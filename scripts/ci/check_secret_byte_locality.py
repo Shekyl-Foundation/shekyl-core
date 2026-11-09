@@ -24,12 +24,17 @@
 # grow quietly or rot.
 #
 # Test code is out of scope: `tests/`, `benches/`, `fuzz/`, `examples/`,
-# the `shekyl-harness-*` crates, a file a test-only module declares, an
-# inline test-only module, and a statement under a cfg that is false unless
-# the crate is built as a test. A cfg is test-only only when `test` is
+# the `shekyl-harness-*` crates, a file only a test-only declaration
+# reaches, an inline test-only module, and a statement under a cfg that is
+# false unless the crate is built as a test. A file a production module
+# also declares stays in scope. A cfg is test-only only when `test` is
 # required. `not(test)` and `any(test, feature = …)` stay in scope: both
 # can compile in a non-test build, and the scan is of source, not of one
 # feature set. A cfg on a field or a parameter covers that field only.
+# A `<` still groups a generic, so a comma inside `Vec<A, B>` does not
+# end the field. A comparison, a shift, or the block after one does not:
+# the statement ends at its semicolon, or at the `}` of a block that
+# opened outside `()`, `[]` and `{}`, even while a `<` is unmatched.
 # Comments are not attributes, and a brace inside a string is not a brace.
 #
 # Instance of 47-gate-subject-assertion.mdc: it refuses a population under
@@ -445,9 +450,20 @@ def _item_end(lines: list[str], row: int, col: int) -> tuple[int, int]:
 
 
 def _delim_end(lines: list[str], row: int, col: int) -> tuple[int, int]:
-    """End of one field, parameter or statement: comma or semicolon at depth 0,
-    or a closer that belongs to the surrounding item."""
+    """End of one field, parameter or statement.
+
+    A `<` groups a generic, so the comma in `Vec<A, B>` stays inside the
+    field. It does not group a comparison or a shift: `height < limit` and
+    `word << 3` never produce a matching `>`, and requiring one made the
+    exclusion run into the next production statement. A semicolon therefore
+    ends the statement while a `<` is still open. A `{` that opens while
+    no `()`, `[]` or `{}` is open is the statement's block (`if height <
+    limit { ... }`), and the statement ends at its `}`. Treating that `{`
+    as a const generic (`Foo<{N}>`) ends the field early; the tail is
+    scanned, and an early end can only add a hit.
+    """
     angle = paren = brace = bracket = 0
+    statement_block = False
     r, c = row, col
     while r < len(lines):
         line = lines[r]
@@ -457,26 +473,36 @@ def _delim_end(lines: list[str], row: int, col: int) -> tuple[int, int]:
             if ch == "<":
                 angle += 1
             elif ch == ">" and prev != "-" and angle:
+                # `->` is a return type, not a generic closer.
                 angle -= 1
             elif ch == "(":
                 paren += 1
             elif ch == ")":
                 if paren:
                     paren -= 1
-                elif angle == brace == bracket == 0:
+                elif brace == bracket == 0:
                     return r, c - 1 if c else (r, 0)
             elif ch == "{":
-                brace += 1
+                if paren == bracket == 0 and brace == 0:
+                    brace = 1
+                    statement_block = True
+                    angle = 0
+                else:
+                    brace += 1
             elif ch == "}":
                 if brace:
                     brace -= 1
-                elif angle == paren == bracket == 0:
+                    if statement_block and brace == 0 and paren == bracket == 0:
+                        return r, c
+                elif paren == bracket == 0:
                     return r, c - 1 if c else (r, 0)
             elif ch == "[":
                 bracket += 1
             elif ch == "]" and bracket:
                 bracket -= 1
-            elif ch in ",;" and angle == paren == brace == bracket == 0:
+            elif ch == "," and angle == paren == brace == bracket == 0:
+                return r, c
+            elif ch == ";" and paren == brace == bracket == 0:
                 return r, c
             c += 1
         r += 1
@@ -547,10 +573,6 @@ def attributes_above(lines: list[str], row: int) -> list[str]:
     return attrs
 
 
-def _attr_test_only(attr: str) -> bool:
-    return any(test_only for _, _, test_only in cfg_attribute_spans(attr))
-
-
 def _module_child_dir(path: str, prefix: tuple[str, ...]) -> str:
     base = os.path.dirname(path)
     stem = os.path.splitext(os.path.basename(path))[0]
@@ -560,19 +582,26 @@ def _module_child_dir(path: str, prefix: tuple[str, ...]) -> str:
     return child
 
 
-def declared_children(path: str, original: list[str], masked: list[str], test_only: bool) -> set[str]:
-    """Files this file declares with `mod x;`.
+def declared_children(path: str, original: list[str], masked: list[str]) -> tuple[set[str], set[str]]:
+    """`(production, test-only)` files this file declares with `mod x;`.
 
-    With `test_only`, a declaration whose own cfg requires a test build,
-    and a declaration nested in an inline module that does. The child of
-    `mod checks { mod helper; }` is `checks/helper.rs`, not `helper.rs`.
+    A declaration is test-only when it lies in a region a cfg removes from
+    every non-test build, including the body of an inline test module.
+    The cfg covers the next item only: `#[cfg(test)] mod checks {} mod live;`
+    declares `live` for production. The child of `mod checks { mod helper; }`
+    is `checks/helper.rs`, not `helper.rs`.
+
+    A path both sets contain was declared twice. The caller keeps a file
+    that has any production declaration.
 
     Structure is read from the masked lines, so a brace in a string does
     not open a module. `#[path = "..."]` is read from the original line:
     masking a string would erase the path.
     """
-    children = set()
+    production: set[str] = set()
+    test_only: set[str] = set()
     base = os.path.dirname(path)
+    spans = test_spans(masked)
     # Stack entries are (brace depth after the `{`, test-only, name).
     stack: list[tuple[int, bool, str]] = []
     depth = 0
@@ -585,21 +614,18 @@ def declared_children(path: str, original: list[str], masked: list[str], test_on
                 name, kind = found.group(1), found.group(2)
                 prefix = tuple(frame[2] for frame in stack)
                 inherited = any(frame[1] for frame in stack)
-                at_item_start = found.start() == len(line) - len(line.lstrip())
-                if at_item_start:
-                    own = any(_attr_test_only(a) for a in attributes_above(masked, row))
-                else:
-                    own = _same_line_cfg(line, found.start())
-                this_test = inherited or own
+                this_test = inherited or in_spans(row, found.start(), spans)
                 if kind == ";":
-                    if not test_only or this_test:
-                        explicit = _path_attr(original, row, found.start())
-                        if explicit:
-                            children.add(os.path.normpath(os.path.join(base, explicit)))
-                        else:
-                            child_dir = _module_child_dir(path, prefix)
-                            children.add(os.path.join(child_dir, name + ".rs"))
-                            children.add(os.path.join(child_dir, name, "mod.rs"))
+                    explicit = _path_attr(original, row, found.start())
+                    if explicit:
+                        targets = {os.path.normpath(os.path.join(base, explicit))}
+                    else:
+                        child_dir = _module_child_dir(path, prefix)
+                        targets = {
+                            os.path.join(child_dir, name + ".rs"),
+                            os.path.join(child_dir, name, "mod.rs"),
+                        }
+                    (test_only if this_test else production).update(targets)
                 else:
                     depth += line[pos:found.end()].count("{") - line[pos:found.end()].count("}")
                     # The `{` of this mod is inside the match. Count it once.
@@ -616,7 +642,7 @@ def declared_children(path: str, original: list[str], masked: list[str], test_on
             if ch == "}":
                 stack[:] = [frame for frame in stack if frame[0] <= depth]
             pos = brace + 1
-    return children
+    return production, test_only
 
 
 def _next_brace(line: str, start: int, limit: int) -> int | None:
@@ -624,10 +650,6 @@ def _next_brace(line: str, start: int, limit: int) -> int | None:
         if line[i] in "{}":
             return i
     return None
-
-
-def _same_line_cfg(line: str, col: int) -> bool:
-    return any(test_only for _start, end, test_only in cfg_attribute_spans(line) if end <= col)
 
 
 def _path_attr(lines: list[str], row: int, col: int) -> str | None:
@@ -672,18 +694,28 @@ def scan(root: str) -> tuple[list[Hit], int]:
             lines = fh.read().splitlines()
         texts[f] = lines
         masked[f] = masked_lines(lines)
-    test_files: set[str] = set()
+    # A file is out of scope only when no production declaration reaches
+    # it. A test `#[path]` that names a source a production `mod` also
+    # declares does not hide that source, and children of a test-only file
+    # stay out of scope unless a production module names them itself.
+    # A file nobody declares stays in scope.
+    prod_of: dict[str, set[str]] = {}
+    declared: set[str] = set()
     for f, lines in masked.items():
-        test_files |= declared_children(f, texts[f], lines, test_only=True)
-    # Everything a test-only file declares is test-only too.
-    frontier = set(test_files)
+        prod, test = declared_children(f, texts[f], lines)
+        prod_of[f] = prod
+        declared |= prod | test
+    reachable = set(masked) - declared
+    frontier = set(reachable)
     while frontier:
         nxt = set()
         for f in frontier:
-            if f in masked:
-                nxt |= declared_children(f, texts[f], masked[f], test_only=False) - test_files
-        test_files |= nxt
+            for child in prod_of.get(f, ()):
+                if child not in reachable:
+                    reachable.add(child)
+                    nxt.add(child)
         frontier = nxt
+    test_files = declared - reachable
 
     population = 0
     hits: list[Hit] = []
@@ -849,7 +881,26 @@ def selftest() -> int:
             "#[cfg(test)]\nmod checks {\n    mod helper;\n}\n"
             "#[cfg(not(test))]\nmod production_child;\n"
             "// #[cfg(test)]\nmod commented;\n"
-            "#[cfg(test)]\n#[path = \"renamed.rs\"]\nmod renamed_tests;\n",
+            "#[cfg(test)]\n#[path = \"renamed.rs\"]\nmod renamed_tests;\n"
+            "#[cfg(test)] let below_limit = height < limit;\n"
+            "fn after_compare(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n"
+            "#[cfg(test)] let shifted = word << 3;\n"
+            "fn after_shift(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n"
+            "#[cfg(test)]\n"
+            "if height < limit {\n"
+            "    Scalar::from_bytes_mod_order(seed);\n"
+            "}\n"
+            "fn after_if(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n"
+            "#[cfg(test)]\n"
+            "match word << 3 {\n"
+            "    _ => { Scalar::from_bytes_mod_order(seed); }\n"
+            "}\n"
+            "fn after_match(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n"
+            "#[cfg(test)] let hidden: Vec<Seed, from_bytes_mod_order(seed)> = v;\n"
+            "fn after_generic(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n"
+            "#[cfg(test)] mod checks_inline {} mod live;\n"
+            "mod shared;\n"
+            "#[cfg(test)]\n#[path = \"shared.rs\"]\nmod shared_tests;\n",
         )
         write("rust/shekyl-app/src/tests.rs", "mod deeper;\nfn y(sk: [u8; 32]) { Scalar::from_bytes_mod_order(sk); }\n")
         write("rust/shekyl-app/src/tests/deeper.rs", "fn y(sk: [u8; 32]) { Scalar::from_bytes_mod_order(sk); }\n")
@@ -860,6 +911,8 @@ def selftest() -> int:
         write("rust/shekyl-app/src/commented.rs", "fn y(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n")
         write("rust/shekyl-app/src/renamed.rs", "fn y(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n")
         write("rust/shekyl-app/src/renamed_tests.rs", "fn y(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n")
+        write("rust/shekyl-app/src/live.rs", "fn y(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n")
+        write("rust/shekyl-app/src/shared.rs", "fn y(seed: [u8; 32]) { Scalar::from_bytes_mod_order(seed); }\n")
         hits, _ = scan(tmp)
         got = sorted((h.path, h.kind, h.text) for h in hits)
         reduce = "from_bytes_mod_order(seed)"
@@ -880,6 +933,20 @@ def selftest() -> int:
                 # #[path] names renamed.rs. The default renamed_tests.rs is
                 # not that module, so its reduction stays in scope.
                 ("rust/shekyl-app/src/renamed_tests.rs", "reduce", reduce),
+                (app, "reduce", reduce),  # statement after a cfg'd comparison
+                (app, "reduce", reduce),  # statement after a cfg'd shift
+                # The block after a cfg'd comparison or shift ends the
+                # exclusion. The reduction inside the block is test code.
+                (app, "reduce", reduce),  # statement after a cfg'd if
+                (app, "reduce", reduce),  # statement after a cfg'd match
+                # The comma inside Vec<Seed, ...> is the generic's, so the
+                # reduction in that type argument stays out of scope.
+                (app, "reduce", reduce),  # statement after a cfg'd generic
+                # `mod live` follows `#[cfg(test)] mod checks_inline {}` on
+                # the same line, so the cfg does not cover it.
+                ("rust/shekyl-app/src/live.rs", "reduce", reduce),
+                # A test #[path] alias of a production module does not hide it.
+                ("rust/shekyl-app/src/shared.rs", "reduce", reduce),
             ]
         )
         if got != expect:
