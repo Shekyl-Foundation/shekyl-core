@@ -45,6 +45,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use shekyl_curve_generators::{H, T};
+use shekyl_network::envelope::Framed64;
 
 /// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
 /// `ml_kem_ss` wipe before returning `Err` (test-only observability).
@@ -283,24 +284,63 @@ pub fn construct_output_with_label_plaintext(
     output_index: u64,
     label_plaintext: &[u8; 8],
 ) -> Result<OutputData, CryptoError> {
-    // --- Input validation ---
+    let core = construct_output_core(
+        tx_key_secret,
+        x25519_pk,
+        ml_kem_ek,
+        spend_key,
+        amount,
+        output_index,
+        label_plaintext,
+    )?;
 
-    let b_point = CompressedEdwardsY(*spend_key)
-        .decompress()
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    // --- PQC keypair ---
 
-    if b_point == EdwardsPoint::default() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-    if !b_point.is_torsion_free() {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
+    let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&core.secrets.ml_dsa_seed)?;
+    let pqc_leaf = compute_pqc_leaf(&core.secrets, &pqc_pk, &core.combined_ss.0, output_index)?;
+    Ok(OutputData {
+        output_key: core.output_key,
+        commitment: core.commitment,
+        enc_amount: core.enc_amount,
+        enc_label: core.enc_label,
+        view_tag_prefilter: core.view_tag_prefilter,
+        kem_ciphertext_x25519: core.kem_ciphertext_x25519,
+        kem_ciphertext_ml_kem: core.kem_ciphertext_ml_kem.clone(),
+        pqc_public_key: pqc_pk,
+        pqc_leaf,
+        y: core.secrets.y,
+        z: core.secrets.z,
+        k_amount: core.secrets.k_amount,
+        k_label: core.secrets.k_label,
+    })
+}
 
+/// One deterministic hybrid encapsulation to `(x25519_pk, ml_kem_ek)`:
+/// the per-recipient seed is [`derive_kem_seed`] over the transaction key,
+/// **the recipient's two public keys** and the output index, so two
+/// recipients of the same output (a multisig group's members) never share
+/// encapsulation randomness — one member's decapsulation reveals nothing
+/// about another's ciphertext.
+pub(crate) struct Encapsulated {
+    /// Ephemeral X25519 public key (the ciphertext's first 32 bytes).
+    pub(crate) x25519_ct: [u8; 32],
+    /// ML-KEM-768 ciphertext.
+    pub(crate) ml_kem_ct: Vec<u8>,
+    /// The ML-KEM shared secret alone (the wire view tag is over it only).
+    pub(crate) ml_kem_ss: Zeroizing<[u8; 32]>,
+    /// The combined shared secret every per-output value derives from.
+    pub(crate) combined_ss: SharedSecret,
+}
+
+pub(crate) fn encapsulate_deterministic(
+    tx_key_secret: &[u8; 32],
+    x25519_pk: &[u8; 32],
+    ml_kem_ek: &[u8],
+    output_index: u64,
+) -> Result<Encapsulated, CryptoError> {
     if ml_kem_ek.len() != ML_KEM_768_EK_LEN {
         return Err(CryptoError::InvalidKeyMaterial);
     }
-
-    // --- Deterministic KEM encapsulation from tx_key ---
 
     let per_output_seed = derive_kem_seed(tx_key_secret, x25519_pk, ml_kem_ek, output_index);
 
@@ -333,12 +373,61 @@ pub fn construct_output_with_label_plaintext(
         .expect("per_output_seed is 64 bytes");
     let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
 
-    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
-    let ml_ct_bytes = ml_ct.into_bytes();
+    let ml_kem_ss = Zeroizing::new(ml_ss.into_bytes());
+    let combined_ss = combine_shared_secrets(&x25519_raw_ss.0, &*ml_kem_ss)?;
+    Ok(Encapsulated {
+        x25519_ct: eph_mont_pub.0,
+        ml_kem_ct: ml_ct.into_bytes().to_vec(),
+        ml_kem_ss,
+        combined_ss,
+    })
+}
 
-    let view_tag_prefilter = derive_view_tag_prefilter(&ml_ss_bytes, output_index);
+/// What every two-component output shares, solo or multisig: the
+/// encapsulation to the recipient's KEM key, the per-output secrets, the
+/// output key `O = ho·G + B + y·T`, the commitment and the two encrypted
+/// fields. The PQC leaf is the caller's: a solo output commits to its own
+/// per-output key, a multisig output to its container's committed form.
+pub(crate) struct OutputCore {
+    pub(crate) output_key: [u8; 32],
+    pub(crate) commitment: [u8; 32],
+    pub(crate) enc_amount: EncryptedOutputField,
+    pub(crate) enc_label: EncryptedOutputField,
+    pub(crate) view_tag_prefilter: u8,
+    pub(crate) kem_ciphertext_x25519: [u8; 32],
+    pub(crate) kem_ciphertext_ml_kem: Vec<u8>,
+    pub(crate) combined_ss: SharedSecret,
+    pub(crate) secrets: OutputSecrets,
+}
 
-    let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
+pub(crate) fn construct_output_core(
+    tx_key_secret: &[u8; 32],
+    x25519_pk: &[u8; 32],
+    ml_kem_ek: &[u8],
+    spend_key: &[u8; 32],
+    amount: u64,
+    output_index: u64,
+    label_plaintext: &[u8; 8],
+) -> Result<OutputCore, CryptoError> {
+    // --- Input validation ---
+
+    let b_point = CompressedEdwardsY(*spend_key)
+        .decompress()
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+
+    if b_point == EdwardsPoint::default() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if !b_point.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    // --- Deterministic KEM encapsulation from tx_key ---
+
+    let encapsulated =
+        encapsulate_deterministic(tx_key_secret, x25519_pk, ml_kem_ek, output_index)?;
+    let view_tag_prefilter = derive_view_tag_prefilter(&encapsulated.ml_kem_ss, output_index);
+    let combined_ss = encapsulated.combined_ss;
 
     // --- Output secrets derivation ---
 
@@ -391,24 +480,16 @@ pub fn construct_output_with_label_plaintext(
 
     let enc_label = encrypt_label_plaintext(label_plaintext, &secrets.k_label);
 
-    // --- PQC keypair ---
-
-    let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
-    Ok(OutputData {
+    Ok(OutputCore {
         output_key,
         commitment,
         enc_amount: EncryptedOutputField::assemble(enc_amount, secrets.amount_tag),
         enc_label: EncryptedOutputField::assemble(enc_label, secrets.label_tag),
         view_tag_prefilter,
-        kem_ciphertext_x25519: eph_mont_pub.0,
-        kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
-        pqc_public_key: pqc_pk,
-        pqc_leaf,
-        y: secrets.y,
-        z: secrets.z,
-        k_amount: secrets.k_amount,
-        k_label: secrets.k_label,
+        kem_ciphertext_x25519: encapsulated.x25519_ct,
+        kem_ciphertext_ml_kem: encapsulated.ml_kem_ct,
+        combined_ss,
+        secrets,
     })
 }
 
@@ -1064,6 +1145,29 @@ pub fn sign_pqc_auth_for_output(
     })
 }
 
+/// Auth-B: sign an emission's backing-side binding message with the
+/// backing output's derived key, under
+/// [`SCHEME_DOMAIN_EMISSION_BACKING`](crate::signature::SCHEME_DOMAIN_EMISSION_BACKING).
+/// The message is the envelope's [`Framed64`]
+/// (`shekyl/archival-emission-auth-backing-v4`), so it is bound to one
+/// network by type.
+///
+/// # Errors
+///
+/// As [`sign_pqc_auth_for_output`].
+pub fn sign_emission_backing_for_output(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+    message: &Framed64,
+) -> Result<PqcAuthSignature, CryptoError> {
+    sign_pqc_auth_for_output(
+        combined_ss,
+        output_index,
+        crate::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+        message.as_bytes(),
+    )
+}
+
 // ── Proof helpers (Phase 1) ───────────────────────────────────────────
 
 /// Narrow projection of output secrets for proof protocols.
@@ -1298,12 +1402,13 @@ impl std::fmt::Debug for KeyImageResult {
 
 /// Compute the key image and output spend secret for a V3 output.
 ///
-/// Derives `ho` internally from `combined_ss` -- `ho` never crosses FFI.
+/// Derives `ho` internally from `combined_ss`; the caller never sees it.
 /// Returns both the key image `I = x * Hp(O)` and the output spend secret
 /// `x = ho + b` (needed for signing).
 ///
-/// `hp_of_output` is `Hp(O)` precomputed by C++ via `hash_to_ec` (Category 2
-/// Keccak, stays in C++). Must decompress to a prime-order point.
+/// `hp_of_output` is `Hp(O)`, which the caller computes
+/// (`shekyl_curve_generators::biased_hash_to_point`, as the scanner does).
+/// Must decompress to a prime-order point.
 pub fn compute_output_key_image(
     combined_ss: &[u8; 64],
     output_index: u64,
@@ -2262,7 +2367,7 @@ mod tests {
         let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
         // Use a deterministic stand-in for Hp(O): hash output_key to a curve point
-        // In production, C++ provides this via hash_to_ec. For testing, we use
+        // In production the caller hashes O to the curve. For testing, we use
         // the basepoint scaled by a hash (guaranteed prime-order and non-identity).
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();

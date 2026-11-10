@@ -52,10 +52,9 @@ use shekyl_archival_retention::{
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
-use shekyl_crypto_pq::output::{construct_output, sign_pqc_auth_for_output, OutputData};
+use shekyl_crypto_pq::output::{construct_output, sign_emission_backing_for_output, OutputData};
 use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, SignatureScheme as _, SCHEME_DOMAIN_EMISSION_BACKING,
-    SCHEME_DOMAIN_EMISSION_CLAIM, SCHEME_DOMAIN_PQC_AUTH_TX,
+    sign_emission_claim, HybridEd25519MlDsa, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_tx_builder::{
@@ -351,24 +350,15 @@ fn assemble(
             &tx_signable,
         )
         .expect("the auth binding messages derive");
-    let auth_b = sign_pqc_auth_for_output(
-        &backing_combined,
-        backing_index,
-        SCHEME_DOMAIN_EMISSION_BACKING,
-        &auth_msgs.backing,
-    )
-    .expect("Auth-B signs");
+    let auth_b =
+        sign_emission_backing_for_output(&backing_combined, backing_index, &auth_msgs.backing)
+            .expect("Auth-B signs");
     assert_eq!(
         auth_b.hybrid_public_key, backing_pubkey,
         "Auth-B's key is the vin's backing_pubkey"
     );
     vin.auth_backing = auth_b.signature;
-    vin.auth_claim = HybridEd25519MlDsa
-        .sign(
-            &keys.hybrid_sign_sk,
-            SCHEME_DOMAIN_EMISSION_CLAIM,
-            &auth_msgs.claim,
-        )
+    vin.auth_claim = sign_emission_claim(&keys.hybrid_sign_sk, &auth_msgs.claim)
         .expect("Auth-P signs")
         .to_canonical_bytes()
         .expect("Auth-P encodes");

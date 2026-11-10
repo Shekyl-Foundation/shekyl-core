@@ -9,15 +9,11 @@
 //! `docs/test_vectors/MTP_BOUNDARY_V1.json`.
 //!
 //! There is ONE implementation of the rule —
-//! [`shekyl_difficulty::check_timestamp_rule`], which the C++ validator
-//! consumes through the `shekyl_difficulty_check_timestamp_rule` FFI
-//! (crossing re-ratified 2026-09-01). This file pins that implementation
-//! natively over EVERY vector section (the predicates individually, the
-//! combined rule over predicate/assembly/ftl cases, width refusal, and
-//! the template edge); the C++ suite (`tests/unit_tests/mtp_boundary.cpp`)
-//! pins the same sections end-to-end through the FFI boundary the
-//! validator shim uses. Two consumers, one implementation, one vector
-//! file — drift between the native and boundary views cannot pass both.
+//! [`shekyl_difficulty::check_timestamp_rule`], which the block validator
+//! (`shekyl-chain-rules`) calls. This file pins that implementation over
+//! EVERY vector section (the predicates individually, the combined rule
+//! over predicate/assembly/ftl cases, width refusal, and the template
+//! edge).
 
 use shekyl_difficulty::consts::MTP_WINDOW_USIZE;
 use shekyl_difficulty::{is_above_mtp, is_timestamp_below_ftl};
@@ -224,8 +220,8 @@ fn wider_window_is_refused() {
 
 /// The template-edge premise on the one implementation: at
 /// `median == local_clock + FTL` no timestamp satisfies both bounds, and
-/// one clock tick later the same bump is valid (the refusal arm in the C++
-/// template orchestration rests on exactly this).
+/// one clock tick later the same bump is valid (`shekyl-block-template`'s
+/// refusal of a template above the FTL rests on exactly this).
 #[test]
 fn template_edge_no_timestamp_satisfies_both_bounds() {
     let clock = 1_000_000u64;

@@ -82,6 +82,20 @@ impl PqcKeyScalar {
         ))
     }
 
+    /// `k` for a spend's `pqc_auth` slot: over the bytes the spent leaf
+    /// committed to ([`shekyl_crypto_pq::signature::pqc_leaf_key_bytes`]) —
+    /// the whole key for a solo slot, the committed form (never the
+    /// revealed signer keys) for a multisig one. `None` when the slot's
+    /// key blob is not well formed for its scheme; the slot is refused.
+    /// Both consensus verifiers (CEN-I15 and the submit verifier's K12)
+    /// call this.
+    #[must_use]
+    pub fn from_pqc_auth(scheme_id: u8, key_blob: &[u8]) -> Option<Self> {
+        shekyl_crypto_pq::signature::pqc_leaf_key_bytes(scheme_id, key_blob)
+            .ok()
+            .map(Self::from_pqc_public_key)
+    }
+
     /// `k` from its canonical 32-byte encoding; `None` if the bytes are not the
     /// canonical encoding of an Ed25519 scalar. This is the boundary
     /// constructor (FFI, deserialization): a non-canonical spelling is refused,
@@ -212,6 +226,48 @@ mod tests {
     // The byte pins for `PqcKeyScalar::from_pqc_public_key` live in
     // `docs/test_vectors/PQC_KEY_SCALAR_KAT.json`, consumed at the SSOT owner
     // (`shekyl-crypto-pq/src/derivation.rs`) and asserted through this wrapper.
+    /// The consensus `k` for a multisig slot hashes the committed form
+    /// `0x02 ‖ n ‖ m ‖ h_1 … h_n` and nothing after it: the revealed bitmap
+    /// and keys are a spend's choice, which no output committed to. Pinned
+    /// by value, so hashing one byte more (or less) turns this red.
+    #[test]
+    fn multisig_k_is_over_the_committed_form_only() {
+        let committed = {
+            let mut c = vec![0x02, 3, 2];
+            for h in [0x11u8, 0x22, 0x33] {
+                c.extend_from_slice(&[h; 32]);
+            }
+            c
+        };
+        let mut blob = committed.clone();
+        blob.push(0b101);
+        blob.extend_from_slice(&[0xAB; 2 * 1996]);
+
+        let k = PqcKeyScalar::from_pqc_auth(2, &blob).expect("a well-formed prefix");
+        assert_eq!(k, PqcKeyScalar::from_pqc_public_key(&committed));
+        assert_ne!(k, PqcKeyScalar::from_pqc_public_key(&blob));
+        let mut other_tail = blob.clone();
+        other_tail[committed.len()..].fill(0xCD);
+        assert_eq!(PqcKeyScalar::from_pqc_auth(2, &other_tail), Some(k));
+        let hex: String = k.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, K_MULTISIG_KAT);
+
+        // A solo slot's k is over the whole key, which must be one key.
+        let solo = [0x5Au8; 1996];
+        assert_eq!(
+            PqcKeyScalar::from_pqc_auth(1, &solo),
+            Some(PqcKeyScalar::from_pqc_public_key(&solo))
+        );
+        assert_eq!(PqcKeyScalar::from_pqc_auth(1, &solo[1..]), None);
+        // The never-issued 0x01 version and an unknown scheme derive nothing.
+        let mut v1 = blob.clone();
+        v1[0] = 0x01;
+        assert_eq!(PqcKeyScalar::from_pqc_auth(2, &v1), None);
+        assert_eq!(PqcKeyScalar::from_pqc_auth(3, &blob), None);
+    }
+
+    const K_MULTISIG_KAT: &str = "3360c40ed0bd91e05eeae9a9874294072df9764dde23aeac4ec048fdb2628c01";
+
     #[test]
     fn pqc_key_scalar_deterministic() {
         let pk = vec![0xab; 1952]; // ML-DSA-65 public key size

@@ -145,7 +145,11 @@ use crate::{
 ///
 /// `23` (2026-11-06): `ReorgBlocks` hashes and `BlockchainTip.tip_hash`
 /// retype to [`shekyl_types::BlockHash`] (`LEDGER_BLOCK_VERSION` 13).
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 23;
+///
+/// `24` (2026-11-09): [`crate::transfer::UnspendableReason`] names each
+/// multisig receive refusal (`LEDGER_BLOCK_VERSION` 14). A version-23
+/// wallet file is refused; pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 24;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.

@@ -6,24 +6,28 @@
 //! Multisig address encoding, fingerprint, and provenance (PQC_MULTISIG.md SS6).
 //!
 //! Multisig addresses are **file-based**: the canonical payload
-//! (`HEADER_LEN + 2 * GROUP_POINT_LEN + N * PER_PARTICIPANT_LEN` = 70 + N * 1216
-//! bytes) is written to a file and transferred via an authenticated channel. It
-//! is not a Bech32m string — at E′ sizes (~4019 chars for a 2-of-N) it exceeds
+//! (`HEADER_LEN + 2 * GROUP_POINT_LEN + (N + 1) * HYBRID_KEM_PUBKEY_LEN` =
+//! 70 + (N + 1) * 1216 bytes) is written to a file and transferred via an
+//! authenticated channel. It is not a Bech32m string — at E′ sizes it exceeds
 //! Bech32m's ~1023-char checksum-validity limit and would not round-trip. What
 //! *is* Bech32m-encoded, under the `shekyl1m` / `shekyltest1m` / `sshekyl1m` HRP
 //! family, is the fixed-size **fingerprint** (32 B → 67 chars, QR-able): the
 //! short, human-verifiable, shareable group identifier. Integrity rides that
 //! fingerprint, not a full-address string or a stored checksum.
 //!
-//! # Option E′: the address carries the group's two points
+//! # Option E′: the address carries the group's points and KEM keys
 //!
 //! Under E′ a payer constructs `O = ho·G + B_group + y_out·T`
 //! (`shekyl-crypto-pq::output`), so the address **must** carry `B_group` and
-//! `Y_group` or an output cannot be built at all. Option D never needed them —
-//! it derived `O` from `spend_auth_pubkeys[assigned]`, per-output — which is why
-//! the D-era payload has neither. They are the group's **long-term** public
-//! state, unlike the per-output KEM-derived leaf keys the address deliberately
-//! does not carry (MSW-8).
+//! `Y_group` or an output cannot be built at all. It also carries the
+//! **group** hybrid KEM key, which every member holds the secret for: the
+//! output's one `0x06` ciphertext is to it, and the per-output secret behind
+//! `ho`, `y_kem`, the amount key and the leaf blind comes from it. Then one
+//! KEM key per member, for the per-member ciphertexts in `0x0D` that give
+//! each member a per-output signing key the others cannot derive
+//! (`docs/PQC_MULTISIG.md` §6–§7). These are all the group's **long-term**
+//! public state; the per-output signing keys are derived, never carried
+//! (MSW-8).
 //!
 //! `b_group` / `y_group` are opaque 32-byte compressed Edwards points here.
 //! Their validity (decompress, non-identity, torsion-free) is checked where they
@@ -51,12 +55,10 @@ use shekyl_network::envelope::NameDomain;
 /// X25519 (32) + ML-KEM-768 (1184).
 pub const HYBRID_KEM_PUBKEY_LEN: usize = 1216;
 
-/// Per-participant total. Post-MSW-8 (2026-07-15) this is the KEM pubkey
-/// alone. The former `hybrid_sign_pubkeys` (Ed25519 + ML-DSA-65) were a
-/// vestigial Solution C fossil — constructed and parsed here but never
-/// consumed: leaf hybrid sign keys are derived per-output from the KEM shared
-/// secrets in `shekyl-crypto-pq::multisig_receiving`, so the address never
-/// needed to carry them (PQC_MULTISIG.md §6.2).
+/// Per-participant total: the member's KEM pubkey alone (MSW-8). A member's
+/// per-output signing key is derived from the KEM secret behind it
+/// (`shekyl-crypto-pq::output::construct_multisig_output`), so the address
+/// never carries signing keys (PQC_MULTISIG.md §6.2).
 pub const PER_PARTICIPANT_LEN: usize = HYBRID_KEM_PUBKEY_LEN;
 
 /// Maximum multisig participants. Mirrors the authoritative MSW-G cap in
@@ -76,13 +78,11 @@ const HEADER_LEN: usize = 6;
 /// payload, immediately after the header.
 pub const GROUP_POINT_LEN: usize = 32;
 
-/// Current multisig address payload version.
-///
-/// Stays `0x01` across the E′ B/Y addition, on MSW-8's reasoning: nothing is
-/// deployed, so the layout is corrected in place rather than versioned. The
-/// parser's version check is strict equality, so a `0x01` payload is an E′
-/// payload — there is no D-era address to remain compatible with.
-pub const MULTISIG_ADDRESS_VERSION: u8 = 0x01;
+/// Current multisig address payload version: `0x02`, the layout with the
+/// group KEM key. The parser's version check is strict equality, so a `0x01`
+/// payload (the layout without it, which no output can be built from) is
+/// refused with [`MultisigAddressError::UnsupportedVersion`].
+pub const MULTISIG_ADDRESS_VERSION: u8 = 0x02;
 
 /// Current group protocol version.
 pub const GROUP_VERSION: u8 = 0x01;
@@ -94,6 +94,79 @@ pub const GROUP_VERSION: u8 = 0x01;
 /// `B_group`/`Y_group` *is* an E′ address — stamping it `0x01` would make the
 /// payload lie about its own design.
 pub const SPEND_AUTH_VERSION: u8 = 0x02;
+
+/// Bytes of the X25519 u-coordinate that begins a hybrid KEM public key.
+///
+/// Pinned to the width `shekyl-crypto-pq` splits off before encapsulation.
+/// The two are the same 32 bytes; a drift would make this check look at
+/// the wrong half.
+pub const X25519_U_LEN: usize = 32;
+
+/// Little-endian byte `index` of `p = 2^255 - 19`.
+const fn montgomery_prime_byte(index: usize) -> u8 {
+    match index {
+        0 => 0xED,
+        31 => 0x7F,
+        _ => 0xFF,
+    }
+}
+
+/// A Montgomery u-coordinate is canonical when the integer is strictly
+/// less than `p`. X25519 ignores bit 255 and reduces modulo `p`, so a
+/// non-canonical encoding is a second byte string for one point. This is
+/// not the Edwards y check: there bit 255 is a sign and is masked, and
+/// masking it here would accept the alias.
+fn montgomery_u_is_canonical(u: &[u8; X25519_U_LEN]) -> bool {
+    for index in (0..X25519_U_LEN).rev() {
+        let prime = montgomery_prime_byte(index);
+        if u[index] < prime {
+            return true;
+        }
+        if u[index] > prime {
+            return false;
+        }
+    }
+    // Equal to `p`.
+    false
+}
+
+fn kem_x25519_is_canonical(kem: &[u8]) -> bool {
+    let Some(head) = kem.get(..X25519_U_LEN) else {
+        return false;
+    };
+    let u = <[u8; X25519_U_LEN]>::try_from(head).expect("the slice length is X25519_U_LEN");
+    montgomery_u_is_canonical(&u)
+}
+
+/// The group key and every member key are different points. A repeated
+/// point collapses two encapsulation slots onto one shared secret: the
+/// group secret would open a member's signing key, or two members would
+/// hold the same signing key. The X25519 half is compared as bytes, which
+/// is the point comparison only when that half is the one canonical
+/// encoding.
+fn reject_aliased_kem_keys(
+    group_kem_pubkey: &[u8],
+    hybrid_kem_pubkeys: &[Vec<u8>],
+) -> Result<(), MultisigAddressError> {
+    if !kem_x25519_is_canonical(group_kem_pubkey) {
+        return Err(MultisigAddressError::NonCanonicalGroupKemKey);
+    }
+    for (second, member) in hybrid_kem_pubkeys.iter().enumerate() {
+        if !kem_x25519_is_canonical(member) {
+            return Err(MultisigAddressError::NonCanonicalMemberKemKey { index: second });
+        }
+        if member.as_slice() == group_kem_pubkey {
+            return Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: second });
+        }
+        if let Some(first) = hybrid_kem_pubkeys[..second]
+            .iter()
+            .position(|earlier| earlier.as_slice() == member.as_slice())
+        {
+            return Err(MultisigAddressError::DuplicateMemberKemKey { first, second });
+        }
+    }
+    Ok(())
+}
 
 /// Errors specific to multisig address operations.
 #[derive(Debug, thiserror::Error)]
@@ -109,6 +182,32 @@ pub enum MultisigAddressError {
 
     #[error("KEM pubkey {index} has wrong length: expected {HYBRID_KEM_PUBKEY_LEN}, got {got}")]
     KemPubkeyLength { index: usize, got: usize },
+    #[error("group KEM pubkey has wrong length: expected {HYBRID_KEM_PUBKEY_LEN}, got {got}")]
+    GroupKemPubkeyLength { got: usize },
+
+    /// The group key's X25519 half is a second encoding of some u-coordinate.
+    /// X25519 would treat it as the reduced point, so a member key that
+    /// copied it would not look equal as bytes and would still open under
+    /// the group secret.
+    #[error("group KEM key's X25519 half is not a canonical Montgomery u-coordinate")]
+    NonCanonicalGroupKemKey,
+
+    /// A member key's X25519 half is a second encoding of some u-coordinate.
+    /// Copied from the group key with bit 255 flipped, it is the group point.
+    #[error("member {index}'s X25519 half is not a canonical Montgomery u-coordinate")]
+    NonCanonicalMemberKemKey { index: usize },
+
+    /// The group KEM key is also some member's key. That member's per-output
+    /// shared secret would equal the group secret, so anyone who holds the
+    /// group secret could sign as that member.
+    #[error("group KEM key equals member {index}'s KEM key")]
+    GroupKemKeyRepeatsMember { index: usize },
+
+    /// Two members were given the same KEM key. Their per-output signing keys
+    /// would be identical, and a spend of both would be refused as duplicate
+    /// keys.
+    #[error("member KEM keys {first} and {second} are the same key")]
+    DuplicateMemberKemKey { first: usize, second: usize },
 
     #[error("payload too short: need at least {HEADER_LEN} bytes, got {got}")]
     PayloadTooShort { got: usize },
@@ -132,25 +231,60 @@ pub enum MultisigAddressError {
     Io(#[from] std::io::Error),
 }
 
-/// Canonical multisig address payload (PQC_MULTISIG.md SS6.2).
+/// Canonical multisig address payload (PQC_MULTISIG.md §6.2).
+///
+/// The fields are private: [`Self::new`] and [`Self::from_canonical_bytes`]
+/// are the only ways to make one, and both check every invariant, the KEM
+/// key checks included. A payload that exists is valid, so a consumer such
+/// as the output constructor does not check it again.
+///
+/// A field cannot be edited after the checks:
+///
+/// ```compile_fail,E0616
+/// fn edit(p: &mut shekyl_address::MultisigAddressPayload) {
+///     p.hybrid_kem_pubkeys[0][31] |= 0x80;
+/// }
+/// ```
+///
+/// nor a payload written without them:
+///
+/// ```compile_fail,E0451
+/// let _ = shekyl_address::MultisigAddressPayload {
+///     version: 2,
+///     group_version: 1,
+///     spend_auth_version: 2,
+///     network: shekyl_address::Network::Mainnet,
+///     n_total: 1,
+///     m_required: 1,
+///     b_group: [0; 32],
+///     y_group: [0; 32],
+///     group_kem_pubkey: vec![],
+///     hybrid_kem_pubkeys: vec![],
+/// };
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigAddressPayload {
-    pub version: u8,
-    pub group_version: u8,
-    pub spend_auth_version: u8,
-    pub network: Network,
-    pub n_total: u8,
-    pub m_required: u8,
+    version: u8,
+    group_version: u8,
+    spend_auth_version: u8,
+    network: Network,
+    n_total: u8,
+    m_required: u8,
     /// `B_group` — the group's plaintext view/link key point (`B = b·G`). The
     /// `b` behind it is group-plaintext: every participant holds it, so scan,
     /// balance, and key-image are local and need no ceremony. A payer adds this
     /// point directly into `O = ho·G + B_group + y_out·T`.
-    pub b_group: [u8; 32],
+    b_group: [u8; 32],
     /// `Y_group` — the FROST M-of-N group spend key point (`Y = y·T`). No
     /// participant holds `y`; a spend is a threshold ceremony over it. A payer
     /// needs it to derive the per-output tweak `y_out = y_group + y_kem`.
-    pub y_group: [u8; 32],
-    pub hybrid_kem_pubkeys: Vec<Vec<u8>>,
+    y_group: [u8; 32],
+    /// The group's hybrid KEM public key (`X25519 ‖ ML-KEM-768`, 1216 bytes).
+    /// Every member holds its secret; a payer encapsulates the output's one
+    /// `0x06` ciphertext to it.
+    group_kem_pubkey: Vec<u8>,
+    /// Each member's own hybrid KEM public key, member order.
+    hybrid_kem_pubkeys: Vec<Vec<u8>>,
 }
 
 impl MultisigAddressPayload {
@@ -161,6 +295,7 @@ impl MultisigAddressPayload {
         m_required: u8,
         b_group: [u8; 32],
         y_group: [u8; 32],
+        group_kem_pubkey: Vec<u8>,
         hybrid_kem_pubkeys: Vec<Vec<u8>>,
     ) -> Result<Self, MultisigAddressError> {
         if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
@@ -178,6 +313,11 @@ impl MultisigAddressPayload {
                 got: hybrid_kem_pubkeys.len(),
             });
         }
+        if group_kem_pubkey.len() != HYBRID_KEM_PUBKEY_LEN {
+            return Err(MultisigAddressError::GroupKemPubkeyLength {
+                got: group_kem_pubkey.len(),
+            });
+        }
         for (i, pk) in hybrid_kem_pubkeys.iter().enumerate() {
             if pk.len() != HYBRID_KEM_PUBKEY_LEN {
                 return Err(MultisigAddressError::KemPubkeyLength {
@@ -186,6 +326,7 @@ impl MultisigAddressPayload {
                 });
             }
         }
+        reject_aliased_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version: MULTISIG_ADDRESS_VERSION,
@@ -196,24 +337,96 @@ impl MultisigAddressPayload {
             m_required,
             b_group,
             y_group,
+            group_kem_pubkey,
             hybrid_kem_pubkeys,
         })
     }
 
+    /// Canonical byte length for an `n`-member payload:
+    /// `70 + (n + 1) · 1216`.
+    #[must_use]
+    pub const fn canonical_len_for(n_total: u8) -> usize {
+        HEADER_LEN
+            + 2 * GROUP_POINT_LEN
+            + HYBRID_KEM_PUBKEY_LEN
+            + (n_total as usize) * PER_PARTICIPANT_LEN
+    }
+
     /// Expected canonical byte length for this payload.
     pub fn canonical_len(&self) -> usize {
-        HEADER_LEN + 2 * GROUP_POINT_LEN + (self.n_total as usize) * PER_PARTICIPANT_LEN
+        Self::canonical_len_for(self.n_total)
+    }
+
+    /// The payload format version (`0x02`).
+    #[must_use]
+    pub const fn version(&self) -> u8 {
+        self.version
+    }
+
+    /// The group format version.
+    #[must_use]
+    pub const fn group_version(&self) -> u8 {
+        self.group_version
+    }
+
+    /// The spend-authorization version (`0x02`, Option E′).
+    #[must_use]
+    pub const fn spend_auth_version(&self) -> u8 {
+        self.spend_auth_version
+    }
+
+    /// The network this address is for.
+    #[must_use]
+    pub const fn network(&self) -> Network {
+        self.network
+    }
+
+    /// `N`, the number of members.
+    #[must_use]
+    pub const fn n_total(&self) -> u8 {
+        self.n_total
+    }
+
+    /// `M`, the signers a spend needs.
+    #[must_use]
+    pub const fn m_required(&self) -> u8 {
+        self.m_required
+    }
+
+    /// `B_group`, compressed. Not checked as a point here; the output
+    /// constructor checks it is prime-order and not the identity.
+    #[must_use]
+    pub const fn b_group(&self) -> &[u8; 32] {
+        &self.b_group
+    }
+
+    /// `Y_group`, compressed. Checked as `B_group` is.
+    #[must_use]
+    pub const fn y_group(&self) -> &[u8; 32] {
+        &self.y_group
+    }
+
+    /// The group's hybrid KEM public key, `HYBRID_KEM_PUBKEY_LEN` bytes,
+    /// its X25519 half canonical and different from every member's key.
+    #[must_use]
+    pub fn group_kem_pubkey(&self) -> &[u8] {
+        &self.group_kem_pubkey
+    }
+
+    /// The members' hybrid KEM public keys, member order: `N` keys of
+    /// `HYBRID_KEM_PUBKEY_LEN` bytes, each X25519 half canonical, no two
+    /// the same.
+    #[must_use]
+    pub fn hybrid_kem_pubkeys(&self) -> &[Vec<u8>] {
+        &self.hybrid_kem_pubkeys
     }
 
     /// Serialize to canonical bytes.
     ///
     /// Layout: `version(1) || group_version(1) || spend_auth_version(1) ||
     ///          network(1) || n_total(1) || m_required(1) ||
-    ///          b_group(32) || y_group(32) ||
+    ///          b_group(32) || y_group(32) || group_kem_pk(1216) ||
     ///          kem_pk[0] || ... || kem_pk[N-1]`
-    ///
-    /// The points sit after the 6-byte header and before the variable-length KEM
-    /// array, so every header offset is unchanged from the D-era layout.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let len = self.canonical_len();
         let mut buf = Vec::with_capacity(len);
@@ -225,6 +438,7 @@ impl MultisigAddressPayload {
         buf.push(self.m_required);
         buf.extend_from_slice(&self.b_group);
         buf.extend_from_slice(&self.y_group);
+        buf.extend_from_slice(&self.group_kem_pubkey);
         for pk in &self.hybrid_kem_pubkeys {
             buf.extend_from_slice(pk);
         }
@@ -262,8 +476,7 @@ impl MultisigAddressPayload {
             });
         }
 
-        let expected_len =
-            HEADER_LEN + 2 * GROUP_POINT_LEN + (n_total as usize) * PER_PARTICIPANT_LEN;
+        let expected_len = Self::canonical_len_for(n_total);
         if data.len() != expected_len {
             return Err(MultisigAddressError::PayloadLengthMismatch {
                 expected: expected_len,
@@ -282,6 +495,8 @@ impl MultisigAddressPayload {
             .try_into()
             .expect("GROUP_POINT_LEN slice is 32 bytes");
         offset += GROUP_POINT_LEN;
+        let group_kem_pubkey = data[offset..offset + HYBRID_KEM_PUBKEY_LEN].to_vec();
+        offset += HYBRID_KEM_PUBKEY_LEN;
 
         let mut hybrid_kem_pubkeys = Vec::with_capacity(n_total as usize);
         for _ in 0..n_total {
@@ -289,6 +504,7 @@ impl MultisigAddressPayload {
             offset += HYBRID_KEM_PUBKEY_LEN;
         }
         debug_assert_eq!(offset, data.len());
+        reject_aliased_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version,
@@ -299,6 +515,7 @@ impl MultisigAddressPayload {
             m_required,
             b_group,
             y_group,
+            group_kem_pubkey,
             hybrid_kem_pubkeys,
         })
     }
@@ -389,15 +606,9 @@ pub const MULTISIG_ADDRESS_FINGERPRINT: NameDomain<1> =
 /// (PQC_MULTISIG.md SS6.3) **and, under E′, the group's identity** — the artifact
 /// the §5.5 setup ritual actually wanted: every participant computes it from the
 /// address alone and compares, or the group is not the same group. It covers the
-/// group's whole public state: `B_group`, `Y_group`, the N KEM pubkeys, both
-/// version axes, and `m`/`n`.
-///
-/// It supersedes the deleted `multisig_group_id`, which could not do this job: its
-/// preimage was the `MultisigKeyContainer`, whose leaf keys are derived per-output
-/// from KEM shared secrets — so it produced a different value for every output
-/// while being named for the group, had no consumer under E′, and its only
-/// long-term caller (`wallet2::create_pqc_multisig_group`) never executed
-/// successfully.
+/// group's whole public state: `B_group`, `Y_group`, the group KEM pubkey and
+/// the N member KEM pubkeys, both version axes, and `m`/`n`. No per-output
+/// value can serve as the group's identity, since every per-output key differs.
 ///
 /// # Why cSHAKE256 and not the consensus-parity `keccak256`
 ///
@@ -413,7 +624,9 @@ pub const MULTISIG_ADDRESS_FINGERPRINT: NameDomain<1> =
 /// `shekyl/receive-label-hash-v1`); `shekyl_crypto_hash::keccak256` keeps exactly
 /// the consumers that require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
-    MULTISIG_ADDRESS_FINGERPRINT.frame(&payload.network.name_id(), [&payload.to_canonical_bytes()])
+    MULTISIG_ADDRESS_FINGERPRINT
+        .frame(&payload.network.name_id(), [&payload.to_canonical_bytes()])
+        .into_bytes()
 }
 
 /// Format a fingerprint as grouped hex (4-char blocks separated by spaces).
@@ -458,12 +671,15 @@ mod tests {
     use super::*;
 
     fn make_test_payload(n: u8, m: u8) -> MultisigAddressPayload {
+        // `0x40` keeps bit 255 clear. `0xC0` is the fingerprint pin's fill
+        // and is not a key `new` accepts.
         MultisigAddressPayload::new(
             Network::Mainnet,
             n,
             m,
             [0xB1; 32],
             [0x71; 32],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .unwrap()
@@ -473,10 +689,9 @@ mod tests {
     fn canonical_roundtrip_2_of_3() {
         let payload = make_test_payload(3, 2);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(
-            bytes.len(),
-            HEADER_LEN + 2 * GROUP_POINT_LEN + 3 * PER_PARTICIPANT_LEN
-        );
+        // PQC_MULTISIG.md §6.2's table: 70 + 4 · 1216.
+        assert_eq!(bytes.len(), 4934);
+        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(3));
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -485,10 +700,9 @@ mod tests {
     fn canonical_roundtrip_1_of_1() {
         let payload = make_test_payload(1, 1);
         let bytes = payload.to_canonical_bytes();
-        assert_eq!(
-            bytes.len(),
-            HEADER_LEN + 2 * GROUP_POINT_LEN + PER_PARTICIPANT_LEN
-        );
+        // PQC_MULTISIG.md §6.2's table: 70 + 2 · 1216.
+        assert_eq!(bytes.len(), 2502);
+        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(1));
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
     }
@@ -497,11 +711,11 @@ mod tests {
     fn canonical_roundtrip_5_of_5() {
         let payload = make_test_payload(MAX_MULTISIG_PARTICIPANTS, MAX_MULTISIG_PARTICIPANTS);
         let bytes = payload.to_canonical_bytes();
+        // PQC_MULTISIG.md §6.2's table: 70 + 6 · 1216.
+        assert_eq!(bytes.len(), 7366);
         assert_eq!(
             bytes.len(),
-            HEADER_LEN
-                + 2 * GROUP_POINT_LEN
-                + (MAX_MULTISIG_PARTICIPANTS as usize) * PER_PARTICIPANT_LEN
+            MultisigAddressPayload::canonical_len_for(MAX_MULTISIG_PARTICIPANTS)
         );
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
@@ -515,6 +729,7 @@ mod tests {
             0,
             [0xB1; 32],
             [0x71; 32],
+            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
             vec![]
         )
         .is_err());
@@ -531,6 +746,7 @@ mod tests {
             3,
             [0xB1; 32],
             [0x71; 32],
+            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .is_err());
@@ -544,7 +760,11 @@ mod tests {
             3,
             [0xB1; 32],
             [0x71; 32],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN]
+            ],
         )
         .is_err());
     }
@@ -557,9 +777,143 @@ mod tests {
             2,
             [0xB1; 32],
             [0x71; 32],
+            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
             vec![vec![0; 100], vec![0; HYBRID_KEM_PUBKEY_LEN]],
         )
         .is_err());
+    }
+
+    #[test]
+    fn rejects_a_group_key_that_repeats_a_member_and_duplicate_member_keys() {
+        // `0x40` leaves bit 255 clear, so the refusal here is the repeated
+        // point and not the encoding.
+        let group_key = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
+        let member_a = vec![0x01; HYBRID_KEM_PUBKEY_LEN];
+        let overlap = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group_key.clone(),
+            vec![group_key.clone(), member_a.clone()],
+        );
+        assert!(matches!(
+            overlap,
+            Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
+        ));
+
+        let duplicated = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group_key.clone(),
+            vec![member_a.clone(), member_a.clone()],
+        );
+        assert!(matches!(
+            duplicated,
+            Err(MultisigAddressError::DuplicateMemberKemKey {
+                first: 0,
+                second: 1
+            })
+        ));
+
+        // The byte parser runs the same check: a payload whose fields were
+        // edited after `new` still fails when it is read back.
+        let mut payload = make_test_payload(2, 2);
+        payload.hybrid_kem_pubkeys[1] = payload.hybrid_kem_pubkeys[0].clone();
+        let bytes = payload.to_canonical_bytes();
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&bytes),
+            Err(MultisigAddressError::DuplicateMemberKemKey {
+                first: 0,
+                second: 1
+            })
+        ));
+        payload.hybrid_kem_pubkeys[0] = payload.group_kem_pubkey.clone();
+        let bytes = payload.to_canonical_bytes();
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&bytes),
+            Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
+        ));
+    }
+
+    /// Bit 255 of an X25519 u-coordinate is ignored, and `u >= p` is the
+    /// same field element as `u - p`. Either encoding of the group key, as
+    /// a member key, would open under the group secret. Both are refused
+    /// by `new` and by the byte parser.
+    #[test]
+    fn rejects_a_noncanonical_montgomery_half() {
+        let members = vec![
+            vec![0x01; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x02; HYBRID_KEM_PUBKEY_LEN],
+        ];
+        let mut group = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
+        group[31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                group,
+                members.clone(),
+            ),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
+        ));
+
+        let group = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
+        let mut alias = group.clone();
+        alias[31] |= 0x80;
+        let built = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group.clone(),
+            vec![alias, members[1].clone()],
+        );
+        assert!(matches!(
+            built,
+            Err(MultisigAddressError::NonCanonicalMemberKemKey { index: 0 })
+        ));
+
+        // `p` itself: bit 255 clear, integer equal to `2^255 - 19`.
+        let mut at_prime = vec![0x11; HYBRID_KEM_PUBKEY_LEN];
+        at_prime[0] = 0xED;
+        for byte in &mut at_prime[1..31] {
+            *byte = 0xFF;
+        }
+        at_prime[31] = 0x7F;
+        assert!(matches!(
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                at_prime,
+                members,
+            ),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
+        ));
+
+        let mut payload = make_test_payload(2, 2);
+        payload.hybrid_kem_pubkeys[0][31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&payload.to_canonical_bytes()),
+            Err(MultisigAddressError::NonCanonicalMemberKemKey { index: 0 })
+        ));
+        payload.hybrid_kem_pubkeys[0][31] &= 0x7F;
+        payload.group_kem_pubkey[31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&payload.to_canonical_bytes()),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
+        ));
     }
 
     #[test]
@@ -571,9 +925,31 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_version() {
-        let mut bytes = make_test_payload(2, 2).to_canonical_bytes();
-        bytes[0] = 0xFF;
-        assert!(MultisigAddressPayload::from_canonical_bytes(&bytes).is_err());
+        // 0x01 is the layout without the group KEM key: refused by name.
+        for version in [0x01u8, 0xFF] {
+            let mut bytes = make_test_payload(2, 2).to_canonical_bytes();
+            bytes[0] = version;
+            assert!(matches!(
+                MultisigAddressPayload::from_canonical_bytes(&bytes),
+                Err(MultisigAddressError::UnsupportedVersion { version: v }) if v == version
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_group_kem_pubkey_length() {
+        assert!(matches!(
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                vec![0xC0; HYBRID_KEM_PUBKEY_LEN - 1],
+                vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            ),
+            Err(MultisigAddressError::GroupKemPubkeyLength { got }) if got == HYBRID_KEM_PUBKEY_LEN - 1
+        ));
     }
 
     #[test]
@@ -681,12 +1057,12 @@ mod tests {
 
     #[test]
     fn canonical_length_kat() {
-        // E′ payload = HEADER_LEN(6) + 2·GROUP_POINT_LEN(64) + N·PER_PARTICIPANT_LEN(1216)
-        //            = 70 + N·1216.
-        for (n, expected) in [(1u8, 1286usize), (2, 2502), (3, 3718), (5, 6150)] {
+        // E′ payload = HEADER_LEN(6) + 2·GROUP_POINT_LEN(64)
+        //            + (1 + N)·HYBRID_KEM_PUBKEY_LEN(1216) = 70 + (N + 1)·1216.
+        for (n, expected) in [(1u8, 2502usize), (2, 3718), (3, 4934), (5, 7366)] {
             let bytes = make_test_payload(n, 1).to_canonical_bytes();
             assert_eq!(bytes.len(), expected, "canonical length for n={n}");
-            assert_eq!(bytes.len(), 70 + (n as usize) * 1216);
+            assert_eq!(bytes.len(), 70 + (n as usize + 1) * 1216);
         }
     }
 
@@ -714,15 +1090,33 @@ mod tests {
         );
         let mut seen = Vec::new();
         for net in Network::ALL {
-            let payload = MultisigAddressPayload::new(
-                net,
-                2,
-                2,
-                [0xB1; 32],
-                [0x71; 32],
-                (0..2).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
-            )
-            .unwrap();
+            // The pin is these bytes. `0xC0` sets bit 255 of the X25519 half,
+            // which `new` now refuses; the fingerprint is of the payload, so
+            // the struct is built directly and the hash does not move.
+            let payload = MultisigAddressPayload {
+                version: MULTISIG_ADDRESS_VERSION,
+                group_version: GROUP_VERSION,
+                spend_auth_version: SPEND_AUTH_VERSION,
+                network: net,
+                n_total: 2,
+                m_required: 2,
+                b_group: [0xB1; 32],
+                y_group: [0x71; 32],
+                group_kem_pubkey: vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+                hybrid_kem_pubkeys: (0..2).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
+            };
+            assert!(matches!(
+                MultisigAddressPayload::new(
+                    net,
+                    2,
+                    2,
+                    payload.b_group,
+                    payload.y_group,
+                    payload.group_kem_pubkey.clone(),
+                    payload.hybrid_kem_pubkeys.clone(),
+                ),
+                Err(MultisigAddressError::NonCanonicalGroupKemKey)
+            ));
             let fp = address_fingerprint(&payload);
             let hex: String = fp.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(
@@ -751,11 +1145,13 @@ mod tests {
             address_fingerprint(&payload),
             MULTISIG_ADDRESS_FINGERPRINT
                 .frame(&Network::Mainnet.name_id(), [&payload.to_canonical_bytes()])
+                .into_bytes()
         );
         assert_ne!(
             address_fingerprint(&payload),
             MULTISIG_ADDRESS_FINGERPRINT
-                .frame(&Network::Testnet.name_id(), [&payload.to_canonical_bytes()]),
+                .frame(&Network::Testnet.name_id(), [&payload.to_canonical_bytes()])
+                .into_bytes(),
             "the name is load-bearing"
         );
     }
@@ -802,7 +1198,11 @@ mod tests {
             2,
             [0xB1; 32],
             [0x71; 32],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN],
+            ],
         )
         .unwrap();
         let p_test = MultisigAddressPayload::new(
@@ -811,7 +1211,11 @@ mod tests {
             2,
             [0xB1; 32],
             [0x71; 32],
-            vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
+            vec![
+                vec![0; HYBRID_KEM_PUBKEY_LEN],
+                vec![1; HYBRID_KEM_PUBKEY_LEN],
+            ],
         )
         .unwrap();
         assert_ne!(p_main.to_canonical_bytes(), p_test.to_canonical_bytes());

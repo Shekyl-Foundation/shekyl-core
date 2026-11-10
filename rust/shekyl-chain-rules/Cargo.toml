@@ -175,5 +175,16 @@ trybuild = "1"
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 rand_chacha = { workspace = true }
 
+# The trybuild programs are compiled as a downstream crate and judge
+# verdicts with `Trust::UNPINNED`, which exists for `test` and `harness`
+# builds only, and `cfg(test)` does not cross a crate wall. The workspace
+# run turned `harness` on through the store's dev-edge, which is how the
+# target built before the feature was named here; a `-p` run of the target
+# needs it said (found 2026-11-09 by the first run of the harness alone,
+# `scripts/ci/ignored_set_trybuild.sh`).
+[[test]]
+name = "trybuild"
+required-features = ["harness"]
+
 [lints]
 workspace = true

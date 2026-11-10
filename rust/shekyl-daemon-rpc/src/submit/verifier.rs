@@ -95,6 +95,7 @@ use shekyl_archival_retention::{
 use shekyl_bulletproofs::{verify_batch, BatchEntry};
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
+use shekyl_crypto_pq::multisig::MULTISIG_KEY_BLOB_MIN;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
@@ -112,15 +113,10 @@ use crate::submit::facts::{EpochClaimStanding, SubmitFacts};
 use crate::submit::phase_a::{ParsedSubmission, SubmitTxKind};
 use crate::submit::verify::{TxVerifier, VerifyReject};
 
-/// PQC scheme ids (`tx_pqc_verify.cpp:47-48`): single hybrid signer /
-/// M-of-N multisig container. The closed set — anything else is
-/// `Malformed`, exactly as the C++ battery rejects it.
+/// PQC scheme ids: single hybrid signer / M-of-N multisig. The closed set
+/// — anything else is `Malformed`, as CEN-I16 refuses it.
 const PQC_SCHEME_SINGLE: u8 = 1;
 const PQC_SCHEME_MULTISIG: u8 = 2;
-
-/// Multisig key-blob header (`n_total ‖ m_required`,
-/// `tx_pqc_verify.cpp:50`).
-const MULTISIG_KEY_HEADER_LEN: usize = 2;
 
 /// Compressed identity — `ct::identity()` byte-for-byte; the O6
 /// comparison is over compressed encodings, exactly as the C++
@@ -1010,9 +1006,10 @@ fn verify_fcmp(
     layers: u8,
     network: &NetworkId,
 ) -> Result<(), VerifyReject> {
-    // One PQC key scalar `k = H_ℓ(hybrid_public_key)` per spending input,
-    // submission order — the same value the C++ caller computes per input via
-    // `shekyl_fcmp_pqc_key_scalar`; the verifier derives `K = k·G_k` and the
+    // One PQC key scalar `k` per spending input, submission order — over the
+    // bytes the spent leaf committed to (`PqcKeyScalar::from_pqc_auth`: the
+    // whole solo key, or a multisig blob's committed form), the same value
+    // CEN-I15 derives; the verifier derives `K = k·G_k` and the
     // circuit opens the spent leaf's commitment to it (`PL-D3`,
     // `FCMP_SPEND_LINKABILITY.md` §6.2). The caller passes `leaf_auths` already
     // narrowed to the leaf-contributing subset (every auth for a spend, the
@@ -1026,10 +1023,15 @@ fn verify_fcmp(
         .iter()
         .map(|ki| KeyImage::from_canonical_bytes(*ki))
         .collect();
-    let pqc_hashes: Vec<PqcKeyScalar> = leaf_auths
+    let Some(pqc_hashes) = leaf_auths
         .iter()
-        .map(|auth| PqcKeyScalar::from_pqc_public_key(&auth.hybrid_public_key))
-        .collect();
+        .map(|auth| PqcKeyScalar::from_pqc_auth(auth.scheme_id, &auth.hybrid_public_key))
+        .collect::<Option<Vec<PqcKeyScalar>>>()
+    else {
+        return Err(VerifyReject::malformed(
+            "K12: a pqc_auth key blob is not well formed for its scheme",
+        ));
+    };
     if pqc_hashes.len() != key_images.len() {
         return Err(VerifyReject::malformed(
             "K12: leaf-auth count != key-image count",
@@ -1073,16 +1075,14 @@ fn verify_fcmp(
     }
 }
 
-/// K13 proper: the `verify_transaction_pqc_auth` battery
-/// (`tx_pqc_verify.cpp`), natively.
+/// K13 proper: every `pqc_auths` slot verified, the same body as the
+/// validator's CEN-I18.
 ///
 /// Per auth: version pin, zero flags, known scheme id ∈ {1,2}, per-scheme
 /// key-blob length bounds, then the hybrid Ed25519+ML-DSA (or M-of-N multisig
 /// container) verification over the per-input signing-preimage hash — computed
 /// by `shekyl-wire`'s [`pqc_signing_payload_hashes`], the derivation of record
-/// (`PqcSigningPreimage`) that the daemon's `verify_transaction_pqc_auth` and
-/// the validator's CEN-I17 read too; the C++ assembly it once twinned is
-/// deleted (E6 slice 6 commit 7).
+/// (`PqcSigningPreimage`) that the validator's CEN-I17 reads too.
 ///
 /// MSW-6 (PQC_MULTISIG.md §16.3) withdrew the former tx-wide scheme-id
 /// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
@@ -1099,7 +1099,7 @@ fn verify_fcmp(
 /// scalar; PL-D3 (the hiding leaf commitment opened in-circuit) restores it,
 /// and the conclusion stood on the scheme_id=2 precedent alone in between
 /// (docs/design/FCMP_SPEND_LINKABILITY.md §12, ruling 5).
-/// Dropped here in lockstep with the C++ battery so the K13 differential holds.
+/// The validator (CEN-I18) dropped it in lockstep, so the two agree.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes
 fn verify_pqc_auths(
@@ -1119,7 +1119,7 @@ fn verify_pqc_auths(
         ));
     }
     for (auth, payload_hash) in pqc_auths.iter().zip(&payload_hashes) {
-        verify_pqc_auth_slot(auth, payload_hash)?;
+        verify_pqc_auth_slot(auth, payload_hash, network)?;
     }
     Ok(())
 }
@@ -1144,6 +1144,7 @@ fn verify_pqc_auths(
 fn verify_pqc_auth_slot(
     auth: &PqcAuth,
     payload_hash: &SigningPayloadHash,
+    network: &NetworkId,
 ) -> Result<(), VerifyReject> {
     if auth.auth_version != 1 || auth.flags != 0 {
         return Err(VerifyReject::malformed("K13: auth_version/flags"));
@@ -1154,9 +1155,10 @@ fn verify_pqc_auth_slot(
     if auth.hybrid_public_key.is_empty() {
         return Err(VerifyReject::malformed("K13: empty hybrid_public_key"));
     }
-    // The C++ battery's key-blob bounds, kept as the loud pre-check they are
-    // there (the parse inside `verify_pqc_auth` enforces the exact lengths;
-    // this refuses a blob the DoS ceiling excludes before parsing it).
+    // CEN-I16's key-blob bounds, the loud pre-check before the parse (the
+    // parse inside `verify_pqc_auth` enforces the exact lengths; this
+    // refuses a blob the DoS ceiling excludes before parsing it). The
+    // multisig floor is crypto-pq's, the one CEN-I16 also imports.
     match auth.scheme_id {
         PQC_SCHEME_SINGLE => {
             if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
@@ -1164,7 +1166,7 @@ fn verify_pqc_auth_slot(
             }
         }
         PQC_SCHEME_MULTISIG => {
-            if auth.hybrid_public_key.len() < MULTISIG_KEY_HEADER_LEN
+            if auth.hybrid_public_key.len() < MULTISIG_KEY_BLOB_MIN
                 || auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB
             {
                 return Err(VerifyReject::malformed("K13 multisig: key blob bounds"));
@@ -1173,15 +1175,15 @@ fn verify_pqc_auth_slot(
         // Excluded by the closed-set check above.
         _ => return Err(VerifyReject::malformed("K13: unreachable scheme arm")),
     }
-    // One body with the daemon's `shekyl_pqc_verify` and the validator's
-    // CEN-I18: scheme dispatch, the tx-auth domains, and the single
-    // `verify_multisig` entry point (group-id binding no longer exists —
-    // Option E′ deleted `group_id`; identity is the address fingerprint).
+    // One body with the validator's CEN-I18: scheme dispatch, the tx-auth
+    // domains, and the single `verify_multisig` entry point, whose key-hash
+    // check binds this network's id.
     verify_pqc_auth(
         auth.scheme_id,
         &auth.hybrid_public_key,
         &auth.hybrid_signature,
         payload_hash,
+        network,
     )
     .map_err(|e| {
         VerifyReject::malformed(match e {

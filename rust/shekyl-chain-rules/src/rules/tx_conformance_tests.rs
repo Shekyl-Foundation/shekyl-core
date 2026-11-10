@@ -995,6 +995,30 @@ fn the_i19_sites_nonce_rendering_is_i19_at_both_sites() {
     }
 }
 
+/// The I19 site's multisig rendering (`PQC_MULTISIG.md` §7.4). The site's
+/// table row is keyed to the missing-field rendering; this holds the `0x0D`
+/// clause: an entry naming an output the spend does not have. The twin
+/// refuses it with the clause's message, and `tx_form` refuses the same
+/// body on I19 at both listed slots.
+#[test]
+fn the_i19_sites_multisig_rendering_is_i19_at_both_sites() {
+    let tx = i19_multisig_entry_for_a_missing_output();
+    let err = tx
+        .validate()
+        .expect_err("the twin refuses a 0x0d entry for a missing output");
+    assert!(
+        err.to_string().contains("0x0d entry names output 2"),
+        "the twin refused on another arm: {err}"
+    );
+    for slot in [TxSlot::Lone, TxSlot::Listed(0)] {
+        assert_refused(
+            tx_form(&tx, slot, &RuleSet::GENESIS).map(|_| ()),
+            CenRow::I19,
+            Locus::Tx { slot },
+        );
+    }
+}
+
 /// The H20 site's other clauses. The twin's serve-credit shape check is one
 /// site, keyed in [`SITES`] to one trip (a `pqc_auth`), so its other clauses
 /// were held to nothing. Two of them concern the prunable region: a body

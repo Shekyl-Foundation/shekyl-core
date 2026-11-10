@@ -53,7 +53,7 @@ const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md
 
 /// The ratchet's pinned section sizes. Lower a pin when a row leaves; a
 /// raise is a new hole and needs a ruling.
-const INPUT_RAW_EXPECTED: usize = 17;
+const INPUT_RAW_EXPECTED: usize = 7;
 const UNFRAMED_EXPECTED: usize = 2;
 const PENDING_EXPECTED: usize = 7;
 
@@ -74,15 +74,17 @@ const HEDGED_NONCES: [&str; 6] = [
 
 /// `input:<type>` (§2.4, closed) and the Rust type a site must take for it.
 /// `None`: no type exists yet, so every such row is in the ratchet.
-const INPUT_TYPES: [(&str, Option<&str>); 8] = [
+const INPUT_TYPES: [(&str, Option<&str>); 10] = [
     ("TxSignableHash", Some("TxSignableHash")),
     ("SigningPayloadHash", Some("SigningPayloadHash")),
-    ("frame", None),
+    ("Framed32", Some("Framed32")),
+    ("Framed64", Some("Framed64")),
     ("BlockHash", Some("BlockHash")),
     ("TxId", Some("TxHash")),
     ("TreeRoot", Some("CurveTreeRoot")),
     ("SaltForKey", None),
-    ("NoiseMessage", None),
+    ("StaticPublic", Some("StaticPublic")),
+    ("Mac1Tag", Some("Mac1Tag")),
 ];
 
 /// `local:<why>` (§2.4, closed).
@@ -784,7 +786,10 @@ fn control_a_domain_of_the_wrong_kind_or_width_is_refused() {
 
 #[test]
 fn control_an_hkdf_name_row_away_from_salt_for_is_refused() {
-    let reg = with_column("shekyl-output-x", 5, "name");
+    // The row must sit in a file that neither calls nor defines salt_for.
+    // derivation.rs calls it (the multisig transport secret), so its rows
+    // cannot serve; leaf_commitment.rs keys only from per-output secrets.
+    let reg = with_column("shekyl-pqc-leaf-blind", 5, "name");
     refused_with(&reg, RATCHET, CENSUS, "neither calls nor defines salt_for");
 }
 

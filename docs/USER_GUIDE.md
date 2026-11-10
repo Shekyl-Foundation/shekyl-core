@@ -733,10 +733,11 @@ The full staking surface is live in interactive `shekyl-cli` (type
   and do not run. The wallet-rpc method is still `unstake`.
 - **Work in progress and endings:** `stake` also lists each stake, reward
   claim, return or release still in progress, and how each last ended if it
-  did not complete. A node can refuse one; it is then never sent again, and
-  its funds stay set aside until the height `stake` shows, because only the
-  chain can say whether it was mined. If it was not, the funds come back on
-  their own after that height, with nothing to do and no fee. Once you have
+  did not complete, with the amount each one holds. A node can refuse one; it
+  is then never sent again, and the record stays until the
+  height `stake` shows, because only the chain can say whether it was mined.
+  If it was not, what it holds comes back on its own after that height, with
+  nothing to do and no fee. A zero-fee reward claim holds nothing. Once you have
   read the endings `stake` showed, `stake acknowledge <stake|claim|return|release>`
   clears those of that kind; an ending that arrives later stays until you
   have seen it. A stake whose set-aside funds were all spent without the
@@ -858,7 +859,7 @@ the reward. This happens transparently -- no configuration needed.
 
 Shekyl's multisig requires M-of-N participants to authorise a spend. It
 uses the same hybrid Ed25519 + ML-DSA-65 signature scheme as single-signer
-transactions, with a maximum of 7 participants.
+transactions, with a maximum of 5 participants.
 
 ### How it works
 
@@ -901,8 +902,8 @@ authentication material (~5.4 KB solo baseline via `pqc_auth_weight()`).
 | 5-of-5 | ~27 KB | ~5.0× |
 
 Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
-5-of-5 — see `V3_ROLLOUT.md`. Target cap is
-`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G; code still `= 7` until MSW-1).
+5-of-5 — see `V3_ROLLOUT.md`. The cap is
+`MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G).
 
 ### Use cases
 

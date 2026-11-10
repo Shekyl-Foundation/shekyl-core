@@ -19,6 +19,7 @@ mod rig;
 #[path = "../support/tables.rs"]
 mod tables;
 
+mod inbound_host;
 mod judge;
 mod white;
 

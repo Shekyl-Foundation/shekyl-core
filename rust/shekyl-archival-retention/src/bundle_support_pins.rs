@@ -34,7 +34,7 @@ fn a_support_bit_is_in_the_commitment_preimage() {
     let three = records_bytes(3);
     let supported = twelve_with_one_support();
     assert_eq!(
-        hex(&bundle_commitment(&testnet(), &supported, &three)),
+        hex(bundle_commitment(&testnet(), &supported, &three).as_bytes()),
         "c6a58cd2745ae41a3086aa218bb9205c8e8aa8895652dfb40dca7c0cc8d6194290dfd7b8cc24c9bd50daff202ba83be071a145506abde891ceba42f0e08f833a"
     );
     assert_ne!(

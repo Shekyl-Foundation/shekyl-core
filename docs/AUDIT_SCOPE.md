@@ -270,10 +270,15 @@ For the protocol specification of these properties, see
 
 ### In-Scope
 
-1. **KDF domain separation** (`shekyl-crypto-pq/src/multisig_receiving.rs`)
-   - 8 distinct HKDF-Expand labels for key/nonce derivation
+1. **KDF domain separation** (`shekyl-crypto-pq/src/multisig_output.rs`,
+   `derivation.rs`)
+   - The member signing seed (`shekyl-v31-hybrid-sign`), the key-hash AEAD key
+     (`shekyl-output-multisig-key-hashes`), the key-hash domain
+     (`shekyl/multisig-key-hash-v1`) and the transport secret
+     (`shekyl/multisig-transport-v1`)
    - No label collision across single-signer and multisig paths
-   - Correct ikm/info binding for all derivation contexts
+   - Each member's encapsulation randomness is distinct (`derive_kem_seed`
+     binds the recipient's keys)
 
 2. **HKDF-derived Ed25519 scalar for FCMP++ prover**
    - `derive_multisig_signing_key` produces a valid Ed25519 scalar
