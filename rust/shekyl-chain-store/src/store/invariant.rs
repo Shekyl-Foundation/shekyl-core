@@ -470,10 +470,11 @@ pub enum StoreInvariant {
         /// The first height still retained.
         floor: shekyl_types::BlockHeight,
     },
-    /// **SI-35** — the admission view reads `D` from the count phase's memo,
+    /// **SI-35** — the admission view reads `D` from the connect's memo,
     /// under the opening block's hash. A miss is not a rebuild and not an
-    /// absent set: the count phase of this block already filed every epoch a
-    /// section inside `W₂` can name. Fatal, never a verdict on the block.
+    /// absent set: admission's filing step (`remember_window_epochs`) filed
+    /// every epoch a section inside `W₂` can name before the verdict. Fatal,
+    /// never a verdict on the block.
     DrawableMemoMiss {
         /// The epoch the view was asked for.
         epoch: shekyl_types::SettlementEpoch,
@@ -1188,7 +1189,7 @@ impl core::fmt::Display for StoreInvariant {
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
-                 block's hash; the count phase files that set before admission reads it"
+                 block's hash; admission files that set before it judges a bundle"
             ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,

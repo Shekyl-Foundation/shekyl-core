@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! [`StoreBundleView`]: [`BundleView`] over a chain view and the count
-//! phase's [`DrawableMemo`] (`SO-D12` increment 4a).
+//! [`StoreBundleView`]: [`BundleView`] over a chain view and the connect's
+//! [`DrawableMemo`] (`SO-D12` increment 4a).
 //!
 //! `D` is rules-side state. The store does not compute it, so the view is
-//! the batch plus the memo, not the batch alone. A memo miss is SI-35: the
-//! count phase of this block has already filed every epoch a section inside
+//! the batch plus the memo, not the batch alone. A memo miss is SI-35:
+//! admission's filing step has already filed every epoch a section inside
 //! the response window can name, and this path does not rebuild.
 //!
 //! Issued draws are read once per epoch and kept as [`IssuedVisibility`]:
@@ -215,7 +215,7 @@ impl<'a> OpenedEpochs<'a> {
     }
 }
 
-/// The admission view: one chain view and the memo the count phase filled.
+/// The admission view: one chain view and the memo admission's filing step filled.
 ///
 /// `V` is a [`BatchView`] when a connect journals what this view admits,
 /// and a snapshot when a read must not commit. The journal names the

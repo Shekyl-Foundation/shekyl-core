@@ -1280,13 +1280,11 @@ This lane's increments, each its own change:
    - implement the view trait on this lane's store. The view is the
      batch view plus the drawable memo: `D` is rules-side state, and the
      store computes none of it. A miss is SI-35; the view does not
-     rebuild. The count phase files the previous epoch's set into that
-     memo while the connecting block is still within `W₂` of the open,
-     by the same digest-checked rebuild it uses for its own epoch. The
-     brief's contract covered a memo kept across the epoch boundary. A
-     restart inside the window leaves the memo cold. Before this filing
-     the count rebuilt only the epoch it was counting, and a bundle for
-     the previous epoch faulted SI-35. The filing is that correction;
+     rebuild. Admission's filing step (`remember_window_epochs`, before
+     the verdict) files every epoch a section inside `W₂` can name, by
+     the same digest-checked rebuild the count uses for its own epoch, so
+     a memo left cold by a restart inside the window still holds the
+     previous epoch's set when a bundle for it is judged;
    - `admission_plan` builds the rows a connect journals from `Admitted`:
      the heights revealed, the issued draws keyed `(E, P, s, h, j)` — `j`
      the draw's place in its bundle, not its place in `D` — the digest
