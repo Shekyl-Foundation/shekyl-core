@@ -120,11 +120,14 @@ pub fn pqc_verify_against(
     auth: &PqcAuthFixture,
     message: &SigningPayloadHash,
 ) -> Result<(), PqcVerifyError> {
+    // A solo slot: the network id only reaches a multisig slot's key
+    // hashes, so any id measures the same work.
     verify_pqc_auth(
         HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
         &auth.public_key,
         &auth.signature,
         message,
+        &[0u8; 16],
     )
 }
 

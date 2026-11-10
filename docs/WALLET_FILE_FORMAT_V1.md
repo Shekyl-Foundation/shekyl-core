@@ -410,8 +410,11 @@ A `SHEKYLWT` file of any format other than this build's is refused by its
 `file_version` before any decryption: a newer one as
 `FormatVersionTooNew`, an older one (format `0x01`, which stored a
 derived 64-byte master seed and a seed-format byte) as
-`FormatVersionRetired`. Neither is reinterpreted; an older wallet is
-restored from its 24 seed words.
+`FormatVersionRetired`. Neither is reinterpreted. An older wallet's
+backup does not bring it back either: a 64-character seed is refused,
+and 24 recovery words derive other keys under the current derivation
+(`NETWORK_IDENTITY.md` NI-R7), so they open a different, empty wallet.
+The refusal says so and tells the user to create a new wallet.
 
 ## 5. Error taxonomy
 
@@ -425,7 +428,7 @@ reused with a different meaning:
 | `TooShort`                   | 1    | "wallet file truncated" |
 | `BadMagic`                   | 2    | "not a Shekyl V3 wallet file — please restore from seed" |
 | `FormatVersionTooNew`        | 3    | "wallet file written by a newer Shekyl; please upgrade" |
-| `FormatVersionRetired`       | 13   | "wallet file format predates this build; restore the wallet from its 24 seed words" |
+| `FormatVersionRetired`       | 13   | "wallet file format predates this build and cannot be opened. Its backup will not bring it back … Create a new wallet." |
 | `UnsupportedKdfAlgo`         | 4    | "unknown KDF algorithm id" |
 | `KdfParamsOutOfRange`        | 5    | "KDF parameters out of policy range" |
 | `UnsupportedWrapCount`       | 6    | "unexpected wrap-key count" |

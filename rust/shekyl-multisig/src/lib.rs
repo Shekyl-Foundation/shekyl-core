@@ -37,6 +37,7 @@ pub mod encryption;
 pub mod group_descriptor;
 pub mod intent;
 pub mod invariants;
+pub mod member_file;
 pub mod messages;
 
 pub use ceremony::{
@@ -52,6 +53,7 @@ pub use intent::{
 pub use invariants::{
     check_pre_signing_invariants, InvariantCheckInput, InvariantCheckResult, InvariantId,
 };
+pub use member_file::{MemberFile, MemberFileError, MemberSecrets};
 pub use messages::{
     DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope, MAX_PAYLOAD_LEN, MAX_SIG_LEN,
 };

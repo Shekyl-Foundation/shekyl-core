@@ -464,7 +464,16 @@ info:
   # `support_complete_tree` on the bond request, the -29506 refusal, and
   # the serving-posture response. The obligation is unchanged: the
   # whole-corpus archival backstop. api_version stays 1.
-  version: 0.15.0
+  # 0.16.0: an in_flight entry says what it holds
+  # (WALLET_RPC_STAKING_OUTCOMES.md WR-Q6, ruled 2026-11-07). reserved is
+  # required: the amounts of the record's reserved inputs still unspent,
+  # "0" when nothing is held (a held stake, an empty reservation), and
+  # null when the staking scan has not run yet, so what is held cannot be
+  # read. OpenAPI 3.1 does not treat `nullable` as null, so the schema is
+  # a oneOf of AtomicUnits and type null, the same shape as
+  # JsonRpcResponse.id. A refused entry's reason no longer says its funds
+  # stay set aside; reserved says what is held. api_version stays 1.
+  version: 0.16.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -2216,7 +2225,7 @@ components:
             (`FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`), so no spend of it
             can ever be proven; the money is on chain, the row is retained,
             and `get_balance.unspendable` totals it. `unspendable_reason`
-            names which half failed. Never flips: a rescan re-derives the
+            names which check failed. Never flips: a rescan re-derives the
             same verdict from the same chain bytes.
 
 
@@ -2230,14 +2239,28 @@ components:
           format: int64
         unspendable_reason:
           type: string
-          enum: [PQC_LEAF_MISMATCH, PQC_LEAF_ENTRY_ABSENT]
+          enum:
+            - PQC_LEAF_MISMATCH
+            - PQC_LEAF_ENTRY_ABSENT
+            - MULTISIG_ENTRY_ABSENT
+            - MULTISIG_GROUP_SIZE
+            - MULTISIG_HASHES_UNDECRYPTABLE
+            - MULTISIG_MEMBER_DECAP
+            - MULTISIG_MEMBER_KEY_HASH
+            - MULTISIG_DUPLICATE_KEY_HASH
+            - MULTISIG_LEAF_MISMATCH
           description: >
             Present exactly when `state` is UNSPENDABLE. PQC_LEAF_MISMATCH:
             the published `0x07` entry (`CM ‖ record`) is not this wallet's
             derivation for the output. PQC_LEAF_ENTRY_ABSENT: the
             transaction carries no `0x07` entry for the output (a shape
             consensus refuses; reachable only from a non-consensus block
-            source).
+            source). The MULTISIG_* values are the same fact for a group
+            wallet, one value per check: the `0x0D` entry is missing, it
+            names a different group size, its key hashes do not decrypt,
+            this member's ciphertext does not open, this member's key hash
+            does not match, two key hashes are the same hash, or the leaf
+            does not commit to the decrypted hashes.
         attribution:
           allOf:
             - $ref: "#/components/schemas/ReceiveAttribution"
@@ -2867,8 +2890,8 @@ components:
             sealed frontier, exclusive): every block below it is scanned.
             `null` when the wallet has never scanned as a staker, which is
             an answer, not something withheld. Compare with an in_flight
-            entry's funds_return_at: those funds return once this is
-            greater than it.
+            entry's funds_return_at: what that entry holds (`reserved`)
+            returns once this is greater than it.
         recovery_pending_reopen:
           type: boolean
           description: >
@@ -2960,6 +2983,7 @@ components:
         - dispatched_at_height
         - attempts
         - funds_return_at
+        - reserved
         - reason
       description: >
         One staking record in flight. `kind` and `state` are open strings
@@ -2980,19 +3004,22 @@ components:
             Values at this contract version. `pending`: saved, not yet
             sent. `dispatched`: sent and still able to land. `refused`: a
             node refused it and its end date has not passed. Not final:
-            nothing more is sent, its funds stay set aside until
-            funds_return_at, and a stake that lands before then takes the
-            confirmed path, because only the chain can say whether it
-            landed; the refusal becomes an outcome only at the end date.
-            `expired`: the end date has passed, so the transaction can
-            never be mined; its funds return at funds_return_at, and a
-            record a node refused keeps its reason. `held`: a stake past its end date whose every
-            reserved input has been spent with no confirmation seen; it is
-            kept rather than withdrawn, so a stake that did land keeps its
-            place, nothing is returned because nothing reserved is left,
-            and the wallet raises an integrity alarm. A record that lands
-            leaves the list without an outcome; its effect shows in the
-            balance.
+            nothing more is sent, and the record stays until
+            funds_return_at, because only the chain can say whether it
+            landed. What it still holds is `reserved`, which is "0" when
+            the record reserved nothing, as a zero-fee claim does. A stake
+            that lands before the end date takes the confirmed path; the
+            refusal becomes an outcome only at the end date. `expired`:
+            the end date has passed, so the transaction can never be
+            mined; what the record holds (`reserved`) returns once
+            pscan_synced_height passes funds_return_at, and a record a
+            node refused keeps its reason. `held`: a stake past its end
+            date whose every reserved input has been spent with no
+            confirmation seen; it is kept rather than withdrawn, so a
+            stake that did land keeps its place, nothing is returned
+            because nothing reserved is left, and the wallet raises an
+            integrity alarm. A record that lands leaves the list without
+            an outcome; its effect shows in the balance.
         dispatched_at_height:
           type: integer
           format: int64
@@ -3010,9 +3037,21 @@ components:
           nullable: true
           description: >
             For `refused` and `expired`: the end date, the last height at
-            which the transaction could be mined. Its funds return once
-            pscan_synced_height is greater than it. `null` in the other
+            which the transaction could be mined. What the record holds
+            (`reserved`) returns once pscan_synced_height is greater than
+            it. `null` in the other
             states, where no return is expected.
+        reserved:
+          oneOf:
+            - $ref: "#/components/schemas/AtomicUnits"
+            - type: "null"
+          description: >
+            What the record still holds (WR-Q6): the amounts of its
+            reserved inputs that are still unspent. A partly spent
+            reservation holds what is left. "0" when nothing is held: a
+            `held` stake, whose every reserved input is spent, and an
+            empty reservation. `null` when the staking scan has not run
+            yet, so what is held cannot be read; it is not "0".
         reason:
           type: string
           nullable: true

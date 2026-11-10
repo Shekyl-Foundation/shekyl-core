@@ -204,14 +204,13 @@ impl I17 {
 
 /// CEN-I18: every input's hybrid PQC signature — Ed25519 **and** ML-DSA-65,
 /// or the M-of-N multisig container — verifies over that input's
-/// `signed_hash(i)` (`verify_transaction_pqc_auth`, `tx_pqc_verify.cpp`;
-/// gated at `blockchain.cpp:4277–4285` on every non-coinbase transaction
-/// but the serve credit). The verification body is
+/// `signed_hash(i)`, on every non-coinbase transaction but the serve
+/// credit. The verification body is
 /// [`shekyl_crypto_pq::signature::verify_pqc_auth`], **the same function
-/// the daemon's `shekyl_pqc_verify` and daemon-rpc's K13 call** — scheme
-/// dispatch, the tx-auth domains and the container parse live there once,
-/// so the validator, the daemon and the pool cannot disagree on what a
-/// valid slot is. The slot's structural pins (`auth_version`, `flags`,
+/// daemon-rpc's K13 calls** — scheme dispatch, the tx-auth domains, the
+/// container parse and the multisig key-hash check (bound to this
+/// network's id) live there once, so the validator and the pool cannot
+/// disagree on what a valid slot is. The slot's structural pins (`auth_version`, `flags`,
 /// scheme id, key-blob length) are CEN-I16's, in `tx_form`.
 ///
 /// Refuses at the input whose signature does not verify. Vacuous on the
@@ -240,8 +239,8 @@ impl I18 {
     /// The row is recorded only when the check passes, including the
     /// vacuous non-`Fcmp` arm. A refusal leaves it unrecorded, as
     /// [`crate::rules::run_tx`] does for a stateless rule.
-    pub(crate) fn check<N>(
-        cx: &TxContext<'_, N>,
+    pub(crate) fn check(
+        cx: &TxContext<'_, NetworkId>,
         hashes: &[SigningPayloadHash],
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
@@ -260,6 +259,7 @@ impl I18 {
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
                 hash,
+                cx.network(),
             )
             .is_err()
             {

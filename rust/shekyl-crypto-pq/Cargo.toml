@@ -93,6 +93,10 @@ fn-dsa-sign = "=0.4.0"
 fn-dsa-vrfy = "=0.4.0"
 base64 = "0.22"
 hkdf = "0.12"
+# Constant-time compares in the multisig receive check
+# (`multisig_output.rs`): its inputs derive from secret KEM material. Already
+# in `Cargo.lock` (2.6.1) through curve25519-dalek and four workspace crates.
+subtle = "2"
 sha2 = "0.10"
 blake2 = "0.10"
 # BIP-39 (English) mnemonic <-> entropy conversion and PBKDF2-HMAC-SHA512 seed

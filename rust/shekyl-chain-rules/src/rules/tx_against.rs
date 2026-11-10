@@ -454,13 +454,13 @@ impl I13 {
 
 /// CEN-I15: the FCMP++ membership-and-spend-authorisation proof verifies
 /// over the transaction's spends — the proof bytes, every spend's key
-/// image, every pseudo-out, each spend's PQC key scalar
-/// `k = H_ℓ(hybrid_public_key)` (`shekyl_fcmp_pqc_key_scalar`), the root
-/// at the reference, `layers = depth + 1`, and the prefix hash
-/// (`shekyl_fcmp_verify`, `blockchain.cpp:4224`; `FCMP_PLUS_PLUS.md` §7
-/// step 4). The body is [`shekyl_fcmp::proof::verify`], **the function the
-/// daemon's FFI and daemon-rpc's K12 call** — one verifier, reached from
-/// three sites. The operands are assembled here, beside I12's anchor and
+/// image, every pseudo-out, each spend's PQC key scalar `k`
+/// ([`PqcKeyScalar::from_pqc_auth`]: over the whole solo key, or over a
+/// multisig blob's committed form), the root at the reference,
+/// `layers = depth + 1`, and the transaction's signable hash
+/// (`FCMP_PLUS_PLUS.md` §7 step 4). The body is
+/// [`shekyl_fcmp::proof::verify`], **the function daemon-rpc's K12 calls**
+/// — one verifier, reached from both sites. The operands are assembled here, beside I12's anchor and
 /// I13's depth, where they are defined.
 ///
 /// The row is a function over a **spend subset**, because its two callers
@@ -524,7 +524,9 @@ impl I15 {
                 return Err(());
             };
             key_images.push(KeyImage::from_canonical_bytes(*key_image));
-            pqc_keys.push(PqcKeyScalar::from_pqc_public_key(&auth.hybrid_public_key));
+            pqc_keys.push(
+                PqcKeyScalar::from_pqc_auth(auth.scheme_id, &auth.hybrid_public_key).ok_or(())?,
+            );
         }
         let num_inputs = u32::try_from(spend_slots.len()).map_err(|_| ())?;
         let layers = reference.tree_depth.checked_add(1).ok_or(())?;

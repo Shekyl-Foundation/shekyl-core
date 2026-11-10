@@ -40,7 +40,7 @@ use crate::error::WalletLedgerError;
 mod outcomes;
 pub use outcomes::{
     end_date, end_date_disposition, every_reserved_spent, record_was_sent, EndDateDisposition,
-    EndedRecord, EndedRelease, OutcomeKind, RecordKind, SealedRecord, StakingOutcome,
+    EndedRecord, EndedRelease, LiveFunding, OutcomeKind, RecordKind, SealedRecord, StakingOutcome,
 };
 
 /// Schema version of the durable pending-post block. **v13** gives every

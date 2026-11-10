@@ -58,8 +58,10 @@ firewall-pinned active-persona shape). Codes `-29513..-29529`; the two
 dispatch dispositions (`-29521` refused before sending, released /
 `-29522` sent and held until it lands or its end date passes) are
 distinct because they demand opposite client behavior. `staking_info`
-reports every staking record in flight (`in_flight`) and how each kind
-last ended without landing (`outcomes`); a held exit's `funds_return_at`
+reports every staking record in flight (`in_flight`), with the amount
+each still holds (`reserved`, `null` until the staking scan has run), and
+how each kind last ended without landing (`outcomes`); a held exit's
+`funds_return_at`
 is the height by which it has either completed or been withdrawn
 (`WALLET_RPC_STAKING_OUTCOMES.md`). The claim-era names `claim`
 and `get_stakes` are REJECTED, not pending (emission claims are

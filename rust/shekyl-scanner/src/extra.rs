@@ -9,7 +9,7 @@
 //! The genesis tag set and its codec live in [`shekyl_wire::tx_extra`]
 //! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). This module does not re-implement
 //! that grammar: [`Extra::read`] parses through `shekyl-wire` and keeps the
-//! fields the scanner needs (tx pubkeys, nonce, `0x06`/`0x07`). Genesis tags
+//! fields the scanner needs (tx pubkeys, nonce, `0x06`/`0x07`/`0x0D`). Genesis tags
 //! the scan path does not consume — including `0x0B` archival attestation —
 //! are skipped rather than treated as unknown. Retired inherited tags
 //! (`0x03`, `0xDE`) fail closed with the wire parser.
@@ -21,7 +21,7 @@ use zeroize::Zeroize;
 use curve25519_dalek::edwards::EdwardsPoint;
 
 use shekyl_curve_io::CompressedPoint;
-use shekyl_wire::tx_extra::{self, TxExtraField};
+use shekyl_wire::tx_extra::{self, MultisigEntry, TxExtraField};
 
 // PaymentId moved to `shekyl-engine-state`; re-exported here so `crate::extra::PaymentId`
 // and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.
@@ -65,6 +65,10 @@ pub enum ExtraField {
     /// PQC leaf entries (Shekyl tag 0x07): `CM ‖ record`, 64 bytes per
     /// output (`PL-D3`).
     PqcLeafEntries(Vec<u8>),
+    /// Multisig entries (Shekyl tag 0x0D): one per output paid to a
+    /// multisig group, ascending by output index. Public wire data —
+    /// ciphertexts and an encrypted hash list — so not wiped.
+    PqcMultisig(#[zeroize(skip)] Vec<MultisigEntry>),
 }
 
 fn decompress_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
@@ -82,6 +86,7 @@ impl ExtraField {
             ),
             ExtraField::PqcKemCiphertext(data) => TxExtraField::PqcKemCiphertext(data.clone()),
             ExtraField::PqcLeafEntries(data) => TxExtraField::PqcLeafEntries(data.clone()),
+            ExtraField::PqcMultisig(entries) => TxExtraField::PqcMultisig(entries.clone()),
         }
     }
 
@@ -110,12 +115,10 @@ impl ExtraField {
             }
             TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
             TxExtraField::PqcLeafEntries(data) => Some(ExtraField::PqcLeafEntries(data)),
+            TxExtraField::PqcMultisig(entries) => Some(ExtraField::PqcMultisig(entries)),
             // The coinbase's draw commitment is the validator's and the
             // challenger's; a scan reads no output from it.
-            TxExtraField::PqcViewTagHints(_)
-            | TxExtraField::PqcSpendAuthPubkeys(_)
-            | TxExtraField::ArchivalAttestation(_)
-            | TxExtraField::DrawCommitment(_) => None,
+            TxExtraField::ArchivalAttestation(_) | TxExtraField::DrawCommitment(_) => None,
         }
     }
 
@@ -226,6 +229,28 @@ impl Extra {
         let start = vout.checked_mul(PQC_LEAF_ENTRY_LEN)?;
         let end = start.checked_add(PQC_LEAF_ENTRY_LEN)?;
         blob.get(start..end)?.try_into().ok()
+    }
+
+    /// Output `vout`'s `0x0D` multisig entry, or `None` when the output was
+    /// not paid to a multisig group (or the transaction has no `0x0D`).
+    /// First field, as for the other PQC tags; admission admits at most one.
+    pub fn pqc_multisig_entry(&self, vout: usize) -> Option<&MultisigEntry> {
+        self.0.iter().find_map(|field| match field {
+            ExtraField::PqcMultisig(entries) => entries
+                .iter()
+                .find(|entry| usize::from(entry.out_idx()) == vout),
+            _ => None,
+        })
+    }
+
+    /// Append the multisig field (Shekyl tag `0x0D`) when any output pays a
+    /// multisig group. `entries` must be ascending by output index (CEN-I19's
+    /// multisig clause); an empty list appends nothing, since admission
+    /// refuses a present-but-empty field.
+    pub fn push_pqc_multisig(&mut self, entries: Vec<MultisigEntry>) {
+        if !entries.is_empty() {
+            self.0.push(ExtraField::PqcMultisig(entries));
+        }
     }
 
     /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus ONE
