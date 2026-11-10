@@ -146,6 +146,7 @@ stale_through = [
   { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
   { through = "ccc7c5f79a", note = "In this path set, shekyl-bulletproofs only. 3f2922f1ce replaces the folded verifier's variable-time multiexp of single-term (INV_EIGHT, P) pairs with one constant-time scalar multiplication per commitment, the product the prover already used. The points are unchanged; the time of that opening moves and has not been re-measured. ccc7c5f79a names the padded bit-length once for the prover and both verifiers and asserts reduce returns it, and adds no multiplication. The surge factor's Bp+ term was measured on the previous opening. The rows stay stale from PL-D3." },
   { through = "8bf44cad1e", note = "63fc991496 (multisig E′ container v0x02): verify_pqc_auth takes the chain's network id and sends scheme 2 to the v0x02 checks; the scheme-1 arm the pi4_hybrid_sig cells time is the same parse and the same Ed25519 + ML-DSA verify. CEN-I18 passes cx.network(). shekyl-fcmp gains PqcKeyScalar::from_pqc_auth, which for a solo slot adds one length compare before the same H_ℓ over the same bytes. Nothing changes a solo block's weight or verify work. 8bf44cad1e, in this history, rewrites doc comments in signature.rs only." },
+  { through = "e21cd906e7", note = "Multisig slice 2 (21e5e57a0c, e21cd906e7): in this path set, shekyl-fcmp's frost_sal.rs is rewritten over modular_frost's signing machines, frost_dkg.rs is deleted, lib.rs drops that module, and frost_sal_tests.rs is new, all behind the multisig feature. No verify, prove, SAL, leaf or tree function the capture times reads any of it, and none of them changed. Not re-measured; the rows stay stale on their carrier." },
 ]
 
 [[constant]]
@@ -1045,6 +1046,7 @@ stale_through = [
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-fcmp proof.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
   { through = "8bf44cad1e", note = "63fc991496 (multisig E′ container v0x02): shekyl-fcmp's leaf.rs gains PqcKeyScalar::from_pqc_auth and its KAT; a spend's k is the same H_ℓ over the same bytes for a solo slot, after one length compare. No tree or proof work changes." },
+  { through = "e21cd906e7", note = "Multisig slice 2 (21e5e57a0c, e21cd906e7): in this path set, shekyl-fcmp's frost_sal.rs is rewritten over modular_frost's signing machines and frost_dkg.rs is deleted, both behind the multisig feature; the spend path the capture times (tree build, path assembly, the single-signer prover) reads neither and is unchanged. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
