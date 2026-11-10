@@ -832,7 +832,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 46] = [
+    let links: [(&str, &str); 47] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -1017,6 +1017,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v46.json"),
             include_str!("vectors/rpc/get_version_synced_v47.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v47.json"),
+            include_str!("vectors/rpc/get_version_synced_v48.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -1035,7 +1039,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 46] = [
+    const ADDED_AT_LINK: [&[&str]; 47] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -1082,6 +1086,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.68 (sync_info is chain sync's view, CS-5 §7; get_version gains nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
         &[], // 3.70 (get_info's Peers part is one row per connector; get_version gains nothing)
+        &[], // 3.71 (get_blocks_by_height.bin entries carry bundle_references and bundle_bodies, the switch's C4; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1093,7 +1098,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 46] = [
+    const REMOVED_AT_LINK: [&[&str]; 47] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1140,6 +1145,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.68 (sync_info's spans and overview are not get_version's; it retires nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
         &[], // 3.70 (the Peers rows are not get_version's; it retires nothing)
+        &[], // 3.71 (the bundle arrays are not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),

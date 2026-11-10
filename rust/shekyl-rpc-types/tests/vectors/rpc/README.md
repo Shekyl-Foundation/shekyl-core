@@ -261,3 +261,8 @@ predecessors reshaped that way and nothing else
 (`the_3_70_get_info_vectors_are_their_predecessors_with_one_row_per_connector`).
 `get_info_offline_v1` and `_synced_restricted_v7` carry no Peers count
 and do not move. `get_version_synced_v47` is the chain's 3.70 link.
+
+**3.71 — `get_blocks_by_height.bin`'s entries carry the block's bundle
+references and the bodies this node holds for them** (the switch's C4).
+No JSON fixture carries a `.bin` entry, so none has a successor.
+`get_version_synced_v48` is the chain's 3.71 link.

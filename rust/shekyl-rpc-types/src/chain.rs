@@ -745,10 +745,12 @@ mod tests {
         // 3.69 gives `already_in_pool` its required `relay` field
         // (`held`, `held_overdue`, `published`, `untracked`). 3.70 makes
         // `get_info`'s Peers part one row per connector the daemon runs.
-        assert_eq!(CORE_RPC_VERSION, 196_678);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 70);
+        // 3.71 gives `get_blocks_by_height.bin`'s entries the block's
+        // bundle references and the bodies held for them (the switch's C4).
+        assert_eq!(CORE_RPC_VERSION, 196_679);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 71);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 70);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 71);
     }
 
     #[test]
