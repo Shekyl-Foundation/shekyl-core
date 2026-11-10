@@ -10,7 +10,9 @@
 //! 2026-10-30 rendered "Tor is carrying this node's traffic. This machine
 //! cannot reach the Tor network.").
 
-use super::super::super::posture::{render, Carriage, Cause, OwnTx, Shown, Space, Status};
+use super::super::super::posture::{
+    render, Carriage, Cause, OwnTx, ReportedSkew, Shown, Space, Status,
+};
 use super::held_status;
 
 /// Every cause kind, one detail each. The match below makes a new variant
@@ -32,7 +34,9 @@ fn every_cause() -> Vec<Cause> {
         },
         Cause::ExternalBlocked,
         Cause::DirectoryUnreachable,
-        Cause::ClockSkew { seconds: -259_200 },
+        Cause::ClockSkew {
+            skew: ReportedSkew::Measured(-259_200),
+        },
         Cause::CertificatesOutOfDate,
         Cause::TooManyFiles { open: 1024 },
         Cause::ReplyLate,

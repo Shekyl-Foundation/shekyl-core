@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::posture::{
     fixes, own_tx, BootstrapLine, Carriage, Cause, Connectors, Inbound, OriginVerdict,
-    ProgressWindow, Sessions, Shown, Space, Status,
+    ProgressWindow, ReportedSkew, Sessions, Shown, Space, Status,
 };
 
 mod announce;
@@ -385,10 +385,10 @@ pub enum Input {
     ExternalBlocked,
     /// No directory is reachable.
     DirectoryUnreachable,
-    /// A reported clock difference.
+    /// Tor reported the clock off.
     ClockSkew {
-        /// Seconds.
-        seconds: i64,
+        /// Tor's figure: `SKEW` or `MIN_SKEW`.
+        skew: ReportedSkew,
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
@@ -806,8 +806,8 @@ impl Core {
             Input::RepublishWithheld => self.republish_withheld(),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
-            Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
-            Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
+            Input::DirectoryUnreachable => self.unreachable_directories(now),
+            Input::ClockSkew { skew } => self.clock_skew(now, skew),
             Input::ClockJumped => self.clock_jumped(now),
             Input::Resumed { late_by } => self.resumed(now, late_by),
             Input::CertificateOutOfDate => self.line_logged(now),
@@ -912,8 +912,9 @@ impl Core {
                     self.progress.speak(now);
                     // A named cause is said by its own events, at most once
                     // per cap. The progress line is a different action, so
-                    // it cannot say the cause again.
-                    if self.cause == Cause::None {
+                    // it cannot say the cause again; nor the clock, which
+                    // the consensus check names beside no cause.
+                    if self.cause == Cause::None && !self.clock_is_behind() {
                         actions.push(Action::SayProgress);
                     }
                     self.arm_alive(now);
@@ -1330,6 +1331,13 @@ impl Core {
         } else {
             Vec::new()
         }
+    }
+
+    /// The line changed and was already said. Record the key it has now,
+    /// without speaking and without moving the cap.
+    fn note_key(&mut self) {
+        let key = self.say_key();
+        self.announcements.note_key(key);
     }
 
     fn say_key(&self) -> announce::SayKey {
