@@ -53,7 +53,7 @@ use shekyl_archival_retention::{
     verify_join_market_bond_post, verify_reinstate_bond_post, verify_release_bond_post,
     whole_record_last_served, AdmissionShard, ArchivalBondPostVin, BondKind,
     BondPostKind as RetentionKind, HoldingsDescriptor, HoldingsKind, ParentStateHoldings,
-    ShardClose, ShardSet,
+    ShardClose, ShardSet, RELEASE_COOLDOWN_EPOCHS, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -70,7 +70,7 @@ use crate::rules::tx::TxClass;
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{ChainView, Tip};
-use crate::{EpochFloor, Pricing};
+use crate::{EpochFloor, Pricing, Settling};
 
 /// CEN-J4: the persona a serve-credit vin names has a bond record on the
 /// view. The C++'s `get_archival_bond_hybrid_pubkey` miss; the fold's L7
@@ -609,7 +609,7 @@ fn release_terms_hold<'id, V: ChainView<'id>>(
     let (bonded_total, bad_interval_count, last_served) = match record {
         None => (None, 0, None),
         Some(record) => {
-            let maxima = release_last_served(view, &persona, record)?;
+            let maxima = release_last_served(view, rule_set, &persona, record)?;
             (
                 Some(record.bonded_total.to_raw()),
                 record.bad_intervals.len(),
@@ -656,41 +656,83 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
     .is_ok()
 }
 
-/// The last-served epoch of every shard `persona`'s record holds and has
-/// served — a release's cooldown operand, before
-/// `whole_record_last_served` folds it: for a shard set, each held shard's
-/// latest pass in held order, a never-served shard omitted (the C++'s
-/// `archival_bond_last_served_epochs` over `held_shard_ids`); for a complete
-/// tree, every served shard's latest pass in shard order (its
-/// `archival_bond_all_last_served_epochs`). Public for the submit engine's
-/// Release facts over the Rust pool (DRS-E5 PR-b M9), so the block path and
-/// the engine read one gather.
+/// The epochs in which `persona`'s record last passed a draw, inside the
+/// window a release's cooldown can see — the cooldown's operand, before
+/// `whole_record_last_served` folds it (the switch's C5). For a shard set,
+/// each held shard's latest epoch with a passed **economy** draw, read off
+/// the issued-draw index (`archival_issued_draw`); for a complete tree, the
+/// latest epoch with a passed **support** draw, read off
+/// `archival_support_issued` (`SO-D12s`). A shard or tree with no pass in
+/// the window is omitted.
+///
+/// **The window** is the epochs `current − (RELEASE_COOLDOWN_EPOCHS − 1)`
+/// through `current`, `current` the connecting block's epoch: a pass any
+/// earlier has had its cooldown elapse (`release_cooldown_elapsed`), and
+/// its epoch has reached its slash deadline, which falls in the epoch
+/// after it (`SLASH_GRACE_EPOCHS`). So an omitted pass changes neither of
+/// J16's checks. The window lies above the issued indexes' read floor
+/// ([`EpochFloor`]`<Settling>`) — [`COOLDOWN_WINDOW_IS_READABLE`] holds it
+/// at compile time — so the read never asks for a retired epoch.
+///
+/// Public for the submit engine's Release facts over the Rust pool and the
+/// RPC's claim source (DRS-E5 PR-b M9), so the block path and the engine
+/// read one gather.
 ///
 /// # Errors
 ///
 /// The view's fault.
 pub fn release_last_served<'id, V: ChainView<'id>>(
     view: &V,
+    rule_set: &RuleSet,
     persona: &PCanonicalId,
     record: &BondRecord,
 ) -> Result<Vec<u64>, V::Fault> {
-    Ok(match &record.holdings {
-        Holdings::ShardSet(held) => {
-            let mut maxima = Vec::with_capacity(held.len());
-            for h in held.iter() {
-                if let Some(epoch) = view.last_served_epoch(persona, h.shard)? {
-                    maxima.push(epoch.to_raw());
+    let connecting = Tip::connecting_height(view.tip()?.as_ref());
+    let schedule = rule_set.settlement_schedule();
+    let current = schedule.epoch_at_height(connecting.to_raw());
+    let floor = EpochFloor::<Settling>::under(connecting, schedule);
+    let first = current.saturating_sub(RELEASE_COOLDOWN_EPOCHS - 1);
+    let mut latest: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    for epoch in first..=current {
+        let at = SettlementEpoch::from_raw(epoch);
+        match &record.holdings {
+            Holdings::ShardSet(held) => {
+                for draw in view.issued_draws(at, floor)? {
+                    if draw.persona == *persona
+                        && draw.state.passed
+                        && held.iter().any(|h| h.shard == draw.shard)
+                    {
+                        latest.insert(draw.shard.to_raw(), epoch);
+                    }
                 }
             }
-            maxima
+            Holdings::CompleteTree => {
+                if view
+                    .support_issued(at, floor)?
+                    .iter()
+                    .any(|draw| draw.persona == *persona && draw.state.passed)
+                {
+                    latest.insert(u64::MAX, epoch);
+                }
+            }
         }
-        Holdings::CompleteTree => view
-            .served_shards(persona)?
-            .into_iter()
-            .map(|s| s.last_served.to_raw())
-            .collect(),
-    })
+    }
+    Ok(latest.into_values().collect())
 }
+
+/// The cooldown window [`release_last_served`] reads lies above the issued
+/// indexes' read floor, and the cooldown outlasts the slash grace: the
+/// window is the last `RELEASE_COOLDOWN_EPOCHS` epochs, and the settling
+/// family reads back `SLASH_GRACE_EPOCHS` (`EpochFloor<Settling>`), so
+/// `RELEASE_COOLDOWN_EPOCHS − 1 ≤ SLASH_GRACE_EPOCHS`. With the cooldown
+/// above the grace, that pins `RELEASE_COOLDOWN_EPOCHS = SLASH_GRACE_EPOCHS
+/// + 1`. The switch's brief states the upper bound one looser, `≤
+/// SLASH_GRACE_EPOCHS + 2`; that bound would put the window one epoch
+/// under the read floor (raised on #1327).
+pub const COOLDOWN_WINDOW_IS_READABLE: () = assert!(
+    SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS
+        && RELEASE_COOLDOWN_EPOCHS - 1 <= SLASH_GRACE_EPOCHS
+);
 
 /// The classified arm as the retention crate's vin — the marshal the three
 /// `verify_*` functions read. The kind is the arm's, so a kind no arm names

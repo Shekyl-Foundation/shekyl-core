@@ -706,11 +706,9 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
     fn support_issued(
         &self,
-        _epoch: SettlementEpoch,
-        _floor: EpochFloor<Settling>,
-    ) -> Result<Vec<IndexedDraw>, Self::Fault> {
-        Ok(Vec::new())
-    }
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Self::Fault>;
 
     /// The support row `(persona, epoch)` an earlier pass stored. `None`
     /// is no row, not a miss. One row per tree
@@ -719,12 +717,10 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
     fn support_settlement(
         &self,
-        _persona: &PCanonicalId,
-        _epoch: SettlementEpoch,
-        _floor: EpochFloor<Claimable>,
-    ) -> Result<Option<SettlementRow>, Self::Fault> {
-        Ok(None)
-    }
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, Self::Fault>;
 
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch

@@ -730,7 +730,12 @@ mod support_settlement_tests {
             self.inner.outputs_at(height)
         }
 
-        fn support_issued(
+        crate::archival_reads!(delegate inner, support_issued from planted_support);
+    }
+
+    impl SupportIndex<'_, '_> {
+        /// The planted support draws of the one epoch this view holds.
+        fn planted_support(
             &self,
             epoch: SettlementEpoch,
             _floor: EpochFloor<Settling>,
@@ -741,8 +746,6 @@ mod support_settlement_tests {
                 Ok(Vec::new())
             }
         }
-
-        crate::archival_reads!(delegate inner);
     }
 
     /// The shortest epoch that still has a response window. `W₂` is one

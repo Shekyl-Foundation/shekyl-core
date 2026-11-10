@@ -74,6 +74,11 @@ macro_rules! archival_reads {
     (delegate $inner:ident) => {
         $crate::archival_reads!(@methods {delegate $inner});
     };
+    // Every read delegated but the support index, which the view answers
+    // through its own method `$own` (a test that plants support draws).
+    (delegate $inner:ident, support_issued from $own:ident) => {
+        $crate::archival_reads!(@methods {delegate_support $inner $own});
+    };
     (@methods $policy:tt) => {
         // One signature list. `@emit` writes the whole method, receiver and
         // body together: a nested macro may not name `self`.
@@ -178,6 +183,23 @@ macro_rules! archival_reads {
             (::std::vec::Vec<shekyl_types::archival::IndexedDraw>);
             (epoch, floor);
             (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; support_issued;
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Settling>
+            );
+            (::std::vec::Vec<shekyl_types::archival::IndexedDraw>);
+            (epoch, floor);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; support_settlement;
+            (
+                persona: &shekyl_types::PCanonicalId,
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Claimable>
+            );
+            (::core::option::Option<shekyl_types::archival::SettlementRow>);
+            (persona, epoch, floor);
+            (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; issued_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -312,6 +334,16 @@ macro_rules! archival_reads {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Err($err)
+        }
+    };
+    (@emit {delegate_support $inner:ident $own:ident}; support_issued; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn support_issued(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            self.$own($($arg),*)
+        }
+    };
+    (@emit {delegate_support $inner:ident $own:ident}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            self.$inner.$name($($arg),*)
         }
     };
     (@emit {delegate $inner:ident}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {

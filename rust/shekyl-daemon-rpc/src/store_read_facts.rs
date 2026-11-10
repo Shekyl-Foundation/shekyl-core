@@ -616,7 +616,8 @@ impl ChainReadFacts for StoreFacts {
         let bond = match view.bond_record(persona).map_err(store_fault)? {
             None => None,
             Some(record) => {
-                let maxima = release_last_served(&view, persona, &record).map_err(store_fault)?;
+                let maxima =
+                    release_last_served(&view, &rule_set, persona, &record).map_err(store_fault)?;
                 Some(ClaimantBond {
                     join_settlement_epoch: record.join_settlement_epoch,
                     holdings_kind: record.holdings.kind(),
