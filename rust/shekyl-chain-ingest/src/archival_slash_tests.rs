@@ -20,9 +20,11 @@
 //!   are closed, final and priced at its parent (CEN-J15). One block before
 //!   both operands lift, the join is refused on J15; at the first
 //!   admissible height it connects.
-//! - The failure window: eleven epochs of draws on both pairs, the served
-//!   one passed and the other withheld, then the slash in the deadline
-//!   block.
+//! - The failure window: epochs of draws on both pairs, the served one
+//!   passed and the other withheld, then the slash in the deadline block
+//!   of the unserved pair's eleventh miss. An epoch that leaves the pair
+//!   short of its counted draws is not an observation and adds no miss,
+//!   so the slash's epoch is read off the settlement rows.
 //! - The driver's Reinstate connects, and the wallet-side
 //!   `verify_reinstate_bond_post` agrees with the fold on the same vin.
 //! - J18 refuses a second Reinstate and one whose holdings changed. J16
@@ -219,16 +221,56 @@ impl SlashChain {
 
     /// The failure window on admitted bundles: draws on both pairs in every
     /// epoch from `E_join + 1`, passed on the served shard and withheld on
-    /// the other, then the slash in the deadline block.
+    /// the other, then the slash in the deadline block of the unserved
+    /// pair's `m`-th miss.
+    ///
+    /// **Which epoch that is, is read off the chain.** A draw is selected
+    /// from the seed and the block's hash, and a full pair is selected one
+    /// time in sixteen (`select_draw`), so an epoch can leave a pair short
+    /// of its counted draws and settle it `NonObservation`. That is not an
+    /// observation: it adds no miss and no pass (`failure_window`). The
+    /// slash therefore lands at the pass of the `m`-th `Missed` row,
+    /// `E_join + m` only when no epoch before it came up short. The pass of
+    /// every epoch is read as it lands: no slash before the `m`-th miss,
+    /// and the slash in that pass's block.
     async fn slash_the_unserved_shard(&mut self, join: &Joined) -> Slashed {
-        let window = failure_window_epochs();
-        let slash_epoch = join.join_epoch + window;
-        let deadline = self.schedule.slash_deadline_height(slash_epoch);
-        self.serve(join, u64::MAX, BlockHeight::from_raw(deadline))
-            .await;
-        self.drive
-            .advance_to(BlockHeight::from_raw(deadline + 1))
-            .await;
+        let misses_to_slash = failure_window_epochs();
+        let mut misses = 0u64;
+        let mut outcomes: Vec<(u64, SettlementOutcome)> = Vec::new();
+        let mut epoch = join.join_epoch;
+        let (slash_epoch, deadline) = loop {
+            epoch += 1;
+            assert!(
+                epoch <= join.join_epoch + 3 * misses_to_slash,
+                "no slash in three failure windows; the unserved pair settled {outcomes:?}"
+            );
+            let deadline = self.schedule.slash_deadline_height(epoch);
+            self.serve(join, u64::MAX, BlockHeight::from_raw(deadline + 1))
+                .await;
+            let pass = &self.drive.chain[usize::try_from(deadline).expect("small")].archival;
+            let outcome = pass
+                .settlements()
+                .iter()
+                .find(|s| s.epoch.to_raw() == epoch && s.shard.to_raw() == join.unserved)
+                .map(|s| s.row.outcome())
+                .expect("the pass settles the unserved pair");
+            assert_ne!(
+                outcome,
+                SettlementOutcome::Served,
+                "no draw on the unserved shard is passed"
+            );
+            outcomes.push((epoch, outcome));
+            misses += u64::from(outcome == SettlementOutcome::Missed);
+            let slashed = !pass.slashes().is_empty();
+            assert_eq!(
+                slashed,
+                outcome == SettlementOutcome::Missed && misses == misses_to_slash,
+                "epoch {epoch}: the slash is the pass of miss {misses_to_slash}; settled {outcomes:?}"
+            );
+            if slashed {
+                break (epoch, deadline);
+            }
+        };
         let slashed_at: Vec<u64> = self
             .drive
             .chain
@@ -236,19 +278,12 @@ impl SlashChain {
             .filter(|b| !b.archival.slashes().is_empty())
             .map(|b| b.height.to_raw())
             .collect();
-        assert_eq!(
-            slashed_at,
-            vec![deadline],
-            "one slash, in the deadline block"
-        );
+        assert_eq!(slashed_at, vec![deadline], "one slash on the chain");
         // The rows the deadline block settled, ahead of the slash it
-        // decided on them: the unserved shard Missed, the served one Served.
-        let settled: Vec<(u64, SettlementOutcome)> = self
-            .drive
-            .chain
-            .last()
-            .expect("mined")
-            .archival
+        // decided on them: the unserved shard Missed; the served one Served,
+        // or short of its counted draws.
+        let pass = &self.drive.chain[usize::try_from(deadline).expect("small")].archival;
+        let settled: Vec<(u64, SettlementOutcome)> = pass
             .settlements()
             .iter()
             .map(|s| {
@@ -257,13 +292,25 @@ impl SlashChain {
                 (s.shard.to_raw(), s.row.outcome())
             })
             .collect();
-        let mut expected = vec![
-            (join.served, SettlementOutcome::Served),
-            (join.unserved, SettlementOutcome::Missed),
-        ];
-        expected.sort_unstable_by_key(|(shard, _)| *shard);
-        assert_eq!(settled, expected, "one row per pair, in shard order");
-        let slash = &self.drive.chain.last().expect("mined").archival.slashes()[0];
+        let mut shards = vec![join.served, join.unserved];
+        shards.sort_unstable();
+        assert_eq!(
+            settled.iter().map(|(shard, _)| *shard).collect::<Vec<_>>(),
+            shards,
+            "one row per pair, in shard order"
+        );
+        for (shard, outcome) in &settled {
+            if *shard == join.unserved {
+                assert_eq!(*outcome, SettlementOutcome::Missed);
+            } else {
+                assert_ne!(
+                    *outcome,
+                    SettlementOutcome::Missed,
+                    "every served draw passed"
+                );
+            }
+        }
+        let slash = &pass.slashes()[0];
         assert_eq!(slash.entry.persona, join.persona.id());
         assert_eq!(slash.entry.shard.to_raw(), join.unserved);
         assert_eq!(slash.entry.epoch.to_raw(), slash_epoch);
