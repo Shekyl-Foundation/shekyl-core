@@ -102,6 +102,39 @@ pub(super) fn issue_permit() -> shekyl_network::Permit {
 
 pub(super) use crate::test_paths::tmp;
 
+/// Plant `draws` in `epoch`'s issued-draw index and set the epoch's
+/// digest cell to `digest`, in one write: the rows and the cell admission
+/// writes, without a block. The slash tests plant the observations they
+/// settle this way, as they plant `D`; admission's own write is
+/// `admission_chain_tests`'. A digest the draws do not fold to builds the
+/// store SI-25 refuses, which is how that refusal's tests are driven.
+pub(super) fn plant_issued_draws(
+    store: &ChainStore,
+    epoch: shekyl_types::SettlementEpoch,
+    draws: &[crate::store::archival_reads::IndexedDraw],
+    digest: shekyl_types::archival::IssuedDigest,
+) {
+    use crate::codec::Canonical as _;
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let mut index = batch.open_upsert_table(crate::schema::ARCHIVAL_ISSUED_DRAW)?;
+        for draw in draws {
+            let key = crate::ids::IssuedDrawKey::new(
+                epoch,
+                draw.persona,
+                draw.shard,
+                draw.issuing_height,
+                draw.draw,
+            );
+            index.upsert(key.key(), draw.state.encoded().as_encoded())?;
+        }
+        batch
+            .open_upsert_table(crate::schema::ARCHIVAL_ISSUED_DIGEST)?
+            .upsert(epoch.to_raw(), digest.encoded().as_encoded())?;
+        Ok(())
+    });
+    out.expect("the planted draws are written");
+}
+
 #[test]
 fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
     let path = tmp("policy");

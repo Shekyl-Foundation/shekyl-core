@@ -23,9 +23,8 @@
 //! [`CREDITS_PER_BLOCK`] padded serve credits close shard 0, so the scan's
 //! universe is one shard. The credits are personas 0 and 1's **on shard
 //! 1**, the open one, and are there for their bytes ([`padded_credit`]).
-//! Each pair on shard 0 is issued three draws in every epoch from 1
-//! through the regtest door ([`ChainStore::regtest_issue_draws`],
-//! `SO-D10f`: nothing admits a draw yet), none passed — which is how every
+//! Each pair on shard 0 is planted three draws in every epoch from 1
+//! (`store_tests::plant_issued_draws`), none passed — which is how every
 //! observation settles Missed. Each epoch's deadline connect (`199`,
 //! `299`, …) settles that epoch: epoch 0 has no draw and is not in
 //! standing either (`good_through` starts the epoch after the join),
@@ -409,8 +408,7 @@ fn folded(mut digest: IssuedDigest, epoch: SettlementEpoch, draws: &[IndexedDraw
     digest
 }
 
-/// Issue `epoch`'s planned draws through the regtest door, with the
-/// digest they fold to.
+/// Plant `epoch`'s planned draws, with the digest they fold to.
 fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
     let draws = planned_draws(epoch, personas, plan);
     if draws.is_empty() {
@@ -422,14 +420,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
         .expect("read")
         .issued_digest(epoch, EpochFloor::NONE)
         .expect("read");
-    store
-        .regtest_issue_draws(
-            super::store_tests::issue_permit(),
-            epoch,
-            &draws,
-            folded(digest, epoch, &draws),
-        )
-        .expect("the draws are issued");
+    super::store_tests::plant_issued_draws(store, epoch, &draws, folded(digest, epoch, &draws));
 }
 
 #[derive(Clone, Copy, Default)]
