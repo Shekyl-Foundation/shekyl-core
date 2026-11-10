@@ -32,8 +32,8 @@ mod running;
 use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
-pub use dials::DialTally;
 use dials::Dials;
+pub use dials::{DialTally, TorCensus};
 pub use directories::{DirectoryAnswer, DirectoryFetch};
 use probe::Probe;
 

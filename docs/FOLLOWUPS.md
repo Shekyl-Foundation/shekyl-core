@@ -1438,10 +1438,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
 
-- **BA-T1: the CI admission bench times the pool door's whole sequence; closes when its own PR lands, after #1319 and before the cut.** The gungraun bench (BA-I10) times the masks and the membership proof only. The door also verifies one hybrid signature per input and the lone range proof, which `DAEMON_RELAY_PRIVACY.md` §72.2's cells carry since BA-Q9. Adding them moves a gated baseline, so they land in a PR of their own (Rick, 2026-11-08).
-  - Owner: `BA-T1` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) §5 (the proposed tracked set) and BA-Q9
-  - Target: pre-genesis
-
 
 ## Post-genesis
 

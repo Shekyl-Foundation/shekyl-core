@@ -35,7 +35,7 @@ pub use network::{Listening, Network, NetworkParts, StartError};
 pub use plan::{ClearnetPlan, LinkLimits, NetworkPlan, PeerPlan, TorPlan};
 pub use tor::{SupervisorFeeds, TOR_DIAL_WITHIN, TOR_SOCKS_TIMEOUT};
 
-pub use shekyl_dialer::{session_of, TallySink, TorLinkTally};
+pub use shekyl_dialer::{session_of, TallySink, TorCensus, TorLinkTally};
 pub use shekyl_p2p_session::{
     Board, ClaimCarrier, CoreSyncData, Endpoint, Established, PerConnector, ProbeArrival,
     ProbeHandshake, ProbeSink, Row, SessionsSink, SyncInbound, SyncOwner, Taken,

@@ -6,7 +6,9 @@
 //! One wake: settle the lists once, then recover, idle, or begin one test.
 //!
 //! A test whose next attempt is due runs before any new draw, unless its
-//! host is already reached. The open test lives on
+//! host is already reached. That wake does not settle. The Tor census is
+//! published on both: the seats after settle, or the seats held when the
+//! wake only resumes. The open test lives on
 //! [`Attempts`](crate::attempts::Attempts); this module only decides which
 //! wake makes it.
 
@@ -16,6 +18,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectorId, NetworkAddress, Tick, WHITE_REFILL_LINE,
 };
+use shekyl_timing_engine::Stamp;
 
 use super::recovery;
 use super::Shared;
@@ -217,6 +220,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     connector: ConnectorId,
     sessions: &BTreeSet<NetworkAddress>,
     now: Tick,
+    census_at: Stamp,
     rng: &mut R,
 ) -> Wake {
     let index = connector.index();
@@ -231,6 +235,11 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     if shared.attempts[index].in_flight() < bound {
         if let Some((address, aim)) = resume_unoccupied(&mut shared.attempts[index], sessions, now)
         {
+            // A retry returns before settle. The census is still this
+            // wake's: the seats held now. Expiry waits for a wake that
+            // settles.
+            let held = shared.lists.held_seats(connector);
+            shared.tor_link.census(connector, held, census_at);
             // Every wake reports to the recovery episode, this one too.
             let held = shared.attempts[index].held();
             recovery::report_wake(&mut shared.recovery[index], connector, held, target);
@@ -252,6 +261,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             lists,
             attempts,
             pending,
+            tor_link,
             ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
@@ -275,6 +285,9 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
                     .any(|verdict| verdict.outcome.address() == address)
         };
         let seats = settled.census(&mut eligible);
+        // After expiry, the seats this wake can draw. Cooling is inside
+        // the two lengths; the candidate filter is not.
+        tor_link.census(connector, seats.white.saturating_add(seats.gray), census_at);
         let census = Census {
             kept,
             in_flight,

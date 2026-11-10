@@ -69,6 +69,7 @@ use crate::derivation::{
 use crate::kem::MlKemDecapsKey;
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
+    SHARED_SECRET_LEN,
 };
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment};
@@ -1085,59 +1086,97 @@ impl std::fmt::Debug for PqcAuthSignature {
 
 /// Sign a message for a specific output using the HKDF-derived PQC keypair.
 ///
-/// This is the single point where ML-DSA secret keys exist. The key is
-/// derived from `derive_output_secrets(combined_ss, output_index).ml_dsa_seed`
-/// (salt B), used to sign `message`, and immediately zeroized. The secret
-/// key never crosses the FFI boundary.
-///
-/// Returns the hybrid (Ed25519 + ML-DSA-65) public key and signature in
-/// canonical encoding.
+/// Derives the output's hybrid key, signs with the hedged production
+/// nonce, and returns the canonical public key and signature. The secret
+/// key exists only for that derivation and never crosses the FFI boundary.
 ///
 /// `domain` is the scheme-level domain-separation string for the calling
 /// surface (SA-R-2): `SCHEME_DOMAIN_PQC_AUTH_TX` for a tx spend auth,
 /// `SCHEME_DOMAIN_EMISSION_BACKING` for the emission backing role. It is
 /// threaded through to the nested combiner, not applied here.
 pub fn sign_pqc_auth_for_output(
-    combined_ss: &[u8; 64],
+    combined_ss: &[u8; SHARED_SECRET_LEN],
     output_index: u64,
     domain: &[u8],
     message: &[u8],
 ) -> Result<PqcAuthSignature, CryptoError> {
-    use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme};
+    use crate::signature::{HybridEd25519MlDsa, SignatureScheme};
+    let scheme = HybridEd25519MlDsa;
+    sign_derived_output_auth(combined_ss, output_index, |hybrid_sk| {
+        scheme.sign(hybrid_sk, domain, message)
+    })
+}
+
+/// The wallet signer's assembly with a fixed ML-DSA nonce.
+///
+/// Same derivation, same nested combiner and same canonical encodings as
+/// [`sign_pqc_auth_for_output`]. The production entry draws the ML-DSA nonce
+/// from `OsRng`, so a signature made that way differs every call and an
+/// instruction count taken over it moves with the nonce. This entry passes
+/// `ml_dsa_seed` through [`crate::signature::HybridEd25519MlDsa::sign_with_ml_dsa_seed`].
+///
+/// Test-support only (`test-utils`, or this crate's own tests). Production
+/// signatures stay on [`sign_pqc_auth_for_output`].
+#[cfg(any(test, feature = "test-utils"))]
+pub fn sign_pqc_auth_for_output_with_ml_dsa_seed(
+    combined_ss: &[u8; SHARED_SECRET_LEN],
+    output_index: u64,
+    domain: &[u8],
+    message: &[u8],
+    ml_dsa_seed: &[u8; crate::signature::ML_DSA_SIGNING_SEED_LEN],
+) -> Result<PqcAuthSignature, CryptoError> {
+    use crate::signature::HybridEd25519MlDsa;
+    let scheme = HybridEd25519MlDsa;
+    sign_derived_output_auth(combined_ss, output_index, |hybrid_sk| {
+        scheme.sign_with_ml_dsa_seed(hybrid_sk, domain, message, ml_dsa_seed)
+    })
+}
+
+/// Derive one output's hybrid key and sign with `sign`.
+///
+/// This is the single point where that key's ML-DSA secret exists. The key
+/// comes from `derive_output_secrets(combined_ss, output_index)` (the ML-DSA
+/// half from `ml_dsa_seed`, salt B; the Ed25519 half from
+/// `ed25519_pqc_seed`, through [`ed25519_dalek::SigningKey`]), `sign` uses
+/// it, and both the secret and the derived [`OutputSecrets`] are zeroized
+/// on drop. Both public entries call this, so a bench cannot assemble a
+/// second copy of the key.
+fn sign_derived_output_auth<F>(
+    combined_ss: &[u8; SHARED_SECRET_LEN],
+    output_index: u64,
+    sign: F,
+) -> Result<PqcAuthSignature, CryptoError>
+where
+    F: FnOnce(
+        &crate::signature::HybridSecretKey,
+    ) -> Result<crate::signature::HybridSignature, CryptoError>,
+{
+    use crate::signature::{HybridPublicKey, HybridSecretKey};
     use ed25519_dalek::SigningKey;
+    use fips204::traits::SerDes;
 
     let secrets: OutputSecrets = derive_output_secrets(combined_ss, output_index);
 
-    // ML-DSA-65 keypair from HKDF seed
     let (ml_pk, ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
 
-    // Ed25519 keypair from HKDF seed
     let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
     let ed_verifying = ed_signing.verifying_key();
 
     let hybrid_pk = HybridPublicKey {
         ed25519: ed_verifying.to_bytes(),
-        ml_dsa: {
-            use fips204::traits::SerDes;
-            ml_pk.into_bytes().to_vec()
-        },
+        ml_dsa: ml_pk.into_bytes().to_vec(),
     };
     let hybrid_sk = HybridSecretKey {
         ed25519: ed_signing.to_bytes().to_vec(),
-        ml_dsa: {
-            use fips204::traits::SerDes;
-            ml_sk.into_bytes().to_vec()
-        },
+        ml_dsa: ml_sk.into_bytes().to_vec(),
     };
 
-    let scheme = HybridEd25519MlDsa;
-    let sig = scheme.sign(&hybrid_sk, domain, message)?;
-
+    let sig = sign(&hybrid_sk)?;
     let pk_bytes = hybrid_pk.to_canonical_bytes()?;
     let sig_bytes = sig.to_canonical_bytes()?;
 
-    // hybrid_sk drops here — zeroized via HybridSecretKey's Zeroize impl
-    // secrets drops here — zeroized via OutputSecrets's ZeroizeOnDrop
+    // hybrid_sk drops here — zeroized via HybridSecretKey's Zeroize impl.
+    // secrets drops here — zeroized via OutputSecrets's ZeroizeOnDrop.
 
     Ok(PqcAuthSignature {
         hybrid_public_key: pk_bytes,
@@ -1992,6 +2031,71 @@ mod tests {
             cm.compress().to_bytes(),
             "construct CM must open to K(signing hybrid pk) under r"
         );
+    }
+
+    /// The seeded entry is the production assembly with one fixed nonce:
+    /// the same public key [`derive_pqc_public_key`] returns, a signature
+    /// that replays byte for byte, and a signature the production verifier
+    /// accepts. The hedged entry's public key matches too, so the two
+    /// entries cannot grow apart.
+    #[test]
+    fn seeded_output_auth_replays_and_matches_the_derived_public_key() {
+        use crate::derivation::derive_pqc_public_key;
+        use crate::signature::{
+            HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+            ML_DSA_SIGNING_SEED_LEN, SCHEME_DOMAIN_PQC_AUTH_TX,
+        };
+
+        /// Fill of the fixture's combined shared secret. Arbitrary, and
+        /// fixed so the test replays.
+        const COMBINED_SS_FILL: u8 = 0x3c;
+        /// Fill of the fixture's ML-DSA nonce.
+        const ML_DSA_SEED_FILL: u8 = 0x5e;
+        const OUTPUT_INDEX: u64 = 0;
+        const MESSAGE: &[u8] = b"seeded-output-auth";
+
+        let combined_ss = [COMBINED_SS_FILL; SHARED_SECRET_LEN];
+        let ml_dsa_seed = [ML_DSA_SEED_FILL; ML_DSA_SIGNING_SEED_LEN];
+        let domain = SCHEME_DOMAIN_PQC_AUTH_TX;
+
+        let first = sign_pqc_auth_for_output_with_ml_dsa_seed(
+            &combined_ss,
+            OUTPUT_INDEX,
+            domain,
+            MESSAGE,
+            &ml_dsa_seed,
+        )
+        .expect("seeded sign");
+        let replay = sign_pqc_auth_for_output_with_ml_dsa_seed(
+            &combined_ss,
+            OUTPUT_INDEX,
+            domain,
+            MESSAGE,
+            &ml_dsa_seed,
+        )
+        .expect("seeded sign replays");
+        assert_eq!(first.hybrid_public_key, replay.hybrid_public_key);
+        assert_eq!(first.signature, replay.signature);
+
+        let derived =
+            derive_pqc_public_key(&combined_ss, OUTPUT_INDEX).expect("derived public key");
+        assert_eq!(first.hybrid_public_key, derived);
+
+        let hedged = sign_pqc_auth_for_output(&combined_ss, OUTPUT_INDEX, domain, MESSAGE)
+            .expect("hedged sign");
+        assert_eq!(
+            hedged.hybrid_public_key, first.hybrid_public_key,
+            "both entries share one key assembly"
+        );
+
+        let scheme = HybridEd25519MlDsa;
+        let public_key = HybridPublicKey::from_canonical_bytes(&first.hybrid_public_key)
+            .expect("public key parses");
+        let signature =
+            HybridSignature::from_canonical_bytes(&first.signature).expect("signature parses");
+        scheme
+            .verify(&public_key, domain, MESSAGE, &signature)
+            .expect("seeded signature verifies");
     }
 
     #[test]

@@ -168,6 +168,13 @@ impl Substrate for ProductionSubstrate {
         self.caches.release(&Seedhash::from_bytes(*seed.as_bytes()));
     }
 
+    /// The cache store's two slots, as block ids.
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        let as_block = |seed: Seedhash| BlockHash::from_bytes(*seed.as_bytes());
+        let (canonical, transient) = self.caches.slots();
+        (canonical.map(as_block), transient.map(as_block))
+    }
+
     fn cache_absent(&self, fault: &SubstrateFault) -> bool {
         matches!(fault, SubstrateFault::CacheAbsent)
     }
@@ -266,6 +273,10 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
         self.inner.release_seed(seed);
     }
 
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        self.inner.slots()
+    }
+
     fn cache_absent(&self, fault: &P::Fault) -> bool {
         self.inner.cache_absent(fault)
     }
@@ -329,6 +340,10 @@ impl<P: Substrate> Substrate for Branch<'_, P> {
 
     fn release_seed(&self, seed: &BlockHash) {
         self.inner.release_seed(seed);
+    }
+
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        self.inner.slots()
     }
 
     fn cache_absent(&self, fault: &P::Fault) -> bool {

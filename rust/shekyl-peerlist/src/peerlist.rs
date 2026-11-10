@@ -649,6 +649,16 @@ impl Peerlist {
         self.partition(connector).gray_len()
     }
 
+    /// White and gray seats held now, cooling included, before this wake's
+    /// expiry. Barred seats are out, as in [`Self::gray_count`]. A wake
+    /// that resumes a retry does not settle, and the Tor census still
+    /// reads the seats.
+    #[must_use]
+    pub fn held_seats(&self, connector: ConnectorId) -> usize {
+        let partition = self.partition(connector);
+        partition.white_len().saturating_add(partition.gray_len())
+    }
+
     /// Whether an excused cooldown waits on `address`: it failed a test the
     /// judge excused, and the cooldown has not ended or been cleared.
     #[must_use]

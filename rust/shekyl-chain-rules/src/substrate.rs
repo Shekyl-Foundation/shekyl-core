@@ -88,6 +88,15 @@ pub trait Substrate {
     /// for that caller. The default keeps nothing, so it releases nothing.
     fn release_seed(&self, _seed: &BlockHash) {}
 
+    /// The seeds whose caches the implementor holds now: the canonical
+    /// one, then the one kept beside it. Read from the cache itself, never
+    /// from a record of what was pinned, so a caller that publishes what is
+    /// resident publishes what is (A2). The default keeps no cache, so it
+    /// holds none.
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        (None, None)
+    }
+
     /// Whether `fault` is a missing cache: the seed was not pinned, so
     /// [`longhash`](Self::longhash) refused rather than deriving one.
     ///

@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use log_capture::log_text;
 use rig::{peer, reply, reply_at, wait_until, Answer, Rig, Told, NETWORK};
-use shekyl_dialer::{session_of, DialAim, TorLinkTally};
+use shekyl_dialer::{session_of, DialAim, TorCensus, TorLinkTally};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_onion_v3::v3_onion_hostname;
 use shekyl_p2p_session::harness::new_transactions;
@@ -585,10 +585,87 @@ fn every_dial_the_dialer_does_not_keep_leaves_the_board() {
 }
 
 fn onion() -> NetworkAddress {
+    onion_n(0x11)
+}
+
+fn onion_n(n: u8) -> NetworkAddress {
     NetworkAddress::Tor {
-        host: v3_onion_hostname(&[0x11; 32]),
+        host: v3_onion_hostname(&[n; 32]),
         port: 12021,
     }
+}
+
+/// **Each wake's census publishes what the dialer holds** (Rick,
+/// 2026-11-10): pending until the first, empty when nothing is held, and
+/// a non-empty run once an onion is seated. The run's `since` is that
+/// census. Publishing nothing from the census fails this; the fold's own
+/// test holds another connector's census off the count.
+#[test]
+fn a_wake_publishes_how_many_tor_addresses_the_dialer_holds() {
+    let rig = Rig::new();
+    let mut rng = SplitMix64::new(3);
+    assert_eq!(
+        rig.dialer.tor_link_tally().census,
+        TorCensus::Pending,
+        "no census yet"
+    );
+    rig.dialer.wake(TOR, &mut rng);
+    assert_eq!(
+        rig.dialer.tor_link_tally().census,
+        TorCensus::Empty,
+        "nothing held"
+    );
+    admit(&rig, &onion(), 5);
+    // The census runs before the draw; the wake then dials the onion and
+    // runs that dial to its end, so the test answers it as `dial_with` does.
+    let dialer = std::sync::Arc::clone(&rig.dialer);
+    let waker = thread::spawn(move || dialer.wake(TOR, &mut SplitMix64::new(6)));
+    let mut wire = rig.dialed();
+    wire.read_blocking();
+    wire.inject_blocking(reply(NETWORK, vec![]));
+    assert!(waker.join().expect("the wake"), "the onion was dialed");
+    assert!(
+        matches!(
+            rig.dialer.tor_link_tally().census,
+            TorCensus::Held { seats: 1, .. }
+        ),
+        "one onion held: {:?}",
+        rig.dialer.tor_link_tally().census
+    );
+}
+
+/// **A wake that only resumes a retry still publishes the census.** The
+/// settle path is not the only wake. Seats admitted while a retry waits
+/// are on the next wake's census, and the run keeps the `since` of the
+/// census that opened it. Dropping the publish on the resume arm leaves
+/// the count where the failed dial's wake put it.
+#[test]
+fn a_retry_wake_publishes_the_census_too() {
+    let clock = ManualClock::new(Tick::new(1_000_000_000));
+    let rig = Rig::on(&clock);
+    let mut rng = SplitMix64::new(8);
+    admit(&rig, &onion_n(1), 8);
+    rig.peer
+        .refuse_after(shekyl_tor::reply_end(0x06), Duration::from_secs(1));
+    assert!(rig.dialer.wake(TOR, &mut rng), "the first dial");
+    let TorCensus::Held { seats: 1, since } = rig.dialer.tor_link_tally().census else {
+        panic!(
+            "the first census holds the onion: {:?}",
+            rig.dialer.tor_link_tally().census
+        );
+    };
+    admit(&rig, &onion_n(2), 9);
+    // Past every jitter the second attempt could draw (5 s + 5 s).
+    let later = clock.now().get().saturating_add(11_000_000_000);
+    clock.set(Tick::new(later));
+    rig.peer
+        .refuse_after(shekyl_tor::reply_end(0x06), Duration::from_secs(1));
+    assert!(rig.dialer.wake(TOR, &mut rng), "the retry");
+    assert_eq!(
+        rig.dialer.tor_link_tally().census,
+        TorCensus::Held { seats: 2, since },
+        "the retry wake published the new seat and kept the run"
+    );
 }
 
 /// The payload owner declines a delivery on a session whose dial already
@@ -614,6 +691,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             last_sign_of_life: opened.last_sign_of_life,
             failed_attempt_began: None,
+            census: opened.census,
         }
     );
 
@@ -628,6 +706,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             last_sign_of_life: opened.last_sign_of_life,
             failed_attempt_began: None,
+            census: opened.census,
         },
         "the close is not a new stream"
     );

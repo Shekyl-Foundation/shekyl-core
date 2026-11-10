@@ -732,36 +732,48 @@ template above.
 
 ## 11. `crypto_bench_relay_admission_verify`
 
-**Crate.** `shekyl-chain-rules`.
+**Crate.** `shekyl-verify-cost`.
 **Binaries.** `benches/relay_admission_verify.rs` (criterion — NOT
 registered in the rolling baseline, see below),
-`benches/relay_admission_verify_iai.rs` (iai-callgrind, registered
+`benches/relay_admission_verify_iai.rs` (gungraun, registered
 as an iai-only row in `capture_rust_baseline.sh`).
 **Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
 
-**What it measures.** The relay pool-admission verification term —
-two of the bodies the pool door runs (`judge_slot_stateless` at
-`TxSlot::Lone`), **in its order**: CEN-H17's
-`shekyl_ct_balance::check_commitment_masks` over the output
-commitments, then CEN-I15's `shekyl_fcmp::proof::verify` over the
-FCMP++ proof. Pinned to the admission path rather than to a
-primitive so the gate cannot drift from what admission actually
-costs when the calling code changes (`DAEMON_RELAY_PRIVACY.md`
-§72.6, §70.3). The door also runs one authorization check per input
-(CEN-I18: one hybrid signature verification for a single-signer
-input, M for an M-of-N multisig input) and the range proof as a
-batch of one (CEN-H19); those terms are outside this count and are timed by
-`block_connect_verify`'s per-term group (the bench header states
-the split).
+**What it measures (BA-T1).** The pool door's verification sequence
+(`judge_slot_stateless` at `TxSlot::Lone`), **in its order**:
+CEN-H17's `shekyl_ct_balance::check_commitment_masks` over the
+output commitments, CEN-I18's `verify_pqc_auth` over the one input's
+hybrid Ed25519+ML-DSA-65 signature, CEN-I15's
+`shekyl_fcmp::proof::verify` over the FCMP++ proof, and CEN-H19's
+`verify_batch` over the range proof as a batch of one. Those are the
+three terms of each `SPEC_VERIFY_COST` cell (BA-Q9,
+`DAEMON_RELAY_PRIVACY.md` §72.2). Pinned to the admission path
+rather than to a primitive so the gate cannot drift from what
+admission actually costs when the calling code changes
+(`DAEMON_RELAY_PRIVACY.md` §72.6, §70.3). Not in the count:
+CEN-I17's keccak derivation of the signing hash, since the fixture
+has no finished transaction to hash, and `tx_form`'s other rows,
+which verify nothing. A multisig input pays M signatures; the gate's
+input is single-signer, the modal form.
 
 **Fixture shape.** One fixed cell: `1-in / 2-out`, tree depth 2,
 `ChunkLayout::Shared` — the modal transaction shape and the
 cheapest cell, so the gate is sensitive to the per-transaction
-floor rather than to a tail cell. The fixture is built by the
-shared `relay_admission_fixture.rs` module (same workload as the
-wall-clock sweep) and **asserted to VERIFY before it is timed**;
-without that self-witness a broken fixture would time the
-early-return reject path and present as a large speed-up.
+floor rather than to a tail cell. The fixture is
+`shekyl_verify_cost::door::DoorFixture`, built by
+`build_door_fixture_with` so the draw order has one owner: the
+masks and the proof from `relay::build_fixture` (the wall-clock
+sweep's fixture) first, from the pinned seed, then the signature,
+then the range proof, on that same stream. The signature is
+`sign_pqc_auth_for_output_with_ml_dsa_seed`: the wallet signer's
+key assembly, with the ML-DSA nonce seeded, because a hedged
+signature differs every run. That function is `shekyl-crypto-pq`'s
+`test-utils` surface. The fixture is **asserted to VERIFY before
+it is timed**, all four checks; without that self-witness a broken
+fixture would time the early-return reject path and present as a
+large speed-up. `tests/door_pins.rs` pins the status from both
+sides, and that the builder asks for one signature per input in
+order.
 
 **Measurement boundary.** `prove` (fixture construction) is
 `setup`, excluded from the measured region. The fixture is returned
@@ -779,8 +791,8 @@ would classify as an unambiguous improvement.
 hardware-dependent on purpose, run on the reference machine and on
 the Pi, multi-hour at full sweep — so it is deliberately absent
 from the per-PR rolling baseline. The iai row is the CI drift gate:
-a change to FCMP++ verification moves this count, which is the
-signal that `hop` (and the embargo derived from it) is owed a
+a change to any of the door's verifications moves this count, which
+is the signal that `hop` (and the embargo derived from it) is owed a
 re-derivation.
 
 **Apples-to-oranges against C++.** No C++ counterpart; admission is
@@ -1196,3 +1208,14 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   `fn_dsa_hybrid_persona_slot_derivation`, criterion only. No gated
   function is added or changed, and no count moves. Schema version
   unchanged (`shekyl_rust_v0`).
+- `BA-T1` (2026-11-09, BA-Q9): §11's gate times the pool door's whole
+  sequence, not the masks-and-proof pair alone. The fixture keeps the
+  pair's operands (drawn first from the same seed) and adds the one
+  input's hybrid signature, under a seeded ML-DSA nonce, and the lone
+  range proof. On an x86 development host
+  `crypto_bench_relay_admission_verify` moves 359,022,427 →
+  384,147,874 (+7.00 %, inside the warn band). Measured term by term on
+  the same fixture: the pair 359,001,180, the signature 3,453,086, the
+  range proof 21,676,240. One-time gated rise, absorbed by the rolling
+  baseline on the next `dev` rotation. Function name, class and schema
+  version (`shekyl_rust_v0`) unchanged.

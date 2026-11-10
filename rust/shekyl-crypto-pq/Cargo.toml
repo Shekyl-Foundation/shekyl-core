@@ -9,7 +9,9 @@ autoexamples = false
 
 [features]
 # Exposes test-support helpers (F-7): `generate_ephemeral_keypair_for_tests`,
-# `sign_with_ml_dsa_seed`. Names announce test-only intent; a non-derived
+# `sign_with_ml_dsa_seed`, and `sign_pqc_auth_for_output_with_ml_dsa_seed`
+# (the wallet signer's assembly with that seeded nonce). Names announce
+# test-only intent; a non-derived
 # keypair must never reach a wallet. Enabled under `[dev-dependencies]`
 # (benches, integration tests), and forwarded by `shekyl-p-serve`'s
 # `test-signer` feature, whose own enablers are listed in
