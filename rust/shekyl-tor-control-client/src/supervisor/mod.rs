@@ -24,7 +24,7 @@ mod posture;
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
     Action, Core, DialTally, DirectoryAnswer, DirectoryFetch, Input, ManagedRunning, Policy,
-    RoundTally, Step, DESCRIPTOR_LIFETIME,
+    RoundTally, Step, TorCensus, DESCRIPTOR_LIFETIME,
 };
 pub use events::{
     clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
@@ -33,5 +33,5 @@ pub use events::{
 pub use posture::{
     fixes, held_at_start_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace,
     Carriage, Cause, Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx,
-    Sessions, Shown, Space, Status, Syncing, TorSetting,
+    Sessions, Shown, Space, Status, Syncing, TorQuiet, TorSetting,
 };
