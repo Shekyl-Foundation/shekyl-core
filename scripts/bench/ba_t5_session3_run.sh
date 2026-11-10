@@ -234,7 +234,7 @@ order_for_pass() {  # the three cells in the order registered for the pass
   echo "# resident daemon mining_status: $(curl -s -m 5 http://127.0.0.1:12030/mining_status | python3 -c 'import sys,json;d=json.load(sys.stdin);print({k:d.get(k) for k in ("active","threads_count")})' 2>/dev/null)"
   echo "# cells mech8 (BAT5_PRIORITY=thread, 8 in flight, $FETCHES_MECH fetches), mech64 (thread, 64 in flight, $FETCHES_MECH), ctrl8 (BAT5_PRIORITY=budget, 8 in flight, $FETCHES_CTRL); no-serve windows $QUIET_S s; $PASSES passes inside one sync"
   echo "# sync rate from the syncing daemon's own stdout log (Synced H/T lines); the poll seeds its seen line at start"
-  echo "# signature scheme: Ed25519 + ML-DSA-65 hybrid (shekyl/archival-attestation-scheme-v3)"
+  echo "# signature scheme: Ed25519 + FN-DSA-1024 hybrid receipt (shekyl/archival-receipt-scheme-v1)"
 } > "$OBS"
 echo "# ENV utc tag temp_mC governor cur_freq_kHz load1 busy_jiffies sync_daemon_jiffies sync_daemon_rss_kB sync_height sync_synced mem_available_kB sync_daemon_pid system_daemon_rss_kB swap_total_kB swap_free_kB" > "$ENVF"
 : > "$SYNCF"
