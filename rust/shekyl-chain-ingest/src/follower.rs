@@ -673,7 +673,7 @@ fn plant_blocking(
 }
 
 /// Build and post the job for the block after the tip (`template`
-/// module docs). The window is already pinned. A seed the slots do not
+/// module docs). The slots already hold the window. A seed they do not
 /// hold leaves the current job; the next publication tries again.
 ///
 /// The build runs on a blocking thread and takes no hasher permit: one
@@ -697,7 +697,7 @@ where
             return seat.withdraw(NoJob::Unbuilt(Unbuilt::Clock));
         }
     };
-    let Some(window) = shared.seed_now() else {
+    let Some(resident) = shared.seed_now() else {
         return;
     };
     let reader = Arc::clone(shared);
@@ -736,7 +736,7 @@ where
             },
         };
         produce(&snap, &producer, reader.live_pool(), |seed| {
-            window.holds(seed)
+            resident.holds(seed)
         })
         .map_err(Unposted::Template)
     })

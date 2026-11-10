@@ -247,9 +247,8 @@ impl Case {
             Arc::clone(&substrate),
             ServiceConfig::default(),
         );
-        let door = service.door();
-        offer_all(&door, MAIN_SESSION, &chains.prefix).await;
-        let replies = offer_all(&door, MAIN_SESSION, &chains.main).await;
+        offer_all(&service, MAIN_SESSION, &chains.prefix).await;
+        let replies = offer_all(&service, MAIN_SESSION, &chains.main).await;
         assert!(
             replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
             "{self}: the main branch connects"
@@ -264,7 +263,7 @@ impl Case {
     /// canonical.
     async fn follow(self, chains: &Branches) {
         let (service, substrate) = self.open_on_main(chains).await;
-        let replies = offer_all(&service.door(), Z_SESSION, &chains.z).await;
+        let replies = offer_all(&service, Z_SESSION, &chains.z).await;
         let past: Vec<_> = chains
             .z
             .iter()
@@ -307,7 +306,7 @@ impl Case {
     async fn up_to_the_seed_point(self, service: &Service<Gated>, chains: &Branches) {
         for (session, branch) in [(Z_SESSION, &chains.z), (W_SESSION, &chains.w)] {
             let replies = offer_all(
-                &service.door(),
+                service,
                 session,
                 between(branch, PREFIX.next_height(), PAST_SEED),
             )
@@ -408,16 +407,15 @@ impl Case {
     async fn concurrent(self, chains: &Branches) {
         let (service, substrate) = self.open_on_main(chains).await;
         self.up_to_the_seed_point(&service, chains).await;
-        let door = service.door();
         let together_end = PAST_SEED + TOGETHER;
         let (z, w) = tokio::join!(
             offer_all(
-                &door,
+                &service,
                 Z_SESSION,
                 between(&chains.z, PAST_SEED, together_end)
             ),
             offer_all(
-                &door,
+                &service,
                 W_SESSION,
                 between(&chains.w, PAST_SEED, together_end)
             ),

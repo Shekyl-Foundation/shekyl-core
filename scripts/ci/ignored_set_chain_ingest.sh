@@ -15,7 +15,7 @@
 # with real proofs (the archival pop round trips, the emission claims, the
 # levered slash chain, the join, the two pool-shim posts, a produced
 # bundle and a produced support bundle through the staged door), the miner
-# over real RandomX, a service run across the first seed boundary, a spend
+# over real RandomX, two service runs past the first seed epoch, a spend
 # read by the wallet and the RPC after its shard was discarded, the
 # captured-chain replay under the production substrate, and the
 # measurements (the switch at the genesis cap, the miner's rate, the H19
@@ -60,6 +60,7 @@ subjects=(
   'rpc_store_facts_tests::below_horizon::the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded'
   'scenario::scenario_tests::a_chain_mines_under_the_production_substrate'
   'service::service_tests::a_run_across_a_seed_boundary_lands_in_one_commit'
+  'service::service_tests::a_connect_past_the_windows_end_empties_the_second_slot'
   'scenario_emission_tests::a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed'
   'scenario_emission_tests::the_drivers_emission_claim_connects_and_pays_the_persona'
   'scenario_join_tests::a_join_is_written_and_the_blocks_after_it_read_the_record'

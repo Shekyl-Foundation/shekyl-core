@@ -153,11 +153,11 @@ async fn a_mined_transaction_leaves_the_pool_on_connect() {
     let tx = paying_the_floor(&mut x, &prefix, 0).await;
     let txid = tx.txid_parts().hash;
     let pooled = Pooled::start("svc-pool-mined");
-    offer_all(&pooled.service.door(), 1, &prefix).await;
+    offer_all(&pooled.service, 1, &prefix).await;
     pooled.admit(&tx);
     assert_eq!(pooled.record(&txid), Some(false), "held, not yet public");
     let block = x.mine_listing(vec![tx]).await.expect("connects");
-    let replies = offer_all(&pooled.service.door(), 1, std::slice::from_ref(&block)).await;
+    let replies = offer_all(&pooled.service, 1, std::slice::from_ref(&block)).await;
     assert!(matches!(replies[0], Reply::Connected { .. }), "{replies:?}");
     pooled.followed().await;
     assert_eq!(pooled.record(&txid), None, "mined: it left the pool");
@@ -179,10 +179,9 @@ async fn a_switchs_returns_run_the_door() {
     y.idle();
     let heavier = y.mine(2).await;
     let pooled = Pooled::start("svc-pool-returns");
-    let door = pooled.service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, std::slice::from_ref(&demoted)).await;
-    let replies = offer_all(&door, 2, &heavier).await;
+    offer_all(&pooled.service, 1, &prefix).await;
+    offer_all(&pooled.service, 1, std::slice::from_ref(&demoted)).await;
+    let replies = offer_all(&pooled.service, 2, &heavier).await;
     assert!(matches!(replies[0], Reply::Held { .. }), "{replies:?}");
     assert!(matches!(replies[1], Reply::Switched { .. }), "{replies:?}");
     pooled.followed().await;
@@ -204,7 +203,7 @@ async fn a_compact_block_asks_for_a_stem_body_and_resolves_a_shown_one() {
     let block = x.mine_listing(vec![tx.clone()]).await.expect("connects");
     let pooled = Pooled::start("svc-pool-compact");
     let door = pooled.service.door();
-    offer_all(&door, 1, &prefix).await;
+    offer_all(&pooled.service, 1, &prefix).await;
     pooled.admit(&tx);
     let asked = door.offer(compact(1, &block)).expect("room").reply().await;
     assert_eq!(
@@ -256,8 +255,8 @@ async fn an_alternative_blocks_bodies_are_supplemented_only_once_it_is_stored() 
         .expect("connects");
     let pooled = Pooled::start("svc-pool-supplement");
     let door = pooled.service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &main).await;
+    offer_all(&pooled.service, 1, &prefix).await;
+    offer_all(&pooled.service, 1, &main).await;
     let held = door
         .offer(arrival(10, 2, &alt))
         .expect("room")
@@ -341,7 +340,7 @@ async fn a_pool_file_fault_retires_the_pool_and_ingest_goes_on() {
         .shared
         .pool_dead(&StoreError::Cannot(StoreCannot::Alt(AltCannot::NotHeld)));
     assert!(pooled.service.pool_retired(), "the retirement is reported");
-    let replies = offer_all(&pooled.service.door(), 1, &blocks).await;
+    let replies = offer_all(&pooled.service, 1, &blocks).await;
     assert!(
         replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "{replies:?}"

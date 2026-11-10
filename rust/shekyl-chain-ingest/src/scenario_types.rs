@@ -95,6 +95,11 @@ impl<P: Substrate> Substrate for Clocked<P> {
         self.pow.release_seed(seed);
     }
 
+    /// The slots are the pin's: the cache store's under a production pow.
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        self.pow.slots()
+    }
+
     fn cache_absent(&self, fault: &P::Fault) -> bool {
         self.pow.cache_absent(fault)
     }
