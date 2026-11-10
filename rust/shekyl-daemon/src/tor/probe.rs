@@ -18,12 +18,9 @@
 use shekyl_node::Network;
 use shekyl_p2p::ProbeHandshake;
 use shekyl_timing_engine::Tick;
-use shekyl_tor_control_client::control::{
-    parse_service_descriptor, Command, HsDescEvent, RelayFingerprint, ServiceDescriptor,
-    UploadRounds,
-};
+use shekyl_tor_control_client::control::{HsDescEvent, UploadRounds};
 use shekyl_tor_control_client::supervisor::{
-    directory_input_of, round_inputs, DirectoryAnswer, DirectoryFetch, Inbound, InboundCause, Input,
+    directory_input_of, round_inputs, Inbound, InboundCause, Input,
 };
 use shekyl_tor_control_daemon::{probe_own_onion, ProbeDial};
 use tokio::task::JoinHandle;
@@ -104,39 +101,6 @@ impl Drive {
         self.probe.take();
     }
 
-    /// `HSFETCH` this node's own onion after a first probe miss: Tor refreshes
-    /// its client view of that one address (`TSR-Q14`). Whatever Tor answers,
-    /// the second probe follows, a fresh delay later; the fetch's `HS_DESC`
-    /// events carry the descriptor id, so no upload round counts them.
-    pub(super) async fn refetch(&self) -> Input {
-        let draw = self.network.probe_delay_draw();
-        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
-            return Input::DescriptorRefetched { draw };
-        };
-        match control.ask(Command::HsFetch(service)).await {
-            Ok(reply) if reply.status() == 250 => {
-                tracing::info!(
-                    target: "tor",
-                    "the onion probe missed; Tor refetches this node's descriptor"
-                );
-            }
-            Ok(reply) => {
-                tracing::info!(
-                    target: "tor",
-                    status = reply.status(),
-                    "the onion probe missed; Tor did not take the refetch"
-                );
-            }
-            Err(error) => {
-                tracing::info!(
-                    target: "tor",
-                    "the onion probe missed; the refetch was not asked ({error})"
-                );
-            }
-        }
-        Input::DescriptorRefetched { draw }
-    }
-
     /// This onion's `HS_DESC`. The coalescer owns an upload's line, so that
     /// line is not also a directory answer. A line it does not own is the
     /// directory check's. One line has one consumer (`TOR_SUPERVISOR.md` §4.5).
@@ -204,113 +168,6 @@ impl Drive {
         let facet = link_inbound(inbound);
         if self.network.publish_tor_inbound(incarnation, facet) {
             tracing::info!(target: "tor", "this node's onion: {facet:?}");
-        }
-    }
-}
-
-/// A probe's check: the directories the latest upload round reached, each
-/// with the descriptor it was sent and its own CSPRNG draw, and this
-/// service's current revision counter, which each directory's copy is
-/// compared with (§4.5; Rick, 2026-11-01). An empty set is a check that
-/// counts nothing, and the probe alone decides; so is a counter Tor did
-/// not give.
-impl Drive {
-    pub(super) async fn directories_drawn(&self) -> Input {
-        let ours = match self.our_descriptor().await {
-            Ok(ours) => ours,
-            Err(fault) => return fault,
-        };
-        let fetches = self
-            .rounds
-            .as_ref()
-            .map(|rounds| {
-                rounds
-                    .directories()
-                    .iter()
-                    .map(|to| DirectoryFetch {
-                        hsdir: to.hsdir,
-                        descriptor_id: to.descriptor_id.clone(),
-                        draw: self.network.probe_delay_draw(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Input::DirectoriesDrawn { fetches, ours }
-    }
-
-    /// `GETINFO hs/service/desc/id/<onion>`: the service's `desc_current`
-    /// (tor 0.4.9.14 `control_getinfo.c:569`, `hs_service.c:4222-4242`), its
-    /// blinded key and counter. A copy of that descriptor must carry that
-    /// counter; from 12:00 to 00:00 UTC clients ask for `desc_next` instead,
-    /// whose counter Tor does not give. No control connection, or no
-    /// service yet, is no descriptor. An ask that fails is a process fault:
-    /// the check must not go on as if Tor had said the descriptor was absent.
-    async fn our_descriptor(&self) -> Result<Option<ServiceDescriptor>, Input> {
-        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.as_ref()) else {
-            return Ok(None);
-        };
-        let key = format!("hs/service/desc/id/{}", service.as_str());
-        match control.ask(Command::GetInfo(vec![key])).await {
-            Ok(reply) => {
-                let ours = parse_service_descriptor(&reply);
-                match &ours {
-                    Some(ours) => tracing::debug!(
-                        target: "tor",
-                        descriptor_id = %ours.descriptor_id,
-                        revision_counter = ours.revision_counter,
-                        "this onion's current descriptor, for the directory check"
-                    ),
-                    None => tracing::debug!(
-                        target: "tor",
-                        status = reply.status(),
-                        "Tor gave no descriptor for this onion; the check counts nothing and the probe alone decides"
-                    ),
-                }
-                Ok(ours)
-            }
-            Err(error) => {
-                tracing::debug!(target: "tor", "this onion's descriptor was not asked ({error})");
-                Err(super::input_of_ask(&error))
-            }
-        }
-    }
-
-    /// `HSFETCH` this node's onion from one directory. Tor accepting the
-    /// command (`250`) starts that fetch's answer window
-    /// ([`Input::DirectoryFetchAccepted`]). The `HS_DESC` lines that follow
-    /// are events, folded by the event loop. A command Tor refuses (the
-    /// directory left its consensus, 552) or that cannot be asked is
-    /// unusable here, so the check does not wait on it.
-    pub(super) async fn fetch_from(&self, hsdir: RelayFingerprint) -> Option<Input> {
-        let unusable = Some(Input::DirectoryAnswered {
-            hsdir,
-            descriptor_id: None,
-            answer: DirectoryAnswer::Unusable,
-        });
-        let (Some(control), Some(service)) = (self.control.as_ref(), self.service.clone()) else {
-            return unusable;
-        };
-        match control
-            .ask(Command::HsFetchFrom {
-                service,
-                server: hsdir,
-            })
-            .await
-        {
-            Ok(reply) if reply.status() == 250 => Some(Input::DirectoryFetchAccepted { hsdir }),
-            Ok(reply) => {
-                tracing::debug!(
-                    target: "tor",
-                    status = reply.status(),
-                    ?hsdir,
-                    "Tor did not take the directory fetch"
-                );
-                unusable
-            }
-            Err(error) => {
-                tracing::debug!(target: "tor", ?hsdir, "the directory fetch was not asked ({error})");
-                unusable
-            }
         }
     }
 }

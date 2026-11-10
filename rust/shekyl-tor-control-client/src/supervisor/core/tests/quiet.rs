@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Shown, TorQuiet};
 use super::super::{duration_ns, Action, Core, DialTally, Input, Step, TorCensus};
-use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down};
+use super::{announces, managed, policy, reach_usable, replied, socks, spawns, takes_down};
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
@@ -60,15 +60,21 @@ fn tor_says(liveness: Reported, circuits: Reported) -> Input {
 
 /// Run every deadline up to and including `until`, answering each liveness
 /// sample as a Tor that has not reported its network, so nothing but the
-/// evidence under test can move the core. Returns every step taken.
+/// evidence under test can move the core, and then with
+/// [`Input::Replied`]. Returns every step taken, the `Replied` steps among
+/// them: a request queued behind a sample is sent there.
 fn run_until(core: &mut Core, until: u64) -> Vec<Step> {
     let mut steps = Vec::new();
     while let Some(due) = core.deadline().filter(|due| *due <= until) {
         let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            steps.push(core.on(tor_says(Reported::Unknown, Reported::Unknown), due));
-        }
+        let mut sampled = step.actions.contains(&Action::Sample);
         steps.push(step);
+        while sampled {
+            steps.push(core.on(tor_says(Reported::Unknown, Reported::Unknown), due));
+            let next = replied(core, due);
+            sampled = next.actions.contains(&Action::Sample);
+            steps.push(next);
+        }
     }
     steps
 }

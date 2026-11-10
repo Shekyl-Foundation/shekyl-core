@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use super::super::super::posture::BootstrapPace;
 use super::{
-    announces, carrying, duration_ns, held, managed, policy, reach_usable, render, socks,
+    announces, carrying, duration_ns, held, managed, policy, reach_usable, render, replied, socks,
     takes_down, Action, Core, Input, Shown,
 };
 
@@ -33,6 +33,8 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
+    // The deferred writes' `SETCONF` is answered.
+    replied(&mut core, 0);
     let alive = duration_ns(Duration::from_secs(4));
     assert_eq!(core.deadline(), Some(alive), "the liveness sample is armed");
 
@@ -47,6 +49,7 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
         },
         alive,
     );
+    replied(&mut core, alive);
     assert_eq!(core.deadline(), Some(2 * alive), "the next sample is armed");
     assert_eq!(
         core.status().shown,
@@ -57,7 +60,7 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
     // A wedged Tor: the next sample's reply misses the bound.
     let step = core.on_deadline(2 * alive);
     assert!(step.actions.contains(&Action::Sample));
-    let fault = core.on(Input::ReplyLate, 2 * alive);
+    let fault = core.on_deadline(2 * alive + duration_ns(policy().reply_bound));
     assert!(takes_down(&fault), "a late reply withdraws the route");
     // Health is the relay's verdict (`GS-Q3`), reported by the relay, not
     // by this fault; the link's own state is what the fault moves.
@@ -243,6 +246,10 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    // The launch, then the subscription; its `Replied` sends the first
+    // sample, answered here.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     core.on(
         Input::DirectorySample {
             progress: Some(40),
@@ -251,6 +258,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
         },
         0,
     );
+    replied(&mut core, 0);
     let sample_due = duration_ns(policy().sample_every);
     // Halfway is the actor's poll shape: earlier than the sample, later
     // than the arm. The core does not import the actor's interval.
@@ -273,6 +281,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
         },
         sample_due,
     );
+    replied(&mut core, sample_due);
     let between = core.on(
         Input::BootstrapNoted { progress: 40 },
         sample_due + notice_at,

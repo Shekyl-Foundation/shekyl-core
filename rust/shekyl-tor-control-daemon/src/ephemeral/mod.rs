@@ -21,7 +21,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -29,17 +29,18 @@ use tokio::sync::watch;
 use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, Asked,
-    BootstrapState, Command, ControlError, ControlReply, DiskWrites, EventSink, OnionFlags,
-    OnionPort, OnionPow, Resume, ServiceId, SocksTimeout, TorControlClient, TorExit,
+    AddOnionReplyError, BootstrapState, Command, ControlError, ControlReply, EventSink, OnionPow,
+    ServiceId, SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 use crate::data_dir::{EphemeralDataDir, KeptLog};
 
+mod asker;
 mod spawn;
 
+pub use asker::ControlAsker;
 pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 
 /// Bound on the whole teardown sequence (graceful actor stop + child reap),
@@ -226,10 +227,6 @@ pub struct DaemonTorControl {
     exit_watch: watch::Receiver<Option<TorExit>>,
     socks_addr: SocketAddr,
     reply_deadline: Duration,
-    /// A sleep a control ask on this incarnation observed, until the driver
-    /// takes it. The asks are `&self`, and one driver task runs them one at
-    /// a time: the mutex is that shared borrow, not a second schedule.
-    resume: Mutex<Resume>,
     /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
     /// stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
@@ -271,14 +268,22 @@ impl DaemonTorControl {
         self.socks_addr = socks;
     }
 
-    /// `SETCONF AvoidDiskWrites=1` on this owning connection.
+    /// A clone of this incarnation's control actor, for a request run off
+    /// the caller's loop with no bound of its own ([`ControlAsker`]).
+    #[must_use]
+    pub fn asker(&self) -> ControlAsker {
+        ControlAsker::new(self.actor.clone())
+    }
+
+    /// `SETCONF AvoidDiskWrites=1` on this owning connection, under the
+    /// reply deadline.
+    ///
+    /// # Errors
+    /// As [`ControlAsker::defer_disk_writes`], and a reply past the deadline.
     pub async fn defer_disk_writes(&self) -> Result<(), DaemonTorStartError> {
-        self.ask_bounded(
-            Command::SetConfDiskWrites(DiskWrites::Deferred),
-            self.reply_deadline,
-        )
-        .await
-        .map(|_| ())
+        tokio::time::timeout(self.reply_deadline, self.asker().defer_disk_writes())
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     async fn stop_actor(&mut self) -> Option<TorExit> {
@@ -337,26 +342,11 @@ impl DaemonTorControl {
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let port = OnionPort::loopback(virtual_port, local_target).ok_or(
-            DaemonTorPublishError::TargetNotLoopback {
-                target: local_target,
-            },
-        )?;
-
-        let expected = identity.service_id().clone();
-        let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
-            .with_flags(OnionFlags { discard_pk: true })
-            .with_pow(pow);
-        let reply = self
-            .settle_ask(
-                ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline).await,
-            )
-            .map_err(Self::publish_error)?;
-        if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines()) {
-            return Err(refused);
-        }
-        evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
-        Ok(expected)
+        let asker = self.asker();
+        let add = asker.add_onion(identity, virtual_port, local_target, max_streams, pow);
+        tokio::time::timeout(self.reply_deadline, add)
+            .await
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))
     }
 
     /// Publish the onion for `identity` again on this running Tor
@@ -378,18 +368,9 @@ impl DaemonTorControl {
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let held = identity.service_id().clone();
-        let reply = self
-            .settle_ask(ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await)
-            .map_err(Self::publish_error)?;
-        match reply.status() {
-            DEL_ONION_REMOVED | DEL_ONION_UNKNOWN => {}
-            status => {
-                return Err(DaemonTorPublishError::Publish(
-                    AddOnionReplyError::Rejected { status },
-                ))
-            }
-        }
+        tokio::time::timeout(self.reply_deadline, self.asker().delete_onion(identity))
+            .await
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))?;
         self.publish(identity, virtual_port, local_target, max_streams, pow)
             .await
     }
@@ -399,61 +380,9 @@ impl DaemonTorControl {
         command: Command,
         deadline: Duration,
     ) -> Result<ControlReply, DaemonTorStartError> {
-        self.settle_ask(ask_timed(&self.actor, command, deadline).await)
-            .map_err(Self::start_error)
-    }
-
-    /// Keep the wait's sleep, whichever way the ask ended, and hand back
-    /// Tor's answer. A later ask on this handle combines with it
-    /// ([`Resume::later`]); the driver takes the one sleep after the whole
-    /// action.
-    fn settle_ask(&self, waited: Result<Asked, AskError>) -> Result<ControlReply, AskError> {
-        match waited {
-            Ok(asked) => {
-                self.note_resume(asked.resume());
-                Ok(asked.into_reply())
-            }
-            Err(error) => {
-                self.note_resume(error.resume());
-                Err(error)
-            }
-        }
-    }
-
-    fn note_resume(&self, observed: Resume) {
-        let mut slot = self.resume_slot();
-        *slot = (*slot).later(observed);
-    }
-
-    /// The sleep observed since the last take, then [`Resume::Awake`].
-    /// The driver folds it once, ahead of the reply the ask produced.
-    #[must_use]
-    pub fn take_resume(&self) -> Resume {
-        std::mem::take(&mut *self.resume_slot())
-    }
-
-    /// The slot. A poisoned lock still holds the last observation: the
-    /// supervisor would rather restart its windows than lose the sleep.
-    fn resume_slot(&self) -> std::sync::MutexGuard<'_, Resume> {
-        self.resume
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn publish_error(error: AskError) -> DaemonTorPublishError {
-        match error {
-            AskError::Timeout => DaemonTorPublishError::Control(ControlError::Timeout),
-            AskError::Control { error, .. } => DaemonTorPublishError::Control(error),
-            AskError::ActorGone { .. } => DaemonTorPublishError::Died,
-        }
-    }
-
-    fn start_error(error: AskError) -> DaemonTorStartError {
-        match error {
-            AskError::Timeout => DaemonTorStartError::Control(ControlError::Timeout),
-            AskError::Control { error, .. } => DaemonTorStartError::Control(error),
-            AskError::ActorGone { .. } => DaemonTorStartError::Died(None),
-        }
+        tokio::time::timeout(deadline, self.asker().ask(command))
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     pub async fn ask(

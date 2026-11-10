@@ -25,6 +25,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
@@ -38,32 +39,34 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_consensus_valid_after, parse_event, parse_network_view,
-    parse_socks_listeners, parse_traffic_read, resume_lateness, BootstrapState, Command,
-    ControlError, ControlReply, EventSink, LogEvent, LogSeverity, Resume, ServiceId, SocksTimeout,
-    TorEvent, UploadRounds,
+    parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
+    Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
     install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Step,
+    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Status, Step,
     TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
-    DaemonTorStartError, IsolationPair, KeptDataDir, KeptLog, OnionPow, Retirement, SpawnError,
-    TombstoneEnd, TorDeath,
+    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
+    IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
 use tokio::task::JoinHandle;
 
 mod inbox;
+#[cfg(all(test, unix))]
+mod loop_tests;
 mod probe;
+mod requests;
 
-use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, StopLatch, Timer, Wanted, Woken};
+use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, Timer, Wanted, Woken};
 
-/// A control reply this far past due is a process fault. Not a bootstrap limit.
-const REPLY_BOUND: Duration = Duration::from_secs(30);
+/// The launch's own bound on its first control reply (`GETINFO version`),
+/// inside the request the core bounds ([`Policy::reply_bound`]). Not a
+/// bootstrap limit.
+const LAUNCH_BOUND: Duration = shekyl_tor_control_client::supervisor::REPLY_BOUND;
 
 /// The managed Tor answers a SOCKS request it cannot attach just inside the
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
@@ -144,6 +147,14 @@ impl Supervisor {
     /// The zone host's forward listener, once step 8 has bound it.
     pub fn note_forward(&self, forward: SocketAddr) {
         self.owner.forward(forward);
+    }
+
+    /// The supervisor's status now. The loop answers it in its next pass,
+    /// from the one place that holds the state: it never waits on Tor, so
+    /// a Tor that does not answer does not hold this (Rick, 2026-11-10).
+    /// `None` once the loop has stopped.
+    pub async fn status(&self) -> Option<Status> {
+        self.owner.ask_status()?.await.ok()
     }
 
     /// Stop Tor and wait for the directory to be torn down.
@@ -241,7 +252,15 @@ pub fn begin(
     let binary = binary.clone();
     let data_dir = data_dir.to_path_buf();
     let task = handle.spawn(async move {
-        drive(binary, clearnet_on, virtual_port, data_dir, inbox, network).await;
+        drive(
+            PinSource::Discover(binary),
+            clearnet_on,
+            virtual_port,
+            data_dir,
+            inbox,
+            network,
+        )
+        .await;
     });
     Some(Supervisor { owner, task })
 }
@@ -350,8 +369,18 @@ fn sessions_input(held: PerConnector<u32>) -> Input {
     })
 }
 
+/// Where the binary a launch runs comes from.
+enum PinSource {
+    /// Discovered and checked against the pin: at the configured path, or
+    /// the bundle's.
+    Discover(Option<PathBuf>),
+    /// A binary a test names, not checked (`unpinned-tor-for-tests`).
+    #[cfg(test)]
+    Unchecked(VerifiedTorBinary),
+}
+
 async fn drive(
-    binary: Option<PathBuf>,
+    binary: PinSource,
     clearnet_on: bool,
     virtual_port: u16,
     data_dir: PathBuf,
@@ -402,7 +431,7 @@ async fn drive(
         inbox,
         timer,
         forward: None,
-        onion,
+        onion: Arc::new(onion),
         probe_pair,
         virtual_port,
         network,
@@ -433,7 +462,7 @@ struct Drive {
     step: Step,
     /// The process clock: the network's, which the dialer's stamps are on.
     clock: MonotonicClock,
-    binary: Option<PathBuf>,
+    binary: PinSource,
     data_dir: PathBuf,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
@@ -448,8 +477,9 @@ struct Drive {
     /// The zone host's forward listener, once bound.
     forward: Option<SocketAddr>,
     /// The boot's onion identity: the keypair Tor is handed on every
-    /// publish, held until the daemon stops.
-    onion: OnionIdentity,
+    /// publish, held until the daemon stops. Shared with the publish's task,
+    /// never copied.
+    onion: Arc<OnionIdentity>,
     /// The probe's isolation pair, held beside the onion for the boot.
     probe_pair: IsolationPair,
     virtual_port: u16,
@@ -598,21 +628,10 @@ impl Drive {
         self.step = Step { actions, deadline };
     }
 
-    /// An action this core no longer wants. A remedial republish becomes
-    /// [`Input::RepublishWithheld`], which puts the lifetime it started
-    /// back. A probe or directory fetch already handed over is dropped.
+    /// A probe this core no longer wants is dropped. A request that no
+    /// longer stands is withheld in the core, at its turn in the queue.
     fn withheld(&self, action: &Action) -> Option<Vec<Input>> {
-        if self.core.action_stands(action) {
-            return None;
-        }
-        match action {
-            Action::RepublishOnion => Some(vec![Input::RepublishWithheld]),
-            Action::Probe
-            | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. }
-            | Action::RefetchDescriptor => Some(Vec::new()),
-            _ => None,
-        }
+        (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
     async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
@@ -638,35 +657,17 @@ impl Drive {
                 Vec::new()
             }
             Action::CheckPin => vec![self.pin()],
-            Action::Spawn { fresh_directory } => {
-                let spawned = self.spawn(fresh_directory).await;
-                self.resume_before(vec![spawned])
-            }
-            Action::Sample => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.sample()).await {
-                    Ok(inputs) => self.resume_before(inputs),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
+            // A request: sent off the loop, answered as an arrival.
+            Action::Spawn { .. }
+            | Action::SubscribeEvents
+            | Action::Sample
+            | Action::SetConfAvoidDiskWrites
+            | Action::RepublishOnion
+            | Action::AddOnion
+            | Action::RefetchDescriptor
+            | Action::CheckDirectories
+            | Action::FetchFromDirectory { .. } => self.send(action).await,
             Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::SetConfAvoidDiskWrites => {
-                let latch = self.inbox.latch();
-                let Some(control) = self.control.as_ref() else {
-                    return Vec::new();
-                };
-                match race_stop(&latch, control.defer_disk_writes()).await {
-                    Err(shutdown) => vec![shutdown],
-                    Ok(Ok(())) => self.resume_before(Vec::new()),
-                    Ok(Err(error)) => {
-                        tracing::warn!(
-                            target: "global",
-                            "leaving Tor writing its state ({error})"
-                        );
-                        self.resume_before(Vec::new())
-                    }
-                }
-            }
             Action::Publish(route) => vec![self.publish_route(route)],
             Action::Probe => vec![self.probe()],
             Action::CancelProbe => {
@@ -686,28 +687,7 @@ impl Drive {
                 );
                 Vec::new()
             }
-            Action::RefetchDescriptor => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.refetch()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
             Action::ProbeAfterJump => vec![probe::jump_probe(&self.network)],
-            Action::CheckDirectories => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.directories_drawn()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
-            Action::FetchFromDirectory { hsdir } => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.fetch_from(hsdir)).await {
-                    Ok(input) => self.resume_before(input.into_iter().collect()),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
             Action::DirectoriesUnmatched => {
                 tracing::info!(
                     target: "tor",
@@ -725,14 +705,6 @@ impl Drive {
             Action::PublishInbound(inbound) => {
                 self.publish_inbound(inbound);
                 Vec::new()
-            }
-            Action::RepublishOnion => {
-                tracing::info!(target: "tor", "publishing this node's onion again");
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.republish()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
@@ -792,6 +764,12 @@ impl Drive {
                     minted_at: arrival.minted_at.get(),
                     arrived_at: arrival.arrived_at.get(),
                 });
+            }
+            Arrival::Reply { number, answer } => inputs.extend(self.answered(number, *answer)),
+            Arrival::Status(reply) => {
+                // Answered from the one place that holds the state, at once:
+                // nothing on this loop waits on Tor.
+                drop(reply.send(self.core.status()));
             }
             Arrival::Stop => inputs.push(Input::Shutdown),
         }
@@ -881,23 +859,12 @@ impl Drive {
         inputs
     }
 
-    /// A control ask returned. A sleep it observed is the first input, so
-    /// the reply is judged on windows that start at the wake. A stop that
-    /// drops the ask does not come here: that ask wrote nothing.
-    fn resume_before(&mut self, mut inputs: Vec<Input>) -> Vec<Input> {
-        let Some(control) = self.control.as_ref() else {
-            return inputs;
-        };
-        if let Resume::Slept { late_by } = control.take_resume() {
-            inputs.insert(0, Input::Resumed { late_by });
-        }
-        inputs
-    }
-
     fn pin(&mut self) -> Input {
         let verified = match &self.binary {
-            Some(path) => discover_and_verify_at(path),
-            None => discover_and_verify(),
+            PinSource::Discover(Some(path)) => discover_and_verify_at(path),
+            PinSource::Discover(None) => discover_and_verify(),
+            #[cfg(test)]
+            PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
         match verified {
             Ok(binary) => {
@@ -906,177 +873,6 @@ impl Drive {
             }
             Err(error) => classify_pin(&error).input,
         }
-    }
-
-    async fn spawn(&mut self, fresh_directory: bool) -> Input {
-        // A fault reaps before the next pin. A child still held here is kept,
-        // not dropped: dropping the control retires the directory.
-        if self.control.is_some() {
-            self.reap().await;
-        }
-        let fresh = fresh_directory || self.kept.is_none();
-        let mut swept = false;
-        if fresh_directory {
-            if let Some(old) = self.kept.take() {
-                say_retirement(&old.replace().await);
-                swept = true;
-            }
-        }
-        let Some(binary) = self.pinned.clone() else {
-            return Input::PinRefused;
-        };
-        if fresh && !swept {
-            sweep_stale_data_dirs(&self.data_dir, None);
-        }
-        if let Some(short) = self.space_short(fresh) {
-            return short;
-        }
-        let spawned = if let Some(directory) = self.kept.take() {
-            DaemonTorControl::spawn_into(
-                directory,
-                binary,
-                self.events.clone(),
-                REPLY_BOUND,
-                SOCKS_TIMEOUT,
-            )
-            .await
-            .map_err(|failure| (failure.error, Some(failure.directory)))
-        } else {
-            match DaemonTorControl::spawn_keeping(DaemonTorConfig {
-                tor_binary: binary,
-                data_dir_parent: self.data_dir.clone(),
-                events: self.events.clone(),
-                reply_deadline: REPLY_BOUND,
-                socks_timeout: SOCKS_TIMEOUT,
-            })
-            .await
-            {
-                Ok(up) => Ok(up),
-                Err(SpawnError::DataDir(error)) => Err((DaemonTorStartError::DataDir(error), None)),
-                Err(SpawnError::Launch(failure)) => Err((failure.error, Some(failure.directory))),
-            }
-        };
-        match spawned {
-            Ok(up) => {
-                self.generation = self.generation.wrapping_add(1);
-                tokio::spawn(incarnation(
-                    self.generation,
-                    up.death(),
-                    up.watch_bootstrap(),
-                    self.poster.clone(),
-                ));
-                // The child is up. The subscription is a control ask, so a
-                // stop drops it. The fork itself has already returned; the
-                // control is stored so shutdown still owns the child.
-                self.control = Some(up);
-                let latch = self.inbox.latch();
-                // Stored on the line above. The subscription borrows that
-                // child; a missing one is a broken launch, not a quiet skip.
-                let control = self
-                    .control
-                    .as_ref()
-                    .expect("the child is stored before its event subscription");
-                let subscribed = race_stop(&latch, control.ask(Command::supervisor_events())).await;
-                match subscribed {
-                    Err(shutdown) => shutdown,
-                    Ok(Err(error)) => {
-                        tracing::warn!(
-                            target: "global",
-                            "Tor events were not subscribed ({error})"
-                        );
-                        Input::Spawned
-                    }
-                    Ok(Ok(_)) => Input::Spawned,
-                }
-            }
-            Err((error, directory)) => {
-                if let Some(directory) = directory {
-                    self.kept = Some(directory);
-                }
-                match error {
-                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable {
-                        path: self.data_dir.clone(),
-                        space: None,
-                    },
-                    _ => Input::SpawnFailed,
-                }
-            }
-        }
-    }
-
-    async fn sample(&mut self) -> Vec<Input> {
-        // Read before borrowing the control: the keys and the view that is
-        // folded are the same decision.
-        let reads_network = self.core.reads_network();
-        let Some(control) = self.control.as_mut() else {
-            return vec![Input::ControlEnded];
-        };
-        let reply = match control
-            .ask(Command::GetInfo(sample_keys(reads_network)))
-            .await
-        {
-            Ok(reply) => reply,
-            Err(error) => return vec![input_of_ask(&error)],
-        };
-        let socks = parse_socks_listeners(&reply);
-        if let Some(socks) = socks {
-            control.set_socks(socks);
-        }
-        let mut inputs = vec![Input::DirectorySample {
-            progress: parse_bootstrap_progress(&reply),
-            socks,
-            read: parse_traffic_read(&reply),
-        }];
-        if reads_network {
-            let view = parse_network_view(&reply);
-            // Tor's view is what the next blocked-link run records (`TSR-Q14`):
-            // said when it changes, not with every sample.
-            if view != self.network_view {
-                tracing::info!(
-                    target: "tor",
-                    network_liveness = ?view.liveness,
-                    circuit_established = ?view.circuits,
-                    "Tor's view of its network"
-                );
-                self.network_view = view;
-            }
-            inputs.push(Input::NetworkView(view));
-        }
-        match self.consensus_clock().await {
-            Ok(Some(clock)) => inputs.push(clock),
-            Ok(None) => {}
-            Err(fault) => {
-                // The directory sample already read is still folded. The
-                // fault ends the incarnation after it.
-                inputs.push(fault);
-                return inputs;
-            }
-        }
-        inputs
-    }
-
-    /// The consensus's `valid-after` against this machine's wall time
-    /// (§4.2). The core reads it only while Bootstrapping or Running. Tor
-    /// having no consensus yet is no input. An ask that fails is a process
-    /// fault, the same as the sample's own ask: it is not "no consensus".
-    /// The wall time is read here and passed as a value: the core's own
-    /// clock is monotonic.
-    async fn consensus_clock(&mut self) -> Result<Option<Input>, Input> {
-        let Some(control) = self.control.as_mut() else {
-            return Ok(None);
-        };
-        let asked = control
-            .ask(Command::GetInfo(vec![CONSENSUS_VALID_AFTER.to_owned()]))
-            .await;
-        let parsed = match &asked {
-            Ok(reply) => Ok(parse_consensus_valid_after(reply)),
-            Err(error) => Err(error),
-        };
-        let wall = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|elapsed| elapsed.as_secs());
-        consensus_sample(parsed, wall)
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -1096,45 +892,6 @@ impl Drive {
         // name until now.
         self.publish_inbound(self.core.status().inbound);
         Input::RouteInstalled
-    }
-
-    async fn republish(&mut self) -> Input {
-        let Some(control) = self.control.as_ref() else {
-            return Input::ControlEnded;
-        };
-        let Some(forward) = self.forward else {
-            return Input::ForwardAbsent;
-        };
-        match control
-            .republish(
-                &self.onion,
-                self.virtual_port,
-                forward,
-                MAX_STREAMS,
-                OnionPow::Enabled,
-            )
-            .await
-        {
-            Ok(service) => {
-                self.network
-                    .note_own_onion(service.as_str(), self.virtual_port);
-                // A publish starts the onion's rounds afresh: a round left
-                // open by the deleted service is not this one's.
-                self.rounds = Some(UploadRounds::new(service.clone()));
-                self.service = Some(service.clone());
-                tracing::info!(
-                    target: "global",
-                    "Tor is up: overlay inbound is published at {}.onion:{}, forwarded from {forward}",
-                    service.as_str(),
-                    self.virtual_port,
-                );
-                Input::OnionPublished
-            }
-            Err(error) => {
-                tracing::warn!(target: "global", "the onion was not published ({error})");
-                Input::OnionRejected
-            }
-        }
     }
 
     fn withdraw_route(&mut self, cause: DownCause) {
@@ -1263,32 +1020,13 @@ fn observed_death(death: TorDeath) -> Option<Input> {
 }
 
 fn ends_incarnation(input: &Input) -> bool {
-    matches!(
-        input,
-        Input::ProcessEnded { .. } | Input::ControlEnded | Input::ReplyLate
-    )
+    matches!(input, Input::ProcessEnded { .. } | Input::ControlEnded)
 }
 
-/// Race a control ask against shutdown. A stop already posted, or one
-/// posted while the ask waits, wins: the ask is dropped and the caller
-/// folds [`Input::Shutdown`]. The fork inside spawn is not an ask and does
-/// not come through here.
-async fn race_stop<T>(
-    latch: &StopLatch,
-    ask: impl std::future::Future<Output = T>,
-) -> Result<T, Input> {
-    tokio::select! {
-        biased;
-        () = latch.stopped() => Err(Input::Shutdown),
-        value = ask => Ok(value),
-    }
-}
-
-fn input_of_ask(error: &DaemonTorStartError) -> Input {
-    match error {
-        DaemonTorStartError::Control(ControlError::Timeout) => Input::ReplyLate,
-        _ => Input::ControlEnded,
-    }
+fn input_of_ask(_error: &DaemonTorStartError) -> Input {
+    // The core holds the reply bound, so an ask that ends without an answer
+    // is the control connection ending: a control error or a dead actor.
+    Input::ControlEnded
 }
 
 /// A consensus ask beside the wall time it is compared with. `Ok(None)` is
@@ -1320,21 +1058,24 @@ mod tests {
         assert!(running.starts_with(&bootstrap));
     }
 
-    /// A consensus ask that fails is a process fault. Tor having no
-    /// `valid-after` yet, or no wall time to compare, is no clock input.
-    /// Fails if `consensus_sample` turns a timeout into `Ok(None)`: the
+    /// A consensus ask that fails is a process fault: the control ended
+    /// (the core holds the reply bound, so no ask here times out). Tor having
+    /// no `valid-after` yet, or no wall time to compare, is no clock input.
+    /// Fails if `consensus_sample` turns a failed ask into `Ok(None)`: the
     /// supervisor would keep a dead control connection and never name the
     /// clock.
     #[test]
     fn a_failed_consensus_ask_is_a_process_fault_and_a_missing_consensus_is_not() {
-        let timeout = DaemonTorStartError::Control(ControlError::Timeout);
-        let closed = DaemonTorStartError::Control(ControlError::ConnectionClosed);
-        assert_eq!(
-            consensus_sample(Err(&timeout), Some(1)),
-            Err(Input::ReplyLate)
+        let closed = DaemonTorStartError::Control(
+            shekyl_tor_control_client::control::ControlError::ConnectionClosed,
         );
+        let gone = DaemonTorStartError::Died(None);
         assert_eq!(
             consensus_sample(Err(&closed), Some(1)),
+            Err(Input::ControlEnded)
+        );
+        assert_eq!(
+            consensus_sample(Err(&gone), Some(1)),
             Err(Input::ControlEnded)
         );
         assert_eq!(consensus_sample(Ok(None), Some(1)), Ok(None));
@@ -1389,39 +1130,6 @@ mod tests {
             Some(Duration::from_secs(104)),
             "Tor counts a stream's age in whole seconds"
         );
-    }
-
-    /// A control ask that never answers, the wedged-Tor case, does not hold
-    /// a stop: the stop resolves the race and the driver folds `Shutdown`.
-    /// Dropping the latch's arm from [`race_stop`] makes this time out.
-    /// The production asks call that function.
-    #[tokio::test(start_paused = true)]
-    async fn a_stop_interrupts_an_ask_a_wedged_tor_never_answers() {
-        let (mut owner, waiting, _feeds) = inbox();
-        let latch = waiting.latch();
-        let raced =
-            tokio::spawn(async move { race_stop(&latch, std::future::pending::<Input>()).await });
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        owner.stop();
-        let outcome = tokio::time::timeout(Duration::from_secs(1), raced)
-            .await
-            .expect("the stop ended the ask within a second, not the 30 s bound")
-            .expect("the race task ran");
-        assert_eq!(outcome, Err(Input::Shutdown));
-    }
-
-    /// An ask that answers is unaffected, and a stop signalled before the
-    /// ask began still wins (the daemon is already stopping).
-    #[tokio::test]
-    async fn an_answer_passes_through_and_an_earlier_stop_wins() {
-        let (_owner, open, _feeds) = inbox();
-        let answered = race_stop(&open.latch(), async { Input::ReplyLate }).await;
-        assert_eq!(answered, Ok(Input::ReplyLate));
-
-        let (owner, closed, _feeds) = inbox();
-        drop(owner);
-        let raced = race_stop(&closed.latch(), std::future::pending::<Input>()).await;
-        assert_eq!(raced, Err(Input::Shutdown), "a closed inbox is the stop");
     }
 
     fn secs(seconds: u64) -> u64 {

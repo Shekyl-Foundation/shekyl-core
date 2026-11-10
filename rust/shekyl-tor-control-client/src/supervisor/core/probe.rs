@@ -683,6 +683,8 @@ impl Core {
     /// process fault (§4.4). The first publish of a Tor keeps waiting for
     /// its endpoint, as before.
     pub(super) fn onion_refused(&mut self, now: u64) -> Vec<Action> {
+        // A refused `DEL_ONION` sends no `ADD_ONION`.
+        self.requests.refuse();
         if self.service_republish && matches!(self.phase, Phase::Running { .. }) {
             self.service_republish = false;
             return self.process_fault(now, Cause::OnionRefused, false);

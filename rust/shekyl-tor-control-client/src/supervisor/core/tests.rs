@@ -34,6 +34,7 @@ fn policy() -> Policy {
         descriptor_lifetime: super::DESCRIPTOR_LIFETIME,
         clock_behind_after: super::CLOCK_BEHIND_AFTER,
         republish_after: super::REPUBLISH_AFTER,
+        reply_bound: super::REPLY_BOUND,
     }
 }
 
@@ -107,11 +108,31 @@ fn fresh_directory(step: &Step) -> bool {
         .expect("a passed pin spawns")
 }
 
+/// The last input of a reply, as the driver folds it: [`Input::Replied`]
+/// for the request in flight. With none in flight it answers nothing.
+fn replied(core: &mut Core, at: u64) -> Step {
+    match core.in_flight() {
+        Some(number) => core.on(Input::Replied { number }, at),
+        None => Step {
+            actions: Vec::new(),
+            deadline: core.deadline(),
+        },
+    }
+}
+
 /// Pin, spawn, name the listener, and pass the ready gate. The route is
 /// owed, not installed: health stays false until [`Input::RouteInstalled`].
+/// Each request is answered as the driver answers it: the launch, then the
+/// event subscription, then the first sample.
 fn bring_up(core: &mut Core) -> Step {
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    replied(core, 0);
+    let subscribed = replied(core, 0);
+    assert!(
+        subscribed.actions.contains(&Action::Sample),
+        "the first sample follows the subscription: {subscribed:?}"
+    );
     core.on(
         Input::DirectorySample {
             progress: Some(10),
@@ -120,6 +141,7 @@ fn bring_up(core: &mut Core) -> Step {
         },
         0,
     );
+    replied(core, 0);
     let step = core.on(Input::BootstrapComplete, 0);
     assert!(publishes(&step), "running publishes the route");
     assert!(!core.status().health, "no verdict yet: health is false");
@@ -141,7 +163,14 @@ fn reach_usable(core: &mut Core) {
     bring_up(core);
     let step = core.on(Input::RouteInstalled, 0);
     assert_eq!(announces(&step), 1, "recovery is said once the route is in");
+    // The publish's `DEL_ONION`, then its `ADD_ONION`.
+    let deleted = replied(core, 0);
+    assert!(
+        deleted.actions.contains(&Action::AddOnion),
+        "the add follows the delete: {deleted:?}"
+    );
     core.on(Input::OnionPublished, 0);
+    replied(core, 0);
     let status = core.status();
     assert_eq!(status.shown, Shown::Usable);
     assert!(
@@ -287,7 +316,8 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
-    let step = core.on(Input::ReplyLate, 90_000 * 1_000_000_000);
+    // The launch is in flight and Tor never answers: one bound later.
+    let step = core.on_deadline(duration_ns(policy().reply_bound));
     assert!(!takes_down(&step), "no route was installed");
     assert_eq!(core.status().shown, Shown::Restarting);
     assert_eq!(core.status().cause, Cause::ReplyLate);
@@ -572,7 +602,11 @@ fn an_onion_retries_on_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
     core.on(Input::RouteInstalled, 0);
-    let rejected = core.on(Input::OnionRejected, 0);
+    // The publish's `DEL_ONION` is answered; its `ADD_ONION` is refused.
+    let deleted = replied(&mut core, 0);
+    assert!(deleted.actions.contains(&Action::AddOnion));
+    let mut rejected = core.on(Input::OnionRejected, 0);
+    rejected.actions.extend(replied(&mut core, 0).actions);
     assert!(!rejected
         .actions
         .iter()
@@ -595,12 +629,16 @@ fn a_state_file_defers_writes_and_ends_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
     core.on(Input::RouteInstalled, 0);
+    // The publish's `DEL_ONION`, then its `ADD_ONION`.
+    replied(&mut core, 0);
     core.on(Input::OnionPublished, 0);
+    replied(&mut core, 0);
     let step = core.on(Input::StateFileAppeared, 1);
     assert!(step
         .actions
         .iter()
         .any(|action| matches!(action, Action::SetConfAvoidDiskWrites)));
+    replied(&mut core, 1);
     assert_eq!(
         core.deadline(),
         Some(duration_ns(Duration::from_secs(4))),
@@ -617,6 +655,19 @@ fn a_ready_gate_without_a_listener_waits_for_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    // The launch, the subscription, and the first sample are answered
+    // before the bootstrap ends; that sample names no listener yet.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(10),
+            socks: None,
+            read: None,
+        },
+        0,
+    );
+    replied(&mut core, 0);
     let asked = core.on(Input::BootstrapComplete, 0);
     assert_eq!(
         asked
@@ -641,6 +692,11 @@ fn a_ready_gate_without_a_listener_waits_for_the_sample() {
         .any(|action| matches!(action, Action::Sample)));
     let due = waited.deadline.expect("the next sample is armed");
     assert_eq!(due, duration_ns(policy().sample_every));
+    let answered = replied(&mut core, 0);
+    assert!(!answered
+        .actions
+        .iter()
+        .any(|action| matches!(action, Action::Sample)));
     let step = core.on_deadline(due);
     assert!(step
         .actions
@@ -1119,4 +1175,5 @@ mod pace;
 mod probe;
 mod quiet;
 mod render;
+mod requests;
 mod resume;

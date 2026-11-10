@@ -449,7 +449,7 @@ here.
 | Input | Source | Effect |
 | --- | --- | --- |
 | child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
-| control connection EOF, desync, or a reply past the reply bound (awake time: a bound found expired more than `control::RESUMED_AFTER` late was a sleep, and starts again, §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
+| control connection EOF, desync, or a reply past the reply bound (the core's deadline for the request in flight, `Policy::reply_bound` after the send in awake time, restarted at a wake, §4.11 and §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
@@ -1133,28 +1133,49 @@ a deadline is folded before it, and so is every arrival already queued
 behind the deadline when the loop takes it. A deadline carries no fact: it
 is judged at the moment it is folded, and what is queued behind it happened
 before that moment, so a probe's nonce taken inside its bound is folded
-before the deadline that would time it out, however long a control ask held
-the loop. Only what is queued when the deadline is taken goes ahead, so a
-stream of events cannot hold it back
-(`a_deadline_goes_after_the_arrivals_already_queued_behind_it`). A control ask cannot read the queue without
-taking what is behind the stop, so closing the queue also sets a latch the
-ask races. Tor's events are bounded in the queue at `EVENT_QUEUE_EVENTS`
-not yet taken (`TSR-F2`); one past that is dropped and counted, and the
-count is the round resync's.
+before the deadline that would time it out, however long the loop took
+over the pass before. Only what is queued when the deadline is taken goes
+ahead, so a stream of events cannot hold it back
+(`a_deadline_goes_after_the_arrivals_already_queued_behind_it`). Tor's
+events are bounded in the queue at `EVENT_QUEUE_EVENTS` not yet taken
+(`TSR-F2`); one past that is dropped and counted, and the count is the
+round resync's.
+
+**The loop never waits on Tor** (Rick, 2026-11-10). Every request to Tor
+(the launch, the event subscription, the sample with its consensus clock,
+`SETCONF AvoidDiskWrites`, a republish's `DEL_ONION` and `ADD_ONION`, the
+refetch, the directory check and each directory fetch) is sent and the loop
+goes back to its inbox. A task holding a clone of the control actor
+(`ControlAsker`) runs it and posts the answer as an arrival, tagged with
+the number the core gave the request (`Core::in_flight`); the loop folds
+the answer's inputs and then `Input::Replied` with that number. The core
+sends one request at a time, as when the loop awaited each one, so no
+decision changes: the queue's order is the order the awaits gave (a launch,
+then its subscription, then its first sample; `DEL_ONION`, then
+`ADD_ONION`, and no add after a refused delete). A request that no longer
+stands when its turn comes is withheld there. The reply bound is a core
+deadline per request in flight, `Policy::reply_bound` (30 s) after the send
+in the core's clock (awake time, restarted at a wake like every other
+window); past it is `Cause::ReplyLate`, a process fault. An answer the core
+no longer waits on is not folded, and a Tor launched for it is stopped. So
+a status ask (`Supervisor::status`) and the stop are taken in the next pass
+whatever Tor is doing, which is when an operator asks what is wrong
+(`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`). The
+one wait the loop makes is the only one classified for a sleep.
 
 One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
 they are different actions. While Running it is `Action::Sample`: one
 `GETINFO` on the owning control connection. With the driver's 30 s reply
 bound, a wedged Tor is a process fault within about a minute. A command
-already in flight, such as `SETCONF AvoidDiskWrites=1`, holds the queue for
-its own bound before that sample starts. While bootstrapping it is
+already in flight, such as `SETCONF AvoidDiskWrites=1`, is in flight, and that
+sample waits behind it in the core's queue, each under its own bound. While bootstrapping it is
 `Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
 cause keeps the cadence of its own events, and an origin-hold stays a
 posture warning. The line names the percent, how long that percent has held,
 and the bytes Tor read over a window that slides with every sample: it opens
 on the newest sample at least `alive_every` old (the oldest, until there is
 one) and runs to the moment the line is read, so its span is longer when a
-control ask held the driver. The line begins at the first progress deadline
+pass held the loop. The line begins at the first progress deadline
 and from then on is current at every directory sample (`sample_every`,
 5 s), so a client polling Status reads it to within one sample, while the
 log says it once per deadline. `traffic/read` rides the directory sample.
@@ -1211,7 +1232,7 @@ that detail, not variants of `ManagedTorFix`.
 | Clock skew | `CLOCK_SKEW SKEW=±s` (`ReportedSkew::Measured`), or `MIN_SKEW=±s` (`ReportedSkew::AtLeast`). A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30). Cleared when Tor reaches Running. The consensus check clearing does not clear it: the check cannot tell the clock set right from a fixed consensus aging, or from a sleep (`TSR-M8`). With the clock right and Tor stuck before Running for another reason, the sentence stays until Running or a respawn | Degraded (outbound) | one clock sentence (Rick, 2026-11-10): this computer's clock is [at least] N behind, or ahead of, the Tor network's, N in days and hours from Tor's figure; while "Clock behind the network" stands too, others may not be able to reach this node; check this computer's date and time | none | wait |
 | Certificates out of date | §4.2's certificate lines, three or more, and `DONE` handshake problems naming three or more distinct relays, within `Policy::clock_evidence_within` (60 s), during a bootstrap. A measured `CLOCK_SKEW` stays named in its place | Degraded (outbound) | Tor reports that this computer's date or time looks wrong, so it cannot connect; check this computer's date and time. While "Clock behind the network" stands too, its sentence is the one clock sentence, since it carries a figure | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
-| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a wait the driver was in that returned more than `control::RESUMED_AFTER` (10 s) past the deadline it was armed with: the loop's wait, whatever woke it, or `ask_timed`. At a wake the dialer's timers fire too, so a dial result can be in its cell with the late deadline; the wait is classified, not what woke it (Rick, 2026-10-31). The queue keeps the order things happened in (§4.11): a control event posted before the deadline is folded before it, and one posted after waits its turn, so events cannot hold the deadline off. Time inside a bounded ask is awake: a deadline left behind while that ask ran is overdue work, not a sleep. The driver folds `Input::Resumed` before what the wait returned (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once, and on `CLOCK_JUMPED` while Running one probe (§4.5, "Overdue"). Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch, an open round's waits and the descriptor's lifetime start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. The reply bound uses the same lateness in `control::ask_timed`: a bound found expired that late starts again, the same reply is awaited, and the lateness is reported so the driver folds `Input::Resumed` before it. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
+| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a wait the driver was in that returned more than `control::RESUMED_AFTER` (10 s) past the deadline it was armed with: the loop's wait, whatever woke it; nothing else on the loop waits (§4.11). At a wake the dialer's timers fire too, so a dial result can be in its cell with the late deadline; the wait is classified, not what woke it (Rick, 2026-10-31). The queue keeps the order things happened in (§4.11): a control event posted before the deadline is folded before it, and one posted after waits its turn, so events cannot hold the deadline off. The driver folds `Input::Resumed` before what the wait returned (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once, and on `CLOCK_JUMPED` while Running one probe (§4.5, "Overdue"). Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch, an open round's waits, the descriptor's lifetime and the reply bound of the request in flight start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
 | Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor a known `traffic/read` moving for `Policy::jump_stall_after` (5 min), judged at a sample (a count Tor did not give is unknown, not a stall) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a directory check that misses twice (§4.5) | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`) when the backoff allows; a refused republish is a process fault |
 | Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2). Clears when a sample is inside the tolerance, including a fixed consensus that aged there. That clear does not retire a standing "Clock skew" | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`). Beside "Clock skew" it is that row's one sentence, with Tor's figure. The bootstrap's progress line is not said while it stands, since it would carry the clock again | none | none: no republish and no probe until it clears |

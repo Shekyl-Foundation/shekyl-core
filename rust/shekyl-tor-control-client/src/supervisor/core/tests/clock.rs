@@ -13,7 +13,7 @@
 use super::super::super::posture::{render, Cause, Inbound, InboundCause};
 use super::super::{Action, Core, Input, RoundTally, Step};
 use super::probe::{arrival, count, probes, published, republishes, run_timed, secs, uploaded};
-use super::{managed, policy};
+use super::{managed, policy, replied};
 
 /// The consensus of 2026-11-01 00:00:00 UTC, the one Tor held through the
 /// clock VM run.
@@ -53,32 +53,68 @@ fn checks(step: &Step) -> usize {
     count(step, |action| matches!(action, Action::CheckDirectories))
 }
 
+/// Answer each sample `actions` sent, as the driver answers it: a full
+/// bootstrap, the consensus clock read at that sample when `wall` gives
+/// one, and then [`Input::Replied`]. A request queued behind the sample is
+/// sent by that `Replied`; its actions join `actions`.
+fn answer_samples(core: &mut Core, at: u64, actions: &mut Vec<Action>, wall: Option<(u64, u64)>) {
+    let mut sampled = actions.contains(&Action::Sample);
+    while sampled {
+        let folded = core.on(
+            Input::DirectorySample {
+                progress: Some(100),
+                socks: None,
+                read: None,
+            },
+            at,
+        );
+        actions.extend(folded.actions);
+        if let Some((valid_after, wall)) = wall {
+            actions.extend(core.on(clock(valid_after, wall), at).actions);
+        }
+        let next = replied(core, at);
+        sampled = next.actions.contains(&Action::Sample);
+        actions.extend(next.actions);
+    }
+}
+
+/// `step`, with the sample it sent answered ([`answer_samples`], no clock
+/// read): the actions of the `Replied` that sends what was queued behind
+/// it join the step's.
+fn sample_answered(core: &mut Core, step: Step, at: u64) -> Step {
+    let mut actions = step.actions;
+    answer_samples(core, at, &mut actions, None);
+    Step {
+        actions,
+        deadline: core.deadline(),
+    }
+}
+
+/// The republish in flight is answered: its `DEL_ONION`, then the
+/// `ADD_ONION` that follows, published.
+fn republish_answered(core: &mut Core, at: u64) {
+    let deleted = replied(core, at);
+    assert!(
+        deleted.actions.contains(&Action::AddOnion),
+        "the add follows the delete: {deleted:?}"
+    );
+    core.on(Input::OnionPublished, at);
+    replied(core, at);
+}
+
 /// Every action taken while serving deadlines up to `at`, each liveness
-/// sample answered with a full bootstrap and, when `wall_at` gives one, the
-/// consensus clock read at that sample, as the driver reads it.
+/// sample answered ([`answer_samples`]) with a full bootstrap and, when
+/// `wall_at` gives one, the consensus clock read at that sample, as the
+/// driver reads it.
 fn serve(core: &mut Core, at: u64, wall_at: impl Fn(u64) -> Option<(u64, u64)>) -> Step {
     let mut actions = Vec::new();
     let mut served = None;
     while let Some(due) = core.deadline().filter(|due| *due <= at) {
         assert_ne!(served, Some(due), "the deadline at {due} did not move");
         served = Some(due);
-        let step = core.on_deadline(due);
-        let sampled = step.actions.contains(&Action::Sample);
-        actions.extend(step.actions);
-        if sampled {
-            let folded = core.on(
-                Input::DirectorySample {
-                    progress: Some(100),
-                    socks: None,
-                    read: None,
-                },
-                due,
-            );
-            actions.extend(folded.actions);
-            if let Some((valid_after, wall)) = wall_at(due) {
-                actions.extend(core.on(clock(valid_after, wall), due).actions);
-            }
-        }
+        let mut step = core.on_deadline(due).actions;
+        answer_samples(core, due, &mut step, wall_at(due));
+        actions.extend(step);
     }
     Step {
         actions,
@@ -284,8 +320,12 @@ fn the_republish_backoff_doubles_caps_and_resets_on_reachable() {
         let due = core.republish.due().expect("the owed republish is due");
         waits.push((due - at) / secs(1));
         assert_eq!(core.republish(due - 1), [], "still held");
-        assert_eq!(republishes(&core.on_deadline(due)), 1, "runs when due");
-        core.on(Input::OnionPublished, due);
+        // The liveness sample this deadline also asks goes first; the
+        // republish is sent when it is answered.
+        let step = core.on_deadline(due);
+        let step = sample_answered(&mut core, step, due);
+        assert_eq!(republishes(&step), 1, "runs when due");
+        republish_answered(&mut core, due);
         at = due;
     }
     assert_eq!(
@@ -390,6 +430,10 @@ fn a_new_tor_keeps_a_named_clock() {
     );
     core.on(Input::PinAccepted, due);
     core.on(Input::Spawned, due);
+    // The launch, then the subscription; its `Replied` sends the first
+    // sample, answered as the driver answers it.
+    replied(&mut core, due);
+    replied(&mut core, due);
     core.on(
         Input::DirectorySample {
             progress: Some(10),
@@ -398,6 +442,7 @@ fn a_new_tor_keeps_a_named_clock() {
         },
         due,
     );
+    replied(&mut core, due);
     let running = core.on(Input::BootstrapComplete, due);
     assert!(
         running.actions.contains(&Action::RepublishOnion),
@@ -454,15 +499,18 @@ fn a_named_clock_does_not_postpone_the_overdue_check() {
         "the anchor was not moved: due at {due}, cleared at {clear_at}"
     );
     let step = core.on_deadline(clear_at);
+    let step = sample_answered(&mut core, step, clear_at);
     assert_eq!(overdues(&step), 1, "the check that came due while named");
     assert_eq!(republishes(&step), 1);
 }
 
 /// **The liveness sample is ahead of a republish the same deadline queues.**
-/// Folding a clock that sample names withholds the send and puts the
-/// lifetime back. Fails if `on_deadline` queues `RepublishOnion` first
-/// (the driver would publish before it could know), or if
-/// `republish_withheld` keeps the anchor the send moved.
+/// The sample is sent and the republish waits behind it. Folding a clock
+/// that sample names withholds the republish at its turn, when the sample's
+/// `Replied` comes: it is never sent, and the lifetime is put back. Fails if
+/// `on_deadline` queues `RepublishOnion` first (the driver would publish
+/// before it could know), if the queue sends a republish that no longer
+/// stands, or if `republish_withheld` keeps the anchor the send moved.
 #[test]
 fn a_sample_names_the_clock_before_the_republish_it_queues() {
     let mut core = reachable();
@@ -472,20 +520,16 @@ fn a_sample_names_the_clock_before_the_republish_it_queues() {
     let due = anchor + super::super::duration_ns(policy().descriptor_lifetime);
     core.alive_at = Some(due);
     let step = core.on_deadline(due);
-    let sample = step
-        .actions
-        .iter()
-        .position(|action| matches!(action, Action::Sample))
-        .expect("the liveness sample");
-    let republish = step
-        .actions
-        .iter()
-        .position(|action| matches!(action, Action::RepublishOnion))
-        .expect("the overdue republish");
     assert!(
-        sample < republish,
-        "the sample is folded before the republish: {step:?}"
+        step.actions.contains(&Action::Sample),
+        "the liveness sample is sent: {step:?}"
     );
+    assert_eq!(
+        republishes(&step),
+        0,
+        "the republish waits behind the sample: {step:?}"
+    );
+    assert_eq!(overdues(&step), 1, "the overdue check asked the republish");
     assert!(core.action_stands(&Action::RepublishOnion));
     assert_eq!(
         core.lifetime_from,
@@ -497,7 +541,16 @@ fn a_sample_names_the_clock_before_the_republish_it_queues() {
         !core.action_stands(&Action::RepublishOnion),
         "a named clock withholds the send already handed over"
     );
-    core.on(Input::RepublishWithheld, due);
+    let number = core.in_flight().expect("the sample is in flight");
+    let turn = core.on(Input::Replied { number }, due);
+    assert!(
+        !turn
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::RepublishOnion | Action::AddOnion)),
+        "the republish is withheld at its turn, not sent: {turn:?}"
+    );
+    assert_eq!(core.in_flight(), None, "nothing was sent in its place");
     assert_eq!(core.lifetime_from, Some(anchor), "the anchor is put back");
     assert!(!core.service_republish);
     assert!(!core.republish_is_judging(), "the send was not published");
@@ -530,11 +583,13 @@ fn a_republish_held_while_suppressed_stays_owed() {
         "hidden while the clock is named"
     );
     let served = core.on_deadline(due + secs(1));
+    let served = sample_answered(&mut core, served, due + secs(1));
     assert_eq!(republishes(&served), 0, "the past hold does not spin");
     assert_eq!(core.republish.due(), Some(due), "the hold was not cleared");
     core.on(clock(VALID_AFTER, VALID_AFTER), due + secs(2));
     assert_eq!(core.republish_due(), Some(due));
     let step = core.on_deadline(due + secs(2));
+    let step = sample_answered(&mut core, step, due + secs(2));
     assert_eq!(republishes(&step), 1, "it runs once a republish can help");
 }
 
@@ -622,7 +677,9 @@ fn a_round_wait_while_suppressed_can_still_schedule() {
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(30));
     core.on(Input::UploadRoundStarted, secs(40));
     core.on(Input::FirstUploaded { draw: 0 }, secs(40));
-    let waited = core.on_deadline(secs(40) + super::super::duration_ns(policy().round_wait));
+    let wait_end = secs(40) + super::super::duration_ns(policy().round_wait);
+    let waited = core.on_deadline(wait_end);
+    let waited = sample_answered(&mut core, waited, wait_end);
     assert_eq!(checks(&waited), 0, "standing down schedules nothing");
     let clear = secs(40) + super::super::duration_ns(policy().round_wait) + secs(1);
     core.on(clock(VALID_AFTER, VALID_AFTER), clear);

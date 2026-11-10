@@ -63,6 +63,10 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # shekyl-logging; the `fmt` writer is the capture.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
+# The supervisor's loop test runs a stand-in Tor that never answers, launched
+# through the unpinned witness. Dev edge only (`check_test_only_features.py`).
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client", features = ["unpinned-tor-for-tests"] }
+
 [target.'cfg(unix)'.dev-dependencies]
 # The notify tests plant a descriptor without close-on-exec.
 rustix = { version = "1", features = ["fs"] }

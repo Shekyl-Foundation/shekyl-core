@@ -12,8 +12,10 @@
 use super::super::super::posture::{Cause, Inbound, InboundCause};
 use super::super::{Action, Core, DirectoryAnswer, DirectoryFetch, Input, Step};
 use super::probe::{
-    arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, uploaded,
+    arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, served,
+    uploaded,
 };
+use super::replied;
 use crate::control::{RelayFingerprint, ServiceDescriptor};
 
 /// This service's revision counter in these tests: a directory's copy carrying it
@@ -63,10 +65,12 @@ fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Input {
 }
 
 /// A published core whose round just ended, its check's directories drawn
-/// (`fetches`), and the probe and the fetches due at the delay's floor run:
-/// the probe is in flight, minted at 15 s. Returns the core and the fetches
-/// asked at 15 s.
-fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
+/// (`fetches`) and the check's `Replied` folded, and the deadline at the
+/// delay's floor run: the probe and the fetches are due there. That step's
+/// liveness sample is answered, and its `Replied` sends the first fetch,
+/// which is left in flight. Returns the core and the 15 s step, with the
+/// sample's `Replied` step joined to it.
+fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
     let mut core = published();
     let ended = core.on(uploaded(0), 0);
     assert!(
@@ -80,9 +84,43 @@ fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
         },
         0,
     );
-    let step = core.on_deadline(secs(15));
+    replied(&mut core, 0);
+    let mut step = core.on_deadline(secs(15));
+    assert!(
+        step.actions.contains(&Action::Sample),
+        "the liveness sample goes first"
+    );
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+            read: None,
+        },
+        secs(15),
+    );
+    step.actions.extend(replied(&mut core, secs(15)).actions);
     assert_eq!(probes(&step), 1, "the probe at the delay's floor");
-    let asked = fetched(&step);
+    (core, step)
+}
+
+/// [`checking_in_flight`], with every fetch sent and answered at 15 s, one
+/// after another as the queue sends them: each with `Replied` alone (these
+/// tests fold no acceptance, so each window runs from the send), and the
+/// probe in flight, minted at 15 s. Returns the core and the fetches asked
+/// at 15 s.
+fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
+    let (mut core, step) = checking_in_flight(fetches);
+    // The sample is answered already: what is left in flight is fetches.
+    let mut asked = fetched(&step);
+    let rest = served(
+        &mut core,
+        Step {
+            actions: Vec::new(),
+            deadline: None,
+        },
+        secs(15),
+    );
+    asked.extend(fetched(&rest));
     core.on(
         Input::ProbeDialed {
             minted_at: secs(15),
@@ -161,7 +199,9 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
         Inbound::Publishing,
         "one miss is not a verdict"
     );
-    let again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
+    // The refetch's reply, then its `Replied`, which sends the new check.
+    let mut again = core.on(Input::DescriptorRefetched { draw: 0 }, secs(20));
+    again.actions.extend(replied(&mut core, secs(20)).actions);
     assert!(
         again.actions.contains(&Action::CheckDirectories),
         "a new check"
@@ -173,7 +213,9 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
         },
         secs(20),
     );
+    replied(&mut core, secs(20));
     let launched = core.on_deadline(secs(35));
+    let launched = served(&mut core, launched, secs(35));
     assert_eq!(probes(&launched), 1);
     assert_eq!(fetched(&launched).len(), 8);
     core.on(
@@ -287,7 +329,10 @@ fn a_directory_sent_the_other_descriptor_is_not_counted() {
     }
     core.on(arrival(secs(15), secs(18)), secs(18));
     assert!(matches!(core.status().inbound, Inbound::Reachable { .. }));
+    // The step's liveness sample is answered: a fetch queued behind it
+    // would be sent by its `Replied`, and is looked for there too.
     let later = core.on_deadline(secs(60));
+    let later = served(&mut core, later, secs(60));
     assert!(
         fetched(&later).is_empty(),
         "the excluded directories are never asked"
@@ -388,9 +433,12 @@ fn each_directory_fetch_has_its_own_delay() {
         },
         0,
     );
+    replied(&mut core, 0);
     let at_floor = core.on_deadline(secs(15));
+    let at_floor = served(&mut core, at_floor, secs(15));
     assert_eq!(fetched(&at_floor), [hsdir(1)]);
     let at_top = core.on_deadline(secs(60));
+    let at_top = served(&mut core, at_top, secs(60));
     assert_eq!(fetched(&at_top), [hsdir(2)]);
 }
 
@@ -410,6 +458,7 @@ fn an_answer_before_the_send_is_not_evidence() {
         },
         0,
     );
+    replied(&mut core, 0);
     core.on(answered(1, "cur", DirectoryAnswer::NotFound), secs(1));
     core.on(
         Input::DirectoryAsked {
@@ -436,8 +485,10 @@ fn an_answer_before_the_send_is_not_evidence() {
         secs(1),
     );
     let at_floor = core.on_deadline(secs(15));
+    let at_floor = served(&mut core, at_floor, secs(15));
     assert!(fetched(&at_floor).is_empty(), "its delay has not come due");
     let at_top = core.on_deadline(secs(60));
+    let at_top = served(&mut core, at_top, secs(60));
     assert_eq!(fetched(&at_top), [hsdir(1)], "still asked, at its own time");
 }
 
@@ -506,19 +557,37 @@ fn a_check_open_when_outbound_drops_is_discarded() {
 }
 
 /// Tor accepting a fetch starts that fetch's answer window from the
-/// acceptance. A sibling sent in the same breath keeps the window from its
-/// send. Fails if acceptance leaves the provisional window, or if it moves
-/// every open fetch.
+/// acceptance. A sibling due in the same breath keeps the provisional window
+/// the check's deadline gave it, though the queue sends it only once the
+/// first fetch is answered. Fails if acceptance leaves the provisional
+/// window, or if it moves every open fetch.
 #[test]
 fn a_fetch_waits_from_when_tor_accepts_it() {
-    let (mut core, asked) = checking(sent(1..=2, "cur", 0));
-    assert_eq!(asked, [hsdir(1), hsdir(2)]);
+    // Both fetches come due at 15 s; the queue sends the first, and the
+    // second waits for the first's reply.
+    let (mut core, step) = checking_in_flight(sent(1..=2, "cur", 0));
+    let mut asked = fetched(&step);
+    assert_eq!(asked, [hsdir(1)], "the first fetch is sent");
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
     core.on(arrival(secs(15), secs(18)), secs(18));
+    // The first fetch's reply: Tor accepted it at 40 s. Its `Replied` sends
+    // the sibling, whose acceptance is never folded: its window stays the
+    // one the check gave both at 15 s.
     core.on(Input::DirectoryFetchAccepted { hsdir: hsdir(1) }, secs(40));
+    asked.extend(fetched(&replied(&mut core, secs(40))));
+    assert_eq!(asked, [hsdir(1), hsdir(2)]);
+    replied(&mut core, secs(40));
     let early = core.on_deadline(secs(75));
+    let early = served(&mut core, early, secs(75));
     assert_eq!(refetches(&early), 0, "the accepted fetch is still out");
     assert_eq!(core.status().inbound, Inbound::Publishing);
     let bound = core.on_deadline(secs(100));
+    let bound = served(&mut core, bound, secs(100));
     assert_eq!(refetches(&bound), 1, "both missing, and the probe arrived");
 }
 

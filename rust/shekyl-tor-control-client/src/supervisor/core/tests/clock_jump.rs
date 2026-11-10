@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::super::super::posture::{Cause, Shown};
 use super::super::{duration_ns, Core, Input, Step};
-use super::{managed, policy, takes_down};
+use super::{managed, policy, replied, takes_down};
 
 fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
@@ -150,11 +150,18 @@ fn an_unknown_byte_count_is_not_a_stall() {
 #[test]
 fn a_deadline_past_the_bound_samples_before_it_judges() {
     let mut core = bootstrapping();
+    // The launch and the subscription are answered; each sample's reply
+    // ends with `Replied`, as the driver folds it, so no request is left
+    // past its bound when the deadline comes.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     sample(&mut core, secs(5), 14, 1_000);
+    replied(&mut core, secs(5));
     core.on(Input::ClockJumped, secs(10));
     let mut at = secs(10);
     while at < secs(10) + secs(300) {
         sample(&mut core, at, 14, 1_000);
+        replied(&mut core, at);
         at += secs(5);
     }
     let due = secs(10) + secs(301);
@@ -162,6 +169,8 @@ fn a_deadline_past_the_bound_samples_before_it_judges() {
     assert!(!takes_down(&step), "a deadline does not judge cached marks");
     assert!(step.actions.contains(&super::super::Action::Sample));
     let step = sample(&mut core, due, 14, 250_000);
+    assert!(!takes_down(&step), "bytes arrived: a slow mirror");
+    let step = replied(&mut core, due);
     assert!(!takes_down(&step), "bytes arrived: a slow mirror");
     assert_eq!(core.status().respawn_count, 0);
 }
