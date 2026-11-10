@@ -76,9 +76,10 @@ impl WriteBatch<'_, '_> {
     /// Whether anything holds the body stored under `hash`, for the bundle
     /// of block `h` (the module's three holders).
     ///
-    /// The main-chain holder is looked for in the blocks above `h` and
-    /// within the undo retention of the tip: a bundle is admitted only by a
-    /// block above its own `h`.
+    /// The main-chain holder is looked for in the blocks above `h`, within
+    /// the undo retention of the tip, and at most `W2_MAX_DEFENSIBLE_BLOCKS`
+    /// above `h`: a bundle is admitted only by a block inside its window,
+    /// `h < h_incl ≤ h + W₂`, and no rule set's `W₂` is past that bound.
     ///
     /// # Errors
     ///
@@ -92,7 +93,11 @@ impl WriteBatch<'_, '_> {
         if let Some(tip) = self.tip_height()? {
             let floor = self.holder_floor(tip);
             let mut at = h.max(floor).to_raw().saturating_add(1);
-            while at <= tip.to_raw() {
+            let last =
+                tip.to_raw().min(h.to_raw().saturating_add(
+                    shekyl_archival_retention::constants::W2_MAX_DEFENSIBLE_BLOCKS,
+                ));
+            while at <= last {
                 if self.section_names(BlockHeight::from_raw(at), hash)? {
                     return Ok(true);
                 }

@@ -1038,10 +1038,24 @@ where
     }
 
     /// A block's section names bodies its sender did not send (the model's
-    /// `RequestBundleBodies`). What this node's body store holds goes back
-    /// to the model at once; the rest is asked of `session` (2016), one
-    /// block per request.
-    fn ask_bundle_bodies(&mut self, session: Session, block: BlockHash, references: &[Vec<u8>]) {
+    /// `RequestBundleBodies`). What this node's body store holds is
+    /// returned, for the model after the batch; the rest is asked of
+    /// `session` (2016), one block per request.
+    ///
+    /// **The asks a session may leave unanswered are bounded**, at the
+    /// model's own per-session bound ([`shekyl_chain_sync::AWAITING_PER_SESSION`]).
+    /// A session answers every 2016, if only with nothing (`SCS-P27`), and
+    /// the transport keeps its answers in order, so matching a 2017 to the
+    /// oldest ask is sound. A session that already has that many asks
+    /// unanswered is not keeping up its side and is closed; dropping one ask
+    /// instead would match its next answer to the wrong block. Over every
+    /// session the asks are at most that bound times the sessions open.
+    fn ask_bundle_bodies(
+        &mut self,
+        session: Session,
+        block: BlockHash,
+        references: &[Vec<u8>],
+    ) -> Option<Event<Session>> {
         let mut held = Vec::new();
         let mut asked = Vec::new();
         let snapshot = self.store.begin_read();
@@ -1059,15 +1073,19 @@ where
             }
         }
         drop(snapshot);
-        if !held.is_empty() {
-            self.event(Event::BundleBodies {
-                session,
-                block,
-                bodies: held,
-            });
-        }
+        let answered = (!held.is_empty()).then_some(Event::BundleBodies {
+            session,
+            block,
+            bodies: held,
+        });
         if asked.is_empty() || !self.sessions.contains_key(&session) {
-            return;
+            return answered;
+        }
+        let outstanding = self.bundle_asks.get(&session).map_or(0, VecDeque::len);
+        if outstanding >= shekyl_chain_sync::AWAITING_PER_SESSION {
+            tracing::debug!(%session, outstanding, "a session left its bundle body requests unanswered");
+            self.close(session);
+            return answered;
         }
         let request = RequestBundleBodies {
             hashes: asked
@@ -1083,6 +1101,7 @@ where
                 block,
                 references: asked,
             });
+        answered
     }
 
     /// A session's 2017. It answers the oldest 2016 this owner sent it; a
@@ -1482,6 +1501,10 @@ where
         // the slots changed, after this batch. `seeds_published` would see
         // the pair as already told: the watch fired before the gate closed.
         let mut release_seed = None;
+        // Bundle bodies the store held for a waiting block: told to the
+        // model after this batch, as `Event::Seeds` is, so its handling
+        // never runs while this batch is being drained.
+        let mut held_bodies = Vec::new();
         for command in out {
             match command {
                 Command::Publish { state } => {
@@ -1588,7 +1611,7 @@ where
                     session,
                     block,
                     references,
-                } => self.ask_bundle_bodies(session, block, &references),
+                } => held_bodies.extend(self.ask_bundle_bodies(session, block, &references)),
                 Command::RequestMissingTxs {
                     session,
                     block,
@@ -1614,6 +1637,9 @@ where
             self.seen_seeds = Some(pair);
             // `Event::Seeds` does not emit `SeedNotHeld`, so this does not recur.
             self.event(Event::Seeds);
+        }
+        for held in held_bodies {
+            self.event(held);
         }
         self.publish_view();
     }

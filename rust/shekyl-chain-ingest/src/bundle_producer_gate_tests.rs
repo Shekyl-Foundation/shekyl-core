@@ -19,8 +19,8 @@
 //!    real bytes behind the loopback shim, signing with the staged
 //!    `ResidentReceiptKey` — the capability the cutover selects (4b).
 //! 3. Each block with draws: the producer reads, files, and the queue
-//!    admits the bundle; the next block takes every queued bundle through
-//!    4a's door (`connect_admitting`, [`Scenario::mine_admitting`]). Every
+//!    admits the bundle; the next block carries every queued bundle as its
+//!    section and `validate` admits it ([`Scenario::mine_admitting`]). Every
 //!    draw names P's pair and passed; the index rows carry the passed bits;
 //!    the epoch's settlement credits P as served.
 //! 4. Along the way: a restart mid-window reconciles the queue and the

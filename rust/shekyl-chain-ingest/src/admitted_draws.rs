@@ -8,8 +8,9 @@
 //! The economy settlement chains mine through here. Each block commits to
 //! a [`DriverWitness`] this driver holds — the stand-in for the node's
 //! witness ring, whose key never leaves it — and a block that draws files
-//! its bundle with every draw a pass. The next block admits that bundle
-//! through 4a's door ([`Scenario::mine_admitting`]). The chain's
+//! its bundle with every draw a pass. The next block carries that bundle
+//! as its section and `validate` admits it ([`Scenario::mine_admitting`]).
+//! The chain's
 //! issued-draw index is what a later assertion reads.
 //!
 //! Two boundaries are substituted, and only those two. The witness is
@@ -141,8 +142,9 @@ pub(crate) async fn mine_serving(
     }
 }
 
-/// Mine the block at `h`. `admit` selects 4a's door: the previous block
-/// filed a bundle, and this block is the one that reveals it.
+/// Mine the block at `h`. `admit` makes the block carry the queued section:
+/// the previous block filed a bundle, and this block is the one that
+/// reveals it.
 async fn mine_one(
     scenario: &mut Scenario<FreeHash>,
     witness: &DriverWitness,

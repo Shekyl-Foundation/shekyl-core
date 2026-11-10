@@ -120,6 +120,11 @@ where
             self.held.insert(arrival);
             return;
         }
+        // As the transaction path asks 2009 only while requesting: a node
+        // that is not asking peers has nothing that would complete a wait.
+        if !self.requests() {
+            return;
+        }
         let block = arrival.header.hash();
         if self.awaiting.contains_key(&block) {
             return;
