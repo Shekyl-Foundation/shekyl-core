@@ -107,9 +107,10 @@ fn filing_signs_inside_the_ring_and_takes_the_entry() {
         .verify(
             &key,
             SCHEME_DOMAIN_WITNESS_BUNDLE,
-            &reference
+            reference
                 .kept()
-                .commitment(&shekyl_network::HARNESS_NETWORK_ID, body.records_bytes()),
+                .commitment(&shekyl_network::HARNESS_NETWORK_ID, body.records_bytes())
+                .as_bytes(),
             &signature,
         )
         .expect("the witness signature verifies");

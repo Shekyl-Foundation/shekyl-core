@@ -138,7 +138,7 @@ pub fn multisig_key_hash(
     let bytes = key
         .to_canonical_bytes()
         .expect("a parsed or derived HybridPublicKey always encodes");
-    MULTISIG_KEY_HASH.frame(network, [&bytes])
+    MULTISIG_KEY_HASH.frame(network, [&bytes]).into_bytes()
 }
 
 /// The bytes an output's leaf commits to: `0x02 ‖ n ‖ m ‖ h_1 ‖ … ‖ h_n`.

@@ -28,7 +28,7 @@ There are two different ways to capture a node, and they need different position
 
 - **A host is the full IP.** `NetworkAddress::host()` returns `Host::Ip` of the exact address (`shekyl-net-address`), so one IPv6 /64, the standard allocation on a $5 VPS, is 2^64 distinct hosts. Every per-host rule fails against it:
   - one candidate per host (`Peerlist::draw_gray_where`);
-  - one outbound session per host (`candidate.rs:70`, `outbound_hosts`, `Attempts::holds_host`);
+  - one session per host, in either direction, so a host that dialed in is not dialed back (`candidate.rs` `host_occupied`, `Attempts::holds_host`); a retry that comes due is the same check;
   - host bans (`shekyl-transport-layer/src/ban.rs`). These cover a host or an `Ipv4Subnet` only; there is no IPv6 range ban.
 - **Address validity** admits every global IPv6 address (`validity.rs`). That is correct for validity, but it means nothing upstream of the host rules bounds the count.
 - **There is no grouping:** "no subnet grouping" (`candidate.rs:14`, ruled 2026-10-11; D1 and D2 withdrawn, to be reopened on PM-2a's clearnet many-address run).

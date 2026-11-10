@@ -212,6 +212,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
+use shekyl_network::envelope::Framed64;
 use shekyl_network::NetworkId;
 use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
@@ -599,6 +600,28 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
         .map_err(|_: BundleWireError| BundleRefused::Invalid(BundleInvalid::BodyMalformed))
 }
 
+/// Whether the witness signature holds for `commitment` under
+/// [`SCHEME_DOMAIN_WITNESS_BUNDLE`].
+///
+/// The domain lives here, beside the [`Framed64`] it opens, so the
+/// verifier cannot apply it to bytes it assembled itself. The signer is
+/// [`shekyl_archival_retention::sign_bundle_commitment`], which takes the
+/// same frame.
+fn witness_commitment_holds(
+    key: &FnDsaHybridPublicKey,
+    commitment: &Framed64,
+    signature: &FnDsaHybridSignature,
+) -> bool {
+    HybridEd25519FnDsa
+        .verify(
+            key,
+            SCHEME_DOMAIN_WITNESS_BUNDLE,
+            commitment.as_bytes(),
+            signature,
+        )
+        .is_ok()
+}
+
 /// Everything but the section check, for one bundle: §9.1 steps 3 to 8, in
 /// that order. Receipts included.
 ///
@@ -703,23 +726,17 @@ pub fn verify_bundle<V: BundleView>(
     }
 
     // 5. Witness signature, before any receipt.
-    let scheme = HybridEd25519FnDsa;
     let (Ok(witness_key), Ok(witness_signature)) = (
         FnDsaHybridPublicKey::from_canonical_bytes(body.witness_public_key()),
         FnDsaHybridSignature::from_canonical_bytes(body.witness_signature()),
     ) else {
         return invalid(BundleInvalid::WitnessSignature);
     };
-    let commitment = kept.commitment(network_id, body.records_bytes());
-    if scheme
-        .verify(
-            &witness_key,
-            SCHEME_DOMAIN_WITNESS_BUNDLE,
-            &commitment,
-            &witness_signature,
-        )
-        .is_err()
-    {
+    if !witness_commitment_holds(
+        &witness_key,
+        &kept.commitment(network_id, body.records_bytes()),
+        &witness_signature,
+    ) {
         return invalid(BundleInvalid::WitnessSignature);
     }
 

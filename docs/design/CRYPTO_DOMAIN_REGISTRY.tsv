@@ -81,11 +81,15 @@
 #                        shekyl/p2p-network-id-v1 (input:BlockHash) the id: the
 #                        two binding derivations.
 #   input:<type>         its input holds a value already network-bound; type in
-#                        TxSignableHash, SigningPayloadHash, frame (an envelope
-#                        frame's output), BlockHash, TxId, TreeRoot (the FCMP++
+#                        TxSignableHash, SigningPayloadHash, Framed32 and
+#                        Framed64 (an envelope frame's output, by width),
+#                        BlockHash, TxId, TreeRoot (the FCMP++
 #                        tree root or anchor), SaltForKey (a key derived under
-#                        salt_for), NoiseMessage (a handshake message under a
-#                        prologue that carries the id). BlockHeader is refused.
+#                        salt_for), StaticPublic (an RPC daemon's static
+#                        public bundle), Mac1Tag (the mac1 of a message 1,
+#                        made only under that bundle's key; a busy reply is
+#                        that tag's method under the same key). BlockHeader is
+#                        refused.
 #   derived:<CEN rule>   not an authorization: every verifier recomputes it from
 #                        its own chain under the named census rule
 #   local:<why>          never relied on as evidence of authorship or
@@ -175,12 +179,12 @@
 1	shekyl/msg-sig-ck-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIG_CHECKSUM_DOMAIN	shekyl-live	local:checksum	4	plain		
 1	shekyl/pqc-auth-tx-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX	shekyl-live	input:SigningPayloadHash	64	auth		
 1	shekyl/pqc-auth-tx-multisig-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG	shekyl-live	input:SigningPayloadHash	64	auth		
-1	shekyl/archival-emission-claim-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_CLAIM	shekyl-live	input:frame	64	auth		
-1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live	input:frame	64	auth		
+1	shekyl/archival-emission-claim-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_CLAIM	shekyl-live	input:Framed64	64	auth		
+1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live	input:Framed64	64	auth		
 1	shekyl/archival-attestation-scheme-v3	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live	input:BlockHash	64	auth		2026-10-04: message gained the delivery digest, nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]; -v2 (no digest, SF-D8 2026-09-13) and -v1 (nonce-only) retired, no code const kept — the retention crate's a_retired_domain_signature_does_not_verify_under_v3 test is the negative control for both
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live	-	64	auth		
 1	shekyl/archival-receipt-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_RECEIPT	shekyl-live	input:BlockHash	64	auth		2026-10-09: the serve receipt under hybrid scheme 3 (Ed25519 + FN-DSA-1024), signed by the persona's receipt key over the 112-byte delivery transcript (ARCHIVAL_SERVE_CREDIT_SPEC.md §6). The constant and its vectors land first; the receipt path moves onto it, and archival-attestation-scheme-v3 retires, in the FN-DSA lane's increment 4
-1	shekyl/archival-witness-bundle-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_WITNESS_BUNDLE	shekyl-live	input:frame	64	auth		2026-10-12 (Slice C): the witness's signature over the bundle commitment (shekyl/archival-serve-credit-bundle-v2) under hybrid scheme 3, with the key generated fresh per block and committed in 0x0C (ARCHIVAL_SERVE_CREDIT_SPEC.md §6.2, §7.3). A different message from the carrier's set commitment, so a different label. STAGED: the one verifier is shekyl-chain-rules' verify_bundle, which no connect path calls until SO-D12's cutover; the signer is the challenger's
+1	shekyl/archival-witness-bundle-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_WITNESS_BUNDLE	shekyl-live	input:Framed64	64	auth		2026-10-12 (Slice C): the witness's signature over the bundle commitment (shekyl/archival-serve-credit-bundle-v2) under hybrid scheme 3, with the key generated fresh per block and committed in 0x0C (ARCHIVAL_SERVE_CREDIT_SPEC.md §6.2, §7.3). A different message from the carrier's set commitment, so a different label. STAGED: the one verifier is shekyl-chain-rules' verify_bundle, which no connect path calls until SO-D12's cutover; the signer is the challenger's
 1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh/types.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live	input:BlockHash	16	plain		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 1	shekyl/chain-digest/v0	rust/shekyl-chain-store/src/digest_v0.rs	OUTER_CUSTOMIZATION	shekyl-live	input:TreeRoot	32	auth		DRS-P0d logical-state digest outer
 1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live	input:BlockHash	32	auth		DRS-P0d height-ordered chain component
@@ -269,11 +273,11 @@
 4	Shekyl FCMP++ MO nonce r_y v1	rust/shekyl-fcmp-proofs/src/sal/membership_only.rs	MO_NONCE_R_Y	shekyl-live	enclosed-by:Shekyl FCMP++ SAL membership-only v1	-	plain		
 #
 # ── Mechanism 5 — keccak / schnorr challenge DST ──────────────────────
-5	shekyl-outbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	OUTBOUND_DOMAIN	shekyl-live	input:frame	-	auth		schnorr challenge domain
-5	shekyl-inbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	INBOUND_DOMAIN	shekyl-live	input:frame	-	auth		schnorr challenge domain
-5	shekyl-reserve-proof-v1	rust/shekyl-proofs/src/reserve_proof.rs	RESERVE_DOMAIN	shekyl-live	input:frame	-	auth		schnorr challenge domain
-5	shekyl-reserve-proof-dleq-v1	rust/shekyl-proofs/src/dleq.rs	DOMAIN_SEPARATOR	shekyl-live	input:frame	-	auth		schnorr/DLEQ challenge domain
-5	shekyl/msg-sign-outer-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_OUTER_DOMAIN	shekyl-live	input:frame	-	auth		schnorr outer domain
+5	shekyl-outbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	OUTBOUND_DOMAIN	shekyl-live	input:Framed32	-	auth		schnorr challenge domain
+5	shekyl-inbound-tx-proof-v1	rust/shekyl-proofs/src/tx_proof.rs	INBOUND_DOMAIN	shekyl-live	input:Framed32	-	auth		schnorr challenge domain
+5	shekyl-reserve-proof-v1	rust/shekyl-proofs/src/reserve_proof.rs	RESERVE_DOMAIN	shekyl-live	input:Framed32	-	auth		schnorr challenge domain
+5	shekyl-reserve-proof-dleq-v1	rust/shekyl-proofs/src/dleq.rs	DOMAIN_SEPARATOR	shekyl-live	input:Framed32	-	auth		schnorr/DLEQ challenge domain
+5	shekyl/msg-sign-outer-v1	rust/shekyl-crypto-pq/src/message_signing.rs	MSG_SIGN_OUTER_DOMAIN	shekyl-live	input:Framed64	-	auth		schnorr outer domain
 5	shekyl-subaddr-v1\0	rust/shekyl-crypto-pq/src/output_claim.rs	CLAIM_DERIVATION_DOMAIN	shekyl-live	input:SaltForKey	-	auth		keccak256_to_scalar prefix; TRAILING NUL (\0) is load-bearing — part of the hashed bytes, not a C-string terminator
 5	Monero Generator T	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited	enclosed-by:shekyl/fcmp-spend-signing-v2	-	plain		FCMP++ generator DST; see docs/FROZEN_DOMAIN_SEPARATORS.md
 5	Monero FCMP++ Generator U	rust/shekyl-curve-generators/src/lib.rs	(hash_to_point(keccak256(..)))	frozen-inherited	enclosed-by:shekyl/fcmp-spend-signing-v2	-	plain		FCMP++ generator DST
@@ -298,8 +302,8 @@
 # handshake's prologue is the network id alone, which is a mechanism-1
 # derivation and has no label here.)
 7	shekyl/rpc-channel-v1	rust/shekyl-rpc-channel/src/lib.rs	CHANNEL_DST	shekyl-live	id	-	auth		RT-O14: the RPC channel's prologue is these bytes followed by the 16-byte network id, no separator. Binds the handshake to the channel protocol and to one network
-7	shekyl/rpc-busy-v1	rust/shekyl-rpc-channel/src/lib.rs	BUSY_DST	shekyl-live	input:NoiseMessage	-	auth		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20): the busy reply to a message 1 that passed mac1 and found the handshake budget empty is keyed BLAKE2s-128 under the mac1 key over this label followed by that message 1's mac1, so it answers one attempt and only a bundle holder can forge it
-7	shekyl/rpc-mac1-v1	rust/shekyl-rpc-channel/src/lib.rs	MAC1_DST	shekyl-live	input:NoiseMessage	-	auth		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20): the mac1 key is BLAKE2s-256(this label || the daemon's X25519 key || its ML-KEM-768 encapsulation key); mac1 is keyed BLAKE2s-128 over the Noise message 1, outside it, checked before any long-term key
+7	shekyl/rpc-busy-v1	rust/shekyl-rpc-channel/src/mac1.rs	BUSY_DST	shekyl-live	input:Mac1Tag	-	auth		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20; input corrected 2026-11-07): the busy reply to a message 1 that passed mac1 and found the handshake budget empty is keyed BLAKE2s-128 under the mac1 key over this label followed by that message 1's mac1, so it answers one attempt and only a bundle holder can forge it. Its input is a Mac1Tag, which only the mac1 computation makes and the daemon's mac1 check hands back, and the reply is that tag's method under the key that proved it
+7	shekyl/rpc-mac1-v1	rust/shekyl-rpc-channel/src/mac1.rs	MAC1_DST	shekyl-live	input:StaticPublic	-	auth		RPC_CHANNEL.md section 4.3 (ruled 2026-10-20; input corrected 2026-11-07): the mac1 key is BLAKE2s-256(this label || the daemon's X25519 key || its ML-KEM-768 encapsulation key), its input the daemon's static public bundle (StaticPublic); message 1 is MAC'd under that key with no label: keyed BLAKE2s-128 over the Noise message 1, outside it, checked before any long-term key
 7	shekyl/noise-record-header-v1	rust/shekyl-noise/src/classed.rs	RECORD_HEADER_DST	shekyl-live	-	-	plain		RPC_CHANNEL.md section 4.4 (RT-O20): the classed framer's header-protection key is the first output of the Noise HKDF with the record key in the chaining-key position and these bytes as input, derived again at each rekey; its first ChaCha20 keystream byte under the record nonce masks the class byte
 #
 # ── TEST-ONLY — domains minted by test/bench code, segregated from production ─

@@ -47,6 +47,7 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
+use shekyl_network::envelope::Framed64;
 use shekyl_types::SigningPayloadHash;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -572,6 +573,22 @@ pub fn pqc_leaf_key_bytes(scheme_id: u8, key_blob: &[u8]) -> Result<&[u8], PqcVe
         }
         _ => Err(PqcVerifyError::SchemeMismatch),
     }
+}
+
+/// Auth-P: sign an emission's claim-side binding message under
+/// [`SCHEME_DOMAIN_EMISSION_CLAIM`]. The message is the envelope's
+/// [`Framed64`] (`shekyl/archival-emission-auth-claim-v4`), so it is bound to
+/// one network by type.
+///
+/// # Errors
+///
+/// The hybrid signer's refusal: malformed key material, or the combiner
+/// giving up.
+pub fn sign_emission_claim(
+    secret: &HybridSecretKey,
+    message: &Framed64,
+) -> Result<HybridSignature, CryptoError> {
+    HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_EMISSION_CLAIM, message.as_bytes())
 }
 
 #[cfg(test)]

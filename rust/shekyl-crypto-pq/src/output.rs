@@ -45,6 +45,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use shekyl_curve_generators::{H, T};
+use shekyl_network::envelope::Framed64;
 
 /// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
 /// `ml_kem_ss` wipe before returning `Err` (test-only observability).
@@ -1142,6 +1143,29 @@ pub fn sign_pqc_auth_for_output(
         hybrid_public_key: pk_bytes,
         signature: sig_bytes,
     })
+}
+
+/// Auth-B: sign an emission's backing-side binding message with the
+/// backing output's derived key, under
+/// [`SCHEME_DOMAIN_EMISSION_BACKING`](crate::signature::SCHEME_DOMAIN_EMISSION_BACKING).
+/// The message is the envelope's [`Framed64`]
+/// (`shekyl/archival-emission-auth-backing-v4`), so it is bound to one
+/// network by type.
+///
+/// # Errors
+///
+/// As [`sign_pqc_auth_for_output`].
+pub fn sign_emission_backing_for_output(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+    message: &Framed64,
+) -> Result<PqcAuthSignature, CryptoError> {
+    sign_pqc_auth_for_output(
+        combined_ss,
+        output_index,
+        crate::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+        message.as_bytes(),
+    )
 }
 
 // ── Proof helpers (Phase 1) ───────────────────────────────────────────

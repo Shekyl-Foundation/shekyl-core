@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 
 use shekyl_dialer::{Attempts, CandidateFilter, DialAim, Skip};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peerlist::{DialOutcome, Host, NetworkAddress};
+use shekyl_peerlist::{DialOutcome, NetworkAddress};
 
 fn peer(n: u8, port: u16) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -35,7 +35,6 @@ type MakeOutcome = fn(NetworkAddress) -> DialOutcome;
 struct World {
     own: Vec<NetworkAddress>,
     sessions: BTreeSet<NetworkAddress>,
-    outbound_hosts: BTreeSet<Host>,
     attempts: Attempts,
 }
 
@@ -44,7 +43,6 @@ impl World {
         CandidateFilter {
             own: &self.own,
             sessions: &self.sessions,
-            outbound_hosts: &self.outbound_hosts,
             attempts: &self.attempts,
         }
         .check(address)
@@ -77,10 +75,10 @@ fn an_address_already_in_use_is_not_a_candidate() {
 }
 
 #[test]
-fn a_host_with_an_outbound_session_is_not_a_candidate_on_another_port() {
+fn a_host_with_a_session_is_not_a_candidate_on_another_port() {
     let mut world = World::default();
-    world.outbound_hosts.insert(peer(4, 18080).host());
-    assert_eq!(world.check(&peer(4, 28080)), Err(Skip::HostHasOutbound));
+    world.sessions.insert(peer(4, 18080));
+    assert_eq!(world.check(&peer(4, 28080)), Err(Skip::HostInSession));
     assert_eq!(world.check(&peer(5, 28080)), Ok(()));
 }
 
@@ -91,7 +89,7 @@ fn a_pending_attempt_and_its_host_are_not_candidates() {
     assert_eq!(world.check(&peer(6, 18080)), Err(Skip::Pending));
     assert_eq!(
         world.check(&peer(6, 28080)),
-        Err(Skip::HostHasOutbound),
+        Err(Skip::HostInSession),
         "the pending attempt's host, on another port"
     );
 

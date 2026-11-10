@@ -677,7 +677,8 @@ impl std::error::Error for PqcFieldShapeError {}
 /// Why a parsed `extra` is refused at admission: CEN-I19, the coinbase
 /// grammar, or a `0x02` on a transaction that is not a coinbase.
 ///
-/// One type so the daemon logs one [`Display`] and a caller matches once. The variants do not overlap: a missing pubkey is
+/// One type so the daemon logs one [`Display`] and a caller matches one
+/// enum. The variants do not overlap: a missing pubkey is
 /// [`CoinbaseGrammarError::PubkeyMissing`], never [`PqcFieldShapeError::Missing`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtraShapeError {
@@ -719,9 +720,8 @@ impl std::error::Error for ExtraShapeError {}
 ///
 /// `kem_lens` / `leaf_lens` are the byte lengths of every `0x06` / `0x07`
 /// field [`parse`] found, in order. [`check_pqc_field_shape_of`] is that
-/// extraction. The daemon does not parse `extra` and does not hand lengths
-/// across the FFI; `shekyl_tx_extra_shape_of` parses and calls
-/// [`check_tx_extra_shape`]. The zero-output arm is what keeps serve-credit
+/// extraction; the validator's CEN-I19 calls it and [`check_tx_extra_shape`]
+/// (`shekyl-chain-rules` `rules/tx_extra.rs`). The zero-output arm is what keeps serve-credit
 /// transactions (no outputs, empty `extra`) admissible: they are the
 /// must-accept control.
 ///
