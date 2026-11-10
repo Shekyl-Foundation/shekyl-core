@@ -5,21 +5,9 @@
 //! not file is re-seated later in the same epoch (`ARCHIVAL_SUPPORT_DRAW.md`
 //! §2; `SO-D12` S2, ruled 2026-11-01, option 1).
 //!
-//! **STAGED.** Nothing on the connect path calls this. It joins the
-//! transition at the switch's C5 (`SO-D12` 4b §5.3), after admission went
-//! live at C3: before admission nothing was admitted on chain, so every
-//! scheduled seat would have read as unfiled and every tree would have
-//! been carried onto nearly every block (G3 of item 3's brief). Named
-//! consumer: the switch's transition, which writes the carried seats in
-//! the block's seat row and the counters in `archival_support_unissued`.
-//! Falsifier: `nothing_on_the_connect_path_fills_a_section_or_carries_a_seat`,
-//! which lists
-//! [`seats_with_carry`] and [`SupportCarry`]. Admission does not consult
-//! it either: the stored row is compared for equality to the seats the
-//! transition wrote
-//! ([`shekyl_types::archival::SupportSeats::first_one_sided`]). When this
-//! joins the transition, those seats are [`seats_with_carry`]'s and the
-//! comparison stays equality.
+//! **Live** since the switch's C5: the count phase steps the carry over
+//! the epoch's stored counts (`archival_support_unissued`) and writes the
+//! seats it returns in the block's seat row, and the counts back.
 //!
 //! # The rule
 //!
@@ -84,6 +72,25 @@ impl<'s> SupportCarry<'s> {
             snapshot,
             owed: BTreeMap::new(),
         }
+    }
+
+    /// The carry of `snapshot`'s epoch as stored: each tree's count of
+    /// unfiled seats not yet re-seated (`archival_support_unissued`).
+    #[must_use]
+    pub fn resume(
+        snapshot: &'s DrawableEpoch,
+        counts: impl IntoIterator<Item = (PCanonicalId, SupportUnissued)>,
+    ) -> Self {
+        Self {
+            snapshot,
+            owed: counts.into_iter().collect(),
+        }
+    }
+
+    /// Every tree this carry has a count for, zero included, ascending by
+    /// persona: what the transition writes back.
+    pub fn counts(&self) -> impl Iterator<Item = (PCanonicalId, SupportUnissued)> + '_ {
+        self.owed.iter().map(|(persona, owed)| (*persona, *owed))
     }
 
     /// The epoch this carry is for: its snapshot's.

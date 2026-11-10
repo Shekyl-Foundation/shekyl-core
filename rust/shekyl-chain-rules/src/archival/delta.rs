@@ -68,6 +68,38 @@ pub struct ArchivalDelta {
     /// stream, in persona order. Present at every height; the empty row is
     /// a block that seated nobody, and a missing row is the hole.
     pub(super) support_seats: SupportSeats,
+    /// The support carry this block leaves (`archival_support_unissued`).
+    pub(super) support_carry: SupportCarryWrite,
+}
+
+/// What a block's transition does to the support carry
+/// (`archival_support_unissued`, the switch's C5): the epoch's counts it
+/// leaves, and the previous epoch whose counts lapse at this open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupportCarryWrite {
+    /// The connecting block's epoch.
+    pub epoch: shekyl_types::SettlementEpoch,
+    /// Each tree the carry has a count for, zero included, ascending by
+    /// persona. A zero removes the row.
+    pub counts: Vec<(
+        shekyl_types::PCanonicalId,
+        shekyl_archival_retention::SupportUnissued,
+    )>,
+    /// At an epoch's open, the epoch before it: every one of its rows
+    /// lapses (`SO-D12r`). `None` at any other height.
+    pub lapsed: Option<shekyl_types::SettlementEpoch>,
+}
+
+impl SupportCarryWrite {
+    /// A block that leaves the carry as it was.
+    #[must_use]
+    pub const fn untouched(epoch: shekyl_types::SettlementEpoch) -> Self {
+        Self {
+            epoch,
+            counts: Vec::new(),
+            lapsed: None,
+        }
+    }
 }
 
 impl ArchivalDelta {
@@ -179,6 +211,12 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn support_seats(&self) -> &SupportSeats {
         &self.support_seats
+    }
+
+    /// The support carry this block leaves (the field's docs).
+    #[must_use]
+    pub const fn support_carry(&self) -> &SupportCarryWrite {
+        &self.support_carry
     }
 }
 

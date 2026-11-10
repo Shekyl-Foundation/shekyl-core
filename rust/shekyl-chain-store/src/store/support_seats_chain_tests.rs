@@ -74,6 +74,25 @@ struct Seated {
     rows: BTreeMap<u64, SupportSeats>,
     /// Every connected height's count row, as its connect wrote it.
     draws: BTreeMap<u64, BlockDraws>,
+    /// Every connected height's carry rows for its own epoch, and at an
+    /// open the rows left for the epoch before, read right after it
+    /// connected.
+    carried: BTreeMap<u64, (Carried, Carried)>,
+}
+
+/// One epoch's `archival_support_unissued` rows as counts.
+type Carried = BTreeMap<PCanonicalId, u32>;
+
+fn carried_at(chain: &SlashedChain, epoch: u64) -> Carried {
+    chain
+        .store
+        .begin_read()
+        .expect("read")
+        .support_unissued(shekyl_types::SettlementEpoch::from_raw(epoch))
+        .expect("read")
+        .into_iter()
+        .map(|(persona, count)| (persona, count.get()))
+        .collect()
 }
 
 fn seated(label: &str, through: u64) -> Seated {
@@ -82,6 +101,7 @@ fn seated(label: &str, through: u64) -> Seated {
     let mut snapshots = BTreeMap::new();
     let mut rows = BTreeMap::new();
     let mut draws = BTreeMap::new();
+    let mut carried = BTreeMap::new();
     let schedule = RULES.settlement_schedule();
     for h in h_open(1)..=through {
         let linked = connect_plain(&mut chain, Some(&mut memo));
@@ -91,6 +111,11 @@ fn seated(label: &str, through: u64) -> Seated {
         );
         draws.insert(h, linked.draws);
         let epoch = schedule.epoch_at(BlockHeight::from_raw(h));
+        let before = epoch
+            .to_raw()
+            .checked_sub(1)
+            .map_or_else(Carried::new, |before| carried_at(&chain, before));
+        carried.insert(h, (carried_at(&chain, epoch.to_raw()), before));
         if h == h_open(epoch.to_raw()) {
             let snapshot = memo
                 .get(epoch, &linked.hash)
@@ -105,21 +130,58 @@ fn seated(label: &str, through: u64) -> Seated {
         snapshots,
         rows,
         draws,
+        carried,
     }
 }
 
-/// A tree's seats over an epoch are its `c` slots, at every archive width
-/// the chain passes through: none while the archive at the open is empty
-/// (a complete tree of an empty archive holds nothing to draw), and the
-/// specified slots once it is not. And the economy is unchanged by them:
-/// a complete tree is not in `D`, so every count row is the production
+/// A tree's seats over an epoch when no seat is ever filed, from the
+/// specification and not from the rules crate (`ARCHIVAL_SUPPORT_DRAW.md`
+/// §2, the carry): the epoch-relative heights it sits at, and what it is
+/// owed after each one. A seated block whose window closes inside the
+/// epoch unfiled owes one more draw, capped at `c`; an owed tree takes a
+/// seat on each usable block it is not scheduled on, one owed draw each.
+/// The close is noted before the block seats, as the connect does.
+fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
+    let scheduled = specified_seats(persona);
+    let span = seb() - window();
+    let c = SUPPORT_DRAWS_PER_EPOCH;
+    let mut seated = BTreeSet::new();
+    let mut owed_after = Vec::new();
+    let mut owed = 0u32;
+    for relative in 0..seb() {
+        if let Some(closed) = relative.checked_sub(window() + 1) {
+            if seated.contains(&closed) {
+                owed = (owed + 1).min(c);
+            }
+        }
+        if scheduled.contains(&relative) {
+            seated.insert(relative);
+        } else if relative < span && owed > 0 {
+            owed -= 1;
+            seated.insert(relative);
+        }
+        owed_after.push(owed);
+    }
+    (seated, owed_after)
+}
+
+/// A tree's seats over an epoch are its `c` slots and the carry of every
+/// one of them that went unfiled, at every archive width the chain passes
+/// through: none while the archive at the open is empty (a complete tree
+/// of an empty archive holds nothing to draw). No bundle is admitted on
+/// this chain, so no seat is filed and the carry runs to its cap. The
+/// carry rows are what each tree is owed after each block, and the next
+/// open lapses them. And the economy is unchanged by any of it: a
+/// complete tree is not in `D`, so every count row is the production
 /// composition for an empty `D`. Red edits: spread the slots over
-/// `0..SEB` in `support_slot` (the rows leave the specified slots);
-/// build a roster at width zero in `emit` (it does not compile:
-/// `SupportRoster`'s width is a `NonZeroU64`); put a tree's pair into
-/// `D` (`D` is not empty, and the count moves).
+/// `0..SEB` in `support_slot` (the rows leave the specified slots); drop
+/// the carry from the connect (the rows are the schedule alone); skip the
+/// lapse at an open (the epoch before keeps its rows); build a roster at
+/// width zero in `emit` (it does not compile: `SupportRoster`'s width is a
+/// `NonZeroU64`); put a tree's pair into `D` (`D` is not empty, and the
+/// count moves).
 #[test]
-fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
+fn a_trees_seats_over_an_epoch_are_its_c_slots_and_their_carry_at_each_width() {
     let through = h_open(4) - 1;
     let seated = seated("support-seats-epochs", through);
     let trees: BTreeSet<PCanonicalId> = (0..WITNESS_PERSONAS)
@@ -127,6 +189,8 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
         .collect();
     let mut widths = BTreeSet::new();
     let mut with_members = 0;
+    let mut carried_seats = 0;
+    let mut lapses = 0;
     for (&epoch, snapshot) in &seated.snapshots {
         // No roster is the archive with no closed shard at the open; the
         // test reads it as width 0.
@@ -156,23 +220,57 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
             compose(0, open, last),
             "epoch {epoch}: the count is an empty D's"
         );
+        let (_, lapsed) = &seated.carried[&open];
+        if let Some((ended, _)) = seated.carried.get(&(open - 1)) {
+            lapses += usize::from(!ended.is_empty());
+        }
+        assert!(
+            lapsed.is_empty(),
+            "epoch {epoch}: the open lapsed the epoch before's carry: {lapsed:?}"
+        );
         if roster.is_none() {
             assert!(seated_at.is_empty(), "epoch {epoch}: no roster, no seat");
+            for relative in 0..seb() {
+                let (rows, _) = &seated.carried[&(open + relative)];
+                assert!(rows.is_empty(), "epoch {epoch}: no roster, no carry");
+            }
             continue;
         }
         with_members += 1;
         assert_eq!(members, trees, "epoch {epoch}: the joins are the members");
         for tree in &trees {
+            let (expected, owed_after) = unfiled_seats(tree);
+            assert!(
+                specified_seats(tree).is_subset(&expected),
+                "the oracle seats every scheduled slot"
+            );
+            carried_seats += expected.len() - specified_seats(tree).len();
             assert_eq!(
                 seated_at.get(tree),
-                Some(&specified_seats(tree)),
-                "epoch {epoch}, width {width}: {tree:?} at its specified slots"
+                Some(&expected),
+                "epoch {epoch}, width {width}: {tree:?} at its slots and their carry"
             );
+            for (relative, owed) in (0u64..).zip(&owed_after) {
+                let (rows, _) = &seated.carried[&(open + relative)];
+                assert_eq!(
+                    rows.get(tree).copied().unwrap_or(0),
+                    *owed,
+                    "epoch {epoch}, relative {relative}: {tree:?}'s carry row"
+                );
+            }
         }
     }
     assert!(
         with_members > 0,
         "the subject exists: an epoch with members"
+    );
+    assert!(
+        carried_seats > 0,
+        "the subject exists: a seat the carry added"
+    );
+    assert!(
+        lapses > 0,
+        "the subject exists: an epoch that ended owing, then lapsed"
     );
     assert!(
         widths.len() >= 2,

@@ -334,6 +334,13 @@ impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
             .map_err(ReadFault::into_plain)
     }
 
+    fn support_unissued(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
+        archival_reads::support_unissued(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+    }
+
     fn support_settlement(
         &self,
         persona: &PCanonicalId,

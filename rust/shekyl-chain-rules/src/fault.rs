@@ -464,6 +464,18 @@ pub enum DrawCountFault {
     InFlightOverflow,
     /// `COUNTED_DRAWS · |D|` does not fit the shortfall's `u64`.
     ShortfallOverflow,
+    /// A support carry row (`archival_support_unissued`) holds more than
+    /// the cap `c`: no writer stores one.
+    SupportCountPastCap {
+        /// The count the row holds.
+        count: u32,
+    },
+    /// The block whose response window closes here has no support seat
+    /// row: every connected height writes one (SI-40).
+    MissingSeats {
+        /// The height whose row is absent.
+        at: BlockHeight,
+    },
 }
 
 impl fmt::Display for DrawCountFault {
@@ -486,6 +498,12 @@ impl fmt::Display for DrawCountFault {
             Self::InFlightOverflow => write!(f, "the in-flight draws do not fit a u64"),
             Self::ShortfallOverflow => {
                 write!(f, "the visible shortfall does not fit a u64")
+            }
+            Self::SupportCountPastCap { count } => {
+                write!(f, "a support carry row holds {count}, past the cap")
+            }
+            Self::MissingSeats { at } => {
+                write!(f, "no support seat row is recorded at height {at}")
             }
         }
     }

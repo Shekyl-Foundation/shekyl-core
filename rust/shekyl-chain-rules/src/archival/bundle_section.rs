@@ -14,8 +14,8 @@
 //!
 //! [`check_section`] is live on the connect path (through
 //! `rules::bundle_admission`) and [`check_section_until_switch`] at arrival
-//! (`bind_body`). [`fill_section`] is staged until the template calls it
-//! (C4). The disposition is the parent module's.
+//! (`bind_body`). [`fill_section`] is the block template's selection. The
+//! disposition is the parent module's.
 
 use core::fmt;
 
@@ -340,10 +340,9 @@ pub fn check_section_until_switch(
 /// The result is a section [`check_section`] admits at `h_incl` under the
 /// root [`bundle_root`] computes over it.
 ///
-/// **STAGED** (`SO-D12` 4b, C4; `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3
-/// item 4): the block template (`shekyl-chain-ingest`'s `template.rs`)
-/// calls it over the bundle queue's references and the store's bundle view
-/// of the template's snapshot. Nothing calls it before then.
+/// The block template (`shekyl-chain-ingest`'s `template.rs`) calls it
+/// over the bundle queue's references and the store's bundle view of the
+/// template's snapshot (`SO-D12` 4b, C4).
 ///
 /// # Errors
 ///

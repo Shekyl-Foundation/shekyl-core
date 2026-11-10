@@ -1309,6 +1309,17 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// The support carry of `epoch`: each complete tree owed draws from
+    /// blocks it was seated in and that went unfiled, ascending by persona.
+    /// Only the connecting epoch's rows are held; an open lapses the rest.
+    pub fn support_unissued(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
+        archival_reads::support_unissued(&self.txn, epoch)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **A19.** The digest of `epoch`'s drawable set as written at its
     /// open, or `None` for an epoch with no recorded set. An all-zero
     /// digest is a digest.

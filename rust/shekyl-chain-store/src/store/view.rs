@@ -501,6 +501,13 @@ impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
         archival_reads::support_issued(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
+    fn support_unissued(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
+        archival_reads::support_unissued(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
     fn support_settlement(
         &self,
         persona: &PCanonicalId,

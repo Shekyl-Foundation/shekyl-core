@@ -722,6 +722,16 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, Self::Fault>;
 
+    /// The support carry of `epoch` (`archival_support_unissued`): each
+    /// complete tree's count of unfiled seats not yet re-seated, ascending
+    /// by persona; a tree with no row is owed nothing. The carry stays
+    /// inside its epoch (`SO-D12r`), so only the connecting block's epoch is
+    /// asked, and its rows lapse at the next open.
+    fn support_unissued(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, Self::Fault>;
+
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.

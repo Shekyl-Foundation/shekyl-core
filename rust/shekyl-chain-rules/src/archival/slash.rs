@@ -739,11 +739,11 @@ mod support_settlement_tests {
             &self,
             epoch: SettlementEpoch,
             _floor: EpochFloor<Settling>,
-        ) -> Result<Vec<IndexedDraw>, Infallible> {
+        ) -> Vec<IndexedDraw> {
             if epoch == self.epoch {
-                Ok(self.draws.clone())
+                self.draws.clone()
             } else {
-                Ok(Vec::new())
+                Vec::new()
             }
         }
     }

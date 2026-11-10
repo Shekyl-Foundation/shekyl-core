@@ -60,15 +60,10 @@
 //!   single writer, and it re-judges every entry after a reorg. The
 //!   producer derives the draws it reads with [`draw_targets`], the same
 //!   selection [`verify_bundle`] runs.
-//! - **Still STAGED:** [`fill_section`], the template's section, is
-//!   called by the block template at C4; [`seats_with_carry`], the support
-//!   carry, joins the transition at C5. Their falsifier is
-//!   `nothing_on_the_connect_path_fills_a_section_or_carries_a_seat`
-//!   (`bundle_rows_tests.rs`), which reads every non-test source of this
-//!   crate but the fixture, the registry and this module's files, and
-//!   fails when any names them apart from the one `pub use` in
-//!   `archival/mod.rs` and `lib.rs`. It requires the connect path's files
-//!   by name, so the walk cannot shrink silently.
+//! - **The template and the carry (the switch's C4 and C5):**
+//!   [`fill_section`] is the block template's selection
+//!   (`shekyl-chain-ingest`'s `template.rs`), and [`seats_with_carry`]
+//!   is the count phase's seats. Nothing of this module is staged.
 //!
 //! # One name: `DrawableEpoch`
 //!
@@ -281,8 +276,8 @@ pub use bundle_section::{
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
 
-/// The support stream's carry (`SO-D12` S2): STAGED, and on the connect
-/// path at the switch's C5.
+/// The support stream's carry (`SO-D12` S2), on the connect path since the
+/// switch's C5.
 #[path = "support_carry.rs"]
 mod support_carry;
 

@@ -666,6 +666,31 @@ pub(super) fn support_issued<T: ReadTables>(
     Ok(out)
 }
 
+/// The support carry of `epoch`: every `archival_support_unissued` row
+/// keyed by that epoch, ascending by persona. The table holds at most the
+/// connecting epoch's rows (the transition lapses the rest at each open),
+/// so the walk is one epoch's trees.
+pub(super) fn support_unissued<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, ReadFault> {
+    let table = txn.table(crate::schema::ARCHIVAL_SUPPORT_UNISSUED)?;
+    let mut out = Vec::new();
+    for row in table.range::<([u8; 32], u64)>(..)? {
+        let (key, value) = row?;
+        let (persona, at) = key.value();
+        if at != epoch.to_raw() {
+            continue;
+        }
+        let count: shekyl_types::archival::SupportCount = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable("archival_support_unissued", cause))?;
+        out.push((PCanonicalId::from_bytes(persona), count));
+    }
+    Ok(out)
+}
+
 /// The support row `(persona, epoch)`. `None` is no row, not a miss.
 pub(super) fn support_settlement<T: ReadTables>(
     txn: &T,

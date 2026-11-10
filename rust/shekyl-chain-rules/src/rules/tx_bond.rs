@@ -687,6 +687,7 @@ pub fn release_last_served<'id, V: ChainView<'id>>(
     persona: &PCanonicalId,
     record: &BondRecord,
 ) -> Result<Vec<u64>, V::Fault> {
+    let () = COOLDOWN_WINDOW_IS_READABLE;
     let connecting = Tip::connecting_height(view.tip()?.as_ref());
     let schedule = rule_set.settlement_schedule();
     let current = schedule.epoch_at_height(connecting.to_raw());
@@ -725,11 +726,11 @@ pub fn release_last_served<'id, V: ChainView<'id>>(
 /// window is the last `RELEASE_COOLDOWN_EPOCHS` epochs, and the settling
 /// family reads back `SLASH_GRACE_EPOCHS` (`EpochFloor<Settling>`), so
 /// `RELEASE_COOLDOWN_EPOCHS − 1 ≤ SLASH_GRACE_EPOCHS`. With the cooldown
-/// above the grace, that pins `RELEASE_COOLDOWN_EPOCHS = SLASH_GRACE_EPOCHS
-/// + 1`. The switch's brief states the upper bound one looser, `≤
-/// SLASH_GRACE_EPOCHS + 2`; that bound would put the window one epoch
-/// under the read floor (raised on #1327).
-pub const COOLDOWN_WINDOW_IS_READABLE: () = assert!(
+/// above the grace, that pins the cooldown at one epoch past the grace.
+/// The switch's brief states the upper bound one looser, the grace plus
+/// two; that bound would put the window one epoch under the read floor
+/// (raised on #1327).
+const COOLDOWN_WINDOW_IS_READABLE: () = assert!(
     SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS
         && RELEASE_COOLDOWN_EPOCHS - 1 <= SLASH_GRACE_EPOCHS
 );

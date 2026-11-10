@@ -122,8 +122,16 @@ use crate::schema::{
     ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
-    BLOCK_INFO,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_SUPPORT_UNISSUED, BLOCK_BURN, BLOCK_INFO,
+};
+
+/// A support carry row the writer read and then did not find to remove:
+/// SI-7 on the cell. The removes follow a read of the same rows in the same
+/// batch, so this is the table moving under the writer.
+const CARRY_ROW_ABSENT: StoreInvariant = StoreInvariant::CellCorrupt {
+    key: "archival_support_unissued",
+    fault: super::error::CellFault::Absent,
 };
 
 use super::archival_reads;
@@ -402,7 +410,56 @@ impl<'id> WriteBatch<'_, 'id> {
         }
         self.write_drawable_digest(delta)?;
         self.write_block_draws(connecting, delta)?;
-        self.write_support_block(connecting, delta)
+        self.write_support_block(connecting, delta)?;
+        self.write_support_carry(delta)
+    }
+
+    /// The support carry the block leaves (`archival_support_unissued`,
+    /// the switch's C5): each tree's count of unfiled seats not yet
+    /// re-seated, in the connecting block's epoch. A count above zero is
+    /// written; a count that reached zero removes its row. At an epoch's
+    /// open every row of the epoch before lapses (`SO-D12r`), so the table
+    /// holds one epoch's trees. Journaled, like the seat row it goes with:
+    /// `pop` restores the rows. No archival family governs it, for
+    /// [`Self::write_block_draws`]'s reason.
+    fn write_support_carry(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let carry = delta.support_carry();
+        if let Some(lapsed) = carry.lapsed {
+            let rows = archival_reads::support_unissued(self.txn(), lapsed)
+                .map_err(|fault| self.arm_read_fault(fault))?;
+            if !rows.is_empty() {
+                let mut table =
+                    self.open_remove_table(ARCHIVAL_SUPPORT_UNISSUED, CARRY_ROW_ABSENT)?;
+                for (persona, _) in rows {
+                    table.remove((persona.to_bytes(), lapsed.to_raw()))?;
+                }
+            }
+        }
+        if carry.counts.is_empty() {
+            return Ok(());
+        }
+        let present: std::collections::BTreeSet<_> =
+            archival_reads::support_unissued(self.txn(), carry.epoch)
+                .map_err(|fault| self.arm_read_fault(fault))?
+                .into_iter()
+                .map(|(persona, _)| persona)
+                .collect();
+        let epoch = carry.epoch.to_raw();
+        for (persona, owed) in &carry.counts {
+            let key = (persona.to_bytes(), epoch);
+            if owed.get() > 0 {
+                self.open_upsert_table(ARCHIVAL_SUPPORT_UNISSUED)?.upsert(
+                    key,
+                    shekyl_types::archival::SupportCount::new(owed.get())
+                        .encoded()
+                        .as_encoded(),
+                )?;
+            } else if present.contains(persona) {
+                self.open_remove_table(ARCHIVAL_SUPPORT_UNISSUED, CARRY_ROW_ABSENT)?
+                    .remove(key)?;
+            }
+        }
+        Ok(())
     }
 
     /// 9c. `archival_drawable_digest[E] = digest` at the block that opens
@@ -511,13 +568,10 @@ impl<'id> WriteBatch<'_, 'id> {
     ///
     /// The block's support count is [`Self::write_support_block`]: every
     /// connect records how many support draws the block issued.
-    /// `archival_support_issued` and `archival_support_unissued` still wait
-    /// on admission. [`shekyl_archival_retention::support_slot`] schedules
-    /// a draw, and the slash pass settles the issued rows it is shown.
-    /// Admission is not on the connect path, so this pass reads an empty
-    /// index and writes no settlement row. Filing unanswered draws before
-    /// a bundle can mark a pass would settle misses the stream has not yet
-    /// been able to serve.
+    /// Admission writes `archival_support_issued` (`admission_write.rs`)
+    /// and the count phase `archival_support_unissued`
+    /// ([`Self::write_support_carry`]); the slash pass settles the issued
+    /// rows it is shown.
     fn write_support_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
         let rows = delta.support_settlements();
         if rows.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {

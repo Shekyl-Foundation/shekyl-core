@@ -17,14 +17,16 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     admission_plan, AdmissionPlan, AdmissionPlanFault, Admitted, BlockDrawsFloor, EpochFloor,
-    Settling,
+    Settling, SupportIssue,
 };
-use shekyl_types::archival::BlockDraws;
+use shekyl_types::archival::{BlockDraws, SupportIssued};
 use shekyl_types::BlockHeight;
 
 use crate::codec::Canonical;
-use crate::ids::IssuedDrawKey;
-use crate::schema::{ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW};
+use crate::ids::{IssuedDrawKey, SupportIssuedKey};
+use crate::schema::{
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_SUPPORT_ISSUED,
+};
 
 use super::archival_reads;
 use super::bundle_view::StoreBundleView;
@@ -137,6 +139,40 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             self.open_upsert_table(ARCHIVAL_ISSUED_DIGEST)?
                 .upsert(issues.epoch().to_raw(), digest.encoded().as_encoded())?;
+        }
+        self.journal_support(plan.support())
+    }
+
+    /// The support draws the bundles issued, one
+    /// `archival_support_issued[(epoch(h), P, h, j)]` row each: the shard
+    /// and the pass bit (`ARCHIVAL_SUPPORT_DRAW.md` §3; the switch's C5).
+    /// Insert-once like the economy index: a key already present is the
+    /// same drift (SI-25, `IndexDrift`). Journaled, so `pop` of the block
+    /// removes them.
+    fn journal_support(&self, support: &[SupportIssue]) -> Result<(), StoreError> {
+        let Some(first) = support.first() else {
+            return Ok(());
+        };
+        let collision = StoreInvariant::SettlementNotSound {
+            epoch: first.epoch,
+            observed: SettlementFault::IndexDrift,
+        };
+        let mut index = self.open_insert_table(ARCHIVAL_SUPPORT_ISSUED, collision)?;
+        for issue in support {
+            let key =
+                SupportIssuedKey::new(issue.epoch, issue.persona, issue.issuing_height, issue.draw);
+            let row = SupportIssued {
+                shard: issue.shard,
+                passed: issue.passed,
+            };
+            index.insert_observing(
+                key.key(),
+                row.encoded().as_encoded(),
+                StoreInvariant::SettlementNotSound {
+                    epoch: issue.epoch,
+                    observed: SettlementFault::IndexDrift,
+                },
+            )?;
         }
         Ok(())
     }
