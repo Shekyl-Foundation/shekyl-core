@@ -459,6 +459,7 @@ mod fetch {
                 .map(|(block, txs)| BlockEntry {
                     block: block.clone(),
                     txs: txs.iter().map(&mut slot).collect(),
+                    ..Default::default()
                 })
                 .collect(),
         }

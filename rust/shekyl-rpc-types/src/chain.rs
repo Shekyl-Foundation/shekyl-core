@@ -271,7 +271,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `grey_peerlist_size`) are gone; the list sizes they gave were the
 /// clearnet lists alone, so a Tor-only node read `white 0`. A 3.69 reader
 /// refuses the reply. `get_version` gains nothing.
-pub const CORE_RPC_VERSION_MINOR: u32 = 70;
+/// 3.71: `/get_blocks_by_height.bin`'s entries carry the block's
+/// `bundle_references` and the `bundle_bodies` this node holds for them,
+/// each an array of strings absent when empty (the switch's C4). A block
+/// that admits no bundle reads as at 3.70. `get_version` gains nothing.
+pub const CORE_RPC_VERSION_MINOR: u32 = 71;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 

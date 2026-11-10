@@ -55,6 +55,14 @@ pub const ROUTE: &str = "get_blocks_by_height.bin";
 /// Why the corpus could not be fetched.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchFault {
+    /// A block's bundle section names a body the daemon no longer holds:
+    /// it was released past the undo retention, and a corpus without it
+    /// cannot be replayed.
+    #[error("the bundle body of a reference at height {height} is not held")]
+    BundleBodyNotHeld {
+        /// The block's height.
+        height: BlockHeight,
+    },
     /// The transport failed.
     #[error("rpc: {0}")]
     Rpc(#[from] RpcError),
@@ -183,7 +191,11 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
                     }
                 }
             }
-            writer.append(&entry.block, &txs)?;
+            // The section's bodies in section order, each the one its
+            // reference names. A body the daemon no longer holds cannot be
+            // replayed, so the capture stops there (`corpus.rs`, version 4).
+            let bodies = section_bodies(at, &entry.bundle_references, &entry.bundle_bodies)?;
+            writer.append_carrying(&entry.block, &txs, &entry.bundle_references, &bodies)?;
             written += 1;
             for injection in injections.iter().filter(|i| i.at == at) {
                 writer.inject(at, injection.credit)?;
@@ -192,4 +204,35 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
         first = end;
     }
     Ok(written)
+}
+
+/// The body of each of `references`, in section order, from `carried`,
+/// matched by length and hash (§7.5).
+///
+/// # Errors
+///
+/// [`FetchFault::BundleBodyNotHeld`] when a reference's body is not among
+/// them: the daemon has released it, and a corpus without it cannot be
+/// replayed.
+fn section_bodies(
+    height: BlockHeight,
+    references: &[Vec<u8>],
+    carried: &[Vec<u8>],
+) -> Result<Vec<Vec<u8>>, FetchFault> {
+    let mut bodies = Vec::with_capacity(references.len());
+    for bytes in references {
+        let found = shekyl_archival_retention::BundleRef::decode(bytes)
+            .ok()
+            .and_then(|reference| {
+                carried
+                    .iter()
+                    .find(|body| reference.accept_body(body).is_ok())
+                    .cloned()
+            });
+        match found {
+            Some(body) => bodies.push(body),
+            None => return Err(FetchFault::BundleBodyNotHeld { height }),
+        }
+    }
+    Ok(bodies)
 }

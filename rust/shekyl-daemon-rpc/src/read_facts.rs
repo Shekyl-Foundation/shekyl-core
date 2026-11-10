@@ -215,6 +215,10 @@ pub struct BlockRead {
     pub block: Vec<u8>,
     /// Each listed transaction.
     pub txs: Vec<ListedTx>,
+    /// The block's bundle references, undecoded; empty when it admits none.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those references this node holds.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the

@@ -305,6 +305,9 @@ pub(crate) struct KeptPosting {
     pub(crate) job: Job,
     /// The bodies it listed, in the block's order.
     pub(crate) bodies: Vec<Transaction>,
+    /// Its bundle section, when the block admits any: the door attaches it
+    /// to a block mined on this job (`Door::offer_local`).
+    pub(crate) section: Option<crate::template::PostedSection>,
 }
 
 /// The postings still kept, by generation. The service owns the map. The
@@ -787,6 +790,7 @@ where
         KeptPosting {
             job: produced.job,
             bodies: produced.transactions,
+            section: produced.section,
         },
     );
     while kept.len() > KEPT_JOBS {
@@ -834,6 +838,20 @@ impl Unposted {
             Self::Template(NoTemplate::Selection(fault)) => {
                 shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
                 why(Unbuilt::Selection)
+            }
+            // The section's reads are the snapshot's, as the facts are: a
+            // store fault stops the service, and so does a corrupt set.
+            Self::Template(NoTemplate::Section(Fault::View(store))) => {
+                shared.fail(ServiceFault::Store(store));
+                why(Unbuilt::StoreFault)
+            }
+            Self::Template(NoTemplate::Section(Fault::Corrupt(corrupt))) => {
+                crate::service::record_store_read(shared, ViewRead::Corrupt(corrupt));
+                why(Unbuilt::StoreCorrupt)
+            }
+            Self::Template(NoTemplate::Section(Fault::Stale(stale))) => {
+                tracing::error!("no template: the section's read went stale: {stale}");
+                why(Unbuilt::StoreCorrupt)
             }
             Self::Template(NoTemplate::PoolFile(store)) => {
                 shared.pool_dead(&store);

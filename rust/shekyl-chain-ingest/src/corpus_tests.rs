@@ -593,3 +593,72 @@ fn an_inject_needs_a_regtest_corpus_a_tip_and_the_tips_height() {
         }
     ));
 }
+
+/// A block's bundle section rides its record (version 4, the switch's C4):
+/// the references and, in section order, each one's body come back on the
+/// candidate a replay judges. A body that is not its reference's is refused
+/// before the record is written. Red edit: drop the body check in
+/// `verified_section` — the swapped body is written.
+#[test]
+fn a_record_carries_its_bundle_section_and_refuses_a_body_that_is_not_its_own() {
+    use shekyl_chain_rules::harness::bundle::BundleWorld;
+    use shekyl_chain_rules::RuleSet;
+
+    let (_, block, txs) = blobs(0, 1);
+    let one = BundleWorld::with(
+        BlockHeight::from_raw(7),
+        BundleWorld::SEED,
+        0,
+        &RuleSet::GENESIS,
+    );
+    let (reference, body) = one.bundle(&[]);
+    let other = BundleWorld::with(
+        BlockHeight::from_raw(8),
+        BundleWorld::SEED,
+        0,
+        &RuleSet::GENESIS,
+    );
+    let (_, foreign) = other.bundle(&[]);
+
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        Network::Stagenet,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    let refused = w
+        .append_carrying(
+            &block,
+            &txs,
+            &[reference.encode()],
+            &[foreign.as_bytes().to_vec()],
+        )
+        .expect_err("a body that is not the reference's");
+    assert!(
+        matches!(refused, CorpusFault::BadSection { .. }),
+        "{refused}"
+    );
+    w.append_carrying(
+        &block,
+        &txs,
+        &[reference.encode()],
+        &[body.as_bytes().to_vec()],
+    )
+    .expect("the section holds");
+    let bytes = w.finish().expect("finish").into_inner();
+
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let IngestEvent::Extend(candidate) =
+        reader.next().expect("one record").expect("a record").event
+    else {
+        panic!("an extend record");
+    };
+    assert_eq!(
+        candidate
+            .bundle_references
+            .as_ref()
+            .map(|section| section.as_slice().to_vec()),
+        Some(vec![reference.encode()])
+    );
+    assert_eq!(candidate.bundle_bodies, vec![body]);
+}

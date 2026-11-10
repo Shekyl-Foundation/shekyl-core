@@ -200,10 +200,12 @@ fn two_blocks_whole() -> GetBlocksByHeightResponse {
                     BlockTx::Full(tagged_blob(31, 16)),
                     BlockTx::Full(tagged_blob(41, 8)),
                 ],
+                ..Default::default()
             },
             BlockEntry {
                 block: tagged_blob(53, 12),
                 txs: Vec::new(),
+                ..Default::default()
             },
         ],
     }
@@ -315,6 +317,7 @@ fn get_blocks_by_height_pruned_response_matches_the_pinned_bytes() {
                     archival_len: 0,
                 }),
             ],
+            ..Default::default()
         }],
     };
     let built = reply.to_bin().expect("encode");
@@ -348,6 +351,7 @@ fn get_blocks_by_height_archived_response_matches_the_pinned_bytes() {
                     shard: 7,
                 },
             ],
+            ..Default::default()
         }],
     };
     let built = reply.to_bin().expect("encode");
@@ -390,5 +394,45 @@ fn an_empty_block_list_is_absent_not_an_empty_array() {
     assert!(
         !built.windows(6).any(|w| w == b"blocks"),
         "an empty block list must not put the key in the document"
+    );
+}
+
+/// 3.71: an entry carries the block's bundle references and the bodies the
+/// node holds, each absent from the document when empty. A block with no
+/// section encodes as at 3.70. Red edit: drop the `bundle_bodies` insert
+/// from `to_bin` — the round trip loses them.
+#[test]
+fn a_block_entry_carries_its_bundle_section_and_omits_an_empty_one() {
+    let with = GetBlocksByHeightResponse {
+        status: RpcStatus::ok(),
+        blocks: vec![BlockEntry {
+            block: tagged_blob(11, 24),
+            txs: Vec::new(),
+            bundle_references: vec![tagged_blob(61, 80)],
+            bundle_bodies: vec![tagged_blob(71, 200)],
+        }],
+    };
+    let bytes = with.to_bin().expect("encodes");
+    assert_eq!(
+        GetBlocksByHeightResponse::from_bin(&bytes).expect("decodes"),
+        with
+    );
+
+    let without = GetBlocksByHeightResponse {
+        status: RpcStatus::ok(),
+        blocks: vec![BlockEntry {
+            block: tagged_blob(11, 24),
+            ..Default::default()
+        }],
+    };
+    let bytes = without.to_bin().expect("encodes");
+    let needle: &[u8] = b"bundle_";
+    assert!(
+        !bytes.windows(needle.len()).any(|window| window == needle),
+        "an empty section writes no key"
+    );
+    assert_eq!(
+        GetBlocksByHeightResponse::from_bin(&bytes).expect("decodes"),
+        without
     );
 }

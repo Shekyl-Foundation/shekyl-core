@@ -512,12 +512,14 @@ pub fn get_blocks_by_height(
             .blocks
             .into_iter()
             .map(|block| BlockEntry {
-                block: block.block,
                 txs: block
                     .txs
                     .iter()
                     .map(|tx| block_tx(tx, request.prune))
                     .collect(),
+                block: block.block,
+                bundle_references: block.bundle_references,
+                bundle_bodies: block.bundle_bodies,
             })
             .collect(),
     })

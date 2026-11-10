@@ -2115,6 +2115,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         crate::follower::KeptPosting {
             job,
             bodies: blocks[2].template.transactions.clone(),
+            section: None,
         },
     );
     let (sender, inbox) = shekyl_miner::found_blocks();

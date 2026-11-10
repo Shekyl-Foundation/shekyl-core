@@ -350,6 +350,13 @@ pub struct BlockEntry {
     /// Its listed transactions, in the block's order. Absent from the
     /// document when empty.
     pub txs: Vec<BlockTx>,
+    /// Its bundle references, as its header's root commits them (3.71).
+    /// Absent from the document when the block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The body of each reference this node still holds, in no set order
+    /// (3.71), as 2014 carries them. A reader matches each to its reference
+    /// by hash. Absent from the document when empty.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// Response of `/get_blocks_by_height.bin`.
@@ -379,6 +386,18 @@ impl GetBlocksByHeightResponse {
                 if !entry.txs.is_empty() {
                     let txs = entry.txs.iter().map(BlockTx::to_section).collect();
                     section.insert("txs", Value::Array(Array::Object(txs)));
+                }
+                if !entry.bundle_references.is_empty() {
+                    section.insert(
+                        "bundle_references",
+                        Value::Array(Array::Bytes(entry.bundle_references.clone())),
+                    );
+                }
+                if !entry.bundle_bodies.is_empty() {
+                    section.insert(
+                        "bundle_bodies",
+                        Value::Array(Array::Bytes(entry.bundle_bodies.clone())),
+                    );
                 }
                 entries.push(section);
             }
@@ -420,7 +439,17 @@ impl GetBlocksByHeightResponse {
                             .collect::<Result<Vec<_>, _>>()?,
                         Some(_) => return Err(BinError::WrongType("txs")),
                     };
-                    out.push(BlockEntry { block, txs });
+                    let bytes_array = |key: &'static str| match section.get(key) {
+                        None => Ok(Vec::new()),
+                        Some(Value::Array(Array::Bytes(v))) => Ok(v.clone()),
+                        Some(_) => Err(BinError::WrongType(key)),
+                    };
+                    out.push(BlockEntry {
+                        block,
+                        txs,
+                        bundle_references: bytes_array("bundle_references")?,
+                        bundle_bodies: bytes_array("bundle_bodies")?,
+                    });
                 }
                 out
             }

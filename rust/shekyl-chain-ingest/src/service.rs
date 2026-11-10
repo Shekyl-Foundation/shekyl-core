@@ -907,6 +907,9 @@ pub struct Door {
     seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
     connector: ActorRef<Connector>,
     filed: tokio::sync::broadcast::Sender<FiledBundle>,
+    /// The follower's postings: a block mined on one is given its bundle
+    /// section here ([`Door::offer_local`]).
+    postings: crate::follower::Postings,
 }
 
 impl Door {
@@ -988,6 +991,42 @@ impl Door {
         self.room.close();
     }
 
+    /// The bundle section of the posting `block` was mined on, as the block
+    /// carries it: references, and bodies (`SO-D12` 4b, C4). A local block
+    /// arrives as bytes — the built-in miner's and an outside miner's
+    /// `submit_block` alike — and its header commits the section's root, so
+    /// the posting with the same parent and the same root is the one it was
+    /// mined on. A block whose root is no posting's, or the empty section's,
+    /// carries none, and the validator judges its root against that.
+    fn posted_section(&self, block: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let Ok(block) = shekyl_wire::Block::from_bytes(block) else {
+            return (Vec::new(), Vec::new());
+        };
+        let header = &block.header;
+        let kept = self
+            .postings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.values()
+            .filter_map(|posting| {
+                let posted = &posting.job.block.header;
+                let section = posting.section.as_ref()?;
+                (posted.previous == header.previous && posted.bundle_root == header.bundle_root)
+                    .then(|| {
+                        (
+                            section.references.as_slice().to_vec(),
+                            section
+                                .bodies
+                                .iter()
+                                .map(|body| body.as_bytes().to_vec())
+                                .collect(),
+                        )
+                    })
+            })
+            .next()
+            .unwrap_or_default()
+    }
+
     /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
     /// node mined, was submitted, or is connecting at genesis. It waits for
     /// the local seat while the window is full, offers the block as
@@ -1009,13 +1048,14 @@ impl Door {
         block: Vec<u8>,
         bodies: Vec<Vec<u8>>,
     ) -> Result<Tagged, Refusal> {
+        let (bundle_references, bundle_bodies) = self.posted_section(&block);
         let arrival = Arrival {
             tag,
             origin: Origin::Local,
             block,
             bodies,
-            bundle_references: Vec::new(),
-            bundle_bodies: Vec::new(),
+            bundle_references,
+            bundle_bodies,
         };
         loop {
             match self.offer(arrival.clone()) {
@@ -1379,6 +1419,7 @@ where
             seeds: shared.seeds.subscribe(),
             connector: shared.connector.clone(),
             filed: shared.filed.clone(),
+            postings: shared.postings(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();

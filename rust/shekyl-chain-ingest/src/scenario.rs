@@ -343,8 +343,9 @@ where
         Ok((self.mined(height, out.applied, kept)?, out.admitted))
     }
 
-    /// The queue's entries inside the window of `height`, ascending by `h`:
-    /// their references and their bodies. `None` when there are none.
+    /// The section the node's template would carry at `height`: the
+    /// production [`crate::template::section`], `fill_section` over the
+    /// queue on one snapshot. `None` when it packs nothing.
     fn queued_section(
         &self,
         height: BlockHeight,
@@ -352,33 +353,19 @@ where
         Vec<shekyl_archival_retention::BundleRef>,
         Vec<shekyl_archival_retention::BundleBody>,
     )> {
-        let window = self
-            .rules
-            .in_force(height)
-            .settlement_schedule()
-            .challenge_response_blocks()
-            .map_or(shekyl_types::BlockCount::ZERO, |w| {
-                shekyl_types::BlockCount::from_raw(w.get())
-            });
-        let entries: Vec<_> = self
-            .store()
-            .begin_read()
-            .expect("the scenario's store reads")
-            .queued_bundles()
-            .expect("the queue reads")
-            .into_iter()
-            .filter(|entry| entry.h < height && height <= entry.h.saturating_add(window))
+        let store = self.store();
+        let snap = store.begin_read().expect("the scenario's store reads");
+        let section = crate::template::section(&snap, height, &self.rules.in_force(height))
+            .unwrap_or_else(|stop| panic!("the template's section reads: {stop:?}"))?;
+        let refs = section
+            .references
+            .as_slice()
+            .iter()
+            .map(|bytes| {
+                shekyl_archival_retention::BundleRef::decode(bytes).expect("a packed reference")
+            })
             .collect();
-        if entries.is_empty() {
-            return None;
-        }
-        Some((
-            entries
-                .iter()
-                .map(|entry| entry.queued.reference.clone())
-                .collect(),
-            entries.into_iter().map(|entry| entry.body).collect(),
-        ))
+        Some((refs, section.bodies))
     }
 
     /// Form `next`'s block. What the caller applies it through is its own.
