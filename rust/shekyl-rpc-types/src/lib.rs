@@ -78,12 +78,14 @@ pub mod headers;
 pub mod hex128;
 pub mod identity;
 pub mod info;
+pub mod method;
 pub mod methods;
 pub mod mining;
 pub mod nullable;
 pub mod options;
 pub mod p2p;
 pub mod pool;
+pub mod schema;
 pub mod transactions;
 pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
