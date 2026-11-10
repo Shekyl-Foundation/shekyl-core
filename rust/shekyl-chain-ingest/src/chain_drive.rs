@@ -89,6 +89,14 @@ const RETIRED_AT_A_BOUNDARY: &[&str] = &[
 ];
 
 /// The archival families those tables carry.
+/// Tables a connect sweeps for good, at every height: the bodies of the
+/// block that has just passed the undo retention (SI-41's main-chain
+/// holder, `bundle_holders.rs`). The body store is not chain state, and a
+/// legal reorg from any later tip cannot reach that block, so a pop does
+/// not restore what the sweep dropped: [`pop_keeps_the_prune`] at every
+/// pop, not only at a boundary's.
+const SWEPT_AT_A_CONNECT: &[&str] = &["archival_bundle_body"];
+
 const FAMILIES_RETIRED_AT_A_BOUNDARY: &[SnapshotFamily] = &[
     SnapshotFamily::SigmaWork,
     SnapshotFamily::Budget,
@@ -312,11 +320,13 @@ fn indexed(rows: &RawRows) -> BTreeMap<Vec<u8>, Vec<u8>> {
 }
 
 /// `got` is the store `parent` describes. With `connected`, `got` is the
-/// store after a pop of the block that wrote `connected`: retired tables
-/// and families satisfy [`pop_keeps_the_prune`], and everything else is
-/// equal. Without it, every read is equal — a reconnect, or a block that
-/// did not prune.
-fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>) {
+/// store after a pop of the block that wrote `connected`, which ran a
+/// boundary: retired tables and families satisfy [`pop_keeps_the_prune`],
+/// and everything else is equal. With `swept`, `got` is the store after a
+/// pop of the block that wrote `swept`: the tables a connect sweeps satisfy
+/// [`pop_keeps_the_prune`] against it. Without either, every read is equal
+/// — a reconnect.
+fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>, swept: Option<&Tip>) {
     assert_eq!(got.height, parent.height, "{step}: the tip");
     let families: Vec<_> = SnapshotFamily::ALL
         .into_iter()
@@ -344,6 +354,13 @@ fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>) {
         .filter(|table| {
             let want = parent.rows.get(table).unwrap_or(&none);
             let have = got.rows.get(table).unwrap_or(&none);
+            if let Some(swept) = swept.filter(|_| SWEPT_AT_A_CONNECT.contains(table)) {
+                return !pop_keeps_the_prune(
+                    &indexed(want),
+                    &indexed(have),
+                    &indexed(swept.rows.get(table).unwrap_or(&none)),
+                );
+            }
             let kept = match connected {
                 Some(connected) if RETIRED_AT_A_BOUNDARY.contains(table) => pop_keeps_the_prune(
                     &indexed(want),
@@ -592,6 +609,7 @@ impl Driven {
                 parent,
                 &popped,
                 is_pruning_boundary(block.height, schedule).then_some(&connected),
+                Some(&connected),
             );
         }
         let (again, readmitted) = self
@@ -617,6 +635,7 @@ impl Driven {
             &format!("reconnecting block {}", block.height),
             &connected,
             &reconnected,
+            None,
             None,
         );
         let close_slot = again

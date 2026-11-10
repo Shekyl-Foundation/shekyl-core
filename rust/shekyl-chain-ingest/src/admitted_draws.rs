@@ -151,6 +151,12 @@ pub(crate) async fn serve_to(
             return;
         }
         waiting = file_draws(drive, witness, signers, passes, h, block.hash).await;
+        if waiting {
+            // The filed bundle is a write beside a block: the queue holds
+            // it after the block that drew it. A round trip's next pop
+            // compares against the store it left.
+            drive.wrote_beside_a_block().await;
+        }
     }
 }
 
