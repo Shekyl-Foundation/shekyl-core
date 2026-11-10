@@ -386,6 +386,7 @@ stale_through = [
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
+  { through = "b0cbd52d72", note = "The switch's C6: the pass is signed with the persona's receipt key (the FN-DSA hybrid envelope) in place of the identity key, over a typed PassTranscript whose bytes are unchanged. The per-serve signature is a different primitive, so the captured serve does not price it. Not re-measured." },
 ]
 
 [[path_set]]
@@ -450,6 +451,7 @@ stale_through = [
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-p-fetch's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the captures priced has moved." },
+  { through = "b0cbd52d72", note = "The switch's C6: the pass is signed with the persona's receipt key (the FN-DSA hybrid envelope) in place of the identity key, over a typed PassTranscript whose bytes are unchanged. The per-serve signature is a different primitive, so the captured serve does not price it. Not re-measured." },
 ]
 
 [[constant]]
@@ -525,6 +527,7 @@ spec = [
 ]
 cleared = [
   { through = "2fb779723", reason = "The Android target_os gates are deleted. Linux still calls setpriority with SERVING_NICE 19, and the serving runtime's Linux test still reads that value back. The BA-T5 session 3 T1 capture still prices this tree." },
+  { through = "b0cbd52d72", reason = "runtime.rs changes only a test: the accept-loop test names the receipt width on signer_at_synced_tip. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
 ]
 
 [[constant]]
