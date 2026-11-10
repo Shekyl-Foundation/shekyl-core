@@ -21,42 +21,52 @@
 use std::sync::Arc;
 
 use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
 use super::service_tests::{arrival, offer_all, service, Gated, Running};
 use super::{Reply, Service, ServiceConfig};
 use crate::scenario::{Mined, Scenario};
 
-/// Blocks the fork sits below the seed. Each branch then mines its own
-/// seed block; the prefix stops on the shared fork root.
-const LEAD_IN: u64 = 8;
+/// The seed block. [`SEEDHASH_EPOCH_BLOCKS`] is the epoch length; the seed
+/// is the block at that ordinal.
+const SEED: BlockHeight = BlockHeight::from_raw(SEEDHASH_EPOCH_BLOCKS);
+/// The schedule's seed lag, as a span.
+const LAG: BlockCount = BlockCount::from_raw(SEEDHASH_EPOCH_LAG);
+/// How far below the seed the fork sits. The seed block is then the
+/// branch's own.
+const LEAD_IN: BlockCount = BlockCount::from_raw(8);
 
-/// Blocks `0..PREFIX`. The tip of this span is the fork root.
-const PREFIX: u64 = SEEDHASH_EPOCH_BLOCKS - LEAD_IN;
+/// The shared chain. Its next height is the first block of every branch,
+/// and its tip is the fork root. The two differ by one: the count is not
+/// the ordinal.
+const PREFIX: ChainCount = {
+    let Some(first_branch) = SEED.checked_sub_count(LEAD_IN) else {
+        panic!("the lead-in fits under the seed");
+    };
+    ChainCount::from_next_height(first_branch)
+};
 
-/// The first height whose seed is the block at [`SEEDHASH_EPOCH_BLOCKS`].
-/// [`seedheight`] still returns genesis through `blocks + lag`.
-const PAST_SEED: u64 = first_own_seed_height();
+/// The first height whose seed is [`SEED`]. [`seedheight`] still returns
+/// genesis through the epoch length plus the lag.
+const PAST_SEED: BlockHeight = first_own_seed_height();
 
 /// Blocks of each branch offered together, past the seed.
-const TOGETHER: u64 = 8;
-
+const TOGETHER: BlockCount = BlockCount::from_raw(8);
 /// Alternation steps once both branches have reached the seed. Step `i`
-/// offers w at `PAST_SEED + i` and z at the next height.
-const ALTERNATION_STEPS: u64 = 4;
-
+/// offers w at `PAST_SEED + i` and z one block later.
+const ALTERNATION_STEPS: BlockCount = BlockCount::from_raw(4);
 /// Blocks w keeps past the higher window, and blocks main keeps past w.
 /// w stays lighter than main. z is one block longer than main, so it
 /// becomes heavier only at its tip.
-const W_MARGIN: u64 = 9;
-const MAIN_MARGIN: u64 = 10;
+const W_MARGIN: BlockCount = BlockCount::from_raw(9);
+const MAIN_MARGIN: BlockCount = BlockCount::from_raw(10);
 
 /// w: long enough for every window, shorter than main.
-const W: u64 = blocks_through(window_top()) + W_MARGIN;
+const W: BlockCount = add_count(blocks_through(window_top()), W_MARGIN);
 /// The main chain after the prefix. Its tip is past the seed.
-const MAIN: u64 = W + MAIN_MARGIN;
+const MAIN: BlockCount = add_count(W, MAIN_MARGIN);
 /// z: one block longer than main.
-const Z: u64 = MAIN + 1;
+const Z: BlockCount = add_count(MAIN, BlockCount::ONE);
 
 /// The session that connected the prefix and the main chain.
 const MAIN_SESSION: u64 = 1;
@@ -75,72 +85,115 @@ const FIRST_PAST_SEED_TAG: u64 = 500;
 const W_STEP_TAG: u64 = 600;
 const Z_STEP_TAG: u64 = 700;
 
-const fn first_own_seed_height() -> u64 {
-    let mut height = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG;
-    while seedheight(height, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG) != SEEDHASH_EPOCH_BLOCKS {
-        height += 1;
+const fn add_count(count: BlockCount, more: BlockCount) -> BlockCount {
+    let Some(sum) = count.checked_add(more) else {
+        panic!("a branch length fits");
+    };
+    sum
+}
+
+const fn first_own_seed_height() -> BlockHeight {
+    let mut height = SEED.saturating_add(LAG);
+    while seedheight(height.to_raw(), SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG) != SEED.to_raw() {
+        height = height.saturating_add(BlockCount::ONE);
     }
     height
 }
 
 /// The later of the two windows' last heights: w's last alternation step,
 /// or the last block of the joint offer.
-const fn window_top() -> u64 {
-    let alternation = PAST_SEED + ALTERNATION_STEPS - 1;
-    let together = PAST_SEED + TOGETHER - 1;
-    if alternation > together {
+const fn window_top() -> BlockHeight {
+    let alternation = PAST_SEED
+        .saturating_add(ALTERNATION_STEPS)
+        .saturating_sub_count(BlockCount::ONE);
+    let together = PAST_SEED
+        .saturating_add(TOGETHER)
+        .saturating_sub_count(BlockCount::ONE);
+    if alternation.to_raw() > together.to_raw() {
         alternation
     } else {
         together
     }
 }
 
-/// How many branch blocks it takes to reach `height` inclusive. Branch
-/// block 0 is at height [`PREFIX`].
-const fn blocks_through(height: u64) -> u64 {
-    height - PREFIX + 1
+/// Branch blocks from the first block after the fork through `height`,
+/// inclusive.
+const fn blocks_through(height: BlockHeight) -> BlockCount {
+    let Some(before) = height.checked_sub(PREFIX.next_height()) else {
+        panic!("the height is on the branch");
+    };
+    let Some(count) = before.checked_add(BlockCount::ONE) else {
+        panic!("the span of the branch fits");
+    };
+    count
 }
 
 /// Tip height of a branch that mined `len` blocks after the prefix.
-const fn branch_tip(len: u64) -> u64 {
-    PREFIX - 1 + len
+const fn branch_tip(len: BlockCount) -> BlockHeight {
+    let Some(fork) = PREFIX.tip() else {
+        panic!("the prefix holds a block");
+    };
+    fork.saturating_add(len)
 }
 
 const _: () = {
-    assert!(LEAD_IN > 0, "the seed block belongs to the branch");
-    assert!(TOGETHER > 0, "the joint offer is a span");
-    assert!(ALTERNATION_STEPS > 0, "the alternation takes a step");
-    assert!(MAIN_MARGIN > 0, "main stays ahead of w");
-    assert!(window_top() >= PREFIX, "the windows sit on the branch");
-    assert!(W < MAIN, "w stays lighter than main");
-    assert!(Z == MAIN + 1, "z becomes heavier only at its tip");
-    assert!(branch_tip(MAIN) >= PAST_SEED, "main passes the seed");
+    assert!(!LEAD_IN.is_zero(), "the seed block belongs to the branch");
+    assert!(!TOGETHER.is_zero(), "the joint offer is a span");
+    assert!(!ALTERNATION_STEPS.is_zero(), "the alternation takes a step");
+    assert!(!MAIN_MARGIN.is_zero(), "main stays ahead of w");
     assert!(
-        branch_tip(W) >= PAST_SEED + TOGETHER - 1,
-        "w covers the joint offer"
+        window_top().to_raw() >= PREFIX.next_height().to_raw(),
+        "the windows sit on the branch"
+    );
+    assert!(W.to_raw() < MAIN.to_raw(), "w stays lighter than main");
+    assert!(
+        Z.to_raw() == MAIN.to_raw() + 1,
+        "z becomes heavier only at its tip"
     );
     assert!(
-        branch_tip(W) >= PAST_SEED + ALTERNATION_STEPS - 1,
-        "w covers its alternation steps"
+        branch_tip(MAIN).to_raw() >= PAST_SEED.to_raw(),
+        "main passes the seed"
     );
     assert!(
-        branch_tip(Z) >= PAST_SEED + ALTERNATION_STEPS,
+        branch_tip(W).to_raw() >= window_top().to_raw(),
+        "w covers the higher window"
+    );
+    assert!(
+        branch_tip(Z).to_raw() >= PAST_SEED.saturating_add(ALTERNATION_STEPS).to_raw(),
         "z covers the height one past each alternation step"
     );
     assert!(
-        branch_tip(Z) >= PAST_SEED + TOGETHER - 1,
-        "z covers the joint offer"
+        branch_tip(Z).to_raw() >= window_top().to_raw(),
+        "z covers the higher window"
     );
     assert!(
-        seedheight(PAST_SEED, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG) == SEEDHASH_EPOCH_BLOCKS,
+        seedheight(
+            PAST_SEED.to_raw(),
+            SEEDHASH_EPOCH_BLOCKS,
+            SEEDHASH_EPOCH_LAG
+        ) == SEED.to_raw(),
         "PAST_SEED hashes under the branch's own seed"
     );
+    let Some(before_seed) = PAST_SEED.checked_sub_count(BlockCount::ONE) else {
+        panic!("PAST_SEED is not genesis");
+    };
     assert!(
-        seedheight(PAST_SEED - 1, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG) == 0,
+        seedheight(
+            before_seed.to_raw(),
+            SEEDHASH_EPOCH_BLOCKS,
+            SEEDHASH_EPOCH_LAG
+        ) == 0,
         "the height before PAST_SEED still hashes under genesis"
     );
+    // The measured fixture. A derivation that moves one of these has
+    // changed which blocks the scenarios mine.
+    assert!(PREFIX.to_raw() == 2040);
+    assert!(PAST_SEED.to_raw() == 2113);
+    assert!(W.to_raw() == 90);
+    assert!(MAIN.to_raw() == 100);
+    assert!(Z.to_raw() == 101);
     assert!(
-        Z_STEP_TAG > W_STEP_TAG + ALTERNATION_STEPS,
+        Z_STEP_TAG > W_STEP_TAG + ALTERNATION_STEPS.to_raw(),
         "alternation tags do not collide"
     );
     assert!(
@@ -216,7 +269,7 @@ impl Case {
             .z
             .iter()
             .zip(&replies)
-            .filter(|(mined, _)| mined.height.to_raw() >= PAST_SEED)
+            .filter(|(mined, _)| mined.height >= PAST_SEED)
             .collect();
         let Some(last_index) = past.len().checked_sub(1) else {
             panic!("{self}: z passes its seed point");
@@ -253,8 +306,12 @@ impl Case {
     /// genesis's id.
     async fn up_to_the_seed_point(self, service: &Service<Gated>, chains: &Branches) {
         for (session, branch) in [(Z_SESSION, &chains.z), (W_SESSION, &chains.w)] {
-            let replies =
-                offer_all(&service.door(), session, between(branch, PREFIX, PAST_SEED)).await;
+            let replies = offer_all(
+                &service.door(),
+                session,
+                between(branch, PREFIX.next_height(), PAST_SEED),
+            )
+            .await;
             assert!(
                 replies.iter().all(|r| matches!(r, Reply::Held { .. })),
                 "{self}: up to the seed point: {replies:?}"
@@ -305,11 +362,16 @@ impl Case {
             "{self}: the chain's seed stays canonical"
         );
         // Then w, z, w, z, … : each switch of branch evicts the other's seed.
+        // The tag names w's height on both offers. z's block is the next one.
         let mut order = Vec::new();
-        for step in 0..ALTERNATION_STEPS {
-            let height = PAST_SEED + step;
-            order.push((W_STEP_TAG + height, &chains.w, height));
-            order.push((Z_STEP_TAG + height, &chains.z, height + 1));
+        let steps_end = PAST_SEED + ALTERNATION_STEPS;
+        for height in PAST_SEED.ordinals_until(steps_end) {
+            order.push((W_STEP_TAG + height.to_raw(), &chains.w, height));
+            order.push((
+                Z_STEP_TAG + height.to_raw(),
+                &chains.z,
+                height + BlockCount::ONE,
+            ));
         }
         let mut alternations = 0;
         for (tag, branch, height) in order {
@@ -347,16 +409,17 @@ impl Case {
         let (service, substrate) = self.open_on_main(chains).await;
         self.up_to_the_seed_point(&service, chains).await;
         let door = service.door();
+        let together_end = PAST_SEED + TOGETHER;
         let (z, w) = tokio::join!(
             offer_all(
                 &door,
                 Z_SESSION,
-                between(&chains.z, PAST_SEED, PAST_SEED + TOGETHER)
+                between(&chains.z, PAST_SEED, together_end)
             ),
             offer_all(
                 &door,
                 W_SESSION,
-                between(&chains.w, PAST_SEED, PAST_SEED + TOGETHER)
+                between(&chains.w, PAST_SEED, together_end)
             ),
         );
         assert!(
@@ -386,11 +449,20 @@ async fn branches() -> Branches {
     let mut main = Scenario::open("seed-point-main");
     let mut z = Scenario::open("seed-point-z");
     let mut w = Scenario::open("seed-point-w");
-    let (prefix, _, _) = tokio::join!(main.mine(PREFIX), z.mine(PREFIX), w.mine(PREFIX));
+    let prefix_len = PREFIX.to_raw();
+    let (prefix, _, _) = tokio::join!(
+        main.mine(prefix_len),
+        z.mine(prefix_len),
+        w.mine(prefix_len)
+    );
     z.idle();
     w.idle();
     w.idle();
-    let (main_branch, z_branch, w_branch) = tokio::join!(main.mine(MAIN), z.mine(Z), w.mine(W));
+    let (main_branch, z_branch, w_branch) = tokio::join!(
+        main.mine(MAIN.to_raw()),
+        z.mine(Z.to_raw()),
+        w.mine(W.to_raw())
+    );
     for driver in [main, z, w] {
         driver.close().await;
     }
@@ -432,19 +504,31 @@ fn claimed<T, E: std::fmt::Debug>(case: Case, what: &str, result: Result<T, E>) 
     }
 }
 
+/// Where `height` sits in a branch mined after [`PREFIX`]. Index 0 is the
+/// prefix's next height: the count and that ordinal are different
+/// quantities that share a number.
+fn index_on_branch(height: BlockHeight) -> usize {
+    let start = PREFIX.next_height();
+    let Some(span) = height.checked_sub(start) else {
+        panic!("{height} is before the branch, which starts at {start}");
+    };
+    usize::try_from(span.to_raw()).unwrap_or_else(|_| panic!("{height} does not fit an index"))
+}
+
 /// The blocks of `branch` from height `from` up to, not including, `to`.
-fn between(branch: &[Mined], from: u64, to: u64) -> &[Mined] {
-    let first = usize::try_from(from - PREFIX).expect("an index");
-    let end = usize::try_from(to - PREFIX).expect("an index");
-    &branch[first..end]
+fn between(branch: &[Mined], from: BlockHeight, to: BlockHeight) -> &[Mined] {
+    &branch[index_on_branch(from)..index_on_branch(to)]
 }
 
 /// The block of `branch` at `height`.
-fn block_at(branch: &[Mined], height: u64) -> &Mined {
-    &between(branch, height, height + 1)[0]
+fn block_at(branch: &[Mined], height: BlockHeight) -> &Mined {
+    let Some(block) = between(branch, height, height + BlockCount::ONE).first() else {
+        panic!("no block at {height}");
+    };
+    block
 }
 
-/// The seed block at [`SEEDHASH_EPOCH_BLOCKS`] on `branch`.
+/// The seed block at [`SEED`] on `branch`.
 fn seed_block(branch: &[Mined]) -> BlockHash {
-    block_at(branch, SEEDHASH_EPOCH_BLOCKS).hash
+    block_at(branch, SEED).hash
 }
