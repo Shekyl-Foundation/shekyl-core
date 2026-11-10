@@ -38,8 +38,19 @@
 //!   invariant changed; regenerate.
 //!
 //! The other two fixtures carry no suggestion block and are immune to both.
+//!
+//! # Cadence
+//!
+//! `trybuild` checks the fixtures in a cargo project of its own, where this
+//! crate's whole dependency tree compiles again (about 19 minutes on the CI
+//! runner, and the workspace's profile does not reach it). Since 2026-11-09
+//! the test is `#[ignore]`d and run every night by the `trybuild-ignored`
+//! lane (`scripts/ci/ignored_set_trybuild.sh`); a pull request's Rust job
+//! only checks that it is still here. `cargo test --test trybuild --
+//! --ignored` runs it locally.
 
 #[test]
+#[ignore = "checks its fixtures over the crate's whole dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
 fn an_unencrypted_output_field_cannot_be_constructed_downstream() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_overwritten.rs");

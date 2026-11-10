@@ -23,10 +23,9 @@ retries = 1
 # Name a test that is still running after a minute, again each minute, and
 # kill it at the thirtieth. The kill is a failure, so the retry above runs
 # it once more: a hung test fails by name within an hour, not at the job's
-# timeout five hours on. Thirty is about twice the slowest
-# green test seen: in #1285's run (2026-11-07), with every binary running
-# at once, the chain-rules trybuild test took 15m05s and six others 11m49s
-# to 14m40s.
+# timeout five hours on. Thirty is about twice the slowest green tests
+# seen: in #1285's run (2026-11-07), with every binary running at once,
+# six tests took 11m49s to 14m40s.
 slow-timeout = { period = "60s", terminate-after = 30 }
 # The closing summary lists slow tests as well as failures, so the run
 # names the tests that set the step's length.
@@ -40,21 +39,8 @@ failure-output = "immediate-final"
 # job uploads it.
 path = "junit.xml"
 
-# The trybuild tests each run `cargo build` in one shared directory
-# (target/tests/trybuild), and cargo locks it for each build, so they
-# contend for it. The first to build on a cold directory compiles every
-# dependency there. In the first local nextest run the chain-rules one ran
-# 50 minutes, and the logging and mempool ones, waiting in test slots,
-# finished within seconds of it. The group gives them one slot, so none
-# sits in a lock wait holding another; the priority starts them first,
-# so the dependency compile happens at the start of the run, not in its
-# middle. This runs all five one after another; whether that chain beats
-# the slowest binary on CI's 4-core runner is for its JUnit timings to
-# say, and the group goes if it does not.
-[test-groups]
-trybuild = { max-threads = 1 }
-
-[[profile.ci.overrides]]
-filter = 'binary(trybuild)'
-test-group = 'trybuild'
-priority = 100
+# The trybuild harnesses whose programs compile a whole dependency tree
+# (chain-rules, mempool, crypto-pq) are `#[ignore]`d and run by the
+# nightly `trybuild-ignored` lane (scripts/ci/ignored_set_trybuild.sh);
+# the one left in this run (shekyl-logging's) checks little and needs no
+# slot of its own.
