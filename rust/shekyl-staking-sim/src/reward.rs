@@ -1,4 +1,20 @@
-//! Reward computation: the model under test.
+//! Reward computation: two arms.
+//!
+//! **`RewardArm::Production`** (the default) pays as production does
+//! (`ECONOMICS_SIM_PRODUCTION_REBASE.md` Appendix B, R1–R5): each held seated
+//! shard contributes `shard_work_micro(r, age, g)`, the sum floors to milli
+//! once (`work_milli_from_micro`), market membership gates it
+//! (`credited_work_milli`), and `reward_share_floor` pays
+//! `⌊budget · credited / Σwork⌋` in atomic units, the dust unminted. Credit is
+//! linear in work: production deleted the plateau from the reward path (D3/R2).
+//! `r` is the shard's seated holders, `r_market_count`'s served count under the
+//! population model's all-pass draw abstraction (N1). The purse crosses from
+//! model units to atomic units once, at one model unit per SKL, and so do the
+//! shard age (to milli) and the age weight (to milli).
+//!
+//! **`RewardArm::RegisteredPlateau`** is the arm the L11/L13 pins were taken on,
+//! described below. It is on the retirement list (D1) and is the falsifier's
+//! control: `l11_l13_five_seed_pins` runs it.
 //!
 //! `work_P = Σ_{shards held} (1/R(shard)) · g(age(shard))` (age-weighted scarcity),
 //! then a per-pseudonym **banded plateau-cap** `Curve(work_P)` on work, then the
@@ -22,16 +38,33 @@
 
 use crate::curve::curve_banded;
 use crate::model::{g_age, World};
-use shekyl_archival_retention::{curve_milli, BandedCurveParams, WORK_MILLI_SCALE};
+use shekyl_archival_retention::{
+    credited_work_milli, curve_milli, reward_share_floor, scarcity_micro, shard_work_micro,
+    sigma_work_milli, work_milli_from_micro, BandedCurveParams, WORK_MICRO_SCALE, WORK_MILLI_SCALE,
+};
 
-/// Reward curve evaluation backend.
+/// Atomic units per model unit: one model unit is one SKL (Appendix B, Units).
+const ATOMIC_PER_UNIT: f64 = shekyl_units::ATOMIC_UNITS_PER_SKL as f64;
+
+/// Which mechanism pays a run's reward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RewardArm {
+    /// Linear credited work on production's integer operands.
+    #[default]
+    Production,
+    /// Float work, the banded plateau at `cap`, the pseudonym split and a float
+    /// price: the arm the L11/L13 pins were taken on. Retired in production
+    /// (D3/R2); kept as the falsifier's control until its deletion is ruled.
+    RegisteredPlateau,
+}
+
+/// The plateau's evaluation backend on [`RewardArm::RegisteredPlateau`].
 ///
-/// `Integer` imports the canonical `shekyl-archival-retention::reward_arithmetic`
-/// crate — the code the emission vin mints with — and is the **authoritative**
-/// default (PR 1.5, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`). `Float` is the sim's
-/// exploration mirror (`curve_banded`); it is **not** authoritative and over-reads
-/// worst-shard redundancy by up to one replica (the tail-margin finding), so it is
-/// opt-in only.
+/// `Integer` evaluates the banded curve with `curve_milli`; `Float` with the
+/// sim's `curve_banded`, which over-reads worst-shard redundancy by up to one
+/// replica (PR 1.5, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`). Production applies
+/// neither: its credit is linear (`credited_work_milli`), so this selects a
+/// backend of the registered arm only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CurveImpl {
     #[default]
@@ -53,8 +86,49 @@ pub struct RewardParams {
     pub pseudonym_cost: f64,
     /// Age-weight in `g(age) = 1 + age_weight · age`. `0` = pure `1/R` baseline.
     pub age_weight: f64,
-    /// Float sim path vs `shekyl-archival-retention::reward_arithmetic` (minting code).
+    /// The registered arm's plateau backend.
     pub curve_impl: CurveImpl,
+    /// Which mechanism pays.
+    pub arm: RewardArm,
+}
+
+/// A shard age in `[0, 1]` as production's relative depth in milli. The one
+/// crossing from the model's float age into the reward's integers.
+#[must_use]
+pub fn age_milli(age: f64) -> u64 {
+    (age.clamp(0.0, 1.0) * WORK_MILLI_SCALE as f64).round() as u64
+}
+
+/// The age weight as production's milli weight (`2.0` → `2000`).
+#[must_use]
+pub fn age_weight_milli(age_weight: f64) -> u64 {
+    (age_weight.max(0.0) * WORK_MILLI_SCALE as f64).round() as u64
+}
+
+/// The purse in atomic units, crossing once at one model unit per SKL.
+#[must_use]
+pub fn purse_atomic(budget: f64) -> u64 {
+    let atomic = (budget.max(0.0) * ATOMIC_PER_UNIT).round();
+    if atomic >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        atomic as u64
+    }
+}
+
+/// What one more held shard is worth to an agent at `price` (model units per
+/// unit of work) with `r_eff` holders counting itself: the work term the arm
+/// pays on, times the price. Production's term is `scarcity_micro`; the
+/// registered arm's is the float `g/r`.
+#[must_use]
+pub fn shard_value(arm: RewardArm, price: f64, r_eff: usize, age: f64, age_weight: f64) -> f64 {
+    match arm {
+        RewardArm::Production => {
+            let micro = scarcity_micro(r_eff as u64, age_milli(age), age_weight_milli(age_weight));
+            price * micro as f64 / WORK_MICRO_SCALE as f64
+        }
+        RewardArm::RegisteredPlateau => price * (1.0 / r_eff as f64) * g_age(age, age_weight),
+    }
 }
 
 /// Raw (uncapped) work for one actor, given current replication counts. The economic
@@ -167,6 +241,9 @@ pub struct RewardEval {
     /// (`net reward ÷ committed bond capital` vs. reservation). Zero for inactive or
     /// zero-work actors.
     pub rewards: Vec<f64>,
+    /// Atomic units of the purse `reward_share_floor` left unminted this epoch
+    /// (production arm; `0` on the registered arm).
+    pub dust_atomic: u64,
 }
 
 /// Evaluate rewards for the whole world. `price_hint` seeds the split decision
@@ -174,6 +251,69 @@ pub struct RewardEval {
 /// previous epoch's price as the hint and recompute the realized price here; across
 /// epochs this converges — no inner fixed point).
 pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval {
+    match p.arm {
+        RewardArm::Production => evaluate_production(world, p),
+        RewardArm::RegisteredPlateau => evaluate_registered(world, p, price_hint),
+    }
+}
+
+/// Production's reward for one epoch (module docs). `r` in the result is the
+/// committed count, which the coverage metrics read on both arms; the reward
+/// itself counts seated holders.
+fn evaluate_production(world: &World, p: &RewardParams) -> RewardEval {
+    let r = world.replication();
+    let seated = world.serving_replication();
+    let weight_milli = age_weight_milli(p.age_weight);
+    let n = world.actors.len();
+
+    let work_milli: Vec<u64> = (0..n)
+        .map(|a| {
+            let micro = world.holdings[a]
+                .iter()
+                .enumerate()
+                .filter(|&(s, &held)| held && world.inflight[a][s] == 0)
+                .map(|(s, _)| {
+                    shard_work_micro(
+                        seated[s] as u64,
+                        age_milli(world.shards[s].age),
+                        weight_milli,
+                        true,
+                    )
+                })
+                .fold(0u64, u64::saturating_add);
+            work_milli_from_micro(micro)
+        })
+        .collect();
+    let member = &world.active;
+    let sigma = sigma_work_milli(&work_milli, member);
+    let budget = purse_atomic(p.budget);
+
+    let mut paid = 0u64;
+    let rewards = (0..n)
+        .map(|a| {
+            let credited = credited_work_milli(work_milli[a], member[a]);
+            let atomic = reward_share_floor(budget, credited, sigma);
+            paid = paid.saturating_add(atomic);
+            atomic as f64 / ATOMIC_PER_UNIT
+        })
+        .collect();
+    let price = if sigma > 0 {
+        p.budget * WORK_MILLI_SCALE as f64 / sigma as f64
+    } else {
+        0.0
+    };
+
+    RewardEval {
+        r,
+        pseudonyms: vec![1; n],
+        price,
+        rewards,
+        dust_atomic: budget.saturating_sub(paid),
+    }
+}
+
+/// The registered arm's reward for one epoch (module docs).
+fn evaluate_registered(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval {
     let r = world.replication();
     let n = world.actors.len();
 
@@ -206,6 +346,7 @@ pub fn evaluate(world: &World, p: &RewardParams, price_hint: f64) -> RewardEval 
         pseudonyms,
         price,
         rewards,
+        dust_atomic: 0,
     }
 }
 
@@ -221,6 +362,7 @@ mod tests {
             pseudonym_cost: 0.0,
             age_weight: 0.0,
             curve_impl: CurveImpl::Float,
+            arm: RewardArm::RegisteredPlateau,
         };
         let single = curve(12.0, &p);
         let (eff, m, _) = split_decision(12.0, 1.0, &p);
@@ -246,6 +388,7 @@ mod tests {
                     pseudonym_cost: 0.0,
                     age_weight: 0.0,
                     curve_impl,
+                    arm: RewardArm::RegisteredPlateau,
                 };
                 assert_eq!(
                     curve(12.0, &p),
@@ -267,6 +410,7 @@ mod tests {
                 pseudonym_cost: 0.0,
                 age_weight: 0.0,
                 curve_impl: CurveImpl::Float,
+                arm: RewardArm::RegisteredPlateau,
             };
             let int_p = RewardParams {
                 curve_impl: CurveImpl::Integer,
@@ -277,6 +421,90 @@ mod tests {
             assert!(
                 (f - i).abs() < 2e-3,
                 "work={work}: float {f} vs integer {i} diverge beyond milli rounding"
+            );
+        }
+    }
+
+    fn world(holdings: Vec<Vec<bool>>, ages: &[f64]) -> World {
+        use crate::model::{Actor, Shard};
+        let shards = ages.iter().map(|&age| Shard { age }).collect();
+        let actors = holdings
+            .iter()
+            .map(|_| Actor {
+                storage_capacity: 64,
+                capital: 100.0,
+                is_whale: false,
+                reservation: 0.0,
+            })
+            .collect();
+        let mut w = World::new(shards, actors);
+        w.holdings = holdings;
+        w
+    }
+
+    fn production(budget: f64) -> RewardParams {
+        RewardParams {
+            budget,
+            cap: 8.0,
+            pseudonym_cost: 0.05,
+            age_weight: crate::model::AGE_WEIGHT,
+            curve_impl: CurveImpl::Integer,
+            arm: RewardArm::Production,
+        }
+    }
+
+    /// The production arm pays `reward_share_floor` per member and leaves the
+    /// rest unminted: paid plus dust is the purse, and the dust is under one
+    /// atomic unit per member.
+    #[test]
+    fn production_pays_the_floor_and_keeps_the_dust() {
+        let w = world(
+            vec![
+                vec![true, true, false, true],
+                vec![true, false, true, true],
+                vec![false, true, true, false],
+            ],
+            &[0.1, 0.37, 0.62, 0.95],
+        );
+        let p = production(100.0);
+        let eval = evaluate(&w, &p, 1.0);
+        let paid: u64 = eval
+            .rewards
+            .iter()
+            .map(|&r| (r * ATOMIC_PER_UNIT).round() as u64)
+            .sum();
+        assert_eq!(paid + eval.dust_atomic, purse_atomic(100.0));
+        assert!(eval.dust_atomic < w.actors.len() as u64);
+        assert!(eval.pseudonyms.iter().all(|&m| m == 1));
+    }
+
+    /// Credit is linear in work: an actor holding two copies' worth of the
+    /// same shards earns twice the other's share, where the plateau arm would
+    /// cap it.
+    #[test]
+    fn production_credit_is_linear_in_work() {
+        // Every shard has two holders. Actor 0 holds all eight; actor 1 holds
+        // shards 0..4 and actor 2 shards 4..8. Actor 0's work is twice actor
+        // 1's, and so is its share.
+        let h0 = vec![true; 8];
+        let h1: Vec<bool> = (0..8).map(|s| s < 4).collect();
+        let h2: Vec<bool> = (0..8).map(|s| s >= 4).collect();
+        let w = world(vec![h0, h1, h2], &[0.75; 8]);
+        let eval = evaluate(&w, &production(100.0), 1.0);
+        let ratio = eval.rewards[0] / eval.rewards[1];
+        assert!((ratio - 2.0).abs() < 1e-6, "ratio {ratio}");
+    }
+
+    /// The agent's value of a shard on the production arm is the price times
+    /// `scarcity_micro`'s `g/r`, to a micro.
+    #[test]
+    fn production_shard_value_is_scarcity_times_price() {
+        for (r, age) in [(1usize, 0.0), (3, 0.5), (6, 0.999), (11, 0.25)] {
+            let v = shard_value(RewardArm::Production, 2.0, r, age, crate::model::AGE_WEIGHT);
+            let float = 2.0 * g_age(age, crate::model::AGE_WEIGHT) / r as f64;
+            assert!(
+                (v - float).abs() < 2.0 * 2e-6,
+                "r={r} age={age}: {v} vs {float}"
             );
         }
     }

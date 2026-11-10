@@ -23,6 +23,10 @@ shekyl-onion-key = { path = "../shekyl-onion-key" }
 # The control actor's `ActorRef` issues ADD_ONION; kameo is the workspace stack.
 kameo = { workspace = true }
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
+# The session's tor data directory, under a random name. Removed only when
+# the session returns success. An error, a panic (`panic = "abort"`), and a
+# signal leave it for diagnosis.
+tempfile = { workspace = true }
 
 [[bin]]
 name = "shekyl-tor-transit-spike"

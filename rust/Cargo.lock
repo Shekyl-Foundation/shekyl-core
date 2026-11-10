@@ -4681,6 +4681,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "tempfile",
  "trybuild",
 ]
 
@@ -5349,9 +5350,11 @@ dependencies = [
  "serde_json",
  "shekyl-archival-retention",
  "shekyl-chain-rules",
+ "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-standoff",
  "shekyl-types",
+ "shekyl-units",
 ]
 
 [[package]]
@@ -5471,6 +5474,7 @@ dependencies = [
  "kameo",
  "shekyl-onion-key",
  "shekyl-tor-control-client",
+ "tempfile",
  "tokio",
 ]
 

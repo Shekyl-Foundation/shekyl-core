@@ -51,7 +51,7 @@ pub fn deepest_retention_epochs() -> u64 {
 pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 =
     shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
 
-pub const BLOCK_TIME_SEC: u64 = 120;
+pub const BLOCK_TIME_SEC: u64 = shekyl_difficulty::T_SECONDS;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CouplingCheck {
@@ -177,7 +177,7 @@ pub fn verify() -> TimingClusterReport {
     });
 
     let f4_offline_burst = verify_f4_offline_burst();
-    let f4_slow_emitter = verify_f4_slow_emitter(25, 1);
+    let f4_slow_emitter = verify_f4_slow_emitter(MAX_CLAIM_AGE_W - 1, 1);
 
     let all_pass =
         couplings.iter().all(|c| c.pass) && f4_offline_burst.pass && f4_slow_emitter.pass;
