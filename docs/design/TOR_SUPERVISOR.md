@@ -328,10 +328,11 @@ test on both platforms is `tor-pin-verify`: its Windows entry and its two
 macOS entries, which run the live tests on the exact signed bytes. §7's
 Windows and macOS cases are the supervisor's acceptance tests, not the pin's
 gate.
-**Run 2026-11-08** (§7, Windows and macOS): every case each host could stage
-passes, with two findings: `TSR-F18` (macOS, fixed by #1310) and the
-repeated clock line (Windows, the next supervisor fix). The cases neither
-host could stage are named in §7.
+**Runs 2026-11-08 and 2026-11-09** (§7, Windows and macOS; macOS's cases
+that need `sudo` on 2026-11-09): every case each host could stage passes,
+with two findings: `TSR-F18` (macOS, fixed by #1310) and the repeated clock
+line (Windows and macOS, the next supervisor fix). The cases neither host
+could stage are named in §7.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
 libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
@@ -1479,11 +1480,59 @@ off; shekyl-dev `data/tsr-acceptance/2026-11-08-macos/`, commits `042ef17`,
 - **Stops:** `SIGINT` and `SIGTERM` in 0.16 to 0.17 s, no Tor left, Tor's log
   kept; after `SIGKILL` of the daemon Tor ended on its own within 31 ms, and
   the next start swept what was left.
-- **Not run:** outbound blocked, Tor down at start, the slow link and the
-  clock need `sudo` (`pf`, `dnctl`, `date`); suspend, because another
-  session on the host holds a sleep assertion (`TSR-M8` measured the clock
+- **Not run that day:** outbound blocked, Tor down at start, the slow link
+  and the clock, which need `sudo` (`pf`, `dnctl`, `date`): they ran on
+  2026-11-09 (below). Suspend, because another session on the host holds a
+  sleep assertion (`TSR-M8` measured the clock
   across a sleep there). Upload failure and the introduction flood are best
   effort.
+
+**macOS, 2026-11-09: the cases that need `sudo`** (the same host; the
+signed 15.0.26 bundle; `shekyld` built there at `91135efd5`, which holds
+#1310 and #1318; testnet, clearnet off; `sudo` only for `pfctl`, `dnctl`,
+`date`, `systemsetup` and `sntp`, granted for the run and removed after;
+shekyl-dev `data/tsr-acceptance/2026-11-09-macos-sudo/`, commit `862cec2`):
+
+- **Outbound blocked 10 min while Running (a `pf` anchor dropping every
+  outbound packet beyond the LAN):** no respawn, no cause named, the neutral
+  line once ("Nothing has come through Tor for 2 min 16 s …"). Tor logged
+  failed connections but raised no status event about its network, as on
+  Windows and on Linux under `TSR-Q14`. A descriptor round ended 2 min 39 s
+  after the unblock and a probe arrived 3 min 32 s after it.
+- **Tor down at start (blocked before the start, for 4 min):** no respawn,
+  gray intact (six onion entries at 1 and 4 min); "This machine cannot reach
+  the Tor network …" named once, 3 min 47 s after the start, at Tor's tenth
+  failed connection. Tor was up 1.1 s after the unblock and a probe arrived
+  2 min 4 s after it.
+- **Slow link (two `dnctl` pipes at 40 kbit/s, measured 3.8 kB/s), cold
+  start on a fresh data directory:** up after 21 min 40 s; one Tor
+  throughout, no respawn and no kill. The progress line every 30 s carried
+  the percentage and the bytes, and while a percentage held, "a slow
+  directory mirror can hold this for minutes."; no cause named.
+- **Clock a day ahead at start** (network time off, the clock moved with
+  `date -u`): up, a probe arrived, nothing named, as on Windows and the
+  Linux VM.
+- **Clock three days behind at start:** not up in 4 min; no respawn.
+  **Finding (Windows's, again):** the line was said 18 times in 4 min, 2 to
+  42 s apart, as Tor's skew reports arrived with -258357, -259201 and
+  -259202 s. Each carries the cause's sentence with the raw seconds beside
+  "at least 2 d 23 h behind"; five also add "cannot reach the Tor
+  network", set off by one `NOROUTE` among the skew reports.
+- **Set back a day while Running, then set right after 5 min:** named once
+  (inbound `ClockBehind`, "at least 22 h 39 min behind"); no respawn. Set
+  right, the name cleared in the same second, a descriptor round ended 14 s
+  later and a probe arrived 52 s later.
+- **A slow link while Running (seen, not a case):** with 40 kbit/s pipes on
+  for 29 min under a node that had been Reachable, Tor reset its circuit
+  timeout, a descriptor round reached 4 of 8 directories, and a probe
+  missed. The node said "Peers cannot reach this node through Tor right
+  now. Its address is being published again."; the next probe arrived
+  2 min 25 s after that line, with no respawn.
+- **Stops:** `SIGTERM` in 0.15 to 0.17 s, no Tor left, Tor's log kept. The
+  acceptance script started each node in the background, so the node
+  inherited `SIGINT` ignored, said so at start and kept ignoring it, as
+  ruled: the first try's `SIGINT` stop left a node running, and `SIGTERM`
+  stopped it 3 h 43 min later in 0.15 s.
 
 **Windows, 2026-11-08** (Windows Server 2025 Datacenter VM, x86_64; the
 pinned 15.0.25 `tor.exe`; `shekyld` built there at `8d78bbacfb`; testnet,
@@ -1541,7 +1590,7 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-11-08-windows/`, commits
   service mode; suspend, which on a Server VM is the hypervisor's (`TSR-M8`
   measured Modern Standby on a laptop); the slow link.
 
-**Seen on both, not a case:** no outbound session handshook. The testnet
+**Seen on both hosts, both days, not a case:** no outbound session handshook. The testnet
 fleet runs alpha.11, and `dev` is alpha.12's, a regenesis with new network
 ids, so "gray unchanged" in these runs says less than it reads. The
 seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
@@ -1550,7 +1599,7 @@ seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
 | --- | --- | --- |
 | kill the Tor child | respawn; the same onion republished; the dialer resumes; no draws while down | a kill by PID (`kill -9`, `taskkill /F`) |
 | block outbound, then unblock | Degraded (outbound, blocked); **no respawn**; Usable on unblock | Linux: an unprivileged network namespace; Windows: a firewall rule (CI runners are administrators); macOS: a `pf` anchor under `sudo` |
-| skew the clock | the clock message with the offset; no respawn | a VM or container with its own clock: Linux time namespaces do not offset the real-time clock, and TB-7's cleared environment refuses `LD_PRELOAD`-based fakes |
+| skew the clock | the clock message with the offset; no respawn | Linux: a VM or container with its own clock: Linux time namespaces do not offset the real-time clock, and TB-7's cleared environment refuses `LD_PRELOAD`-based fakes. Windows and macOS: the host's clock with network time off (`w32time` stopped; `systemsetup` and `date` under `sudo`) |
 | fill the data directory's disk | the named state; no spawn while full; recovery when space returns | Linux: a small `tmpfs` in an unprivileged mount namespace; macOS: a small `hdiutil` image; Windows: a small VHD |
 | descriptor upload fails | no verdict from the uploads: Tor retries them, and the next probe judges the facet; respawn only if a control command fails | the private Tor network with its HSDirs stopped, best effort (`TSR-Q6`); not an acceptance gate if it cannot be built |
 | this computer's clock set back a day while Running | named within one liveness sample (Degraded, inbound, the clock's line); no republish; outsiders reach the onion until the copy from before expires. Set right: it clears, the next upload is accepted, outsiders reach the onion again | the clock VM with a correct-clock outside watcher (Rick, 2026-11-01) |
@@ -1558,7 +1607,7 @@ seven-day soaks run after the alpha.12 fleet deploy (Rick, 2026-11-08).
 | crash-looping binary | the backoff cap; the loud announcement; never gives up | a test binary that exits at once, through the test-only unchecked witness |
 | binary replaced on disk, then the child killed | `InstallDefect`; nothing unverified spawns | replace a pinned file between spawns |
 | wedged Tor (stopped process) | the reply bound; respawn | `SIGSTOP`; a suspended process on Windows |
-| slow link (rate-limited) | bootstrap completes past the old 300 s; no kill while progress advances | a rate limit on the namespace's link |
+| slow link (rate-limited) | bootstrap completes past the old 300 s; no kill while progress advances | Linux: a rate limit on the namespace's link; macOS: `dnctl` pipes through a `pf` anchor under `sudo` |
 | suspend and resume | `CLOCK_JUMPED` handled; no respawn unless a process fault follows | a laptop or VM suspend |
 | daemon stop under each trigger | the one stop path; the dialer stopped before Tor; teardown within its bound; the tombstone swept at the next start | each platform's stop signals and console events, the SCM stop on Windows, and `SIGKILL` of the daemon (the owner window) |
 | Tor down at start with a restored address file | gray intact when Tor comes up | start with outbound blocked |
@@ -1798,8 +1847,9 @@ are fixed before the work starts:
    suspend ran on a VM (2026-10-30; `TSR-M8` measured on Windows and
    macOS) and their findings are fixed; the slow link and a silent drop
    (under `TSR-Q14`) pass on the floor device (2026-10-31). Windows and
-   macOS ran on 2026-11-08 (§7, `TSR-F15`); the cases they could not stage
-   are named there. Open: the VM cases on a build with the fixes. The
+   macOS ran on 2026-11-08, and macOS's cases that need `sudo` on
+   2026-11-09 (§7, `TSR-F15`); the cases they could not stage are named
+   there. Open: the VM cases on a build with the fixes. The
    floor-device soak ran from 2026-10-31 06:17Z to
    2026-11-08 00:01Z at `ffb7259051` (shekyl-dev
    `data/tsr-acceptance/2026-10-31-pi-soak/`):
