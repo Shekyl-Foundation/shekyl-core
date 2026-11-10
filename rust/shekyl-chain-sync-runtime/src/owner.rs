@@ -68,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::connector::{BundleOffered, FiledBundle};
 use shekyl_chain_ingest::service::{
-    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SeedPair, SessionId,
+    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SessionId, SlotPair,
 };
 use shekyl_chain_ingest::{ChainRules, TipChanged};
 use shekyl_chain_rules::Tip;
@@ -482,14 +482,14 @@ struct Owner<C: Clock + Clone, R> {
     /// whose handshake has not completed.
     sessions: BTreeMap<Session, Established>,
     seats: Option<usize>,
-    /// The seed window's published pair, read when a proof found a seed
-    /// absent (`Command::SeedNotHeld`). The loop waits on its own
-    /// receiver of the same watch.
-    seeds: watch::Receiver<Option<SeedPair>>,
-    /// The pair the model was last told of. The attendant republishes the
-    /// window at every tip; the model hears `Event::Seeds` when the pair
-    /// differs.
-    seen_seeds: Option<SeedPair>,
+    /// The seeds the slots hold, read when a proof found a seed absent
+    /// (`Command::SeedNotHeld`). The loop waits on its own receiver of
+    /// the same watch.
+    seeds: watch::Receiver<Option<SlotPair>>,
+    /// The pair the model was last told of. It hears `Event::Seeds` when
+    /// that pair differs: an epoch edge, or a seed a run or a branch
+    /// prepared that the window does not name.
+    seen_seeds: Option<SlotPair>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
     /// The 2016s each session has been sent and not yet answered, oldest
@@ -1374,10 +1374,11 @@ where
         self.published.alarm_tx.send_replace(self.sync.alarm());
     }
 
-    /// The seed window published `pair`. The model hears of it when it
-    /// differs from the pair it was last told of: the attendant reinstalls
-    /// the window at every tip, and the pair moves only at an epoch edge.
-    fn seeds_published(&mut self, pair: Option<SeedPair>) {
+    /// The slots published `pair`. The model hears of it when it differs
+    /// from the pair it was last told of. The pair moves when the slots do:
+    /// at an epoch edge, and when a run or a branch prepares a seed the
+    /// window does not name.
+    fn seeds_published(&mut self, pair: Option<SlotPair>) {
         if self.seen_seeds == pair {
             return;
         }

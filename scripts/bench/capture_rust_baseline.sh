@@ -101,9 +101,10 @@ BENCHES=(
   # (the 6-i projection is synchronous + runtime-free).
   "shekyl-engine-core:engine_trait_bench_key_dispatch:engine_trait_bench_key_dispatch_baseline_iai:bench-internals"
   "shekyl-engine-core:engine_trait_bench_key_merge_projection:engine_trait_bench_key_merge_projection_iai:bench-internals"
-  # §72.6's drift gate: what pool admission costs, at the modal 1-in/2-out
-  # shape. iai-only by design — see the empty-criterion-field note above.
-  # A change to FCMP++ verification moves this count, which is the signal
+  # §72.6's drift gate (BA-T1): what pool admission costs, at the modal
+  # 1-in/2-out shape: the door's masks, signature, proof and range proof.
+  # iai-only by design — see the empty-criterion-field note above. A change
+  # to any of those verifications moves this count, which is the signal
   # that `hop` (and the embargo derived from it) is owed a re-derivation.
   "shekyl-verify-cost::relay_admission_verify_iai"
   # BA-T3: the archival serve path. Four functions: one whole response at

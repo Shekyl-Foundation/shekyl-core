@@ -631,6 +631,23 @@ impl CacheStore {
             false
         }
     }
+
+    /// The seedhashes the two slots hold now: the canonical slot, then the
+    /// transient one. Read in [`Self::set_canonical`]'s lock order.
+    ///
+    /// This is the record a caller publishes of what is resident, read
+    /// from the slots themselves. A copy of the slot rules kept beside the
+    /// store drifts from it the moment either changes, and a drifted record
+    /// is how A2's release was skipped on a live node (alpha.11 bug hunt).
+    #[must_use]
+    pub fn slots(&self) -> (Option<Seedhash>, Option<Seedhash>) {
+        let canonical = self.canonical.read().unwrap();
+        let transient = self.transient.read().unwrap();
+        (
+            canonical.as_ref().map(|held| *held.seedhash()),
+            transient.as_ref().map(|held| *held.seedhash()),
+        )
+    }
 }
 
 impl Default for CacheStore {
@@ -756,6 +773,25 @@ mod tests {
         let _pc = cs.lookup_or_derive(&seedhash_c());
         assert!(cs.lookup(&seedhash_c()).is_some());
         assert!(cs.lookup(&seedhash_b()).is_some());
+    }
+
+    #[test]
+    fn cachestore_slots_names_what_each_slot_holds() {
+        // A miss lands in the transient slot; an advance moves it to the
+        // canonical slot and demotes the prior canonical; a release
+        // empties the transient slot. `slots` reads each state.
+        let cs = CacheStore::new();
+        assert_eq!(cs.slots(), (None, None));
+        let pa = cs.lookup_or_derive(&seedhash_a());
+        assert_eq!(cs.slots(), (None, Some(seedhash_a())));
+        cs.set_canonical(pa);
+        assert_eq!(cs.slots(), (Some(seedhash_a()), None));
+        let pb = cs.lookup_or_derive(&seedhash_b());
+        assert_eq!(cs.slots(), (Some(seedhash_a()), Some(seedhash_b())));
+        cs.set_canonical(pb);
+        assert_eq!(cs.slots(), (Some(seedhash_b()), Some(seedhash_a())));
+        assert!(cs.release(&seedhash_a()));
+        assert_eq!(cs.slots(), (Some(seedhash_b()), None));
     }
 
     // ---- T-CS-2 -------------------------------------------------

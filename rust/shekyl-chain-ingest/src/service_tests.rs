@@ -21,7 +21,7 @@ use shekyl_chain_rules::Substrate;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
-use super::{Arrival, ArrivalTag, Door, Origin, Refusal, Reply, Service, ServiceConfig, SessionId};
+use super::{Arrival, ArrivalTag, Origin, Refusal, Reply, Service, ServiceConfig, SessionId};
 use crate::connector::Rewind;
 use crate::scenario::{Mined, Scenario, CLOCK_START, RULES};
 use crate::test_support::{open_store, tmp, TestPath};
@@ -159,6 +159,11 @@ impl Substrate for Gated {
         }
     }
 
+    /// The two slots, as the cache store's `slots` reads them.
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        *self.slots.lock().expect("slots")
+    }
+
     /// The cache store's derive: a seed no slot holds is built into the
     /// transient slot; the canonical slot does not move.
     fn prepare_seed(&self, seed: &BlockHash) {
@@ -288,9 +293,16 @@ pub(crate) fn service_under(
 }
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
-pub(crate) async fn offer_all(door: &Door, session: u64, blocks: &[Mined]) -> Vec<Reply> {
+/// After each reply the published pair is what the slots hold
+/// ([`the_record_is_the_slots`]).
+pub(crate) async fn offer_all(
+    service: &Service<Gated>,
+    session: u64,
+    blocks: &[Mined],
+) -> Vec<Reply> {
     // A caller asks for room before it sends: spans no larger than the
     // room the door reports, each answered before the next.
+    let door = service.door();
     let mut replies = Vec::new();
     let mut index = 0u64;
     for chunk in blocks.chunks(door.room().max(1)) {
@@ -304,9 +316,28 @@ pub(crate) async fn offer_all(door: &Door, session: u64, blocks: &[Mined]) -> Ve
         let tickets = door.offer_span(span).expect("room");
         for ticket in tickets {
             replies.push(ticket.reply().await.reply);
+            the_record_is_the_slots(service);
         }
     }
     replies
+}
+
+/// The pair the service publishes names the seeds the substrate's slots
+/// hold. The door hands that pair to arrivals, and a template hashes under
+/// it. A branch seed the window does not name stays in the transient slot
+/// after the arrival is answered, and the pair names it too: the slots are
+/// not the window. Read under the pin lock, which every pin, preparation
+/// and publish holds, so no change is midway. Skipped once the service is
+/// stopping.
+pub(crate) fn the_record_is_the_slots(service: &Service<Gated>) {
+    if service.shared.stopping() {
+        return;
+    }
+    let view = service.shared.pin_view();
+    assert_eq!(
+        view.published, view.slots,
+        "the published pair is what the slots hold"
+    );
 }
 
 /// What the store holds for `hash`: on the main chain, as an alt row.
@@ -327,7 +358,7 @@ async fn a_span_from_the_tip_connects_in_order() {
     let blocks = y.mine(6).await;
     let gate = Arc::new(Gated::new());
     let service = service("service-span", Arc::clone(&gate), ServiceConfig::default());
-    let replies = offer_all(&service.door(), 1, &blocks).await;
+    let replies = offer_all(&service, 1, &blocks).await;
     for (mined, reply) in blocks.iter().zip(&replies) {
         assert_eq!(
             *reply,
@@ -364,7 +395,7 @@ async fn a_span_lands_in_one_commit() {
     );
     let mut tips = service.watch_tip().await.expect("watch");
     assert_eq!(*tips.borrow_and_update(), TipChanged { seq: 0, tip: None });
-    let replies = offer_all(&door, 1, &blocks).await;
+    let replies = offer_all(&service, 1, &blocks).await;
     for (mined, reply) in blocks.iter().zip(&replies) {
         assert_eq!(
             *reply,
@@ -426,6 +457,10 @@ impl Substrate for Faulting {
 
     fn release_seed(&self, seed: &BlockHash) {
         self.gate.release_seed(seed);
+    }
+
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        self.gate.slots()
     }
 
     fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
@@ -531,7 +566,7 @@ async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
     // Everything below the reference root's block, in spans as the door
     // has room; then the dependent run as one span.
     let split = usize::try_from(at - 6).expect("fits");
-    let before = offer_all(&door, 1, &blocks[..split]).await;
+    let before = offer_all(&service, 1, &blocks[..split]).await;
     assert!(
         before.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "{before:?}"
@@ -540,7 +575,7 @@ async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
     let run = &blocks[split..];
     assert_eq!(run.len(), 7);
     assert!(door.room() >= run.len(), "the run fits the door's window");
-    let replies = offer_all(&door, 1, run).await;
+    let replies = offer_all(&service, 1, run).await;
     for (mined, reply) in run.iter().zip(&replies) {
         assert_eq!(
             *reply,
@@ -589,10 +624,9 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
-    let door = service.door();
     let mut tips = service.watch_tip().await.expect("watch");
     let split = usize::try_from(boundary - 5).expect("fits");
-    let before = offer_all(&door, 1, &blocks[..split]).await;
+    let before = offer_all(&service, 1, &blocks[..split]).await;
     assert!(
         before.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "{before:?}"
@@ -601,7 +635,7 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
     let pins_before = gate.pins();
     let run = &blocks[split..];
     assert_eq!(run.len(), 7);
-    let replies = offer_all(&door, 1, run).await;
+    let replies = offer_all(&service, 1, run).await;
     for (mined, reply) in run.iter().zip(&replies) {
         assert_eq!(
             *reply,
@@ -651,7 +685,7 @@ async fn two_arrivals_at_one_height_one_connects_and_one_is_held() {
         ServiceConfig::default(),
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
+    offer_all(&service, 1, &prefix).await;
     let first = door.offer(arrival(10, 2, &a[0])).expect("room");
     let second = door.offer(arrival(20, 3, &b[0])).expect("room");
     let replies = [first.reply().await.reply, second.reply().await.reply];
@@ -693,8 +727,8 @@ async fn one_block_placed_alt_then_extend_has_one_home() {
         ServiceConfig::default(),
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &tip).await;
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &tip).await;
     // Session 2: x's parent is not the tip, so it is offered as an
     // alternative and held.
     let held = door
@@ -752,7 +786,7 @@ async fn an_extension_whose_parent_moves_is_placed_again() {
     let gate = Arc::new(Gated::new());
     let service = service("service-moves", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
+    offer_all(&service, 1, &prefix).await;
     // `mine[0]` is placed as an extension and held in `form` ...
     gate.hold(mine[0].hash);
     let held = door.offer(arrival(10, 2, &mine[0])).expect("room");
@@ -821,7 +855,7 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         .collect();
     assert_eq!(door.offer_span(span).err(), Some(Refusal::NoRoom));
     assert_eq!(door.room(), 2, "nothing of a refused span is kept");
-    let replies = offer_all(&door, 1, &blocks[..2]).await;
+    let replies = offer_all(&service, 1, &blocks[..2]).await;
     assert!(replies.iter().all(|r| matches!(r, Reply::Connected { .. })));
     assert_eq!(door.room(), 2, "each reply gives its room back");
 
@@ -880,8 +914,8 @@ async fn an_arrival_this_node_holds_is_already_held() {
     let gate = Arc::new(Gated::new());
     let service = service("service-a1", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &tip).await;
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &tip).await;
     let held = door
         .offer(arrival(20, 2, &side[0]))
         .expect("room")
@@ -914,7 +948,7 @@ async fn an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored() {
     let gate = Arc::new(Gated::new());
     let service = service("service-a4", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &blocks[..2]).await;
+    offer_all(&service, 1, &blocks[..2]).await;
     let orphan = door
         .offer(arrival(30, 2, &blocks[3]))
         .expect("room")
@@ -1062,7 +1096,7 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
         Budget::new(NonZeroUsize::MIN),
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..2]).await;
+    offer_all(&service, 1, &blocks[..2]).await;
     let hashed = gate.hashes();
     let mut bad = blocks[4].template.block.clone();
     bad.header.minor_version = 1;
@@ -1355,7 +1389,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         board.posted().expect("posted").1.height,
         BlockHeight::from_raw(0)
     );
-    offer_all(&service.door(), 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     until_followed(&mut followed, 1).await;
     assert_eq!(
         board.posted().expect("posted").1.height,
@@ -1414,8 +1448,8 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
         rules,
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &main).await;
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &main).await;
     let (hashes, pins) = (substrate.hashes(), substrate.pins());
     let reply = door
         .offer(arrival(90, 2, &fork[0]))
@@ -1536,7 +1570,7 @@ async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
         .await
         .expect("the empty chain's job");
         for block in &blocks {
-            offer_all(&service.door(), 1, std::slice::from_ref(block)).await;
+            offer_all(&service, 1, std::slice::from_ref(block)).await;
             // The build yields, so a generation is in the record here, before
             // a later post drops it from the ring.
             collect(&mut seen);
@@ -1843,7 +1877,7 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     let txid = tx.txid_parts().hash;
     let next = prefix.last().expect("the chain").height.to_raw() + 1;
     let mut seated = SeatedPool::start("service-body-left-out");
-    offer_all(&seated.service.door(), 1, &prefix).await;
+    offer_all(&seated.service, 1, &prefix).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
@@ -1899,7 +1933,7 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
     let txid = tx.txid_parts().hash;
     let next = prefix.last().expect("the chain").height.to_raw() + 1;
     let mut seated = SeatedPool::start("service-pop-returns");
-    offer_all(&seated.service.door(), 1, &prefix).await;
+    offer_all(&seated.service, 1, &prefix).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
@@ -1920,7 +1954,7 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
         .mine_listing(vec![tx.clone()])
         .await
         .unwrap_or_else(|outcome| panic!("the spend's block lands: {outcome}"));
-    offer_all(&seated.service.door(), 1, std::slice::from_ref(&carrying)).await;
+    offer_all(&seated.service, 1, std::slice::from_ref(&carrying)).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
@@ -1966,7 +2000,7 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     );
     let next = prefix.last().expect("the chain").height.to_raw() + 1;
     let mut seated = SeatedPool::start("service-stuck-rebuild");
-    offer_all(&seated.service.door(), 1, &prefix).await;
+    offer_all(&seated.service, 1, &prefix).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
@@ -2041,7 +2075,7 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
         service_mining("service-sync-closed", Arc::new(Gated::new()), &board, sync);
     let mut followed = service.followed();
     drop(sync_tx);
-    offer_all(&service.door(), 1, &blocks).await;
+    offer_all(&service, 1, &blocks).await;
     // The span lands in one commit, so the follower has one publication to
     // reach, not one per block: the tip watch's sequence after the offers.
     let published = service.watch_tip().await.expect("watch").borrow().seq;
@@ -2082,7 +2116,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         },
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     // Block 1 enters as this node's own and is held in form: at a window
     // of two it holds the one seat local arrivals share.
     substrate.hold(blocks[1].hash);
@@ -2396,7 +2430,7 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let service = service("service-bound", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
     let (prefix, last) = blocks.split_at(blocks.len() - 1);
-    offer_all(&door, 1, prefix).await;
+    offer_all(&service, 1, prefix).await;
     let mined = &last[0];
     let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
     let hashes_before = gate.hashes();
@@ -2480,7 +2514,7 @@ async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
     );
     let door = service.door();
     let (prefix, last) = blocks.split_at(blocks.len() - 1);
-    offer_all(&door, 1, prefix).await;
+    offer_all(&service, 1, prefix).await;
     let mined = &last[0];
     let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
     let bound = |tag: u64| super::BoundArrival {
@@ -2620,7 +2654,7 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
         },
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     let local = |tag: u64, mined: &Mined| {
         let door = door.clone();
         let block = mined.template.block.serialize();
@@ -2716,7 +2750,7 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
         .await
         .expect("the empty chain's window is installed");
     assert_eq!(gate.canonical(), Some(BlockHash::NULL));
-    let replies = offer_all(&door, 1, &blocks).await;
+    let replies = offer_all(&service, 1, &blocks).await;
     assert!(
         replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "{replies:?}"
@@ -2732,7 +2766,7 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
     };
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| *pair == Some(window)),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(window))),
     )
     .await
     .expect("the window after genesis is installed within 30 s")
@@ -2771,12 +2805,10 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
     // A run over genesis and the blocks above it: genesis hashes under the
     // null seed, the rest under genesis's id, which the store has not got.
     let run_seed = BlockHash::from_bytes([7; 32]);
-    {
-        let _pins = service.shared.pin_lock.lock().expect("the pin lock");
+    service.shared.with_pin_lock(|_| {
         gate.pin_seed(&BlockHash::NULL);
         gate.pin_seed(&run_seed);
-    }
-    service.shared.note_pins(&[BlockHash::NULL, run_seed]);
+    });
     // The tip has not moved, so the window is still the empty chain's.
     super::window::install_blocking(&service.shared).expect("the window installs");
     assert_eq!(gate.canonical(), Some(BlockHash::NULL));
@@ -2785,5 +2817,199 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
         Some(run_seed),
         "the run's seed is still resident beside the window's"
     );
+    let view = service.shared.pin_view();
+    assert_eq!(
+        view.published,
+        Some(crate::cache_window::SlotPair {
+            canonical: BlockHash::NULL,
+            transient: Some(run_seed),
+        }),
+        "the published pair is what the slots hold, the run's seed included"
+    );
     service.stop().await.expect("stops");
+}
+
+/// A2, the sequence that leaked on a live node, on the connect path's own
+/// functions and at PR time (the test that mines to the release height is
+/// in the nightly lane, and #1301 merged with this sequence broken).
+///
+/// 1. The window `{b, a}` is installed: past the epoch switch, `b` the new
+///    epoch's seed and `a` the previous one's.
+/// 2. A connect re-pins `b` through the run's pin, which moves no slot.
+/// 3. The window's lower end passes the switch: `{b, none}` is installed.
+///
+/// `a` is released at step 3. Recording the second slot empty at step 2
+/// made the install at step 3 find its pair already recorded and skip.
+///
+/// One block connects first, and the tip follower acts on it, so no
+/// install of the follower's runs between the steps.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
+    use crate::cache_window::SeedPair;
+    let mut y = Scenario::open("service-repin-release-y");
+    let blocks = y.mine(1).await;
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-repin-release",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    // The follower installs the chain's window on its own task. Wait it
+    // out, so that install does not run between the steps below.
+    offer_all(&service, 1, &blocks).await;
+    let seq = service
+        .watch_tip()
+        .await
+        .expect("the tip watch")
+        .borrow()
+        .seq;
+    let mut followed = service.followed();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        followed.wait_for(|at| *at >= seq),
+    )
+    .await
+    .expect("the follower acts on the block")
+    .expect("the tip watch is open");
+    let a = BlockHash::from_bytes([0xa1; 32]);
+    let b = BlockHash::from_bytes([0xb2; 32]);
+    super::window::install_pair(
+        &service.shared,
+        SeedPair {
+            canonical: b,
+            transient: Some(a),
+        },
+    );
+    assert_eq!((gate.canonical(), gate.transient()), (Some(b), Some(a)));
+    assert!(
+        super::span::pin_seeds(&service.shared, &[b], shekyl_hash_budget::Class::Chain).await,
+        "the run's pin"
+    );
+    assert_eq!(
+        (gate.canonical(), gate.transient()),
+        (Some(b), Some(a)),
+        "a re-pin of the canonical seed moves no slot"
+    );
+    let after_pin = service.shared.pin_view();
+    assert_eq!(
+        after_pin.published,
+        Some(crate::cache_window::SlotPair {
+            canonical: b,
+            transient: Some(a),
+        }),
+        "the re-pin leaves the second slot recorded"
+    );
+    super::window::install_pair(
+        &service.shared,
+        SeedPair {
+            canonical: b,
+            transient: None,
+        },
+    );
+    assert_eq!(
+        (gate.canonical(), gate.transient()),
+        (Some(b), None),
+        "the seed the window stopped naming is released"
+    );
+    assert_eq!(
+        service.shared.pin_view().published,
+        Some(crate::cache_window::SlotPair {
+            canonical: b,
+            transient: None,
+        }),
+        "the published pair is the slots"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A2, the connect path: once the window stops naming the previous epoch's
+/// seed, the second slot empties. Under the levered cap of ten the window's
+/// lower end passes the switch (connecting height 2113) at connecting
+/// height 2123 (2832 under the production cap of 720); from there both
+/// ends name block 2048's seed, so genesis's cache is released.
+///
+/// Every block past the switch re-pins block 2048's seed, which moves no
+/// slot. The record of the slots must keep genesis's seed in the second
+/// slot through those pins; recording it empty made the window's install
+/// at 2123 find its pair already recorded and skip the release, and
+/// genesis's cache stayed resident until the next epoch's pin (the live
+/// reading of 2026-11-09: two caches at tip 2840 on regtest). Ignored: it
+/// mines 2,124 blocks, and the nightly ignored lane runs it; every
+/// connect-path test checks the published pair against the slots
+/// ([`the_record_is_the_slots`]).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
+async fn a_connect_past_the_windows_end_empties_the_second_slot() {
+    use crate::cache_window::SeedPair;
+    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
+    use shekyl_difficulty::{SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+    let rules = levered_rules();
+    let switch = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1; // 2113
+    let release = switch + REORG_CAP_BLOCKS; // connecting height 2123
+    let mut y = Scenario::open_under("service-window-end-y", crate::scenario::FreeHash, rules);
+    // Heights 0..=release: the last connecting height is release + 1.
+    let blocks = y.mine(release + 1).await;
+    let genesis = blocks[0].hash;
+    let epoch_seed = blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash;
+    let gate = Arc::new(Gated::new());
+    let service = service_under(
+        "service-window-end",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+        rules,
+    );
+    let door = service.door();
+    let mut seeds = door.seeds();
+    // Up to three blocks short of the release: both seeds are in the window.
+    let short = usize::try_from(release - 3).expect("fits");
+    let before = offer_all(&service, 1, &blocks[..short]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "every block up to {short} connects"
+    );
+    let both = SeedPair {
+        canonical: epoch_seed,
+        transient: Some(genesis),
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(both))),
+    )
+    .await
+    .expect("the window naming both epochs is installed within 30 s")
+    .expect("the service is up");
+    assert_eq!(
+        (gate.canonical(), gate.transient()),
+        (Some(epoch_seed), Some(genesis)),
+        "past the switch, block 2048's seed is canonical and genesis's beside it"
+    );
+    // Across the release: the window names one seed.
+    let after = offer_all(&service, 1, &blocks[short..]).await;
+    assert!(
+        after.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{after:?}"
+    );
+    let one = SeedPair {
+        canonical: epoch_seed,
+        transient: None,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(one))),
+    )
+    .await
+    .expect("the window naming one epoch is installed within 30 s")
+    .expect("the service is up");
+    // Take the pin lock and release it, so an install in flight has
+    // finished before the slots are read. The view is not the lock.
+    let _ = service.shared.pin_view();
+    assert_eq!(gate.canonical(), Some(epoch_seed));
+    assert_eq!(
+        gate.transient(),
+        None,
+        "genesis's cache is released once the window stops naming it"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
 }

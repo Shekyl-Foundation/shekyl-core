@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared fixture for the §72 admission-verification benches.
+//! Shared fixture for the §72 admission-verification benches: the masks
+//! and the FCMP++ proof.
 //!
-//! `relay_admission_verify` (wall clock, the `hop` input) and
-//! `relay_admission_verify_iai` (instruction counts, the drift gate) both
-//! call this module, so the two instruments measure the same workload.
-//! The GAP-7 connect fixture ([`crate::connect`]) builds on it too.
+//! `relay_admission_verify` (wall clock, the `hop` input's masks-and-proof
+//! term) times this module's pair over 64 cells. The drift gate,
+//! `relay_admission_verify_iai`, times the door's whole sequence
+//! ([`crate::door`]), whose masks and proof are this module's fixture and
+//! bodies. The GAP-7 connect fixture ([`crate::connect`]) builds on it too.
 //!
 //! # What the fixture is, and what it is not
 //!
@@ -365,14 +367,15 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
 
 /// The admission checks this fixture can carry, in the pool door's order.
 ///
-/// [`shekyl_chain_rules::judge_slot_stateless`] runs `tx_form` (CEN-H17's
+/// `shekyl_chain_rules::judge_slot_stateless` runs `tx_form` (CEN-H17's
 /// mask rule among its rows), then the signatures (CEN-I17/I18), then the
 /// proof (CEN-I15), then — at `TxSlot::Lone` — the range proof as a batch of
 /// one (CEN-H19). This calls the bodies of H17 and I15, in that order:
 /// [`check_commitment_masks`] under [`MaskSubject::Spend`], and
 /// [`verify`] with the arguments I15 marshals (`layers` = the declared depth
-/// plus one). The signature and range-proof terms are not in this sequence;
-/// the GAP-7 connect fixture times them beside it.
+/// plus one). The signature and range-proof terms are not in this pair:
+/// [`crate::door::door_verify`] runs all four in the door's order, and the
+/// GAP-7 connect bench times each beside it.
 ///
 /// The shape comes from the fixture, not from the caller, so the pair cannot
 /// disagree. The status is returned rather than discarded so the optimiser

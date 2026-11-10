@@ -73,24 +73,68 @@ fn pop_reach(cap: BlockCount, connecting: BlockHeight, floor: BlockHeight) -> Bl
     }
 }
 
-/// The seeds the two slots hold: the connecting height's, and the other
-/// endpoint of the serviceable window when it differs. Published on
-/// [`Door::seeds`](crate::service::Door::seeds) once pinned, so a reader
-/// that saw it holds a seed can look that seed up and find it.
+/// The seeds the rules name at the committed tip: the connecting height's,
+/// and the other endpoint of the serviceable window when it differs.
+///
+/// This is the window an install pins, and the only seeds a later install
+/// may release. It is not what the cache slots hold. A run or a branch may
+/// keep a seed beside the window; that resident pair is a [`SlotPair`],
+/// published on [`Door::seeds`](crate::service::Door::seeds).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeedPair {
     /// The seed a block connecting at the tip's successor hashes under.
-    /// The canonical slot.
     pub(crate) canonical: BlockHash,
-    /// The other seed the window names, in the transient slot.
+    /// The other seed the window names, when the two ends differ.
     pub(crate) transient: Option<BlockHash>,
 }
 
 impl SeedPair {
-    /// Whether `seed` is one of the two this pair holds.
+    /// Whether `seed` is one of the two this window names.
     #[must_use]
     pub fn holds(self, seed: &BlockHash) -> bool {
         self.canonical == *seed || self.transient == Some(*seed)
+    }
+}
+
+/// The seeds the two cache slots hold.
+///
+/// Distinct from [`SeedPair`]. The window is what the rules name. The slots
+/// are what is resident: that window, or that window plus a seed a run or a
+/// branch prepared and the window does not name. `None` from
+/// [`from_stored`](Self::from_stored) until a seed is canonical. A cache
+/// that sits only in the transient slot is not a pair a hash may use, and
+/// the service does not hash until the window's canonical seed is pinned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotPair {
+    /// The canonical slot.
+    pub(crate) canonical: BlockHash,
+    /// The transient slot, when it holds a seed.
+    pub(crate) transient: Option<BlockHash>,
+}
+
+impl SlotPair {
+    /// `slots` as the store reports them, canonical then transient.
+    /// `None` when the canonical slot is empty.
+    #[must_use]
+    pub(crate) fn from_stored(
+        (canonical, transient): (Option<BlockHash>, Option<BlockHash>),
+    ) -> Option<Self> {
+        canonical.map(|canonical| Self {
+            canonical,
+            transient,
+        })
+    }
+
+    /// Whether `seed` is one of the two the slots hold.
+    #[must_use]
+    pub fn holds(self, seed: &BlockHash) -> bool {
+        self.canonical == *seed || self.transient == Some(*seed)
+    }
+
+    /// Whether the slots hold exactly the seeds `window` names.
+    #[must_use]
+    pub fn same_seeds(self, window: SeedPair) -> bool {
+        self.canonical == window.canonical && self.transient == window.transient
     }
 }
 
@@ -257,6 +301,29 @@ mod tests {
 
     /// The store's lowest poppable height while nothing is retired.
     const GENESIS_FLOOR: BlockHeight = BlockHeight::from_raw(1);
+
+    #[test]
+    fn a_pair_names_the_slots_once_a_seed_is_canonical() {
+        let canonical = BlockHash::from_bytes([1; 32]);
+        let transient = BlockHash::from_bytes([2; 32]);
+        assert_eq!(SlotPair::from_stored((None, None)), None);
+        assert_eq!(
+            SlotPair::from_stored((None, Some(transient))),
+            None,
+            "a transient cache alone is not a pair a hash may use"
+        );
+        let pair = SlotPair::from_stored((Some(canonical), Some(transient))).expect("canonical");
+        assert!(pair.holds(&canonical));
+        assert!(pair.holds(&transient));
+        assert!(pair.same_seeds(SeedPair {
+            canonical,
+            transient: Some(transient),
+        }));
+        assert!(!pair.same_seeds(SeedPair {
+            canonical,
+            transient: None,
+        }));
+    }
 
     fn tip(height: BlockHeight, fill: u8) -> Tip {
         Tip {

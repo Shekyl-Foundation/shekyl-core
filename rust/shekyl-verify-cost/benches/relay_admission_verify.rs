@@ -39,13 +39,15 @@
 //!   runs CEN-I17/I18 — one authorization check per input: one hybrid
 //!   Ed25519+ML-DSA-65 verification for a single-signer input, M of them for
 //!   an M-of-N multisig input (M ≤ 5) — before the proof, and at `Lone` the
-//!   range proof as a batch of one (CEN-H19) after it. This sequence keeps
-//!   the masks-and-proof pair the surface below was measured on, and the drift gate's subject; the two
-//!   further terms are timed per input and per proof by
+//!   range proof as a batch of one (CEN-H19) after it. This surface keeps
+//!   the masks-and-proof pair it was measured on, one term of each cell; the
+//!   two further terms are timed per input and per proof by
 //!   `block_connect_verify.rs`'s `block_connect_terms` group (dev box
 //!   2026-09-04: 178 µs per hybrid verification, 2.82 ms for a 2-output
 //!   range proof, against 22.8 ms for this pair at 1-in/2-out). `hop`'s
-//!   verification term is the sum, not this pair alone.
+//!   verification term is the sum, not this pair alone, and the drift gate
+//!   (`relay_admission_verify_iai`, BA-T1) counts the sum at the modal
+//!   shape.
 //!
 //! # What it does *not* measure, by design
 //!

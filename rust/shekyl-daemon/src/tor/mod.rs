@@ -30,7 +30,7 @@ use std::time::Duration;
 use shekyl_daemon_config::sections::Tor;
 use shekyl_node::Network;
 use shekyl_p2p::{
-    dial_profile, ConnectorId, DownCause, OriginVerdict, PerConnector, SupervisorFeeds,
+    dial_profile, ConnectorId, DownCause, OriginVerdict, PerConnector, SupervisorFeeds, TorCensus,
     TorLinkTally, TOR_SOCKS_TIMEOUT,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass};
@@ -47,7 +47,8 @@ use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
     install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Step, TorSetting,
+    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Step,
+    TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
@@ -312,6 +313,14 @@ fn dial_tally(tally: TorLinkTally) -> DialTally {
         unopened: tally.unopened,
         last_sign_of_life: tally.last_sign_of_life.map(|at| at.tick().get()),
         failed_attempt_began: tally.failed_attempt_began.map(|at| at.tick().get()),
+        census: match tally.census {
+            TorCensus::Pending => QuietCensus::Pending,
+            TorCensus::Empty => QuietCensus::Empty,
+            TorCensus::Held { seats, since } => QuietCensus::Held {
+                seats,
+                since: since.tick().get(),
+            },
+        },
     }
 }
 

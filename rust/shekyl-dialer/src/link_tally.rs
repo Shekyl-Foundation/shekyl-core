@@ -10,10 +10,10 @@
 //! Which reply a failed onion dial gets is the destination's to choose as
 //! much as the link's: a live service that refuses its port answers `0x01`,
 //! one that blackholes it answers `0x06`, as a blocked link does. So the
-//! tally says only what is plainly so: whether streams open, and when the
-//! link last showed life. The supervisor never sees an address
-//! or a reply code. How many sessions each connector holds is the session
-//! layer's to publish, from its board.
+//! tally says only what is plainly so: whether streams open, when the
+//! link last showed life, and what the latest Tor census holds. The
+//! supervisor never sees an address or a reply code. How many sessions
+//! each connector holds is the session layer's to publish, from its board.
 
 use std::sync::Arc;
 
@@ -21,6 +21,26 @@ use shekyl_peerlist::{ConnectorId, DialOutcome};
 use shekyl_timing_engine::Stamp;
 
 use crate::reach::{attempt_stream, AttemptStream};
+
+/// The Tor connector's latest census (`TOR_SUPERVISOR.md` §4.2).
+///
+/// [`Self::Pending`] is no census yet. [`Self::Empty`] is a census that
+/// holds no Tor address: zero is an answer. [`Self::Held`] is a non-empty
+/// run, and `since` is the clock time of the census that opened it. A
+/// later empty census ends the run. The unanswered posture line measures
+/// from `since`, so it does not claim peers were silent before the dialer
+/// held any.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TorCensus {
+    /// No wake has censused the Tor connector.
+    #[default]
+    Pending,
+    /// The latest census holds no Tor address.
+    Empty,
+    /// The latest census holds `seats` Tor addresses, white and gray,
+    /// cooling included. `since` opened this non-empty run.
+    Held { seats: u32, since: Stamp },
+}
 
 /// What this node's Tor dials show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,6 +63,10 @@ pub struct TorLinkTally {
     /// says it did not test the link since. `None` until the first. An
     /// opened stream does not clear it.
     pub failed_attempt_began: Option<Stamp>,
+    /// The Tor connector's latest census. [`TorCensus::Pending`] until the
+    /// first wake of that connector, including a wake that only resumes a
+    /// retry (Rick, 2026-11-10).
+    pub census: TorCensus,
 }
 
 /// Where the tally goes. Called under the dialer's lock: it must not block.
@@ -110,6 +134,28 @@ impl LinkFold {
         self.publish(next);
     }
 
+    /// A census of `connector`'s seats at `at`: the tally's census when it
+    /// is the Tor link. Zero seats is [`TorCensus::Empty`]. A positive
+    /// count continues the open run, or opens one at `at`.
+    pub(crate) fn census(&mut self, connector: ConnectorId, seats: usize, at: Stamp) {
+        if connector != ConnectorId::Tor {
+            return;
+        }
+        let seats = seats_held(seats);
+        let census = if seats == 0 {
+            TorCensus::Empty
+        } else {
+            let since = match self.tally.census {
+                TorCensus::Held { since, .. } => since,
+                TorCensus::Pending | TorCensus::Empty => at,
+            };
+            TorCensus::Held { seats, since }
+        };
+        let mut next = self.tally;
+        next.census = census;
+        self.publish(next);
+    }
+
     fn publish(&mut self, next: TorLinkTally) {
         if next == self.tally {
             return;
@@ -119,6 +165,13 @@ impl LinkFold {
             sink(next);
         }
     }
+}
+
+/// A seat count for the census. A count past `u32` saturates. Saturation
+/// is still a non-empty run: [`TorCensus::Pending`] and [`TorCensus::Empty`]
+/// are the states that are not a count.
+fn seats_held(seats: usize) -> u32 {
+    u32::try_from(seats).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -176,6 +229,7 @@ mod tests {
                 unopened: 8,
                 last_sign_of_life: None,
                 failed_attempt_began: Some(at(0)),
+                census: TorCensus::Pending,
             }
         );
         fold.observe(
@@ -217,6 +271,52 @@ mod tests {
         );
         assert_eq!(fold.tally().opened, 1, "the close is not a new stream");
         assert_eq!(fold.tally().unopened, 1, "failed dials since the open stay");
+    }
+
+    /// A census of the Tor connector sets the census, and only a change is
+    /// published. Another connector's census leaves it. A later positive
+    /// count keeps the run's `since`; an empty census ends the run, and
+    /// the next positive count opens a new one. Resetting `since` on every
+    /// census, or treating a repeat as a change, fails this.
+    #[test]
+    fn a_tor_census_sets_the_run_and_keeps_its_start() {
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let mut fold = LinkFold::new();
+        let sink = Arc::clone(&published);
+        fold.set_sink(Arc::new(move |tally| {
+            sink.lock().expect("sink").push(tally.census)
+        }));
+        let opened = at(10);
+        let later = at(40);
+        let reopened = at(70);
+        fold.census(ConnectorId::Tor, 0, opened);
+        fold.census(ConnectorId::Tor, 0, later);
+        fold.census(ConnectorId::Clearnet, 5, later);
+        fold.census(ConnectorId::Tor, 6, opened);
+        fold.census(ConnectorId::Tor, 7, later);
+        fold.census(ConnectorId::Tor, 0, later);
+        fold.census(ConnectorId::Tor, 2, reopened);
+        assert_eq!(
+            *published.lock().expect("sink"),
+            vec![
+                TorCensus::Pending,
+                TorCensus::Empty,
+                TorCensus::Held {
+                    seats: 6,
+                    since: opened,
+                },
+                TorCensus::Held {
+                    seats: 7,
+                    since: opened,
+                },
+                TorCensus::Empty,
+                TorCensus::Held {
+                    seats: 2,
+                    since: reopened,
+                },
+            ],
+            "the first tally at the sink, then each change of the run"
+        );
     }
 
     /// Another connector's dials say nothing about Tor.
