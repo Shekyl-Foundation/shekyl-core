@@ -218,6 +218,11 @@ pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 pub enum Action {
     /// Discover and pin. No spawn until this accepts.
     CheckPin,
+    /// Stop and reap the incarnation that ended, keeping its data
+    /// directory for the next launch: the owning connection closes, Tor is
+    /// given its grace to exit, and is killed past it. A request: the
+    /// reply is [`Input::Replied`] alone, and the next launch waits behind it.
+    Reap,
     /// Spawn. `fresh_directory` drops the kept data directory first.
     Spawn {
         /// Take a new data directory.
@@ -242,7 +247,7 @@ pub enum Action {
     /// Publish the managed route. Only the transition into `Running` builds it.
     Publish(ManagedRunning),
     /// The installed route is down because the process ended. The driver
-    /// reaps and keeps the directory.
+    /// withdraws it; [`Self::Reap`] follows.
     TakeDown,
     /// The installed route is down because this node is stopping. The
     /// driver leaves the child up; [`Self::StopChild`] wipes it.
@@ -376,9 +381,11 @@ pub enum Input {
         /// `PROGRESS=`.
         progress: u8,
     },
-    /// The last input of a request's reply ([`Action`]s that are requests:
-    /// [`requests`]). `number` is [`Core::in_flight`] as the request was
-    /// sent. A reply for any other number is not folded.
+    /// The last input of a request's reply: the actions the driver runs off
+    /// its loop (the launch, the subscription, the sample, `SETCONF`, the
+    /// republish's two halves, the refetch, the directory check and its
+    /// fetches). `number` is [`Core::in_flight`] as the request was sent. A
+    /// reply for any other number is not folded.
     Replied {
         /// The request this reply answers.
         number: u64,
@@ -1247,8 +1254,13 @@ impl Core {
 
     fn process_fault(&mut self, now: u64, cause: Cause, launch_failed: bool) -> Vec<Action> {
         // The incarnation ended: nothing queued for it is sent, and a reply
-        // still on its way is not folded.
+        // still on its way is not folded. A Tor that was launched is reaped,
+        // off the loop, before the next launch.
         self.requests.clear();
+        let launched = matches!(
+            self.phase,
+            Phase::Bootstrapping { .. } | Phase::Running { .. }
+        );
         let installed = self.route_done();
         let dropped = self.drop_probe();
         self.phase = Phase::Absent {
@@ -1272,6 +1284,9 @@ impl Core {
         let mut actions: Vec<Action> = dropped.into_iter().collect();
         if installed {
             actions.push(Action::TakeDown);
+        }
+        if launched {
+            actions.push(Action::Reap);
         }
         actions.extend(self.say(now, Cadence::Due));
         actions

@@ -1142,7 +1142,8 @@ events are bounded in the queue at `EVENT_QUEUE_EVENTS` not yet taken
 round resync's.
 
 **The loop never waits on Tor** (Rick, 2026-11-10). Every request to Tor
-(the launch, the event subscription, the sample with its consensus clock,
+(the reap of an incarnation that ended, the launch, the event subscription,
+the sample with its consensus clock,
 `SETCONF AvoidDiskWrites`, a republish's `DEL_ONION` and `ADD_ONION`, the
 refetch, the directory check and each directory fetch) is sent and the loop
 goes back to its inbox. A task holding a clone of the control actor
@@ -1162,6 +1163,33 @@ a status ask (`Supervisor::status`) and the stop are taken in the next pass
 whatever Tor is doing, which is when an operator asks what is wrong
 (`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`). The
 one wait the loop makes is the only one classified for a sleep.
+
+The reap is a request like the others. A fault that ends an incarnation
+that had launched sends `Action::Reap` after the take-down, and the next
+launch waits behind it in the queue
+(`an_ended_tor_is_reaped_before_the_next_launch`). The task closes the
+owning connection, waits Tor's grace (`SHUTDOWN_GRACE`, 5 s), kills what is
+still alive (the whole stop under `REAP_TIMEOUT`, 15 s), saves the directory
+cache after a clean exit, and answers with the kept directory. A frozen Tor
+that ignores the close holds the reap for the whole grace, and status asks
+and the stop are taken meanwhile
+(`a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped`). A
+reap past the reply bound is late like any request; its directory is
+retired when its answer arrives, and the next launch takes a fresh one.
+
+The launch request covers everything between the send and Tor's first
+control reply: the old directory's retirement when the launch takes a fresh
+one, the stale-directory sweep, the space check, the copy of the directory
+cache (`TSR-Q8`), the process start, and `GETINFO version`. The reply bound
+holds all of it from the send. `LAUNCH_BOUND` (the same 30 s) bounds only
+`GETINFO version`, inside it. On the floor device, a cold start with a fresh
+data directory, while the node generated its genesis block, reached Tor's
+first event (after the version reply and the event subscription) 1.4 s and
+2.8 s after the daemon's first log line (2026-10-31, `ffb7259051`, runs 0
+and 1; shekyl-dev `data/tsr-acceptance/2026-10-31-pi-floor/`). Those runs
+had no cache to copy; the copy the launch makes took at most 0.063 s on the
+same device (§10, the seeded start, 2026-10-22, not synced).
+So the launch keeps the reply bound and needs no bound of its own.
 
 One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
 they are different actions. While Running it is `Action::Sample`: one

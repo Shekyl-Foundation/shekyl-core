@@ -176,3 +176,45 @@ fn a_sample_due_while_one_waits_is_not_queued_again() {
         "a second sample was queued: {answered:?}"
     );
 }
+
+/// **An ended Tor is reaped before the next launch, off the loop.** A
+/// bootstrapping Tor's control ends: the fault sends `Reap`, and the next
+/// launch, due after the backoff, waits behind it; answering the reap sends
+/// the launch. A launch that failed had no Tor to reap and sends none.
+/// Fails if the core leaves the reap to the driver's loop (no `Reap`), or
+/// sends the launch while the reap is in flight.
+#[test]
+fn an_ended_tor_is_reaped_before_the_next_launch() {
+    let mut core = launching();
+    core.on(Input::Spawned, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    let ended = core.on(Input::ControlEnded, secs(1));
+    assert!(ended.actions.contains(&Action::Reap), "{:?}", ended.actions);
+    let due = core.deadline().expect("the respawn wait");
+    core.on_deadline(due);
+    let pinned = core.on(Input::PinAccepted, due);
+    assert!(
+        !pinned
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::Spawn { .. })),
+        "the launch waits for the reap: {:?}",
+        pinned.actions
+    );
+    let reaped = replied(&mut core, due);
+    assert!(
+        reaped
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::Spawn { .. })),
+        "the reap's answer sends the launch: {:?}",
+        reaped.actions
+    );
+    let failed = core.on(Input::SpawnFailed, due);
+    assert!(
+        !failed.actions.contains(&Action::Reap),
+        "a launch that failed has no Tor to reap: {:?}",
+        failed.actions
+    );
+}

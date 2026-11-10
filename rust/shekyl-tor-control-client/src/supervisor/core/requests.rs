@@ -13,9 +13,10 @@
 //!
 //! One request is in flight at a time, as when the loop awaited each one:
 //! moving the waits off the loop changes no decision. The order the awaits
-//! gave is this queue's order. A launch is followed by the event
-//! subscription and then the first sample; a republish is `DEL_ONION` and
-//! then `ADD_ONION`. A request that no longer stands when its turn comes
+//! gave is this queue's order. The reap of an incarnation that ended goes
+//! before the next launch; a launch is followed by the event subscription
+//! and then the first sample; a republish is `DEL_ONION` and then
+//! `ADD_ONION`. A request that no longer stands when its turn comes
 //! ([`Core::action_stands`]) is withheld there, as the driver withheld it.
 //!
 //! The reply bound is a deadline here, one bound after the send in the
@@ -35,6 +36,10 @@ use crate::control::RelayFingerprint;
 /// A request the driver runs off the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Request {
+    /// Stop and reap the incarnation that ended, keeping its directory for
+    /// the next launch ([`Action::Reap`]). It waits Tor's grace for an exit,
+    /// so it runs off the loop like any other request.
+    Reap,
     /// Launch Tor ([`Action::Spawn`]).
     Launch { fresh_directory: bool },
     /// Subscribe to the supervisor's events ([`Action::SubscribeEvents`]).
@@ -60,6 +65,7 @@ impl Request {
     /// for an action the driver performs on the loop.
     pub(super) fn of(action: &Action) -> Option<Vec<Self>> {
         Some(match action {
+            Action::Reap => vec![Self::Reap],
             Action::Spawn { fresh_directory } => vec![
                 Self::Launch {
                     fresh_directory: *fresh_directory,
@@ -79,6 +85,7 @@ impl Request {
     /// The action that sends this request.
     pub(super) fn action(&self) -> Action {
         match self {
+            Self::Reap => Action::Reap,
             Self::Launch { fresh_directory } => Action::Spawn {
                 fresh_directory: *fresh_directory,
             },

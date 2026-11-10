@@ -254,6 +254,7 @@ pub fn begin(
     let task = handle.spawn(async move {
         drive(
             PinSource::Discover(binary),
+            policy(),
             clearnet_on,
             virtual_port,
             data_dir,
@@ -375,12 +376,13 @@ enum PinSource {
     /// the bundle's.
     Discover(Option<PathBuf>),
     /// A binary a test names, not checked (`unpinned-tor-for-tests`).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     Unchecked(VerifiedTorBinary),
 }
 
 async fn drive(
     binary: PinSource,
+    policy: Policy,
     clearnet_on: bool,
     virtual_port: u16,
     data_dir: PathBuf,
@@ -419,7 +421,7 @@ async fn drive(
     let poster = inbox.poster();
     let timer = Timer::start(owner, poster.clone());
     let started = clock.now().get();
-    let (core, step) = Core::start(policy(), connectors, started);
+    let (core, step) = Core::start(policy, connectors, started);
     let mut drive = Drive {
         core,
         step,
@@ -452,7 +454,7 @@ async fn drive(
     // were launched before this Tor ran, and the quiet line leaves them out
     // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
     let first = drive.changed_inputs();
-    drive.fold_after_start(first, started).await;
+    drive.fold_after_start(first, started);
     drive.run().await;
 }
 
@@ -510,7 +512,7 @@ struct Drive {
 impl Drive {
     async fn run(mut self) {
         loop {
-            if self.perform().await {
+            if self.perform() {
                 break;
             }
             // Captured before the wait. The wait's lateness is this
@@ -522,7 +524,7 @@ impl Drive {
             let woken = self.inbox.wait().await;
             let woke = self.now();
             let lead = slept(armed, entered, woke).map(|late_by| Input::Resumed { late_by });
-            self.pass(woken, lead, woke, wanted).await;
+            self.pass(woken, lead, woke, wanted);
         }
         self.cancel_probe();
         if let Some(control) = self.control.take() {
@@ -547,7 +549,7 @@ impl Drive {
     /// Fold what the network published before the loop, after the start's
     /// own step: its actions follow the start's, and an empty batch leaves
     /// the start's deadline.
-    async fn fold_after_start(&mut self, inputs: Vec<Input>, at: u64) {
+    fn fold_after_start(&mut self, inputs: Vec<Input>, at: u64) {
         let start = std::mem::replace(
             &mut self.step,
             Step {
@@ -555,7 +557,7 @@ impl Drive {
                 deadline: None,
             },
         );
-        self.fold_at(inputs, at).await;
+        self.fold_at(inputs, at);
         let folded = std::mem::replace(&mut self.step, start);
         if !folded.actions.is_empty() || folded.deadline.is_some() {
             self.step.actions.extend(folded.actions);
@@ -566,14 +568,14 @@ impl Drive {
     /// Perform every action the last fold produced. Inputs from one action
     /// are folded in order and their actions run in that order, ahead of
     /// anything already queued. `true` means the daemon is stopping.
-    async fn perform(&mut self) -> bool {
+    fn perform(&mut self) -> bool {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            let inputs = self.act(action, &mut halt).await;
+            let inputs = self.act(&action, &mut halt);
             let mut produced = Vec::new();
             for input in inputs {
-                self.fold(input).await;
+                self.fold(input);
                 produced.append(&mut self.step.actions);
             }
             for action in produced.into_iter().rev() {
@@ -587,43 +589,30 @@ impl Drive {
     }
 
     /// Fold one observation. See [`Self::fold_many`].
-    async fn fold(&mut self, input: Input) {
-        self.fold_many(vec![input]).await;
+    fn fold(&mut self, input: Input) {
+        self.fold_many(vec![input]);
     }
 
     /// Fold `inputs` at the driver's clock. See [`Self::fold_at`].
-    async fn fold_many(&mut self, inputs: Vec<Input>) {
-        self.fold_at(inputs, self.now()).await;
+    fn fold_many(&mut self, inputs: Vec<Input>) {
+        self.fold_at(inputs, self.now());
     }
 
     /// Fold `inputs` as one step at `at`. Each transition's actions are kept,
     /// in order, and the deadline is the last transition's. An empty list
     /// leaves the step alone, so a batch that carried nothing does not
-    /// disarm a wait that is already armed.
-    ///
-    /// A process that ended is reaped here when that transition does not
-    /// withdraw a route: there is nothing to take down, and the directory
-    /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
-    /// the route is gone before the child is. A [`Action::StopRoute`] only
-    /// withdraws: the shutdown wipe still owns the child.
-    async fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
+    /// disarm a wait that is already armed. A process that ended is reaped
+    /// by the core's [`Action::Reap`] request, off the loop.
+    fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
         if inputs.is_empty() {
             return;
         }
         let mut actions = Vec::new();
         let mut deadline = None;
         for input in inputs {
-            let ended = ends_incarnation(&input);
             let step = self.core.on(input, at);
-            let take_down = step
-                .actions
-                .iter()
-                .any(|action| matches!(action, Action::TakeDown));
             actions.extend(step.actions);
             deadline = step.deadline;
-            if ended && !take_down {
-                self.reap().await;
-            }
         }
         self.step = Step { actions, deadline };
     }
@@ -634,8 +623,8 @@ impl Drive {
         (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
-    async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
-        if let Some(instead) = self.withheld(&action) {
+    fn act(&mut self, action: &Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(action) {
             return instead;
         }
         match action {
@@ -658,7 +647,8 @@ impl Drive {
             }
             Action::CheckPin => vec![self.pin()],
             // A request: sent off the loop, answered as an arrival.
-            Action::Spawn { .. }
+            Action::Reap
+            | Action::Spawn { .. }
             | Action::SubscribeEvents
             | Action::Sample
             | Action::SetConfAvoidDiskWrites
@@ -666,9 +656,9 @@ impl Drive {
             | Action::AddOnion
             | Action::RefetchDescriptor
             | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. } => self.send(action).await,
+            | Action::FetchFromDirectory { .. } => self.send(action),
             Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::Publish(route) => vec![self.publish_route(route)],
+            Action::Publish(route) => vec![self.publish_route(*route)],
             Action::Probe => vec![self.probe()],
             Action::CancelProbe => {
                 self.cancel_probe();
@@ -703,12 +693,11 @@ impl Drive {
                 Vec::new()
             }
             Action::PublishInbound(inbound) => {
-                self.publish_inbound(inbound);
+                self.publish_inbound(*inbound);
                 Vec::new()
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
-                self.reap().await;
                 Vec::new()
             }
             Action::StopRoute => {
@@ -726,19 +715,19 @@ impl Drive {
     /// loop is judged on windows that start at the wake; then every cell
     /// that changed; then the arrival. A deadline is folded only when it
     /// names the generation the loop gave the deadline it waited with.
-    async fn pass(&mut self, woken: Woken, lead: Option<Input>, woke: u64, wanted: Option<Wanted>) {
+    fn pass(&mut self, woken: Woken, lead: Option<Input>, woke: u64, wanted: Option<Wanted>) {
         let changed = self.changed_inputs();
         let mut inputs = led(lead, changed);
         let arrival = match woken {
             Woken::Arrived(arrival) => arrival,
             Woken::Rang => {
-                self.fold_at(inputs, woke).await;
+                self.fold_at(inputs, woke);
                 return;
             }
         };
         match arrival {
             Arrival::Deadline { generation } => {
-                self.fold_at(inputs, woke).await;
+                self.fold_at(inputs, woke);
                 if wanted.is_some_and(|wanted| wanted.generation == generation) {
                     self.timer.spent();
                     let due = self.core.on_deadline(woke);
@@ -773,7 +762,7 @@ impl Drive {
             }
             Arrival::Stop => inputs.push(Input::Shutdown),
         }
-        self.fold_at(inputs, woke).await;
+        self.fold_at(inputs, woke);
     }
 
     /// The cells' values not yet folded, as inputs: the relay's verdict,
@@ -863,7 +852,7 @@ impl Drive {
         let verified = match &self.binary {
             PinSource::Discover(Some(path)) => discover_and_verify_at(path),
             PinSource::Discover(None) => discover_and_verify(),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
         match verified {
@@ -906,37 +895,6 @@ impl Drive {
     /// headroom. A disk that fills after the spawn is not this check's.
     /// A probe that cannot read the disk lets the spawn go ahead: "I cannot
     /// tell" is not "full".
-    fn space_short(&self, fresh: bool) -> Option<Input> {
-        let needed = space_needed(&self.data_dir, fresh);
-        match shekyl_node::free_bytes(&self.data_dir) {
-            Ok(available) if available < needed => Some(Input::DirectoryUnusable {
-                path: self.data_dir.clone(),
-                space: Some(Space { available, needed }),
-            }),
-            Ok(_) => None,
-            Err(error) => {
-                tracing::warn!(
-                    target: "global",
-                    path = %self.data_dir.display(),
-                    %error,
-                    "the free space for Tor's data directory could not be read; starting Tor anyway"
-                );
-                None
-            }
-        }
-    }
-
-    /// Stop the child and keep its directory. The generation moves so the
-    /// stop's own death is not a second fault.
-    async fn reap(&mut self) {
-        self.cancel_probe();
-        let Some(control) = self.control.take() else {
-            return;
-        };
-        self.generation = self.generation.wrapping_add(1);
-        self.kept = Some(control.stop_for_respawn().await);
-    }
-
     /// The bootstrap's state as the core reads it. `Ready` and `Failed`
     /// arrive once: the incarnation's producer stops after either.
     fn bootstrap_input(&mut self, state: BootstrapState) -> Input {
@@ -1019,8 +977,27 @@ fn observed_death(death: TorDeath) -> Option<Input> {
     }
 }
 
-fn ends_incarnation(input: &Input) -> bool {
-    matches!(input, Input::ProcessEnded { .. } | Input::ControlEnded)
+/// The data directory's free space against what a launch needs, read after
+/// any replacement (§5, "Data directory unusable"). An unreadable figure
+/// starts Tor anyway.
+fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
+    let needed = space_needed(data_dir, fresh);
+    match shekyl_node::free_bytes(data_dir) {
+        Ok(available) if available < needed => Some(Input::DirectoryUnusable {
+            path: data_dir.to_path_buf(),
+            space: Some(Space { available, needed }),
+        }),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(
+                target: "global",
+                path = %data_dir.display(),
+                %error,
+                "the free space for Tor's data directory could not be read; starting Tor anyway"
+            );
+            None
+        }
+    }
 }
 
 fn input_of_ask(_error: &DaemonTorStartError) -> Input {

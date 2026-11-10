@@ -479,6 +479,9 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     let died = core.on(Input::ProcessEnded { exit_code: None }, secs(116));
     assert_eq!(cancels(&died), 1, "the fault drops the probe");
     assert!(takes_down(&died));
+    // The ended Tor is reaped off the loop before the next launch.
+    assert!(died.actions.contains(&Action::Reap), "{:?}", died.actions);
+    replied(&mut core, secs(116));
 
     // The respawn reaches Running again; the onion is republished.
     let due = core.deadline().expect("the pin check");

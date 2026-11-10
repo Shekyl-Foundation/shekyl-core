@@ -420,7 +420,10 @@ fn the_clock_runs_sequence_gives_the_clock_line_and_no_republish() {
 fn a_new_tor_keeps_a_named_clock() {
     let mut core = published();
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY), secs(1));
-    core.on(Input::ControlEnded, secs(2));
+    let ended = core.on(Input::ControlEnded, secs(2));
+    // The ended Tor is reaped off the loop before the next launch.
+    assert!(ended.actions.contains(&Action::Reap), "{:?}", ended.actions);
+    replied(&mut core, secs(2));
     let due = core.deadline().expect("the respawn wait");
     let step = core.on_deadline(due);
     assert!(

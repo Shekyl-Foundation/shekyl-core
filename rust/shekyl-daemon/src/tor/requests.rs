@@ -40,7 +40,7 @@ use shekyl_tor_control_daemon::{
 
 use super::inbox::Arrival;
 use super::{
-    consensus_sample, incarnation, input_of_ask, sample_keys, say_retirement,
+    consensus_sample, incarnation, input_of_ask, sample_keys, say_retirement, space_short,
     sweep_stale_data_dirs, Drive, CONSENSUS_VALID_AFTER, LAUNCH_BOUND, MAX_STREAMS, SOCKS_TIMEOUT,
 };
 
@@ -48,8 +48,16 @@ use super::{
 pub(super) enum Answer {
     /// Inputs ready to fold.
     Inputs(Vec<Input>),
+    /// The reap: the ended incarnation's directory, kept for the next launch.
+    Reaped(KeptDataDir),
     /// The launch: the incarnation, or why not, with the directory to keep.
     Launched(Result<DaemonTorControl, (DaemonTorStartError, Option<KeptDataDir>)>),
+    /// A launch held back before it started (too little space), with the
+    /// kept directory handed back.
+    Held {
+        input: Input,
+        kept: Option<KeptDataDir>,
+    },
     /// The sample's reply and, when it was answered, the consensus clock's
     /// with the wall time read beside it.
     Sampled {
@@ -69,6 +77,8 @@ impl std::fmt::Debug for Answer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Inputs(_) => "Inputs",
+            Self::Reaped(_) => "Reaped",
+            Self::Held { .. } => "Held",
             Self::Launched(Ok(_)) => "Launched",
             Self::Launched(Err(_)) => "LaunchFailed",
             Self::Sampled { .. } => "Sampled",
@@ -81,14 +91,15 @@ impl Drive {
     /// Send the request `action` names: the core has just put it in flight.
     /// Returns what the loop answers at once, `Replied` last; empty when a
     /// task answers.
-    pub(super) async fn send(&mut self, action: Action) -> Vec<Input> {
+    pub(super) fn send(&mut self, action: &Action) -> Vec<Input> {
         // A fault folded between the core sending this request and the loop
         // reaching it has cleared it: there is nothing to send.
         let Some(number) = self.core.in_flight() else {
             return Vec::new();
         };
         let answered = match action {
-            Action::Spawn { fresh_directory } => self.send_launch(number, fresh_directory).await,
+            Action::Reap => self.send_reap(number),
+            Action::Spawn { fresh_directory } => self.send_launch(number, *fresh_directory),
             Action::SubscribeEvents => self.send_subscribe(number),
             Action::Sample => self.send_sample(number),
             Action::SetConfAvoidDiskWrites => self.send_defer(number),
@@ -96,7 +107,7 @@ impl Drive {
             Action::AddOnion => self.send_add(number),
             Action::RefetchDescriptor => self.send_refetch(number),
             Action::CheckDirectories => self.send_check(number),
-            Action::FetchFromDirectory { hsdir } => self.send_fetch(number, hsdir),
+            Action::FetchFromDirectory { hsdir } => self.send_fetch(number, *hsdir),
             _ => unreachable!("{action:?} is not a request"),
         };
         match answered {
@@ -121,33 +132,63 @@ impl Drive {
         self.control.as_ref().map(DaemonTorControl::asker)
     }
 
-    /// Prepare the directory on the loop, then launch off it. A fault reaps
-    /// before the next pin; a child still held is kept, not dropped.
-    async fn send_launch(&mut self, number: u64, fresh_directory: bool) -> Option<Vec<Input>> {
-        if self.control.is_some() {
-            self.reap().await;
-        }
-        let fresh = fresh_directory || self.kept.is_none();
-        let mut swept = false;
-        if fresh_directory {
-            if let Some(old) = self.kept.take() {
-                say_retirement(&old.replace().await);
-                swept = true;
-            }
+    /// Stop and reap the incarnation that ended, off the loop: the owning
+    /// connection closes and Tor is given its grace to exit (killed past
+    /// it), so a frozen Tor holds this task, not the loop. The directory
+    /// comes back in the answer, kept for the launch that follows.
+    fn send_reap(&mut self, number: u64) -> Option<Vec<Input>> {
+        self.cancel_probe();
+        let Some(control) = self.control.take() else {
+            return Some(Vec::new());
+        };
+        // The stop's own death is not a second fault.
+        self.generation = self.generation.wrapping_add(1);
+        self.answer_later(number, async move {
+            Answer::Reaped(control.stop_for_respawn().await)
+        });
+        None
+    }
+
+    /// Launch off the loop. The directory work goes with it: a fresh
+    /// directory replaces the kept one (its sweep and retirement), and the
+    /// free space is read after that. A launch the space holds back hands
+    /// the kept directory back with its answer.
+    fn send_launch(&mut self, number: u64, fresh_directory: bool) -> Option<Vec<Input>> {
+        // The core reaps an incarnation before the next launch, so none is
+        // held here; one that is would be lost by the launch, so it is
+        // stopped off the loop instead.
+        if let Some(stray) = self.control.take() {
+            self.generation = self.generation.wrapping_add(1);
+            tokio::spawn(async move {
+                drop(stray.stop_for_respawn().await.retire().await);
+            });
         }
         let Some(binary) = self.pinned.clone() else {
             return Some(vec![Input::PinRefused]);
         };
-        if fresh && !swept {
-            sweep_stale_data_dirs(&self.data_dir, None);
-        }
-        if let Some(short) = self.space_short(fresh) {
-            return Some(vec![short]);
-        }
-        let events = self.events.clone();
+        let fresh = fresh_directory || self.kept.is_none();
+        let old = if fresh_directory {
+            self.kept.take()
+        } else {
+            None
+        };
         let kept = self.kept.take();
-        let data_dir_parent = self.data_dir.clone();
+        let events = self.events.clone();
+        let data_dir = self.data_dir.clone();
         self.answer_later(number, async move {
+            let swept = match old {
+                Some(old) => {
+                    say_retirement(&old.replace().await);
+                    true
+                }
+                None => false,
+            };
+            if fresh && !swept {
+                sweep_stale_data_dirs(&data_dir, None);
+            }
+            if let Some(input) = space_short(&data_dir, fresh) {
+                return Answer::Held { input, kept };
+            }
             let launched = match kept {
                 Some(directory) => DaemonTorControl::spawn_into(
                     directory,
@@ -160,7 +201,7 @@ impl Drive {
                 .map_err(|failure| (failure.error, Some(failure.directory))),
                 None => match DaemonTorControl::spawn_keeping(DaemonTorConfig {
                     tor_binary: binary,
-                    data_dir_parent,
+                    data_dir_parent: data_dir,
                     events,
                     reply_deadline: LAUNCH_BOUND,
                     socks_timeout: SOCKS_TIMEOUT,
@@ -418,16 +459,38 @@ impl Drive {
     /// Tor launched for it is stopped so it does not outlive the request.
     pub(super) fn answered(&mut self, number: u64, answer: Answer) -> Vec<Input> {
         if self.core.in_flight() != Some(number) {
-            if let Answer::Launched(Ok(control)) = answer {
-                tracing::info!(target: "tor", "a Tor launched after its bound is stopped");
-                tokio::spawn(async move {
-                    drop(control.shutdown().await);
-                });
+            // A request the core gave up on: whatever it holds is ended off
+            // the loop, so no Tor and no directory outlives it.
+            match answer {
+                Answer::Launched(Ok(control)) => {
+                    tracing::info!(target: "tor", "a Tor launched after its bound is stopped");
+                    tokio::spawn(async move {
+                        drop(control.shutdown().await);
+                    });
+                }
+                Answer::Reaped(kept)
+                | Answer::Held {
+                    kept: Some(kept), ..
+                }
+                | Answer::Launched(Err((_, Some(kept)))) => {
+                    tokio::spawn(async move {
+                        say_retirement(&kept.retire().await);
+                    });
+                }
+                _ => {}
             }
             return Vec::new();
         }
         let mut inputs = match answer {
             Answer::Inputs(inputs) => inputs,
+            Answer::Reaped(kept) => {
+                self.kept = Some(kept);
+                Vec::new()
+            }
+            Answer::Held { input, kept } => {
+                self.kept = kept;
+                vec![input]
+            }
             Answer::Launched(launched) => vec![self.launched(launched)],
             Answer::Sampled {
                 reads_network,
