@@ -169,7 +169,6 @@ impl super::Transition {
             }
             SupportStepFault::Corrupt(corrupt) => ViewRead::Corrupt(corrupt),
         })?;
-        self.file_prior_epoch(view, count_memo)?;
         let (visible, carry_in) = if at_open {
             // The block before a later open wrote a row. Its numbers belong
             // to the epoch that closed; this epoch counts `D` afresh. The
@@ -278,39 +277,6 @@ impl super::Transition {
         };
         memo.evict(connecting, schedule);
         self.remember_epoch(view, epoch, memo, read)
-    }
-
-    /// File the previous epoch's set when this block's window reaches it.
-    ///
-    /// `W₂ < SEB`, so the window names at most the epoch being counted and
-    /// the one before it, and only while `connecting` is still within `W₂`
-    /// of the open. A warm memo already holds that set. A cold one does
-    /// not: the count rebuilds only its own epoch, and admission would
-    /// then fault the miss it was promised would not happen.
-    fn file_prior_epoch<'id, V: ChainView<'id>>(
-        &self,
-        view: &V,
-        count_memo: &mut CountMemo<'_>,
-    ) -> Result<(), ViewRead<V::Fault>> {
-        let Some(memo) = count_memo.memo.as_mut() else {
-            return Ok(());
-        };
-        let Some(window) = self.schedule.challenge_response_blocks() else {
-            return Ok(());
-        };
-        let raw = self.epoch.to_raw();
-        if raw == 0 {
-            return Ok(());
-        }
-        let open = BlockHeight::from_raw(self.schedule.open_height(raw));
-        let reaches = match self.connecting.checked_sub(open) {
-            Some(span) => span.to_raw() < window.get(),
-            None => false,
-        };
-        if !reaches {
-            return Ok(());
-        }
-        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo, |_| ())
     }
 
     /// The hash of the block that opened `epoch`. Above the tip the epoch
