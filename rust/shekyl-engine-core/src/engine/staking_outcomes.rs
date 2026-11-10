@@ -90,9 +90,10 @@ pub enum InFlightState {
     /// Sent at least once and still able to land.
     Dispatched,
     /// A daemon refused it outright and its end date has not passed. Not
-    /// final: nothing more is sent, but the record and its funds are held
-    /// until the end date, because only the chain can say whether the bytes
-    /// land (BD-Q3 Rule 2).
+    /// final: nothing more is sent, and the record stays until the end
+    /// date, because only the chain can say whether the bytes land
+    /// (BD-Q3 Rule 2). What it still holds is [`InFlightRecord::reserved`],
+    /// which is zero when the record reserved nothing.
     Refused {
         /// What the daemon said.
         cause: TerminalCause,
@@ -265,15 +266,17 @@ fn refusal(cause: &TerminalCause) -> std::borrow::Cow<'static, str> {
     }
 }
 
-/// What the sealed scan contributes to a read. `live` is `Some` only when a
-/// scan exists and its frontier has moved off zero: absence from that set is
-/// a spend. `None` means the scan has not produced evidence, so absence is
-/// not a spend and a fully spent stake is not yet held. `amounts` holds each
-/// live output's amount, and is read only when `live` is `Some`.
+/// What the sealed scan contributes to a read.
+///
+/// `funding` is one map. Its keys are the live funding set and its values
+/// are what those outputs still hold, so membership and amount cannot
+/// disagree. `None` means the scan has produced no evidence: absence is
+/// not a spend, a fully spent stake is not yet held, and what a record
+/// holds cannot be read. `Some`, including an empty map, means the
+/// frontier has moved off zero.
 #[derive(Clone, Copy)]
 pub(crate) struct ScanEvidence<'a> {
-    live: Option<&'a BTreeSet<GlobalOutputIndex>>,
-    amounts: &'a BTreeMap<GlobalOutputIndex, AtomicUnits>,
+    funding: Option<&'a BTreeMap<GlobalOutputIndex, AtomicUnits>>,
     confirmed_posts: &'a BTreeSet<PCanonicalId>,
 }
 
@@ -282,70 +285,51 @@ impl ScanEvidence<'static> {
     /// No scan evidence. A record past its end date reads expired.
     fn unscanned() -> Self {
         Self {
-            live: None,
-            amounts: &EMPTY_AMOUNTS,
+            funding: None,
             confirmed_posts: &EMPTY_CONFIRMED,
         }
     }
 }
 
 #[cfg(test)]
-impl<'a> ScanEvidence<'a> {
-    /// Evidence the caller already knows a moved frontier produced.
-    fn scanned(
-        live: &'a BTreeSet<GlobalOutputIndex>,
-        confirmed_posts: &'a BTreeSet<PCanonicalId>,
-    ) -> Self {
-        Self {
-            live: Some(live),
-            amounts: &EMPTY_AMOUNTS,
-            confirmed_posts,
-        }
-    }
-}
-
-#[cfg(test)]
 static EMPTY_CONFIRMED: BTreeSet<PCanonicalId> = BTreeSet::new();
-#[cfg(test)]
-static EMPTY_AMOUNTS: BTreeMap<GlobalOutputIndex, AtomicUnits> = BTreeMap::new();
 
-/// The funding set and JoinMarket matches of one sealed scan, or the
+/// The funding map and JoinMarket matches of one sealed scan, or the
 /// absence of evidence when there is no scan or the frontier is still zero.
 pub(crate) struct FundingScan {
-    live: Option<BTreeSet<GlobalOutputIndex>>,
-    amounts: BTreeMap<GlobalOutputIndex, AtomicUnits>,
+    funding: Option<BTreeMap<GlobalOutputIndex, AtomicUnits>>,
     confirmed_posts: BTreeSet<PCanonicalId>,
 }
 
 impl FundingScan {
-    /// `None` for `live` when `pscan` is absent or its frontier cannot step
-    /// back one block. An empty funding set is then not read as "every input
-    /// is spent".
+    /// No scan evidence. An empty map is a different state: the frontier
+    /// moved and holds nothing.
+    fn no_evidence() -> Self {
+        Self {
+            funding: None,
+            confirmed_posts: BTreeSet::new(),
+        }
+    }
+
+    /// `funding` is `None` when `pscan` is absent or its frontier cannot
+    /// step back one block. That absence is not an empty map, and it is
+    /// not read as "every input is spent".
     pub(crate) fn from_seal(pscan: Option<&PScanState>) -> Self {
         let Some(pscan) = pscan else {
-            return Self {
-                live: None,
-                amounts: BTreeMap::new(),
-                confirmed_posts: BTreeSet::new(),
-            };
+            return Self::no_evidence();
         };
         if pscan
             .synced_height()
             .checked_sub_count(BlockCount::ONE)
             .is_none()
         {
-            return Self {
-                live: None,
-                amounts: BTreeMap::new(),
-                confirmed_posts: BTreeSet::new(),
-            };
+            return Self::no_evidence();
         }
-        let amounts: BTreeMap<_, _> = pscan
+        let funding = pscan
             .funding_outputs()
             .iter()
             .map(|output| (output.gindex, output.amount))
             .collect();
-        let live = amounts.keys().copied().collect();
         let confirmed_posts = pscan
             .bond_post_matches()
             .iter()
@@ -353,16 +337,24 @@ impl FundingScan {
             .map(|matched| matched.p_canonical_id)
             .collect();
         Self {
-            live: Some(live),
-            amounts,
+            funding: Some(funding),
             confirmed_posts,
+        }
+    }
+
+    /// A moved frontier that holds no outputs. Absence from this map is a
+    /// spend. This is not [`Self::no_evidence`].
+    #[cfg(test)]
+    fn holding_nothing() -> Self {
+        Self {
+            funding: Some(BTreeMap::new()),
+            confirmed_posts: BTreeSet::new(),
         }
     }
 
     pub(crate) fn evidence(&self) -> ScanEvidence<'_> {
         ScanEvidence {
-            live: self.live.as_ref(),
-            amounts: &self.amounts,
+            funding: self.funding.as_ref(),
             confirmed_posts: &self.confirmed_posts,
         }
     }
@@ -372,9 +364,10 @@ impl FundingScan {
 ///
 /// Past the end date, [`end_date_disposition`] decides. A hold the scan has
 /// not matched reads [`InFlightState::Held`]. A release reads
-/// [`InFlightState::Expired`]: the funds come back once the frontier covers
-/// the end date. A settlement, and a hold the scan has already matched, do
-/// not promise a return; they fall through to the sealed state. With no scan
+/// [`InFlightState::Expired`]: what the record holds comes back once the
+/// frontier covers the end date. A settlement, and a hold the scan has
+/// already matched, do not promise a return; they fall through to the
+/// sealed state. With no scan
 /// evidence, past the end date reads expired, because absence has not been
 /// shown to be a spend. Before the end date a recorded verdict reads
 /// [`InFlightState::Refused`].
@@ -385,9 +378,9 @@ fn project(
 ) -> InFlightState {
     let funds_return_at = end_date(record.reference_height, REFERENCE_MAX_AGE);
     if ledger_tip >= funds_return_at {
-        match evidence.live {
-            Some(live) => {
-                match end_date_disposition(record.kind, record.reserved, record.terminal, live) {
+        match evidence.funding {
+            Some(funding) => {
+                match end_date_disposition(record.kind, record.reserved, record.terminal, funding) {
                     EndDateDisposition::Hold
                         if record.kind == RecordKind::Post
                             && !evidence.confirmed_posts.contains(record.persona) =>
@@ -432,9 +425,11 @@ fn tip_of(at: ChainCount) -> BlockHeight {
     at.tip().unwrap_or(BlockHeight::ZERO)
 }
 
-/// What `record` still holds (WR-Q6): the sum of its reserved inputs'
-/// amounts that are still in the live funding set. `Ok(None)` with no scan
-/// evidence.
+/// What `record` still holds (WR-Q6): the sum of its reserved inputs that
+/// are still keys of the live funding map. A reserved input absent from
+/// that map has been spent and contributes nothing. `Ok(None)` when the
+/// scan has produced no evidence, which is not zero: an unknown amount is
+/// the missing map, never a missing key.
 ///
 /// # Errors
 ///
@@ -445,14 +440,14 @@ fn reserved_amount(
     record: &SealedRecord<'_>,
     evidence: ScanEvidence<'_>,
 ) -> Result<Option<AtomicUnits>, ReservedOverflow> {
-    if evidence.live.is_none() {
+    let Some(funding) = evidence.funding else {
         return Ok(None);
-    }
+    };
     AtomicUnits::checked_sum(
         record
             .reserved
             .iter()
-            .filter_map(|gindex| evidence.amounts.get(gindex).copied()),
+            .filter_map(|gindex| funding.get(gindex).copied()),
     )
     .map(Some)
     .ok_or(ReservedOverflow)

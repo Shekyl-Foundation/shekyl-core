@@ -14,10 +14,11 @@
 //! fully spent therefore reads held while the release is still waiting
 //! to keep the record.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use shekyl_types::{BlockCount, BlockHeight, GlobalOutputIndex, PCanonicalId};
+use shekyl_units::AtomicUnits;
 
 use super::{PendingBondPost, PendingPostBlock, PendingPostState, TerminalCause};
 
@@ -121,15 +122,36 @@ pub const fn end_date(reference_height: BlockHeight, max_age: BlockCount) -> Blo
     reference_height.saturating_add(max_age)
 }
 
+/// Whether an output is still in the live funding set.
+///
+/// The release path answers with the index set it already walks. The
+/// staking read answers with the amount map: an output it still holds is
+/// a key, and the value is what that output is worth. Membership is that
+/// one question, so the read cannot treat an output as live and as holding
+/// nothing.
+pub trait LiveFunding {
+    /// Whether `gindex` is still unspent in this funding view.
+    fn contains_output(&self, gindex: &GlobalOutputIndex) -> bool;
+}
+
+impl LiveFunding for BTreeSet<GlobalOutputIndex> {
+    fn contains_output(&self, gindex: &GlobalOutputIndex) -> bool {
+        self.contains(gindex)
+    }
+}
+
+impl LiveFunding for BTreeMap<GlobalOutputIndex, AtomicUnits> {
+    fn contains_output(&self, gindex: &GlobalOutputIndex) -> bool {
+        self.contains_key(gindex)
+    }
+}
+
 /// Whether a record reserves inputs and every one of them has left the
 /// live funding set. An empty reservation is not spent: `all` would be
 /// vacuously true, and a zero-fee claim would retire the moment it sealed.
 #[must_use]
-pub fn every_reserved_spent(
-    reserved: &[GlobalOutputIndex],
-    live: &BTreeSet<GlobalOutputIndex>,
-) -> bool {
-    !reserved.is_empty() && reserved.iter().all(|g| !live.contains(g))
+pub fn every_reserved_spent(reserved: &[GlobalOutputIndex], live: &impl LiveFunding) -> bool {
+    !reserved.is_empty() && reserved.iter().all(|g| !live.contains_output(g))
 }
 
 /// What the end date does with one sealed record, given the live funding
@@ -162,7 +184,7 @@ pub fn end_date_disposition(
     kind: RecordKind,
     reserved: &[GlobalOutputIndex],
     terminal: Option<TerminalCause>,
-    live: &BTreeSet<GlobalOutputIndex>,
+    live: &impl LiveFunding,
 ) -> EndDateDisposition {
     if every_reserved_spent(reserved, live) {
         return if kind == RecordKind::Post {
@@ -171,7 +193,7 @@ pub fn end_date_disposition(
             EndDateDisposition::Settled
         };
     }
-    let some_spent = reserved.iter().any(|g| !live.contains(g));
+    let some_spent = reserved.iter().any(|g| !live.contains_output(g));
     let outcome = if some_spent {
         OutcomeKind::SpentElsewhere
     } else if reserved.is_empty() {

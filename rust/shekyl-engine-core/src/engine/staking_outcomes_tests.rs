@@ -9,7 +9,8 @@
 //! Wired as a `#[path]` child of `staking_outcomes::tests`, so `use super::*`
 //! resolves into the module and its private projection stays testable; the
 //! sibling file exists so the decomposition ratchet counts the module rather
-//! than its suite (the `block_fetch_tests` pattern).
+//! than its suite (`EXCLUDE` in `engine_decomposition_ratchet.conf`, the
+//! `block_fetch_tests` pattern).
 
 use super::*;
 
@@ -585,10 +586,8 @@ fn a_stake_with_every_input_spent_reads_held() {
 
     let mut settled = PendingPostBlock::empty();
     seal(&mut settled, Record::Drain(drain(0x91, &[9])));
-    let live = BTreeSet::new();
-    let confirmed = BTreeSet::new();
     assert_eq!(
-        in_flight(&settled, END, ScanEvidence::scanned(&live, &confirmed))[0].state,
+        in_flight(&settled, END, FundingScan::holding_nothing().evidence())[0].state,
         InFlightState::Dispatched,
         "a fully spent drain is settlement's, and does not promise a return"
     );
