@@ -409,11 +409,11 @@ async fn a_substituted_body_closes_the_supplier_and_the_header_survives() {
     substituted("subst-body", Bodies::SubstituteBody, "Bind(G2)").await;
 }
 
-/// References that are not the block's close the supplier at CEN-B4; the
+/// References that are not the block's close the supplier at CEN-J29; the
 /// header survives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn substituted_references_close_the_supplier_and_the_header_survives() {
-    substituted("subst-refs", Bodies::SubstituteReferences, "Bind(B4)").await;
+    substituted("subst-refs", Bodies::SubstituteReferences, "Bind(J29)").await;
 }
 
 async fn substituted(tag: &str, bodies: Bodies, expected: &str) {

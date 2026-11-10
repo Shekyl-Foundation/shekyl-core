@@ -135,8 +135,8 @@ fn context<'a>(
         height,
         previous,
         curve_tree_root,
-        // The template carries no witness, so the validator judges it
-        // against the empty set's root (CEN-B4, slice 8 row 10).
+        // The template carries no references, so the validator judges it
+        // against the empty section's root (CEN-J29).
         bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         major_version: RuleSet::GENESIS.header_major_version(),
         now: NOW,

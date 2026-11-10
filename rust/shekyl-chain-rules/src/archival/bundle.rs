@@ -122,7 +122,8 @@
 //! builder of the drawable set this rule indexes
 //! ([`drawable_epoch_walked_back`](super::drawable_epoch_walked_back)) and
 //! the settlement fold that consumes what admission writes. The rule types
-//! that succeed CEN-B4 land in `rules/` at the cutover and call into here.
+//! that succeed CEN-B4 are in `rules/bundle_admission.rs` and call into
+//! here.
 //!
 //! # Precondition on the rule set: `W₂ + L ≤` anchor depth
 //!

@@ -968,7 +968,7 @@ pub(crate) fn build_template(
         curve_tree_root: facts.curve_tree_root,
         // The driver's blocks admit no bundle until the template fills a
         // section (the switch's C4), so every template commits the empty
-        // section's root — the arm CEN-B4 judges a block with no
+        // section's root, the root CEN-J29 compares a block with no
         // references against.
         bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         major_version: rule_set.header_major_version(),

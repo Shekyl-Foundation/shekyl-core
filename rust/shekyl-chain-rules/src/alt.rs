@@ -22,9 +22,9 @@
 //! already gives CEN-B5: an unexecuted alternative cannot answer it, and
 //! promotion validates every block of the alternative against executed
 //! state through `validate`, where the read is correct and costs nothing
-//! extra (`E5-Q4`, ruled β 2026-10-11). The attestation set (CEN-B4) is
-//! such a check and has no step here; the witness the candidate carries
-//! rides to the store unjudged, for promotion to judge.
+//! extra (`E5-Q4`, ruled β 2026-10-11). The bundle section (CEN-J29
+//! through J37) is such a check and has no step here; the references the
+//! candidate carries ride to the store unjudged, for promotion to judge.
 //!
 //! The bound is the belt: a view that implements only
 //! [`HeaderView`](crate::HeaderView) — the store's `AltView` — cannot be
@@ -363,8 +363,8 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     D5::record(&mut coverage);
 
     // The header ladder (`DRS_E5` §2.1, CEN-K4): the three segments
-    // `validate` calls with B5, B4 and G1 between them. Nothing between
-    // them here — those three read chain state.
+    // `validate` calls with B5, the bundle section and G1 between them.
+    // Nothing between them here — those three read chain state.
     if let Err(refused) = header_ladder::judge_header_ladder(&context, alt_view, &mut coverage)? {
         return Ok(Err(refused));
     }

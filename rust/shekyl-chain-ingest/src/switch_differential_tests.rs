@@ -249,8 +249,8 @@ async fn tampered_references_on_an_alt_row_fail_promotion_k5b() {
     // CEN-K5b: the references a promoted block is judged with are the ones
     // its alt row carries. The scenario's blocks admit no bundle, so every
     // honest row's references are `None`; plant a section on B's second row
-    // and CEN-B4, run by promotion's `validate`, refuses it: the header
-    // commits the empty section. The switch rolls back and the suffix from
+    // and CEN-J29, run by promotion's `validate`, refuses it: the
+    // reference does not parse. The switch rolls back and the suffix from
     // that block leaves.
     let mut x = with_prefix("switch-k5b-x", PREFIX).await;
     let mut y = with_prefix("switch-k5b-y", PREFIX).await;

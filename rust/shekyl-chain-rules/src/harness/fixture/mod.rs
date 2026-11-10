@@ -1079,7 +1079,8 @@ pub fn header() -> BlockHeader {
 /// hash (the null hash on an empty chain — CEN-A2), `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
 /// empty tree at genesis — CEN-B5), `bundle_root` is the empty
-/// section's (no sidecar, no `0x0B` field in the coinbase — CEN-B4); the header lists exactly the bodies it carries.
+/// section's (no references — CEN-J29; no `0x0B` field in the coinbase —
+/// CEN-I20); the header lists exactly the bodies it carries.
 /// Mutate one field to build a negative fixture. A corrupt
 /// parent read leaves the coinbase as [`coinbase`] built it, so
 /// `validate` is the function that reports the fault.

@@ -83,7 +83,7 @@ pub(super) fn candidate_over(
             nonce: 7,
             curve_tree_root: root,
             // The empty section's root: a candidate carrying no references is
-            // judged against it (CEN-B4).
+            // judged against it (CEN-J29).
             bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
         },
         miner_transaction: coinbase(height),

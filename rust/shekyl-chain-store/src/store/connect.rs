@@ -302,9 +302,9 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
         // ---- 5. bundle references (`archival_write.rs`) ------------------
-        // The verdict's sidecar, judged by CEN-B4 in `validate`: the header's
-        // root is theirs. B4 is always in coverage, so the widening above
-        // never names it.
+        // The verdict's section, admitted by CEN-J29 through J37 in
+        // `validate`: the header's root is theirs. The nine rows are always
+        // in coverage, so the widening above never names them.
         self.record_bundle_references(height, block.bundle_references())?;
 
         // ---- 6. block --------------------------------------------------
