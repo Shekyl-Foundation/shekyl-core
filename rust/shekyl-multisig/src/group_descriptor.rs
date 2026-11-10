@@ -8,10 +8,17 @@
 
 use serde::{Deserialize, Serialize};
 
-/// File format version. `2` adds the group KEM public key; a version `1`
-/// file has none and is refused with
-/// [`GroupDescriptorError::UnsupportedVersion`].
+/// File format version. `2` adds the group KEM public key. A file of any
+/// other version is refused with [`GroupDescriptorError::UnsupportedVersion`],
+/// whatever fields it has: [`GroupDescriptor::from_json`] reads the version
+/// before the rest of the schema.
 pub const GROUP_DESCRIPTOR_VERSION: u8 = 2;
+
+/// The one field every descriptor version shares. Serde ignores the rest.
+#[derive(Deserialize)]
+struct VersionProbe {
+    version: u8,
+}
 
 /// Group descriptor: everything needed to restore a multisig group.
 ///
@@ -25,13 +32,17 @@ pub struct GroupDescriptor {
     pub spend_auth_version: u8,
     pub participant_pubkeys: Vec<String>,
     /// The group's hybrid KEM public key (hex): the key a payer's `0x06`
-    /// ciphertext goes to. Every member holds its secret.
+    /// ciphertext goes to. Every member holds its secret. Absent reads as
+    /// empty, so [`GroupDescriptor::from_json`] names it missing.
+    #[serde(default)]
     pub group_kem_pubkey: String,
     /// The group's identity: the hex of `shekyl_address::address_fingerprint`
     /// over the group's `MultisigAddressPayload`. This is the single group
     /// identifier — it replaces the former opaque `group_id: String`, which was
     /// carried but never produced by anything (the synthesis: one value, one
     /// producer, independently derivable by every participant from the address).
+    /// Absent reads as empty, so [`GroupDescriptor::from_json`] names it missing.
+    #[serde(default)]
     pub address_fingerprint: String,
     pub created_at: u64,
     pub notes: Option<String>,
@@ -64,12 +75,13 @@ impl GroupDescriptor {
     }
 
     pub fn from_json(json: &str) -> Result<Self, GroupDescriptorError> {
-        let desc: Self = serde_json::from_str(json)
-            .map_err(|e| GroupDescriptorError::ParseFailed(e.to_string()))?;
-
-        if desc.version != GROUP_DESCRIPTOR_VERSION {
-            return Err(GroupDescriptorError::UnsupportedVersion(desc.version));
+        let parse_failed = |e: serde_json::Error| GroupDescriptorError::ParseFailed(e.to_string());
+        let VersionProbe { version } = serde_json::from_str(json).map_err(parse_failed)?;
+        if version != GROUP_DESCRIPTOR_VERSION {
+            return Err(GroupDescriptorError::UnsupportedVersion(version));
         }
+        let desc: Self = serde_json::from_str(json).map_err(parse_failed)?;
+
         if desc.m_required == 0 || desc.m_required > desc.n_total {
             return Err(GroupDescriptorError::InvalidThreshold {
                 m: desc.m_required,
@@ -174,14 +186,44 @@ mod tests {
         ));
     }
 
+    /// The descriptor as JSON with `field` removed and `version` set.
+    fn json_without(field: &str, version: u8) -> String {
+        let mut value = serde_json::to_value(make_test_descriptor()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        assert!(object.remove(field).is_some(), "no field {field}");
+        object.insert("version".into(), version.into());
+        value.to_string()
+    }
+
     #[test]
-    fn rejects_version_1_and_a_missing_group_kem_pubkey() {
-        let mut desc = make_test_descriptor();
-        desc.version = 1;
-        let json = serde_json::to_string(&desc).unwrap();
+    fn a_version_1_file_is_refused_by_its_version() {
+        // A version-1 descriptor has no group KEM key at all.
         assert!(matches!(
-            GroupDescriptor::from_json(&json),
+            GroupDescriptor::from_json(&json_without("group_kem_pubkey", 1)),
             Err(GroupDescriptorError::UnsupportedVersion(1))
+        ));
+        // Another version is refused by version whatever its fields are.
+        assert!(matches!(
+            GroupDescriptor::from_json(r#"{"version": 3}"#),
+            Err(GroupDescriptorError::UnsupportedVersion(3))
+        ));
+    }
+
+    #[test]
+    fn a_file_without_a_version_does_not_parse() {
+        let mut value = serde_json::to_value(make_test_descriptor()).unwrap();
+        value.as_object_mut().unwrap().remove("version");
+        assert!(matches!(
+            GroupDescriptor::from_json(&value.to_string()),
+            Err(GroupDescriptorError::ParseFailed(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_missing_group_kem_pubkey() {
+        assert!(matches!(
+            GroupDescriptor::from_json(&json_without("group_kem_pubkey", 2)),
+            Err(GroupDescriptorError::MissingGroupKemPubkey)
         ));
         let mut desc = make_test_descriptor();
         desc.group_kem_pubkey = String::new();
@@ -189,6 +231,14 @@ mod tests {
         assert!(matches!(
             GroupDescriptor::from_json(&json),
             Err(GroupDescriptorError::MissingGroupKemPubkey)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_absent_address_fingerprint() {
+        assert!(matches!(
+            GroupDescriptor::from_json(&json_without("address_fingerprint", 2)),
+            Err(GroupDescriptorError::MissingFingerprint)
         ));
     }
 
