@@ -23,7 +23,7 @@
 //! facts, and so the production adapter is one file whose job is reading
 //! rows, not deciding anything.
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{ExpectedShard, FetchTarget, PassVerifyingKey};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
@@ -48,14 +48,16 @@ pub enum FactsFault {
 /// A holder the draw may pick: a persona bonded to the shard, read from its
 /// bond record.
 ///
-/// `K` is the scheme the exchange is closed with. Every holder a
-/// [`HolderSource`] returns is the live scheme's, the bond identity key.
-/// A caller that names its own persona — a challenge read, through
+/// `K` is the scheme the exchange is closed with, and it has no default:
+/// every site names its scheme. Every holder a [`HolderSource`] returns is
+/// under the receipt key (hybrid scheme 3) its bond record carries, the
+/// key the bundle verifier checks a receipt against. A caller that names
+/// its own persona — a challenge read, through
 /// [`FetchScheduler::read_from_nonce`](crate::FetchScheduler::read_from_nonce)
-/// — may name it under another scheme, and the read it gets back holds
-/// that scheme's signature.
+/// — names its scheme too, and the read it gets back holds that scheme's
+/// signature.
 #[derive(Clone, Debug)]
-pub struct Holder<K: PassVerifyingKey = HybridPublicKey> {
+pub struct Holder<K: PassVerifyingKey> {
     /// The persona's canonical id — what a pass record and a log line name.
     pub id: PCanonicalId,
     /// Where to dial it and whose signature to accept.
@@ -184,7 +186,10 @@ pub trait HolderSource: Send + Sync {
     /// # Errors
     ///
     /// [`FactsFault`]: the store could not answer.
-    fn holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault>;
+    fn holders_of(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault>;
 
     /// Complete trees that hold the whole archive, as a best-effort source
     /// beside [`Self::holders_of`] (`ARCHIVAL_SUPPORT_DRAW.md` §7).
@@ -196,7 +201,10 @@ pub trait HolderSource: Send + Sync {
     /// # Errors
     ///
     /// [`FactsFault`]: the store could not answer.
-    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+    fn support_holders_of(
+        &self,
+        _shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
         Ok(Vec::new())
     }
 }

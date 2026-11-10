@@ -33,7 +33,7 @@ use std::sync::Arc;
 use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, PassStream, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
 };
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{
     ExpectedShard, FetchError, NextMove, PFetchClient, PassVerifyingKey, RequestHeader, TxSink,
     VerifiedShard,
@@ -149,11 +149,11 @@ impl HolderRetries {
 /// A completed read: the body went through the caller's sink one
 /// transaction at a time, and this is what the requester keeps.
 ///
-/// `K` is the scheme of the holder that was dialled. A drawn read is the
-/// live scheme's. A nonce read is whatever scheme its caller named the
-/// holder under, so a read over a receipt-key target carries the receipt.
+/// `K` is the scheme of the holder that was dialled, with no default. A
+/// drawn read is under the receipt key. A nonce read is whatever scheme
+/// its caller named the holder under.
 #[derive(Clone, Debug)]
-pub struct Read<K: PassVerifyingKey = HybridPublicKey> {
+pub struct Read<K: PassVerifyingKey> {
     /// The verified shard: view hash, delivery digest, `P`'s signature.
     pub shard: VerifiedShard<K>,
     /// Who served it.
@@ -253,7 +253,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         shard_id: ShardId,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Read, ReadFailure> {
+    ) -> Result<Read<FnDsaHybridPublicKey>, ReadFailure> {
         self.drive(shard_id, sink, budget, None, None).await
     }
 
@@ -270,11 +270,11 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// read returns when the urn starts empty and this one does not.
     pub async fn read_from(
         &self,
-        assigned: &Holder,
+        assigned: &Holder<FnDsaHybridPublicKey>,
         shard_id: ShardId,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Read, ReadFailure> {
+    ) -> Result<Read<FnDsaHybridPublicKey>, ReadFailure> {
         self.drive(shard_id, sink, budget, Some(assigned), None)
             .await
     }
@@ -332,9 +332,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         shard_id: ShardId,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-        assigned: Option<&Holder>,
+        assigned: Option<&Holder<FnDsaHybridPublicKey>>,
         nonce: Option<SuppliedNonce>,
-    ) -> Result<Read, ReadFailure> {
+    ) -> Result<Read<FnDsaHybridPublicKey>, ReadFailure> {
         let closed = self.closed(shard_id)?;
         let drawn = self.holders.holders_of(shard_id)?;
         let support = self.holders.support_holders_of(shard_id)?;
@@ -417,15 +417,10 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             .block_hash_at(anchor)?
             .ok_or(FactsFault::Inconsistent)?;
         match nonce {
-            Some(SuppliedNonce { stream, nonce }) => Ok(RequestHeader::on_stream(
-                stream,
-                nonce,
-                anchor,
-                hash.to_bytes(),
-            )),
-            None => {
-                RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
+            Some(SuppliedNonce { stream, nonce }) => {
+                Ok(RequestHeader::on_stream(stream, nonce, anchor, hash))
             }
+            None => RequestHeader::fresh(anchor, hash).map_err(|_| DrawFault::Entropy.into()),
         }
     }
 

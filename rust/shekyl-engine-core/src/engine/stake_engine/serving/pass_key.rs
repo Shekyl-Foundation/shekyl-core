@@ -49,7 +49,6 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_host::{PassKey, SignRefused, IDENTITY_ENVELOPE_LEN};
 use shekyl_types::BlockHeight;
@@ -59,9 +58,15 @@ use crate::engine::stake_engine::types::{PSlot, StakeEngineError};
 
 /// The serving role's view of the active persona's bond identity key.
 ///
-/// Constructed once per serving start by `start_serving_if_staker`, bound to
-/// the slot that was active at that moment. That slot stays held for the
-/// host's lifetime: the retire sweep never wipes the active persona
+/// The serving task signs with the receipt key
+/// ([`ResidentReceiptKey`](super::receipt_key::ResidentReceiptKey)); only
+/// tests construct this one. Whether it is deleted is open on #1327. The
+/// one dead-code marker is on the impl that holds `new`: the compiler
+/// treats an item under the expectation as a root, so the type and the
+/// handle method its trait impl reaches carry none.
+///
+/// Bound to the slot active when it is constructed. That slot stays held
+/// for the host's lifetime: the retire sweep never wipes the active persona
 /// (`RetireOutcome::SkippedActive`, pinned by
 /// `retire_skips_the_active_persona`), and there is no production re-key
 /// path that would move `active` off it (`activate_persona` has no
@@ -72,6 +77,13 @@ pub(crate) struct ResidentPassKey {
     p_slot: PSlot,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the 4b switch serves with the receipt key; deleting the identity-key serving signer awaits Rick (#1327)"
+    )
+)]
 impl ResidentPassKey {
     pub(crate) fn new(stake: &StakeEngineHandle, p_slot: PSlot) -> Arc<Self> {
         Arc::new(Self {
@@ -106,10 +118,10 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for ResidentPassKey {
     /// legitimate here and nowhere else.
     fn sign_pass(
         &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        transcript: &shekyl_p_host::PassTranscript,
     ) -> Result<HybridSignature, SignRefused> {
         self.live_handle()?
-            .sign_pass_transcript_blocking(self.p_slot, *message)
+            .sign_pass_transcript_blocking(self.p_slot, *transcript)
             .map_err(|e| SignRefused::new(e.to_string()))
     }
 }
@@ -118,7 +130,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for ResidentPassKey {
 mod tests {
     use super::*;
 
-    use shekyl_archival_retention::{pass_countersignature_message, verify_pass_transcript};
+    use shekyl_archival_retention::verify_pass_transcript;
 
     use crate::engine::stake_engine::types::PersonaIdentity;
     use crate::engine::test_support::{activate_persona, staker_engine};
@@ -131,15 +143,14 @@ mod tests {
     const ANCHOR_HASH: [u8; 32] = [0x22; 32];
     const DIGEST: [u8; 32] = [0x5a; 32];
 
-    fn message() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(
+    fn transcript() -> shekyl_archival_retention::PassTranscript {
+        shekyl_archival_retention::PassRequestHeader::from_parts(
             shekyl_archival_retention::PassStream::Economy,
-            &NONCE,
+            NONCE,
             ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
         )
+        .transcript(SHARD, DIGEST)
     }
 
     async fn active_staker() -> (
@@ -170,19 +181,23 @@ mod tests {
 
         key.ready(SHARD, ANCHOR).expect("actor alive → ready");
 
-        let signature = tokio::task::spawn_blocking(move || key.sign_pass(&message()))
+        let signature = tokio::task::spawn_blocking(move || key.sign_pass(&transcript()))
             .await
             .expect("blocking task")
             .expect("held slot signs");
 
         verify_pass_transcript(
             &active.bond_id,
-            shekyl_archival_retention::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            &shekyl_archival_retention::PassTranscript::new(
+                shekyl_archival_retention::PassRequestHeader::from_parts(
+                    shekyl_archival_retention::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+                ),
+                SHARD,
+                DIGEST,
+            ),
             &signature,
         )
         .expect("verifies under bond_id");
@@ -200,7 +215,7 @@ mod tests {
         // `ready` is liveness only — the slot question is asked at sign time.
         key.ready(SHARD, ANCHOR).expect("actor alive → ready");
 
-        let refused = tokio::task::spawn_blocking(move || key.sign_pass(&message()))
+        let refused = tokio::task::spawn_blocking(move || key.sign_pass(&transcript()))
             .await
             .expect("blocking task")
             .expect_err("unheld slot refuses");
@@ -238,7 +253,7 @@ mod tests {
             refused.detail.contains("stake engine unavailable"),
             "refusal names the recovery action: {refused}"
         );
-        tokio::task::spawn_blocking(move || key.sign_pass(&message()))
+        tokio::task::spawn_blocking(move || key.sign_pass(&transcript()))
             .await
             .expect("blocking task")
             .expect_err("stopped actor → sign refused");

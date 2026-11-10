@@ -14,8 +14,8 @@ use crate::draw::Urn;
 use crate::facts::{BlockSpan, Holder};
 
 /// A holder the urn can tell apart. Nothing here is dialled, so the key
-/// is a placeholder shape, not a key.
-fn holder(tag: u8) -> Holder {
+/// is a placeholder shape, not a key; the urn is the same for any scheme.
+fn holder(tag: u8) -> Holder<HybridPublicKey> {
     Holder {
         id: PCanonicalId::from_bytes([tag; 32]),
         target: FetchTarget {
@@ -28,7 +28,7 @@ fn holder(tag: u8) -> Holder {
     }
 }
 
-fn holders(n: u8) -> Vec<Holder> {
+fn holders(n: u8) -> Vec<Holder<HybridPublicKey>> {
     (1..=n).map(holder).collect()
 }
 

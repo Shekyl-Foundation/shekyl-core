@@ -22,7 +22,7 @@ use shekyl_archival_fetch_sched::{
 };
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, ErrorClass, ReadSnapshot, ShardFold, StoreError};
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::Holdings;
 use shekyl_types::{BlockHash, BlockHeight, ShardId};
 
@@ -85,14 +85,17 @@ impl StoreHolderSource {
 }
 
 impl HolderSource for StoreHolderSource {
-    fn holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+    fn holders_of(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
         let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
         let mut holders = Vec::new();
         for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {
             if !holds_drawn(&record.holdings, shard_id) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,
@@ -105,14 +108,17 @@ impl HolderSource for StoreHolderSource {
         Ok(holders)
     }
 
-    fn support_holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+    fn support_holders_of(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
         let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
         let mut holders = Vec::new();
         for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {
             if !matches!(record.holdings, Holdings::CompleteTree) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,

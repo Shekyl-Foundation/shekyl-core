@@ -21,9 +21,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
-use shekyl_p_serve::{PServeEndpoint, PassSigner, TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
 use shekyl_socks::accept_userpass;
 use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, FramedObject, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
@@ -80,10 +80,10 @@ fn payload() -> Arc<[u8]> {
         .into()
 }
 
-async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
+async fn persona(signer: Arc<TestReceiptKeySigner>) -> (PServeEndpoint, SocketAddr) {
     let ep = PServeEndpoint::bind(
         Arc::new(FixtureShardProvider::new(payload())),
-        signer as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
     )
     .await
     .expect("bind endpoint");
@@ -91,7 +91,7 @@ async fn persona(signer: Arc<TestKeySigner>) -> (PServeEndpoint, SocketAddr) {
     (ep, proxy)
 }
 
-fn target_for(signer: &TestKeySigner) -> FetchTarget<HybridPublicKey> {
+fn target_for(signer: &TestReceiptKeySigner) -> FetchTarget<FnDsaHybridPublicKey> {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
         verifying_key: signer.public_key().clone(),
@@ -105,7 +105,7 @@ fn expectation() -> ExpectedShard {
 
 #[tokio::test]
 async fn apparatus_anchor_passes_the_gate_and_the_body_verifies() {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
         APPARATUS_OWN_HEIGHT,
     )));
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
@@ -129,7 +129,7 @@ async fn a_persona_at_a_far_height_is_refused_not_blamed_on_tor() {
     // anchor outside `[own − 720 − L, own − 720 + L]` and renders the
     // bare 400. The client leg must class that as `Refused`: it is a
     // completed exchange, and the rig — not the network — is what is wrong.
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
         APPARATUS_OWN_HEIGHT + 720,
     )));
     let (ep, proxy) = persona(Arc::clone(&signer)).await;
@@ -148,10 +148,10 @@ async fn a_body_under_the_wrong_key_is_refused() {
     // The persona signs under one key; the "bond record" names another. The
     // production client refuses the countersignature, and the leg reports
     // it as `Refused`, distinguishable from a stall.
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
         APPARATUS_OWN_HEIGHT,
     )));
-    let other = TestKeySigner::ephemeral(BlockHeight::from_raw(APPARATUS_OWN_HEIGHT));
+    let other = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(APPARATUS_OWN_HEIGHT));
     let (_ep, proxy) = persona(signer).await;
     let leg = ClientLeg::new(proxy, 1);
 

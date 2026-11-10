@@ -53,7 +53,7 @@ const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md
 
 /// The ratchet's pinned section sizes. Lower a pin when a row leaves; a
 /// raise is a new hole and needs a ruling.
-const INPUT_RAW_EXPECTED: usize = 17;
+const INPUT_RAW_EXPECTED: usize = 15;
 const UNFRAMED_EXPECTED: usize = 2;
 const PENDING_EXPECTED: usize = 7;
 

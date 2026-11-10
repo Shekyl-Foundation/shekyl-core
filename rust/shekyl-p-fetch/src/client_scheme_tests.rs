@@ -89,7 +89,9 @@ fn receipt_envelope(keys: &ReceiptKeys, body: &[u8]) -> Vec<u8> {
         .sign(
             &keys.secret,
             SCHEME_DOMAIN_RECEIPT,
-            &header.transcript(SHARD.to_raw(), &pass_delivery_digest(header.nonce(), body)),
+            &header
+                .transcript(SHARD.to_raw(), pass_delivery_digest(header.nonce(), body))
+                .message(),
         )
         .expect("sign")
         .to_canonical_bytes()

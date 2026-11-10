@@ -376,7 +376,7 @@ async fn offer(parts: &ProducerParts, filing: Filing, scheme_logged: &mut Scheme
     if scheme_logged.due(h, serving_scheme_absent) {
         tracing::info!(
             h = h.to_raw(),
-            "block {}: no receipt scheme on the serving side yet; filed with no passes",
+            "block {}: a holder answered with the identity scheme, not its receipt key; filed with no passes",
             h.to_raw()
         );
     }

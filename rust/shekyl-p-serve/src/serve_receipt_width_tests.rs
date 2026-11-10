@@ -15,7 +15,6 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_archival_retention::{pass_delivery_digest, verify_receipt_transcript};
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::HybridSignature;
@@ -86,12 +85,16 @@ async fn an_endpoint_bound_with_a_receipt_signer_closes_with_a_receipt() {
     let receipt = FnDsaHybridSignature::from_canonical_bytes(envelope).expect("a receipt");
     verify_receipt_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, &ahead[body_start..]),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, &ahead[body_start..]),
+        ),
         &receipt,
     )
     .expect("the receipt verifies under the receipt key");
@@ -117,10 +120,7 @@ impl PassKey<RECEIPT_ENVELOPE_LEN> for ReceiptRefusesLate {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
-    fn sign_pass(
-        &self,
-        _: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<FnDsaHybridSignature, SignRefused> {
+    fn sign_pass(&self, _: &crate::PassTranscript) -> Result<FnDsaHybridSignature, SignRefused> {
         Err(SignRefused::new("signer went away"))
     }
 }

@@ -160,12 +160,7 @@ impl PassVerifyingKey for HybridPublicKey {
     ) -> bool {
         verify_pass_transcript(
             self,
-            header.stream(),
-            header.nonce(),
-            header.anchor_height(),
-            header.anchor_hash(),
-            shard_id,
-            delivery_digest,
+            &header.transcript(shard_id, *delivery_digest),
             signature,
         )
         .is_ok()
@@ -190,12 +185,7 @@ impl PassVerifyingKey for FnDsaHybridPublicKey {
     ) -> bool {
         verify_receipt_transcript(
             self,
-            header.stream(),
-            header.nonce(),
-            header.anchor_height(),
-            header.anchor_hash(),
-            shard_id,
-            delivery_digest,
+            &header.transcript(shard_id, *delivery_digest),
             signature,
         )
         .is_ok()

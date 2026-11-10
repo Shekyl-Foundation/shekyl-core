@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_bond_builder::BondBuildError;
 use shekyl_archival_retention::epoch_is_claim_expired;
-use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
@@ -166,7 +165,7 @@ impl HeldPersona {
     ///   next request signs from it.
     pub(crate) fn sign_receipt_transcript(
         &mut self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        transcript: &shekyl_archival_retention::PassTranscript,
     ) -> Result<FnDsaHybridSignature, StakeEngineError> {
         let (keys, receipt) = match self {
             HeldPersona::Bonded(b) => (&b.0, &mut b.1),
@@ -175,7 +174,7 @@ impl HeldPersona {
         let signer = receipt
             .signer_over(&keys.receipt_sign_sk)
             .map_err(|ReceiptKeyUndecodable| StakeEngineError::ReceiptKeyUndecodable)?;
-        shekyl_p_host::sign_receipt_transcript(signer, message)
+        shekyl_p_host::sign_receipt_transcript(signer, transcript)
             .map_err(StakeEngineError::ReceiptSign)
     }
 

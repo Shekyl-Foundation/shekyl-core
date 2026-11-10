@@ -16,6 +16,8 @@
 
 use shekyl_types::PCanonicalId;
 
+use shekyl_p_fetch::PassVerifyingKey;
+
 use crate::facts::Holder;
 
 /// Why a draw produced nothing.
@@ -28,12 +30,12 @@ pub enum DrawFault {
 }
 
 /// One need's urn of holders not yet tried.
-pub(crate) struct Urn {
-    remaining: Vec<Holder>,
+pub(crate) struct Urn<K: PassVerifyingKey> {
+    remaining: Vec<Holder<K>>,
 }
 
-impl Urn {
-    pub(crate) fn new(holders: Vec<Holder>) -> Self {
+impl<K: PassVerifyingKey> Urn<K> {
+    pub(crate) fn new(holders: Vec<Holder<K>>) -> Self {
         Self { remaining: holders }
     }
 
@@ -45,7 +47,7 @@ impl Urn {
 
     /// Draw one holder uniformly from those remaining, removing it. `None`
     /// once the urn is empty.
-    pub(crate) fn draw(&mut self) -> Result<Option<Holder>, DrawFault> {
+    pub(crate) fn draw(&mut self) -> Result<Option<Holder<K>>, DrawFault> {
         let n = self.remaining.len();
         if n == 0 {
             return Ok(None);

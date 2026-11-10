@@ -41,12 +41,16 @@ async fn the_countersignature_is_released_only_after_the_whole_body() {
         HybridSignature::from_canonical_bytes(sealed).expect("the last bytes are the signature");
     verify_pass_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, &before[end..]),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, &before[end..]),
+        ),
         &signature,
     )
     .expect("the closing signature covers this request and the bytes ahead of it");
@@ -72,10 +76,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
-    fn sign_pass(
-        &self,
-        _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, _: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
         Err(SignRefused::new("signer went away"))
     }
 }
@@ -135,7 +136,13 @@ fn a_real_signature_is_never_the_refusal_trailer() {
     let signer = crate::countersign::TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
     let signature = signer
         .sign_pass(
-            &[0x5a; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+            &shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                [0x5a; 32],
+                BlockHeight::from_raw(OWN_HEIGHT),
+                shekyl_types::BlockHash::from_bytes([0x5a; 32]),
+            )
+            .transcript(0x5a5a, [0x5a; 32]),
         )
         .expect("sign")
         .to_canonical_bytes()
@@ -151,10 +158,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new("not resident"))
     }
-    fn sign_pass(
-        &self,
-        _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, _: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
         Err(SignRefused::new("not resident"))
     }
 }

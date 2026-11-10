@@ -101,12 +101,16 @@ async fn served_shard_is_the_put_frame() {
 
     verify_pass_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(ANCHOR_HEIGHT),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, body),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(ANCHOR_HEIGHT),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, body),
+        ),
         &signature,
     )
     .expect("the countersignature covers this request's header, shard id and delivered bytes");

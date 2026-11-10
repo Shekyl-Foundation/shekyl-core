@@ -135,4 +135,6 @@ pub use serve::{
     RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
 };
 pub use serve_counters::ServeCounterReader;
-pub use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
+pub use shekyl_archival_retention::pass_anchor::{
+    PassTranscript, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+};

@@ -59,7 +59,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_types::{BlockHeight, SHARD_LENGTH};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -169,10 +168,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for CountingSigner {
         self.key.ready(shard_id, anchor_height)
     }
 
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, message: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
         self.asked_to_sign.fetch_add(1, Ordering::SeqCst);
         if self.signs == Signs::FailsLate {
             return Err(SignRefused::new("counting signer: fails late"));

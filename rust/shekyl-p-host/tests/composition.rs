@@ -22,8 +22,8 @@ use std::time::Duration;
 use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
 };
-use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_archival_retention::{pass_delivery_digest, verify_receipt_transcript};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
 use shekyl_curve_tree::{
     leaves_per_segment, BlockHeight, Gindex, LeafEntry, LeafStore, OutputIdentity,
@@ -36,7 +36,7 @@ use shekyl_p_host::{
     ServeSetPinner, Staleness, StalenessBound, StoreFacts, StoreIdentity,
 };
 use shekyl_p_serve::HeldShardSource;
-use shekyl_p_serve::{TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_p_serve::{TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_tor_control_wallet::service::{
     EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
@@ -352,10 +352,10 @@ fn bodies_writer_holding(ids: &[u64]) -> BodyStore {
     store
 }
 
-/// An ephemeral attestation key for a host under test; the test keeps the
+/// An ephemeral receipt key for a host under test; the test keeps the
 /// handle to read the public half back.
-fn test_key() -> Arc<TestKeySigner> {
-    Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(0)))
+fn test_key() -> Arc<TestReceiptKeySigner> {
+    Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(0)))
 }
 
 /// The gate's height source under test: a daemon tip stamped at `height`.
@@ -386,18 +386,18 @@ fn anchor_for(own_height: u64) -> BlockHeight {
 
 /// Split a 200 response into its `SF-D8` envelope and the framed body that
 /// precedes it, the way a fetcher does.
-fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
+fn envelope_of(response: &[u8]) -> (FnDsaHybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
     let body = &response[end + 4..];
     assert!(
-        body.len() >= IDENTITY_ENVELOPE_LEN,
+        body.len() >= RECEIPT_ENVELOPE_LEN,
         "a served body ends with the countersignature envelope"
     );
-    let (rest, sig) = body.split_at(body.len() - IDENTITY_ENVELOPE_LEN);
-    let sig = HybridSignature::from_canonical_bytes(sig).expect("canonical hybrid signature");
+    let (rest, sig) = body.split_at(body.len() - RECEIPT_ENVELOPE_LEN);
+    let sig = FnDsaHybridSignature::from_canonical_bytes(sig).expect("canonical receipt signature");
     (sig, rest)
 }
 
@@ -614,7 +614,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             identity: id,
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<RECEIPT_ENVELOPE_LEN>>,
             tip: tip_at(10_000),
             bodies: bodies_holding(&[0]),
         },
@@ -643,29 +643,37 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     // as a fetcher does: it verifies only if the persona signed for exactly
     // these bytes under this request's nonce.
     let (signature, framed) = envelope_of(&first);
-    verify_pass_transcript(
+    verify_receipt_transcript(
         key.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        anchor_for(10_000),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, framed),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                anchor_for(10_000),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, framed),
+        ),
         &signature,
     )
     .expect("the served countersignature binds header, shard id and the delivered bytes");
     let mut tampered = framed.to_vec();
     *tampered.last_mut().expect("a served shard is not empty") ^= 1;
     assert!(
-        verify_pass_transcript(
+        verify_receipt_transcript(
             key.public_key(),
-            shekyl_archival_retention::PassStream::Economy,
-            &NONCE,
-            anchor_for(10_000),
-            &ANCHOR_HASH,
-            0,
-            &pass_delivery_digest(&NONCE, &tampered),
-            &signature,
+            &shekyl_archival_retention::PassTranscript::new(
+                shekyl_archival_retention::PassRequestHeader::from_parts(
+                    shekyl_archival_retention::PassStream::Economy,
+                    NONCE,
+                    anchor_for(10_000),
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                0,
+                pass_delivery_digest(&NONCE, &tampered)
+            ),
+            &signature
         )
         .is_err(),
         "the same signature must not cover a body that differs in one byte"
@@ -708,14 +716,18 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         envelope_of(&first).1,
         "and it must still be serving the same bytes"
     );
-    verify_pass_transcript(
+    verify_receipt_transcript(
         key.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        anchor_for(10_000),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, second_frame),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                anchor_for(10_000),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, second_frame),
+        ),
         &second_signature,
     )
     .expect("the second serve is countersigned too");
@@ -1938,7 +1950,7 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
             identity: identity(),
             virtual_port: 80,
             max_streams: 8,
-            key: Arc::clone(&key) as Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
+            key: Arc::clone(&key) as Arc<dyn PassKey<RECEIPT_ENVELOPE_LEN>>,
             tip: Arc::clone(&tip),
             bodies: bodies_holding(&[0]),
         },
@@ -1965,14 +1977,18 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     // And the countersignature binds the anchor the requester actually sent,
     // so "served" is not merely "did not 404".
     let (signature, framed) = envelope_of(&served);
-    verify_pass_transcript(
+    verify_receipt_transcript(
         key.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        anchor_for(CHAIN_TIP),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, framed),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                anchor_for(CHAIN_TIP),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, framed),
+        ),
         &signature,
     )
     .expect("the served countersignature binds the requester's anchor");

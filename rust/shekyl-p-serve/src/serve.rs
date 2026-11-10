@@ -117,9 +117,7 @@ use tokio::task::JoinHandle;
 use crate::countersign::{anchor_within_gate, EnvelopeWidth, PassEnvelope, PassSigner};
 use crate::provider::{ShardBody, ShardProvider};
 use crate::serve_counters::{ServeCounterReader, ServeCounterWriter};
-use shekyl_archival_retention::{
-    PassRequestHeader, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
-};
+use shekyl_archival_retention::{PassRequestHeader, PassTranscript, PASS_NONCE_LEN};
 use shekyl_types::BlockHeight;
 
 // Sibling of this file, not `serve/delivery.rs`: the endpoint stays one
@@ -633,12 +631,12 @@ where
 /// reach the wire.
 fn sign_envelope<const W: usize>(
     signer: &dyn PassSigner<W>,
-    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    transcript: &PassTranscript,
 ) -> Option<[u8; W]>
 where
     PassEnvelope: EnvelopeWidth<W>,
 {
-    <PassEnvelope as EnvelopeWidth<W>>::envelope(&signer.sign_pass(message).ok()?)
+    <PassEnvelope as EnvelopeWidth<W>>::envelope(&signer.sign_pass(transcript).ok()?)
 }
 
 /// The committed head of a 200: status line and headers as one byte
@@ -818,8 +816,8 @@ where
         return Err(io::Error::other("shard body shorter than declared"));
     };
     // Every body byte is written and hashed. Sign for exactly those bytes.
-    let message = fields.transcript(shard_id, &digest);
-    let signed = tokio::task::spawn_blocking(move || sign_envelope(&*signer, &message)).await;
+    let transcript = fields.transcript(shard_id, digest);
+    let signed = tokio::task::spawn_blocking(move || sign_envelope(&*signer, &transcript)).await;
     let Ok(Some(signature)) = signed else {
         // The body is out and cannot be taken back. Say so, in bytes only
         // this end can write.
@@ -935,7 +933,7 @@ where
     let Some(digest) = running.finish() else {
         return InMemoryServe::Truncated;
     };
-    match sign_envelope(signer, &fields.transcript(shard_id, &digest)) {
+    match sign_envelope(signer, &fields.transcript(shard_id, digest)) {
         Some(signature) => {
             out.extend_from_slice(&signature);
             InMemoryServe::Served

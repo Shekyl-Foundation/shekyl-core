@@ -32,7 +32,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
 use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -87,10 +86,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedKeySigner {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, message: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
         if !self.signs {
             return Err(SignRefused::new("signer went away"));
         }
@@ -98,7 +94,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedKeySigner {
             .sign_with_ml_dsa_seed(
                 &self.secret,
                 SCHEME_DOMAIN_ATTESTATION,
-                message,
+                &message.message(),
                 &ML_DSA_SIGN_SEED,
             )
             .map_err(|e| SignRefused::new(e.to_string()))
@@ -195,12 +191,16 @@ async fn a_served_response_is_the_pinned_bytes() {
     );
     verify_pass_transcript(
         &pinned_keys().0,
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, &served.body),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, &served.body),
+        ),
         &served.signature,
     )
     .expect("the pinned signature verifies");

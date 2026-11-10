@@ -88,10 +88,12 @@ fn deterministic_response(keys: &Keys) -> Vec<u8> {
         .sign_with_ml_dsa_seed(
             &keys.secret,
             SCHEME_DOMAIN_ATTESTATION,
-            &header.transcript(
-                SHARD.to_raw(),
-                &pass_delivery_digest(header.nonce(), &body()),
-            ),
+            &header
+                .transcript(
+                    SHARD.to_raw(),
+                    pass_delivery_digest(header.nonce(), &body()),
+                )
+                .message(),
             &ML_DSA_SIGN_SEED,
         )
         .expect("sign")

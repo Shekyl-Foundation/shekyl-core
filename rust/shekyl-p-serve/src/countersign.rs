@@ -53,7 +53,7 @@
 //! struct Odd;
 //! impl PassKey<64> for Odd {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<[u8; 64], SignRefused> {
+//!     fn sign_pass(&self, _: &shekyl_p_serve::PassTranscript) -> Result<[u8; 64], SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -67,7 +67,7 @@
 //! struct Mixed;
 //! impl PassKey<RECEIPT_ENVELOPE_LEN> for Mixed {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<HybridSignature, SignRefused> {
+//!     fn sign_pass(&self, _: &shekyl_p_serve::PassTranscript) -> Result<HybridSignature, SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -87,7 +87,7 @@
 //! struct Plain;
 //! impl PassKey<IDENTITY_ENVELOPE_LEN> for Plain {
 //!     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> { Ok(()) }
-//!     fn sign_pass(&self, _: &[u8; 113]) -> Result<HybridSignature, SignRefused> {
+//!     fn sign_pass(&self, _: &shekyl_p_serve::PassTranscript) -> Result<HybridSignature, SignRefused> {
 //!         Err(SignRefused::new("never"))
 //!     }
 //! }
@@ -129,7 +129,7 @@
 //! ```
 
 use shekyl_archival_retention::pass_anchor::{
-    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PassTranscript, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSignature, FnDsaHybridSigner};
 use shekyl_crypto_pq::signature::{
@@ -246,9 +246,10 @@ where
     /// `sign_failure_count`.
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused>;
 
-    /// Sign the 113-byte SF-D8 transcript with this key's scheme, under
-    /// that scheme's domain for it (the attestation domain for the identity
-    /// key, the receipt domain for the receipt key).
+    /// Sign the SF-D8 transcript with this key's scheme, under that
+    /// scheme's domain for it (the attestation domain for the identity key,
+    /// the receipt domain for the receipt key). The signature covers
+    /// [`PassTranscript::message`].
     ///
     /// # Errors
     ///
@@ -262,10 +263,7 @@ where
     /// can tell "signer failed with the shard already sent" from "key not
     /// available" and from "store not readable". An ordinary miss — a
     /// shard the persona does not hold — is counted by none of them.
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<EnvelopeSignature<W>, SignRefused>;
+    fn sign_pass(&self, transcript: &PassTranscript) -> Result<EnvelopeSignature<W>, SignRefused>;
 }
 
 /// The persona's signing seam, supplied by the host at [`bind`]: a
@@ -329,29 +327,20 @@ impl std::error::Error for SignRefused {}
 /// Propagates the underlying scheme's failure (malformed key material).
 pub fn sign_pass_transcript(
     secret: &HybridSecretKey,
-    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    transcript: &PassTranscript,
 ) -> Result<HybridSignature, CryptoError> {
-    HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_ATTESTATION, message)
+    HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_ATTESTATION, &transcript.message())
 }
 
 /// Sign an SF-D8 transcript under `SCHEME_DOMAIN_RECEIPT`.
 ///
-/// **STAGED** (rule 23; `FN_DSA_HYBRID.md` §9). The receipt-domain
-/// counterpart of [`sign_pass_transcript`], and the only place a pass
-/// transcript is paired with that domain. Its one non-test caller is the
-/// stake actor's held receipt key (`shekyl-engine-core`,
-/// `HeldPersona::sign_receipt_transcript`), which only the staged receipt
-/// capability asks to sign; `TestReceiptKeySigner` is the other caller,
-/// behind `test-signer`. No live serve path reaches it: every production
-/// endpoint is bound at [`IDENTITY_ENVELOPE_LEN`] and signs through
-/// [`sign_pass_transcript`].
-///
-/// **Who makes it live:** the settlement lane's cutover, in the change
-/// that makes a verifier accept scheme-3 receipts, by selecting the
-/// receipt capability for the serving task. **Falsifier:** a receipt
-/// signed through this function reaching a requester before a verifier
-/// accepts one — that is, a production endpoint bound at
-/// [`RECEIPT_ENVELOPE_LEN`] before the cutover.
+/// The receipt-domain counterpart of [`sign_pass_transcript`], and the
+/// only place a pass transcript is paired with that domain
+/// (`FN_DSA_HYBRID.md` §9). Its non-test caller is the stake actor's held
+/// receipt key (`shekyl-engine-core`, `HeldPersona::sign_receipt_transcript`),
+/// which the serving task's receipt capability asks to sign; every
+/// production endpoint is bound at [`RECEIPT_ENVELOPE_LEN`].
+/// `TestReceiptKeySigner` is the other caller, behind `test-signer`.
 ///
 /// # Errors
 ///
@@ -360,9 +349,9 @@ pub fn sign_pass_transcript(
 /// the signer is built from a decoded key.
 pub fn sign_receipt_transcript(
     signer: &mut FnDsaHybridSigner,
-    message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    transcript: &PassTranscript,
 ) -> Result<FnDsaHybridSignature, CryptoError> {
-    signer.sign(SCHEME_DOMAIN_RECEIPT, message)
+    signer.sign(SCHEME_DOMAIN_RECEIPT, &transcript.message())
 }
 
 /// The SF-D5 pre-sign gate: `anchor_height ∈ [p − 720 − L, p − 720 + L]`
@@ -437,10 +426,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for TestKeySigner {
         Ok(())
     }
 
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, message: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
         sign_pass_transcript(&self.secret, message).map_err(|e| SignRefused::new(e.to_string()))
     }
 }
@@ -513,7 +499,7 @@ impl PassKey<RECEIPT_ENVELOPE_LEN> for TestReceiptKeySigner {
 
     fn sign_pass(
         &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        message: &crate::PassTranscript,
     ) -> Result<FnDsaHybridSignature, SignRefused> {
         let mut signer = self
             .signer
@@ -574,48 +560,23 @@ mod tests {
             shekyl_archival_retention::PassStream::Economy,
             [7; 32],
             bh(49),
-            [8; 32],
+            shekyl_types::BlockHash::from_bytes([8; 32]),
         );
         let digest = [9u8; 32];
-        let sig = signer.sign_pass(&f.transcript(7, &digest)).expect("sign");
+        let sig = signer.sign_pass(&f.transcript(7, digest)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),
             IDENTITY_ENVELOPE_LEN
         );
-        let ok = verify_pass_transcript(
-            signer.public_key(),
-            f.stream(),
-            f.nonce(),
-            f.anchor_height(),
-            f.anchor_hash(),
-            7,
-            &digest,
-            &sig,
-        );
+        let ok = verify_pass_transcript(signer.public_key(), &f.transcript(7, digest), &sig);
         assert!(ok.is_ok());
         // The delivery digest is bound: another digest does not verify.
-        assert!(verify_pass_transcript(
-            signer.public_key(),
-            f.stream(),
-            f.nonce(),
-            f.anchor_height(),
-            f.anchor_hash(),
-            7,
-            &[10u8; 32],
-            &sig,
-        )
-        .is_err());
-        // Shard id is bound: a neighbouring id does not verify.
-        let bad = verify_pass_transcript(
-            signer.public_key(),
-            f.stream(),
-            f.nonce(),
-            f.anchor_height(),
-            f.anchor_hash(),
-            8,
-            &digest,
-            &sig,
+        assert!(
+            verify_pass_transcript(signer.public_key(), &f.transcript(7, [10u8; 32]), &sig)
+                .is_err()
         );
+        // Shard id is bound: a neighbouring id does not verify.
+        let bad = verify_pass_transcript(signer.public_key(), &f.transcript(8, digest), &sig);
         assert!(bad.is_err());
     }
 }

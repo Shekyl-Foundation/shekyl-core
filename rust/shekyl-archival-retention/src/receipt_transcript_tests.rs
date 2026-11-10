@@ -47,12 +47,16 @@ fn verify(
 ) -> Result<(), PassCountersignatureError> {
     verify_receipt_transcript(
         public,
-        crate::pass_anchor::PassStream::Economy,
-        &NONCE,
-        ANCHOR,
-        &ANCHOR_HASH,
-        SHARD,
-        &DIGEST,
+        &crate::pass_anchor::PassTranscript::new(
+            crate::pass_anchor::PassRequestHeader::from_parts(
+                crate::pass_anchor::PassStream::Economy,
+                NONCE,
+                ANCHOR,
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            SHARD,
+            DIGEST,
+        ),
         signature,
     )
 }
@@ -72,12 +76,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &[0x12; PASS_NONCE_LEN],
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    [0x12; PASS_NONCE_LEN],
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -85,12 +93,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            BlockHeight::from_raw(1_001),
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    BlockHeight::from_raw(1_001),
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -98,12 +110,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &[0x23; PASS_ANCHOR_HASH_LEN],
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes([0x23; PASS_ANCHOR_HASH_LEN])
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -111,12 +127,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD + 1,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD + 1,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -124,12 +144,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &[0x5b; PASS_DELIVERY_DIGEST_LEN],
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                [0x5b; PASS_DELIVERY_DIGEST_LEN]
+            ),
             &signature
         ),
         refused
@@ -168,12 +192,16 @@ fn an_identity_signature_is_not_a_receipt_and_a_receipt_is_not_one() {
         .expect("sign");
     verify_pass_transcript(
         &identity_public,
-        crate::pass_anchor::PassStream::Economy,
-        &NONCE,
-        ANCHOR,
-        &ANCHOR_HASH,
-        SHARD,
-        &DIGEST,
+        &crate::pass_anchor::PassTranscript::new(
+            crate::pass_anchor::PassRequestHeader::from_parts(
+                crate::pass_anchor::PassStream::Economy,
+                NONCE,
+                ANCHOR,
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            SHARD,
+            DIGEST,
+        ),
         &identity,
     )
     .expect("control: the identity check accepts its own");

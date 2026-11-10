@@ -17,7 +17,7 @@
 
 use shekyl_archival_retention::{
     challenge_nonce, select_support_shard, support_challenge_nonce, verify_receipt_transcript,
-    BundleBody, BundleRecord, DrawableEpoch, PassStream, CHALLENGE_READS,
+    BundleBody, BundleRecord, DrawableEpoch, PassRequestHeader, PassStream, CHALLENGE_READS,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::BlockHash;
@@ -164,12 +164,13 @@ fn verify_transcript<F>(
     };
     if verify_receipt_transcript(
         key,
-        pass.stream,
-        nonce,
-        pass.record.anchor_height,
-        anchor_hash.as_bytes(),
-        pass.shard,
-        &pass.record.delivery_digest,
+        &PassRequestHeader::from_parts(
+            pass.stream,
+            *nonce,
+            pass.record.anchor_height,
+            *anchor_hash,
+        )
+        .transcript(pass.shard, pass.record.delivery_digest),
         &receipt,
     )
     .is_err()

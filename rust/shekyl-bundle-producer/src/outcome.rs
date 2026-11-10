@@ -34,11 +34,11 @@ pub struct ReadKey {
 /// A completed exchange that is not a pass, by what `P` answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answered {
-    /// The reply closed with a signature of another scheme than the
-    /// receipt key's. Until the cutover (4b) the live serving host signs
-    /// with its identity key, so this is every live read: the producer
-    /// logs "no receipt scheme on the serving side yet" once for the
-    /// block and files it with no passes.
+    /// The reply closed with a signature of the identity scheme, not the
+    /// receipt key's: a host that does not sign with the receipt key the
+    /// serving task binds. The producer logs it once for the block and
+    /// files the block with no passes. Whether this arm outlives the
+    /// switch is open on #1327.
     ServingScheme,
     /// Anything else `SF-D6` calls a completed exchange: a 404, a 503,
     /// the refusal trailer, a malformed or overlong reply, a bad

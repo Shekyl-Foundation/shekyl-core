@@ -557,35 +557,47 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     // daemon runs, against exactly the header the request carried.
     verify_pass_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        0,
-        &digest,
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            digest,
+        ),
         &signature,
     )
     .expect("the served signature covers the request header, shard id and delivered bytes");
     // ...and is bound to *this* shard id and *this* nonce.
     assert!(verify_pass_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        1,
-        &digest,
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+            ),
+            1,
+            digest
+        ),
         &signature
     )
     .is_err());
     assert!(verify_pass_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &[0u8; 32],
-        BlockHeight::from_raw(IN_GATE_ANCHOR),
-        &ANCHOR_HASH,
-        0,
-        &digest,
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                [0u8; 32],
+                BlockHeight::from_raw(IN_GATE_ANCHOR),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+            ),
+            0,
+            digest
+        ),
         &signature
     )
     .is_err());
@@ -599,12 +611,16 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     ] {
         assert!(verify_pass_transcript(
             signer.public_key(),
-            shekyl_archival_retention::PassStream::Economy,
-            &NONCE,
-            BlockHeight::from_raw(IN_GATE_ANCHOR),
-            &ANCHOR_HASH,
-            0,
-            &other,
+            &shekyl_archival_retention::PassTranscript::new(
+                shekyl_archival_retention::PassRequestHeader::from_parts(
+                    shekyl_archival_retention::PassStream::Economy,
+                    NONCE,
+                    BlockHeight::from_raw(IN_GATE_ANCHOR),
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                0,
+                other
+            ),
             &signature
         )
         .is_err());
@@ -669,10 +685,7 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
         fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
             self.0.ready(shard_id, anchor_height)
         }
-        fn sign_pass(
-            &self,
-            m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-        ) -> Result<HybridSignature, SignRefused> {
+        fn sign_pass(&self, m: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
             self.0.sign_pass(m)
         }
     }

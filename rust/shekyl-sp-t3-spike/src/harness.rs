@@ -96,7 +96,7 @@ use std::time::{Duration, Instant};
 use kameo::actor::Spawn as _;
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::account::Network;
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{
     DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
     ServingEndpoint, Stall, Timeouts,
@@ -112,7 +112,7 @@ use shekyl_tor_control_client::control::{
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
 
-use shekyl_p_serve::{PServeEndpoint, TestKeySigner};
+use shekyl_p_serve::{PServeEndpoint, TestReceiptKeySigner};
 
 use crate::fixture::{FixtureShardProvider, FramedObject};
 use crate::measure::{FailureKind, Observation};
@@ -315,10 +315,10 @@ pub struct Persona {
     /// spike measures what ships, not a lookalike.
     pub endpoint: PServeEndpoint,
     /// What a daemon reads from the bond record before dialling: the
-    /// endpoint column and the identity key (`SF-D13`). Read once here at
+    /// endpoint column and the receipt key (`SF-D13`). Read once here at
     /// bring-up, from the same material the onion was published from.
     serving: ServingEndpoint,
-    verifying_key: HybridPublicKey,
+    verifying_key: FnDsaHybridPublicKey,
     /// The wallet host's tor — one per persona, the conformant shape.
     tor: ManagedInstance,
 }
@@ -332,10 +332,10 @@ impl Persona {
 
     /// The key this persona countersigns under — what a reader on another
     /// host needs beside the onion to verify the body (`SF-D8`). In
-    /// production this is the bond record's identity key; here it is the
+    /// production this is the bond record's receipt key; here it is the
     /// ephemeral test key minted at bring-up.
     #[must_use]
-    pub fn verifying_key(&self) -> &HybridPublicKey {
+    pub fn verifying_key(&self) -> &FnDsaHybridPublicKey {
         &self.verifying_key
     }
 
@@ -352,7 +352,7 @@ impl Persona {
     /// The typed fetch target, as a scheduler would build it from a bond
     /// record. The shard is named by the expectation, not the target.
     #[must_use]
-    pub fn target(&self) -> FetchTarget<HybridPublicKey> {
+    pub fn target(&self) -> FetchTarget<FnDsaHybridPublicKey> {
         FetchTarget {
             endpoint: self.serving,
             verifying_key: self.verifying_key.clone(),
@@ -392,7 +392,7 @@ impl ClientLeg {
     pub async fn fetch_once(
         &self,
         lane: usize,
-        target: &FetchTarget<HybridPublicKey>,
+        target: &FetchTarget<FnDsaHybridPublicKey>,
         expected: &ExpectedShard,
     ) -> Result<usize, FailureKind> {
         fetch_via(&self.lanes[lane % self.lanes.len()], target, expected)
@@ -452,12 +452,12 @@ impl std::fmt::Display for FetchFault {
 /// the failure under a class Tor would be blamed for.
 pub async fn fetch_via(
     client: &PFetchClient,
-    target: &FetchTarget<HybridPublicKey>,
+    target: &FetchTarget<FnDsaHybridPublicKey>,
     expected: &ExpectedShard,
 ) -> Result<usize, FetchFault> {
     let header = RequestHeader::fresh(
         shekyl_types::BlockHeight::from_raw(APPARATUS_ANCHOR_HEIGHT),
-        APPARATUS_ANCHOR_HASH,
+        shekyl_types::BlockHash::from_bytes(APPARATUS_ANCHOR_HASH),
     )
     .expect("OS entropy source failed; the apparatus cannot mint request nonces");
     let fetched = tokio::time::timeout(
@@ -697,11 +697,11 @@ impl Apparatus {
             if serving.onion_address() != service_id.hostname() {
                 return Err(ApparatusError::NoServiceId);
             }
-            // An ephemeral attestation key per persona: the spike measures
+            // An ephemeral receipt key per persona: the spike measures
             // the shipped serve path, and signing is on it. Its own height is
             // the apparatus's fixed chain view; the client leg anchors its
             // requests against the same number.
-            let signer = Arc::new(TestKeySigner::ephemeral(
+            let signer = Arc::new(TestReceiptKeySigner::ephemeral(
                 shekyl_types::BlockHeight::from_raw(APPARATUS_OWN_HEIGHT),
             ));
             let verifying_key = signer.public_key().clone();
@@ -1167,7 +1167,7 @@ fn classify(e: &FetchError) -> FailureKind {
 async fn probe_once(
     client: Arc<PFetchClient>,
     index: usize,
-    target: FetchTarget<HybridPublicKey>,
+    target: FetchTarget<FnDsaHybridPublicKey>,
     expected: ExpectedShard,
     deadline: Instant,
 ) -> Result<bool, ApparatusError> {

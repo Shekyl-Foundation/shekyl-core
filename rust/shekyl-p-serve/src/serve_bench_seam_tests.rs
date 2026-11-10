@@ -128,12 +128,16 @@ async fn a_served_response_is_the_same_bytes_for_the_same_work() {
         let served = parse_served(response);
         verify_pass_transcript(
             signer.key().public_key(),
-            shekyl_archival_retention::PassStream::Economy,
-            &NONCE,
-            BlockHeight::from_raw(IN_GATE_ANCHOR),
-            &ANCHOR_HASH,
-            0,
-            &pass_delivery_digest(&NONCE, &served.body),
+            &shekyl_archival_retention::PassTranscript::new(
+                shekyl_archival_retention::PassRequestHeader::from_parts(
+                    shekyl_archival_retention::PassStream::Economy,
+                    NONCE,
+                    BlockHeight::from_raw(IN_GATE_ANCHOR),
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+                ),
+                0,
+                pass_delivery_digest(&NONCE, &served.body),
+            ),
             &served.signature,
         )
         .expect("each envelope verifies under its key");

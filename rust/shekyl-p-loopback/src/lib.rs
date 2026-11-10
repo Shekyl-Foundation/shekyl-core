@@ -138,7 +138,7 @@ pub fn request_header(anchor: BlockHeight) -> RequestHeader {
     RequestHeader::with_nonce(
         [FIXTURE_NONCE_BYTE; PASS_NONCE_LEN],
         anchor,
-        [FIXTURE_ANCHOR_HASH_BYTE; PASS_ANCHOR_HASH_LEN],
+        shekyl_types::BlockHash::from_bytes([FIXTURE_ANCHOR_HASH_BYTE; PASS_ANCHOR_HASH_LEN]),
     )
 }
 

@@ -22,9 +22,9 @@ use crate::attestation::AttestationKind;
 use crate::hash::cshake256_32;
 use crate::id::p_canonical_id_from_hybrid_pubkey;
 use crate::pass_anchor::{
-    pass_countersignature_message, PassAnchorWindow, PassStream, PASS_ANCHOR_HASH_LEN,
-    PASS_ANCHOR_HEIGHT_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_LEN,
-    PASS_NONCE_LEN,
+    pass_countersignature_message, PassAnchorWindow, PassStream, PassTranscript,
+    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
 };
 
 /// cSHAKE customization for `attestation_root` over the ordered pass-record set.
@@ -454,16 +454,14 @@ pub fn verify_pass_countersignature(
             last: window.last(),
         },
     )?;
-    verify_pass_transcript(
-        p_pubkey,
-        crate::pass_anchor::PassStream::Economy,
-        &record.nonce,
+    let transcript = crate::pass_anchor::PassRequestHeader::from_parts(
+        PassStream::Economy,
+        record.nonce,
         record.anchor_height,
-        anchor_hash,
-        record.shard_id,
-        &record.delivery_digest,
-        &record.signature,
+        shekyl_types::BlockHash::from_bytes(*anchor_hash),
     )
+    .transcript(record.shard_id, record.delivery_digest);
+    verify_pass_transcript(p_pubkey, &transcript, &record.signature)
 }
 
 /// Verify a pass countersignature over its transcript, with the anchor hash
@@ -481,30 +479,16 @@ pub fn verify_pass_countersignature(
 /// ([`pass_delivery_digest`](crate::pass_anchor::pass_delivery_digest)), so a
 /// signature over other bytes fails here; admission passes the record's
 /// carried one.
-#[allow(clippy::too_many_arguments)] // the stream byte is one more field of the existing transcript
 pub fn verify_pass_transcript(
     p_pubkey: &HybridPublicKey,
-    stream: PassStream,
-    nonce: &[u8; PASS_NONCE_LEN],
-    anchor_height: BlockHeight,
-    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
-    shard_id: u64,
-    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+    transcript: &PassTranscript,
     signature: &HybridSignature,
 ) -> Result<(), PassCountersignatureError> {
-    let message = pass_countersignature_message(
-        stream,
-        nonce,
-        anchor_height,
-        anchor_hash,
-        shard_id,
-        delivery_digest,
-    );
     HybridEd25519MlDsa
         .verify(
             p_pubkey,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-            &message,
+            &transcript.message(),
             signature,
         )
         .map_err(|_| PassCountersignatureError::InvalidSignature)
@@ -522,47 +506,30 @@ pub fn verify_pass_transcript(
 /// and neither can be handed the other's. There is no function that accepts
 /// either. A caller verifies under the one scheme its key is of.
 ///
-/// **STAGED.** No connect path and no live fetch calls this: receipts are
-/// not accepted anywhere yet. It has two callers, both staged: the fetch
-/// client's scheme-3 target (`shekyl-p-fetch`, `target.rs`), which no live
-/// target selects, and the bundle verifier's step 8
-/// (`shekyl-chain-rules`, `archival::bundle::verify_bundle`), which nothing
-/// on the connect path runs. Both call this and neither builds the
-/// transcript or names the domain itself, so the receipt a persona signs at
-/// serve time and the receipt admission verifies cannot drift. The
-/// settlement lane's cutover is what makes a verifier accept a receipt.
+/// It has two callers: the fetch client's receipt-key target
+/// (`shekyl-p-fetch`, `target.rs`), which every drawn holder's target is,
+/// and the bundle verifier's step 8 (`shekyl-chain-rules`,
+/// `archival::bundle::verify_bundle`), which admission runs. Neither builds
+/// the message or names the domain itself, so the receipt a persona signs
+/// at serve time and the receipt admission verifies cannot drift.
 ///
-/// `delivery_digest` is the caller's, recomputed from the body it received,
-/// as for [`verify_pass_transcript`].
+/// The transcript's delivery digest is the caller's, recomputed from the
+/// body it received, as for [`verify_pass_transcript`].
 ///
 /// # Errors
 ///
 /// [`PassCountersignatureError::InvalidSignature`] if the signature does not
 /// verify under `receipt_pubkey`, the receipt domain and this transcript.
-#[allow(clippy::too_many_arguments)] // the stream byte is one more field of the existing transcript
 pub fn verify_receipt_transcript(
     receipt_pubkey: &FnDsaHybridPublicKey,
-    stream: PassStream,
-    nonce: &[u8; PASS_NONCE_LEN],
-    anchor_height: BlockHeight,
-    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
-    shard_id: u64,
-    delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
+    transcript: &PassTranscript,
     signature: &FnDsaHybridSignature,
 ) -> Result<(), PassCountersignatureError> {
-    let message = pass_countersignature_message(
-        stream,
-        nonce,
-        anchor_height,
-        anchor_hash,
-        shard_id,
-        delivery_digest,
-    );
     HybridEd25519FnDsa
         .verify(
             receipt_pubkey,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT,
-            &message,
+            &transcript.message(),
             signature,
         )
         .map_err(|_| PassCountersignatureError::InvalidSignature)

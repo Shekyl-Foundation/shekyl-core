@@ -36,7 +36,7 @@
 
 use core::num::NonZeroU64;
 
-use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -299,7 +299,7 @@ pub struct PassRequestHeader {
     stream: PassStream,
     nonce: [u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
-    anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+    anchor_hash: BlockHash,
 }
 
 impl PassRequestHeader {
@@ -310,7 +310,7 @@ impl PassRequestHeader {
         stream: PassStream,
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
-        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+        anchor_hash: BlockHash,
     ) -> Self {
         Self {
             stream,
@@ -343,7 +343,7 @@ impl PassRequestHeader {
             stream,
             nonce,
             anchor_height: BlockHeight::from_raw(u64::from_le_bytes(height_le)),
-            anchor_hash,
+            anchor_hash: BlockHash::from_bytes(anchor_hash),
         })
     }
 
@@ -361,7 +361,7 @@ impl PassRequestHeader {
 
     /// The requester's block hash at [`Self::anchor_height`].
     #[must_use]
-    pub const fn anchor_hash(&self) -> &[u8; PASS_ANCHOR_HASH_LEN] {
+    pub const fn anchor_hash(&self) -> &BlockHash {
         &self.anchor_hash
     }
 
@@ -372,25 +372,81 @@ impl PassRequestHeader {
             self.stream,
             &self.nonce,
             self.anchor_height,
-            &self.anchor_hash,
+            self.anchor_hash.as_bytes(),
         )
     }
 
     /// The SF-D8 transcript for this header, `shard_id`, and the digest of
     /// the bytes delivered under this header's nonce.
     #[must_use]
-    pub fn transcript(
+    pub const fn transcript(
         &self,
         shard_id: u64,
-        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
-    ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(
-            self.stream,
-            &self.nonce,
-            self.anchor_height,
-            &self.anchor_hash,
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> PassTranscript {
+        PassTranscript {
+            header: *self,
             shard_id,
             delivery_digest,
+        }
+    }
+}
+
+/// What `P` signs, typed: the request header (whose anchor is a
+/// [`BlockHash`]), the shard the route named, and the digest of the bytes
+/// delivered. Every function that applies a signing domain to a pass takes
+/// this, never the bytes, so the anchor reaches each domain as a block
+/// hash (`DOMAIN_BINDING_RATCHET.tsv`, the `input:BlockHash` rows of the
+/// attestation and receipt domains). [`Self::message`] is the 113-byte
+/// layout the signature covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassTranscript {
+    header: PassRequestHeader,
+    shard_id: u64,
+    delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+}
+
+impl PassTranscript {
+    /// The transcript of `header`, `shard_id` and `delivery_digest`; the
+    /// same as [`PassRequestHeader::transcript`].
+    #[must_use]
+    pub const fn new(
+        header: PassRequestHeader,
+        shard_id: u64,
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> Self {
+        header.transcript(shard_id, delivery_digest)
+    }
+
+    /// The request header.
+    #[must_use]
+    pub const fn header(&self) -> &PassRequestHeader {
+        &self.header
+    }
+
+    /// The shard the route named.
+    #[must_use]
+    pub const fn shard_id(&self) -> u64 {
+        self.shard_id
+    }
+
+    /// The digest of the bytes delivered under the header's nonce.
+    #[must_use]
+    pub const fn delivery_digest(&self) -> &[u8; PASS_DELIVERY_DIGEST_LEN] {
+        &self.delivery_digest
+    }
+
+    /// The 113-byte message a signature covers
+    /// ([`pass_countersignature_message`]).
+    #[must_use]
+    pub fn message(&self) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        pass_countersignature_message(
+            self.header.stream,
+            &self.header.nonce,
+            self.header.anchor_height,
+            self.header.anchor_hash.as_bytes(),
+            self.shard_id,
+            &self.delivery_digest,
         )
     }
 }
@@ -539,7 +595,7 @@ mod tests {
             PassStream::Economy,
             [0x11; 32],
             bh(0x0102_0304_0506_0708),
-            [0x22; 32],
+            shekyl_types::BlockHash::from_bytes([0x22; 32]),
         );
         let bytes = h.to_bytes();
         assert_eq!(PassRequestHeader::from_bytes(&bytes), Some(h));
@@ -554,7 +610,7 @@ mod tests {
         bad[0] = 2;
         assert!(PassRequestHeader::from_bytes(&bad).is_none());
         assert_eq!(
-            h.transcript(9, &[0x33; 32]),
+            h.transcript(9, [0x33; 32]).message(),
             pass_countersignature_message(
                 PassStream::Economy,
                 &[0x11; 32],

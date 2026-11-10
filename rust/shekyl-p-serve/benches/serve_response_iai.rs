@@ -160,12 +160,14 @@ impl SeededSigner {
     }
 }
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for SeededSigner {
-    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
-        Ok(())
-    }
-
-    fn sign_pass(
+impl SeededSigner {
+    /// One seeded signature over `message`. The cells sign
+    /// [`PINNED_TRANSCRIPT`] through this, so the trajectory is the pinned
+    /// bytes' and not a typed transcript's: the pinned bytes start with
+    /// `0x3c`, which is no stream byte, so no [`PassTranscript`] makes them.
+    ///
+    /// [`PassTranscript`]: shekyl_p_serve::PassTranscript
+    fn sign_bytes(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<HybridSignature, SignRefused> {
@@ -177,6 +179,19 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for SeededSigner {
                 &ML_DSA_SEED,
             )
             .map_err(|e| SignRefused::new(e.to_string()))
+    }
+}
+
+impl PassKey<IDENTITY_ENVELOPE_LEN> for SeededSigner {
+    fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
+        Ok(())
+    }
+
+    fn sign_pass(
+        &self,
+        transcript: &shekyl_p_serve::PassTranscript,
+    ) -> Result<HybridSignature, SignRefused> {
+        self.sign_bytes(&transcript.message())
     }
 }
 
@@ -222,7 +237,7 @@ impl PinnedEnvelopeSigner {
     fn new(key: &SeededSigner) -> Self {
         Self {
             envelope: key
-                .sign_pass(&PINNED_TRANSCRIPT)
+                .sign_bytes(&PINNED_TRANSCRIPT)
                 .expect("the seeded key signs the pinned transcript"),
         }
     }
@@ -235,7 +250,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedEnvelopeSigner {
 
     fn sign_pass(
         &self,
-        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        _message: &shekyl_p_serve::PassTranscript,
     ) -> Result<HybridSignature, SignRefused> {
         Ok(self.envelope.clone())
     }
@@ -400,7 +415,7 @@ fn crypto_bench_serve_response(mut fx: Fixture) -> Fixture {
 fn crypto_bench_serve_sign(fx: Fixture) -> Fixture {
     let envelope = fx
         .key
-        .sign_pass(black_box(&PINNED_TRANSCRIPT))
+        .sign_bytes(black_box(&PINNED_TRANSCRIPT))
         .expect("the seeded key signs the pinned transcript");
     assert_eq!(
         black_box(envelope)

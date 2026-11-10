@@ -155,16 +155,15 @@ pub mod __test_helpers {
         run_arm1_fire, run_arm3_fire, Arm1FireReport, Arm3FireReport,
     };
 
-    /// A stake actor holding one persona's keys, and the actor's staged
-    /// receipt capability over them: the serving route's signer at the
-    /// receipt envelope's width (`FN_DSA_HYBRID.md` §9). The capability is
-    /// the production type, `ResidentReceiptKey`; what is the test's is
-    /// only that it is selected.
+    /// A stake actor holding one persona's keys, and the actor's receipt
+    /// capability over them: the serving route's signer at the receipt
+    /// envelope's width (`FN_DSA_HYBRID.md` §9). The capability is the
+    /// production type, `ResidentReceiptKey`, the one the serving task
+    /// binds; what is the test's is the actor, built without a wallet.
     ///
     /// Its consumer is the bundle producer's gate test in
-    /// `shekyl-chain-ingest` (`SO-D12` increment 4c): a persona that serves
-    /// its shard with receipts before the cutover selects the capability
-    /// for the live serving task (4b). The actor lives as long as the
+    /// `shekyl-chain-ingest`: a persona that serves its shard with
+    /// receipts, with no engine around it. The actor lives as long as the
     /// returned [`ReceiptKeyHolder`].
     ///
     /// Test-only (feature-gated); never compiled into a default production

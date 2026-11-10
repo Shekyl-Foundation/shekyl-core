@@ -25,12 +25,11 @@ use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, verify_receipt_transcript, PassStream,
     CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
 };
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{
-    PassSigner, TestKeySigner, TestReceiptKeySigner, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
-};
+use shekyl_p_serve::{PassSigner, TestKeySigner, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::net::TcpListener;
 
@@ -143,14 +142,14 @@ impl ShardFacts for Facts {
 /// `n` holder ids, all resolving (through the shim) to the one endpoint.
 /// Support holders are a second list, empty unless a test sets one.
 struct Holders {
-    holders: Mutex<Vec<Holder>>,
-    support: Mutex<Vec<Holder>>,
+    holders: Mutex<Vec<Holder<FnDsaHybridPublicKey>>>,
+    support: Mutex<Vec<Holder<FnDsaHybridPublicKey>>>,
     /// How many needs have asked who holds the shard.
     lookups: AtomicUsize,
 }
 
 impl Holders {
-    fn new(n: u8, key: &shekyl_crypto_pq::signature::HybridPublicKey) -> Self {
+    fn new(n: u8, key: &FnDsaHybridPublicKey) -> Self {
         let holders = (1..=n)
             .map(|tag| Holder {
                 id: PCanonicalId::from_bytes([tag; 32]),
@@ -168,18 +167,24 @@ impl Holders {
         self.holders.lock().unwrap().clear();
     }
 
-    fn set_support(&self, support: Vec<Holder>) {
+    fn set_support(&self, support: Vec<Holder<FnDsaHybridPublicKey>>) {
         *self.support.lock().unwrap() = support;
     }
 }
 
 impl HolderSource for Holders {
-    fn holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+    fn holders_of(
+        &self,
+        _shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         Ok(self.holders.lock().unwrap().clone())
     }
 
-    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+    fn support_holders_of(
+        &self,
+        _shard_id: ShardId,
+    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
         Ok(self.support.lock().unwrap().clone())
     }
 }
@@ -193,12 +198,14 @@ struct Stack {
 
 /// A serve of `served_shard` behind `n` holder ids.
 async fn stack(served_shard: u64, n: u8) -> Stack {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
     let key = signer.public_key().clone();
     let (endpoint, client) = endpoint_and_client(
         served_shard,
         fixture_body(),
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
         ephemeral_timeouts(),
     )
     .await;
@@ -305,10 +312,7 @@ async fn a_stall_redials_the_same_holder_within_the_budget() {
     });
     let client = PFetchClient::with_timeouts(proxy, ephemeral_timeouts());
     let facts = Arc::new(Facts::new());
-    let key = shekyl_crypto_pq::signature::HybridPublicKey {
-        ed25519: [1; 32],
-        ml_dsa: Vec::new(),
-    };
+    let key = placeholder_key();
     let holders = Arc::new(Holders::new(2, &key));
     let scheduler = FetchScheduler::new(facts, holders, client);
     let err = scheduler
@@ -744,10 +748,7 @@ async fn concurrent_unavailable_views_share_one_walk_and_the_refusal_is_not_cach
     }
     let client = PFetchClient::with_timeouts(proxy, ephemeral_timeouts());
     let facts = Arc::new(Facts::new());
-    let key = shekyl_crypto_pq::signature::HybridPublicKey {
-        ed25519: [1; 32],
-        ml_dsa: Vec::new(),
-    };
+    let key = placeholder_key();
     let holders = Arc::new(Holders::new(2, &key));
     let scheduler = Arc::new(FetchScheduler::new(facts, Arc::clone(&holders), client));
     let desk = Arc::new(ViewDesk::new(scheduler, budget(1, 0)));
@@ -827,10 +828,7 @@ async fn a_cancelled_leader_frees_the_flight() {
     }
     let client = PFetchClient::with_timeouts(proxy, ephemeral_timeouts());
     let facts = Arc::new(Facts::new());
-    let key = shekyl_crypto_pq::signature::HybridPublicKey {
-        ed25519: [1; 32],
-        ml_dsa: Vec::new(),
-    };
+    let key = placeholder_key();
     let holders = Arc::new(Holders::new(1, &key));
     let scheduler = Arc::new(FetchScheduler::new(facts, holders, client));
     let desk = Arc::new(ViewDesk::new(scheduler, budget(1, 0)));
@@ -865,10 +863,16 @@ async fn a_cancelled_leader_frees_the_flight() {
     assert_eq!(desk.cached_count(), 0);
 }
 
+/// A receipt key for a holder that is never verified against: the read
+/// fails at the dial or the stall before any signature is opened.
+fn placeholder_key() -> FnDsaHybridPublicKey {
+    TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+        .public_key()
+        .clone()
+}
+
 /// One holder under the receipt scheme, over the receipt endpoint.
-fn receipt_holder(
-    key: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
-) -> Holder<shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey> {
+fn receipt_holder(key: &FnDsaHybridPublicKey) -> Holder<FnDsaHybridPublicKey> {
     Holder {
         id: PCanonicalId::from_bytes([0x3c; 32]),
         target: fetch_target(key.clone()),
@@ -880,7 +884,7 @@ fn receipt_holder(
 async fn receipt_stack() -> (
     shekyl_p_loopback::PServeEndpoint,
     Arc<FetchScheduler<Facts, Holders>>,
-    shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey,
+    FnDsaHybridPublicKey,
 ) {
     let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
         OWN_HEIGHT,
@@ -893,8 +897,7 @@ async fn receipt_stack() -> (
         ephemeral_timeouts(),
     )
     .await;
-    let identity = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
-    let holders = Arc::new(Holders::new(0, identity.public_key()));
+    let holders = Arc::new(Holders::new(0, &key));
     let scheduler = Arc::new(FetchScheduler::new(Arc::new(Facts::new()), holders, client));
     (endpoint, scheduler, key)
 }
@@ -940,12 +943,16 @@ async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
         let verify = |stream| {
             verify_receipt_transcript(
                 &key,
-                stream,
-                read.header.nonce(),
-                read.header.anchor_height(),
-                read.header.anchor_hash(),
-                read.shard.shard_id().to_raw(),
-                read.shard.delivery_digest(),
+                &shekyl_archival_retention::PassRequestHeader::from_parts(
+                    stream,
+                    *read.header.nonce(),
+                    read.header.anchor_height(),
+                    *read.header.anchor_hash(),
+                )
+                .transcript(
+                    read.shard.shard_id().to_raw(),
+                    *read.shard.delivery_digest(),
+                ),
                 read.shard.signature(),
             )
         };
@@ -958,17 +965,20 @@ async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
     }
 }
 
-/// The live serving host signs with the identity key. A receipt-key
-/// holder of such a host gets a reply its scheme cannot parse: one
-/// completed exchange, `Malformed`, and no receipt.
+/// The serving host signs with the receipt key. A holder named under the
+/// identity key of such a host gets a reply its scheme cannot parse: one
+/// completed exchange, `Malformed`, and no signature.
 #[tokio::test]
-async fn a_receipt_holder_of_an_identity_endpoint_is_malformed() {
+async fn an_identity_holder_of_a_receipt_endpoint_is_malformed() {
     let s = stack(FIXTURE_SHARD_ID, 1).await;
-    let other = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
+    let identity = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
     let err = s
         .scheduler
         .read_from_nonce(
-            &receipt_holder(other.public_key()),
+            &Holder {
+                id: PCanonicalId::from_bytes([0x3c; 32]),
+                target: fetch_target(identity.public_key().clone()),
+            },
             SHARD,
             SuppliedNonce {
                 stream: PassStream::Economy,

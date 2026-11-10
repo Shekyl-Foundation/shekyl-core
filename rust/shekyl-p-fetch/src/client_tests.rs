@@ -320,7 +320,9 @@ fn sign(keys: &Keys, header: &RequestHeader, shard_id: u64, body: &[u8]) -> Hybr
         .sign(
             &keys.secret,
             SCHEME_DOMAIN_ATTESTATION,
-            &header.transcript(shard_id, &pass_delivery_digest(header.nonce(), body)),
+            &header
+                .transcript(shard_id, pass_delivery_digest(header.nonce(), body))
+                .message(),
         )
         .expect("sign")
 }
@@ -337,7 +339,11 @@ fn target(keys: &Keys) -> FetchTarget<HybridPublicKey> {
 }
 
 fn header() -> RequestHeader {
-    RequestHeader::with_nonce([0xa5; 32], BlockHeight::from_raw(9_000), [0x5a; 32])
+    RequestHeader::with_nonce(
+        [0xa5; 32],
+        BlockHeight::from_raw(9_000),
+        shekyl_types::BlockHash::from_bytes([0x5a; 32]),
+    )
 }
 
 fn fast() -> Timeouts {
@@ -973,8 +979,10 @@ async fn credentials_of(header: &RequestHeader, keys: &Keys) -> (Vec<u8>, Vec<u8
 async fn two_reads_of_one_shard_present_different_credentials() {
     let keys = keys();
     let anchor = BlockHeight::from_raw(9_000);
-    let first = RequestHeader::fresh(anchor, [0x5a; 32]).expect("entropy");
-    let second = RequestHeader::fresh(anchor, [0x5a; 32]).expect("entropy");
+    let first = RequestHeader::fresh(anchor, shekyl_types::BlockHash::from_bytes([0x5a; 32]))
+        .expect("entropy");
+    let second = RequestHeader::fresh(anchor, shekyl_types::BlockHash::from_bytes([0x5a; 32]))
+        .expect("entropy");
     let a = credentials_of(&first, &keys).await;
     let b = credentials_of(&second, &keys).await;
     assert_ne!(a, b, "two reads on one circuit");
@@ -993,8 +1001,11 @@ async fn the_retries_inside_one_read_present_the_same_credentials() {
     let stall_retry = credentials_of(&read, &keys).await;
     assert_eq!(first, stall_retry);
     // The retry after a 400 takes a fresh anchor and keeps the nonce.
-    let reanchored =
-        RequestHeader::with_nonce(*read.nonce(), BlockHeight::from_raw(9_003), [0x77; 32]);
+    let reanchored = RequestHeader::with_nonce(
+        *read.nonce(),
+        BlockHeight::from_raw(9_003),
+        shekyl_types::BlockHash::from_bytes([0x77; 32]),
+    );
     assert_ne!(reanchored, read);
     assert_eq!(credentials_of(&reanchored, &keys).await, first);
 }
@@ -1122,7 +1133,11 @@ async fn a_signature_over_a_different_transcript_or_key_is_bad_countersignature(
     assert!(matches!(out, Err(FetchError::BadCountersignature)));
 
     // Right key, wrong nonce in the transcript.
-    let other = RequestHeader::with_nonce([0x11; 32], BlockHeight::from_raw(9_000), [0x5a; 32]);
+    let other = RequestHeader::with_nonce(
+        [0x11; 32],
+        BlockHeight::from_raw(9_000),
+        shekyl_types::BlockHash::from_bytes([0x5a; 32]),
+    );
     let (out, _) = run(
         Script::Respond(signed_body(&keys, &other, SHARD.to_raw(), &body)),
         Arc::new(DiscardTxs),

@@ -693,8 +693,16 @@ mod tests {
     #[test]
     fn a_request_differs_from_another_only_in_its_nonce() {
         let anchor = BlockHeight::from_raw(1_000);
-        let organic = RequestHeader::with_nonce([0xa5; 32], anchor, [3; 32]);
-        let challenge = RequestHeader::with_nonce([0x5a; 32], anchor, [3; 32]);
+        let organic = RequestHeader::with_nonce(
+            [0xa5; 32],
+            anchor,
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
+        let challenge = RequestHeader::with_nonce(
+            [0x5a; 32],
+            anchor,
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
         let a = request_bytes(7, &organic);
         let b = request_bytes(7, &challenge);
         assert_eq!(a.len(), b.len());
@@ -720,7 +728,11 @@ mod tests {
 
     #[test]
     fn the_request_is_the_route_and_the_one_header() {
-        let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(2), [3; 32]);
+        let h = RequestHeader::with_nonce(
+            [1; 32],
+            BlockHeight::from_raw(2),
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
         let req = String::from_utf8(request_bytes(7, &h)).unwrap();
         assert_eq!(
             req,

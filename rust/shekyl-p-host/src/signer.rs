@@ -41,11 +41,12 @@
 //!
 //! # Why the key is
 //!
-//! The key is the persona's bonded attestation key, and its custody is the
+//! The key is the persona's bonded receipt key, and its custody is the
 //! wallet's design (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7.2; `SF-D13`). This
-//! crate holds an `Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>` and calls it once per served shard from
-//! the blocking pool; it never sees the secret. The production key is
-//! `shekyl-engine-core`'s resident pass key, which answers each call with a
+//! crate holds an `Arc<dyn PassKey<RECEIPT_ENVELOPE_LEN>>` and calls it
+//! once per served shard from the blocking pool; it never sees the secret.
+//! The production key is `shekyl-engine-core`'s resident receipt key,
+//! which answers each call with a
 //! round-trip into the stake actor that holds the secret. A key that answers
 //! "no" keeps the endpoint up and counted: a valid request for a held shard
 //! is the bare 503, before any shard byte is sent. `RefusingKey` is that
@@ -61,13 +62,11 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-signer"))]
 use std::time::Duration;
 
-#[cfg(any(test, feature = "test-signer"))]
-use shekyl_crypto_pq::signature::HybridSignature;
-#[cfg(any(test, feature = "test-signer"))]
-use shekyl_p_serve::IDENTITY_ENVELOPE_LEN;
+#[cfg(test)]
+use shekyl_p_serve::RECEIPT_ENVELOPE_LEN;
 use shekyl_p_serve::{
-    EnvelopeSignature, EnvelopeWidth, PassEnvelope, PassKey, PassSigner, SignRefused,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    EnvelopeSignature, EnvelopeWidth, PassEnvelope, PassKey, PassSigner, PassTranscript,
+    SignRefused,
 };
 use shekyl_types::BlockHeight;
 
@@ -93,16 +92,18 @@ impl RefusingKey {
     pub const REASON: &'static str = "refusing key (test fixture)";
 }
 
+/// At either envelope width: a test of a key the host binds, or of a
+/// scheme's own route, says no the same way.
 #[cfg(any(test, feature = "test-signer"))]
-impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusingKey {
+impl<const W: usize> PassKey<W> for RefusingKey
+where
+    PassEnvelope: EnvelopeWidth<W>,
+{
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new(Self::REASON))
     }
 
-    fn sign_pass(
-        &self,
-        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+    fn sign_pass(&self, _message: &PassTranscript) -> Result<EnvelopeSignature<W>, SignRefused> {
         Err(SignRefused::new(Self::REASON))
     }
 }
@@ -185,10 +186,7 @@ where
         self.key.ready(shard_id, anchor_height)
     }
 
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<EnvelopeSignature<W>, SignRefused> {
+    fn sign_pass(&self, message: &PassTranscript) -> Result<EnvelopeSignature<W>, SignRefused> {
         self.key.sign_pass(message)
     }
 }
@@ -218,9 +216,22 @@ mod tests {
 
     const MAX_AGE: Duration = Duration::from_secs(120);
 
-    fn signer() -> (Arc<DaemonTipCache>, HostSigner<IDENTITY_ENVELOPE_LEN>) {
+    /// A transcript the refusing key is asked to sign; its fields do not
+    /// matter, since the key refuses every one.
+    fn any_transcript() -> PassTranscript {
+        shekyl_archival_retention::PassRequestHeader::from_parts(
+            shekyl_archival_retention::PassStream::Economy,
+            [0; 32],
+            BlockHeight::from_raw(9_280),
+            shekyl_types::BlockHash::from_bytes([0; 32]),
+        )
+        .transcript(0, [0; 32])
+    }
+
+    fn signer() -> (Arc<DaemonTipCache>, HostSigner<RECEIPT_ENVELOPE_LEN>) {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
-        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
+        let signer: HostSigner<RECEIPT_ENVELOPE_LEN> =
+            HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
         (tip, signer)
     }
 
@@ -229,9 +240,9 @@ mod tests {
     /// trailer; the host signer passes the question through to its key.
     #[test]
     fn refusing_key_refuses_at_the_pre_flight_and_the_host_passes_it_through() {
-        let err = RefusingKey
-            .ready(7, BlockHeight::from_raw(9_280))
-            .unwrap_err();
+        let err =
+            PassKey::<RECEIPT_ENVELOPE_LEN>::ready(&RefusingKey, 7, BlockHeight::from_raw(9_280))
+                .unwrap_err();
         assert_eq!(err.detail, RefusingKey::REASON);
         let (tip, signer) = signer();
         tip.stamp_synced(BlockHeight::from_raw(10_000));
@@ -247,8 +258,7 @@ mod tests {
 
     #[test]
     fn refusing_key_refuses_with_its_fixed_reason() {
-        let err = RefusingKey
-            .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
+        let err = PassKey::<RECEIPT_ENVELOPE_LEN>::sign_pass(&RefusingKey, &any_transcript())
             .unwrap_err();
         assert_eq!(err.detail, RefusingKey::REASON);
     }
@@ -287,7 +297,8 @@ mod tests {
     #[test]
     fn a_tip_past_the_age_bound_refuses_at_the_gate() {
         let tip = Arc::new(DaemonTipCache::new(MAX_AGE));
-        let signer = HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
+        let signer: HostSigner<RECEIPT_ENVELOPE_LEN> =
+            HostSigner::new(Arc::clone(&tip), Arc::new(RefusingKey));
         let long_ago = Instant::now()
             .checked_sub(MAX_AGE + Duration::from_secs(1))
             .expect("the test clock is past the age bound");
@@ -301,9 +312,7 @@ mod tests {
     fn the_key_still_refuses_independently_of_the_height() {
         let (tip, signer) = signer();
         tip.stamp_synced(BlockHeight::from_raw(4_321));
-        assert!(signer
-            .sign_pass(&[0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN])
-            .is_err());
+        assert!(signer.sign_pass(&any_transcript()).is_err());
     }
 
     /// The test constructor stamps the height the gate will read. A second
@@ -311,7 +320,8 @@ mod tests {
     #[test]
     fn signer_at_synced_tip_reports_the_stamped_height() {
         let height = BlockHeight::from_raw(10_000);
-        let signer = signer_at_synced_tip(Arc::new(RefusingKey), height, MAX_AGE);
+        let signer =
+            signer_at_synced_tip::<RECEIPT_ENVELOPE_LEN>(Arc::new(RefusingKey), height, MAX_AGE);
         assert_eq!(signer.own_height(), Some(height));
     }
 }

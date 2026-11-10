@@ -8,7 +8,7 @@
 use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
-use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_archival_retention::{HoldingsDescriptor, PassTranscript};
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_host::sign_pass_transcript;
@@ -206,7 +206,7 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// and no security.
 pub(crate) struct SignPassTranscript {
     pub p_slot: PSlot,
-    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    pub transcript: PassTranscript,
 }
 
 impl Message<SignPassTranscript> for StakeEngine {
@@ -223,10 +223,9 @@ impl Message<SignPassTranscript> for StakeEngine {
             .ok_or(StakeEngineError::LookaheadExhausted {
                 requested: msg.p_slot,
             })?;
-        // Identity key, live scheme. The receipt key is a second message
-        // ([`SignReceiptTranscript`]). The cutover selects
-        // `ResidentReceiptKey`; it does not replace this argument.
-        sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
+        // Identity key. The serving task signs with the receipt key, a
+        // second message ([`SignReceiptTranscript`]).
+        sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.transcript)
             .map_err(StakeEngineError::PassCountersign)
     }
 }
@@ -264,7 +263,7 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// [`SignPassTranscript`] and for its reasons.
 pub(crate) struct SignReceiptTranscript {
     pub p_slot: PSlot,
-    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    pub transcript: PassTranscript,
 }
 
 impl Message<SignReceiptTranscript> for StakeEngine {
@@ -283,7 +282,7 @@ impl Message<SignReceiptTranscript> for StakeEngine {
             })?;
         // Undecodable and a failed signature come back as two variants;
         // the capability's pre-flight latches on the first only.
-        held.sign_receipt_transcript(&msg.message)
+        held.sign_receipt_transcript(&msg.transcript)
     }
 }
 

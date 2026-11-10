@@ -20,10 +20,7 @@ use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, fixture_prunable,
     request_header, DiscardTxs, PServeEndpoint, TxSink, VerifiedTx, FIXTURE_SHARD_ID, FIXTURE_TXID,
 };
-use shekyl_p_serve::{
-    PassKey, PassSigner, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-};
+use shekyl_p_serve::{PassKey, PassSigner, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN};
 use shekyl_types::BlockHeight;
 
 const OWN_HEIGHT: u64 = 10_000;
@@ -157,7 +154,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
 
     fn sign_pass(
         &self,
-        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        _message: &shekyl_p_serve::PassTranscript,
     ) -> Result<HybridSignature, SignRefused> {
         Err(SignRefused::new("no key"))
     }
@@ -179,7 +176,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
 
     fn sign_pass(
         &self,
-        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        _message: &shekyl_p_serve::PassTranscript,
     ) -> Result<HybridSignature, SignRefused> {
         Err(SignRefused::new("signer went away"))
     }

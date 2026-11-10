@@ -358,12 +358,16 @@ fn a_signature_over_the_delivered_bytes_refuses_any_other_bytes() {
     let check = |n: &[u8; 32], b: &[u8]| {
         verify_pass_transcript(
             &pubkey,
-            crate::pass_anchor::PassStream::Economy,
-            n,
-            bh(anchor),
-            &hash,
-            42,
-            &pass_delivery_digest(n, b),
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    *n,
+                    bh(anchor),
+                    shekyl_types::BlockHash::from_bytes(hash),
+                ),
+                42,
+                pass_delivery_digest(n, b),
+            ),
             &sig,
         )
     };
