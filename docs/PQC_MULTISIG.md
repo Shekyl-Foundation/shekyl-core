@@ -1866,7 +1866,7 @@ rust/shekyl-multisig/src/
 ├── messages.rs            — envelope + E′ message types (Option-D discriminants excised)
 ├── encryption.rs          — group_shared_secret + AEAD
 ├── invariants.rs          — honest-signer invariant checks
-├── group_descriptor.rs    — group backup format (the `relays` field excised)
+├── group_descriptor.rs    — public group identity (no share, no KEM secret)
 └── build.rs               — FCMP reference-block consts from config JSON
 
 rust/shekyl-engine-core/src/engine/signer.rs

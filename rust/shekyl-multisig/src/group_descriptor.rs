@@ -1,10 +1,13 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // All rights reserved. BSD-3-Clause
 
-//! Group Descriptor: single canonical backup file for multisig group state.
+//! Group descriptor: one file of a multisig group's public identity.
 //!
-//! Analogous to Bitcoin's output script descriptors (BIP 380). One file
-//! contains everything needed to reconstruct group state from seeds.
+//! It holds the threshold, the participants' public keys, the group KEM
+//! public key and the address fingerprint. It does not hold a FROST share,
+//! `b`, or a KEM secret. Those live in the member file (`member_file`),
+//! and a wallet seed does not regenerate them. Restoring a member is that
+//! file plus a rescan (`PQC_MULTISIG.md` §6.6, §8.4).
 
 use serde::{Deserialize, Serialize};
 
@@ -20,10 +23,11 @@ struct VersionProbe {
     version: u8,
 }
 
-/// Group descriptor: everything needed to restore a multisig group.
+/// The group's public identity, in one file.
 ///
-/// This is the "descriptor" file — one file, importable into any
-/// conforming wallet, restores the group without scattered persistence.
+/// Importing one restores the public fields a wallet shows and compares.
+/// Spending still needs that member's file: the share and the KEM secrets
+/// are not in this file and are not derived from a seed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupDescriptor {
     pub version: u8,
