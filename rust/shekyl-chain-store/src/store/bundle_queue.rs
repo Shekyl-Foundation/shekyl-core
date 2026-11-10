@@ -475,6 +475,35 @@ impl ReadSnapshot<'_> {
         bundle_queued(self.txn(), h).map_err(ReadFault::into_plain)
     }
 
+    /// The bodies `section` names, in section order, each from the body
+    /// store by its reference's prunable hash. The list stops at the first
+    /// reference with no stored body, or the first that does not parse: a
+    /// candidate built from it lacks that body, which `validate` faults as
+    /// `Stale::BundleBody`, never a verdict.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub fn section_bodies(
+        &self,
+        section: Option<&shekyl_types::archival::BundleReferences>,
+    ) -> Result<Vec<BundleBody>, StoreError> {
+        let mut bodies = Vec::new();
+        let Some(section) = section else {
+            return Ok(bodies);
+        };
+        for bytes in section.as_slice() {
+            let Ok(reference) = BundleRef::decode(bytes) else {
+                return Ok(bodies);
+            };
+            match self.bundle_body(reference.prunable_hash())? {
+                Some(body) => bodies.push(body),
+                None => return Ok(bodies),
+            }
+        }
+        Ok(bodies)
+    }
+
     /// The body stored under `prunable_hash`, whichever holder keeps it
     /// (§7.5): what a peer's body request is answered from. A point read
     /// of the body table; the holders are not walked.

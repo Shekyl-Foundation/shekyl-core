@@ -138,6 +138,8 @@ pub struct Sync<K, R> {
     pub(crate) unreadable: bool,
     /// Bound bodies waiting for a seat.
     pub(crate) held: crate::arrivals::Held<K>,
+    /// Bound bodies waiting for their bundle bodies (`runs::awaiting`).
+    pub(crate) awaiting: crate::runs::awaiting::Awaiting<K>,
     /// Offered arrivals waiting for the entry's reply, keyed by tag.
     pub(crate) outstanding: crate::arrivals::Offered<K>,
     /// Bodies the entry accepted. The walk treats them as present.
@@ -212,6 +214,7 @@ where
             seats: None,
             unreadable: false,
             held: crate::arrivals::Held::new(),
+            awaiting: BTreeMap::new(),
             outstanding: crate::arrivals::Offered::new(),
             accepted: BTreeSet::new(),
             judged: BTreeSet::new(),
@@ -514,6 +517,7 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let before = self.state();
+        self.expire_waiting(now);
         let header_response = match &event {
             Event::Headers { session, .. } => Some(*session),
             _ => None,
@@ -560,13 +564,18 @@ where
                 self.on_headers(main, session, &bytes, now, out)?
             }
             Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, now, out),
-            Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
+            Event::Proven { job, results } => self.on_proven(main, job, &results, now, out)?,
             Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
             Event::Seeds => self.seeds_changed(),
             Event::Announce { session, body } => {
                 self.on_announce(main, session, &body, now, out)?
             }
+            Event::BundleBodies {
+                session,
+                block,
+                bodies,
+            } => self.on_bundle_bodies(session, block, bodies, out),
         }
         self.settle_opening();
         let after = self.state();

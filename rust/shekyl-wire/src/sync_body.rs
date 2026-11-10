@@ -256,6 +256,14 @@ impl fmt::Debug for BlockBody {
                     .map(|reference| digest(reference))
                     .collect::<Vec<_>>(),
             )
+            .field(
+                "bundle_bodies",
+                &self
+                    .bundle_bodies
+                    .iter()
+                    .map(|body| digest(body))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }

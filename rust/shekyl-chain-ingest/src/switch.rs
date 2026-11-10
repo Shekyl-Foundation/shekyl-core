@@ -183,6 +183,10 @@ pub struct PlannedPromotion {
     pub block: Block,
     /// The bundle references the alt row carries (CEN-K5b).
     pub references: Option<BundleReferences>,
+    /// Their bodies, from the body store, where the alt row holds them
+    /// (`SO-D12` 4b, C3): read before the closure, so promotion's
+    /// `validate` judges the row's section whole.
+    pub bundle_bodies: Vec<shekyl_archival_retention::BundleBody>,
     /// The listed bodies, in listed order (AL8).
     pub transactions: Vec<Transaction>,
 }
@@ -491,6 +495,9 @@ fn offer(
     };
     let height = chain.candidate_height();
     let in_force = rules.in_force(height);
+    // The bodies the arrival carried for its section: the alt row holds
+    // them once stored (`bundle_holders.rs`), so a switch reads them back.
+    let bundle_bodies = formed.candidate().bundle_bodies.clone();
     let view = AltView::new(&snap, chain);
     let admitted = match alt_against(formed, &view, &in_force, &trust) {
         Ok(Ok(admitted)) => admitted,
@@ -499,7 +506,10 @@ fn offer(
     };
     drop(view);
     let alternative = admitted.cumulative_difficulty();
-    let inserted: Result<(), StoreError> = store.write(|batch| batch.insert_alt_block(admitted));
+    let inserted: Result<(), StoreError> = store.write(|batch| {
+        batch.insert_alt_block(admitted)?;
+        batch.hold_alt_bodies(&bundle_bodies)
+    });
     match inserted {
         Ok(()) => {}
         Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::AlreadyHeld))) => {
@@ -584,6 +594,7 @@ fn plan(
     for entry in entries {
         let height = entry.block.height();
         let references = entry.block.bundle_references().cloned();
+        let bundle_bodies = snap.section_bodies(references.as_ref())?;
         let target = match target_claim(&stitched, height, &rules.in_force(height)) {
             Ok(target) => target,
             Err(fault) => return Err(snapshot_fault(store, height, fault)),
@@ -598,6 +609,7 @@ fn plan(
             },
             block: entry.block.block().clone(),
             references,
+            bundle_bodies,
             transactions: snap
                 .alt_block_bodies(&entry.id)?
                 .expect("an entry of the alternative chain was read from its row")

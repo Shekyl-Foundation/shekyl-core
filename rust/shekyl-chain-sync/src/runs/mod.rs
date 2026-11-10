@@ -24,6 +24,7 @@ use crate::branch::{BranchView, Pending};
 use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
 use crate::peer::{cache_for, HeaderRequest, Run};
 
+pub(crate) mod awaiting;
 mod bodies;
 mod entry;
 mod evidence;
@@ -116,10 +117,11 @@ where
         main: &H,
         job: Job,
         results: &[Proved],
+        now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         if self.announce_for(job.raw()).is_some() {
-            return self.on_announced_proved(main, job, results, out);
+            return self.on_announced_proved(main, job, results, now, out);
         }
         let Some(session) = self.session_for_job(job.raw()) else {
             return Ok(());
@@ -364,6 +366,7 @@ where
         }
         self.outstanding.drop_session(session);
         self.held.drop_session(session);
+        self.drop_waiting_from(session);
         self.served.retain(|_, who| *who != session);
     }
 

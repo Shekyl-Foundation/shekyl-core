@@ -98,13 +98,17 @@ where
             };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
-            self.held.insert(BoundArrival {
-                tag,
-                session,
-                header: judged,
-                body: offered,
-                solicited: true,
-            });
+            self.hold_or_await(
+                BoundArrival {
+                    tag,
+                    session,
+                    header: judged,
+                    body: offered,
+                    solicited: true,
+                },
+                now,
+                out,
+            );
         }
         self.flush_offers(out);
     }

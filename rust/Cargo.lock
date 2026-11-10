@@ -3970,6 +3970,7 @@ name = "shekyl-chain-sync"
 version = "3.1.0"
 dependencies = [
  "proptest",
+ "shekyl-archival-retention",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-difficulty",

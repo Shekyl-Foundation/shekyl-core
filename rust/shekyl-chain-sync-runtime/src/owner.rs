@@ -56,9 +56,13 @@
 //!   the verdict; a bundle the queue admitted goes on as 2015 to every
 //!   established session but its supplier. A bundle this node filed
 //!   arrives on the door's feed and goes to every established session. A
-//!   2016 is served from the body store like any other request.
+//!   2016 is served from the body store like any other request. When the
+//!   model asks for a block's bundle bodies (`RequestBundleBodies`), what
+//!   the body store holds goes back at once and the rest is asked of the
+//!   sender as 2016; its 2017 answers the oldest ask to that session and
+//!   is accepted body by body, and a 2017 nothing asked for closes it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -488,6 +492,18 @@ struct Owner<C: Clock + Clone, R> {
     seen_seeds: Option<SeedPair>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
+    /// The 2016s each session has been sent and not yet answered, oldest
+    /// first: the block each asks for and the references it names. A
+    /// session answers in the order it was asked, so a 2017 answers the
+    /// first.
+    bundle_asks: HashMap<Session, VecDeque<BundleAsk>>,
+}
+
+/// One 2016 this owner sent: the block whose section names the bodies, and
+/// the references it asked for, opened.
+struct BundleAsk {
+    block: BlockHash,
+    references: Vec<shekyl_archival_retention::BundleRef>,
 }
 
 /// The owner's `select`. Tokio 1.51 does not take `#[cfg]` on an arm, and
@@ -583,6 +599,7 @@ async fn run<C, R>(
         seen_seeds,
         state_tx,
         published,
+        bundle_asks: HashMap::new(),
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -886,6 +903,7 @@ where
                 }
                 self.transit.forget_session(session);
                 self.serving.remove(&session);
+                self.bundle_asks.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
             }
@@ -978,13 +996,9 @@ where
                     }
                 }
             }
-            // This node asks for bundle bodies only for a block whose
-            // references it is connecting, and it has asked for none: an
-            // answer to no request is the sender's fault.
-            SyncInbound::ResponseBundleBodies(_) => {
-                tracing::debug!(%session, "a bundle body response nothing asked for");
+            SyncInbound::ResponseBundleBodies(payload) => {
                 drop(taken);
-                self.close(session);
+                self.bundle_bodies_answered(session, &payload);
             }
         }
     }
@@ -1021,6 +1035,91 @@ where
             });
             drop(taken);
         });
+    }
+
+    /// A block's section names bodies its sender did not send (the model's
+    /// `RequestBundleBodies`). What this node's body store holds goes back
+    /// to the model at once; the rest is asked of `session` (2016), one
+    /// block per request.
+    fn ask_bundle_bodies(&mut self, session: Session, block: BlockHash, references: &[Vec<u8>]) {
+        let mut held = Vec::new();
+        let mut asked = Vec::new();
+        let snapshot = self.store.begin_read();
+        for (position, bytes) in references.iter().enumerate() {
+            let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
+                continue;
+            };
+            let stored = snapshot
+                .as_ref()
+                .ok()
+                .and_then(|snap| snap.bundle_body(reference.prunable_hash()).ok().flatten());
+            match stored {
+                Some(body) => held.push(body.as_bytes().to_vec()),
+                None => asked.push(reference),
+            }
+        }
+        drop(snapshot);
+        if !held.is_empty() {
+            self.event(Event::BundleBodies {
+                session,
+                block,
+                bodies: held,
+            });
+        }
+        if asked.is_empty() || !self.sessions.contains_key(&session) {
+            return;
+        }
+        let request = RequestBundleBodies {
+            hashes: asked
+                .iter()
+                .map(|reference| *reference.prunable_hash())
+                .collect(),
+        };
+        self.send(session, &Message::RequestBundleBodies(request));
+        self.bundle_asks
+            .entry(session)
+            .or_default()
+            .push_back(BundleAsk {
+                block,
+                references: asked,
+            });
+    }
+
+    /// A session's 2017. It answers the oldest 2016 this owner sent it; a
+    /// 2017 with none outstanding is the sender's fault and closes the
+    /// session, as does one that is not an answer to the references asked
+    /// (`accept_bundle_bodies`). The bodies it carries go to the model,
+    /// which decides what an empty answer means.
+    fn bundle_bodies_answered(&mut self, session: Session, payload: &[u8]) {
+        let Some(ask) = self
+            .bundle_asks
+            .get_mut(&session)
+            .and_then(VecDeque::pop_front)
+        else {
+            tracing::debug!(%session, "a bundle body response nothing asked for");
+            self.close(session);
+            return;
+        };
+        let accepted = shekyl_levin::ResponseBundleBodies::load(payload)
+            .map_err(|err| err.to_string())
+            .and_then(|response| {
+                crate::bundles::accept_bundle_bodies(&ask.references, &response)
+                    .map_err(|refused| format!("{refused:?}"))
+            });
+        match accepted {
+            Ok(bodies) => self.event(Event::BundleBodies {
+                session,
+                block: ask.block,
+                bodies: bodies
+                    .into_iter()
+                    .map(|(_, body)| body.as_bytes().to_vec())
+                    .collect(),
+            }),
+            Err(why) => {
+                tracing::debug!(%session, %why, "a bundle body response that is not an answer");
+                self.close(session);
+            }
+        }
     }
 
     /// Relay a bundle this node filed (2015) to every established session.
@@ -1485,6 +1584,11 @@ where
                     self.send(session, &Message::GetTxpoolComplement(request));
                 }
                 Command::Relay { hash, from } => self.relay(hash, from),
+                Command::RequestBundleBodies {
+                    session,
+                    block,
+                    references,
+                } => self.ask_bundle_bodies(session, block, &references),
                 Command::RequestMissingTxs {
                     session,
                     block,

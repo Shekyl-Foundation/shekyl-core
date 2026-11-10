@@ -102,6 +102,19 @@ pub enum Event<K> {
         /// The block, its transactions, and its bundle references.
         body: BlockBody,
     },
+    /// Bundle bodies for a block awaiting them
+    /// ([`Command::RequestBundleBodies`]): what this node's body store held,
+    /// or a session's 2017 answer, each already held to the reference it
+    /// answers (length and hash, §7.5). Empty when the session answered
+    /// with nothing.
+    BundleBodies {
+        /// The session the bodies were asked of.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies, encoded.
+        bodies: Vec<Vec<u8>>,
+    },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
     /// on [`Proved::Refused`], and re-planning a `Stale` with the fault's
@@ -260,6 +273,17 @@ pub enum Command<K> {
         /// supplied, such as a block this node mined: it goes to every
         /// established session.
         from: Option<K>,
+    },
+    /// A block's section names bundle bodies this node was not sent (2016).
+    /// The owner answers what its body store holds and asks `session` for
+    /// the rest; either comes back as [`Event::BundleBodies`].
+    RequestBundleBodies {
+        /// The session that sent the block.
+        session: K,
+        /// The block awaiting the bodies.
+        block: BlockHash,
+        /// The references whose bodies were not sent, undecoded.
+        references: Vec<Vec<u8>>,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {
@@ -514,4 +538,8 @@ pub enum CloseCause {
     BlockRefused(InvalidBlock),
     /// The body is larger than any valid block.
     Oversize,
+    /// The session announced a block and answered the 2016 for its bundle
+    /// bodies with nothing. A relayer serves the bodies of the blocks it
+    /// relays (`SCS-P27`), so the session is withholding them.
+    BundleBodiesWithheld,
 }

@@ -216,6 +216,27 @@ impl WriteBatch<'_, '_> {
         Ok(())
     }
 
+    /// An alternative block's bodies, stored beside its row in the same
+    /// write: the row's section names them, so it holds them until a switch
+    /// connects the block or the branch is removed. A body that is not one
+    /// the row names has no holder and is the open's reconcile to drop; the
+    /// caller passes the candidate's own, which `form` and assembly paired
+    /// with its references.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub fn hold_alt_bodies(&self, bodies: &[BundleBody]) -> Result<(), StoreError> {
+        for body in bodies {
+            let stored = QueuedBody(body.clone()).encoded();
+            check_row::<crate::codec::Coded<QueuedBody>>(BODY_CELL, &stored.as_encoded())?;
+            self.body_table()?
+                .insert(body.prunable_hash(), stored.as_encoded())
+                .map_err(EngineError::Storage)?;
+        }
+        Ok(())
+    }
+
     /// Connect, after the seal: the block that has just passed the undo
     /// retention of `tip` gives up the bodies its section names, unless the
     /// queue or an alternative block still holds one.

@@ -1166,9 +1166,13 @@ impl ReadSnapshot<'_> {
             AtHeight::Recorded(references) => references,
             AtHeight::AboveTip => unreachable!("the block at this height was just read"),
         };
+        // The block holds its section's bodies while it is within the undo
+        // retention, which a demotion is (`bundle_holders.rs`).
+        let bodies = self.section_bodies(references.as_ref())?;
         Ok(AtHeight::Recorded(
             shekyl_chain_rules::Candidate::new(body.block, transactions)
-                .with_bundle_references(references),
+                .with_bundle_references(references)
+                .with_bundle_bodies(bodies),
         ))
     }
 
