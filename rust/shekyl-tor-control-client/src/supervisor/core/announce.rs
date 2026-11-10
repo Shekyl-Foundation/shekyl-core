@@ -156,6 +156,13 @@ impl Announcements {
         }
     }
 
+    /// The line's key changed and it was already said. Record the key the
+    /// line has now. Do not speak, and do not move the cap: a clock that
+    /// keeps a new figure is the same line.
+    pub(super) fn note_key(&mut self, key: SayKey) {
+        self.said = Some(key);
+    }
+
     /// Say `key` under `cadence`, or arm the debt the cap still owes.
     /// `true` when the driver should announce.
     pub(super) fn say(

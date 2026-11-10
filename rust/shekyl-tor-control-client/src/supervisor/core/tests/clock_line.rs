@@ -19,7 +19,7 @@
 //! core asks to say (an announcement or a progress line) is rendered, and
 //! the lines that name the clock are counted.
 
-use super::super::super::posture::render;
+use super::super::super::posture::{render, ReportedSkew};
 use super::super::{Action, Core, Input};
 use super::{managed, policy};
 
@@ -52,8 +52,7 @@ impl Tor {
     fn input(self) -> Input {
         match self {
             Self::Skew(seconds) => Input::ClockSkew {
-                seconds,
-                at_least: false,
+                skew: ReportedSkew::Measured(seconds),
             },
             Self::Blocked => Input::ExternalBlocked,
             Self::Cleared => Input::ExternalCleared,
@@ -81,7 +80,7 @@ impl Said {
     fn naming_the_clock(&self) -> Vec<&String> {
         self.lines
             .iter()
-            .filter(|line| line.contains("clock"))
+            .filter(|line| line.contains("clock") || line.contains("date or time"))
             .collect()
     }
 }
@@ -319,8 +318,7 @@ fn tors_figure_and_the_lower_bound_are_one_sentence() {
     use super::super::super::posture::Cause;
     let text = render(&clock_status(
         Cause::ClockSkew {
-            seconds: -259_201,
-            at_least: false,
+            skew: ReportedSkew::Measured(-259_201),
         },
         Some(258_357),
     ));
@@ -346,8 +344,7 @@ fn ahead_and_at_least_are_said_as_tor_gave_them() {
     use super::super::super::posture::Cause;
     let ahead = render(&clock_status(
         Cause::ClockSkew {
-            seconds: 2 * 86_400 + 5 * 3_600,
-            at_least: false,
+            skew: ReportedSkew::Measured(2 * 86_400 + 5 * 3_600),
         },
         None,
     ));
@@ -359,8 +356,7 @@ fn ahead_and_at_least_are_said_as_tor_gave_them() {
     );
     let bound = render(&clock_status(
         Cause::ClockSkew {
-            seconds: -7_200,
-            at_least: true,
+            skew: ReportedSkew::AtLeast(-7_200),
         },
         None,
     ));
@@ -391,10 +387,10 @@ fn the_lower_bound_stands_in_for_a_figure_tor_did_not_give() {
             "{cause:?}: {text}"
         );
     }
-    let certificates = render(&clock_status(Cause::CertificatesOutOfDate, None));
+    let line = render(&clock_status(Cause::CertificatesOutOfDate, None));
     assert!(
-        certificates.contains("Tor reports that this computer's date or time looks wrong"),
-        "{certificates}"
+        line.contains("Tor reports that this computer's date or time looks wrong"),
+        "{line}"
     );
 }
 
@@ -460,4 +456,76 @@ fn unreachable_directories_leave_a_named_clock() {
         render(&core.status())
     );
     assert!(matches!(core.status().cause, Cause::ClockSkew { .. }));
+}
+
+/// **A kept figure is the same kind.** The consensus check names the clock,
+/// then Tor's report replaces the cause. The key is recorded, so a say
+/// inside the cap does not treat that as a change. Fails if the report
+/// returns without recording the key.
+#[test]
+fn a_kept_figure_is_the_same_kind() {
+    use super::super::announce::Cadence;
+    let mut core = bootstrapping();
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: WALL_AT_START,
+        },
+        SECOND,
+    );
+    let kept = core.on(
+        Input::ClockSkew {
+            skew: ReportedSkew::Measured(-259_201),
+        },
+        2 * SECOND,
+    );
+    assert!(
+        !kept.actions.contains(&Action::Announce),
+        "the figure was said again"
+    );
+    let again = core.say(3 * SECOND, Cadence::Due);
+    assert!(again.is_empty(), "a kept figure was a new kind: {again:?}");
+}
+
+/// **A fixed consensus aging into the tolerance does not retire Tor's
+/// report.** The gap starts at 900 s and the wall advances with the
+/// supervisor clock, one second per second, until the gap is inside 360 s.
+/// The report stays, nothing is said, and Tor repeating it says nothing.
+/// Fails if aging is read as the clock being set right.
+#[test]
+fn an_aging_consensus_does_not_retire_tors_report() {
+    use super::super::super::posture::Cause;
+    use super::super::CLOCK_BEHIND_AFTER;
+    let mut core = bootstrapping();
+    let tolerance = CLOCK_BEHIND_AFTER.as_secs();
+    // Twice the tolerance: one second of wall per second of supervisor time
+    // walks the gap from named, through the window.
+    let start_gap = tolerance.saturating_mul(2);
+    let valid_after = start_gap.saturating_mul(2);
+    let start_gap_i = i64::try_from(start_gap).expect("the gap fits in i64");
+    let report = ReportedSkew::Measured(-start_gap_i);
+    let skew = core.on(Input::ClockSkew { skew: report }, SECOND);
+    assert!(skew.actions.contains(&Action::Announce), "the report");
+    let mut said = Vec::new();
+    let last = start_gap - tolerance;
+    for step in 0..=last {
+        let at = (2 + step) * SECOND;
+        let wall = valid_after - start_gap + step;
+        let sample = core.on(Input::ConsensusClock { valid_after, wall }, at);
+        if sample.actions.contains(&Action::Announce) {
+            said.push((step, render(&core.status())));
+        }
+    }
+    assert!(said.is_empty(), "aging said the clock: {said:#?}");
+    assert!(
+        matches!(core.status().cause, Cause::ClockSkew { skew } if skew == report),
+        "the report was retired: {:?}",
+        core.status().cause
+    );
+    assert_eq!(core.status().clock_behind, None, "the bound did age out");
+    let repeated = core.on(Input::ClockSkew { skew: report }, (3 + last) * SECOND);
+    assert!(
+        !repeated.actions.contains(&Action::Announce),
+        "the same report was a new line"
+    );
 }

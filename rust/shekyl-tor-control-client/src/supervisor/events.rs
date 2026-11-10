@@ -13,6 +13,16 @@ use crate::control::{
 };
 
 use super::core::{DirectoryAnswer, Input, RoundTally};
+use super::posture::ReportedSkew;
+
+/// Tor's `CLOCK_SKEW` value, as the supervisor stores it. The two wire
+/// forms stay two variants: a lower bound is not a measure.
+fn reported_skew(skew: crate::control::ClockSkew) -> ReportedSkew {
+    match skew {
+        crate::control::ClockSkew::Measured(seconds) => ReportedSkew::Measured(seconds),
+        crate::control::ClockSkew::AtLeast(seconds) => ReportedSkew::AtLeast(seconds),
+    }
+}
 
 /// A fetch of this node's onion, as the directory check reads it (§4.5).
 /// The caller keeps only events for its own address. `REQUESTED` names the
@@ -116,16 +126,11 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
         TorEvent::NetworkLiveness(Liveness::Up) => Some(Input::ExternalCleared),
         TorEvent::General { status, .. } => match status {
             GeneralStatus::DirAllUnreachable => Some(Input::DirectoryUnreachable),
-            GeneralStatus::ClockSkew { skew, .. } => skew.as_ref().map(|skew| match *skew {
-                crate::control::ClockSkew::Measured(seconds) => Input::ClockSkew {
-                    seconds,
-                    at_least: false,
-                },
-                crate::control::ClockSkew::AtLeast(seconds) => Input::ClockSkew {
-                    seconds,
-                    at_least: true,
-                },
-            }),
+            GeneralStatus::ClockSkew { skew, .. } => {
+                skew.as_ref().copied().map(|skew| Input::ClockSkew {
+                    skew: reported_skew(skew),
+                })
+            }
             GeneralStatus::ClockJumped { .. } => Some(Input::ClockJumped),
             GeneralStatus::TooManyConnections { current } => Some(Input::TooManyFiles {
                 open: current.unwrap_or(0),
@@ -393,8 +398,7 @@ mod tests {
             matches!(
                 input_of(&measured),
                 Some(Input::ClockSkew {
-                    seconds: -259_201,
-                    at_least: false
+                    skew: super::super::posture::ReportedSkew::Measured(-259_201)
                 })
             ),
             "{measured:?}"
@@ -404,8 +408,7 @@ mod tests {
             matches!(
                 input_of(&bound),
                 Some(Input::ClockSkew {
-                    seconds: 7_200,
-                    at_least: true
+                    skew: super::super::posture::ReportedSkew::AtLeast(7_200)
                 })
             ),
             "{bound:?}"

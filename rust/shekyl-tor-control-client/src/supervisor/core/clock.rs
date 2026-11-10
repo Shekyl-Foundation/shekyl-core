@@ -17,9 +17,14 @@
 //! with the clock behind, the directories refuse what this node uploads and
 //! keep serving the copy they have. The inbound facet says so; outbound and
 //! `OwnTx` are untouched (outbound carried traffic throughout the VM run of
-//! 2026-11-01). It clears at the first sample inside the tolerance, and
-//! nothing is done then: Tor's next rebuild takes a counter above anything the
-//! directories hold, and the overdue rule covers a stalled schedule.
+//! 2026-11-01). The lower bound clears at the first sample inside the
+//! tolerance. Tor's own report that the clock is behind clears with it only
+//! when that sample closed the gap faster than the time since the previous
+//! one: a fixed consensus ages into the tolerance without the clock being
+//! set, and retiring the report there makes the next report say the fault
+//! again. Nothing is done on the clear besides the one recovery line: Tor's
+//! next rebuild takes a counter above anything the directories hold, and the
+//! overdue rule covers a stalled schedule.
 //!
 //! **No republish while it cannot help:** while the clock is named, or while
 //! more than half of the latest round's directories refused its upload. A
@@ -37,9 +42,33 @@
 
 use std::time::Duration;
 
-use super::super::posture::{Cause, Inbound, InboundCause};
+use super::super::posture::{Cause, Inbound, InboundCause, ReportedSkew};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
+
+/// One consensus check, so the next one can tell a fixed `valid-after`
+/// aging into the tolerance from the wall clock being set forward.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ConsensusSample {
+    /// Supervisor time of the sample, in the caller's units.
+    at: u64,
+    /// `valid-after` minus the wall clock, in seconds. How far behind the
+    /// check measured.
+    gap: u64,
+}
+
+impl ConsensusSample {
+    /// The gap closed by at least `tolerance` beyond the time since this
+    /// sample. A fixed consensus ages one second per second. That is not
+    /// the clock being set forward, and it does not retire Tor's report.
+    pub(super) fn corrected(self, now: u64, gap: u64, tolerance: Duration) -> bool {
+        let elapsed = Duration::from_nanos(now.saturating_sub(self.at)).as_secs();
+        let closed = self.gap.saturating_sub(gap);
+        // `>=` so a clock just past the tolerance, set right in one sample,
+        // counts. Aging closes by `elapsed` and does not.
+        closed >= elapsed.saturating_add(tolerance.as_secs())
+    }
+}
 
 /// The republish backoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,30 +123,41 @@ impl Core {
         ) {
             return Vec::new();
         }
-        let behind = valid_after.saturating_sub(wall);
-        if behind > self.policy.clock_behind_after.as_secs() {
-            let behind = Duration::from_secs(behind);
+        let gap = valid_after.saturating_sub(wall);
+        let corrected = self
+            .consensus_sample
+            .is_some_and(|sample| sample.corrected(now, gap, self.policy.clock_behind_after));
+        self.consensus_sample = Some(ConsensusSample { at: now, gap });
+        if gap > self.policy.clock_behind_after.as_secs() {
+            let behind = Duration::from_secs(gap);
             // Tor's report or the certificates may have named it already.
             let named = self.clock_named_already();
-            let newly = self.note_clock_behind(now, behind) && !named;
+            let newly = self.note_clock_behind(now, behind);
             // A probe already in hand would judge the copy a republish
             // cannot replace. Drop it, including one this same deadline
             // armed before the sample was folded.
             let mut actions = self.stand_down_probe();
-            if newly {
+            if newly && !named {
                 actions.extend(self.say(now, Cadence::Due));
+            } else {
+                // The lag moved, or this check joined a clock already named.
+                // Record the key. Do not speak.
+                self.note_key();
             }
             return actions;
         }
         if !self.clock_is_behind() {
             return Vec::new();
         }
-        // Cleared. Tor's own report that the clock is behind was made of the
-        // clock before it was set right, and is cleared with it, so the
-        // recovery is one line. A report that it is ahead stands: this check
-        // cannot see ahead. Refused uploads still stand if they did;
-        // otherwise the facet is unknown again until a probe judges it.
-        if matches!(self.cause, Cause::ClockSkew { seconds, .. } if seconds < 0) {
+        // The check no longer trips. Tor's report that the clock is behind
+        // is retired only when the gap closed faster than the time since the
+        // previous sample: the wall was set forward. A fixed consensus ages
+        // into the tolerance one second per second, and that must not clear
+        // the report or the next one says the fault again. A report that the
+        // clock is ahead stands either way: this check cannot see ahead.
+        // Refused uploads still stand if they did; otherwise the facet is
+        // unknown again until a probe judges it.
+        if corrected && matches!(self.cause, Cause::ClockSkew { skew } if skew.is_behind()) {
             self.set_cause(Cause::None);
         }
         if self.uploads_refused {
@@ -129,19 +169,27 @@ impl Core {
                 Inbound::NotOffered
             };
         }
+        if matches!(
+            self.cause,
+            Cause::ClockSkew { .. } | Cause::CertificatesOutOfDate
+        ) {
+            self.note_key();
+            return Vec::new();
+        }
         self.say(now, Cadence::Due)
     }
 
-    /// Tor reports the clock off. Said when it newly names the clock; while
+    /// Tor reports the clock off. Said when it newly names the clock. While
     /// the clock is already named (by an earlier report, the certificates,
-    /// or the consensus check) the figure is kept and nothing is said: a
-    /// clock three days behind for four minutes is said once (Rick,
-    /// 2026-11-10). Tor reports it at every handshake and directory fetch,
-    /// seconds apart (the macOS run of 2026-11-09).
-    pub(super) fn clock_skew(&mut self, now: u64, seconds: i64, at_least: bool) -> Vec<Action> {
+    /// or the consensus check) the figure is kept and the key is recorded
+    /// without speaking: a clock three days behind for four minutes is said
+    /// once (Rick, 2026-11-10). Tor reports it at every handshake and
+    /// directory fetch, seconds apart (the macOS run of 2026-11-09).
+    pub(super) fn clock_skew(&mut self, now: u64, skew: ReportedSkew) -> Vec<Action> {
         let named = self.clock_named_already();
-        self.set_cause(Cause::ClockSkew { seconds, at_least });
+        self.set_cause(Cause::ClockSkew { skew });
         if named {
+            self.note_key();
             return Vec::new();
         }
         self.say(now, Cadence::Due)
@@ -149,7 +197,7 @@ impl Core {
 
     /// The clock is named: by Tor's report, the certificates, or the
     /// consensus check beside no other cause.
-    fn clock_named_already(&self) -> bool {
+    pub(super) fn clock_named_already(&self) -> bool {
         matches!(
             self.cause,
             Cause::ClockSkew { .. } | Cause::CertificatesOutOfDate

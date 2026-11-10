@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::posture::{
     fixes, own_tx, BootstrapLine, Carriage, Cause, Connectors, Inbound, OriginVerdict,
-    ProgressWindow, Sessions, Shown, Space, Status,
+    ProgressWindow, ReportedSkew, Sessions, Shown, Space, Status,
 };
 
 mod announce;
@@ -385,12 +385,10 @@ pub enum Input {
     ExternalBlocked,
     /// No directory is reachable.
     DirectoryUnreachable,
-    /// A reported clock difference.
+    /// Tor reported the clock off.
     ClockSkew {
-        /// Seconds: negative behind the network, positive ahead.
-        seconds: i64,
-        /// Tor gave a lower bound (`MIN_SKEW`), not a measure (`SKEW`).
-        at_least: bool,
+        /// Tor's figure: `SKEW` or `MIN_SKEW`.
+        skew: ReportedSkew,
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
@@ -697,6 +695,8 @@ pub struct Core {
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
     clock_evidence: clock_evidence::ClockEvidence,
+    /// The previous consensus check (§4.2). Aging is not a correction.
+    consensus_sample: Option<clock::ConsensusSample>,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -739,6 +739,7 @@ impl Core {
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
+            consensus_sample: None,
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -809,7 +810,7 @@ impl Core {
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
             Input::DirectoryUnreachable => self.unreachable_directories(now),
-            Input::ClockSkew { seconds, at_least } => self.clock_skew(now, seconds, at_least),
+            Input::ClockSkew { skew } => self.clock_skew(now, skew),
             Input::ClockJumped => self.clock_jumped(now),
             Input::Resumed { late_by } => self.resumed(now, late_by),
             Input::CertificateOutOfDate => self.line_logged(now),
@@ -1020,6 +1021,7 @@ impl Core {
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.jump = clock_jump::JumpWatch::new(now);
         self.clock_evidence = clock_evidence::ClockEvidence::default();
+        self.consensus_sample = None;
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -1333,6 +1335,13 @@ impl Core {
         } else {
             Vec::new()
         }
+    }
+
+    /// The line changed and was already said. Record the key it has now,
+    /// without speaking and without moving the cap.
+    fn note_key(&mut self) {
+        let key = self.say_key();
+        self.announcements.note_key(key);
     }
 
     fn say_key(&self) -> announce::SayKey {

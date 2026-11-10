@@ -163,6 +163,32 @@ pub enum Inbound {
     },
 }
 
+/// Tor's `CLOCK_SKEW` figure, in seconds. Negative is behind the network,
+/// positive is ahead. Zero is said ahead: Tor did not report a direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportedSkew {
+    /// `SKEW=`: Tor measured the difference.
+    Measured(i64),
+    /// `MIN_SKEW=`: Tor gave a lower bound, not a measure.
+    AtLeast(i64),
+}
+
+impl ReportedSkew {
+    /// The reported difference, in seconds.
+    #[must_use]
+    pub const fn seconds(self) -> i64 {
+        match self {
+            Self::Measured(seconds) | Self::AtLeast(seconds) => seconds,
+        }
+    }
+
+    /// Behind the network. Zero and ahead are not.
+    #[must_use]
+    pub const fn is_behind(self) -> bool {
+        self.seconds() < 0
+    }
+}
+
 /// Why the phase is what it is. The detail is the variant (`TSR-Q12`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cause {
@@ -193,13 +219,10 @@ pub enum Cause {
     ExternalBlocked,
     /// No directory Tor knows answered.
     DirectoryUnreachable,
-    /// Tor reported this computer's clock this far off, in seconds:
-    /// negative behind the network, positive ahead.
+    /// Tor reported this computer's clock off by [`ReportedSkew`].
     ClockSkew {
-        /// The reported difference, in seconds.
-        seconds: i64,
-        /// Tor gave a lower bound (`MIN_SKEW`), not a measure (`SKEW`).
-        at_least: bool,
+        /// Tor's figure.
+        skew: ReportedSkew,
     },
     /// Tor logged relays' certificates as expired or not yet valid, from
     /// enough distinct relays within the window that the clock, not a relay,
@@ -706,7 +729,7 @@ pub fn render(status: &Status) -> String {
     } else if let Some(quiet) = quiet_sentence(status) {
         append(&mut text, &quiet);
     }
-    if let Some(clock) = clock_sentence(status) {
+    if let Some(clock) = super::clock_line::sentence(status) {
         append(&mut text, &clock);
     }
     if let Some(inbound) = inbound_sentence(status) {
@@ -778,25 +801,12 @@ fn append(text: &mut String, sentence: &str) {
     text.push_str(sentence);
 }
 
-fn spoken_duration(duration: std::time::Duration) -> String {
+pub(super) fn spoken_duration(duration: std::time::Duration) -> String {
     let seconds = duration.as_secs();
     if seconds < 60 {
         format!("{seconds} s")
     } else {
         format!("{} min {} s", seconds / 60, seconds % 60)
-    }
-}
-
-/// A span that can run to days, at the precision the clock line needs:
-/// days and hours, hours and minutes, or [`spoken_duration`] below an hour.
-fn spoken_span(duration: std::time::Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds >= 86_400 {
-        format!("{} d {} h", seconds / 86_400, seconds % 86_400 / 3_600)
-    } else if seconds >= 3_600 {
-        format!("{} h {} min", seconds / 3_600, seconds % 3_600 / 60)
-    } else {
-        spoken_duration(duration)
     }
 }
 
@@ -882,42 +892,9 @@ fn inbound_sentence(status: &Status) -> Option<String> {
             "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
                 .to_owned()
         }
-        // The clock's sentence: [`clock_sentence`].
+        // The clock's sentence: [`super::clock_line::sentence`].
         InboundCause::ClockBehind { .. } => return None,
     })
-}
-
-/// The clock, in one sentence, whatever names it (§5, "Clock skew"; Rick,
-/// 2026-11-10). Tor's figure when Tor reported one, behind or ahead; this
-/// node's lower bound from the consensus otherwise, which only sees behind.
-/// "Others may not be able to reach this node" while the consensus check
-/// names it: behind, the directories refuse this node's address. A
-/// certificate verdict carries no figure, so it is said only when the
-/// lower bound is not there.
-fn clock_sentence(status: &Status) -> Option<String> {
-    let ours = status.clock_behind;
-    let unreachable = if ours.is_some() {
-        " Others may not be able to reach this node."
-    } else {
-        ""
-    };
-    let check = "Check this computer's date and time.";
-    let figure = match status.cause {
-        Cause::ClockSkew { seconds, at_least } => Some((seconds, at_least)),
-        Cause::CertificatesOutOfDate if ours.is_none() => {
-            return Some(format!(
-                "Tor reports that this computer's date or time looks wrong, so it cannot connect. {check}"
-            ));
-        }
-        _ => ours.map(|behind| (-i64::try_from(behind.as_secs()).unwrap_or(i64::MAX), true)),
-    }?;
-    let (seconds, at_least) = figure;
-    let span = spoken_span(std::time::Duration::from_secs(seconds.unsigned_abs()));
-    let bound = if at_least { "at least " } else { "" };
-    let direction = if seconds < 0 { "behind" } else { "ahead of" };
-    Some(format!(
-        "This computer's clock is {bound}{span} {direction} the Tor network's.{unreachable} {check}"
-    ))
 }
 
 /// The named cause. [`Cause::None`] is the absence of one: the bootstrap
@@ -925,7 +902,7 @@ fn clock_sentence(status: &Status) -> Option<String> {
 fn named_cause(status: &Status) -> Option<String> {
     match &status.cause {
         // No cause; or the clock, whose one sentence comes from whichever
-        // evidence stands ([`clock_sentence`]). Tor's certificate verdict is
+        // evidence stands ([`super::clock_line::sentence`]). Tor's certificate verdict is
         // its evidence, not a measurement: the source is relays, so that
         // sentence says what Tor reports rather than that the clock is wrong.
         Cause::None | Cause::ClockSkew { .. } | Cause::CertificatesOutOfDate => None,

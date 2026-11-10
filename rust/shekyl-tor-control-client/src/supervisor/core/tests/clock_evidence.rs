@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, Cause, Shown};
-use super::super::{duration_ns, Core, Input};
+use super::super::super::posture::{render, Cause, ReportedSkew, Shown};
+use super::super::{duration_ns, Action, Core, Input};
 use super::{managed, policy};
 use crate::control::RelayFingerprint;
 
@@ -124,8 +124,7 @@ fn a_measured_skew_is_not_replaced() {
     let mut core = bootstrapping();
     core.on(
         Input::ClockSkew {
-            seconds: 259_200,
-            at_least: false,
+            skew: ReportedSkew::Measured(259_200),
         },
         secs(1),
     );
@@ -139,8 +138,70 @@ fn a_measured_skew_is_not_replaced() {
     assert_eq!(
         core.status().cause,
         Cause::ClockSkew {
-            seconds: 259_200,
-            at_least: false,
+            skew: ReportedSkew::Measured(259_200),
         }
     );
+}
+
+/// An unreachable directory is the same problem as a blocked link. Inside
+/// the window it leaves the verdict standing and says nothing. Fails if
+/// that input takes its own path around the window.
+#[test]
+fn an_unreachable_directory_leaves_the_verdict() {
+    let mut core = bootstrapping();
+    for _ in 0..3 {
+        core.on(Input::CertificateOutOfDate, secs(1));
+    }
+    for n in 1..=3 {
+        closed(&mut core, n, secs(2));
+    }
+    let step = core.on(Input::DirectoryUnreachable, secs(10));
+    assert!(
+        !step.actions.contains(&Action::Announce),
+        "said: {}",
+        render(&core.status())
+    );
+    assert_eq!(core.status().cause, Cause::CertificatesOutOfDate);
+}
+
+/// The consensus check already named the clock. Completing the count does
+/// not set the verdict and does not say the line again. Fails if the count
+/// calls `external` over a clock the check has spoken.
+#[test]
+fn the_count_does_not_say_a_clock_the_check_named() {
+    let mut core = bootstrapping();
+    let named = core.on(
+        Input::ConsensusClock {
+            valid_after: 1_000_000,
+            wall: 1_000_000 - 86_400,
+        },
+        secs(1),
+    );
+    assert!(
+        named.actions.contains(&Action::Announce),
+        "the check names it"
+    );
+    let mut said = Vec::new();
+    for i in 0..3 {
+        let step = core.on(Input::CertificateOutOfDate, secs(2 + i));
+        if step.actions.contains(&Action::Announce) {
+            said.push(render(&core.status()));
+        }
+    }
+    for n in 1..=3 {
+        let step = closed_step(&mut core, n, secs(6));
+        if step.actions.contains(&Action::Announce) {
+            said.push(render(&core.status()));
+        }
+    }
+    assert!(said.is_empty(), "said again: {said:#?}");
+    assert_eq!(
+        core.status().cause,
+        Cause::None,
+        "the check stays the cause"
+    );
+}
+
+fn closed_step(core: &mut Core, n: u8, at: u64) -> super::super::Step {
+    core.on(Input::HandshakeClosed { relay: relay(n) }, at)
 }
