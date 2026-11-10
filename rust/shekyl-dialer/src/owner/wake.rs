@@ -5,19 +5,22 @@
 
 //! One wake: settle the lists once, then recover, idle, or begin one test.
 //!
-//! A test whose next attempt is due runs before any new draw. The open
-//! test lives on [`Attempts`](crate::attempts::Attempts); this module only
-//! decides which wake makes it.
+//! A test whose next attempt is due runs before any new draw, unless its
+//! host is already reached. The open test lives on
+//! [`Attempts`](crate::attempts::Attempts); this module only decides which
+//! wake makes it.
+
+use std::collections::BTreeSet;
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
     white_diversity_floor, ConnectorId, NetworkAddress, Tick, WHITE_REFILL_LINE,
 };
 
-use super::address::LiveSessions;
 use super::recovery;
 use super::Shared;
-use crate::candidate::CandidateFilter;
+use crate::attempts::Attempts;
+use crate::candidate::{host_occupied, CandidateFilter};
 use crate::fill::{plan, Census, DialAim, DrawList};
 
 /// Why a connector under its target dialed nothing on one wake.
@@ -188,12 +191,31 @@ fn idle_if_undrawn(
     Some(IdleWhy::InUse)
 }
 
+/// The earliest due retry whose host is free, moved back to in flight.
+///
+/// A host that connected while the attempt waited is not dialed. That
+/// wait stays where it is, with the same due, and a later wake asks
+/// again. Another host whose retry is also due is the one this wake
+/// makes. Nothing is recorded: no cooldown, no demotion, no `DialFailed`.
+fn resume_unoccupied(
+    attempts: &mut Attempts,
+    sessions: &BTreeSet<NetworkAddress>,
+    now: Tick,
+) -> Option<(NetworkAddress, DialAim)> {
+    let (address, _) = attempts
+        .due(now)
+        .into_iter()
+        .find(|(address, _)| !host_occupied(sessions, attempts, &address.host()))?;
+    let aim = attempts.resume(&address)?;
+    Some((address, aim))
+}
+
 /// Settle once, count once, and either recover, idle, or begin one attempt.
 /// [`super::Dialer::choose`] has already returned when the connector cannot dial.
 pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     shared: &mut Shared,
     connector: ConnectorId,
-    live: &LiveSessions,
+    sessions: &BTreeSet<NetworkAddress>,
     now: Tick,
     rng: &mut R,
 ) -> Wake {
@@ -202,12 +224,13 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
     // Protocol data installed on the dialer. A test seam can raise it, and
     // the retry below and the draw further down both read this number.
     let bound = shared.bounds[index];
-    // A test whose next attempt is due makes it now, ahead of any draw: the
-    // address is still the outstanding draw, so nothing draws it twice.
-    // The test moves from waiting to in flight inside `take_due`, so this
-    // path cannot drop the test and leave the seat outstanding.
+    // A test whose next attempt is due makes it now, ahead of any draw,
+    // when its host is free. The address stays the outstanding draw either
+    // way, so nothing draws it twice. Resuming moves the test to in flight;
+    // a host that is occupied leaves the wait untouched.
     if shared.attempts[index].in_flight() < bound {
-        if let Some((address, aim)) = shared.attempts[index].take_due(now) {
+        if let Some((address, aim)) = resume_unoccupied(&mut shared.attempts[index], sessions, now)
+        {
             // Every wake reports to the recovery episode, this one too.
             let held = shared.attempts[index].held();
             recovery::report_wake(&mut shared.recovery[index], connector, held, target);
@@ -237,8 +260,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
         let mut settled = lists.settle(connector, now, &mut attempts[index], rng);
         let filter = CandidateFilter {
             own: &own,
-            sessions: &live.addresses,
-            session_hosts: &live.session_hosts,
+            sessions,
             attempts: &attempts[index],
         };
         // An address whose verdict waits is not drawn again. A gray one's

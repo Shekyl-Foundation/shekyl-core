@@ -108,23 +108,48 @@ impl Attempts {
         Some(next)
     }
 
-    /// The earliest waiting test whose tick has arrived, moved back to
-    /// in flight. `None` when none is due. Equal ticks break by address,
-    /// so the choice does not depend on the order the waits were stored.
-    pub fn take_due(&mut self, now: Tick) -> Option<(NetworkAddress, DialAim)> {
-        let due = self
+    /// Waiting tests whose tick has arrived, earliest first.
+    ///
+    /// Equal ticks break by address, so the order does not depend on the
+    /// order the waits were stored. Listing them does not move them: the
+    /// caller resumes the one it will dial. A wait whose host is occupied
+    /// stays here, with the same due, until a later wake.
+    #[must_use]
+    pub fn due(&self, now: Tick) -> Vec<(NetworkAddress, DialAim)> {
+        let mut due: Vec<(u64, NetworkAddress, DialAim)> = self
             .tests
             .iter()
             .filter_map(|(address, test)| match *test {
-                Test::Waiting { aim, attempt, due } if due.get() <= now.get() => {
-                    Some((due.get(), address.clone(), aim, attempt))
+                Test::Waiting { aim, due, .. } if due.get() <= now.get() => {
+                    Some((due.get(), address.clone(), aim))
                 }
                 _ => None,
             })
-            .min_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-        let (_, address, aim, attempt) = due?;
+            .collect();
+        due.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        due.into_iter()
+            .map(|(_, address, aim)| (address, aim))
+            .collect()
+    }
+
+    /// Move `address`'s waiting test back to in flight.
+    ///
+    /// `None` when `address` has no waiting test. The attempt number and
+    /// the aim are the ones the wait stored.
+    pub fn resume(&mut self, address: &NetworkAddress) -> Option<DialAim> {
+        let Test::Waiting { aim, attempt, .. } = self.tests.get(address).copied()? else {
+            return None;
+        };
         self.tests
             .insert(address.clone(), Test::InFlight { aim, attempt });
+        Some(aim)
+    }
+
+    /// The earliest waiting test whose tick has arrived, moved back to
+    /// in flight. `None` when none is due.
+    pub fn take_due(&mut self, now: Tick) -> Option<(NetworkAddress, DialAim)> {
+        let (address, _) = self.due(now).into_iter().next()?;
+        let aim = self.resume(&address)?;
         Some((address, aim))
     }
 
@@ -219,9 +244,13 @@ impl Attempts {
             || self.kept.contains(address)
     }
 
-    /// Whether an in-flight test or a kept session is to `host`, on any
-    /// port. One session per host: an in-flight test's host is not a
-    /// candidate either. A waiting test does not hold the host.
+    /// Whether an in-flight test or a kept session names `host`, on any
+    /// port.
+    ///
+    /// A waiting test does not. The outstanding draw already keeps that
+    /// address from being drawn again, and the wait must not block its
+    /// own resumption. A live session is not in this set: the candidate
+    /// filter reads the board beside it ([`crate::candidate::host_occupied`]).
     #[must_use]
     pub fn holds_host(&self, host: &Host) -> bool {
         self.tests
@@ -348,5 +377,37 @@ mod tests {
         assert!(!attempts.has_waiting());
         assert!(attempts.kept_addresses().contains(&kept));
         assert_eq!(attempts.kept_count(), 1);
+    }
+
+    /// Listing the due retries does not move them, and resuming one
+    /// leaves the others waiting. A waiting test does not hold its host,
+    /// so the wait cannot block its own resumption.
+    #[test]
+    fn listing_due_retries_leaves_them_waiting_until_one_is_resumed() {
+        let mut attempts = Attempts::new();
+        let earlier = peer(1);
+        let later = peer(2);
+        assert!(attempts.begin(&earlier, DialAim::Keep));
+        assert!(attempts.begin(&later, DialAim::Confirm));
+        assert_eq!(attempts.defer_retry(&earlier, 3, |_| at(10)), Some(2));
+        assert_eq!(attempts.defer_retry(&later, 3, |_| at(20)), Some(2));
+
+        let listed = attempts.due(at(20));
+        assert_eq!(
+            listed,
+            vec![
+                (earlier.clone(), DialAim::Keep),
+                (later.clone(), DialAim::Confirm),
+            ]
+        );
+        assert_eq!(attempts.in_flight(), 0, "listing does not resume");
+        assert!(!attempts.holds_host(&earlier.host()));
+        assert!(!attempts.holds_host(&later.host()));
+
+        assert_eq!(attempts.resume(&later), Some(DialAim::Confirm));
+        assert_eq!(attempts.in_flight(), 1);
+        assert_eq!(attempts.due(at(20)), vec![(earlier.clone(), DialAim::Keep)]);
+        assert!(attempts.resume(&earlier).is_some());
+        assert!(attempts.resume(&earlier).is_none(), "already in flight");
     }
 }
