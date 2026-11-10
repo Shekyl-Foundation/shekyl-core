@@ -35,7 +35,7 @@
 
 use crate::apply_policy::ArchivalFamily;
 use shekyl_chain_rules::{GenesisConflict, RuleSet};
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
@@ -370,41 +370,8 @@ pub enum StoreCannot {
         /// The rule set the caller says is in force at `height`.
         in_force: Box<RuleSet>,
     },
-    /// `pop`, or the regtest injection, on a store with no block recorded
-    /// (nothing to pop; no tip to attribute an injected bit to).
+    /// `pop` on a store with no block recorded: nothing to pop.
     ChainEmpty,
-    /// A replay write (`ChainStore::regtest_inject_serve_credit`,
-    /// `regtest_issue_draws`; DRS-E4 §3.8 item 3) was handed a network
-    /// row's permit for another lever. Each door writes what the rules did
-    /// not admit and opens only on its own lever's permit, which only
-    /// regtest's row grants (`NETWORK_IDENTITY.md` NI-R6).
-    PermitForAnotherLever {
-        /// The lever the permit is for.
-        given: shekyl_network::Lever,
-        /// The lever the write needs.
-        wanted: shekyl_network::Lever,
-    },
-    /// The regtest serve-credit injection named a persona with no bond
-    /// record. The door writes the one row the rules did not admit, but
-    /// it does not mint a file the reads refuse: every serve-credit read
-    /// arms SI-15 (a credit names a persona with a record), so a bit for a
-    /// stranger would be [`StoreInvariant::ServeCreditWithoutBond`] at the
-    /// next `pass_count`. The C++'s injector has no such check because
-    /// the C++ has no such read belt; the refusal is the belt's, not a
-    /// deviation to grade (rule 16 — the check is read at the
-    /// implementation, not inherited from the absence of one).
-    InjectionForUnbondedPersona {
-        /// The persona the injection named.
-        persona: PCanonicalId,
-    },
-    /// The regtest draw issue
-    /// (`ChainStore::regtest_issue_draws`) named a draw the index already
-    /// holds. The door adds draws; re-issuing one would fold its term into
-    /// the digest a second time.
-    DrawAlreadyIssued {
-        /// The persona the draw names.
-        persona: PCanonicalId,
-    },
     /// `pop` at `tip` cannot run: the height is below the pop floor
     /// (S-CHAIN-W §5.4, SCW-7).
     ///
@@ -593,22 +560,6 @@ impl core::fmt::Display for StoreCannot {
                  force at height {height}; re-validate under the rule set in force"
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
-            Self::PermitForAnotherLever { given, wanted } => write!(
-                f,
-                "a replay write needs the permit for {}; it was handed the permit for {}",
-                wanted.name(),
-                given.name()
-            ),
-            Self::InjectionForUnbondedPersona { persona } => write!(
-                f,
-                "regtest injection refused: persona {persona} has no bond record, and a credit \
-                 or a draw without one is a row the reads refuse"
-            ),
-            Self::DrawAlreadyIssued { persona } => write!(
-                f,
-                "regtest draw issue refused: the index already holds this draw for persona \
-                 {persona}"
-            ),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,
                 "cannot pop height {tip}: the pop floor is {floor} (genesis is never poppable; \

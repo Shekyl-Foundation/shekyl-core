@@ -55,13 +55,6 @@ enum Archival {
         shard: u64,
         epoch: u64,
     },
-    /// An `Inject` record: a credit no block produced, attributed to the
-    /// tip it was written at. Not a vin: J4–J6 never see it.
-    Injected {
-        at_tip: BlockHeight,
-        shard: u64,
-        epoch: u64,
-    },
     /// An emission vin: the claimant and the epochs claimed (J19's parse).
     Claim {
         height: BlockHeight,
@@ -78,7 +71,6 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
     let mut reader =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height();
-    let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
         match event.event {
@@ -152,21 +144,11 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
                         }
                     }
                 }
-                tip = Some(height);
                 height = height.saturating_add(BlockCount::ONE);
             }
             IngestEvent::Rewind { to } => {
-                tip = Some(to);
                 height = to.saturating_add(BlockCount::ONE);
             }
-            IngestEvent::Inject(credit) => found.push((
-                credit.persona,
-                Archival::Injected {
-                    at_tip: tip.expect("the corpus law refuses an inject before any block"),
-                    shard: credit.shard.to_raw(),
-                    epoch: credit.epoch.to_raw(),
-                },
-            )),
         }
     }
     found

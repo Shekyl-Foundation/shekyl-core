@@ -86,20 +86,6 @@ pub(super) fn probe_val(store: &ChainStore, k: &str) -> Option<u64> {
     table.get(k).expect("get").map(|g| g.value())
 }
 
-/// Regtest's row's permit for the serve-credit replay write (NI-R6).
-pub(super) fn inject_permit() -> shekyl_network::Permit {
-    shekyl_network::Network::Regtest
-        .permit(shekyl_network::Lever::InjectServeCredit)
-        .expect("regtest's row permits it")
-}
-
-/// Regtest's row's permit for the issued-draws replay write (NI-R6).
-pub(super) fn issue_permit() -> shekyl_network::Permit {
-    shekyl_network::Network::Regtest
-        .permit(shekyl_network::Lever::IssueDraws)
-        .expect("regtest's row permits it")
-}
-
 pub(super) use crate::test_paths::tmp;
 
 /// Plant `draws` in `epoch`'s issued-draw index and set the epoch's

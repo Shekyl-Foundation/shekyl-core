@@ -264,10 +264,10 @@ mod vectors_tests;
 #[cfg(feature = "pipeline")]
 pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
-    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
-    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
-    Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
-    TemplateFacts, TipChanged, WatchDeepReorg, WatchLatch, WatchTip,
+    OfferAlt, Offered, PlanMismatchReason, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion, Reorganize, Rewind, Rewound, RunEnd,
+    RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts, TipChanged,
+    WatchDeepReorg, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
@@ -284,8 +284,6 @@ pub use schedule::{ChainRules, LeverRefused};
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
-pub use source::{
-    IngestEvent, Injection, InjectionParseError, SequenceNo, Sequenced, ServeCredit, Source,
-};
+pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

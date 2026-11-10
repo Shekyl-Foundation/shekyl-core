@@ -87,26 +87,12 @@
 //! index against its digest, and the fold's own count — and arrive through
 //! `refuse_corrupt` as the same row. The issued-draw index and its digest
 //! are written by [`WriteBatch::write_admissions`](super::write::WriteBatch::write_admissions) from the
-//! rules' admission plan. The regtest door below plants rows no block
-//! admitted, and folds a digest the caller already computed.
-//!
-//! # The regtest injector (§3.8 item 3)
-//!
-//! [`ChainStore::regtest_inject_serve_credit`](super::ChainStore::regtest_inject_serve_credit)
-//! is the writer's own test hook — the door the C++'s
-//! `regtest_inject_archival_serve_credit` (`blockchain.cpp:4708`) opened,
-//! writing a serve-credit bit the rules did not admit, attributed to the
-//! tip's height, refused off regtest. It lives beside the phase bodies
-//! because it writes their table and nothing else may. It is **not
-//! journaled**: it runs in its own transaction outside any block's
-//! recording, so no `undo_log` row names it, and a pop below its height
-//! leaves the bit — the C++'s behaviour, and the corpus's `Inject` event
-//! (commit 7) is a pipeline barrier for the same reason.
+//! rules' admission plan. No write outside a block's connect reaches these
+//! tables.
 
 use shekyl_chain_rules::{ArchivalDelta, ChainValid, ChainView, RecordWriteKind};
-use shekyl_network::{Lever, Permit};
-use shekyl_types::archival::{BundleReferences, IndexedDraw, IssuedDigest};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::archival::BundleReferences;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::apply_policy::ArchivalFamily;
@@ -114,25 +100,21 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, BundleReferencesBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{
-    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
-};
+use crate::ids::{ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
     ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
-    BLOCK_INFO,
+    ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
+    ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
 };
 
 use super::archival_reads;
 use super::error::{
-    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreCannot,
-    StoreError, StoreInvariant,
+    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreError,
+    StoreInvariant,
 };
 use super::write::WriteBatch;
-use super::ChainStore;
 
 impl<'id> WriteBatch<'_, 'id> {
     /// Phase 2's archival half: the block's bond records and serve credits.
@@ -672,136 +654,5 @@ impl<'id> WriteBatch<'_, 'id> {
             }
         }
         Ok(())
-    }
-}
-
-/// A replay write runs on its own lever's permit and no other.
-fn require(permit: Permit, wanted: Lever) -> Result<(), StoreError> {
-    if permit.lever() == wanted {
-        Ok(())
-    } else {
-        Err(StoreCannot::PermitForAnotherLever {
-            given: permit.lever(),
-            wanted,
-        }
-        .into())
-    }
-}
-
-impl ChainStore {
-    /// The regtest injector: `archival_serve_credit[(persona, shard, epoch,
-    /// tip)] = Present`, a bit no block earned, attributed to the tip's
-    /// height — the Gate-6 stand-in that lets a regtest reach a closed
-    /// epoch with a credit in it. It runs only on the network row's
-    /// `permit` for [`Lever::InjectServeCredit`] (`NETWORK_IDENTITY.md`
-    /// NI-R6), which only regtest's row grants: the store holds the
-    /// permit, never the network (rule 71).
-    ///
-    /// Its own transaction, **not journaled** (module doc): a pop below the
-    /// returned height leaves the bit, as the C++'s does. Returns the
-    /// height the bit was attributed to.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
-    /// write; [`StoreCannot::ChainEmpty`] with no block recorded (no tip
-    /// to attribute the bit to); [`StoreCannot::InjectionForUnbondedPersona`]
-    /// if `persona` has no bond record — every serve-credit read arms
-    /// SI-15, so a bit for a stranger would be a file the reads refuse
-    /// (the C++ does not check because the C++ has no such read belt);
-    /// [`StoreCannot::FamilyStubbed`] if this session stubs `ServeCredit`
-    /// — the door writes one family and does not skip; the admission and
-    /// engine errors of [`write`](Self::write).
-    pub fn regtest_inject_serve_credit(
-        &self,
-        permit: Permit,
-        persona: PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<BlockHeight, StoreError> {
-        require(permit, Lever::InjectServeCredit)?;
-        self.write(|batch| {
-            let tip = {
-                let info = batch.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
-                let tip = info.last()?.map(|(h, _)| h.value());
-                tip
-            };
-            let Some(tip) = tip else {
-                return Err(StoreCannot::ChainEmpty.into());
-            };
-            let height = BlockHeight::from_raw(tip);
-            // The stub refusal first: the door's own contract before the
-            // file's state.
-            let mut credits = batch.open_upsert_table(ARCHIVAL_SERVE_CREDIT)?;
-            let record = archival_reads::bond_record(batch.txn(), &persona)
-                .map_err(|f| batch.arm_read_fault(f))?;
-            if record.is_none() {
-                return Err(StoreCannot::InjectionForUnbondedPersona { persona }.into());
-            }
-            credits.upsert(
-                ServeCreditKey::new(persona, shard, epoch, height).key(),
-                Present,
-            )?;
-            Ok::<_, StoreError>(height)
-        })
-    }
-
-    /// The regtest draw issue: write `draws` into `epoch`'s issued-draw
-    /// index and set the epoch's running digest to `digest`
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`). The stand-in for
-    /// admission until admission exists: it lets a regtest chain reach a
-    /// slash pass with draws to settle, each already marked passed or not.
-    /// It runs only on the row's permit for [`Lever::IssueDraws`], as
-    /// [`regtest_inject_serve_credit`](Self::regtest_inject_serve_credit)
-    /// does on its own.
-    ///
-    /// **The caller folds the digest.** The store computes none of the
-    /// archival state it holds (`ARW-Q1`): `digest` is the cell's
-    /// post-image, the value read through
-    /// [`ReadSnapshot::issued_digest`](super::ReadSnapshot::issued_digest)
-    /// with each new draw's term added. A caller that hands a digest its
-    /// draws do not fold to has built the store SI-25 refuses at the slash
-    /// pass, which is how the tests of that refusal are driven.
-    ///
-    /// Its own transaction, **not journaled**: a pop leaves the draws, as
-    /// it leaves an injected credit.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
-    /// write; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
-    /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
-    /// if the index holds one of the draws; the admission and engine
-    /// errors of [`write`](Self::write).
-    pub fn regtest_issue_draws(
-        &self,
-        permit: Permit,
-        epoch: SettlementEpoch,
-        draws: &[IndexedDraw],
-        digest: IssuedDigest,
-    ) -> Result<(), StoreError> {
-        require(permit, Lever::IssueDraws)?;
-        self.write(|batch| {
-            let mut index = batch.open_upsert_table(ARCHIVAL_ISSUED_DRAW)?;
-            for draw in draws {
-                let persona = draw.persona;
-                if archival_reads::bond_record(batch.txn(), &persona)
-                    .map_err(|f| batch.arm_read_fault(f))?
-                    .is_none()
-                {
-                    return Err(StoreCannot::InjectionForUnbondedPersona { persona }.into());
-                }
-                let key =
-                    IssuedDrawKey::new(epoch, persona, draw.shard, draw.issuing_height, draw.draw);
-                if index.get(key.key())?.is_some() {
-                    return Err(StoreCannot::DrawAlreadyIssued { persona }.into());
-                }
-                index.upsert(key.key(), draw.state.encoded().as_encoded())?;
-            }
-            batch
-                .open_upsert_table(ARCHIVAL_ISSUED_DIGEST)?
-                .upsert(epoch.to_raw(), digest.encoded().as_encoded())?;
-            Ok::<_, StoreError>(())
-        })
     }
 }

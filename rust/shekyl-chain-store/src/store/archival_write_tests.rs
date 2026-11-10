@@ -8,8 +8,7 @@
 //! production snapshot API and compared with the **verdict** that produced
 //! it — never with a figure the test planted. The join and its credit
 //! (phase 2), the accrual (9a), the epoch close (9c) on a short levered epoch
-//! schedule, the attestation witness (5), the regtest injector door
-//! (`ChainStore::regtest_inject_serve_credit`), ARW-9's skip-and-widen
+//! schedule, the attestation witness (5), ARW-9's skip-and-widen
 //! under a stubbed family, and CEN-L7's `NotSettled` arm over a
 //! **persisted** record — the arm the rules crate cannot reach on its own,
 //! because its driver has no record that outlives a block.
@@ -38,7 +37,7 @@ use shekyl_chain_rules::{
     FormClaims, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot,
     Verdict,
 };
-use shekyl_types::archival::{BundleReferences, IndexedDraw, IssuedDigest, IssuedDraw};
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_wire::Input;
 
@@ -48,7 +47,7 @@ use super::connect_fixtures::{
     anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, expected_seed,
     expected_target, priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{inject_permit, issue_permit, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -511,129 +510,6 @@ fn no_references_is_no_row_and_a_malformed_section_is_refused() {
     drop(store);
 }
 
-// ------------------------------------------------------- the injector
-
-/// The regtest door: refused under any trust that carries an anchor
-/// (Fakechain is the one posture no release vouches for), refused on an
-/// empty chain, refused for a persona with no record (a bit for a
-/// stranger would be SI-15 at the next read), and otherwise a pass bit at
-/// the tip's height that the journal never saw — a pop below it leaves the
-/// bit, as the C++'s does.
-#[test]
-fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip() {
-    let path = tmp("aw-inject");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(P_SLOT);
-
-    let empty = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(empty, StoreError::Cannot(StoreCannot::ChainEmpty)),
-        "{empty:?}"
-    );
-
-    let mut grown = Grown::new();
-    for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    }
-    let stranger = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            stranger,
-            StoreError::Cannot(StoreCannot::InjectionForUnbondedPersona { persona }) if persona == p
-        ),
-        "{stranger:?}"
-    );
-    connect_one(
-        &store,
-        &mut grown,
-        &[Listed::Join { slot: P_SLOT }],
-        RuleSet::GENESIS,
-    );
-    let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
-
-    // A permit for another lever opens no door: the write runs on its own.
-    let off = store
-        .regtest_inject_serve_credit(issue_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            off,
-            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
-                given: shekyl_network::Lever::IssueDraws,
-                wanted: shekyl_network::Lever::InjectServeCredit,
-            })
-        ),
-        "{off:?}"
-    );
-    assert!(
-        !store
-            .begin_read()
-            .expect("read")
-            .pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .any(),
-        "a refused injection writes nothing"
-    );
-
-    let at = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .expect("Fakechain, a tip recorded, a record held");
-    assert_eq!(at, tip, "attributed to the tip");
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .to_raw(),
-        1
-    );
-    assert!(!snap.pass_count(&p, shard(3), epoch(1)).expect("read").any());
-    drop(snap);
-
-    // Not journaled: a block above the bit, popped, leaves it.
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    pop(&store);
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.tip().expect("read").recorded.map(|t| t.height),
-        Some(tip)
-    );
-    assert_eq!(
-        snap.pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .to_raw(),
-        1,
-        "the injected bit survives the pop below it"
-    );
-    drop(snap);
-    drop(store);
-}
-
-/// The door writes one family and does not skip: a session stubbing
-/// `ServeCredit` is refused at the table, not silently widened.
-#[test]
-fn the_injector_is_refused_when_serve_credits_are_stubbed() {
-    let path = tmp("aw-inject-stubbed");
-    let policy = ApplyPolicy::stubbed(&[ArchivalFamily::ServeCredit]).expect("non-empty");
-    let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
-    let mut grown = Grown::new();
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    let err = store
-        .regtest_inject_serve_credit(inject_permit(), persona(0x1f), shard(0), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            StoreError::Cannot(StoreCannot::FamilyStubbed(ArchivalFamily::ServeCredit))
-        ),
-        "{err:?}"
-    );
-    drop(store);
-}
-
 // ------------------------------------------------------------- ARW-9
 
 /// Skip-and-widen: a session stubbing `Bond` connects the join without
@@ -804,117 +680,6 @@ fn a_claim_with_a_filler_fee_proof_is_refused_at_j26_before_the_persisted_record
         },
     );
     drop(store);
-}
-
-/// The draw-issue door (`SO-D10f`) beside the credit injector: Fakechain
-/// only, bonded personas only, a draw issued once, and the digest the
-/// caller folded stored as given. Not journaled, like the credit.
-#[test]
-fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_once() {
-    let path = tmp("aw-issue-draws");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(P_SLOT);
-    let draw = |j: u32, passed: bool| IndexedDraw {
-        persona: p,
-        shard: shard(3),
-        issuing_height: BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
-        draw: j,
-        state: IssuedDraw {
-            revealed_at: BlockHeight::from_raw(FIRST_SPEND_HEIGHT + 1),
-            passed,
-        },
-    };
-    let digest = IssuedDigest::from_bytes([0x5a; 32]);
-
-    let mut grown = Grown::new();
-    for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    }
-    let stranger = store
-        .regtest_issue_draws(issue_permit(), epoch(0), &[draw(0, false)], digest)
-        .unwrap_err();
-    assert!(
-        matches!(
-            stranger,
-            StoreError::Cannot(StoreCannot::InjectionForUnbondedPersona { persona }) if persona == p
-        ),
-        "{stranger:?}"
-    );
-    connect_one(
-        &store,
-        &mut grown,
-        &[Listed::Join { slot: P_SLOT }],
-        RuleSet::GENESIS,
-    );
-    let off = store
-        .regtest_issue_draws(inject_permit(), epoch(0), &[draw(0, false)], digest)
-        .unwrap_err();
-    assert!(
-        matches!(
-            off,
-            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
-                given: shekyl_network::Lever::InjectServeCredit,
-                wanted: shekyl_network::Lever::IssueDraws,
-            })
-        ),
-        "{off:?}"
-    );
-    let read = |e: u64| {
-        let snap = store.begin_read().expect("read");
-        (
-            snap.issued_draws(epoch(e), EpochFloor::NONE).expect("read"),
-            snap.issued_digest(epoch(e), EpochFloor::NONE)
-                .expect("read"),
-        )
-    };
-    assert_eq!(
-        read(0),
-        (vec![], IssuedDigest::ZERO),
-        "a refused issue writes nothing"
-    );
-
-    store
-        .regtest_issue_draws(
-            issue_permit(),
-            epoch(0),
-            &[draw(1, true), draw(0, false)],
-            digest,
-        )
-        .expect("Fakechain, a record held, draws not yet issued");
-    assert_eq!(
-        read(0),
-        (vec![draw(0, false), draw(1, true)], digest),
-        "both draws in index order, the digest as given"
-    );
-    assert_eq!(
-        read(1),
-        (vec![], IssuedDigest::ZERO),
-        "another epoch is untouched"
-    );
-
-    // A draw the index holds is not issued again, and the refused batch
-    // writes nothing: not the fresh draw listed before it, not the digest.
-    let again = store
-        .regtest_issue_draws(
-            issue_permit(),
-            epoch(0),
-            &[draw(2, false), draw(1, false)],
-            IssuedDigest::ZERO,
-        )
-        .unwrap_err();
-    assert!(
-        matches!(
-            again,
-            StoreError::Cannot(StoreCannot::DrawAlreadyIssued { persona }) if persona == p
-        ),
-        "{again:?}"
-    );
-    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
-
-    // Not journaled: a block above the draws, popped, leaves them.
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    pop(&store);
-    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
 }
 
 #[path = "block_draws_write_tests.rs"]

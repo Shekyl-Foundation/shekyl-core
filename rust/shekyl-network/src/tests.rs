@@ -166,20 +166,6 @@ fn each_genesis_derives_its_recorded_id_and_prefix() {
     }
 }
 
-/// A permit exists exactly where the row permits the lever, and names it.
-#[test]
-fn a_permit_is_the_rows_permission() {
-    for net in Network::ALL {
-        for lever in Lever::ALL {
-            assert_eq!(
-                net.permit(lever).map(Permit::lever),
-                net.permits(lever).then_some(lever),
-                "{net} {lever:?}"
-            );
-        }
-    }
-}
-
 /// The seeds are the row's: mainnet and testnet share six hosts, testnet
 /// pairs each with its onion, and stagenet and regtest have none.
 #[test]

@@ -23,9 +23,7 @@ use std::sync::Arc;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalTag, Follow, Origin, Reply, Service, ServiceConfig,
 };
-use shekyl_chain_ingest::{
-    ChainRules, CorpusReader, IngestEvent, Inject, ProductionSubstrate, ServeCredit, Source,
-};
+use shekyl_chain_ingest::{ChainRules, CorpusReader, IngestEvent, ProductionSubstrate, Source};
 use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
@@ -46,18 +44,13 @@ pub struct Corpus {
     pub tip_height: u64,
 }
 
-/// One step of a corpus.
+/// One step of a corpus: a block and its listed bodies.
 #[derive(Clone, Debug)]
-pub enum Step {
-    /// A block and its listed bodies.
-    Block {
-        /// The block blob.
-        block: Vec<u8>,
-        /// The listed bodies, in the block's order.
-        bodies: Vec<Vec<u8>>,
-    },
-    /// The out-of-band serve credit the capture wrote at the tip.
-    Inject(ServeCredit),
+pub struct Step {
+    /// The block blob.
+    pub block: Vec<u8>,
+    /// The listed bodies, in the block's order.
+    pub bodies: Vec<Vec<u8>>,
 }
 
 impl Corpus {
@@ -168,7 +161,7 @@ impl Corpus {
                         "{}: a block with bundle references",
                         self.shape
                     );
-                    steps.push(Step::Block {
+                    steps.push(Step {
                         block: candidate.block.serialize(),
                         bodies: candidate
                             .transactions
@@ -177,7 +170,6 @@ impl Corpus {
                             .collect(),
                     });
                 }
-                IngestEvent::Inject(credit) => steps.push(Step::Inject(credit)),
                 IngestEvent::Rewind { .. } => panic!("{}: a rewind in a corpus", self.shape),
             }
         }
@@ -264,37 +256,26 @@ impl Chain {
     /// A block did not connect: the corpus is the chain these rules accept.
     pub async fn apply(&self, steps: &[Step]) {
         let door = self.service.door();
-        for step in steps {
-            match step {
-                Step::Block { block, bodies } => {
-                    let tag = ArrivalTag(self.next_tag.fetch_add(1, Ordering::Relaxed));
-                    let ticket = loop {
-                        match door.offer(Arrival {
-                            tag,
-                            origin: Origin::Local,
-                            block: block.clone(),
-                            bodies: bodies.clone(),
-                            bundle_references: Vec::new(),
-                            bundle_bodies: Vec::new(),
-                        }) {
-                            Ok(ticket) => break ticket,
-                            Err(_) => tokio::task::yield_now().await,
-                        }
-                    };
-                    let reply = ticket.reply().await.reply;
-                    assert!(
-                        matches!(reply, Reply::Connected { .. } | Reply::AlreadyHeld),
-                        "a corpus block did not connect: {reply:?}"
-                    );
+        for Step { block, bodies } in steps {
+            let tag = ArrivalTag(self.next_tag.fetch_add(1, Ordering::Relaxed));
+            let ticket = loop {
+                match door.offer(Arrival {
+                    tag,
+                    origin: Origin::Local,
+                    block: block.clone(),
+                    bodies: bodies.clone(),
+                    bundle_references: Vec::new(),
+                    bundle_bodies: Vec::new(),
+                }) {
+                    Ok(ticket) => break ticket,
+                    Err(_) => tokio::task::yield_now().await,
                 }
-                Step::Inject(credit) => {
-                    self.service
-                        .connector()
-                        .ask(Inject(*credit))
-                        .await
-                        .expect("the credit is written");
-                }
-            }
+            };
+            let reply = ticket.reply().await.reply;
+            assert!(
+                matches!(reply, Reply::Connected { .. } | Reply::AlreadyHeld),
+                "a corpus block did not connect: {reply:?}"
+            );
         }
     }
 

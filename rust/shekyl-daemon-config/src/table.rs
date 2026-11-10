@@ -516,7 +516,6 @@ mod tests {
         }
         let configurable = Lever::ALL
             .into_iter()
-            .filter(|l| !matches!(l, Lever::InjectServeCredit | Lever::IssueDraws))
             .map(DevGate::Lever)
             .chain(Staging::ALL.into_iter().map(DevGate::Staging));
         for gate in configurable {

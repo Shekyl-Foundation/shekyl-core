@@ -69,14 +69,13 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
-use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
+use shekyl_types::archival::BondRecord;
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::schedule::ChainRules;
-use crate::source::ServeCredit;
 
 #[path = "connector_bundles.rs"]
 mod bundles;
@@ -244,39 +243,6 @@ pub struct Rewind {
 pub struct PopBlocks {
     /// How many.
     pub count: u64,
-}
-
-/// Write the out-of-band serve credit at the tip, in its own store
-/// transaction, through the store's regtest door
-/// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3). Not
-/// journaled: a later `Rewind` below the attributed height does not carry
-/// it away, which is why the pipeline refuses one.
-#[derive(Clone, Copy, Debug)]
-pub struct Inject(pub ServeCredit);
-
-/// What an [`Inject`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Injected {
-    /// The height the store attributed the bit to: the tip when it was
-    /// written.
-    pub at: BlockHeight,
-}
-
-/// Write issued draws into `epoch`'s index, in their own store transaction,
-/// through the store's regtest door (`ChainStore::regtest_issue_draws`;
-/// `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): the stand-in for admission,
-/// which does not exist yet, so a scenario's slash pass has draws to
-/// settle. `digest` is the epoch's running digest with these draws folded
-/// in; the caller folds it, as admission will. Not journaled, like
-/// [`Inject`].
-#[derive(Clone, Debug)]
-pub struct IssueDraws {
-    /// The epoch the draws were issued in.
-    pub epoch: SettlementEpoch,
-    /// The draws, each with whether it was passed.
-    pub draws: Vec<IndexedDraw>,
-    /// The epoch's digest after them.
-    pub digest: IssuedDigest,
 }
 
 /// The redb-side logical state now (commit 2), for the digest sink.
@@ -484,44 +450,6 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.write(f);
-        self.latch(result)
-    }
-
-    /// The store's regtest door, in its own transaction, behind the same
-    /// latch: the one write that is not a batch. The store refuses it
-    /// under an anchored trust, on an empty chain and for a persona with
-    /// no record; each of those is the store's `Cannot`, terminal like any
-    /// other store fault — the replay cannot reach the daemon's archival
-    /// state without the bit, so the run is over.
-    fn inject(
-        &mut self,
-        permit: shekyl_network::Permit,
-        credit: ServeCredit,
-    ) -> Result<BlockHeight, RunFault> {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self
-            .store
-            .regtest_inject_serve_credit(permit, credit.persona, credit.shard, credit.epoch)
-            .map_err(RunFault::Store);
-        self.latch(result)
-    }
-
-    /// The store's regtest draw issue, behind the same latch as
-    /// [`Self::inject`] and terminal on the same refusals.
-    fn issue_draws(
-        &mut self,
-        permit: shekyl_network::Permit,
-        issue: &IssueDraws,
-    ) -> Result<(), RunFault> {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self
-            .store
-            .regtest_issue_draws(permit, issue.epoch, &issue.draws, issue.digest)
-            .map_err(RunFault::Store);
         self.latch(result)
     }
 
@@ -888,40 +816,6 @@ fn heights_popped(after: BlockHeight, tip: BlockHeight) -> impl Iterator<Item = 
         next = height.checked_add(BlockCount::ONE);
         Some(height)
     })
-}
-
-impl Message<Inject> for Connector {
-    type Reply = Result<Injected, RunFault>;
-
-    async fn handle(&mut self, msg: Inject, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        let Inject(credit) = msg;
-        let Some(permit) = self.rules.permit(shekyl_network::Lever::InjectServeCredit) else {
-            return Err(RunFault::InjectNotPermitted {
-                credit,
-                network: self.rules.network(),
-            });
-        };
-        let at = self.writer.inject(permit, credit)?;
-        Ok(Injected { at })
-    }
-}
-
-impl Message<IssueDraws> for Connector {
-    type Reply = Result<(), RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: IssueDraws,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let Some(permit) = self.rules.permit(shekyl_network::Lever::IssueDraws) else {
-            return Err(RunFault::IssueNotPermitted {
-                epoch: msg.epoch,
-                network: self.rules.network(),
-            });
-        };
-        self.writer.issue_draws(permit, &msg)
-    }
 }
 
 impl Message<Digest> for Connector {

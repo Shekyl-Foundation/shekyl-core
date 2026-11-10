@@ -394,12 +394,12 @@ mod fetch {
         BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest, GetBlocksByHeightResponse,
         RpcStatus,
     };
-    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
+    use shekyl_types::{BlockHeight, TxHash};
 
     use super::three_blocks;
     use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
     use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
-    use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
+    use crate::source::Source;
     use shekyl_network::Network;
 
     /// One recorded request: the route and the heights asked.
@@ -479,7 +479,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &[], &mut w)
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &mut w)
             .await
             .expect("fetched");
         assert_eq!(written, 3);
@@ -522,7 +522,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("archived");
         match err {
@@ -559,7 +559,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("skeleton");
         // Block 0 lists no body; the first skeleton is block 1's.
@@ -584,7 +584,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("pruned");
         match err {
@@ -611,7 +611,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("refused");
         assert!(
@@ -633,7 +633,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("short");
         assert!(
@@ -656,86 +656,10 @@ mod fetch {
         )
         .expect("header");
         assert!(matches!(
-            fetch_corpus(&rpc, 0..1, batch(1), &[], &mut w)
+            fetch_corpus(&rpc, 0..1, batch(1), &mut w)
                 .await
                 .expect_err("transport"),
             FetchFault::Rpc(RpcError::ConnectionError(_))
         ));
-    }
-
-    fn receipt(at: u64, tag: u8) -> Injection {
-        Injection {
-            at: BlockHeight::from_raw(at),
-            credit: ServeCredit {
-                persona: PCanonicalId::from_bytes([tag; 32]),
-                shard: ShardId::from_raw(u64::from(tag) + 100),
-                epoch: SettlementEpoch::from_raw(u64::from(tag)),
-            },
-        }
-    }
-
-    /// The injector's receipts are placed right after the block at their
-    /// height — across a batch boundary, two at one height in the order
-    /// given — and the corpus reads the `Inject` back where the daemon
-    /// wrote it. A receipt the range does not reach is refused before the
-    /// first request.
-    #[tokio::test]
-    async fn injections_land_beside_their_block_and_a_stray_one_is_refused_first() {
-        let blocks = three_blocks();
-        let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            Network::Regtest,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        // Out of height order on purpose: placement is by `at`, not by
-        // position in the flag list.
-        let receipts = [receipt(2, 0x22), receipt(1, 0x11), receipt(2, 0x33)];
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &receipts, &mut w)
-            .await
-            .expect("fetched");
-        assert_eq!(written, 3, "blocks, not records");
-        let bytes = w.finish().expect("count").into_inner();
-        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-        assert_eq!(r.declared(), 6);
-        let mut shape = Vec::new();
-        while let Some(Sequenced { event, .. }) = r.next().expect("record") {
-            shape.push(match event {
-                IngestEvent::Extend(_) => None,
-                IngestEvent::Inject(credit) => Some(credit),
-                other => panic!("{other:?}"),
-            });
-        }
-        assert_eq!(
-            shape,
-            vec![
-                None,
-                None,
-                Some(receipts[1].credit),
-                None,
-                Some(receipts[0].credit),
-                Some(receipts[2].credit),
-            ]
-        );
-
-        let rpc = Scripted::new(&[reply(&blocks)]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            Network::Regtest,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[receipt(3, 0x44)], &mut w)
-            .await
-            .expect_err("stray");
-        assert!(
-            matches!(err, FetchFault::InjectionOutOfRange { injection } if injection == receipt(3, 0x44)),
-            "{err}"
-        );
-        assert!(
-            rpc.asked.lock().expect("lock").is_empty(),
-            "refused before any block was requested"
-        );
     }
 }

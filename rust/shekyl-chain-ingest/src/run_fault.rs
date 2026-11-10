@@ -9,10 +9,9 @@
 //! messages share, so a new message maps a fault by calling [`fault_reply`]
 //! rather than growing another copy of the stale arms.
 
-use crate::source::ServeCredit;
 use shekyl_chain_rules::{Corrupt, Fault, ReferenceMismatch, Retry, Stale, Target, TxSlot};
 use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
@@ -41,8 +40,6 @@ impl RunEnd {
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
-            | RunFault::InjectNotPermitted { .. }
-            | RunFault::IssueNotPermitted { .. }
             | RunFault::NotAlternative { .. }
             | RunFault::StalePlan { .. }
             | RunFault::PlanMismatch { .. }
@@ -202,28 +199,6 @@ pub enum RunFault {
         to: BlockHeight,
         /// The tip at the time.
         tip: Option<BlockHeight>,
-    },
-    /// An [`super::Inject`] under rules whose network's row does not permit
-    /// the write (DRS-E4 §3.8 item 3; `NETWORK_IDENTITY.md` NI-R6): refused
-    /// here, before the store sees it, so a source that carries one into a
-    /// replay of another network is a driver fault and not a store-terminal
-    /// one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) on {network}: its row does not permit the serve-credit write", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectNotPermitted {
-        /// The credit refused.
-        credit: ServeCredit,
-        /// The network the connector runs on.
-        network: shekyl_network::Network,
-    },
-    /// An [`super::IssueDraws`] under rules whose network's row does not
-    /// permit the write, refused here for the same reason as
-    /// [`Self::InjectNotPermitted`].
-    #[error("issue of draws for epoch {epoch} on {network}: its row does not permit the issued-draws write")]
-    IssueNotPermitted {
-        /// The epoch the draws were for.
-        epoch: SettlementEpoch,
-        /// The network the connector runs on.
-        network: shekyl_network::Network,
     },
     /// An [`super::OfferAlt`] for a block whose parent is the recorded tip:
     /// an extension, which is an [`super::Apply`]'s. A driver defect; the

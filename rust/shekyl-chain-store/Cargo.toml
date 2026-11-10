@@ -12,9 +12,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-# A network row's permit for the replay writes (NETWORK_IDENTITY.md NI-R6):
-# the store holds the permit, never the network (rule 71).
-shekyl-network = { path = "../shekyl-network" }
 redb = { workspace = true }
 # The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
 # `CodecError`, the four value shapes, and the codecs for types this crate
@@ -60,6 +57,8 @@ pool-commit-fault = []
 workspace = true
 
 [dev-dependencies]
+# HARNESS_NETWORK_ID for the bundle fixtures' witness signatures.
+shekyl-network = { path = "../shekyl-network" }
 # The manifest walk in `codec::snapshot_tests::workflow_gates_this_crate`
 # derives the set of crates whose code can change a stored byte from the
 # workspace's `Cargo.toml`s. A hand-rolled reader that skipped a spelling it

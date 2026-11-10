@@ -50,11 +50,9 @@
 //! exists. The block at `u64::MAX` is yielded; the event after it is
 //! [`MutationFault::HeightExhausted`]. A fault is not retryable
 //! ([`MutationFault::Stopped`]). The wrapper never reorders, renumbers or
-//! adds events, and it is **Extend-only**: a `Rewind` or an `Inject` from
-//! the inner source is a wrapper fault — a mutation on a fork is the
-//! reorg × mutation cross §3.10 names as out of scope, and a mutation over
-//! an out-of-band write has no family (no captured chain carries an
-//! `Inject`).
+//! adds events, and it is **Extend-only**: a `Rewind` from the inner source
+//! is a wrapper fault — a mutation on a fork is the reorg × mutation cross
+//! §3.10 names as out of scope.
 
 use core::fmt;
 
@@ -66,7 +64,7 @@ use shekyl_types::{
 use shekyl_wire::transaction::MAX_FCMP_INPUTS;
 use shekyl_wire::{Ct, Input, Transaction};
 
-use crate::source::{IngestEvent, Sequenced, ServeCredit, Source};
+use crate::source::{IngestEvent, Sequenced, Source};
 
 /// One second past the future-time limit CEN-C1 accepts (`clock + FTL`).
 const PAST_FTL: u64 = FTL_SECONDS + 1;
@@ -1098,8 +1096,7 @@ impl<'a, S: Source> Mutated<'a, S> {
     }
 
     /// `u64::MAX` was yielded. Another event is [`MutationFault::HeightExhausted`],
-    /// except a `Rewind` or an `Inject`, which are still the Extend-only
-    /// faults.
+    /// except a `Rewind`, which is still the Extend-only fault.
     fn pull_past_end(&mut self) -> Result<Option<Sequenced<IngestEvent>>, MutationFault<S::Fault>> {
         match self.inner.next() {
             Err(fault) => self.fail(MutationFault::Inner(fault)),
@@ -1108,10 +1105,6 @@ impl<'a, S: Source> Mutated<'a, S> {
                 event: IngestEvent::Rewind { to },
                 ..
             })) => self.fail(MutationFault::Rewind { to }),
-            Ok(Some(Sequenced {
-                event: IngestEvent::Inject(credit),
-                ..
-            })) => self.fail(MutationFault::Inject(credit)),
             Ok(Some(_)) => self.fail(MutationFault::HeightExhausted {
                 after: BlockHeight::from_raw(u64::MAX),
             }),
@@ -1131,9 +1124,6 @@ pub enum MutationFault<F> {
         /// The rewind's target.
         to: BlockHeight,
     },
-    /// The inner source emitted an `Inject`; the family is Extend-only.
-    #[error("the inner source emitted an out-of-band serve credit for {persona} (shard {shard}, epoch {epoch}); the mutation family is Extend-only", persona = .0.persona, shard = .0.shard, epoch = .0.epoch)]
-    Inject(ServeCredit),
     /// The candidate at `at` could not carry the mutation.
     #[error("{mutation} at height {at}: {cause}")]
     Unmutable {
@@ -1189,7 +1179,6 @@ impl<S: Source> Source for Mutated<'_, S> {
         let candidate = match event {
             IngestEvent::Extend(candidate) => candidate,
             IngestEvent::Rewind { to } => return self.fail(MutationFault::Rewind { to }),
-            IngestEvent::Inject(credit) => return self.fail(MutationFault::Inject(credit)),
         };
         let produced = if height == self.at {
             match self

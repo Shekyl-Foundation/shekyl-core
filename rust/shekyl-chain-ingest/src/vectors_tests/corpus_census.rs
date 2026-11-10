@@ -78,9 +78,6 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
                 };
                 height = to.to_raw() + 1;
             }
-            // An inject occupies no height and lists no body: nothing a
-            // block mutation could take as an operand.
-            IngestEvent::Inject(_) => {}
         }
     }
     chain

@@ -763,7 +763,7 @@ mod curve_read_tests;
 mod archival_read_tests;
 
 /// DRS-E4 commit 5: the archival writer's rows, read back against the
-/// verdict; the injector door; ARW-9; CEN-L7 over a persisted record.
+/// verdict; ARW-9; CEN-L7 over a persisted record.
 #[cfg(test)]
 #[path = "archival_write_tests.rs"]
 mod archival_write_tests;

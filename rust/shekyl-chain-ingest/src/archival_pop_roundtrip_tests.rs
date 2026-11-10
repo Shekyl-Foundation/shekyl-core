@@ -173,7 +173,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
 /// The slash-and-reinstate chain (module docs), every block from the join
 /// on popped and reconnected: a compact join on two shards at a non-zero
 /// epoch; its first serve credit; eleven epochs of settlements, passed on one
-/// shard and missed on the other, with injected credits; the slash, whose
+/// shard and missed on the other, on admitted draws; the slash, whose
 /// pop is its revert; the Reinstate that closes the interval; the release
 /// at the cooldown's boundary.
 ///
