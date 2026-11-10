@@ -332,7 +332,7 @@ moving; at the pin only the first row has one.
 | `block_weight_short_term_surge_factor = 3` | `config/consensus_constants.json:16` | Worst cold-block verify within a third of the block time; 3 is the integer below the conservative d24 bracket 3.67, an Assumption until BA-T10 re-runs the full sweep | floor, 2026-09-05, pre-`PL-D3`; the Bp+ term 2026-11-08 (BA-I110) | No | BA-G4, BA-T2, BA-T10 |
 | `block_weight_full_reward_zone_bytes = 300 000` | `config/consensus_constants.json:17` | Zone-point block verifies in 7.23 s | as above | No | BA-G4, BA-T10 |
 | `FCMP_MAX_INPUTS_PER_TX = 8` | `src/cryptonote_config.h` at `63e456fb95` (line 160) | "bounds proof generation time and tx size"; derivation owed | floor and x86 dev, 2026-09-24, n = 1 | No | `docs/FOLLOWUPS.md:141`, BA-T10 |
-| Maximum tree depth 24 | `rust/shekyl-fcmp/src/lib.rs:50` | Proving cost and proof size | Nothing past depth 7 | No | BA-G4 |
+| Maximum tree depth 24 | `rust/shekyl-fcmp/src/lib.rs:49` | Proving cost and proof size | Nothing past depth 7 | No | BA-G4 |
 | `MAX_ATTESTATION_RECORDS = 256` | `rust/shekyl-types/src/archival/mod.rs:239` | Per-block admission cost | Not measured | No | BA-G16 |
 | IBD floor, redb ≤ 1.25× LMDB | `scripts/bench/drs_artifact.py:29` | Slower IBD means fewer full nodes | x86 dev, LMDB arm only | No | BA-G6, BA-T13 |
 | Read shape for the weight window | ruled in [`CHAIN_RULES_SLICE_7.md`](../completed/CHAIN_RULES_SLICE_7.md) | ≤ 5 % of zone-point verify; measured 0.5 % | floor, 2026-09-27, n = 1 | No | None needed: about ten times headroom, and the denominator is BA-G4's |

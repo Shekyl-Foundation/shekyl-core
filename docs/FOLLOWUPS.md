@@ -714,9 +714,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`.**
   - Target: pre-genesis
 
-- **`shekyl-fcmp`: resolve `useless_conversion` clippy warnings in `frost_sal.rs`.**
-  - Target: pre-genesis
-
 - **Full migration of remaining `SHEKYL_*` FFI constants to the JSON-authority pattern (target: post-stressnet, pre-audit-final).**
   - Target: pre-genesis
 

@@ -93,36 +93,37 @@ Move to 3-of-5 or higher when:
 
 ---
 
-## 2. Group Setup (DKG Ceremony)
+## 2. Group Setup (Dealer Mode)
 
 ### Prerequisites
 
-- All N participants have Shekyl wallets with PQC key material
-- Each participant knows the hybrid public keys of all others
-- Communication channel exists between all participants
+- One participant, the owner, runs the setup. The owner generates every
+  key and is trusted with all of them until the member files are
+  delivered (`PQC_MULTISIG.md` §5.2).
+- Every participant has a Shekyl wallet to load its member file into.
+- A private channel from the owner to each participant: a member file
+  holds that participant's secrets.
 
 ### Steps
 
-1. **Exchange public keys**: Each participant exports their hybrid public
-   key (hex) and shares it with all others.
+1. **Create group**: In the GUI, navigate to Multisig → Setup Group.
+   Enter N (total participants) and M (required signatures).
 
-2. **Create group**: In the GUI, navigate to Multisig → Setup Group.
-   Enter N (total participants), M (required signatures), and all
-   participant public keys.
+2. **Key split**: The wallet generates the group's keys, splits the
+   group's FROST key M-of-N, and writes one member file per participant
+   (`PQC_MULTISIG.md` §6.6). No key-generation round runs, so the
+   participants need not be online together.
 
-3. **DKG execution**: The wallet runs `dkg-pedpop` to establish the
-   shared group key. This requires all N participants to be online
-   simultaneously.
+3. **Deliver the files**: The owner gives each participant its own
+   member file over the private channel, then deletes its copies of the
+   other participants' files.
 
-4. **Fingerprint verification**: After DKG completes, each participant
-   sees the same 3-representation fingerprint. **All participants must
-   confirm their fingerprint matches** before transacting. This is the
-   only human verification step — do not skip it.
+4. **Fingerprint verification**: Each participant loads its member file
+   and sees the group's 3-representation fingerprint. **All participants
+   must confirm their fingerprint matches** before transacting. This is
+   the only human verification step — do not skip it.
 
-5. **Loss acknowledgment**: The GUI requires explicit acknowledgment of
-   the 1/N loss limitation before the group is finalized.
-
-6. **Export group descriptor**: After setup, export the group descriptor
+5. **Export group descriptor**: After setup, export the group descriptor
    file (Settings → Group Descriptor → Export). This single JSON file
    contains everything needed to restore the group from seeds.
    **Store it with your wallet backup.**
@@ -164,10 +165,10 @@ spending.
 
 **Setup:**
 1. Each of the 5 keyholders creates a wallet.
-2. Designate a setup coordinator (any member) who collects public keys
-   and initiates the DKG.
-3. All 5 must be online simultaneously for DKG. Schedule a 30-minute
-   window.
+2. Designate the owner (any member), who runs the setup and delivers
+   each keyholder its member file in person or over a private channel.
+3. Each keyholder loads its member file; no shared online window is
+   needed.
 4. All 5 verify fingerprints — use a group video call where each reads
    their fingerprint.
 5. All 5 export and back up their group descriptors independently.
@@ -498,10 +499,13 @@ support ML-DSA-65. V3.1 signing requires a full desktop or laptop.
 Hardware wallet support is a V3.2 goal. See `docs/FOLLOWUPS.md` for
 vendor outreach recommendations and technical constraints.
 
-### 9.5 All Participants Online for DKG
+### 9.5 A Trusted Owner at Setup
 
-The DKG ceremony requires all N participants to be online
-simultaneously. After DKG, daily operation is asynchronous.
+Setup is dealer mode: the owner generates every key and holds every
+member's share until the member files are delivered. Participants who
+cannot trust one owner with that wait for a key-generation ceremony
+mode, which would be a later `spend_auth_version` (`PQC_MULTISIG.md`
+§5.2). After setup, daily operation is asynchronous.
 
 ### 9.6 No Partial Key Rotation
 

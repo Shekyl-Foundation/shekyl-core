@@ -219,13 +219,10 @@ A group is defined by:
 **`MAX_MULTISIG_PARTICIPANTS` (MSW-G) = 5** (decided 2026-07-15
 overhaul; withdraws same-day provisional 8).
 
-**Enforcement status (pre-genesis).** This is the **ratified target**,
-not the live constant. Until **MSW-1** lands, production code still
-compiles the constant as **seven**
-(`rust/shekyl-crypto-pq/src/multisig.rs`,
-`src/cryptonote_config.h`). Do not read this section as "the node
-already rejects n>5." MSW-1 is the atomic cutover of the constant +
-bound KATs; this PR is design/docs only.
+**Enforced.** `MAX_MULTISIG_PARTICIPANTS = 5` in
+`rust/shekyl-crypto-pq/src/multisig.rs`, mirrored in `shekyl-address`
+and `shekyl-wire` under compile-time pins. The address, the key
+container, the `0x0D` entry and the dealer split each refuse `n > 5`.
 
 **Derivation:** MAX = **2f+1 at f=2** — classical majority-threshold
 BFT for the *largest group we intend to serve*. Consumer: largest
@@ -239,8 +236,11 @@ requires n>5 *and* zone/address usability are dispositioned. See
 
 **Product path (Option E′, §15.4a / design §0.5):** the owner is the
 trusted dealer. Generate `b` and `y_group`, Shamir-split `y_group`,
-write participant files. **No DKG.** TRaccoon-class papers assume the
-same trusted KeyGen.
+write participant files (§6.6). **No DKG.** TRaccoon-class papers assume
+the same trusted KeyGen. The split is
+`shekyl_fcmp::frost_sal::dealer_split`: Shamir over the Ed25519 scalar
+field at `x = 1..=n`, verification shares `share_i·T`, `y_group` gone
+once the shares exist.
 
 **Mutually-distrusting parties** (buyer/seller/arbitrator) MAY get a
 DKG ceremony behind a **later** `spend_auth_version` / ceremony mode —
@@ -497,6 +497,15 @@ sign:
 | group KEM secret | 2432 B | X25519 (32) ‖ ML-KEM-768 decapsulation key (2400) |
 | member KEM secret | 2432 B | this member's own, same layout |
 | transport secret | 32 B | keys the ceremony blobs (§12) |
+
+`y_share` is the Shamir share at FROST participant `member_index + 1`.
+`shekyl_fcmp::frost_sal::threshold_keys` loads it, with the verification
+shares and the address's `Y_group`, into the member's
+`ThresholdKeys<Ed25519T>`, and refuses a file whose shares would not sign:
+a non-canonical share, a verification share that is not a prime-order
+point, a share that is not its own verification share's discrete log,
+shares that do not open `Y_group`, and a share off the group's
+polynomial. Each refusal is its own `FrostKeyError` variant.
 
 The **transport secret** is
 `shekyl_crypto_pq::derivation::derive_group_transport_secret`: HKDF-SHA-512
@@ -1535,6 +1544,7 @@ published; intent REJECTED
 | Per-output forward privacy | Option C N-fold KEM fan-out + per-output ephemeral keys |
 | Spend-to-spend unlinkability (within scheme-2) | Different ephemeral N-key blobs per spend — **but see stream attribution below** |
 | Group identity privacy from passive observer | group_id not on-chain; encrypted transport |
+| Group size | **Not private.** Each `0x0D` entry gives the receiving group's `n` (§7.4); inherent to Option E′ |
 | Role-pattern privacy from relay observers | Encrypted message_type in envelope |
 | Filesystem metadata privacy | Opaque filenames + encrypted manifest (§12.6) |
 
@@ -1769,12 +1779,15 @@ existed only because a single assigned prover held `y`. Does **not**
 change quantum authorization strength (already M × ML-DSA). Does **not**
 shrink auth blobs (15.4b).
 
-**Blocked on (internal — now open):** Apr 9 `y=0` / two-component-address
-gate is dead — `derive_output_secrets` asserts `y ≠ 0`
-(`rust/shekyl-crypto-pq/src/derivation.rs`; formula
-`O = ho·G + B + y·T` in `output.rs`). Remaining work: threshold-
-share `y_group`, wire `0x02`, nonce-discipline types, E′ address layout
-(`B` + `Y_group` + N×KEM). **Not blocked on NIST.**
+**Built:** the two-component output (`derive_output_secrets` asserts
+`y ≠ 0`), the E′ address (`B` + `Y_group` + `(N+1)`×KEM), the `0x0D`
+receive path, the dealer split of `y_group`, and the SAL leg as a FROST
+signature through `modular_frost`'s machines (`shekyl_fcmp::frost_sal`;
+keys offset by `y_kem − o_blind`, refused when they do not open the
+rerandomized output). M-of-N spends of real E′ outputs verify
+(`rust/shekyl-fcmp/tests/frost_spend.rs`). **Remaining:** the signing
+ceremony and its held nonce (`shekyl-multisig`), transaction assembly,
+the wallet. **Not blocked on NIST.**
 
 **Watch (15.4b size only):** dPN25 (T≤8, ~2.7 KB), TALUS/ML-DSA-threshold.
 Do **not** lead with TRaccoon (wrong N, coordinator, no DKG).
@@ -1964,9 +1977,9 @@ rust/shekyl-scanner/src/scan.rs
 
 **Status: planned sketch — these flags are not in any `Cargo.toml`
 today.** Do not copy-paste the block below into a crate; it names the
-intended gate axes for Track B / Option E′. Live today: `multisig`
-scaffolding feature on engine-core / ffi (F-6 CI lane; the lane's former
-third package, the transitional `shekyl-engine-rpc`, is deleted).
+intended gate axes for Track B / Option E′. Live today: the `multisig`
+feature on engine-core, `shekyl-fcmp` and `shekyl-fcmp-proofs` (F-6 CI
+lane, `.github/workflows/multisig-feature.yml`).
 `frost-sal-v4` and `unsafe-testing-only` land when E′ / simple-mode
 fixtures are implemented (after Option A orchestration DELETE).
 
@@ -1985,11 +1998,10 @@ CI verifies release builds do not contain simple-mode symbols.
 
 **`frost-sal-v4` is E′'s planned gate** (was specified, never built —
 now the first real coexistence boundary for `spend_auth_version =
-0x02`). Build it after deleting the Option A `MultisigGroup` wrapper;
-**keep** `shekyl-fcmp::{frost_sal, frost_dkg}` primitives. Do **not**
-park the rejected fixed `pqc_public_key` fossil behind this flag —
-**delete** `multisig/{dkg,group,signing}.rs` orchestration (R1-F-3)
-and re-home clean SAL-only types under the E′ stack.
+0x02`). The Option A `MultisigGroup` wrapper is deleted; the SAL layer it
+gates is `shekyl_fcmp::frost_sal`, and the Option A orchestration
+(`multisig/{dkg,group,signing}.rs`, R1-F-3) is deleted. Do **not** park
+the rejected fixed `pqc_public_key` fossil behind this flag.
 
 ### 16.8 Test matrix
 

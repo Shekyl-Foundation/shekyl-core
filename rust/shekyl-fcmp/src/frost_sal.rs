@@ -34,6 +34,10 @@
 //! Nonce custody is the machine's: `modular_frost` hedges each nonce with
 //! the secret share and binds every signer's nonces to the whole signing
 //! set (FROST's binding factor). Nothing here sees a nonce.
+//!
+//! Signing under a public additive tweak of the group key is standard, but
+//! its soundness here is a Phase 6 review question
+//! (`docs/design/V3_1_MULTISIG_RUST_ENGINE.md` §0.5), not a settled one.
 
 use std::collections::HashMap;
 use std::fmt;
