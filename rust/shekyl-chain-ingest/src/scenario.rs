@@ -272,6 +272,12 @@ where
 
     /// Build the next block listing `listed`, form it, and apply it.
     /// A refusal is returned, not panicked: some scenarios ask for one.
+    /// The settlement schedule this chain runs: its rules' at genesis, which
+    /// a regtest schedule keeps at every height.
+    pub fn settlement_schedule(&self) -> shekyl_chain_rules::SettlementSchedule {
+        self.rules.in_force(BlockHeight::ZERO).settlement_schedule()
+    }
+
     pub async fn mine_listing(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
         let next = self.next_template(listed).await?;
         self.connect_template(next).await

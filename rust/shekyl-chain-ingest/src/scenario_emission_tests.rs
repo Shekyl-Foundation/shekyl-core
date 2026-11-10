@@ -88,9 +88,8 @@ use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch, inside_one_epoch_of,
-    levered_rules, mine_to, settled_epoch_blocks, settled_rules, settled_schedule,
-    FILL_FROM_COINBASE,
+    close_shards, first_admissible_compact_join, inside_one_epoch_of, mine_to,
+    settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 use std::sync::Arc;
@@ -613,14 +612,20 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
 #[tokio::test]
 #[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
-    let rules = levered_rules();
+    // The settled schedule: admitted draws give a pair its counted draws
+    // only on it (`settled_epoch_blocks`).
+    let rules = settled_rules();
     let mut scenario = Scenario::open_under("scenario-emission-frozen-membership", FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
     let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };
-    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1);
+    let join_height = inside_one_epoch_of(
+        settled_schedule(),
+        first_admissible_compact_join(&rules, *closed),
+        1,
+    );
     mine_to(&mut scenario, &mut mined, join_height).await;
     let mut drive = Driven::begin(scenario, mined);
     let facts = drive_frozen_membership(&mut drive, *closed).await;

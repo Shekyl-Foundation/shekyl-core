@@ -18,20 +18,22 @@ use shekyl_archival_retention::{
     shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond, EpochCloseInputs,
     EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim, MAX_CLAIM_AGE_W,
 };
+use shekyl_bundle_producer::DrawTarget;
 use shekyl_chain_rules::EpochFloor;
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 use shekyl_types::archival::SettlementOutcome;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 
+use crate::admitted_draws::{assert_issued_pair, serve_to, DriverWitness};
 use crate::archival_driver::{record_of, ENDPOINT, FEE};
 use crate::chain_drive::{
-    catch_up, failure_window_epochs, priced_emission_claim, Driven, EmissionClaimParts, IssuedPair,
+    catch_up, failure_window_epochs, priced_emission_claim, Driven, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
-use crate::scenario_shard::{levered_schedule, ClosedShard, EPOCH_BLOCKS};
+use crate::scenario_shard::ClosedShard;
 
 /// The release's funding coinbase. The joins ride coinbases 0 to 2.
 const RELEASE_COINBASE: u64 = 3;
@@ -104,7 +106,7 @@ pub(crate) async fn drive_frozen_membership(
     closed: ClosedShard,
 ) -> FrozenClaim {
     assert_eq!(closed.shard.to_raw(), 0);
-    let schedule = levered_schedule();
+    let schedule = drive.scenario.settlement_schedule();
     let join_height = drive.height();
     let persona = Persona::at(1);
     let released = Persona::at(2);
@@ -155,37 +157,34 @@ pub(crate) async fn drive_frozen_membership(
     let join_epoch = schedule.epoch_at(join_height);
     assert!(join_epoch.to_raw() > 0, "the joins are at a non-zero epoch");
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
-    let shard = ShardId::from_raw(0);
-    let all = [persona.id(), released.id(), slashed.id()];
-
-    // `served`: every pair passes. Then the failure window, in which the
-    // second tree alone is drawn and fails, so the pass of the last slashes it.
-    let passing: Vec<_> = all
-        .iter()
-        .map(|id| IssuedPair {
-            persona: *id,
-            shard,
-            passed: true,
-        })
-        .collect();
-    drive.issue_draws(served, &passing).await;
     let slash_epoch = SettlementEpoch::from_raw(served.to_raw() + failure_window_epochs());
-    for raw in (served.to_raw() + 1)..=slash_epoch.to_raw() {
-        drive
-            .issue_draws(
-                SettlementEpoch::from_raw(raw),
-                &[IssuedPair {
-                    persona: slashed.id(),
-                    shard,
-                    passed: false,
-                }],
-            )
-            .await;
-    }
 
+    // Every drawing block's bundle is filed and admitted by the next
+    // (`serve_to`). The compact persona is drawn on the economy stream
+    // (shard 0 is its pair in `D`); the two trees are seated on the support
+    // stream. The persona serves throughout. Both trees serve through
+    // `served` and withhold after it: the first releases at the first block
+    // its cooldown allows, measured from its last support pass (J16, S3),
+    // and the second misses through the failure window, so the pass of the
+    // last slashes it at its eleventh miss.
+    let witness = DriverWitness::new(0x63);
+    let signers: [&shekyl_harness_spender::Persona; 3] = [&persona, &released, &slashed];
+    let compact = persona.id();
+    let passes = move |h: BlockHeight, target: &DrawTarget| {
+        target.persona == compact || schedule.epoch_at(h) <= served
+    };
+
+    // Served up to the slash pass of `served`; the pass's block itself, and
+    // the release after it, are mined plain.
     let at_pass = BlockHeight::from_raw(schedule.slash_deadline_height(served.to_raw()));
+    serve_to(drive, &witness, &signers, &passes, at_pass).await;
+    assert_issued_pair(
+        &drive.scenario,
+        served,
+        (persona.id(), ShardId::from_raw(0)),
+    );
     drive.advance_to(at_pass + BlockCount::ONE).await;
-    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
+    let count_at_close = (served.to_raw() + 1) * schedule.blocks().get();
     let close = *drive.chain[usize::try_from(count_at_close - 1).expect("small")]
         .archival
         .close()
@@ -193,29 +192,50 @@ pub(crate) async fn drive_frozen_membership(
     let pass = drive.chain[usize::try_from(at_pass.to_raw()).expect("small")]
         .archival
         .clone();
-    let mut settled: Vec<_> = pass
+    let settled: Vec<_> = pass
         .settlements()
         .iter()
-        .map(|row| (row.persona, row.epoch, row.row.outcome()))
+        .filter(|row| row.epoch == served)
+        .map(|row| (row.persona, row.shard, row.row.outcome()))
         .collect();
-    settled.sort_unstable_by_key(|(id, _, _)| *id);
-    let mut expected: Vec<_> = all
+    assert_eq!(
+        settled,
+        [(
+            persona.id(),
+            ShardId::from_raw(0),
+            SettlementOutcome::Served
+        )],
+        "the compact pair, the epoch's only pair in D, settled Served"
+    );
+    let mut trees_settled: Vec<_> = pass
+        .support_settlements()
         .iter()
-        .map(|id| (*id, served, SettlementOutcome::Served))
+        .filter(|row| row.epoch == served)
+        .map(|row| (row.persona, row.row.outcome()))
         .collect();
-    expected.sort_unstable_by_key(|(id, _, _)| *id);
-    assert_eq!(settled, expected, "all three pairs settled Served");
+    trees_settled.sort_unstable_by_key(|(id, _)| *id);
+    let mut both_served = vec![
+        (released.id(), SettlementOutcome::Served),
+        (slashed.id(), SettlementOutcome::Served),
+    ];
+    both_served.sort_unstable_by_key(|(id, _)| *id);
+    assert_eq!(
+        trees_settled, both_served,
+        "both trees settled Served on the support stream"
+    );
     let gather = pass
         .gathers()
         .iter()
         .find(|gather| gather.epoch() == served)
         .expect("the pass gathers the epoch it settles");
-    let mut trees = vec![released.id(), slashed.id()];
-    trees.sort_unstable();
-    assert_eq!(
-        gather.complete_trees().as_slice(),
-        trees.as_slice(),
-        "the pass froze the two complete trees it kept out of the market"
+    // The trees are not in the epoch's market because they are not in `D`:
+    // a complete tree is drawn on the support stream, never as an economy
+    // pair, so the gather credits neither and the pass has nothing to
+    // exclude as a complete tree. The frozen set is empty.
+    assert!(
+        gather.complete_trees().as_slice().is_empty(),
+        "the gather credits no complete tree, so the pass freezes none: {:?}",
+        gather.complete_trees()
     );
 
     // `Σwork(served)` from the store, not the fold.
@@ -232,12 +252,12 @@ pub(crate) async fn drive_frozen_membership(
         .expect("Σwork(served) is a row after the pass");
     assert_eq!(stored_sigma, gather.sigma_work());
 
-    let bond = |complete| EpochCloseBond {
+    // The market is the compact persona alone: the trees are not in it.
+    let bonds = [EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
-        is_support_complete_tree: complete,
+        is_support_complete_tree: false,
         bad_intervals: &[],
-    };
-    let bonds = [bond(false), bond(true), bond(true)];
+    }];
     let shards = [EpochCloseShard {
         shard_id: 0,
         close: ShardClose::ClosedAt(closed.close_height),
@@ -305,6 +325,7 @@ pub(crate) async fn drive_frozen_membership(
     ));
 
     let slash_height = BlockHeight::from_raw(schedule.slash_deadline_height(slash_epoch.to_raw()));
+    serve_to(drive, &witness, &signers, &passes, slash_height).await;
     drive.advance_to(slash_height + BlockCount::ONE).await;
     let slashes = drive.chain[usize::try_from(slash_height.to_raw()).expect("small")]
         .archival

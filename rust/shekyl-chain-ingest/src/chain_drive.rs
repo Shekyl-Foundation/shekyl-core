@@ -50,7 +50,8 @@ use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, IssueDraws, Rewound};
 use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
-use crate::scenario_shard::{levered_schedule, EPOCH_BLOCKS};
+use crate::scenario_shard::levered_schedule;
+use shekyl_chain_rules::SettlementSchedule;
 
 /// Draws issued for one persona on one shard. Three is this driver's
 /// witness, not [`shekyl_archival_retention`](shekyl_archival_retention)'s
@@ -101,11 +102,12 @@ pub(crate) fn failure_window_epochs() -> u64 {
     u64::from(FAILURE_WINDOW_M)
 }
 
-/// Whether the block at `height` runs the boundary batch on the levered
-/// schedule: `E·SEB` with `E ≥ 2`.
-pub(crate) fn is_pruning_boundary(height: BlockHeight) -> bool {
+/// Whether the block at `height` runs the boundary batch under `schedule`:
+/// `E·SEB` with `E ≥ 2`.
+pub(crate) fn is_pruning_boundary(height: BlockHeight, schedule: SettlementSchedule) -> bool {
     let h = height.to_raw();
-    h.is_multiple_of(EPOCH_BLOCKS) && h >= 2 * EPOCH_BLOCKS
+    let seb = schedule.blocks().get();
+    h.is_multiple_of(seb) && h >= 2 * seb
 }
 
 /// The pop of a retired table: the keys `parent` and `connected` share,
@@ -562,6 +564,7 @@ impl Driven {
             self.chain.push(block.clone());
             return Ok((block, admitted));
         }
+        let schedule = self.scenario.settlement_schedule();
         let parent_height = match &self.recording {
             Recording::RoundTrip(ledger) => ledger.parent.height,
             Recording::Straight => unreachable!("round-tripping was just matched"),
@@ -588,7 +591,7 @@ impl Driven {
                 &format!("popping block {}", block.height),
                 parent,
                 &popped,
-                is_pruning_boundary(block.height).then_some(&connected),
+                is_pruning_boundary(block.height, schedule).then_some(&connected),
             );
         }
         let (again, readmitted) = self
@@ -625,7 +628,7 @@ impl Driven {
                 ledger.closes[slot] += 1;
             }
             ledger.trips += 1;
-            ledger.boundaries += u64::from(is_pruning_boundary(again.height));
+            ledger.boundaries += u64::from(is_pruning_boundary(again.height, schedule));
             ledger.parent = connected;
         }
         self.chain.push(again.clone());
