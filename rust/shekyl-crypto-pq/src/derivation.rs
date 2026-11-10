@@ -114,6 +114,9 @@ const LABEL_OUTPUT_LABEL_TAG: &[u8] = b"shekyl-output-label-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
 const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
 const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
+/// The key that encrypts a multisig output's member key hashes (`0x0D`;
+/// `docs/PQC_MULTISIG.md` §7.3). Same PRK as every per-output secret.
+const LABEL_OUTPUT_MULTISIG_KEY_HASHES: &[u8] = b"shekyl-output-multisig-key-hashes";
 
 /// All per-output secrets derived from a combined KEM shared secret.
 ///
@@ -202,6 +205,49 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
         ml_dsa_seed,
         ed25519_pqc_seed,
     }
+}
+
+/// The AEAD key for a multisig output's encrypted member key hashes:
+/// `HKDF-Expand(prk, "shekyl-output-multisig-key-hashes" ‖ idx_le64, 32)`
+/// over the group's combined shared secret, the same derivation family as
+/// the output's amount and label keys. One key per output, used once.
+#[must_use]
+pub fn derive_multisig_key_hashes_key(
+    combined_ss: &[u8],
+    output_index: u64,
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    expand_32_into(
+        &hk,
+        LABEL_OUTPUT_MULTISIG_KEY_HASHES,
+        output_index,
+        &mut out,
+    );
+    out
+}
+
+/// Info label for the multisig group's transport secret
+/// (`CRYPTO_DOMAIN_REGISTRY.tsv`). The salt is [`crate::account::salt_for`].
+pub const LABEL_MULTISIG_GROUP_TRANSPORT: &[u8] = b"shekyl/multisig-transport-v1";
+
+/// The group transport secret, from the dealer's group seed.
+///
+/// HKDF-SHA-512 with salt [`crate::account::salt_for`]`(network)` and info
+/// [`LABEL_MULTISIG_GROUP_TRANSPORT`]. The dealer (slice 3) derives it once
+/// and writes the bytes into every member file. The file stores them; it
+/// does not derive them. The ceremony blobs' AEAD (R-4) keys from those bytes.
+#[must_use]
+pub fn derive_group_transport_secret(
+    network: crate::account::Network,
+    group_seed: &[u8; 32],
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let salt = crate::account::salt_for(network);
+    let hk = Hkdf::<Sha512>::new(Some(&salt), group_seed);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    hk.expand(LABEL_MULTISIG_GROUP_TRANSPORT, out.as_mut())
+        .expect("32 bytes is within HKDF-SHA-512's output");
+    out
 }
 
 /// Derive the on-wire view-tag pre-filter byte from ML-KEM shared secret only.
@@ -315,6 +361,25 @@ fn expand_first_byte(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The transport secret is bound to the network's name and the seed.
+    #[test]
+    fn transport_secret_binds_network_and_seed() {
+        use crate::account::Network;
+        let a = derive_group_transport_secret(Network::Testnet, &[1; 32]);
+        assert_eq!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Mainnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[2; 32])
+        );
+    }
 
     #[test]
     fn derived_key_sizes() {

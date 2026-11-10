@@ -741,10 +741,6 @@ Default. Lands before genesis if it should exist at launch.
 - **FA-6 — PQ-safe view-tag pre-filter (T6 closure, genesis).**
   - Target: pre-genesis
 
-- **FA-6b — audit whether the multisig `0x09` view-tag hints are classically linkable (per-wallet-constant clustering without a view key) before the multisig receive path is production-load-bearing.** Separate from FA-6's account-path closure; spec pointer `FA-6_VIEW_TAG_ML_KEM.md` §3.2/§5.1, posture in [`FA-6_CLOSEOUT.md`](completed/FA-6_CLOSEOUT.md) §5. The tag is STAGED with the multisig receive path as producer ([`TX_EXTRA_RUST_CUTOVER.md`](design/TX_EXTRA_RUST_CUTOVER.md) §1.1; PR #825) — this audit gates that producer, not the codec. *(Row body restored 2026-09-22; it had been truncated to its heading.)*
-  - Target: pre-genesis
-  - Owner: [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md) (FA-6b gate, R-A…R-F)
-
 - **Phase 2a send path — engine substrate (closed 2026-06).** `LocalPendingTx`
   - Target: pre-genesis
 
@@ -896,13 +892,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Term hygiene: "rotation" is a §11.8 defect on a noun — rename to "activation" (read-per-site, NOT grep-and-replace).**
   - Target: pre-genesis
 
-- **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation landed subtractively; five items it deliberately did not fold in (each named blocker + target, rule 22 clause 3):
+- **PQC Multisig: MSW-6 landing residue.** The scheme_id relaxation landed subtractively; three items it deliberately did not fold in (each named blocker + target, rule 22 clause 3):
   - Target: pre-genesis
   - **Cross-model co-spend is a BLOCKING E′ ship gate, not a soft item** — MSW-6 removed the consensus refusal of a solo+multisig co-spend on no-externality grounds; correct only if the spend-time binding holds.
-  - **`cryptonote_tx_utils.cpp:670` — MSW-6 broke this** (the scheme-id check the relaxation left behind); see the row's history for the site.
-  - **`MultisigKeyContainer` is one type over two populations — S2-blocking.**
   - **`tx_extra` tag `0x05` — reserve-vs-free decision.** RULED 2026-09-22 (PR #825): REJECTED, the tag is deleted and the byte retired.
-  - **Structural pqc-auth verify → Rust port slice** (the C++ structural check moves behind the FFI).
   - **C-2 (the P0-n gate is a literal denylist).**
 
 - **PQC Multisig : Option-D residue left standing after the F-6**
@@ -947,7 +940,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §3.4 — the census lane; the discriminator and the first sweep are [`CHAIN_RULES_SLICE_4.md`](design/CHAIN_RULES_SLICE_4.md) §3.1's
 
-- **The other half of `TXE-Q6′`: a listed transaction's `tx_extra` has no closed grammar, so `0x09`/`0x0A`/`0x0B` blobs ride to the tx size limit with no consensus bound below CEN-H1.** `TXE-Q6′` ([`TX_EXTRA_RUST_CUTOVER.md`](design/TX_EXTRA_RUST_CUTOVER.md) §6, RULED 2026-09-23) closed the coinbase's extra as a whitelist — `[0x01, 0x02(8), 0x06, 0x07]` and nothing else — for one stated reason: *bounding one tag while the rest stayed admissible would bound the door somebody noticed*. Off the coinbase the same door is open. CEN-I19 shapes the two PQC fields and bans the nonce; the staged `0x09` view-tag-hints, `0x0A` spend-auth-pubkeys and `0x0B` attestation tags parse on any transaction to the parser's `READ_LEN_CAP` (1 MB), producerless today, so a spend can carry arbitrary bytes up to CEN-H1's size limit and CEN-M4's relay cap is policy. Found 2026-09-25 re-cutting the M4 conformance trip (E6 slice 6 commit 3): the trip has to carry exactly such a blob to reach the twin's cap arm through I19. The fix already exists in shape — the ruling's whitelist generalised to the non-coinbase grammar, which is smaller (`[0x06, 0x07]` iff outputs, nothing else; `0x0B` when its producer amends the row, on whichever class it names) — which makes this a census question with a consensus answer, not a fresh design round. Cite `TXE-Q6′` from the I19 and I20 census cells when it lands so the two halves read as one ruling (commit 10 of the slice does this for the nonce clause). Falsify by: `check_tx_extra_shape(General)` refusing any tag outside the whitelist, with CEN-I19's census cell stating the grammar and the conformance trip `m4_extra_over_the_relay_cap` no longer constructible as a consensus-admissible transaction.
+- **The other half of `TXE-Q6′`: a listed transaction's `tx_extra` has no closed grammar, so `0x04` and `0x0B` blobs ride to the tx size limit with no consensus bound below CEN-H1.** `TXE-Q6′` ([`TX_EXTRA_RUST_CUTOVER.md`](design/TX_EXTRA_RUST_CUTOVER.md) §6, RULED 2026-09-23) closed the coinbase's extra as a whitelist — `[0x01, 0x02(8), 0x06, 0x07]` and nothing else — for one stated reason: *bounding one tag while the rest stayed admissible would bound the door somebody noticed*. Off the coinbase the same door is open. CEN-I19 shapes the two PQC fields and bans the nonce; the `0x04` additional-pubkeys and the staged `0x0B` attestation tags parse on any transaction to the parser's `READ_LEN_CAP` (1 MB) (`0x0D`, the multisig entries, is bounded by CEN-I19's clause), so a spend can carry arbitrary bytes up to CEN-H1's size limit and CEN-M4's relay cap is policy. Found 2026-09-25 re-cutting the M4 conformance trip (E6 slice 6 commit 3): the trip has to carry exactly such a blob to reach the twin's cap arm through I19. The fix already exists in shape — the ruling's whitelist generalised to the non-coinbase grammar, which is smaller (`[0x06, 0x07]` iff outputs, nothing else; `0x0B` when its producer amends the row, on whichever class it names) — which makes this a census question with a consensus answer, not a fresh design round. Cite `TXE-Q6′` from the I19 and I20 census cells when it lands so the two halves read as one ruling (commit 10 of the slice does this for the nonce clause). Falsify by: `check_tx_extra_shape(General)` refusing any tag outside the whitelist, with CEN-I19's census cell stating the grammar and the conformance trip `m4_extra_over_the_relay_cap` no longer constructible as a consensus-admissible transaction.
   - Target: pre-genesis
   - Owner: [`TX_EXTRA_RUST_CUTOVER.md`](design/TX_EXTRA_RUST_CUTOVER.md) §6 — the ruling this is the other half of
 

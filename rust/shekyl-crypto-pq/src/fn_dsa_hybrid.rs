@@ -792,6 +792,7 @@ mod tests {
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
                 &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
+                &[0u8; 16],
             ),
             Err(PqcVerifyError::SchemeMismatch)
         );
@@ -802,6 +803,7 @@ mod tests {
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
                 &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
+                &[0u8; 16],
             ),
             Err(PqcVerifyError::DeserializationFailed)
         );

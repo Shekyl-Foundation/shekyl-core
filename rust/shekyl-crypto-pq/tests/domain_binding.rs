@@ -786,7 +786,10 @@ fn control_a_domain_of_the_wrong_kind_or_width_is_refused() {
 
 #[test]
 fn control_an_hkdf_name_row_away_from_salt_for_is_refused() {
-    let reg = with_column("shekyl-output-x", 5, "name");
+    // The row must sit in a file that neither calls nor defines salt_for.
+    // derivation.rs calls it (the multisig transport secret), so its rows
+    // cannot serve; leaf_commitment.rs keys only from per-output secrets.
+    let reg = with_column("shekyl-pqc-leaf-blind", 5, "name");
     refused_with(&reg, RATCHET, CENSUS, "neither calls nor defines salt_for");
 }
 

@@ -77,7 +77,7 @@ user-behavior only):
 
 | ID | Surface | V3.0 disposition | Detail |
 |----|---------|------------------|--------|
-| **T6** | Quantum observer + off-chain address → view-tag receive clustering | **Closed on account-output path** at genesis (FA-6 PQ-keyed `view_tag_prefilter`) | FA-6b multisig hints are a **separate** V3.1 track; no end-user multisig at V3.0 |
+| **T6** | Quantum observer + off-chain address → view-tag receive clustering | **Closed on account-output path** at genesis (FA-6 PQ-keyed `view_tag_prefilter`) | Multisig outputs carry no per-member hints (`0x09` retired): a group scans its one `0x06` ciphertext with the same PQ-keyed `view_tag_prefilter` ([`PQC_MULTISIG.md`](PQC_MULTISIG.md) §8.1) |
 | **T7** | Leaked receive address — phishing, dust, substitution, liveness | **R2-F9 pinned** | Dust **receive/spend oracle closed** (FCMP++); substitution + T6 harvest + app-layer probes **named** below |
 
 ### T6 after FA-6

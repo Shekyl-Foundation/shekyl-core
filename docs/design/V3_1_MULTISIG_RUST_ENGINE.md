@@ -9,6 +9,13 @@ explicit go-ahead. The one pre-MS-5 gate no CI could turn green — the
 generics; `<N, K>` retired** (§ "MS-1 under coexistence").
 Protocol crypto: [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 
+**E′ completion (2026-11-08/09).** Round 0 rulings R-1 (a group KEM key),
+R-2 (one ephemeral responder; everyone else holds a nonce), R-3 (the leaf
+commits to member key hashes), R-4 (a random XChaCha nonce in the ceremony
+blobs), and the deletions — recorded in §9. Slice 1 (receive and wire) is
+built; slices 2 (FROST correctness), 3 (the live ceremony) and 4 (wallet)
+follow.
+
 ---
 
 ## Corrected picture (2026-07-14) — read this first
@@ -946,9 +953,9 @@ New wallet multisig logic: Rust-only. C++: LMDB + verify FFI. The former
 here as the "**correct** `shekyl_pqc_multisig_group_id`" caller — is **deleted**:
 it was a non-functional fossil (threw on every input) and group_id is retired.
 MS-2's "migration/deletion is rewrite/Phase-5" applied and this took the
-deletion path. The remaining C++ multisig surface is the LMDB store + the verify
-FFI (`shekyl_pqc_verify`), nothing wallet-side. Track A bound fixes are consensus
-ceiling corrections, not wallet logic.
+deletion path. No C++ multisig surface remains (#1299 deleted the C++ tree);
+verification is `verify_pqc_auth` / `verify_multisig` in Rust. Track A bound
+fixes are consensus ceiling corrections, not wallet logic.
 
 ### MS-3 — Feature gate — **OPEN (lean amended)**
 
@@ -1017,11 +1024,11 @@ B→A hybrid sig; A assembles.
 
 **(D) two-leg binding — no new primitive.** The FROST SAL leg and the M hybrid
 `scheme_id=2` legs are *already* welded bidirectionally in the solo path: the pqc
-signed payload embeds the SAL via `prunable_hash` (`tx_pqc_verify.cpp:92`, the
-anti-substitution binding), and the curve-tree leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J`
-(opened in-circuit, `PL-D3`) binds the SAL to the key, with the multisig key
-*container* being the `pqc_pk` bytes `k` is derived from (`pqc_key_scalar`
-over the canonical container bytes). MS-5 extends this unchanged; it only
+signed payload embeds the SAL via `prunable_hash` (`signed_hash(i)`, CEN-I17,
+the anti-substitution binding), and the curve-tree leaf commitment
+`CM = H_ℓ(pqc_pk)·G_k + r·J` (opened in-circuit, `PL-D3`) binds the SAL to the
+key. For a multisig output the bytes `k` is derived from are the container's
+committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n` (`PQC_MULTISIG.md` §7.5). MS-5 extends this unchanged; it only
 forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
 
 **The nonce rule (corrected — the load-bearing security part).** Two shapes,
@@ -1212,7 +1219,7 @@ rust/shekyl-engine-core/src/multisig/signing.rs  coordinator ceremony
 
 # F-8 second verifier
 rust/shekyl-daemon-rpc/src/submit/verifier.rs:322-386
-src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
+rust/shekyl-crypto-pq/src/multisig.rs  MULTISIG_KEY_BLOB_MIN (the one floor; K13 and CEN-I16 import it)
 ```
 
 ---
@@ -1244,3 +1251,4 @@ src/cryptonote_core/tx_pqc_verify.cpp  MULTISIG_KEY_HEADER_LEN = 2
 | 2026-07-16 | **MS-1 `N`/`K` DECIDED:** the multisig kind takes **no const generics**. `N` (participants) / `M` (threshold) are runtime payload values (`n_total`/`m_required`); the coexistence axis (version byte) is type/dispatch, not a const generic (and not compile-time — the version is read from the wire). `MultisigSigner<N, K>` retired; the multisig kind takes no type parameters (one type with a runtime version, or a per-version family — MS-1's call). Recorded at the name (`signer.rs`) + "MS-1 under coexistence". MS-1's remaining call is only the coexistence *shape* (per-version markers vs runtime version field), bounded by this. |
 | 2026-07-17 | **MS-1 shape DECIDED + MS-5 S1 LANDED.** MS-1(a): multisig lives in a standalone `shekyl-multisig` crate whose dep list *is* the "no transport" ban (no tor/tokio-net/reqwest; module scope was rejected because engine-core already links Tor via SP-T2). Marker shape: per-version family `MultisigSignerV2` (not a runtime version field — one type would need a one-variant `SigningCeremony` enum now; the monomorphization cost is zero until V4 per §15.5). MS-5 S1: `state.rs` **deleted, not inherited**; format modules moved into the crate with Option-D residue excised; the `FrostCeremony` FSM (four-blob / two-round-trip / **pqc-last** — the (D) binding is the existing solo bidirectional weld, no new primitive), both nonce shapes (B ephemeral `!Clone`; A held under containment + `ConsumedNonce` persist-before-use + intent-binding — `!Serialize`/restart-forfeits dropped as unprovable/incompatible), and the `SpendRequest`/`SpendResponse` blobs. **No live crypto** (S2/S3); the clean build is the proof. |
 | 2026-07-18 | **E′ address (PR #323 merged) + group_id / Option-D deletion.** Address: `MultisigAddressPayload` carries `B_group`/`Y_group`; `spend_auth_version = 0x02`; fingerprint = `cSHAKE256(canonical, "shekyl/multisig-address-v1")` (domained, not `cn_fast_hash`); full address is file-based (bech32m can't hold ~4019 chars > 1023-char limit), the fingerprint (67 chars) is the shareable id. Deletion: `multisig_group_id` had **no consumer** under E′, computed a **per-output** container hash under a per-group name, and its one long-term caller (`wallet2::create_pqc_multisig_group`) **threw on every input** — deleted with its FFI (`shekyl_pqc_multisig_group_id`, `_verify_with_group_id`), `verify_multisig` check 9 + `expected_group_id`, the Option-D receive unit (`rotating_prover_index` + construct + validate + griefing/persisted residue), tag-0x05 unchanged (deferred), and the wallet2 C++ surface (safe: epee cache never wrote the fields). Group identity = address fingerprint. FFI code 9 retired (gap; 10/11 fixed). Consequence recorded: **no multisig output constructor exists until S2/S4 writes the E′ two-component one** (better than one building unspendable outputs). Container-lifetime ambiguity (`MultisigKeyContainer` per-output in Rust vs long-term in wallet2/KAT) filed as an S2-blocking slice. |
+| 2026-11-09 | **E′ completion Round 0 ruled; slice 1 (receive and wire) built.** Rulings (Rick, 2026-11-08/09): **R-1** a group hybrid KEM key in the address (`70 + (N+1)·1216` B); each output carries one `0x06` ciphertext to it, so the group scans as a solo wallet does. **R-2** at most one ephemeral responder per ceremony, every other signer holds its nonce (slice 3). **R-3** the leaf commits to member key hashes: committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n`, `h_i = frame(shekyl/multisig-key-hash-v1, network_id, [pk_i])`, published encrypted in the new tag `0x0D`, so `m` signers spend without the other `n − m` (with the full keys in the container, as before, every spend needed all `n`). **R-4** XChaCha20-Poly1305 with a random nonce in the ceremony blobs (slice 3). **Deletions approved:** `frost_sal`'s session/coordinator and `frost_dkg` (slice 2); `multisig_receiving.rs`, container `spend_auth_pubkeys`, tags `0x09`/`0x0A`, `InvariantId::I7` (slice 1). Slice 1: tag `0x0D` + CEN-I19's clause; container v`0x02` and `verify_multisig` with the network-bound hash check; both consensus `k` derivations over the committed form; address v`0x02`; the member file; `construct_multisig_output` and `open_multisig_entry`; the scanner's member context. The per-output cost is `≈ 1120 + 64 + 1152·n + 18` B (4.7 KB at n = 3, 7.0 KB at n = 5). |

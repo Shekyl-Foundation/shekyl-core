@@ -464,9 +464,14 @@ pub struct TransferView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
     /// Why the output is `UNSPENDABLE` (present exactly when `state` is
-    /// `UNSPENDABLE`): `PQC_LEAF_MISMATCH` — the published leaf entry is not
-    /// this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the transaction
-    /// carries no entry for the output.
+    /// `UNSPENDABLE`). Solo: `PQC_LEAF_MISMATCH` — the published leaf entry
+    /// is not this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the
+    /// transaction carries no leaf entry for the output. Multisig:
+    /// `MULTISIG_ENTRY_ABSENT`, `MULTISIG_GROUP_SIZE`,
+    /// `MULTISIG_HASHES_UNDECRYPTABLE`, `MULTISIG_MEMBER_DECAP`,
+    /// `MULTISIG_MEMBER_KEY_HASH`, `MULTISIG_DUPLICATE_KEY_HASH`,
+    /// `MULTISIG_LEAF_MISMATCH` — the check of that name failed, and the
+    /// output can never be spent from this wallet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unspendable_reason: Option<String>,
     /// Receive attribution (WI-RPC-4).

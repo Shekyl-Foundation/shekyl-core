@@ -1,10 +1,10 @@
 {
-  "description": "Multisig address fingerprints (NETWORK_IDENTITY.md NI-R15; the signing envelope §2.6): frame(shekyl/multisig-address-v3, name_id, [canonical payload]), name_id the network's name binding, for one fixed 2-of-2 payload (B = 0xB1 x32, Y = 0x71 x32, KEM key i = byte i x1216) on each network. Written and checked by scripts/kat/multisig_fingerprint_oracle.py; read by shekyl-address's address_fingerprint_kat.",
+  "description": "Multisig address fingerprints (NETWORK_IDENTITY.md NI-R15; the signing envelope §2.6): frame(shekyl/multisig-address-v3, name_id, [canonical payload]), name_id the network's name binding, for one fixed 2-of-2 address version 0x02 payload (B = 0xB1 x32, Y = 0x71 x32, group KEM key = 0xC0 x1216, member KEM key i = byte i x1216) on each network. Written and checked by scripts/kat/multisig_fingerprint_oracle.py; read by shekyl-address's address_fingerprint_kat.",
   "customization": "shekyl/multisig-address-v3",
   "fingerprints": {
-    "mainnet": "2eb0e6aa771f847339505a63c7887e45e2ba4171ba6d7a71d37e86f4345d7d75",
-    "testnet": "046e573b2d79e09d7fcbb928105ddc5546caa0702ff111274df16993b4037329",
-    "stagenet": "2ef4fc03390f6fe6dad41a4076391068d136bc087893dfc26ab08505c25e0e75",
-    "regtest": "7a45002a8f879d7cb7194b6e48d43e64096ba23487aa527afa3970d0dc0ee4de"
+    "mainnet": "7394a6aa28c2f76ca18a450fae0200727ac16c4587a2fda1852a1ec837cc7d64",
+    "testnet": "73c1104cb3d7f728596813396802ec8a355d0a8446ffa49dea2e93745b52cf92",
+    "stagenet": "fa5fde8a0655e7cc0e8df48d0a32f64722799284437bac4e73268890af55cb2f",
+    "regtest": "e4bcaf3178a5596ff370d3adf5884627a416405ac49ca3df79f92621be2807e0"
   }
 }

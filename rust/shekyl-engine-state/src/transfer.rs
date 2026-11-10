@@ -215,6 +215,44 @@ pub enum UnspendableReason {
     /// shape consensus refuses, so reachable only through a non-consensus
     /// block source — recorded rather than assumed away).
     PqcLeafEntryAbsent,
+    /// The group's view pair matched, and the transaction carries no `0x0D`
+    /// entry for this output. A solo-shaped payment to the group is not
+    /// spendable under the group's rules.
+    MultisigEntryAbsent,
+    /// The `0x0D` entry's member count is not this group's.
+    MultisigGroupSize,
+    /// The entry's key hashes do not decrypt under the output's group secret.
+    MultisigHashesUndecryptable,
+    /// This member's own ciphertext does not decapsulate.
+    MultisigMemberDecap,
+    /// The hash at this member's index is not this member's key.
+    MultisigMemberKeyHash,
+    /// Two of the decrypted key hashes are the same hash, so a spend that
+    /// revealed both would be refused as duplicate keys.
+    MultisigDuplicateKeyHash,
+    /// The published `0x07` entry does not commit to the committed form the
+    /// decrypted hashes make.
+    MultisigLeafMismatch,
+}
+
+impl UnspendableReason {
+    /// The RPC and OpenAPI spelling of this reason
+    /// (`docs/api/wallet_rpc.yaml`). One name per variant, so a new refusal
+    /// cannot be persisted and then projected under a neighbour's string.
+    #[must_use]
+    pub const fn rpc_name(self) -> &'static str {
+        match self {
+            Self::PqcLeafMismatch => "PQC_LEAF_MISMATCH",
+            Self::PqcLeafEntryAbsent => "PQC_LEAF_ENTRY_ABSENT",
+            Self::MultisigEntryAbsent => "MULTISIG_ENTRY_ABSENT",
+            Self::MultisigGroupSize => "MULTISIG_GROUP_SIZE",
+            Self::MultisigHashesUndecryptable => "MULTISIG_HASHES_UNDECRYPTABLE",
+            Self::MultisigMemberDecap => "MULTISIG_MEMBER_DECAP",
+            Self::MultisigMemberKeyHash => "MULTISIG_MEMBER_KEY_HASH",
+            Self::MultisigDuplicateKeyHash => "MULTISIG_DUPLICATE_KEY_HASH",
+            Self::MultisigLeafMismatch => "MULTISIG_LEAF_MISMATCH",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 > **Status:** DRAFT v1.1 — incorporates three rounds of adversarial wargame feedback and the resolved prover-verification mechanism
 > **Supersedes:** `PQC_MULTISIG.md` (original), the standalone V3.1 governance and receiving drafts, and v1.0 of this consolidated spec
 > **Companion:** `PQC_MULTISIG_V3_1_ANALYSIS.md` (size analysis, attack catalog, cryptographer review targets, design rationale)
-> **Consensus impact:** None. Wallet-layer protocol on existing V3 consensus rules.
+> **Consensus impact:** the scheme-2 key blob and its check (CEN-I16, CEN-I18), the leaf key scalar of a scheme-2 spend (CEN-I15), and the `0x0D` clause of CEN-I19 (§7.4–§7.5).
 
 ---
 
@@ -98,7 +98,6 @@ each one before producing a signature.
 | I4 | BP+ range proofs verify against signer's independently-computed commitments | Pre-signing verification | §10.2 |
 | I5 | Output public key O matches the assigned prover's spend-auth pubkey | Pre-signing verification | §11.3 |
 | I6 | tx_hash commitment agrees across all M SignatureShares before assembly | Pre-assembly verification | §11.5 |
-| I7 | Receive-time: every tracked output's O matches `spend_auth_pubkeys[rotating_prover_index(...)]` | Receive-time validation | §8.3 |
 
 **Implementation requirements:**
 
@@ -127,7 +126,7 @@ sign-off before addition.
 
 | Adversary | Capabilities | Defended by |
 |---|---|---|
-| Malicious sender | Constructs outputs to grief recipients | §7.6 wallet-side filtering; §8.3 receive-time validation |
+| Malicious sender | Constructs outputs to grief recipients | §8.2 multisig check: the output is received but unspendable and named (§7.6); a sender can always burn an output |
 | Malicious group member (single) | Tries to spend alone, redirect funds, or DoS | M-of-N threshold; §2.7 I5 honest-signer prover verification; veto |
 | Malicious prover | Tries to construct invalid or substitute proof | §2.7 I3, I4 signer-side proof verification before signing |
 | Malicious assembler | Tries to broadcast tampered tx | §2.7 I6 tx-hash commitments |
@@ -169,8 +168,9 @@ consensus-layer fix would require a chain-anchored group registry
 |---|---|
 | Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.5 indirect binding via the leaf commitment opening (`PL-D3`) + `pqc_auth` size check; `expected_scheme_id` for defense in depth (the `expected_group_id` leg is deleted — §5.3) |
 | Key substitution within a group | Existing `verify_multisig` Check 8 (key uniqueness) |
-| Signer index manipulation | Existing `verify_multisig` Checks 6 and 7 (range, ascending) |
-| Blob truncation/padding | Strict size checks in `tx_pqc_verify.cpp` |
+| Signer index manipulation | `verify_multisig`: indices in range, ascending, and exactly the key blob's bitmap (§7.5) |
+| Key substitution by a signer | `verify_multisig`: each revealed key must hash to the committed `h_i` at its index (§7.5) |
+| Blob truncation/padding | Exact-length parses in `MultisigKeyBlob` / `MultisigSigContainer`; CEN-I16's floor and ceiling |
 | Replay across groups | **address-fingerprint** binding in the canonical signing intent (I1; §5.3 — replaces the retired `group_id`) |
 | Replay within group | `intent_id` + `tx_counter` + `expires_at` + `reference_block_hash` + `kem_randomness_seed` freshness |
 
@@ -341,58 +341,56 @@ Wallets MUST type-check the HRP at parse time.
 
 ```
 MultisigAddressPayload {
-    version:             u8   (= 0x01)
+    version:             u8   (= 0x02)
     group_version:       u8   (= 0x01)
-    spend_auth_version:  u8   (= 0x02 for Option E′; 0x01 never issued)
+    spend_auth_version:  u8   (= 0x02, Option E′)
     network_byte:        u8
-    n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS)
+    n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS = 5)
     m_required:          u8   (1..=n_total)
 
-    b_group:             [u8; 32]   // Option E′: group plaintext view/link key B = b·G
-    y_group:             [u8; 32]   // Option E′: FROST M-of-N group spend key Y = y·T
+    b_group:             [u8; 32]   // B = b·G. Every member holds b.
+    y_group:             [u8; 32]   // Y = y·T. y is FROST-shared, M-of-N.
+
+    group_kem_pubkey:    HybridKemPubkey
+    // X25519 (32 B) + ML-KEM-768 (1184 B) = 1216 B. Every member holds the
+    // secret. A payer's one 0x06 ciphertext per output is to this key.
 
     hybrid_kem_pubkeys:  [HybridKemPubkey; n_total]
-    // Each: X25519 (32 B) + ML-KEM-768 (1184 B) = 1216 B
-    // Canonically ordered by participant_index (0..n_total)
-
-    // Wire order: 6-byte header || b_group(32) || y_group(32) || KEM array.
-    // The points sit after the header and before the variable-length array, so
-    // every D-era header offset is unchanged. A payer needs B and Y to build
-    // O = ho·G + b_group + y_out·T (y_out = y_group + y_kem); without them an
-    // output cannot be constructed at all. The points are opaque compressed
-    // Edwards points in the address; their validity is checked by the output
-    // constructor (crypto-pq::output), not the address parser.
-
-    // No stored checksum: integrity is the fingerprint (§6.3).
+    // Each member's own key, member order (participant index 0..n_total).
+    // The per-member 0x0D ciphertexts are to these keys.
 }
 ```
 
-> **MSW-8 (2026-07-15):** `hybrid_sign_pubkeys: [HybridSignPubkey; n_total]`
-> is **deleted**. Vestigial Solution C fossil — constructed and parsed,
-> never consumed (`multisig_receiving.rs` derives leaf hybrid sign keys
-> from KEM shared secrets). `PER_PARTICIPANT_LEN` collapses 3200 → 1216.
-> Free pre-genesis. Applies to D and E′ identically.
+The wire order is the field order. A payer needs `B` and `Y` to build
+`O = ho·G + B + (y_group + y_kem)·T`, and both kinds of KEM key to build the
+output's `0x06` and `0x0D` fields (§7.1). The points are opaque compressed
+Edwards points in the address; the output constructor checks that each is a
+prime-order, non-identity point. There is no stored checksum: integrity is
+the fingerprint (§6.3). A `version` other than `0x02` is refused.
 
-Canonical payload (E′): `70 + N × 1216` bytes
-(`HEADER_LEN(6) + 2 × GROUP_POINT_LEN(32) + N × PER_PARTICIPANT_LEN(1216)`). This
-is the fingerprint preimage and the file contents.
+The X25519 half of every KEM key is one canonical Montgomery u-coordinate:
+the integer is strictly less than `2^255 − 19`, so bit 255 is clear.
+X25519 ignores that bit and reduces modulo the prime, and the address
+compares keys as bytes. A second encoding of the group key would be a
+different byte string and the same point, and the group secret would open
+that member's slot. `new`, `from_canonical_bytes` and the output
+constructor refuse it, and they refuse a key that repeats another.
 
-**The full address is file-based, not a Bech32m string.** At E′ sizes the address
-is ~4019 chars for a 2-of-N — past Bech32m's ~1023-char BCH-checksum validity limit,
-so encode/decode do not round-trip (measured, not estimated; the length KAT
-surfaced it). The Bech32m string form (§6.1) therefore encodes the **fingerprint**
-(32 B → 67 chars), not the payload — that is the short, QR-able, shareable
-identifier participants compare. Integrity rides the fingerprint (§6.3), never a
-full-address string or a stored checksum.
+Canonical payload: `70 + (N + 1) × 1216` bytes
+(`HEADER_LEN(6) + 2 × GROUP_POINT_LEN(32) + (1 + N) × 1216`). This is the
+fingerprint preimage and the file contents.
 
-| N | Canonical bytes | Full address (file-based) |
-|---|---|---|
-| 2 | 2,502 B | 4,019 bech32-equivalent chars — file only |
-| 3 | 3,718 B | file only |
-| 5 | 6,150 B | file only |
+**The full address is file-based, not a Bech32m string.** At these sizes it
+is far past Bech32m's ~1023-character checksum-validity limit, so the
+Bech32m string form (§6.1) encodes the **fingerprint** (32 B → 67 chars),
+the short identifier participants compare.
 
-The fingerprint's own Bech32m string is 67 chars at every N (fixed 32-byte input) —
-QR-able, and the thing users actually exchange and verify.
+| N | Canonical bytes |
+|---|---|
+| 1 | 2,502 B |
+| 2 | 3,718 B |
+| 3 | 4,934 B |
+| 5 | 7,366 B |
 
 ### 6.3 Address handling, fingerprint UX, and provenance
 
@@ -482,438 +480,280 @@ that commits a group's pubkeys on-chain at a short identifier. Addresses
 would reference the on-chain group by short hash (~100 B address). This is
 explicitly out of V3.1 scope and would be a consensus change.
 
+### 6.6 The member file
+
+The dealer gives each member one file (`shekyl-multisig::member_file`,
+layout version 1). It holds everything that member needs to receive and to
+sign:
+
+| Field | Size | What it is |
+|---|---|---|
+| magic, version | 4 + 1 B | `"SKMF"`, `1` |
+| address payload | `u32_le` length + §6.2 payload | the group's public state and identity |
+| `member_index` | 1 B | `0..n` |
+| `b` | 32 B | the group-plaintext spend scalar |
+| `y_share` | 32 B | this member's share of `y_group` |
+| verification shares | `n × 32` B | every member's, member order |
+| group KEM secret | 2432 B | X25519 (32) ‖ ML-KEM-768 decapsulation key (2400) |
+| member KEM secret | 2432 B | this member's own, same layout |
+| transport secret | 32 B | keys the ceremony blobs (§12) |
+
+The **transport secret** is
+`shekyl_crypto_pq::derivation::derive_group_transport_secret`: HKDF-SHA-512
+with salt `salt_for(network)` (the network's `name_id`, then
+`shekyl-master-derive-v3`), input keying material the dealer's 32-byte group
+seed, and info `shekyl/multisig-transport-v1`. The dealer derives it once
+and writes the same value into every member file. The file stores the bytes;
+it does not derive them.
+
+This is the plaintext serialization. Keeping the file encrypted at rest is
+the wallet's job, as for every other key file. Every secret is wiped on
+drop, and the type's `Debug` prints none of them.
+
 ---
 
 ## 7. Receiving Outputs
 
-### 7.1 Per-output KEM fan-out with published spend-auth pubkeys (Option C + Solution C)
+### 7.1 Output construction
 
-For each multisig-recipient output, the sender performs N separate KEM
-encapsulations, producing N independent ephemeral hybrid signing keypairs
-**and** N independent ephemeral classical spend-auth keypairs. The spend-
-auth pubkeys are published explicitly in `tx_extra` to enable public
-prover-assignment verification.
+A multisig output is a solo output to the group, plus one entry per member.
+The constructor is `shekyl-crypto-pq::multisig_output::construct_multisig_output`.
 
 ```python
-def construct_multisig_output(
-    sender_tx_secret_key:  secret_key,
-    recipient_address:     MultisigAddress,
-    amount:                u64,
-    output_index_in_tx:    u64,
-    reference_block_hash:  [u8; 32],
-    kem_seed:              [u8; 32],   # see §7.3
-):
-    kem_ciphertexts    = []    # N × HybridKemCiphertext
-    ephemeral_sign_pks = []    # N × HybridSignPubkey
-    spend_auth_pubkeys = []    # N × 32 bytes (classical Y_i = y_i * G)
-    view_tag_hints     = []    # N × u8
-    ss_by_index        = {}    # cache for commitment mask derivation
+def construct_multisig_output(tx_key_secret, address, amount, output_index, network_id):
+    assert output_index <= 255            # the 0x0D entry names it in one byte
 
-    for i in range(recipient_address.n_total):
-        # Per-participant deterministic KEM randomness
-        kem_randomness_i = HKDF_Expand(
-            kem_seed,
-            b"shekyl-v31-multisig-kem" || u64_le(output_index_in_tx) || u8(i),
-            64
-        )
+    # The solo part: the solo output core, to the group.
+    spend_key = address.b_group + address.y_group           # checked prime-order, non-identity
+    ct_group, ss_group = encapsulate(tx_key_secret, address.group_kem_pubkey, output_index)
+    ho, y_kem, z, k_amount, k_label = derive_output_secrets(ss_group, output_index)
+    O = ho·G + spend_key + y_kem·T       # = ho·G + B + (y_group + y_kem)·T
+    C = z·G + amount·H
+    enc_amount, enc_label = encrypt(k_amount, amount), encrypt(k_label, SENTINEL)
 
-        # Encap to participant i's KEM pubkey
-        ct_i, ss_i = HybridKEM.encap_deterministic(
-            recipient_address.hybrid_kem_pubkeys[i],
-            kem_randomness_i
-        )
-        kem_ciphertexts.append(ct_i)
-        ss_by_index[i] = ss_i
+    # The per-member part.
+    cts, hashes = [], []
+    for i in range(address.n_total):
+        ct_i, ss_i = encapsulate(tx_key_secret, address.hybrid_kem_pubkeys[i], output_index)
+        pk_i = member_keypair(ss_i).public                   # §7.2
+        hashes.append(frame32("shekyl/multisig-key-hash-v1", network_id, [pk_i]))
+        cts.append(ct_i)
+        # ss_i and the keypair are wiped here.
 
-        # Derive per-output ephemeral material with DOMAIN SEPARATION
-        # See §7.2 for KDF label definitions
-        hybrid_sign_kdf = HKDF_Expand(
-            ss_i, b"shekyl-v31-hybrid-sign", 64
-        )
-        hybrid_sign_pk_i = derive_hybrid_sign_pubkey(hybrid_sign_kdf)
-        ephemeral_sign_pks.append(hybrid_sign_pk_i)
+    committed = 0x02 ‖ n ‖ m ‖ hashes[0] ‖ … ‖ hashes[n-1]  # 3 + 32·n bytes
 
-        classical_spend_kdf = HKDF_Expand(
-            ss_i, b"shekyl-v31-classical-spend", 64
-        )
-        y_i = derive_classical_scalar(classical_spend_kdf)
-        Y_i = y_i * G   # 32-byte compressed Ed25519 point
-        spend_auth_pubkeys.append(Y_i)
+    # The leaf commits to the committed form, blinded from the group secret.
+    (CM, record) = pqc_leaf_commitment(ss_group, output_index, committed)
 
-        # View tag hint (1 byte) for fast scanner identification
-        view_tag_hints.append(
-            HKDF_Expand(ss_i, b"shekyl-v31-view-tag", 1)[0]
-        )
+    # The hashes travel encrypted under the group secret.
+    key = derive_multisig_key_hashes_key(ss_group, output_index)
+    enc_hashes = ChaCha20Poly1305(key).encrypt(nonce = 0^12,
+                                               msg = hashes[0] ‖ … ‖ hashes[n-1],
+                                               aad = u8(output_index) ‖ u8(n))
 
-    # NOTE (Option E′): the assigned-prover computation below is DELETED
-    # machinery (§11.1 banner) — E′ has no mandatory prover, and
-    # `rotating_prover_index` / `group_id` no longer exist in code. Retained
-    # only as historical spec of the Option-D receive flow; a full E′ rewrite
-    # of §7/§8 is S2/S4 scope.
-    tx_secret_key_hash = cn_fast_hash(sender_tx_secret_key)
-    assigned_prover = rotating_prover_index(   # DELETED — see note above
-        recipient_address.group_id,
-        output_index_in_tx,
-        tx_secret_key_hash,
-        reference_block_hash,
-        recipient_address.n_total
-    )
-
-    # Output public key binds to the assigned prover's spend-auth pubkey
-    O = spend_auth_pubkeys[assigned_prover]
-
-    # Commitment uses the assigned prover's commitment mask
-    commitment_mask = derive_commitment_mask(
-        ss_by_index[assigned_prover], output_index_in_tx
-    )
-    commitment = Commit(amount, commitment_mask)
-
-    # Canonical leaf container includes all three components
-    leaf_container = MultisigKeyContainer {
-        version:              0x01,
-        n_total:              recipient_address.n_total,
-        m_required:           recipient_address.m_required,
-        keys:                 ephemeral_sign_pks,  # HybridPublicKey per participant
-        spend_auth_pubkeys:   spend_auth_pubkeys,
-    }
-
-    # 4th leaf scalar: CM.x, with CM = k*G_k + r*J and k over the full container (PL-D3)
-    k = pqc_key_scalar(leaf_container_bytes)          # one derivation, no multisig shim
-    (cm, record) = pqc_leaf_commitment(combined_ss, index, leaf_container)
-
-    return OutputConstruction {
-        output_pubkey:     O,
-        commitment,
-        kem_ciphertexts,
-        view_tag_hints,
-        spend_auth_pubkeys,    # published separately in tx_extra
-        pqc_leaf: (cm, record),   # the 64-byte 0x07 entry
-        leaf_container,
-        assigned_prover_index: assigned_prover,
-    }
+    return O, C, enc_amount, enc_label, ct_group,     # the solo fields; ct_group is the 0x06 entry
+           (CM, record),                              # the 0x07 entry
+           (output_index, n, cts, enc_hashes)         # the 0x0D entry
 ```
 
-### 7.2 KDF domain separation (CRITICAL)
+The solo constructor's per-output PQC key is never made for a multisig
+output. Every member holds the group secret and could derive it, so a leaf
+over it would let any one member satisfy the PQ leg alone.
 
-Per-output material derives from each participant's KEM shared secret
-`ss_i` via three strictly domain-separated HKDF expansions:
+**Why the hashes are encrypted.** A spend reveals the committed form
+(§7.5). In the clear at receive time, the hashes would match it and link
+the spend to its output.
 
-| Purpose | Label | Output length |
+**Why the hash key needs no nonce.** The key is derived per output from a
+fresh KEM secret and the output index, and encrypts one plaintext.
+
+### 7.2 Derivations
+
+| Value | From | Label or domain |
 |---|---|---|
-| Hybrid signing keypair | `"shekyl-v31-hybrid-sign"` | 64 B |
-| Classical spend-auth keypair | `"shekyl-v31-classical-spend"` | 64 B |
-| View tag hint | `"shekyl-v31-view-tag"` | 1 B |
+| `ho`, `y_kem`, `z`, `k_amount`, `k_label`, leaf blinds | the group secret `ss_group` | the solo `shekyl-output-*` labels, unchanged |
+| hash AEAD key | `ss_group` | `shekyl-output-multisig-key-hashes` (same PRK as the solo labels) |
+| member `i`'s per-output signing keypair | member `i`'s secret `ss_i` | `HKDF-SHA-512(ikm = ss_i).expand("shekyl-v31-hybrid-sign", 64)`: bytes `0..32` seed Ed25519, `32..64` seed ML-DSA-65 |
+| `h_i` | `pk_i` | `frame(shekyl/multisig-key-hash-v1, network_id, [pk_i])`, 32 B |
 
-**Future spend-auth versions use distinct labels**, preventing
-cross-version key reuse:
+`h_i` binds the chain's network id because consensus compares it at every
+spend (§7.5). Every label is registered in `CRYPTO_DOMAIN_REGISTRY.tsv`.
 
-| spend_auth_version | KDF label |
-|---|---|
-| **0x02 (Option E′ / 15.4a)** | `"shekyl-v31-classical-spend"` — classical threshold SAL on `y` (Ed25519 in the FCMP++ circuit). **Not** lattice auth. |
-| 0x01 | **Never issued** (was Option D mandatory-prover scaffold) |
-| Future 15.4b auth evolution | Distinct label — do not overload `0x02` |
+### 7.3 Deterministic encapsulation
 
-Domain separation is a HARD requirement. Any implementation that uses
-identical material for two purposes is non-conforming.
+Every encapsulation in a multisig output, the group's and each member's,
+uses the solo deterministic encapsulation. Its per-recipient seed is
+`derive_kem_seed(tx_key_secret, recipient_x25519, recipient_ml_kem, output_index)`,
+which binds the recipient's two public keys. So two recipients of one
+output never share encapsulation randomness: one member decapsulating its
+own ciphertext learns nothing about another member's.
 
-### 7.3 Deterministic KEM seed
+`tx_secret_key` MUST be freshly generated per transaction.
 
-The `kem_seed` derives from the transaction's secret key:
+### 7.4 tx_extra
 
-```
-kem_seed = HKDF_Expand(
-    tx_secret_key,
-    b"shekyl-v31-kem-seed" || u64_le(output_index_in_tx),
-    32
-)
-```
-
-`tx_secret_key` MUST be freshly generated per transaction. Wallets MUST
-assert freshness and refuse to construct a transaction if `tx_secret_key`
-is reused.
-
-### 7.4 tx_extra additions
-
-Per multisig-recipient output, the tx_extra includes:
+Per transaction:
 
 | Tag | Name | Payload |
 |---|---|---|
-| 0x06 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | N × 1120 B |
-| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 64 B (`CM ‖ record`; `CM` commits to `k = H_ℓ(full container)`, `PL-D3`) |
-| 0x09 | `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` | N × 1 B |
-| **0x0A** | `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS` | **1 + N × 32 B** (version byte + N Y_i) |
+| 0x06 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | exactly one field, `1120 × n_outputs` B: a multisig output's entry is its group ciphertext, the same shape as a solo output's |
+| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | exactly one field, `64 × n_outputs` B: a multisig output's entry is `CM ‖ record` over the committed form |
+| **0x0D** | `TX_EXTRA_TAG_PQC_MULTISIG` | at most one field: one entry per multisig output, strictly ascending by output index |
 
-Tag `0x0A` is new in V3.1 and is REQUIRED on every multisig-recipient
-output. Its first byte is the `spend_auth_version` (**`0x02` for
-Option E′**; `0x01` never issued); subsequent bytes are the N
-spend-auth pubkeys in canonical participant order (E′ layout pinned
-in design §0.5 — `B` + `Y_group` + N×KEM once MSW-8 lands).
+A `0x0D` entry is
 
-`TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` (0x09) MUST be absent for single-sig
-outputs. Wallets MUST reject any single-sig-shaped output that contains
-this tag.
+```
+out_idx(1) ‖ n(1) ‖ ct_1 … ct_n (1120 B each) ‖ enc(h_1 … h_n) (32·n B) ‖ tag (16 B)
+```
 
-**Reserved tags (do not use):**
+`2 + 1152·n + 16` bytes. It carries `n` so the field parses without the
+address. CEN-I19's multisig clause (`check_pqc_multisig_shape`) refuses a
+second `0x0D` field, an empty one, entries out of order or repeated, and an
+entry naming an output the transaction does not have. The parser refuses
+`n` outside `1..=5` and a short or long entry. A coinbase's closed grammar
+does not admit `0x0D`, so a coinbase cannot pay a group.
 
-| Tag | Reserved for |
+**Cost per multisig output**, across the three fields:
+`1120 + 64 + 2 + 1152·n + 16` bytes, about **4.7 KB at n = 3** and **7.0 KB at
+n = 5**. The `n` per-member ciphertexts are what keep the PQ leg M-of-N; a
+key every member could derive would make it 1-of-N. Under the 24,576-byte
+relay cap on `extra` (CEN-M4), one transaction carries at most **five**
+multisig outputs to a 3-member group, or **three** to a 5-member group,
+beside a change output.
+
+**Privacy.** A `0x0D` field says that a transaction pays a multisig group,
+and each entry gives the group's size. That is inherent to Option E′. The
+entries carry nothing linkable to the group across transactions: the
+ciphertexts are fresh per output and the hashes are encrypted.
+
+**Retired and reserved tags** (never reused; each parses as unknown):
+
+| Tag | Disposition |
 |---|---|
-| 0x08 | `TX_EXTRA_TAG_MULTISIG_MIGRATION` — the group-rotation / migration transaction, producer undesigned. **RESERVED in this table only** (rule 23, 2026-09-22): the code constant, struct and variant are deleted, and the byte parses as unknown until the producer's design mints them. |
-
-**Retired tag:** `0x05` (`TX_EXTRA_TAG_PQC_OWNERSHIP`, a per-output
-`(scheme_id, group_id)` entry) is **REJECTED 2026-09-22** — no producer, no
-reader; superseded by `PL-D3`'s in-circuit leaf-commitment binding (§7.5) and
-by the address fingerprint as group identity (§5.3). The byte stays retired
-in `shekyl-wire/src/tx_extra.rs` (the one codec since 2026-09-23) beside
-`0x03` / `0xDE`.
+| 0x05 | Retired. A per-output `(scheme_id, group_id)` entry with no producer and no reader. |
+| 0x08 | RESERVED for the group-rotation / migration transaction; producer undesigned (rule 23). |
+| 0x09 | Retired. Per-member view-tag hints, never produced; `0x0D` replaced it. |
+| 0x0A | Retired. Per-member spend-auth pubkeys, never produced; `0x0D` replaced it. |
 
 ### 7.5 Spend-time consensus binding
 
-The spend-time binding works through the FCMP++ in-circuit leaf-commitment
-opening (`PL-D3`) combined with the `pqc_auth` size check, both in V3
-consensus. With the Solution C receiving model in place, the binding chain is:
+The key blob a multisig spend reveals in `pqc_auths[i].hybrid_public_key`
+(scheme 2) is
 
-1. Output committed at receive time with `O = spend_auth_pubkeys[assigned]`
-2. Leaf scalar `CM.x`, `CM = k·G_k + r·J` with `k = H_ℓ(MultisigKeyContainer)`,
-   binds the full container including spend_auth_pubkeys
-3. At spend time, the spender presents `pqc_auths[i].hybrid_public_key`
-   containing the canonical `MultisigKeyContainer` (byte-identical to the
-   one committed)
-4. The verifier computes `k = shekyl_fcmp_pqc_key_scalar(blob)`, derives
-   `K = k·G_k`, and the FCMP++ proof confirms a leaf whose commitment opens
-   to `K` is in the curve tree
-5. The FCMP++ proof verifies the key image derives from `O`
-6. Honest signers (pre-signing, §2.7 I5) verify
-   `O == spend_auth_pubkeys[rotating_prover_index(...)]` — confirming
-   the proof was constructed by the assigned prover
+```
+committed form (0x02 ‖ n ‖ m ‖ h_1 … h_n) ‖ signer_bitmap(1) ‖ pk_{i_1} ‖ … ‖ pk_{i_m}
+```
 
-Any blob other than the canonical container yields a point the leaf's
-commitment does not open to; the proof rejects. Size check at `tx_pqc_verify.cpp:206-211` rejects
-scheme_id=1 against multisig-shaped blobs.
+`3 + 32·n + 1 + 1996·m` bytes; the bitmap has exactly `m` bits set, none at
+or above `n`, and the keys follow in ascending member order. The signature
+blob is `sig_count ‖ m × HybridSignature ‖ m × index`, its indices exactly
+the bitmap's set bits.
 
-**Defense-in-depth wiring fixes** (no consensus rule change, but explicit
-enforcement of rules already implicitly guaranteed):
+1. The leaf's 4th scalar is `CM.x` with `CM = k·G_k + r·J`,
+   `k = H_ℓ(committed form)` (`PL-D3`).
+2. Both consensus verifiers derive `k` from **the committed form only**
+   (`pqc_leaf_key_bytes`, `PqcKeyScalar::from_pqc_auth`), and the FCMP++
+   proof opens the spent leaf to `K = k·G_k`. A blob whose committed form is
+   not the output's does not open.
+3. `verify_multisig` (CEN-I18) parses both blobs, checks `m` signatures and
+   that their indices are the bitmap's, checks each revealed `pk_i` against
+   `h_i` under this network's id, refuses duplicate keys, then verifies each
+   signature under `shekyl/pqc-auth-tx-multisig-v1`.
 
-- ~~`blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
-  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`~~ —
-  **retired 2026-09-22:** tag `0x05` is deleted (§7.4, *Retired tag*); the
-  scheme is bound by the leaf commitment, not by a per-output entry.
-- ~~`rust/shekyl-ffi/src/lib.rs` SHOULD pass `expected_group_id` to
-  `verify_multisig` when `scheme_id == 2`~~ — **retired (§5.3):** the
-  `expected_group_id` parameter and check 9 are deleted; group identity
-  is the address fingerprint, not a per-verify argument.
+So `m` signers spend without the other `n − m`: they reveal only their own
+keys, and every member can read every `h_j` from the `0x0D` entry. A
+non-signer's key never reaches the chain. CEN-I16's structural floor for a
+scheme-2 key blob is `MULTISIG_KEY_BLOB_MIN = 2032` bytes (a 1-of-1).
 
-### 7.6 Wallet-side filtering and griefing resource limits
+### 7.6 Outputs a group cannot spend
 
-Outputs that pass structural tag parsing but fail KEM decap, view-tag
-hint check, or receive-time validation (§8.3) are griefing artifacts.
-Wallets MUST:
-
-1. Attempt KEM decap on candidate outputs
-2. On decap failure or validation failure, mark the output as garbage
-   and never surface it in balance, history, or any user-visible view
-3. Apply **per-sender griefing scores**:
-   - Maintain a rolling 24-hour window of failed-validation counts per
-     sender (keyed by tx author hash, not output)
-   - After 10 failures from the same sender in 24h, temporarily mark
-     that sender's outputs as low-priority (deprioritized scan) for
-     7 days with a user-visible banner "possible griefing detected"
-   - After 100 failures in 24h, skip that sender's outputs entirely
-     for 7 days
-4. Apply **hard caps on garbage state**:
-   - Maximum 10,000 garbage entries retained per wallet at any time
-   - When cap reached, drop oldest entries first
-5. Optionally expose griefing-attack indicators via daemon RPC
-   (`get_griefing_stats`) for network-wide monitoring
-6. Periodically purge garbage entries (default every 10,000 blocks;
-   configurable)
-
-This bounds attack to scanner CPU cost, with no user-visible impact and
-no unbounded state growth.
+A sender can always make an output unspendable. Under E′ that shows up as
+an output the group owns (its view pair matches and the amount opens) whose
+`0x0D` entry is missing or wrong, or whose leaf does not commit to the
+entry's hashes. The scanner keeps such an output, names its transaction,
+and marks it received-but-unspendable, naming the check that failed
+(`UnspendableReason::MultisigEntryAbsent` when the `0x0D` entry is
+missing, and one variant per refusal of `open_multisig_entry`; §8.2).
+It is never offered to coin selection.
 
 ### 7.7 Wallet send-side requirements
 
 When sending to a multisig recipient, the sender's wallet MUST:
 
 1. Display the address fingerprint (§6.3) and require user confirmation
-2. Verify that the parsed address has a valid Bech32m checksum
-3. Verify that all N hybrid pubkey blobs deserialize correctly
-4. Reject addresses with `n_total > MAX_MULTISIG_PARTICIPANTS` or
-   `m_required > n_total` (cap = 5 per §5.1 / MSW-G)
-5. Reject addresses with unknown `spend_auth_version` (wallets only
-   construct outputs for versions they fully implement)
-6. Compute and surface the per-output size cost
-7. *(Option D only — withdrawn for E′.)* Determine
-   `assigned_prover_index` via the sender-computable rule
-8. *(Option D only — withdrawn for E′.)* Set
-   `O = spend_auth_pubkeys[assigned_prover_index]`. Under **Option E′**
-   (§15.4a), construct `O = ho·G + B + y_out·T` with
-   `y_out = y_group + y_kem`; any wallet bug here would produce
-   unspendable outputs
+2. Refuse an address whose version is not `0x02`, whose `spend_auth_version`
+   it does not implement, whose `n_total > MAX_MULTISIG_PARTICIPANTS` or
+   `m_required > n_total`, or whose points or KEM keys do not parse
+3. Build the output with `construct_multisig_output` (§7.1) and write its
+   `0x06`, `0x07` and `0x0D` parts into the transaction's single fields
+4. Surface the per-output size (§7.4)
 
 ---
 
 ## 8. Wallet Scanning and Receive-Time Validation
 
-### 8.1 Scan-time filtering
+### 8.1 Scanning as the group
 
-Each participant's wallet processes each candidate output:
+Every member scans with the **solo scanner**, as the group: its view pair is
+the group KEM secret with spend point `B_group + Y_group`, and its spend
+secret is `b`. An output paid to the group is found exactly as a solo
+wallet finds its own: the `0x06` ciphertext decapsulates, the view tag
+matches, `recover_recipient_spend_pubkey` returns `B_group + Y_group`, the
+amount opens, and the key image is `compute_output_key_image` with `b`. So
+balance and spent-detection are local: no member needs another to see what
+the group holds.
 
-```python
-def scan_output(output, my_participant_index, my_kem_secret):
-    # Fast tag check
-    hints = parse_tx_extra_tag(output.tx_extra, 0x09)
-    if hints is None:
-        return None  # not multisig-shaped
+### 8.2 The multisig check
 
-    spend_auth_tag = parse_tx_extra_tag(output.tx_extra, 0x0A)
-    if spend_auth_tag is None:
-        return None  # malformed multisig output
+For each output the group's view pair matches, the member then runs
+`open_multisig_entry` in place of the solo leaf comparison
+(`shekyl-scanner`, `MultisigMemberScan`):
 
-    spend_auth_version = spend_auth_tag[0]
-    if spend_auth_version not in KNOWN_VERSIONS:
-        return None  # unknown scheme — do not scan (forward-compat)
+1. Find the `0x0D` entry for the output's index. A missing entry is
+   `UnspendableReason::MultisigEntryAbsent`.
+2. Check its `n` is the group's (`MultisigGroupSize`). Decrypt the hashes
+   under the output's group secret (AEAD-authenticated, with `out_idx ‖ n`
+   as associated data; `MultisigHashesUndecryptable`).
+3. Refuse a repeated decrypted hash (`MultisigDuplicateKeyHash`). Every
+   member sees the whole list, and `verify_multisig` would refuse the same
+   bytes as duplicate keys.
+4. Decapsulate `ct_i` with the member's own KEM secret
+   (`MultisigMemberDecap`), derive `pk_i`, and check `h_i` against it
+   (`MultisigMemberKeyHash`). A sender lying about *this* member is caught
+   here.
+5. Rebuild the committed form from the `n` hashes and the group's `m`, and
+   check that the published `0x07` entry is its leaf commitment
+   (`MultisigLeafMismatch`). A sender lying about *any other* member, while
+   leaving the leaf over the honest list, is caught here. A sender who
+   keeps every `ss_i`, replaces another member's hash, and recomputes the
+   leaf is not caught by this member: that member does not hold the other
+   member's KEM secret. The cosigners refuse that committed form before
+   they sign (slice 3).
 
-    if my_participant_index >= len(hints):
-        return None  # cardinality mismatch
+A missing `0x07` entry stays `PqcLeafEntryAbsent`. The solo leaf comparison
+never runs for a group output: its leaf never commits to the solo
+per-output key.
 
-    # KEM decap my slot
-    my_ct = parse_kem_ciphertext_slot(output, my_participant_index)
-    ss = HybridKEM.decap(my_kem_secret, my_ct)
-    if ss is None:
-        register_griefing_failure(output.sender_id)
-        return None  # decap failed
+### 8.3 Versions
 
-    # Fast hint check
-    expected_hint = HKDF_Expand(ss, b"shekyl-v31-view-tag", 1)[0]
-    if expected_hint != hints[my_participant_index]:
-        register_griefing_failure(output.sender_id)
-        return None  # hint mismatch
+A wallet refuses an address whose version is not `0x02` (§6.2). A spend's
+key blob with a container version other than `0x02` is refused by
+consensus (`PqcVerifyError::ContainerVersion`); `0x01` was never issued.
 
-    # Full receive-time validation (§8.3)
-    if not validate_multisig_output_at_receive(
-        output, my_participant_index, ss, spend_auth_tag
-    ):
-        register_griefing_failure(output.sender_id)
-        return None  # structural validation failed
+### 8.4 Persistence
 
-    # All checks pass; output is ours
-    return MatchedOutput { ss, ... }
-```
-
-### 8.2 Unknown spend_auth_version handling (forward compatibility)
-
-When a wallet encounters an output with `spend_auth_version` it does not
-understand:
-
-- It MUST NOT attempt decap
-- It MUST NOT track the output in any form
-- It MUST NOT emit an error
-- It MUST silently skip the output
-
-This preserves forward compatibility: a V3.1 wallet encountering a V4
-output ignores it cleanly. The output remains scannable by upgraded
-wallets that understand the newer version.
-
-### 8.3 Receive-time validation (CRITICAL)
-
-Every scanned-and-apparently-ours output MUST be validated for correct
-prover-assignment binding before being added to the wallet's balance.
-This is honest-signer invariant **I7** from §2.7.
-
-```python
-def validate_multisig_output_at_receive(
-    output, my_participant_index, ss_mine, spend_auth_tag
-):
-    # Derive my own spend-auth pubkey
-    classical_kdf = HKDF_Expand(ss_mine, b"shekyl-v31-classical-spend", 64)
-    y_mine = derive_classical_scalar(classical_kdf)
-    Y_mine_computed = y_mine * G
-
-    # Parse the published N spend-auth pubkeys
-    n_total = (len(spend_auth_tag) - 1) // 32
-    spend_auth_pubkeys = [
-        spend_auth_tag[1 + i*32 : 1 + (i+1)*32]
-        for i in range(n_total)
-    ]
-
-    # Check 1: my own published Y matches my derivation
-    if spend_auth_pubkeys[my_participant_index] != Y_mine_computed:
-        return False  # sender used wrong material for my slot
-
-    # Check 2: output pubkey O matches the assigned prover's published Y
-    tx_secret_key_hash = extract_from_output(output)  # via tx_public_key + cn_fast_hash; see §11.1
-    assigned_prover = rotating_prover_index(
-        group.group_id,
-        output.index_in_tx,
-        tx_secret_key_hash,
-        output.reference_block_hash,
-        n_total
-    )
-
-    Y_assigned = spend_auth_pubkeys[assigned_prover]
-    if output.output_pubkey != Y_assigned:
-        return False  # O doesn't bind to assigned prover
-
-    # Validation passes: output is structurally correct for future spend
-    return True
-```
-
-**Rationale:** this check catches three distinct failure modes at
-receive time, before funds enter user-visible balance:
-
-1. **Malicious sender grief (time-bomb outputs):** sender publishes an
-   output that decaps successfully but binds `O` to the wrong participant.
-   At spend time, honest signers would detect and refuse to sign (I5),
-   leaving funds locked. Receive-time validation rejects before acceptance.
-2. **Sender implementation bugs:** a buggy wallet produces outputs with
-   incorrect Y_prover assignment. Same outcome as malicious; detected here.
-3. **Spec violations during transition periods:** older wallet mis-implements
-   the new derivation. Detected.
-
-Outputs failing receive-time validation are treated as griefing artifacts
-per §7.6.
-
-### 8.4 Persistence requirements
-
-For each validated multisig output, the wallet MUST persist:
-
-```
-PersistedMultisigOutput {
-    output_id:             [u8; 32]  # local identifier
-    global_output_index:   u64
-    my_participant_index:  u8
-    my_shared_secret:      [u8; 32]  # ss_mine from decap
-    spend_auth_version:    u8
-    spend_auth_pubkeys:    [[u8; 32]; n_total]  # ALL N pubkeys from tx_extra
-    output_pubkey:         [u8; 32]  # O
-    commitment:            [u8; 32]
-    amount:                u64
-    reference_block_hash:  [u8; 32]
-    output_index_in_tx:    u64
-    tx_secret_key_hash:    [u8; 32]  # extracted at scan time
-    assigned_prover_index: u8  # computed once at scan time, cached
-    received_at_height:    u64
-    eligible_height:       u64
-}
-```
-
-**Persistence of all N spend-auth pubkeys** is required so that
-prover-assignment verification works at spend time without re-reading
-the transaction from chain (which may be pruned on participant's node).
-
-**Seed restore:** When a wallet is restored from seed, it rescans the
-chain. For each matched output, it reconstructs `PersistedMultisigOutput`
-deterministically from chain data plus the restored seed (which gives
-the KEM secret for decap). All fields are reproducible.
+A group output is persisted as a solo output is. Nothing multisig-specific
+is stored at receive time: at spend time each signer re-derives its `pk_i`
+by decapsulating `ct_i` again, and the committed form is rebuilt from the
+transaction's `0x0D` entry, as the solo spend path re-derives its secrets
+from chain data. Restoring a member from its member file and rescanning
+reproduces everything.
 
 ### 8.5 Cost
 
-Per output (fast path): 1 KEM decap + 1 HKDF hint check + 1 structural
-validation. Each participant processes only their own ciphertext slot.
-Per-participant scanning cost is not multiplied by N.
-
-False-positive rate from view-tag hint: ~1/256. Each false positive
-triggers full validation (which fails) and griefing-score increment.
+An output that is not the group's costs exactly a solo scan. An output that
+is costs one more decapsulation, one ML-DSA-65 key generation, one AEAD
+open and one leaf commitment.
 
 ---
 
@@ -1685,7 +1525,7 @@ published; intent REJECTED
 | No unilateral spend | scheme_id=2 consensus requires M PQC signatures |
 | No unilateral redirect | Deterministic construction; signers reconstruct and verify |
 | No wrong-prover spend | §11.3 honest-signer prover assignment verification (I5) |
-| No sender griefing via malformed assignment | §8.3 receive-time validation (I7) |
+| No silent acceptance of a malformed group output | §8.2 multisig check (received but unspendable, named) |
 | No invariant bypass | §2.7 mechanical enforcement in signing path |
 
 ### 14.2 Privacy
@@ -1899,8 +1739,9 @@ question.
 | **(a) Lattice-only *auth signing*** | Drop the Ed25519 half of the hybrid `scheme_id=2` key/sig container; M-of-N or composite becomes lattice-only at the *authorization* layer | Achievable in principle; size/FIPS story; **not** what `spend_auth_version` gates |
 | **(b) Lattice *SAL*** | Replace Ed25519 `O` / `y` with a lattice key verified inside FCMP++ | **Impossible** while FCMP++ is the membership proof (Helios/Selene circuit verifies a curve equation) |
 
-`spend_auth_version` gates the **SAL key scheme** published in
-`tx_extra` (`spend_auth_pubkeys`), not the hybrid auth container.
+`spend_auth_version` gates the **SAL key scheme** (it is the container's
+version byte and the address's `spend_auth_version`), not the hybrid
+signature scheme inside the container.
 **`spend_auth_version = 0x02` means 15.4a** (threshold classical SAL /
 FROST group-shaped `y` under a two-component address) — still Ed25519
 points in the circuit. It does **not** mean (b). Reading (a) is a
@@ -2020,26 +1861,36 @@ rust/shekyl-engine-core/src/engine/signer.rs
 │                             SigningCeremony = shekyl_multisig::FrostCeremony
 └── MultisigNonceSink       — engine-core's durable NonceCounterSink impl (body: S2)
 
-rust/shekyl-crypto-pq/src/multisig_receiving.rs
-├── construct_multisig_output_for_sender
-├── scan_multisig_output_for_participant
-├── validate_multisig_output_at_receive  — §8.3
-└── derive_spend_auth_pubkey               — versioned §7.2
-```
+rust/shekyl-multisig/src/member_file.rs
+└── MemberFile — §6.6 (stores the transport secret; does not derive it)
 
-> `shekyl-crypto-pq`'s `multisig_receiving.rs` still carries a
-> `rotating_prover_index` (Option-D, sender-computable) that E′ does not use — a
-> separate crypto-pq residue cleanup, out of scope for the MS-5 crate move.
+rust/shekyl-crypto-pq/src/derivation.rs
+└── derive_group_transport_secret — §6.6
+
+rust/shekyl-crypto-pq/src/multisig.rs
+├── MultisigCommittedForm, MultisigKeyBlob     — §7.5
+├── multisig_key_hash (shekyl/multisig-key-hash-v1)
+└── verify_multisig                            — CEN-I18
+
+rust/shekyl-crypto-pq/src/multisig_output.rs
+├── construct_multisig_output                  — §7.1
+├── derive_multisig_member_keypair             — §7.2
+└── open_multisig_entry                        — §8.2
+
+rust/shekyl-scanner/src/multisig_scan.rs
+└── MultisigMemberScan — §8.2
+
+rust/shekyl-scanner/src/scan.rs
+└── Scanner::new_multisig_member — §8.1–§8.2
+```
 
 ### 16.2 New tx_extra tags
 
-`rust/shekyl-wire/src/tx_extra.rs` (the C++ `tx_extra.h` mirror was deleted
-2026-09-23 with the C++ parser, `TX_EXTRA_RUST_CUTOVER.md`; both tags are
-STAGED with the multisig receive path as producer, and are **not** in the
-coinbase grammar `CEN-I20`):
-- `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS = 0x09`
-- `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS = 0x0A`
-- Reserved (spec table only, no code symbol — §7.4): `0x08`
+`rust/shekyl-wire/src/tx_extra/mod.rs` (not in the coinbase grammar `CEN-I20`):
+- `TX_EXTRA_TAG_PQC_MULTISIG = 0x0D`, `MultisigEntry`, CEN-I19's
+  `check_pqc_multisig_shape` (§7.4)
+- Retired, never reused: `0x09`, `0x0A`. Reserved (spec table only, no code
+  symbol): `0x08`
 
 ### 16.3 Defense-in-depth wiring fixes
 
@@ -2076,11 +1927,10 @@ coinbase grammar `CEN-I20`):
 > `pqc_auths`.
 
 - ~~`src/cryptonote_core/blockchain.cpp` tx-wide `expected_scheme_id`~~
-  → **MSW-6 landed** — dropped in both C++ verify batteries
-  (`tx_pqc_verify.{h,cpp}` + `blockchain.cpp`) and the Rust submit
-  verifier (`verifier.rs`). KAT: `fcmp.cpp::msw6_mixed_scheme_transaction_verifies`.
-- `rust/shekyl-ffi` / group_id DiD for scheme_id=2: **MS-8 retired**
-  (leaf already binds the blob; no-op)
+  → **MSW-6 landed**: no tx-wide scheme agreement in either verifier
+  (the CEN-I18 validator and the submit verifier, `verifier.rs`).
+- group_id DiD for scheme_id=2: **MS-8 retired** (the leaf already binds the
+  committed form; no-op)
 
 ### 16.4 Modified C++ — **RETIRED**
 
@@ -2156,7 +2006,11 @@ and re-home clean SAL-only types under the E′ stack.
 - Malicious prover: incorrect BP+ randomness (I4)
 - Wrong-prover key image attack (I5)
 - tx_hash commitment disagreement in signing (I6)
-- Receive-time validation failures: wrong Y_assigned, wrong my_Y (I7)
+
+**Adversarial (receive, §8.2):**
+- A sender lies about one member's key hash: that member sees `MemberKeyHash`, every other member `LeafMismatch`
+- Damaged or missing `0x0D` entry, damaged leaf, wrong `out_idx`, wrong group size
+- A member decapsulating another member's ciphertext cannot pass that member's hash
 
 **Adversarial (other):**
 - Network partition + CounterProof recovery (including malformed proofs)
@@ -2246,9 +2100,10 @@ least two independent implementations before being locked.
 2. **Receive-output vector**
    - Input: fixed recipient address (from A.1), fixed tx_secret_key,
      fixed output_index_in_tx, fixed reference_block_hash, fixed amount
-   - Output: full construct_multisig_output result — kem_ciphertexts,
-     spend_auth_pubkeys, view_tag_hints, leaf_container bytes,
-     output_pubkey O, assigned_prover_index, h_pqc
+   - Output: full construct_multisig_output result — the 0x06 ciphertext,
+     the output key O, the commitment, the 0x07 entry (CM ‖ record over the
+     committed form), and the 0x0D entry (member ciphertexts, encrypted key
+     hashes)
 
 3. **Spend-intent vector**
    - Input: fixed group state (from A.1), fixed input list, fixed
