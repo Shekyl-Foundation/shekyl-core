@@ -311,17 +311,6 @@ impl Connector {
     }
 }
 
-/// A view read's fault, as the count raises it: a `Corrupt` halts the
-/// writer, a store fault is the store's. Only the staged admitting door
-/// reads on a batch.
-#[cfg(test)]
-fn view_fault(batch: &WriteBatch<'_, '_>, fault: ViewRead<StoreError>) -> RunFault {
-    match fault {
-        ViewRead::View(error) => RunFault::Store(error),
-        ViewRead::Corrupt(corrupt) => RunFault::Store(batch.refuse_corrupt(corrupt)),
-    }
-}
-
 /// Why the rule refused a bundle, as the queue reports it.
 enum Refusal {
     /// A bundle for `h` is already admitted on this chain.
