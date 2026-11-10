@@ -576,8 +576,8 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     );
     core.on(arrival(secs(15), secs(18)), secs(18));
     // The first fetch's reply: Tor accepted it at 40 s. Its `Replied` sends
-    // the sibling, whose acceptance is never folded: its window stays the
-    // one the check gave both at 15 s.
+    // the sibling, whose acceptance is never folded: its window runs from
+    // that send.
     core.on(Input::DirectoryFetchAccepted { hsdir: hsdir(1) }, secs(40));
     asked.extend(fetched(&replied(&mut core, secs(40))));
     assert_eq!(asked, [hsdir(1), hsdir(2)]);
@@ -589,6 +589,47 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     let bound = core.on_deadline(secs(100));
     let bound = served(&mut core, bound, secs(100));
     assert_eq!(refetches(&bound), 1, "both missing, and the probe arrived");
+}
+
+/// **A fetch waiting in the queue is not sent yet.** Both fetches come due
+/// at 15 s; the queue sends the first, and the second waits for its reply
+/// at 40 s. Until then a line about the second directory is not this
+/// check's, and its answer window runs from its own send: its copy at 80 s,
+/// more than 60 s after it came due and less than 60 s after it was sent,
+/// counts. Both directories hold our copy and the probe arrived:
+/// Reachable. Fails if the check opens a fetch when it comes due rather
+/// than when it is sent: the early line, or a window run out before the
+/// send, makes the second directory a miss, and one of two is Lost.
+#[test]
+fn a_queued_fetch_is_not_open_and_its_window_runs_from_its_send() {
+    let ours_copy = || DirectoryAnswer::Received {
+        revision_counter: Some(OURS),
+    };
+    let (mut core, step) = checking_in_flight(sent(1..=2, "cur", 0));
+    assert_eq!(fetched(&step), [hsdir(1)], "the second waits in the queue");
+    core.on(
+        Input::ProbeDialed {
+            minted_at: secs(15),
+        },
+        secs(15),
+    );
+    core.on(arrival(secs(15), secs(18)), secs(18));
+    core.on(answered(2, "cur", DirectoryAnswer::NotFound), secs(20));
+    core.on(Input::DirectoryFetchAccepted { hsdir: hsdir(1) }, secs(40));
+    let sibling = replied(&mut core, secs(40));
+    assert_eq!(fetched(&sibling), [hsdir(2)], "sent at 40 s");
+    replied(&mut core, secs(40));
+    core.on(answered(1, "cur", ours_copy()), secs(41));
+    while let Some(due) = core.deadline().filter(|due| *due <= secs(80)) {
+        let step = core.on_deadline(due);
+        served(&mut core, step, due);
+    }
+    core.on(answered(2, "cur", ours_copy()), secs(80));
+    assert!(
+        matches!(core.status().inbound, Inbound::Reachable { .. }),
+        "{:?}",
+        core.status().inbound
+    );
 }
 
 /// **A stale copy is a miss for that directory** (Rick, 2026-11-01). The
@@ -661,8 +702,12 @@ fn a_copy_of_a_descriptor_ours_does_not_name_counts_by_being_there() {
         },
         0,
     );
-    let launched = core.on_deadline(secs(15));
+    replied(&mut core, 0);
+    // The probe and the fetches, sent as the queue sends them.
+    let due = core.on_deadline(secs(15));
+    let launched = served(&mut core, due, secs(15));
     assert_eq!(probes(&launched), 1);
+    assert_eq!(fetched(&launched).len(), 8, "{launched:?}");
     core.on(
         Input::ProbeDialed {
             minted_at: secs(15),

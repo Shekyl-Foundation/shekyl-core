@@ -882,9 +882,11 @@ impl Core {
                     Some(directories::DirectoryHalf::AwaitingDraw)
                 )
             }
-            Action::FetchFromDirectory { .. } => {
-                matches!(self.directories, Some(directories::DirectoryHalf::Open(_)))
-                    && !self.republish_cannot_help()
+            Action::FetchFromDirectory { hsdir } => {
+                matches!(
+                    &self.directories,
+                    Some(directories::DirectoryHalf::Open(check)) if check.queued(*hsdir)
+                ) && !self.republish_cannot_help()
             }
             Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
             _ => true,

@@ -137,6 +137,18 @@ pub(super) struct Requests {
 }
 
 impl Requests {
+    /// A publication (its `DEL_ONION` or its `ADD_ONION`) is queued or in
+    /// flight.
+    fn publishing(&self) -> bool {
+        let publication =
+            |request: &Request| matches!(request, Request::DeleteOnion | Request::AddOnion);
+        self.queued.iter().any(publication)
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|flight| publication(&flight.request))
+    }
+
     pub(super) fn push(&mut self, request: Request) {
         let waiting = self.queued.contains(&request)
             || self
@@ -239,6 +251,15 @@ impl super::Core {
         let mut out = Vec::with_capacity(actions.len());
         for action in actions {
             match Request::of(&action) {
+                // One publication at a time. The onion stays owed until the
+                // add is answered, so a sample deadline or the endpoint
+                // coming back while one is out asks for it again. That ask
+                // is already being answered, and a second delete queued
+                // behind it would remove the service the first one
+                // publishes. A remedial republish folded in here is sent by
+                // the publication already out: its answer settles the
+                // republish's state as its own.
+                Some(_) if action == Action::RepublishOnion && self.requests.publishing() => {}
                 Some(requests) => {
                     for request in requests {
                         self.requests.push(request);
@@ -250,11 +271,16 @@ impl super::Core {
         while let Some(request) = self.requests.next_to_send() {
             let action = request.action();
             if !self.action_stands(&action) {
-                if request == Request::DeleteOnion {
-                    out.extend(self.republish_withheld());
+                match &request {
+                    Request::DeleteOnion => out.extend(self.republish_withheld()),
+                    Request::FetchFrom { hsdir } => self.directory_fetch_withheld(*hsdir),
+                    _ => {}
                 }
                 self.requests.drop_follower();
                 continue;
+            }
+            if let Request::FetchFrom { hsdir } = &request {
+                self.directory_fetch_sent(now, *hsdir);
             }
             self.requests.sent(request, now);
             out.push(action);

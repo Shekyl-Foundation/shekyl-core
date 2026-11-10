@@ -218,3 +218,40 @@ fn an_ended_tor_is_reaped_before_the_next_launch() {
         failed.actions
     );
 }
+
+fn deletes(actions: &[Action]) -> usize {
+    actions
+        .iter()
+        .filter(|action| matches!(action, Action::RepublishOnion))
+        .count()
+}
+
+/// **A publication that spans a sample deadline is sent once.** Running
+/// owes the onion: the delete goes out and Tor is slow to answer. The onion
+/// is still owed, so each sample deadline meanwhile asks for the
+/// publication again. Those asks are the one already out: when its add is
+/// answered and the onion is published, nothing is in flight and no second
+/// delete goes, which would remove the service just published. Fails if a
+/// publication is queued behind the one in flight.
+#[test]
+fn a_publication_spanning_a_sample_deadline_is_sent_once() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let up = bring_up(&mut core);
+    let installed = core.on(Input::RouteInstalled, 0);
+    let mut sent = deletes(&up.actions) + deletes(&installed.actions);
+    assert_eq!(sent, 1, "the publish's delete: {up:?} {installed:?}");
+    let mut at = 0;
+    for _ in 0..2 {
+        at = core.deadline().expect("a sample is due");
+        assert!(at < bound(), "a sample comes due before the delete is late");
+        sent += deletes(&core.on_deadline(at).actions);
+    }
+    let deleted = replied(&mut core, at);
+    assert!(deleted.actions.contains(&Action::AddOnion), "{deleted:?}");
+    sent += deletes(&deleted.actions);
+    core.on(Input::OnionPublished, at);
+    let added = replied(&mut core, at);
+    sent += deletes(&added.actions);
+    assert_eq!(sent, 1, "a second publication: {added:?}");
+    assert_eq!(core.in_flight(), None);
+}

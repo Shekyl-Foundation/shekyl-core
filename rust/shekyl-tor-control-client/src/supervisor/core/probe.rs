@@ -418,14 +418,27 @@ impl Core {
         let Some(DirectoryHalf::Open(check)) = &mut self.directories else {
             return Vec::new();
         };
-        let within = duration_ns(self.policy.probe_within);
         let mut actions: Vec<Action> = check
-            .on_deadline(now, within)
+            .on_deadline(now)
             .into_iter()
             .map(|hsdir| Action::FetchFromDirectory { hsdir })
             .collect();
         actions.extend(self.judge(now));
         actions
+    }
+
+    /// The fetch of `hsdir` was sent at `now`: its answer window starts.
+    pub(super) fn directory_fetch_sent(&mut self, now: u64, hsdir: RelayFingerprint) {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
+            check.dispatched(hsdir, now, duration_ns(self.policy.probe_within));
+        }
+    }
+
+    /// The fetch of `hsdir` was withheld at its turn in the queue.
+    pub(super) fn directory_fetch_withheld(&mut self, hsdir: RelayFingerprint) {
+        if let Some(DirectoryHalf::Open(check)) = &mut self.directories {
+            check.withheld(hsdir);
+        }
     }
 
     /// Tor accepted one fetch. That fetch's answer window starts now.

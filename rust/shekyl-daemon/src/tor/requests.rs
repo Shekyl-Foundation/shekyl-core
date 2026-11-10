@@ -304,13 +304,22 @@ impl Drive {
         None
     }
 
-    fn send_add(&self, number: u64) -> Option<Vec<Input>> {
+    /// `ADD_ONION`, the second half. The service and a fresh round
+    /// tracker are this onion's from the send: Tor uploads as soon as it
+    /// takes the service, and its `HS_DESC` events can reach the inbox
+    /// before the reply does. A publish starts the rounds afresh, since a
+    /// round left open by the deleted service is not this one's. A refused
+    /// add publishes nothing, so no event reaches the new tracker.
+    fn send_add(&mut self, number: u64) -> Option<Vec<Input>> {
         let Some(asker) = self.asker() else {
             return Some(vec![Input::ControlEnded]);
         };
         let Some(forward) = self.forward else {
             return Some(vec![Input::ForwardAbsent]);
         };
+        let service = self.onion.service_id().clone();
+        self.rounds = Some(UploadRounds::new(service.clone()));
+        self.service = Some(service);
         let onion = Arc::clone(&self.onion);
         let virtual_port = self.virtual_port;
         self.answer_later(number, async move {
@@ -593,10 +602,6 @@ impl Drive {
             Ok(service) => {
                 self.network
                     .note_own_onion(service.as_str(), self.virtual_port);
-                // A publish starts the onion's rounds afresh: a round left
-                // open by the deleted service is not this one's.
-                self.rounds = Some(UploadRounds::new(service.clone()));
-                self.service = Some(service.clone());
                 tracing::info!(
                     target: "global",
                     "Tor is up: overlay inbound is published at {}.onion:{}, forwarded from {forward}",
