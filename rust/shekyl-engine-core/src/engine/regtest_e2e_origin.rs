@@ -48,10 +48,11 @@ use super::*;
 /// asserts that) and has nowhere to send it. Its only session is the
 /// origin's, the one the stem arrived on: a stem goes out on an outbound
 /// session other than its source, and a fluff to every peer but its source.
-/// The sink holds no outbound session to the origin because the dialer does
-/// not dial a host that already holds a session with it (Rick, 2026-11-09).
-/// The sink starts first, its own dial to the origin fails, and the origin
-/// has dialed in long before the sink's next wake. So the transaction stays
+/// The sink holds no outbound session to the origin because it dials
+/// nothing (`Peering::Listening`): the pair holds one session, the
+/// origin's, since the dialer dials no host it already holds a session
+/// with (Rick, 2026-11-09), and a sink that dialed first would take that
+/// session and leave the origin no stem successor. So the transaction stays
 /// `stem` on the origin until the origin's own embargo expires. A second
 /// session between the two would carry the stem straight back, the origin
 /// would take the second arrival as a fluff, and the hold would be over in
@@ -115,10 +116,9 @@ impl StemSinkPair {
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
+        let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Listening {
             p2p_port: sink_p2p,
-            peer_p2p_port: origin_p2p,
-            sink: true,
+            requests: false,
         }))
         .await;
         let origin = RegtestDaemon::spawn(
@@ -128,7 +128,6 @@ impl StemSinkPair {
                 .with_peering(Peering::Linked {
                     p2p_port: origin_p2p,
                     peer_p2p_port: sink_p2p,
-                    sink: false,
                 }),
         )
         .await;

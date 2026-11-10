@@ -187,6 +187,11 @@ pub(super) struct RegtestDaemon {
     recipe: Vec<std::ffi::OsString>,
 }
 
+/// The closed peer a [`Peering::Listening`] daemon names: TEST-NET-1
+/// (RFC 5737), documentation space that no host answers and no daemon in a
+/// test can bind, so the daemon dials nothing that answers.
+const NOWHERE: &str = "192.0.2.1:18080";
+
 /// How a spawned daemon takes part in peer-to-peer.
 #[derive(Clone, Copy, Debug)]
 enum Peering {
@@ -207,17 +212,25 @@ enum Peering {
     /// runs. `--tor off` declines the managed Tor, so the node is
     /// clearnet-only and a local origin takes the stem slot, not a hidden
     /// own-edge.
-    Linked {
+    Linked { p2p_port: u16, peer_p2p_port: u16 },
+    /// Bound on loopback and dialling no peer that answers: the far side
+    /// of a [`Peering::Linked`] daemon, which dials it.
+    ///
+    /// Every daemon here is on `127.0.0.1`, one host, and the dialer dials
+    /// no host it already holds a session with (Rick, 2026-11-09). Two
+    /// daemons that each dial the other therefore hold one session, in the
+    /// direction of whichever dial lands first, a start-up race. A rig
+    /// that needs the session's direction, a stem successor or a fresh
+    /// incoming handshake, makes one end listen. Its closed list names
+    /// [`NOWHERE`], so it is still the operator naming a closed network
+    /// (`Declaration::Closed`, CS-Q2 step 8) and dials no seed.
+    Listening {
         p2p_port: u16,
-        peer_p2p_port: u16,
-        /// `--dev-sync off`: the daemon requests nothing (`Requesting::Off`)
-        /// and follows its peer by announcements alone. It is synchronized
-        /// at the tip like any closed node (CS-Q2 step 8), but once its
-        /// peer mines ahead it cannot fetch the chain and stays `Behind`,
-        /// and a node that is behind ignores every transaction a peer sends
-        /// it. Observed 2026-11-01: synced at heights 1 and 2, then behind
-        /// while its peer mined to 70, ignoring the stem transaction.
-        sink: bool,
+        /// `false` is `--dev-sync off`: the daemon requests nothing
+        /// (`Requesting::Off`) and follows its peer by announcements alone,
+        /// which keeps it at its peer's tip. It still admits a transaction
+        /// a peer sends it.
+        requests: bool,
     },
     /// Bound on loopback and dialling exactly `peers`, two simulated
     /// peers' listening addresses (the stem width) (`regtest_e2e_peer.rs`): the closed list
@@ -605,8 +618,8 @@ impl RegtestDaemon {
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
-                ..
             } => vec![*p2p_port, *peer_p2p_port],
+            Peering::Listening { p2p_port, .. } => vec![*p2p_port],
             Peering::Closed { p2p_port, peers } => {
                 let mut ports = vec![*p2p_port];
                 ports.extend(peers.iter().map(std::net::SocketAddrV4::port));
@@ -677,7 +690,6 @@ impl RegtestDaemon {
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
-                sink,
             } => {
                 cmd.args([
                     "--clearnet-listen",
@@ -685,7 +697,15 @@ impl RegtestDaemon {
                     "--p2p-closed-peer",
                     &format!("127.0.0.1:{peer_p2p_port}"),
                 ]);
-                if sink {
+            }
+            Peering::Listening { p2p_port, requests } => {
+                cmd.args([
+                    "--clearnet-listen",
+                    &format!("127.0.0.1:{p2p_port}"),
+                    "--p2p-closed-peer",
+                    NOWHERE,
+                ]);
+                if !requests {
                     cmd.args(["--dev-sync", "off"]);
                 }
             }
