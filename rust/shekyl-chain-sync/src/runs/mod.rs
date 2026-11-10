@@ -568,7 +568,8 @@ fn retry_of(stale: &Stale) -> Option<FormAttempt> {
         | Stale::RuleSet { retry, .. }
         | Stale::Network { retry, .. }
         | Stale::Target { retry, .. }
-        | Stale::Reference { retry, .. } => retry,
+        | Stale::Reference { retry, .. }
+        | Stale::BundleBody { retry, .. } => retry,
     };
     match retry {
         Retry::Again(attempt) => Some(*attempt),

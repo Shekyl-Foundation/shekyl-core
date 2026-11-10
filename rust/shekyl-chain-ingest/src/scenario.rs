@@ -313,21 +313,24 @@ where
         self.mined(height, applied, kept)
     }
 
-    /// Mine the next block listing `listed`, admitting every queued bundle
-    /// inside its window through the store's staged door
-    /// (`connector_bundles::ApplyAdmitting`): what 4b's connect does with a
-    /// block's references, for the bundle producer's gate test. The
-    /// verifier's verdicts come back with the block.
+    /// Mine the next block listing `listed`, carrying every queued bundle
+    /// inside its window as its section: the references under the root
+    /// they make, and their bodies. `validate` admits them (CEN-J29
+    /// through J37) and the verdict's admissions come back with the block,
+    /// through `connector_bundles::ApplyAdmitting`, which reports them and
+    /// takes the admitted entries out of the queue. The block template
+    /// builds the same section with `fill_section` at C4.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the queue's bundles do not admit: the gate's failure.
+    /// A refused block, as [`Self::mine_listing`]'s.
     pub async fn mine_admitting(
         &mut self,
         listed: Vec<Transaction>,
     ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
         let next = self.next_template(listed).await?;
-        let (height, formed, kept) = self.form_next(next)?;
+        let section = self.queued_section(next.height);
+        let (height, formed, kept) = self.form_next_carrying(next, section)?;
         let out = self
             .connector
             .ask(crate::connector::ApplyAdmitting {
@@ -337,10 +340,45 @@ where
             .await
             .map_err(handler_error)
             .map_err(StepOutcome::Connector)?;
-        let admitted = out
-            .admitted
-            .unwrap_or_else(|why| panic!("the queue's bundles admit at {height}: {why}"));
-        Ok((self.mined(height, out.applied, kept)?, admitted))
+        Ok((self.mined(height, out.applied, kept)?, out.admitted))
+    }
+
+    /// The queue's entries inside the window of `height`, ascending by `h`:
+    /// their references and their bodies. `None` when there are none.
+    fn queued_section(
+        &self,
+        height: BlockHeight,
+    ) -> Option<(
+        Vec<shekyl_archival_retention::BundleRef>,
+        Vec<shekyl_archival_retention::BundleBody>,
+    )> {
+        let window = self
+            .rules
+            .in_force(height)
+            .settlement_schedule()
+            .challenge_response_blocks()
+            .map_or(shekyl_types::BlockCount::ZERO, |w| {
+                shekyl_types::BlockCount::from_raw(w.get())
+            });
+        let entries: Vec<_> = self
+            .store()
+            .begin_read()
+            .expect("the scenario's store reads")
+            .queued_bundles()
+            .expect("the queue reads")
+            .into_iter()
+            .filter(|entry| entry.h < height && height <= entry.h.saturating_add(window))
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        Some((
+            entries
+                .iter()
+                .map(|entry| entry.queued.reference.clone())
+                .collect(),
+            entries.into_iter().map(|entry| entry.body).collect(),
+        ))
     }
 
     /// Form `next`'s block. What the caller applies it through is its own.
@@ -348,18 +386,49 @@ where
         &mut self,
         next: NextBlock,
     ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
+        self.form_next_carrying(next, None)
+    }
+
+    /// [`Self::form_next`] for a block carrying `section`: its references
+    /// and bodies, with the header's root set to the root they make before
+    /// the block is hashed.
+    fn form_next_carrying(
+        &mut self,
+        next: NextBlock,
+        section: Option<(
+            Vec<shekyl_archival_retention::BundleRef>,
+            Vec<shekyl_archival_retention::BundleBody>,
+        )>,
+    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
         let NextBlock {
             height,
-            template,
+            mut template,
             seed,
             target,
         } = next;
+        let (references, bodies) = match section {
+            None => (None, Vec::new()),
+            Some((refs, bodies)) => {
+                let root = shekyl_archival_retention::bundle_root(&refs)
+                    .expect("a queue's section is countable");
+                template.block.header.bundle_root = shekyl_types::BundleRoot::from_bytes(root);
+                let references = shekyl_types::archival::BundleReferences::new(
+                    refs.iter()
+                        .map(shekyl_archival_retention::BundleRef::encode)
+                        .collect(),
+                )
+                .expect("a non-empty section");
+                (Some(references), bodies)
+            }
+        };
         // Nothing the producer priced is handed to `connect`: the reward it
         // priced is judged by F14b/F18, the burn by F17, and both are
         // recorded from the verdict (the ledger that carried the burn left
         // with wave B).
         let rule_set = self.rules.in_force(height);
-        let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        let candidate = Candidate::new(template.block.clone(), template.transactions.clone())
+            .with_bundle_references(references)
+            .with_bundle_bodies(bodies);
         // The third claim, off the same ledger (its window covers CEN-I11's).
         let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
             Ok(references) => references,

@@ -735,12 +735,11 @@ fn commit_upkeep(batch: &WriteBatch<'_, '_>, plan: &Upkeep) -> Result<(), RunFau
     Ok(())
 }
 
-/// Test only: apply one block, admitting every queued bundle inside its
-/// window through the store's staged door (increment 4a's
-/// `connect_admitting`), and take those entries out of the queue. This is
-/// what 4b's connect does with the references a block carries, played by
-/// the queue's own entries so the gate test can show a produced bundle
-/// connect before references travel.
+/// Test only: apply one block through the connector's own judge and
+/// connect, and report what its section admitted — the verdict's
+/// admissions — then take those entries out of the queue. The block
+/// carries the section ([`Scenario::mine_admitting`](crate::scenario::Scenario::mine_admitting)),
+/// and `validate` admits it as it admits any block's.
 #[cfg(test)]
 pub(crate) struct ApplyAdmitting {
     /// The height the source claims for the block.
@@ -749,12 +748,11 @@ pub(crate) struct ApplyAdmitting {
     pub(crate) formed: shekyl_chain_rules::Verdict<shekyl_chain_rules::StructurallyValid>,
 }
 
-/// What [`ApplyAdmitting`] did: the block, and the verifier's verdicts on
-/// the bundles it admitted, or why the section was refused.
+/// What [`ApplyAdmitting`] did: the block, and what its section admitted.
 #[cfg(test)]
 pub(crate) struct AppliedAdmitting {
     pub(crate) applied: super::Applied,
-    pub(crate) admitted: Result<Vec<shekyl_chain_rules::Admitted>, String>,
+    pub(crate) admitted: Vec<shekyl_chain_rules::Admitted>,
 }
 
 #[cfg(test)]
@@ -783,59 +781,19 @@ impl Message<ApplyAdmitting> for Connector {
             else {
                 return Ok(AppliedAdmitting {
                     applied,
-                    admitted: Ok(Vec::new()),
+                    admitted: Vec::new(),
                 });
             };
             let height = judged.height;
             let in_force = judged.rule_set;
-            let window = in_force
-                .settlement_schedule()
-                .challenge_response_blocks()
-                .map_or(BlockCount::ZERO, |w| BlockCount::from_raw(w.get()));
-            let entries: Vec<_> = batch
-                .queued_bundles()?
-                .into_iter()
-                .filter(|entry| entry.h < height && height <= entry.h.saturating_add(window))
-                .collect();
-            let view = batch.chain_view();
-            remember_window_epochs(&view, height, &in_force, &mut *memo)
-                .map_err(|f| view_fault(batch, f))?;
-            let refs: Vec<BundleRef> = entries.iter().map(|e| e.queued.reference.clone()).collect();
-            let bodies: Vec<BundleBody> = entries.iter().map(|e| e.body.clone()).collect();
-            let Ok(root) = bundle_root(&refs) else {
-                unreachable!("a test section's count fits");
-            };
-            let admitted = {
-                let bundle_view =
-                    StoreBundleView::new(&view, &*memo, height, in_force.settlement_schedule());
-                match judge_bundles(
-                    &refs,
-                    &bodies,
-                    &root,
-                    height,
-                    &bundle_view,
-                    &in_force,
-                    &trust.network_id(),
-                ) {
-                    Ok(admitted) => admitted,
-                    Err(fault) => {
-                        return Ok(AppliedAdmitting {
-                            applied,
-                            admitted: Err(format!("{fault:?}")),
-                        })
-                    }
-                }
-            };
+            let admitted = judged.valid.block().admitted().to_vec();
             applied.exercised.extend(judged.exercised());
-            batch.connect_admitting(judged.valid, in_force, Some((&*memo, &admitted)))?;
-            for entry in &entries {
-                batch.unqueue_bundle(entry.h)?;
+            batch.connect(judged.valid, in_force)?;
+            for bundle in &admitted {
+                batch.unqueue_bundle(bundle.kept.h)?;
             }
             super::connect_step::record_connected(&mut applied, height, judged.facts);
-            Ok(AppliedAdmitting {
-                applied,
-                admitted: Ok(admitted),
-            })
+            Ok(AppliedAdmitting { applied, admitted })
         })?;
         if !out.applied.connected.is_empty() {
             self.tip_moved();

@@ -57,9 +57,6 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::A2,
                 CenRow::B1,
                 CenRow::B2,
-                // Slice 8 row 10: B4, always in coverage — `None` is the
-                // empty preimage against the header's root.
-                CenRow::B4,
                 CenRow::B5,
                 CenRow::B6,
                 CenRow::C1,
@@ -183,6 +180,17 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::J24,
                 CenRow::J25,
                 CenRow::J26,
+                // The switch's C3: the bundle section, always in coverage —
+                // `None` is the empty section against the header's root.
+                CenRow::J29,
+                CenRow::J30,
+                CenRow::J31,
+                CenRow::J32,
+                CenRow::J33,
+                CenRow::J34,
+                CenRow::J35,
+                CenRow::J36,
+                CenRow::J37,
                 CenRow::L1,
                 // DRS-E4 commit 4: the archival transition, which passes
                 // with nothing archival to fold and records the row.

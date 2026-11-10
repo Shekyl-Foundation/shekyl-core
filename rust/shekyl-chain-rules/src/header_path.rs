@@ -26,8 +26,8 @@ use crate::fault::{Fault, FormAttempt, Stale};
 use crate::header_facts::{prove_header, FormedHeader, HeaderFacts, HeaderProof, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
-use crate::rules::attestation::B4;
 use crate::rules::body::G2;
+use crate::rules::bundle_admission::bind_section;
 use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2};
 use crate::rules::HeaderContext;
@@ -350,11 +350,11 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
         carried.push(hash);
     }
     G2::listed_match(&block.transaction_hashes, &carried)?;
-    let root = *block.header.bundle_root.as_bytes();
-    B4::bind_root(
-        &block.miner_transaction.prefix.extra,
+    bind_section(
         &body.bundle_references,
-        &root,
+        block.header.bundle_root.as_bytes(),
+        header.connecting(),
+        &header.rule_set(),
     )?;
     Ok(())
 }

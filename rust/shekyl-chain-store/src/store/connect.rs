@@ -86,7 +86,7 @@
 //! cardinality: a second bucket, or a hole compensated by a foreign row,
 //! is SI-9, never a verdict.
 
-use shekyl_chain_rules::{Admitted, ChainValid, DrawableMemo, RuleSet, TxIdentity};
+use shekyl_chain_rules::{ChainValid, DrawableMemo, RuleSet, TxIdentity};
 use shekyl_types::{
     ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
 };
@@ -173,35 +173,21 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-1 (key image), SI-4 (root), SI-8 (`total_burned` overflow) — each
     /// [`StoreError::InvariantViolated`] and each poisoning the batch;
     /// engine errors.
-    pub fn connect(
-        &self,
-        valid: ChainValid<'id, BatchView<'_, 'id>>,
-        in_force: RuleSet,
-    ) -> Result<Connected, StoreError> {
-        self.connect_admitting(valid, in_force, None)
-    }
-
-    /// [`connect`](Self::connect), then the block's admitted bundles.
     ///
-    /// `admitted` is the memo the count phase filed and the verifier's
-    /// [`Admitted`] values. This method does not call the verifier. The
-    /// view is built here, at the height being connected, so the plan and
-    /// the journal name one height. The writes land before the journal
-    /// seals, so `pop` of the block removes them with it. `issued_short`
-    /// counts only draws of the epoch of that height.
-    ///
-    /// # Errors
-    ///
-    /// [`connect`](Self::connect)'s, and the admission writer's.
+    /// The block's admitted bundles are the verdict's
+    /// ([`ValidatedBlock::admitted`](shekyl_chain_rules::ValidatedBlock::admitted)),
+    /// journaled at phase 9 (`admission_write.rs`): the reveals, the issued
+    /// draws and the digest terms. This method does not call the verifier.
+    /// The writes land before the journal seals, so `pop` of the block
+    /// removes them with it. A block that admits none writes nothing there.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
     )]
-    pub fn connect_admitting(
+    pub fn connect(
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
         in_force: RuleSet,
-        admitted: Option<(&DrawableMemo, &[Admitted])>,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
         // The connecting height is known from the tip's key alone and is
@@ -398,19 +384,25 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
         self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
-        if let Some((memo, bundles)) = admitted {
+        let admitted = valid.block().admitted();
+        if !admitted.is_empty() {
             // The connecting height was noted before this block's row
             // landed. `chain_view` notes `tip + 1`, and the tip is now this
             // block, so that note would halt a later fault at the next
             // height. The view is the batch, and it does not re-note.
+            //
+            // The journal reads the issued-draw index and never `D`, so the
+            // memo the view holds is empty: a read of it would be SI-35, and
+            // the writer makes none (`write_admissions`).
             let chain = BatchView::new(self);
+            let no_drawable = DrawableMemo::new();
             let view = StoreBundleView::new(
                 &chain,
-                memo,
+                &no_drawable,
                 BlockHeight::from_raw(height),
                 in_force.settlement_schedule(),
             );
-            self.write_admissions(&view, bundles)?;
+            self.write_admissions(&view, admitted)?;
         }
 
         // ---- 10. journal -----------------------------------------------

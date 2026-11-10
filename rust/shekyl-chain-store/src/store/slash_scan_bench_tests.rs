@@ -470,6 +470,31 @@ struct SlashedChain {
 }
 
 impl SlashedChain {
+    /// Close the store and open it again over the same file, as a restart
+    /// does. Nothing rules-side survives: a connector's drawable memo is
+    /// not persisted, so the caller's next memo is cold.
+    fn reopen(&mut self) {
+        let schedule = RULES.settlement_schedule();
+        let horizons = Horizons::new(
+            schedule.blocks(),
+            BlockCount::from_raw(RETENTION),
+            RULES.reorg_cap(),
+        )
+        .expect("cap ≤ retention < epoch");
+        // The file's lock is held while the old handle lives, so a scratch
+        // store stands in the field while the real one closes and reopens.
+        let scratch = tmp("reopen-scratch");
+        let closing = std::mem::replace(
+            &mut self.store,
+            ChainStore::with_horizons(&scratch, ApplyPolicy::Full, horizons).expect("scratch"),
+        );
+        drop(closing);
+        let reopened =
+            ChainStore::with_horizons(&self._path, ApplyPolicy::Full, horizons).expect("reopen");
+        drop(std::mem::replace(&mut self.store, reopened));
+        drop(scratch);
+    }
+
     /// The witness's chain: every pair misses every epoch from 1, built to
     /// the epoch-`M` slashing connect.
     fn build(label: &str, personas: u64) -> Self {

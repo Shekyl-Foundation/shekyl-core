@@ -24,6 +24,81 @@ use crate::view::{
     Tip,
 };
 
+/// The bundle view of a test view that holds no bundle rows.
+///
+/// Every read is unanswered: no count, no commitment, no hash, no drawable
+/// epoch, no roster. A section that is not empty therefore stops at the
+/// budget's read of `D` as awaiting, which `validate` faults as
+/// [`Corrupt::BundleUnanswered`](crate::Corrupt::BundleUnanswered). It
+/// never refuses a block, so a view with no rows cannot turn its missing
+/// rows into a verdict. `revealed` and `visibly_short` are read only after
+/// `D` is answered, so their `false` is never reached. An empty section
+/// reads nothing.
+pub struct NoBundleRows<F>(core::marker::PhantomData<F>);
+
+impl<F> NoBundleRows<F> {
+    /// The view.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(core::marker::PhantomData)
+    }
+}
+
+impl<F> Default for NoBundleRows<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<F> crate::archival::BundleView for NoBundleRows<F> {
+    type Fault = F;
+
+    fn draw_count(&self, _: BlockHeight) -> Result<Option<u32>, F> {
+        Ok(None)
+    }
+
+    fn draw_commitment(
+        &self,
+        _: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, F> {
+        Ok(None)
+    }
+
+    fn block_hash(&self, _: BlockHeight) -> Result<Option<BlockHash>, F> {
+        Ok(None)
+    }
+
+    fn visibly_short(&self, _: BlockHeight, _: u64) -> Result<bool, F> {
+        Ok(false)
+    }
+
+    fn revealed(&self, _: BlockHeight) -> Result<bool, F> {
+        Ok(false)
+    }
+
+    fn drawable_epoch(
+        &self,
+        _: shekyl_types::SettlementEpoch,
+    ) -> Result<Option<&shekyl_archival_retention::DrawableEpoch>, F> {
+        Ok(None)
+    }
+
+    fn support_count(&self, _: BlockHeight) -> Result<Option<u32>, F> {
+        Ok(None)
+    }
+
+    fn support_roster(
+        &self,
+        _: BlockHeight,
+    ) -> Result<Option<Vec<crate::archival::SupportSeat>>, F> {
+        Ok(None)
+    }
+
+    fn archive_width(&self, _: BlockHeight) -> Result<Option<core::num::NonZeroU64>, F> {
+        Ok(None)
+    }
+}
+
 /// The fault a [`FaultingView`] raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Faulted;
@@ -45,6 +120,20 @@ impl<'id> HeaderView<'id> for FaultingView<'id> {
 }
 
 impl<'id> ChainView<'id> for FaultingView<'id> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Faulted>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Faulted> {
         Err(Faulted)
     }
@@ -169,6 +258,20 @@ impl<'id> HeaderView<'id> for WithholdingView<'_, 'id> {
 }
 
 impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Infallible>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         self.inner.has_key_image(key_image)
     }

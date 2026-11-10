@@ -10,6 +10,7 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_archival_retention::BundleBody;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_network::NetworkId;
 use shekyl_types::archival::BundleReferences;
@@ -19,7 +20,7 @@ use shekyl_types::{
 
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use crate::archival::ArchivalDelta;
+use crate::archival::{Admitted, ArchivalDelta};
 use crate::coverage::RuleCoverage;
 use crate::drain::Drain;
 use crate::fault::FormAttempt;
@@ -114,10 +115,18 @@ pub struct Candidate {
     /// The bundle references carried beside the block — **not in it**
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
     /// `bundle_root` commits, undecoded, `None` when the block admits no
-    /// bundle. CEN-B4's operand (`rules::attestation`): the root must be
-    /// the root of these references. The verdict carries them to the
+    /// bundle. The operand of CEN-J29 through J37: `form` holds the root to
+    /// them, and `validate` admits each. The verdict carries them to the
     /// store, which records them at the block's height.
     pub bundle_references: Option<BundleReferences>,
+    /// The body each reference names, in section order: body `i` is the
+    /// one whose prunable hash reference `i` states. Empty when the block
+    /// carries no references. The caller resolves them by hash before
+    /// `form` (§7.5: a body is accepted on hash equality) — from the body
+    /// store, or from a peer by 2014 or 2016 — so a body here is never
+    /// judged as the block's: one that is missing or not its reference's
+    /// is [`Stale::BundleBody`](crate::Stale::BundleBody), not a verdict.
+    pub bundle_bodies: Vec<BundleBody>,
 }
 
 impl Candidate {
@@ -144,6 +153,7 @@ impl Candidate {
             block,
             transactions,
             bundle_references: None,
+            bundle_bodies: Vec::new(),
         }
     }
 
@@ -151,6 +161,13 @@ impl Candidate {
     #[must_use]
     pub fn with_bundle_references(mut self, references: Option<BundleReferences>) -> Self {
         self.bundle_references = references;
+        self
+    }
+
+    /// The same candidate with the references' bodies, in section order.
+    #[must_use]
+    pub fn with_bundle_bodies(mut self, bodies: Vec<BundleBody>) -> Self {
+        self.bundle_bodies = bodies;
         self
     }
 }
@@ -402,6 +419,7 @@ impl fmt::Debug for StructurallyValid {
 ///     emission: todo!(),
 ///     archival: todo!(),
 ///     bundle_references: todo!(),
+///     admitted: todo!(),
 ///     pow: todo!(),
 /// };
 /// ```
@@ -443,11 +461,16 @@ pub struct ValidatedBlock {
     /// future validity and the store computes none of it: `connect` writes
     /// each part through its handle.
     archival: ArchivalDelta,
-    /// The candidate's bundle references, judged by CEN-B4
-    /// (`rules::attestation`) and carried through for `connect` to record
-    /// at the block's height. References a verdict holds have passed B4:
-    /// the header's root is theirs.
+    /// The candidate's bundle references, carried through for `connect` to
+    /// record at the block's height. References a verdict holds have passed
+    /// CEN-J29 through J37: the header's root is theirs, and each bundle
+    /// was admitted.
     bundle_references: Option<BundleReferences>,
+    /// What admitting each bundle of the section derived, in section order
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.6): `connect` journals the
+    /// reveals, the issued draws and the digest terms from it. Empty when
+    /// the block carries no references, and then `connect` writes nothing.
+    admitted: Vec<Admitted>,
     /// The PoW `form` computed under its seed, accepted by this verdict
     /// (CEN-D1/D2/D3). `connect` records it beside the block.
     pow: ProvenPow,
@@ -684,6 +707,8 @@ pub(crate) struct Derived {
     pub(crate) emission: PaidEmission,
     /// The archival transition (DRS-E4, CEN-L7).
     pub(crate) archival: ArchivalDelta,
+    /// The section's admissions (CEN-J29 through J37).
+    pub(crate) admitted: Vec<Admitted>,
     /// The PoW `form` computed, under the seed D3 checked (CEN-D1/D2).
     pub(crate) pow: ProvenPow,
 }
@@ -705,10 +730,13 @@ impl ValidatedBlock {
     /// block — all seven arrive as one [`Derived`], named field by field at
     /// the call site.
     pub(crate) fn derive(candidate: Candidate, hash: BlockHash, derived: Derived) -> Self {
+        // The bodies were admitted into `admitted`; the verdict keeps what
+        // that derived, not the bytes.
         let Candidate {
             block,
             transactions,
             bundle_references,
+            bundle_bodies: _,
         } = candidate;
         let Derived {
             target,
@@ -718,6 +746,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
+            admitted,
             pow,
         } = derived;
         Self {
@@ -736,6 +765,7 @@ impl ValidatedBlock {
             emission,
             archival,
             bundle_references,
+            admitted,
             pow,
         }
     }
@@ -746,12 +776,26 @@ impl ValidatedBlock {
         self.pow
     }
 
-    /// The candidate's bundle references, as CEN-B4 judged them (the
-    /// field's docs). `connect` writes `archival_bundle_references[h]` from
-    /// them when `Some`; `None` writes no row.
+    /// The candidate's bundle references, as CEN-J29 through J37 admitted
+    /// them (the field's docs). `connect` writes
+    /// `archival_bundle_references[h]` from them when `Some`; `None` writes
+    /// no row.
     #[must_use]
     pub const fn bundle_references(&self) -> Option<&BundleReferences> {
         self.bundle_references.as_ref()
+    }
+
+    /// What admitting each bundle derived, in section order (the field's
+    /// docs). Empty when the block admits none.
+    #[must_use]
+    pub fn admitted(&self) -> &[Admitted] {
+        &self.admitted
+    }
+
+    /// [`crate::ChainValid::with_admitted`]'s write: a test instrument.
+    #[cfg(any(test, feature = "harness"))]
+    pub(crate) fn set_admitted(&mut self, admitted: Vec<Admitted>) {
+        self.admitted = admitted;
     }
 
     /// The block's weight, long-term weight and the medians it was judged

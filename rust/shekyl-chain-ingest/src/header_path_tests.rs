@@ -674,7 +674,7 @@ fn bind_body_agrees_with_validate() {
                         Some(BundleReferences::new(vec![vec![0xff; 80]]).expect("a section"));
                     assert_eq!(
                         bind_body(&header, &bad_references).map_err(|e| e.rule),
-                        Err(CenRow::B4)
+                        Err(CenRow::J29)
                     );
                     assert_eq!(
                         validate_said(
@@ -686,7 +686,7 @@ fn bind_body_agrees_with_validate() {
                             seed,
                             target,
                         ),
-                        Said::Refused(CenRow::B4)
+                        Said::Refused(CenRow::J29)
                     );
                     witnessed = true;
 

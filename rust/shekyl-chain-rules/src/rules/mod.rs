@@ -89,7 +89,6 @@
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod alt;
-pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
 pub(crate) mod bundle_admission;
@@ -752,8 +751,8 @@ pub fn recorded<'id, V: ChainView<'id>>(
 /// [`recorded`]'s header-facts half: the [`HeaderRecord`] at `height`,
 /// which is below the connecting height and therefore present on a
 /// conforming view — the read every [`HeaderRule`] makes for a parent-side
-/// fact (C3's window, D3's seed, D4's window and work, E1's pin, B4's
-/// anchor window). The hole is the same SI-7 under
+/// fact (C3's window, D3's seed, D4's window and work, E1's pin).
+/// The hole is the same SI-7 under
 /// [`PerHeightRecord::Header`], so the store halts against `block_info`.
 pub fn recorded_header<'id, H: HeaderView<'id>>(
     view: &H,

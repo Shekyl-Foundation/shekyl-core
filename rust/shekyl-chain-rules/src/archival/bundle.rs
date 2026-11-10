@@ -41,68 +41,34 @@
 //!
 //! All four are pure. None names a store type, and none writes.
 //!
-//! # Disposition: STAGED on the connect path; live in the bundle queue
+//! # Disposition: LIVE on the connect path and in the bundle queue
 //!
-//! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
+//! Rule `23-disposition-visibility`.
 //!
-//! - **What is here:** the verifier, [`judge_bundles`], [`draw_targets`],
-//!   [`fill_section`] (the template's section, a section [`check_section`]
-//!   admits; the block template calls it at the switch),
-//!   the view trait, the fixture, and the unbound rule types
-//!   `rules::bundle_admission::J29` through `J37`. Increment 4a also
-//!   implements the view on the store (`shekyl-chain-store`'s
-//!   `StoreBundleView`, the batch view plus the drawable memo). The
-//!   census rows stay `pending`.
-//! - **What is live (increment 4c):** the bundle queue. Its admission is
+//! - **On the connect path (the switch's C3, `SO-D12` 4b):** `validate`
+//!   calls [`judge_bundles`] through `rules::bundle_admission::admit`, at
+//!   the slot the deleted CEN-B4 held, over the chain view's own bundle
+//!   view ([`crate::ChainView::bundles`]; the store's is
+//!   `StoreBundleView`). The census rows CEN-J29 through CEN-J37 are
+//!   bound. `bind_body` runs [`open_reference`] and
+//!   [`check_section_until_switch`], the stateless half, when a body
+//!   arrives. A body that cannot be had is no verdict
+//!   ([`BundleRefused::BodyNotReferenced`]; `crate::Stale::BundleBody`
+//!   inside `validate`).
+//! - **In the bundle queue (increment 4c):** its admission is
 //!   [`judge_bundles`] against the tip, through the ingest connector's
 //!   single writer, and it re-judges every entry after a reorg. The
-//!   producer of a block derives the draws it reads with
-//!   [`draw_targets`], the same selection [`verify_bundle`] runs. The
-//!   queue is pool-like state fed only by this daemon's own bundles until
-//!   references travel (4b); it is not the connect path, and no block
-//!   carries what it holds.
-//! - **What is not:** `form` and `validate` do not call them. The rule
-//!   types are not bound. A block that carries a bundle section is not
-//!   judged by this module today.
-//! - **Who calls it, and when:** increment 4b, after the DRS-X flip
-//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it calls
-//!   [`judge_bundles`] from `validate`, binds the rows, and deletes the
-//!   attestation path (CEN-B4). [`check_section`] takes that view, the
-//!   block's height and its rule set; the cap is the section's. DRS-E5 is transport
-//!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
-//!   tier has landed ([`crate::alt_against`]) and does not call this
-//!   module: an alternative block's row still carries the attestation
-//!   witness, not bundle references. When E5 replaces that with
-//!   references, an arrival that can see the chain calls [`open_reference`]
-//!   and [`check_section`]: an epoch above the fork has no `D`, and one
-//!   such epoch waits the whole section (`SCS-P23`). The window check
-//!   comes first, so only an epoch of a reference inside the window can do
-//!   that (`SCS-P41`).
-//!   [`check_section_until_switch`] is that form when the arrival has no
-//!   view. At the switch, `validate` runs [`check_section`] and
-//!   [`verify_bundle`] over the switch's batch view, on which E5 implements
-//!   [`BundleView`]. A body that cannot be fetched before the switch is no
-//!   switch and no verdict, which is [`BundleRefused::BodyNotReferenced`]'s
-//!   side of the same line. The body store and the bundle queue are
-//!   built (4c, in `shekyl-chain-store`); a connecting block pulling its
-//!   bodies from them by reference is 4b's.
-//! - **The census rows** these refusals name, CEN-J29 through CEN-J37, are
-//!   registered `pending` for the same reason: a `pending` row is in the
-//!   denominator and no rule type is bound to it. The cutover flips them.
-//! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
-//!   reads every non-test source of this crate but the fixture, the
-//!   registry, `archival/bundle.rs`, `archival/bundle_targets.rs`,
-//!   `archival/bundle_admission.rs`, `archival/bundle_records.rs` and
-//!   `archival/bundle_section.rs`, and fails when any other names this
-//!   module's functions, apart from the one `pub use` in `archival/mod.rs`
-//!   and `lib.rs` that exports them. The queue's caller is in another
-//!   crate (the ingest connector), so it does not move this test: the
-//!   test guards this crate's connect path, which the queue is not.
-//!   The section file stays exempt only while it holds `check_section`.
-//!   It requires `validate.rs`,
-//!   `block.rs`, `alt.rs`, `header_ladder.rs`, `drain.rs`, `archival/mod.rs`
-//!   and `rules/mod.rs` by name, so the walk cannot shrink silently. The
-//!   cutover deletes that test in the change that wires them.
+//!   producer derives the draws it reads with [`draw_targets`], the same
+//!   selection [`verify_bundle`] runs.
+//! - **Still STAGED:** [`fill_section`], the template's section, is
+//!   called by the block template at C4; [`seats_with_carry`], the support
+//!   carry, joins the transition at C5. Their falsifier is
+//!   `nothing_on_the_connect_path_fills_a_section_or_carries_a_seat`
+//!   (`bundle_rows_tests.rs`), which reads every non-test source of this
+//!   crate but the fixture, the registry and this module's files, and
+//!   fails when any names them apart from the one `pub use` in
+//!   `archival/mod.rs` and `lib.rs`. It requires the connect path's files
+//!   by name, so the walk cannot shrink silently.
 //!
 //! # One name: `DrawableEpoch`
 //!
@@ -314,8 +280,8 @@ pub use bundle_section::{
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
 
-/// The support stream's carry (`SO-D12` S2): STAGED with the rest of this
-/// module, and on the connect path with admission at the switch.
+/// The support stream's carry (`SO-D12` S2): STAGED, and on the connect
+/// path at the switch's C5.
 #[path = "support_carry.rs"]
 mod support_carry;
 
@@ -888,8 +854,8 @@ mod bundle_section_tests;
 mod bundle_fill_tests;
 
 #[cfg(test)]
-#[path = "bundle_staging_tests.rs"]
-mod bundle_staging_tests;
+#[path = "bundle_rows_tests.rs"]
+mod bundle_rows_tests;
 
 #[cfg(test)]
 #[path = "bundle_admission_tests.rs"]

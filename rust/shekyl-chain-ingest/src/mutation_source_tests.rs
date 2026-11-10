@@ -176,7 +176,7 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::HeaderVersion, ExpectedPlace::Block),
             (Mutation::Orphan, ExpectedPlace::Block),
             (Mutation::WrongRoot, ExpectedPlace::Block),
-            // Slice 8 row 10: B4 names the block, as the header rows do.
+            // The switch's C3: J29's root check names the block, as the header rows do.
             (Mutation::WrongBundleRoot, ExpectedPlace::Block),
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),

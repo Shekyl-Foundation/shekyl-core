@@ -17,8 +17,8 @@ use shekyl_chain_rules::harness::bundle::BundleWorld;
 use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
-    admission_plan, judge_bundles, AdmissionFault, BlockDrawsFloor, BundleInvalid, BundleRefused,
-    BundleView as _, Corrupt, DrawableMemo, EpochFloor, SettlementCheck, Settling,
+    admission_plan, judge_bundles, AdmissionFault, AtHeight, BlockDrawsFloor, BundleInvalid,
+    BundleRefused, BundleView as _, Corrupt, DrawableMemo, EpochFloor, SettlementCheck, Settling,
 };
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{BlockDraws, DrawCommitment, IssuedDigest};
@@ -228,36 +228,32 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
     let mut counted = None;
     let out: Result<(), TestErr> = prepared.chain.store.write(|batch| {
         let view = batch.chain_view();
-        let bundle_view =
-            StoreBundleView::new(&view, &prepared.memo, height, RULES.settlement_schedule());
-        let refs = [reference];
-        let bodies = [body];
-        let root = bundle_root(&refs).expect("one reference");
-        assert_eq!(
-            bundle_view
-                .support_count(refs[0].h())
-                .expect("the read")
-                .expect("the seat row"),
-            prepared.support,
-            "the bundle states the support width the store issued"
-        );
-        let verdict = judge_bundles(
-            &refs,
-            &bodies,
-            &root,
-            height,
-            &bundle_view,
-            &RULES,
-            &shekyl_network::HARNESS_NETWORK_ID,
-        )
-        .expect("the store view admits the fixture bundle");
+        {
+            let bundle_view =
+                StoreBundleView::new(&view, &prepared.memo, height, RULES.settlement_schedule());
+            assert_eq!(
+                bundle_view
+                    .support_count(reference.h())
+                    .expect("the read")
+                    .expect("the seat row"),
+                prepared.support,
+                "the bundle states the support width the store issued"
+            );
+        }
+        // The block carries the section; `validate` admits it and the
+        // verdict carries what `connect` journals.
         let txs = prepared.chain.grown.realise(&[]);
-        let judged = prepared
-            .chain
-            .grown
-            .judge_listing_with_memo(&view, &RULES, &txs, None)?;
+        let judged = prepared.chain.grown.judge_listing_with_section(
+            &view,
+            &RULES,
+            &txs,
+            Some(&mut prepared.memo),
+            std::slice::from_ref(&reference),
+            vec![body],
+        )?;
         counted = Some(judged.block().archival().draws());
-        batch.connect_admitting(judged, RULES, Some((&prepared.memo, &verdict)))?;
+        let verdict = judged.block().admitted().to_vec();
+        batch.connect(judged, RULES)?;
         admitted = Some(verdict);
         Ok(())
     });
@@ -358,6 +354,17 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         digest
     );
     assert!(draws_of(&prepared.chain, h).revealed);
+    let section = prepared
+        .chain
+        .store
+        .begin_read()
+        .expect("read")
+        .bundle_references_at(including)
+        .expect("read");
+    let AtHeight::Recorded(Some(section)) = section else {
+        panic!("the admitting block records its section: {section:?}");
+    };
+    assert_eq!(section.as_slice().len(), 1, "one reference, as admitted");
     let incl = draws_of(&prepared.chain, including);
     assert_eq!(
         incl.count, counted.count,
@@ -398,6 +405,17 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     assert!(
         draws_row(&prepared.chain, including).is_none(),
         "pop removes the admitting block's draw row"
+    );
+    assert_eq!(
+        prepared
+            .chain
+            .store
+            .begin_read()
+            .expect("read")
+            .bundle_references_at(including)
+            .expect("read"),
+        AtHeight::AboveTip,
+        "pop removes the admitting block's section"
     );
     let restored =
         EpochFloor::<Settling>::under(prepared.chain.grown.height(), RULES.settlement_schedule());
@@ -664,4 +682,87 @@ fn a_cold_memo_at_the_open_holds_the_prior_epoch() {
         Ok(())
     });
     out.expect("the prior epoch is in the memo");
+}
+
+/// Rick's C3 test (`SO-D12` 4b review, finding 1): admission runs after the
+/// window's epochs are filed. The store is reopened — the memo is not
+/// persisted, so it is cold — and the block one past epoch 3's open
+/// carries a bundle for the last block of epoch 2. `validate` admits it
+/// with no SI-35: its filing step put epoch 2's `D` in the memo before the
+/// section's budget read it.
+///
+/// Red edit: drop `remember_window_epochs` from `rules::bundle_admission::admit`
+/// — the store's bundle view misses epoch 2 and the batch faults SI-35.
+#[test]
+fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
+    let schedule = RULES.settlement_schedule();
+    let window = schedule
+        .challenge_response_blocks()
+        .expect("the harness schedule has a response window")
+        .get();
+    let h = BlockHeight::from_raw(h_open(3) - 1);
+    let h_incl = BlockHeight::from_raw(h_open(3) + 1);
+    assert!(h_incl.to_raw() - h.to_raw() <= window, "inside the window");
+    assert_ne!(schedule.epoch_at(h), schedule.epoch_at(h_incl));
+
+    let open = h_open(2);
+    let mut chain =
+        SlashedChain::build_with("cold-memo-admit", WITNESS_PERSONAS, open - 1, no_draws);
+    plant_witness_shard_set(&mut chain);
+    let mut warm = DrawableMemo::new();
+    while chain.grown.height() < h {
+        connect_plain(&mut chain, Some(&mut warm));
+    }
+    let world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES);
+    let commitment =
+        DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
+    connect_committed(&mut chain, &mut warm, commitment);
+    connect_plain(&mut chain, Some(&mut warm));
+    assert_eq!(chain.grown.height(), h_incl);
+
+    let read = chain.store.begin_read().expect("read");
+    let count = read
+        .block_draws(h, BlockDrawsFloor::NONE)
+        .expect("read")
+        .expect("h wrote its draw row")
+        .count;
+    let support = u32::try_from(
+        read.support_block_seats(h, BlockDrawsFloor::NONE)
+            .expect("read")
+            .expect("h wrote its seat row")
+            .len(),
+    )
+    .expect("a block seats fewer than 2^32 trees");
+    drop(read);
+    let world = BundleWorld::with(h, BundleWorld::SEED, count, &RULES);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(count, []).expect("no pass"),
+        PassBitmap::from_passes(support, []).expect("no support pass"),
+        &[],
+    );
+
+    chain.reopen();
+    let mut cold = DrawableMemo::new();
+    let txs = chain.grown.realise(&[]);
+    let mut admitted = None;
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = chain.grown.judge_listing_with_section(
+            &view,
+            &RULES,
+            &txs,
+            Some(&mut cold),
+            std::slice::from_ref(&reference),
+            vec![body],
+        )?;
+        admitted = Some(judged.block().admitted().len());
+        batch.connect(judged, RULES)?;
+        Ok(())
+    });
+    out.expect("a cold memo admits: the window's epochs are filed first");
+    assert_eq!(admitted, Some(1));
+    assert!(
+        draws_of(&chain, h).revealed,
+        "the previous epoch's bundle is admitted"
+    );
 }

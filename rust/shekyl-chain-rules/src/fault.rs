@@ -171,6 +171,21 @@ pub enum Stale {
         /// Whether `form` may be run again.
         retry: Retry,
     },
+    /// The candidate does not carry the body the bundle reference at
+    /// `position` names: the bodies are fewer than the references, or the
+    /// body at that position is not the one its reference hashes to.
+    /// The caller assembles a candidate's bodies by the references'
+    /// prunable hashes before `form` (§7.5: a body is accepted on hash
+    /// equality), so this is a driver defect, the class of
+    /// [`Self::Network`]. A fault, never a refusal: the block committed to
+    /// the reference, and the wrong bytes are the caller's, not the
+    /// block's (`BundleRefused::BodyNotReferenced`).
+    BundleBody {
+        /// The reference's position in the section.
+        position: usize,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
 }
 
 /// What [`Stale::Reference`] compared: what `form` verified under against
@@ -396,6 +411,18 @@ pub enum Corrupt {
         height: BlockHeight,
         /// Why it could not be.
         why: DrawCountFault,
+    },
+    /// The bundle view of the chain a block is connecting to did not
+    /// answer for something a chain that holds the referenced block must
+    /// hold (`BundleRefused::Unanswered`), or for a drawable epoch the
+    /// filing step put in the memo before admission read it (SI-35's
+    /// class). Never a refusal of the block: the block is not invalid,
+    /// this node's rows are.
+    BundleUnanswered {
+        /// The block whose section was being admitted.
+        including: BlockHeight,
+        /// What the view did not answer.
+        why: crate::archival::BundleUnanswered,
     },
 }
 
@@ -803,6 +830,11 @@ impl fmt::Display for Stale {
                     claims.expected.height, claims.expected.root
                 ),
             },
+            Self::BundleBody { position, retry } => write!(
+                f,
+                "stale bundle bodies: the candidate does not carry the body bundle reference \
+                 #{position} names ({retry})"
+            ),
         }
     }
 }
@@ -901,6 +933,11 @@ impl fmt::Display for Corrupt {
             Self::DrawCount { height, why } => {
                 write!(f, "the draw count at height {height} cannot be recorded: {why} (SI-33)")
             }
+            Self::BundleUnanswered { including, why } => write!(
+                f,
+                "admitting the section of the block at height {including}: the view did not \
+                 answer {why:?}"
+            ),
         }
     }
 }

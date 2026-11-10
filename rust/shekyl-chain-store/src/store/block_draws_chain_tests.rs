@@ -438,8 +438,7 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 1, no_draws);
     plant_compact_bond(&mut chain);
     let admitted = late_bundle(open - 1);
-    let memo = DrawableMemo::new();
-    connect_admitting(&mut chain, &admitted, &memo);
+    connect_admitting(&mut chain, &admitted);
     let prior = SettlementEpoch::from_raw(1);
     let floor =
         EpochFloor::<Settling>::under(BlockHeight::from_raw(open), RULES.settlement_schedule());
@@ -503,7 +502,7 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     );
     assert!(!draws_of(&chain, BlockHeight::from_raw(open - 1)).revealed);
 
-    connect_admitting(&mut chain, &admitted, &memo);
+    connect_admitting(&mut chain, &admitted);
     let next = connect_listed(&mut chain, &[], None);
     assert_eq!(opened.issued_short, 0);
     let one_pair = u64::try_from(COUNTED_DRAWS).expect("the counted draws fit");
@@ -549,14 +548,17 @@ fn late_bundle(h: u64) -> Vec<Admitted> {
     }]
 }
 
-fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted], memo: &DrawableMemo) {
+/// Connect the next block with `admitted` as its verdict's admissions: the
+/// writer is handed a derivation no fixture bundle produces, through the
+/// harness instrument (`ChainValid::with_admitted`).
+fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted]) {
     let txs = chain.grown.realise(&[]);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
         let judged = chain
             .grown
             .judge_listing_with_memo(&view, &RULES, &txs, None)?;
-        batch.connect_admitting(judged, RULES, Some((memo, admitted)))?;
+        batch.connect(judged.with_admitted(admitted.to_vec()), RULES)?;
         Ok(())
     });
     out.expect("the block connects");

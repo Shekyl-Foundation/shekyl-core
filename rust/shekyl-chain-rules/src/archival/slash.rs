@@ -661,6 +661,20 @@ mod support_settlement_tests {
     }
 
     impl<'id> ChainView<'id> for SupportIndex<'_, 'id> {
+        type Bundles<'m>
+            = crate::harness::NoBundleRows<Infallible>
+        where
+            Self: 'm;
+
+        fn bundles<'m>(
+            &'m self,
+            _: &'m crate::DrawableMemo,
+            _: BlockHeight,
+            _: shekyl_archival_retention::SettlementSchedule,
+        ) -> Self::Bundles<'m> {
+            crate::harness::NoBundleRows::new()
+        }
+
         fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
             self.inner.has_key_image(key_image)
         }

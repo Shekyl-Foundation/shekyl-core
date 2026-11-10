@@ -531,6 +531,36 @@ impl Grown {
         Ok(judged)
     }
 
+    /// [`Self::judge_listing_with_memo`] for a block carrying a bundle
+    /// section: `refs` as its references, under the root they make, and
+    /// `bodies` as their bodies in section order. `validate` admits them
+    /// (CEN-J29 through J37) and the verdict carries what it admitted.
+    pub(in super::super) fn judge_listing_with_section<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: &[Transaction],
+        memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
+        refs: &[shekyl_archival_retention::BundleRef],
+        bodies: Vec<shekyl_archival_retention::BundleBody>,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        let mut cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
+        let root = shekyl_archival_retention::bundle_root(refs).expect("a countable section");
+        cand.block.header.bundle_root = shekyl_types::BundleRoot::from_bytes(root);
+        let section = shekyl_types::archival::BundleReferences::new(
+            refs.iter()
+                .map(shekyl_archival_retention::BundleRef::encode)
+                .collect(),
+        )
+        .expect("a non-empty section");
+        let cand = cand
+            .with_bundle_references(Some(section))
+            .with_bundle_bodies(bodies);
+        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
+        self.record(judged.block().block(), txs);
+        Ok(judged)
+    }
+
     /// Judge an empty block connecting next under `rules`, for a fixture
     /// that built a corrupt state on purpose: the validator's [`Corrupt`]
     /// comes back as a value. Records nothing — the block does not connect.

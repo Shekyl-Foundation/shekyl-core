@@ -112,10 +112,11 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         };
         parsed.push(tx);
     }
-    // References that are not a section are CEN-B4's: the block cannot
-    // carry them. What each reference says is the validator's to open.
+    // References that are not a section — an empty one, or more than a
+    // section holds — are CEN-J29's: no root counts them. What each
+    // reference says is the validator's to open.
     let Ok(references) = BundleReferences::from_sidecar(references) else {
-        return Err((slot, tag, refused(shekyl_chain_rules::CenRow::B4)));
+        return Err((slot, tag, refused(shekyl_chain_rules::CenRow::J29)));
     };
     Ok(Parsed {
         slot,

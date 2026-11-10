@@ -130,6 +130,23 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     pub const fn coverage(&self) -> &RuleCoverage {
         &self.coverage
     }
+
+    /// The same verdict with `admitted` in place of what `validate` derived.
+    ///
+    /// **A test instrument, behind the `harness` feature** (never on the
+    /// production surface). The store's admission writer refuses states no
+    /// verifier output reaches — a reveal whose draw row is absent, a
+    /// reduction past `u32` — and its tests hand it such an output on a
+    /// block the rules accepted, so the refusal is the writer's and not a
+    /// rule's. A verdict this produces connects under the same brand: the
+    /// instrument changes what the writer is given, not which view it is
+    /// given to.
+    #[cfg(any(test, feature = "harness"))]
+    #[must_use]
+    pub fn with_admitted(mut self, admitted: Vec<crate::archival::Admitted>) -> Self {
+        self.block.set_admitted(admitted);
+        self
+    }
 }
 
 /// Which transaction of a candidate a refusal points into.
@@ -166,6 +183,13 @@ pub enum Locus {
         /// The input's position in that transaction.
         input: usize,
     },
+    /// One reference of the block's bundle section (CEN-J29 through
+    /// J37), by its position in the section. A refusal of the section as a
+    /// whole — its root, its budget — is [`Self::Block`].
+    Bundle {
+        /// The reference's position in the section.
+        position: usize,
+    },
 }
 
 impl fmt::Display for TxSlot {
@@ -184,6 +208,7 @@ impl fmt::Display for Locus {
             Self::Block => f.write_str("block"),
             Self::Tx { slot } => write!(f, "{slot}"),
             Self::Input { slot, input } => write!(f, "{slot} input #{input}"),
+            Self::Bundle { position } => write!(f, "bundle reference #{position}"),
         }
     }
 }

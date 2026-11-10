@@ -460,12 +460,13 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
 
 /// The bundle-references row has one persisted form per block: no
 /// references is `None` on the candidate and **no row** — `Recorded(None)`
-/// at the height, `AboveTip` once the block is popped. A block carrying
-/// references is refused at CEN-B4 (`Locus::Block`) before the writer is
-/// handed anything, until admission goes live (the switch's C3); a present
-/// row is that commit's to write.
+/// at the height, `AboveTip` once the block is popped. A section whose
+/// reference does not parse is refused at CEN-J29, at that reference,
+/// before the writer is handed anything. A present row — a block that
+/// admitted a bundle — is written and popped in
+/// `admission_chain_tests::a_verified_bundle_is_what_the_store_writes_and_pop_restores`.
 #[test]
-fn no_references_is_no_row_and_a_block_carrying_references_is_refused() {
+fn no_references_is_no_row_and_a_malformed_section_is_refused() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut grown = Grown::new();
@@ -493,7 +494,11 @@ fn no_references_is_no_row_and_a_block_carrying_references_is_refused() {
             .with_bundle_references(Some(section));
         Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
     });
-    assert_refused(out.expect("judging only reads"), CenRow::B4, Locus::Block);
+    assert_refused(
+        out.expect("judging only reads"),
+        CenRow::J29,
+        Locus::Bundle { position: 0 },
+    );
 
     pop(&store);
     let snap = store.begin_read().expect("read");

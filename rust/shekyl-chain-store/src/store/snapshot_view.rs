@@ -98,7 +98,23 @@ impl<'id> HeaderView<'id> for SnapshotView<'_> {
     }
 }
 
-impl<'id> ChainView<'id> for SnapshotView<'_> {
+impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
+    /// The store's bundle view over this view and the memo the connect
+    /// loop filed (`super::bundle_view`). A memo miss is SI-35.
+    type Bundles<'m>
+        = super::bundle_view::StoreBundleView<'m, SnapshotView<'a>>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m shekyl_chain_rules::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_chain_rules::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        super::bundle_view::StoreBundleView::new(self, memo, h_incl, schedule)
+    }
+
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, StoreError> {
         chain_reads::has_key_image(self.snapshot.txn(), key_image).map_err(ReadFault::into_plain)
     }

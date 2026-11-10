@@ -27,14 +27,15 @@ use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockDrawsFloor, BlockOutputs, ChainValid, ChainView, Claimable, EpochFloor,
+    AtHeight, BlockDrawsFloor, BlockOutputs, BundleView, ChainValid, ChainView, Claimable,
+    DrawableEpoch, DrawableMemo, EpochFloor, SettlementSchedule, SupportSeat,
     HeaderRecord, HeaderView, Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor,
     Settling, SlashLogFloor,
     StructurallyValid, Tip,
     TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest,
     SupportSeats,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
     SlashLogEntry,
@@ -44,6 +45,40 @@ use shekyl_types::{
     SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
+
+/// The empty chain's bundle view: nothing to answer.
+pub struct NoBundles;
+
+impl BundleView for NoBundles {
+    type Fault = Infallible;
+    fn draw_count(&self, _: BlockHeight) -> Result<Option<u32>, Infallible> {
+        Ok(None)
+    }
+    fn draw_commitment(&self, _: BlockHeight) -> Result<Option<DrawCommitment>, Infallible> {
+        Ok(None)
+    }
+    fn block_hash(&self, _: BlockHeight) -> Result<Option<BlockHash>, Infallible> {
+        Ok(None)
+    }
+    fn visibly_short(&self, _: BlockHeight, _: u64) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+    fn revealed(&self, _: BlockHeight) -> Result<bool, Infallible> {
+        Ok(false)
+    }
+    fn drawable_epoch(&self, _: SettlementEpoch) -> Result<Option<&DrawableEpoch>, Infallible> {
+        Ok(None)
+    }
+    fn support_count(&self, _: BlockHeight) -> Result<Option<u32>, Infallible> {
+        Ok(None)
+    }
+    fn support_roster(&self, _: BlockHeight) -> Result<Option<Vec<SupportSeat>>, Infallible> {
+        Ok(None)
+    }
+    fn archive_width(&self, _: BlockHeight) -> Result<Option<core::num::NonZeroU64>, Infallible> {
+        Ok(None)
+    }
+}
 
 /// An empty chain, whatever `T` says about its brand.
 pub struct Stub<T>(pub T);
@@ -83,6 +118,20 @@ impl<'id, T> HeaderView<'id> for Stub<T> {
 }
 
 impl<'id, T> ChainView<'id> for Stub<T> {
+    type Bundles<'m>
+        = NoBundles
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m DrawableMemo,
+        _: BlockHeight,
+        _: SettlementSchedule,
+    ) -> NoBundles {
+        NoBundles
+    }
+
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }

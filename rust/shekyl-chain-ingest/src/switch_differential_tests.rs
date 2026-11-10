@@ -288,7 +288,7 @@ async fn tampered_references_on_an_alt_row_fail_promotion_k5b() {
             ..
         } => {
             assert_eq!(hash, target);
-            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::B4);
+            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::J29);
             assert_eq!(removed, vec![b[1].hash, b[2].hash, b[3].hash]);
         }
         other => panic!("tampered references were promoted: {other:?}"),

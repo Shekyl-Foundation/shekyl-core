@@ -6,7 +6,7 @@
 //! `verify_bundle` against the fixture view (`harness::bundle`).
 //!
 //! The section check lives in `bundle_section_tests`. The census rows and
-//! the staging falsifier live in `bundle_staging_tests`. Each admission
+//! the staging falsifier live in `bundle_rows_tests`. Each admission
 //! row, through `judge_bundles`, lives in `bundle_admission_tests`.
 //!
 //! # What these tests bite against, and what they do not cover

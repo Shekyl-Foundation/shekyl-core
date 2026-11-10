@@ -37,6 +37,7 @@ impl RunEnd {
             | RunFault::StaleReference { .. }
             | RunFault::StaleRuleSet { .. }
             | RunFault::StaleNetwork { .. }
+            | RunFault::StaleBundleBody { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
@@ -157,6 +158,19 @@ pub enum RunFault {
         formed_under: shekyl_network::NetworkId,
         /// What `validate` was given.
         in_force: shekyl_network::NetworkId,
+        /// What the validator would allow next.
+        retry: Retry,
+    },
+    /// The candidate did not carry the body a bundle reference names
+    /// ([`Stale::BundleBody`]): its bodies are resolved by hash before
+    /// `form`, so this is a driver defect, never a verdict on the block.
+    /// The writer stays up.
+    #[error("driver defect: the candidate at height {height} lacks the body bundle reference #{position} names ({retry:?})")]
+    StaleBundleBody {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The reference's position in the section.
+        position: usize,
         /// What the validator would allow next.
         retry: Retry,
     },
@@ -297,6 +311,11 @@ pub(crate) fn fault_reply(
             height,
             formed_under,
             in_force,
+            retry,
+        },
+        Fault::Stale(Stale::BundleBody { position, retry }) => RunFault::StaleBundleBody {
+            height,
+            position,
             retry,
         },
     }

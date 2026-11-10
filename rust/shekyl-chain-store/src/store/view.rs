@@ -210,7 +210,23 @@ impl<'id> HeaderView<'id> for BatchView<'_, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for BatchView<'_, 'id> {
+impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
+    /// The store's bundle view over this view and the memo the connect
+    /// loop filed (`super::bundle_view`). A memo miss is SI-35.
+    type Bundles<'m>
+        = super::bundle_view::StoreBundleView<'m, BatchView<'a, 'id>>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m shekyl_chain_rules::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_chain_rules::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        super::bundle_view::StoreBundleView::new(self, memo, h_incl, schedule)
+    }
+
     /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read
     /// from the table SI-1 guards. The body is [`chain_reads::has_key_image`],
     /// shared with the read snapshot (S-OUT-KI K1); a membership read has no

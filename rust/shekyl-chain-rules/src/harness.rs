@@ -453,6 +453,20 @@ impl<'id> HeaderView<'id> for MockView<'_, 'id> {
 }
 
 impl<'id> ChainView<'id> for MockView<'_, 'id> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Infallible>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         Ok(self.chain.key_images.contains(key_image))
     }
@@ -622,7 +636,7 @@ pub use assert::{
     expected_seed, expected_target, formed, formed_on, formed_on_network, formed_under,
     formed_under_network, infallible, judge_on, judged, token_for_one_rule, MockSubstrate,
 };
-pub use views::{Faulted, FaultingView, WithheldRead, WithholdingView};
+pub use views::{Faulted, FaultingView, NoBundleRows, WithheldRead, WithholdingView};
 
 pub mod fixture;
 mod price;

@@ -3,8 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The bundle rows' census registration, and the falsifier that the
-//! verifier is still staged.
+//! The bundle rows' census registration — each refusal names its row, and
+//! each rule type `validate` runs is the verifier's name for it — and the
+//! falsifier that the template's section and the support carry are still
+//! staged.
 //!
 //! Sibling of `bundle_tests`, `bundle_section_tests`, and
 //! `bundle_fill_tests`. Every test names the edit that turns it red.
@@ -82,80 +84,41 @@ fn every_refusal_names_its_census_row() {
 /// rule type, so no verdict's coverage holds them. Red edit: flip one to
 /// `implemented(...)` without wiring it — and this test is then the
 /// cutover's to delete, with the next one.
-#[test]
-fn the_bundle_rows_are_pending_until_the_cutover() {
-    use crate::census::RowStatus;
-    for row in [
-        CenRow::J29,
-        CenRow::J30,
-        CenRow::J31,
-        CenRow::J32,
-        CenRow::J33,
-        CenRow::J34,
-        CenRow::J35,
-        CenRow::J36,
-        CenRow::J37,
-    ] {
-        assert_eq!(row.status(), RowStatus::Pending, "{row}");
-    }
-}
-
-/// **The falsifier of this module's STAGED disposition** (rule 23): no
-/// source of this crate on the connect path names the bundle verifier.
+/// **The falsifier of what is still STAGED** (rule 23): no source of this
+/// crate on the connect path names the template's section ([`fill_section`],
+/// C4) or the support carry ([`seats_with_carry`], [`SupportCarry`], C5), or
+/// the producer's draw derivation ([`draw_targets`], live in the ingest
+/// crate's producer, not on this crate's connect path).
+///
+/// The admission itself left this test with the switch's C3: `validate`
+/// runs [`judge_bundles`] through `rules::bundle_admission`, and the nine
+/// census rows are bound.
 ///
 /// The walk is every `src/**/*.rs` of the crate, so a file added to the
-/// connect path tomorrow — a segment beside `header_ladder.rs`, a rule —
-/// is judged by default; a list of files would judge yesterday's. What is
-/// exempt, and why:
+/// connect path tomorrow is judged by default. What is exempt, and why:
 ///
-/// - `*_tests.rs`: `cfg(test)`, and the bundle's own tests name the
-///   subject.
-/// - `harness.rs` and `harness/`: the fixture that implements
-///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
-///   never on the production surface.
+/// - `*_tests.rs`: `cfg(test)`.
+/// - `harness.rs` and `harness/`: the fixture, never on the production
+///   surface.
 /// - `archival/bundle.rs`, `archival/bundle_targets.rs`,
 ///   `archival/bundle_admission.rs`, `archival/bundle_records.rs`,
 ///   `archival/bundle_section.rs` and `archival/support_carry.rs`: the
-///   module under test. The targets file is exempt only while it still
-///   holds `draw_targets`, the admission file only while it still holds
-///   `judge_bundles`, the section file only while it still holds the
-///   section checker, the record file only while it still holds the
-///   shared pass check, and the carry file only while it still holds
-///   `seats_with_carry` (`SO-D12` S2: the carry joins the transition with
-///   admission); the test asserts each, so deleting a file or emptying it
-///   is red.
-/// - `census.rs`: the registry's comment on the nine `pending` rows names
-///   the functions as the rows' refusals. It is held to a narrower check
-///   instead: no `implemented`, `enforced_at` or `by_construction` entry
-///   names the bundle module, which is what wiring would look like there.
+///   module that holds these functions. Each is held to still holding its
+///   function, so deleting a file or emptying it is red.
+/// - `census.rs`: the registry names the module in its comments.
 ///
 /// Two files export the surface and are judged with that one `pub use`
-/// removed: `archival/mod.rs` and `lib.rs`. The rest of each — including
-/// `transition` — must not name it.
+/// removed: `archival/mod.rs` and `lib.rs`.
 ///
-/// The subject is asserted, not counted: each file the connect path runs
-/// through today is required by name, with the identifier it is read for,
-/// so the walk cannot shrink or move without this test saying so.
-///
-/// Bites against the verifier being wired into a block path without the
-/// module's banner, the census rows' status and the specification's §2
-/// moving with it. Does not cover a caller outside this crate: the store
-/// and the ingest driver are other crates, and `SO-D12`'s cutover is where
-/// they change. The bundle queue (increment 4c) is such a caller, live in
-/// the ingest connector; it judges against the tip and is not the connect
-/// path, so it does not move this test. The cutover deletes this test in
-/// the change that wires the rule.
+/// Bites against C4 or C5 wiring the template's section or the carry into
+/// this crate's connect path without this test, the module banner and the
+/// specification moving with it. The change that wires the last of them
+/// deletes this test.
 #[test]
-fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
+fn nothing_on_the_connect_path_fills_a_section_or_carries_a_seat() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let files = connect_path_sources(&src);
     let names: &[&str] = &[
-        "verify_bundle",
-        "check_section",
-        "open_body",
-        "open_reference",
-        "BundleView",
-        "judge_bundles",
         "draw_targets",
         "fill_section",
         "seats_with_carry",
@@ -239,29 +202,11 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         for name in names {
             assert!(
                 !judged.contains(name),
-                "{} names `{name}`: the bundle rule is no longer staged. Move the module \
-                 banner, the census rows and this test in the same change.",
+                "{} names `{name}`: it is no longer staged. Move the module banner, the \
+                 specification and this test in the same change.",
                 file.display()
             );
         }
-    }
-
-    // The registry, exempt from the scan and held to what wiring would be.
-    let census = std::fs::read_to_string(src.join("census.rs")).expect("census.rs");
-    let binds = |line: &&str| {
-        ["implemented(", "enforced_at(", "by_construction("]
-            .iter()
-            .any(|entry| line.contains(entry))
-    };
-    assert!(
-        census.contains("rules::bundle_admission::J29"),
-        "the staged rule types are named on the pending rows"
-    );
-    for line in census.lines().filter(binds) {
-        assert!(
-            !line.contains("bundle"),
-            "a census entry binds the bundle module; the rows are no longer staged: {line}"
-        );
     }
 }
 
@@ -336,16 +281,15 @@ fn without_staged_export(source: &str, names: &[&str]) -> String {
     format!("{}{}", &source[..start], &source[end..])
 }
 
-/// Each staged type's row is the verifier's name for that refusal.
-/// Constructing the types is what keeps them live while unbound.
+/// Each rule type's row is the verifier's name for that refusal: the row
+/// `validate` reports is the row the census binds.
 #[test]
-fn the_staged_rule_types_name_the_verifier_rows() {
+fn the_rule_types_name_the_verifier_rows() {
     use crate::census::CenRow;
     use crate::rules::bundle_admission::{J29, J30, J31, J32, J33, J34, J35, J36, J37};
     use crate::rules::Rule;
     use shekyl_archival_retention::SectionBudget;
 
-    let _ = (J29, J30, J31, J32, J33, J34, J35, J36, J37);
     let charge = SectionCharge::of(&[]);
     let budget = SectionBudget::from_draws(0);
     let section = [

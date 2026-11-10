@@ -15,9 +15,7 @@
 
 use redb::ReadableTableMetadata;
 use shekyl_archival_retention::{BundleKept, PassBitmap};
-use shekyl_chain_rules::{
-    Admitted, Corrupt, DrawableMemo, Fault, RowStatus, RuleSet, RuleSetId, Trust,
-};
+use shekyl_chain_rules::{Admitted, Corrupt, Fault, RowStatus, RuleSet, RuleSetId, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
@@ -1085,11 +1083,11 @@ fn an_admission_fault_halts_at_the_admitting_block() {
         draws: Vec::new(),
         support: Vec::new(),
     }];
-    let memo = DrawableMemo::new();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, block)?;
-        Ok(batch.connect_admitting(judged, RuleSet::GENESIS, Some((&memo, &admitted)))?)
+        // An admission no verifier output reaches: the writer's own refusal.
+        Ok(batch.connect(judged.with_admitted(admitted.to_vec()), RuleSet::GENESIS)?)
     });
     let row = StoreInvariant::AdmissionWrite {
         height: unrecorded,

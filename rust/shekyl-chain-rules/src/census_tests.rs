@@ -100,10 +100,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::A2,
             CenRow::B1,
             CenRow::B2,
-            // B4 over the header's root and the bundle references beside
-            // the block (`SCS-P34`). A3 is decided by B4's empty arm and
-            // stays `pending` as a row.
-            CenRow::B4,
             CenRow::B5,
             CenRow::B6,
             CenRow::C1,
@@ -238,6 +234,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J24,
             CenRow::J25,
             CenRow::J26,
+            // The switch's C3 (`SO-D12` 4b, 2026-11-09): the bundle section,
+            // through `rules::bundle_admission::admit`, at B4's old slot.
+            CenRow::J29,
+            CenRow::J30,
+            CenRow::J31,
+            CenRow::J32,
+            CenRow::J33,
+            CenRow::J34,
+            CenRow::J35,
+            CenRow::J36,
+            CenRow::J37,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
@@ -435,7 +442,10 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 161 → 160 on 2026-11-03: CEN-E2 (the anchor floor and anchored reorg
     // cap) went to bucket 3 with S1 (no coded checkpoints) and left this
     // registry.
-    assert_eq!(CenRow::ALL.len(), 160);
+    // 160 → 159 on 2026-11-09: CEN-B4 (the header root against the
+    // sidecar) went to bucket 3 with the switch's C3 and left this
+    // registry — its successors CEN-J29–J37 judge the bundle section.
+    assert_eq!(CenRow::ALL.len(), 159);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

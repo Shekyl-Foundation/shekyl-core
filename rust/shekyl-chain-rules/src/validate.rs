@@ -66,7 +66,6 @@ use crate::header_facts::{prove_header, HeaderProof};
 use crate::header_ladder;
 use crate::header_path::HeaderJudged;
 use crate::rule_set::RuleSet;
-use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::Target;
@@ -568,13 +567,15 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
 
     // View-bound block-level predicates (4.A–4.G). The header rules are the
     // ladder's three segments, written once and shared with the alt tier.
-    // Between them, the C++'s insertion points: B5 after the parent link;
-    // B4 (the attestation set) after the clock and before the coinbase
-    // rows, where `verify_block_attestation` runs; G1 before the slot loop,
-    // the only place it has a witness on a spend (slice 7 Q8). A coinbase
-    // extra that does not parse no longer reaches B4 through both stages:
-    // the miner slot's `tx_form` (CEN-I19) refuses it in `form`. The C++
-    // names B4 there; one refusal either way, the row differs.
+    // Between them: B5 after the parent link; the bundle section (CEN-J29
+    // through J37) after the clock and before the coinbase rows, the slot
+    // the deleted CEN-B4 held; G1 before the slot loop, the only place it
+    // has a witness on a spend (slice 7 Q8).
+    //
+    // The section files the epochs its window names into `memo` first,
+    // then admits through `&`, so the count below reads a memo admission
+    // has already filled (`archival::memo`'s contract). `memo` is reborrowed
+    // here and handed whole to the count after.
     if let Err(refused) = header_ladder::parent_link(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
@@ -582,7 +583,20 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     if let Err(refused) = header_ladder::clock(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
-    judge_block!(cx, view, coverage; B4);
+    let mut memo = memo;
+    let admitted = match rules::bundle_admission::admit(
+        cx.candidate(),
+        connecting,
+        view,
+        rule_set,
+        &network,
+        formed.attempt(),
+        memo.as_deref_mut(),
+        &mut coverage,
+    )? {
+        Ok(admitted) => admitted,
+        Err(refused) => return Ok(Err(refused)),
+    };
     if let Err(refused) = header_ladder::anchor(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
@@ -708,6 +722,7 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
             weights,
             emission: paid,
             archival,
+            admitted,
             pow,
         },
     );

@@ -82,7 +82,8 @@ use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
 use shekyl_chain_rules::{
-    Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant, SettlementCheck,
+    BundleUnanswered, Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant,
+    SettlementCheck,
 };
 use shekyl_units::AtomicUnits;
 
@@ -411,6 +412,30 @@ pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
         Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
             epoch,
             observed: FrozenFault::Absent,
+        },
+        // Admitting a block's section, the bundle view did not answer for
+        // a block it holds (`SO-D12` 4b, C3). Each reason is the row the
+        // store's own bundle view arms when it finds the same hole: the
+        // memo miss (SI-35), the commitment (SI-38), an index past `D`
+        // (SI-37); a missing draw row or block hash below the tip is the
+        // dense-range hole, SI-7 on its cell.
+        Corrupt::BundleUnanswered { including, why } => match why {
+            BundleUnanswered::DrawableEpoch { epoch } => StoreInvariant::DrawableMemoMiss { epoch },
+            BundleUnanswered::DrawCommitment { height } => {
+                StoreInvariant::DrawCommitmentUnreadable { height }
+            }
+            BundleUnanswered::Draw { draw } => StoreInvariant::DrawableIndexPastSet {
+                height: including,
+                index: u64::from(draw),
+            },
+            BundleUnanswered::DrawCount { .. } => StoreInvariant::CellCorrupt {
+                key: "archival_block_draws",
+                fault: CellFault::Absent,
+            },
+            BundleUnanswered::BlockHash { .. } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Absent,
+            },
         },
     }
 }

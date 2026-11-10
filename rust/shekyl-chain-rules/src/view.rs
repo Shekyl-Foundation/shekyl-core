@@ -330,6 +330,31 @@ pub trait HeaderView<'id> {
 /// (DRS-E5) that also knows the pool's own key images implements this trait
 /// over an inner view; this crate never names it.
 pub trait ChainView<'id>: HeaderView<'id> {
+    /// What admission reads a block's bundle section against: this view at
+    /// `h_incl`, with `D` read from `memo` (`SO-D12` 4b).
+    ///
+    /// A method of the chain view, not a second argument beside it, so the
+    /// reads that admit a bundle are this view's: a verdict judged here
+    /// connects only under this view (the brand above), and its admissions
+    /// were read from the same batch. The store returns its
+    /// `StoreBundleView`; a pool decorator returns its inner view's.
+    ///
+    /// The view reads `memo` and does not rebuild it: `validate` files the
+    /// epochs the block's window names before it asks. A view that cannot
+    /// answer answers `None` or faults. It never answers a value that would
+    /// refuse a block it has no rows for.
+    type Bundles<'m>: crate::archival::BundleView<Fault = Self::Fault>
+    where
+        Self: 'm;
+
+    /// [`Self::Bundles`] at `h_incl`, over `memo`.
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m crate::archival::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m>;
+
     /// Whether `key_image` has been spent on the recorded chain.
     ///
     /// CEN-I7 (chain-wide key-image uniqueness); the chain half of CEN-L1.

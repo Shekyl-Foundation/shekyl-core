@@ -6,13 +6,14 @@
 //! §2; `SO-D12` S2, ruled 2026-11-01, option 1).
 //!
 //! **STAGED.** Nothing on the connect path calls this. It joins the
-//! transition with admission at the switch (`SO-D12` 4b §5.3): before
-//! then nothing is admitted on chain, so every scheduled seat would read
-//! as unfiled and every tree would be carried onto nearly every block (G3
-//! of item 3's brief). Named consumer: the switch's transition, which
-//! writes the carried seats in the block's seat row and the counters in
-//! `archival_support_unissued`. Falsifier:
-//! `nothing_on_the_connect_path_calls_the_bundle_verifier`, which lists
+//! transition at the switch's C5 (`SO-D12` 4b §5.3), after admission went
+//! live at C3: before admission nothing was admitted on chain, so every
+//! scheduled seat would have read as unfiled and every tree would have
+//! been carried onto nearly every block (G3 of item 3's brief). Named
+//! consumer: the switch's transition, which writes the carried seats in
+//! the block's seat row and the counters in `archival_support_unissued`.
+//! Falsifier: `nothing_on_the_connect_path_fills_a_section_or_carries_a_seat`,
+//! which lists
 //! [`seats_with_carry`] and [`SupportCarry`]. Admission does not consult
 //! it either: the stored row is compared for equality to the seats the
 //! transition wrote

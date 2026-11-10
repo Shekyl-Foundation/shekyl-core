@@ -96,15 +96,18 @@ DEFAULT_SRC = REPO / "rust" / "shekyl-chain-rules" / "src"
 # `Corrupt`, and none consumes one.
 CORRUPT_CAPABLE: dict[str, str] = {
     # Empty: no block rule reads a view in a way that can halt the writer.
-    # CEN-B4's record arm was the last (`SO-D12` 4b, C1); a rule that gains
-    # a `Corrupt` path is added here, with the read its halt comes from.
+    # CEN-B4's record arm was the last (`SO-D12` 4b, C1), and B4 left at C3.
+    # A rule that gains a `Corrupt` path is added here, with the read its
+    # halt comes from.
 }
 
 # Fewer rule impls than this, summed over every derived form, and the walk did
-# not find the crate (15 at DRS-E5 a2: 11 `BlockRule`, 4 `HeaderRule`). A
-# whole form going unread drops the count by at least four; this floor sees
-# that, and the self-assertion above sees it by signature first.
-MIN_BLOCK_RULES = 14
+# not find the crate (13 at the switch's C3: 9 `BlockRule`, 4 `HeaderRule`;
+# CEN-B4 left as a rule type, its successors J29–J37 run through
+# `rules::bundle_admission::admit`, which is not a `BlockRule`). A whole form
+# going unread drops the count by at least four; this floor sees that, and
+# the self-assertion above sees it by signature first.
+MIN_BLOCK_RULES = 13
 
 # The lifting function every parent-side read goes through (`rules/mod.rs`);
 # its absence from the set means the signature walk is not reading signatures.
@@ -695,7 +698,7 @@ def selftest() -> None:
     p.red("B4 impl gone", no_b4, "has no rule impl: stale")
     p.red("no impls", {"rules/mod.rs": _TRAITS + _BLANKET + _MOD}, "no rule impl found", subject=True)
     p.red("too few impls", _synthetic(n_plain=2, n_header=0), "block rules found", subject=True)
-    p.red("too few impls across forms", _synthetic(n_plain=6, n_header=6), "block rules found",
+    p.red("too few impls across forms", _synthetic(n_plain=5, n_header=6), "block rules found",
           subject=True)
     p.red("no lifters", _synthetic(mod="pub fn x() -> u8 { 0 }", err="V::Fault", anchor="",
                                    b4_body=_PLAIN, traits="", blanket="", n_header=0),

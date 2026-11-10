@@ -337,13 +337,13 @@ census_rows! {
         // what `held_by_store` names; `enforced_at` would be a site here.
         A1 held_by_store("shekyl-chain-ingest", "an_arrival_this_node_holds_is_already_held"),
         A2 implemented(crate::rules::topology::A2),
-        // A3: subsumed by B4's empty-section arm — never its own rule
-        // (slice 1 Q3). The validator has no sidecar-less entry to guard:
-        // `Candidate::bundle_references` is the one door, and B4 judges
-        // `None` as the empty section against the header root, so a
-        // non-empty root with nothing supplied refuses as B4. The second
+        // A3: subsumed by the section's root check (CEN-J29) — never its
+        // own rule (slice 1 Q3). The validator has no sidecar-less entry to
+        // guard: `Candidate::bundle_references` is the one door, and `None`
+        // is the empty section, whose root is the one J29 compares, so a
+        // non-empty root with nothing supplied refuses as J29. The second
         // guard the C++ needed is unrepresentable.
-        A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
+        A3 by_construction(crate::block::Candidate, "j29_a_non_empty_root_with_no_references_is_refused"),
         A4 held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored"),
         // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
         // no `Block` exists that the parser refused, so no rule sees one.
@@ -362,7 +362,12 @@ census_rows! {
         // The rules crate imports no store, so the holder is the store's
         // (E5-18, as K1a/K2/K3/K8).
         B3 held_by_store("shekyl-chain-store", "a_fakechain_verdict_is_refused_under_genesis_in_force"),
-        B4 implemented(crate::rules::attestation::B4),
+        // B4 left this registry with the switch's C3 (`SO-D12` 4b,
+        // 2026-11-09): the header's root is the bundle section's, judged by
+        // CEN-J29 through J37 (`rules::bundle_admission`), its successors
+        // (`SCS-P16`, `SCS-P34`). The coinbase extra B4 also parsed is
+        // CEN-I19's, and the `0x0B` set it held empty is CEN-I20's: both
+        // in `form`, at the miner slot.
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition
@@ -565,23 +570,22 @@ census_rows! {
         J24 implemented(crate::rules::tx_emission::J24),
         J25 implemented(crate::rules::tx_emission_against::J25),
         J26 implemented(crate::rules::tx_emission_against::J26),
-        // J29–J37 (minted 2026-10-12, STAGED): the serve-credit bundle's
-        // admission checks, a block-level section (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
-        // §9.1). The pure verifier is built, and increment 4a adds the rule
-        // types `rules::bundle_admission::J29` through `J37`. They are not
-        // bound: no `implemented` entry names them, nothing on the connect
-        // path calls `judge_bundles`, and each row stays `pending` until 4b.
+        // J29–J37 (minted 2026-10-12; implemented 2026-11-09, the switch's
+        // C3): the serve-credit bundle's admission checks, a block-level
+        // section (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1). `validate` runs
+        // them through `rules::bundle_admission::admit`, at the slot B4
+        // held; J29's and J31's stateless half also runs in `bind_body`.
         // J28 is filed with the bond-post key-shape rows above. J17 stays
         // unregistered (bucket 3).
-        J29 pending,
-        J30 pending,
-        J31 pending,
-        J32 pending,
-        J33 pending,
-        J34 pending,
-        J35 pending,
-        J36 pending,
-        J37 pending,
+        J29 implemented(crate::rules::bundle_admission::J29),
+        J30 implemented(crate::rules::bundle_admission::J30),
+        J31 implemented(crate::rules::bundle_admission::J31),
+        J32 implemented(crate::rules::bundle_admission::J32),
+        J33 implemented(crate::rules::bundle_admission::J33),
+        J34 implemented(crate::rules::bundle_admission::J34),
+        J35 implemented(crate::rules::bundle_admission::J35),
+        J36 implemented(crate::rules::bundle_admission::J36),
+        J37 implemented(crate::rules::bundle_admission::J37),
         // 4.K Reorg / alternative chains (DRS-E5 slice 9, the alt tier).
         // The store holds what its structures make true — the chain's root
         // and linkage (K1a, K2), a held hash refused at insert (K3), no

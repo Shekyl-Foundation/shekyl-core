@@ -165,6 +165,7 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
         | Corrupt::HoleBelowTip { at, .. }
         | Corrupt::RelayFloorUnpriceable { at, .. } => *at,
         Corrupt::DrawCount { height, .. } => *height,
+        Corrupt::BundleUnanswered { including, .. } => *including,
         Corrupt::CumulativeDifficultyOverflow
         | Corrupt::BurnExceedsEmission { .. }
         | Corrupt::LeafNotConstructible { .. }

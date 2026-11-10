@@ -167,9 +167,8 @@ pub enum Mutation {
     WrongRoot,
     /// `bundle_root` replaced, nothing else: no references, no `0x0B`
     /// field, so the section is empty and the mined root is not the empty
-    /// section's. CEN-B4's empty-section arm — CEN-A3's falsifier — at the
-    /// block. CEN-I20's coinbase grammar admits no `0x0B` field, so no
-    /// driven block carries a record to corrupt.
+    /// section's: CEN-J29's root check over the empty section — CEN-A3's
+    /// falsifier — at the block.
     WrongBundleRoot,
     /// `timestamp` = `clock + FTL + 1`: one second past the future-time
     /// limit the substrate's clock allows. Closes §5's FTL row.
@@ -352,7 +351,7 @@ impl Mutation {
             Self::HeaderVersion => CenRow::B1,
             Self::Orphan => CenRow::A2,
             Self::WrongRoot => CenRow::B5,
-            Self::WrongBundleRoot => CenRow::B4,
+            Self::WrongBundleRoot => CenRow::J29,
             Self::FutureTimestamp => CenRow::C1,
             Self::StaleTimestamp => CenRow::C2,
             Self::PowUnderWrongSeed => CenRow::D1,
