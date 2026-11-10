@@ -119,9 +119,10 @@
 //! **The 30 MB figure is RECORDS-WAS, and the value it refuted is gone
 //! (2026-09-12).** `2 × 50 × LTEM` was the ceiling under the inherited ×50.
 //! This extrapolation is what fired against that value: C2-R2 Q3 struck ×50 as
-//! REFUTED-not-superseded and re-derived **S = 4**, now implemented and
+//! REFUTED-not-superseded; the signed value is **S = 3** (C2-R2 Q3,
+//! re-signed 2026-11-08, an Assumption — see the interim below),
 //! single-sourced in `config/consensus_constants.json`. The reachable ceiling
-//! is therefore `2 × 4 × LTEM` = **2.4 MB at launch**, which sits INSIDE the
+//! is therefore `2 × 3 × LTEM` = **1.8 MB at launch**, which sits INSIDE the
 //! measured span rather than 6.25× beyond it. The 30 MB extrapolation is kept
 //! because it is the evidence, not because it describes a state the chain can
 //! now enter — do not read it as the current bound.
@@ -217,7 +218,7 @@
 //! re-derivation target is the surge factor, not the zone); what the
 //! floor device measures remains GAP-7's open half. **That re-derivation
 //! has since happened (2026-09-12): the condition fired, ×50 was struck,
-//! and S = 4 is ratified and implemented — so the ≈ 48 % of a block
+//! and the signed S (now 3) is implemented — so the ≈ 48 % of a block
 //! interval below is the cost of a block the consensus rules no longer
 //! admit. At the ratified ceiling the same extrapolation lands inside the
 //! measured span.** The paragraph is kept as the measurement that forced
@@ -303,11 +304,13 @@
 //! RandomX 1.2845 s per block, `surge_max = (f·T − RandomX) / (zone fill)`
 //! at f·T = 40 s, and the §85.3 depth slope (3.76 ms per layer at 1 input).
 //! The tiers are ≈ 6.42 at d2, ≈ 5.61 at d7 and **≈ 3.93 at d24**, against
-//! the C++-term composition below (6.52 / 5.69 / 3.97). The signed ×4 is the
-//! d24 figure, so it sits above its own bound. The conservative bracket, the
-//! folded lone proof (18.84 ms) in place of the batched term, is ≈ 5.75 at
-//! d2, ≈ 5.10 at d7 and **≈ 3.67 at d24**. The other terms are still the
-//! September capture's; BA-T10 re-runs the full sweep and re-derives S.
+//! the C++-term composition below (6.52 / 5.69 / 3.97). Both put 4 above
+//! the bound the d24 tier sets. The conservative bracket, the folded lone
+//! proof (18.84 ms) in place of the batched term, is ≈ 5.75 at d2, ≈ 5.10
+//! at d7 and **≈ 3.67 at d24**. **The signed S is 3, the integer below that
+//! bracket** (C2-R2 Q3, re-signed 2026-11-08 per Rick's ruling): an
+//! Assumption, because the other terms are still the September capture's;
+//! BA-T10 re-runs the full sweep, the depth sweep included, and re-derives S.
 //!
 //! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
 //! one-point comparison against the shipping configuration (generic
