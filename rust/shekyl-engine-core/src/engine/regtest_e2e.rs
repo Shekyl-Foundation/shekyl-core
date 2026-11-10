@@ -185,6 +185,52 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
+    /// The unanswered loopback port a [`Peering::Listening`] daemon dials.
+    /// Held for the daemon's life, including a restart on the same recipe,
+    /// so the closed-peer address in that recipe is still this socket.
+    /// `None` for every other peering.
+    unanswered: Option<UnansweredPort>,
+}
+
+/// How many times a port probe may draw `:0` before the reserved set is
+/// treated as exhausted. The kernel can hand back a number already reserved.
+const PORT_DRAW_LIMIT: u32 = 64;
+
+/// A loopback TCP port this harness bound and never accepts.
+///
+/// A [`Peering::Listening`] daemon's closed peer is this port, on
+/// `127.0.0.1`, the same host as the daemon and as the partner that dials
+/// it. The first dial completes its TCP handshake into the backlog and
+/// fails at the dial deadline. Once the partner's session is up, the host
+/// is held and the refused port is not dialed again (Rick, 2026-11-09).
+struct UnansweredPort {
+    listener: std::net::TcpListener,
+}
+
+impl UnansweredPort {
+    /// Bind `127.0.0.1:0` on a port that is none of `reserved`, and keep
+    /// the listener. A draw that lands in `reserved` is dropped and tried
+    /// again.
+    fn bind_excluding(reserved: &[u16]) -> Self {
+        for _ in 0..PORT_DRAW_LIMIT {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .expect("bind an unanswered loopback port");
+            let port = listener.local_addr().expect("local_addr").port();
+            if !reserved.contains(&port) {
+                return Self { listener };
+            }
+        }
+        panic!("could not bind an unanswered port distinct from {reserved:?}");
+    }
+
+    fn port(&self) -> u16 {
+        self.listener.local_addr().expect("local_addr").port()
+    }
+
+    /// The closed-peer spelling the daemon is given: loopback, this port.
+    fn peer(&self) -> String {
+        std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, self.port()).to_string()
+    }
 }
 
 /// How a spawned daemon takes part in peer-to-peer.
@@ -207,17 +253,26 @@ enum Peering {
     /// runs. `--tor off` declines the managed Tor, so the node is
     /// clearnet-only and a local origin takes the stem slot, not a hidden
     /// own-edge.
-    Linked {
+    Linked { p2p_port: u16, peer_p2p_port: u16 },
+    /// Bound on loopback, the far side of a [`Peering::Linked`] daemon.
+    ///
+    /// Every daemon here is on `127.0.0.1`, one host, and the dialer dials
+    /// no host it already holds a session with (Rick, 2026-11-09). Two
+    /// daemons that each dial the other therefore hold one session, in the
+    /// direction of whichever dial lands first, a start-up race. A rig
+    /// that needs the session's direction, a stem successor or a fresh
+    /// incoming handshake, makes one end listen. Its closed list names an
+    /// [`UnansweredPort`] on `127.0.0.1`, so it is still the operator
+    /// naming a closed network (`Declaration::Closed`, CS-Q2 step 8) and
+    /// dials no seed. Once the partner's session is up, that host is held
+    /// and the unanswered port is not dialed again.
+    Listening {
         p2p_port: u16,
-        peer_p2p_port: u16,
-        /// `--dev-sync off`: the daemon requests nothing (`Requesting::Off`)
-        /// and follows its peer by announcements alone. It is synchronized
-        /// at the tip like any closed node (CS-Q2 step 8), but once its
-        /// peer mines ahead it cannot fetch the chain and stays `Behind`,
-        /// and a node that is behind ignores every transaction a peer sends
-        /// it. Observed 2026-11-01: synced at heights 1 and 2, then behind
-        /// while its peer mined to 70, ignoring the stem transaction.
-        sink: bool,
+        /// `false` is `--dev-sync off`: the daemon requests nothing
+        /// (`Requesting::Off`) and follows its peer by announcements alone,
+        /// which keeps it at its peer's tip. It still admits a transaction
+        /// a peer sends it.
+        requests: bool,
     },
     /// Bound on loopback and dialling exactly `peers`, two simulated
     /// peers' listening addresses (the stem width) (`regtest_e2e_peer.rs`): the closed list
@@ -286,6 +341,11 @@ struct RegtestSpawn {
     /// Another daemon binary than `SHEKYLD_BIN`: a released version, for a
     /// mixed-version walk.
     binary: Option<PathBuf>,
+    /// Ports already claimed by daemons this spawn must not bind. A
+    /// partner port allocated with [`RegtestDaemon::free_port`] and not
+    /// yet bound can otherwise come back as this daemon's RPC port, its
+    /// view listener, or the unanswered closed peer.
+    taken: Vec<u16>,
 }
 
 impl RegtestSpawn {
@@ -300,7 +360,15 @@ impl RegtestSpawn {
             mine_address: None,
             keep_data: false,
             binary: None,
+            taken: Vec::new(),
         }
+    }
+
+    /// Ports this spawn must not draw. A later partner's p2p port,
+    /// allocated and released before this spawn, belongs here.
+    fn with_ports_taken(mut self, ports: impl IntoIterator<Item = u16>) -> Self {
+        self.taken.extend(ports);
+        self
     }
 
     /// Spawn `binary` instead of `SHEKYLD_BIN`.
@@ -471,7 +539,7 @@ impl RegtestDaemon {
     /// daemon binding is unchanged; this only removes the self-collision,
     /// which is the part we create.)
     fn free_port_excluding(taken: &[u16]) -> u16 {
-        for _ in 0..64 {
+        for _ in 0..PORT_DRAW_LIMIT {
             let port = Self::free_port();
             if !taken.contains(&port) {
                 return port;
@@ -595,6 +663,7 @@ impl RegtestDaemon {
             mine_address,
             keep_data,
             binary,
+            taken,
         } = spec;
         install_wallet_tracing();
 
@@ -605,16 +674,27 @@ impl RegtestDaemon {
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
-                ..
             } => vec![*p2p_port, *peer_p2p_port],
+            Peering::Listening { p2p_port, .. } => vec![*p2p_port],
             Peering::Closed { p2p_port, peers } => {
                 let mut ports = vec![*p2p_port];
                 ports.extend(peers.iter().map(std::net::SocketAddrV4::port));
                 ports
             }
         };
-        let p2p_ports = p2p_ports.as_slice();
-        let rpc_port = Self::free_port_excluding(p2p_ports);
+        let mut reserved = taken;
+        reserved.extend(p2p_ports);
+        // A listening daemon dials an unanswered port on this host. Bind
+        // it before the RPC ports are drawn, and keep it out of that draw:
+        // the kernel would otherwise hand the closed-peer port back as
+        // the RPC listener.
+        let unanswered = matches!(peering, Peering::Listening { .. })
+            .then(|| UnansweredPort::bind_excluding(&reserved));
+        if let Some(held) = unanswered.as_ref() {
+            reserved.push(held.port());
+        }
+        let closed_peer = unanswered.as_ref().map(UnansweredPort::peer);
+        let rpc_port = Self::free_port_excluding(&reserved);
         let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
@@ -677,7 +757,6 @@ impl RegtestDaemon {
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
-                sink,
             } => {
                 cmd.args([
                     "--clearnet-listen",
@@ -685,7 +764,17 @@ impl RegtestDaemon {
                     "--p2p-closed-peer",
                     &format!("127.0.0.1:{peer_p2p_port}"),
                 ]);
-                if sink {
+            }
+            Peering::Listening { p2p_port, requests } => {
+                cmd.args([
+                    "--clearnet-listen",
+                    &format!("127.0.0.1:{p2p_port}"),
+                    "--p2p-closed-peer",
+                    closed_peer
+                        .as_deref()
+                        .expect("a listening spawn holds its unanswered port"),
+                ]);
+                if !requests {
                     cmd.args(["--dev-sync", "off"]);
                 }
             }
@@ -697,7 +786,7 @@ impl RegtestDaemon {
             }
         }
         let restricted_port = restricted_listener.then(|| {
-            let mut taken = p2p_ports.to_vec();
+            let mut taken = reserved.clone();
             taken.push(rpc_port);
             Self::free_port_excluding(&taken)
         });
@@ -755,6 +844,7 @@ impl RegtestDaemon {
             keep_data,
             _serial: serial,
             recipe,
+            unanswered,
         };
         daemon.await_ready().await;
         daemon
@@ -1379,6 +1469,9 @@ impl Drop for RegtestDaemon {
     fn drop(&mut self) {
         drop(self.child.kill());
         drop(self.child.wait());
+        // The unanswered port outlives the process: the recipe's closed
+        // peer is this socket until the daemon has exited.
+        drop(self.unanswered.take());
         drop(std::fs::remove_dir_all(&self.config_dir));
         // The DX-Q8 capture asks to keep the directory (`start_keeping_data`).
         // A failing test keeps it too: the daemon's logs are the evidence

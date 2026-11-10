@@ -43,16 +43,23 @@ use super::*;
 /// sink. A transaction the origin's own wallet submits is a local origin, and
 /// a local origin takes the stem slot whatever the epoch draw
 /// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
-/// records it `stem`, embargoed. The sink runs `--dev-sync off`: it
-/// requests nothing and follows the origin by announcements alone, so once
-/// the origin has mined ahead (every walk here mines a coinbase to
-/// maturity before it spends) the sink is `Behind` and ignores the
-/// transaction on receipt, and nothing fluffs it back. It stays `stem` on
-/// the origin until the origin's own embargo expires. The flag is
-/// load-bearing: a second daemon that requests the chain catches up,
-/// stems the transaction straight back (its outbound session to the
-/// origin is a stem successor), the origin upgrades the second arrival to
-/// fluff, and the hold is over in seconds.
+/// records it `stem`, embargoed. The sink admits it
+/// (`restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
+/// asserts that) and has nowhere to send it. Its only session is the
+/// origin's, the one the stem arrived on: a stem goes out on an outbound
+/// session other than its source, and a fluff to every peer but its source.
+/// The sink's closed peer is an unanswered port on `127.0.0.1`
+/// (`Peering::Listening`). Once the origin's session is up, that host is
+/// held and the sink does not dial it again (Rick, 2026-11-09), so the
+/// pair holds one session, the origin's. A sink that dialed the origin
+/// first would take that session and leave the origin no stem successor.
+/// The transaction stays `stem` on the origin until the origin's own
+/// embargo expires. A second
+/// session between the two would carry the stem straight back, the origin
+/// would take the second arrival as a fluff, and the hold would be over in
+/// seconds. The sink also runs `--dev-sync off`: it requests nothing and
+/// follows the origin by announcements alone, which still keeps it at the
+/// origin's tip.
 ///
 /// **What the rig does not fix.** The embargo is a draw (geometric, mean
 /// 190 s on clearnet) with no lever, so a short one can end mid-assertion.
@@ -110,11 +117,14 @@ impl StemSinkPair {
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
-            p2p_port: sink_p2p,
-            peer_p2p_port: origin_p2p,
-            sink: true,
-        }))
+        let sink = RegtestDaemon::spawn(
+            RegtestSpawn::new(None)
+                .with_ports_taken([origin_p2p])
+                .with_peering(Peering::Listening {
+                    p2p_port: sink_p2p,
+                    requests: false,
+                }),
+        )
         .await;
         let origin = RegtestDaemon::spawn(
             RegtestSpawn::new(Some(serial))
@@ -123,7 +133,6 @@ impl StemSinkPair {
                 .with_peering(Peering::Linked {
                     p2p_port: origin_p2p,
                     peer_p2p_port: sink_p2p,
-                    sink: false,
                 }),
         )
         .await;

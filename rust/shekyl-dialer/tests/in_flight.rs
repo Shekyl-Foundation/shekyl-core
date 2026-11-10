@@ -131,13 +131,11 @@ fn concurrent_dials_never_share_an_address_or_a_clearnet_host() {
         }
         let mut attempts = Attempts::new();
         let empty_sessions = BTreeSet::new();
-        let empty_hosts: BTreeSet<Host> = BTreeSet::new();
         let mut drawn: Vec<NetworkAddress> = Vec::new();
         for _ in 0..IN_FLIGHT {
             let filter = CandidateFilter {
                 own: &[],
                 sessions: &empty_sessions,
-                outbound_hosts: &empty_hosts,
                 attempts: &attempts,
             };
             let pick = list
@@ -178,7 +176,6 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
     }
     let mut attempts = Attempts::new();
     let empty_sessions = BTreeSet::new();
-    let empty_hosts: BTreeSet<Host> = BTreeSet::new();
     // Completion second -> the dials that end then.
     let mut ending: BTreeMap<u64, Vec<(NetworkAddress, DialAim)>> = BTreeMap::new();
     let mut kept: Vec<NetworkAddress> = Vec::new();
@@ -204,7 +201,6 @@ fn fill_share(bound: usize, attacker_share: f64, seed: u64) -> f64 {
         let filter = CandidateFilter {
             own: &[],
             sessions: &empty_sessions,
-            outbound_hosts: &empty_hosts,
             attempts: &attempts,
         };
         let gray_candidates = list.gray_candidates(CLEARNET, &mut |a| filter.admits(a));
