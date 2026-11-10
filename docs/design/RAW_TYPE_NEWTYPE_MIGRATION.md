@@ -296,7 +296,7 @@ crypto and less prone to the cross-domain confusion that bites the wallet path.
 - `HybridSignature` & `HybridPublicKey.ml_dsa` blobs ([`signature.rs:28,49-50`](../../rust/shekyl-crypto-pq/src/signature.rs))
 - `DleqProof.{c,s}` ([`dleq.rs:28`](../../rust/shekyl-proofs/src/dleq.rs))
 - `ml_kem_ct` / `x25519_eph_pk` ([`tx_proof.rs:230-231`](../../rust/shekyl-proofs/src/tx_proof.rs))
-- FROST shares/keys ([`frost_sal.rs`](../../rust/shekyl-fcmp/src/frost_sal.rs), [`frost_dkg.rs:232`](../../rust/shekyl-fcmp/src/frost_dkg.rs))
+- FROST shares/keys ([`frost_sal.rs`](../../rust/shekyl-fcmp/src/frost_sal.rs))
 - Selene leaf x-coords ([`leaf.rs:55-59`](../../rust/shekyl-fcmp/src/leaf.rs))
 
 ## 9. Explicitly out of scope

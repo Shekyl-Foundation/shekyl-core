@@ -25,8 +25,10 @@
 //! secret.
 //!
 //! Byte validity of the scalars and points (canonical, on the curve) is
-//! checked where they are used — the scanner and the FROST key share — so
-//! this crate takes no curve dependency, as `shekyl-address` takes none.
+//! checked where they are used — the scanner, and the FROST key share
+//! (`shekyl_fcmp::frost_sal::threshold_keys`, which also turns the 0-based
+//! `member_index` into the 1-based FROST participant) — so this crate takes
+//! no curve dependency, as `shekyl-address` takes none.
 //!
 //! Layout, version 1:
 //!
