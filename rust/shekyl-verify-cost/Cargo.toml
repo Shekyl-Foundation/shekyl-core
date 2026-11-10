@@ -43,6 +43,13 @@ criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 rand_chacha = { workspace = true }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# The drift gate signs under a seeded ML-DSA nonce: a hedged signature
+# differs every run, and the count with it. `sign_with_ml_dsa_seed` is
+# `test-utils` surface, so it rides this dev edge only, as in
+# `shekyl-tx-builder`'s `transfer_e2e_iai`; `fips204` serialises the
+# derived ML-DSA key. Both are already in the lockfile.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+fips204 = "0.4.6"
 
 [[bench]]
 name = "relay_admission_verify"

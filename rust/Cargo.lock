@@ -5565,6 +5565,7 @@ dependencies = [
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
  "ec-divisors",
+ "fips204",
  "gungraun",
  "helioselene",
  "multiexp",
