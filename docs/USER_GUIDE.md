@@ -734,9 +734,9 @@ The full staking surface is live in interactive `shekyl-cli` (type
 - **Work in progress and endings:** `stake` also lists each stake, reward
   claim, return or release still in progress, and how each last ended if it
   did not complete, with the amount each one holds. A node can refuse one; it
-  is then never sent again, and what it holds stays set aside until the
+  is then never sent again, and the record stays until the
   height `stake` shows, because only the chain can say whether it was mined.
-  If it was not, the funds come back on their own after that height, with
+  If it was not, what it holds comes back on its own after that height, with
   nothing to do and no fee. A zero-fee reward claim holds nothing. Once you have
   read the endings `stake` showed, `stake acknowledge <stake|claim|return|release>`
   clears those of that kind; an ending that arrives later stays until you

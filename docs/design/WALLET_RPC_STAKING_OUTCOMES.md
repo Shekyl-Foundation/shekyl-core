@@ -644,9 +644,10 @@ including the empty and the partly spent reservation.
   `ended_unconfirmed`, with the daemon's reason kept.
 - **What it costs.** The `reference_height` field on all four kinds (the
   one shared v13 bump), with the terminal verdict seen, if any. A refused
-  stake, claim, drain or exit holds its funds until about a day after its
-  end date, and then reports `rejected` with its reason (the zero-fee
-  claim holds none and reports `ended_unconfirmed`).
+  stake, claim, drain or exit keeps the record until about a day after its
+  end date. What it still holds is `reserved` (WR-Q6): zero when the
+  record reserved nothing. It then reports `rejected` with its reason
+  (the zero-fee claim holds none and reports `ended_unconfirmed`).
 
 **The exit's "fate unknown" gets an end.** `unstake`'s
 `-29522 UNSTAKE_FATE_UNKNOWN` today has no way to resolve. Its message

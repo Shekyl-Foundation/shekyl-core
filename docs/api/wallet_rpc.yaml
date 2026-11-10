@@ -2988,19 +2988,22 @@ components:
             Values at this contract version. `pending`: saved, not yet
             sent. `dispatched`: sent and still able to land. `refused`: a
             node refused it and its end date has not passed. Not final:
-            nothing more is sent, what it holds (`reserved`, which is "0"
-            for a zero-fee claim) stays set aside until funds_return_at, and a stake that lands before then takes the
-            confirmed path, because only the chain can say whether it
-            landed; the refusal becomes an outcome only at the end date.
-            `expired`: the end date has passed, so the transaction can
-            never be mined; what it holds returns at funds_return_at, and a
-            record a node refused keeps its reason. `held`: a stake past its end date whose every
-            reserved input has been spent with no confirmation seen; it is
-            kept rather than withdrawn, so a stake that did land keeps its
-            place, nothing is returned because nothing reserved is left,
-            and the wallet raises an integrity alarm. A record that lands
-            leaves the list without an outcome; its effect shows in the
-            balance.
+            nothing more is sent, and the record stays until
+            funds_return_at, because only the chain can say whether it
+            landed. What it still holds is `reserved`, which is "0" when
+            the record reserved nothing, as a zero-fee claim does. A stake
+            that lands before the end date takes the confirmed path; the
+            refusal becomes an outcome only at the end date. `expired`:
+            the end date has passed, so the transaction can never be
+            mined; what the record holds (`reserved`) returns once
+            pscan_synced_height passes funds_return_at, and a record a
+            node refused keeps its reason. `held`: a stake past its end
+            date whose every reserved input has been spent with no
+            confirmation seen; it is kept rather than withdrawn, so a
+            stake that did land keeps its place, nothing is returned
+            because nothing reserved is left, and the wallet raises an
+            integrity alarm. A record that lands leaves the list without
+            an outcome; its effect shows in the balance.
         dispatched_at_height:
           type: integer
           format: int64
