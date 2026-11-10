@@ -822,7 +822,8 @@ impl Unposted {
             Self::Store(store)
             | Self::Template(
                 NoTemplate::Facts(FactsStop::Read(ViewRead::View(store)))
-                | NoTemplate::Claim(ClaimStop::Store(store)),
+                | NoTemplate::Claim(ClaimStop::Store(store))
+                | NoTemplate::Section(Fault::View(store)),
             ) => {
                 shared.fail(ServiceFault::Store(store));
                 why(Unbuilt::StoreFault)
@@ -841,10 +842,6 @@ impl Unposted {
             }
             // The section's reads are the snapshot's, as the facts are: a
             // store fault stops the service, and so does a corrupt set.
-            Self::Template(NoTemplate::Section(Fault::View(store))) => {
-                shared.fail(ServiceFault::Store(store));
-                why(Unbuilt::StoreFault)
-            }
             Self::Template(NoTemplate::Section(Fault::Corrupt(corrupt))) => {
                 crate::service::record_store_read(shared, ViewRead::Corrupt(corrupt));
                 why(Unbuilt::StoreCorrupt)

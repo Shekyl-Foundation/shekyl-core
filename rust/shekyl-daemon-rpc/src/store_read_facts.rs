@@ -427,7 +427,7 @@ impl ChainReadFacts for StoreFacts {
                 block,
                 txs,
                 bundle_references: references
-                    .map(|section| section.into_inner())
+                    .map(shekyl_types::archival::BundleReferences::into_inner)
                     .unwrap_or_default(),
                 bundle_bodies,
             });
