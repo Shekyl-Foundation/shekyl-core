@@ -382,6 +382,12 @@ impl HybridEd25519MlDsa {
     }
 }
 
+/// Width of the seed [`HybridEd25519MlDsa::sign_with_ml_dsa_seed`] passes to
+/// ML-DSA's `try_sign_with_seed`. Production [`SignatureScheme::sign`] does
+/// not take this seed; ML-DSA draws its own nonce.
+#[cfg(any(test, feature = "test-utils"))]
+pub const ML_DSA_SIGNING_SEED_LEN: usize = 32;
+
 // Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
 // **Not** a production isolation gate: `shekyl-p-serve`'s `test-signer` feature
 // forwards `test-utils` on a normal dependency edge, and cargo feature
@@ -419,7 +425,7 @@ impl HybridEd25519MlDsa {
         secret_key: &HybridSecretKey,
         domain: &[u8],
         message: &[u8],
-        ml_dsa_seed: &[u8; 32],
+        ml_dsa_seed: &[u8; ML_DSA_SIGNING_SEED_LEN],
     ) -> Result<HybridSignature, CryptoError> {
         Self::sign_nested(secret_key, domain, message, |pk, inner| {
             pk.try_sign_with_seed(ml_dsa_seed, inner, &[])
