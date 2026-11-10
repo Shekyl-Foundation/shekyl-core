@@ -43,6 +43,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 rand_chacha = { workspace = true }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# The drift gate signs under a seeded ML-DSA nonce: a hedged signature
+# differs every run, and the count with it. `sign_pqc_auth_for_output_with_ml_dsa_seed`
+# is `test-utils` surface, so it rides this dev edge only, as
+# `shekyl-tx-builder`'s `transfer_e2e_iai` rides `sign_with_ml_dsa_seed`.
+# Already in the lockfile.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 
 [[bench]]
 name = "relay_admission_verify"

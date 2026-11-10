@@ -5,7 +5,8 @@ BA-Q3, BA-Q8, BA-Q21 and BA-Q23, and BA-Q9's hop half; BA-Q2 is done (§6). Ever
 disposition in §2 and row of §5 is a *proposal*. No workflow, baseline or
 threshold changes with this document. One tracked benchmark has been built
 since: BA-T3, the serve-path gate (§5, 2026-10-06). BA-T33's T1 arm, added
-with its row on 2026-10-09, is built; its floor arm is owed.
+with its row on 2026-10-09, is built; its floor arm is owed. BA-T1, the
+admission gate over the door's whole sequence, is built (§5, 2026-11-09).
 
 **Pins.** `shekyl-core`: verified at `dev` `63e456fb95`. `shekyl-gui-wallet`:
 branch `dev` at `447908f` (the working branch; `main` is `319517a`,
@@ -408,7 +409,7 @@ a live node.
 
 | Id | Benchmark | Tier and device | Protocol beyond the common one | Replaces or extends | Owner lane |
 | --- | --- | --- | --- | --- | --- |
-| **BA-T1** | Pool-admission verify at the modal shape: the door's whole sequence, masks and proof, the hybrid signatures and the lone range proof (BA-Q9; its own PR after #1319, before the cut) | T1, CI runner | gungraun | BA-I10 | relay privacy |
+| **BA-T1** | Pool-admission verify at the modal shape: the door's whole sequence, masks and proof, the hybrid signatures and the lone range proof (BA-Q9; its own PR after #1319, before the cut). **Built 2026-11-09**: `shekyl-verify-cost` `benches/relay_admission_verify_iai.rs`, `crypto_bench_relay_admission_verify` over `door::door_verify` (manifest §11). The signature is `sign_pqc_auth_for_output_with_ml_dsa_seed`, the wallet signer's assembly with a seeded ML-DSA nonce, and `build_door_fixture_with` owns the draw order. CEN-I17's hash derivation is outside the count, since the fixture has no finished transaction | T1, CI runner | gungraun | BA-I10 | relay privacy |
 | **BA-T2** | Block-connect verify terms: admission pair, hybrid signature, Bulletproofs+, parse, at the modal and the cost-densest shape | T1, CI runner | gungraun over the pinned fixtures | new; subject of BA-I20 | chain rules |
 | **BA-T3** | Serve one response at three shard sizes from an in-memory store; the work before the first byte at two; the chunked read-and-fold loop beside the one-shot digest at three. **Built 2026-10-06** on the single-pass serve: `shekyl-p-serve` `benches/serve_response_iai.rs`, five `crypto_bench_serve_*` functions (manifest §12; the signature's cost in its own cell since PR #1015, so a wire change cannot re-roll ML-DSA's trajectory under the serve cells) | T1, CI runner | gungraun | built (BA-G1) | archival serve |
 | **BA-T4** | Verify one fetched shard: delivery digest, hybrid check, content verification once it exists | T1, CI runner | gungraun | new (BA-G2) | archival fetch |
@@ -754,7 +755,7 @@ on review of PR #964; the change lands in its own PR.
 §72.2 to what admission runs, add the hybrid-signature and Bulletproofs+
 terms to BA-T1, and re-derive the hop from BA-T10's floor figures.
 **RULED 2026-11-08.** BA-T1 takes the signature and range-proof terms in
-its own PR, after #1319 and before the cut.
+its own PR, after #1319 and before the cut. Built 2026-11-09 (§5).
 §72.2 is amended to the Rust door's sequence. Each `SPEC_VERIFY_COST` cell
 is that sequence on the floor device: §85.3's masks-and-proof term, plus
 `n_in` hybrid signatures (971.86 µs per single-signer input at 1 input,

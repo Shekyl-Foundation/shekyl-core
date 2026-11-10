@@ -138,11 +138,17 @@ pub struct HybridCiphertext {
     pub ml_kem: Vec<u8>,
 }
 
+/// Width of [`SharedSecret`]: the HKDF OKM of the combined X25519 and
+/// ML-KEM shared secrets. Every per-output derivation reads a value of
+/// this width.
+pub const SHARED_SECRET_LEN: usize = 64;
+
 /// Combined shared secret after HKDF combination of X25519 and ML-KEM.
-/// 64 bytes: sufficient for HKDF-Expand derivation of per-output keys.
+/// [`SHARED_SECRET_LEN`] bytes: sufficient for HKDF-Expand derivation of
+/// per-output keys.
 // Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SharedSecret(pub [u8; 64]);
+pub struct SharedSecret(pub [u8; SHARED_SECRET_LEN]);
 
 impl std::fmt::Debug for SharedSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -302,7 +308,7 @@ pub(crate) fn combine_shared_secrets(
     ikm.extend_from_slice(ml_kem_ss);
 
     let hk = Hkdf::<Sha512>::new(Some(KEM_DOMAIN_SALT), &ikm);
-    let mut okm = [0u8; 64];
+    let mut okm = [0u8; SHARED_SECRET_LEN];
     hk.expand(b"", &mut okm)
         .map_err(|_| CryptoError::EncapsulationFailed("HKDF expand failed".into()))?;
 

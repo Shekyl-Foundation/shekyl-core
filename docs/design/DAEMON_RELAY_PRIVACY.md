@@ -12788,8 +12788,11 @@ measurement by a guessed factor would be §60.4's error one more time.
   runner. x86 only; not run on the Pi.
 - **Wall clock** is the `hop` input, and needs both machines.
 
-Same bench target, two consumers. Conflating them yields either a gate that
-flaps with runner hardware or a number that cannot be gated.
+Same work, two consumers. The wall clock times it term by term: the masks
+and the proof over the surface, the hybrid signature and the lone range proof
+beside it. The gate counts the door's whole sequence at the modal shape
+(BA-T1, `BENCHMARK_ALIGNMENT.md` §5). Conflating them yields either a gate
+that flaps with runner hardware or a number that cannot be gated.
 
 **The gate is pinned to the relay path, not to a primitive.** The quantity is
 what admission costs; a primitive-level bench drifts from it the moment the

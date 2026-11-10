@@ -464,12 +464,17 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
     "shekyl-crypto-pq": (
         "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
         "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature, "
-        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands.",
+        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands. "
+        "The shekyl-verify-cost dev edge (2026-11-09, BA-T1) is the pool-admission drift "
+        "gate calling sign_pqc_auth_for_output_with_ml_dsa_seed, the wallet signer's "
+        "assembly with a seeded ML-DSA nonce — the same shape as shekyl-tx-builder's "
+        "transfer_e2e_iai.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),
+            ("test-utils", "shekyl-verify-cost", "dev"),
         }),
     ),
     "shekyl-curve-generators": (
