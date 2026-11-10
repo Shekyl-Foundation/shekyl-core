@@ -773,9 +773,13 @@ line. Both are false for a zero-fee claim, which reserves nothing. The
 state cannot know what is held, so the `refused` reason now says only the
 refusal and that nothing more will be sent; `reserved` carries the funds.
 The CLI says a record holds funds that return at the end date only when
-`reserved` is above zero. At `"0"` it says the record holds nothing and
-when it is settled; at `null`, when it is settled and that the amount shows
-once the scan has run.
+`reserved` is above zero. At `"0"` with an end date it says the record
+holds nothing and stays until the staking scan passes that height. At
+`null` it says the amount shows once the scan has run, and, when there
+is an end date, that the record stays until the scan passes it. Neither
+sentence says the scan will show whether the record was mined: a
+zero-fee claim ends `ended_unconfirmed` because the scan cannot see
+whether it landed (§5).
 
 **Overflow.** The inputs are the wallet's own distinct outputs, so a sum
 past `u64` is corrupt state. The read fails closed with the staking
@@ -788,7 +792,9 @@ zero, and the redacted `Debug`); `an_in_flight_entry_carries_what_it_holds`
 `staking_info_refuses_a_reply_missing_a_required_member` (the field is
 required, `null` decodes, a JSON number does not);
 `an_in_flight_line_says_what_it_holds` (CLI: an amount, nothing, unknown,
-and on a `refused` line no claim of funds unless something is held);
+and on a `refused` line no claim of funds unless something is held, and
+neither the zero nor the unread line says the scan will show whether it
+was mined);
 `reasons_are_user_sentences_and_linkage_follows_the_send` (no `refused`
 reason says funds are set aside).
 
