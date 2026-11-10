@@ -64,7 +64,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
-use shekyl_network::envelope::{IdDomain, W64};
+use shekyl_network::envelope::{Framed64, IdDomain, W64};
 use shekyl_network::NetworkId;
 
 use crate::hash::cshake256_32;
@@ -399,7 +399,7 @@ impl BundleKept {
     /// records' bytes in order ([`BundleBody::records_bytes`]), on the
     /// network whose id is `network_id`.
     #[must_use]
-    pub fn commitment(&self, network_id: &NetworkId, records: &[u8]) -> [u8; 64] {
+    pub fn commitment(&self, network_id: &NetworkId, records: &[u8]) -> Framed64 {
         bundle_commitment(network_id, self, records)
     }
 
@@ -765,7 +765,7 @@ pub fn assemble_bundle<E>(
     kept: &BundleKept,
     records: &[BundleRecord],
     witness_public_key: &[u8; BUNDLE_WITNESS_KEY_LEN],
-    sign: impl FnOnce(&[u8; 64]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
+    sign: impl FnOnce(&Framed64) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
 ) -> Result<(BundleRef, BundleBody), E> {
     let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
     let signature = sign(&kept.commitment(network_id, &records_bytes))?;
@@ -782,13 +782,13 @@ pub fn assemble_bundle<E>(
 /// canonical width.
 pub fn sign_bundle_commitment(
     secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
-    commitment: &[u8; 64],
+    commitment: &Framed64,
 ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
     use shekyl_crypto_pq::signature::SignatureScheme as _;
     let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
         secret,
         shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
-        commitment,
+        commitment.as_bytes(),
     )?;
     signature.to_canonical_bytes().try_into().map_err(|_| {
         shekyl_crypto_pq::CryptoError::SerializationError(
@@ -819,7 +819,7 @@ pub fn sign_bundle_commitment(
 /// signature, not inside it. With the id, a witness signature made on one
 /// network verifies on no other (the signing envelope §2.4).
 #[must_use]
-pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u8]) -> [u8; 64] {
+pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u8]) -> Framed64 {
     BUNDLE_COMMITMENT.frame(network_id, [&kept.encode(), records])
 }
 

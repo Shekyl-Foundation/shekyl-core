@@ -39,7 +39,9 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
 };
 
 use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
@@ -48,7 +50,7 @@ use crate::error::ProofError;
 use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 use shekyl_crypto_pq::schnorr;
-use shekyl_network::envelope::IdDomain;
+use shekyl_network::envelope::{Framed32, IdDomain};
 use shekyl_network::NetworkId;
 
 /// The tx proof format's version, the proof's first byte. Version 3: the
@@ -135,11 +137,34 @@ fn assemble_proof_message(
     address_bytes: &[u8],
     user_message: &[u8],
     per_output_data: &[u8],
-) -> [u8; 32] {
+) -> Framed32 {
     domain.frame(
         network_id,
         [txid, address_bytes, user_message, per_output_data],
     )
+}
+
+/// Sign `message` under `domain`.
+///
+/// The caller names the Schnorr domain beside the frame it just built.
+/// [`schnorr::sign`] takes bytes; this is where a proof frame is opened.
+fn sign_framed(
+    domain: &[u8],
+    secret: &Scalar,
+    public: &EdwardsPoint,
+    message: &Framed32,
+) -> [u8; schnorr::SIG_LEN] {
+    schnorr::sign(domain, secret, public, message.as_bytes())
+}
+
+/// Whether `signature` holds for `message` under `domain`.
+fn framed_holds(
+    domain: &[u8],
+    public: &EdwardsPoint,
+    message: &Framed32,
+    signature: &[u8; schnorr::SIG_LEN],
+) -> bool {
+    schnorr::verify(domain, public, message.as_bytes(), signature)
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -248,7 +273,7 @@ pub fn generate_outbound_proof_with_secrets(
         // `ps` drops here; `ProofSecrets` is `ZeroizeOnDrop`.
     }
 
-    let msg = assemble_proof_message(
+    let message = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -262,7 +287,7 @@ pub fn generate_outbound_proof_with_secrets(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = sign_framed(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &message);
 
     let mut proof = Vec::with_capacity(OUTBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -348,7 +373,7 @@ pub fn verify_outbound_proof(
 
     let per_output_blob = &proof_bytes[OUTBOUND_HEADER_SIZE..];
 
-    let msg = assemble_proof_message(
+    let message = assemble_proof_message(
         OUTBOUND_MESSAGE,
         network_id,
         txid,
@@ -362,7 +387,7 @@ pub fn verify_outbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    if !schnorr::verify(OUTBOUND_DOMAIN, &pk_point, &msg, &sig) {
+    if !framed_holds(OUTBOUND_DOMAIN, &pk_point, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -499,7 +524,7 @@ pub fn generate_inbound_proof(
         write_per_output(*vout, ps, &mut per_output_blob);
     }
 
-    let msg = assemble_proof_message(
+    let message = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -513,7 +538,7 @@ pub fn generate_inbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr::sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = sign_framed(INBOUND_DOMAIN, &sk_scalar, &pk_point, &message);
 
     let mut proof = Vec::with_capacity(INBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -588,7 +613,7 @@ pub fn verify_inbound_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid view public key".into()))?;
 
-    let msg = assemble_proof_message(
+    let message = assemble_proof_message(
         INBOUND_MESSAGE,
         network_id,
         txid,
@@ -597,7 +622,7 @@ pub fn verify_inbound_proof(
         per_output_blob,
     );
 
-    if !schnorr::verify(INBOUND_DOMAIN, &view_pk, &msg, &sig) {
+    if !framed_holds(INBOUND_DOMAIN, &view_pk, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

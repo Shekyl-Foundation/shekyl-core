@@ -29,7 +29,7 @@ use shekyl_crypto_pq::message_signing as ms;
 use shekyl_crypto_pq::schnorr;
 use tempfile::TempDir;
 
-use crate::engine::key_actor::KeyEngineHandle;
+use crate::engine::key_actor::{KeyEngineHandle, SignMessageOuter};
 use crate::engine::lifecycle::{Credentials, EngineCreateParams};
 use crate::engine::signer::SoloSigner;
 use crate::engine::Engine;
@@ -237,7 +237,10 @@ async fn sign_message_outer_with_real_keys() {
     let (preimage, sig_pq) =
         ms::sign_message_pq_half(&master_seed, network, &segment, message).expect("pq half");
     let sig_cl = handle
-        .sign_message_outer(ms::outer_bytes(&preimage, &sig_pq))
+        .sign_message_outer(SignMessageOuter {
+            preimage,
+            sig_pq: sig_pq.clone(),
+        })
         .await
         .expect("actor signs the outer bytes");
     let armored = ms::assemble_armored(&sig_pq, &sig_cl);

@@ -52,8 +52,9 @@ pub(super) struct TestPeer {
 
 impl TestPeer {
     /// Listen on a free port of loopback address `host` and serve the first
-    /// connection. The daemon keeps one outbound session per host, so two
-    /// listening peers take two loopback hosts (`127.0.0.1`, `127.0.0.2`).
+    /// connection. The daemon dials no host it already holds a session
+    /// with, so two listening peers take two loopback hosts (`127.0.0.1`,
+    /// `127.0.0.2`).
     pub(super) fn listen(host: Ipv4Addr) -> Self {
         let listener = TcpListener::bind(SocketAddrV4::new(host, 0)).expect("bind a test peer");
         let port = listener.local_addr().expect("local addr").port();

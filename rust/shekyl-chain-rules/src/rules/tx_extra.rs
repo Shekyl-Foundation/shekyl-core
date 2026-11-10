@@ -8,22 +8,19 @@
 //! adopted from `shekyl_wire::tx_extra` (`CHAIN_RULES_SLICE_6.md` commit 3).
 //!
 //! **Adopted, not restated.** The wire crate owns the parser and both shape
-//! predicates (TXE, `TX_EXTRA_RUST_CUTOVER.md`); the C++ reaches them
-//! through one adapter, `check_tx_extra_shape` → `shekyl_tx_extra_shape_of`,
-//! from `check_tx_semantic` (`cryptonote_core.cpp`) and from the coinbase
-//! prevalidation (`blockchain.cpp`). These two rules call the same
-//! functions the adapter calls, so a grammar change is one edit in one
-//! crate and the validator cannot drift from the wire.
+//! predicates (TXE, `TX_EXTRA_RUST_CUTOVER.md`), and these two rules call
+//! them, so a grammar change is one edit in one crate and the validator
+//! cannot drift from the wire.
 //!
-//! **Where the two rows meet.** The C++ emits one refusal; the census splits
+//! **Where the two rows meet.** The wire crate returns one refusal; the census splits
 //! it by subject. I19 is the per-output PQC fields — exactly one `0x06` of
 //! `1120·n` and one `0x07` of `64·n` iff `n > 0`, each `0x07` entry's
 //! leading point canonical — and *"`tx_extra` must parse"*. I20 is the
 //! coinbase grammar, judged at [`TxSlot::Miner`](crate::TxSlot) only
 //! ([`TxScope::Coinbase`], slice 6 Q6). The census words *"off the coinbase,
 //! no `0x02` at all"* under I20; that clause is decided on a **listed**
-//! transaction, which a `Coinbase`-scoped rule never sees, and the C++ emits
-//! it from I19's site (`ExtraSubject::General`). The crate therefore refuses
+//! transaction, which a `Coinbase`-scoped rule never sees, and the wire crate
+//! refuses it from I19's site (`ExtraSubject::General`). The crate therefore refuses
 //! a stray nonce on **I19** (ruled 2026-09-25: the cell describes the rule
 //! that refuses), and the census cell moves the clause with commit 10 —
 //! citing `TXE-Q6′` from both cells, because that ruling decided the nonce's
@@ -32,11 +29,8 @@
 //! no pointer would read as unrelated. The same ruling's other half — no
 //! closed grammar off the coinbase — is a FOLLOWUPS row of its own.
 //!
-//! **Order.** In `check_tx_semantic` the shape check follows `check_outs_valid`
-//! (H7) and `outPk == vout` (H8) and precedes `check_money_overflow` (H9):
-//! `tx_form` runs I19 and I20 between H7 and H9 for the same reason it keeps
-//! the rest of the C++'s order — it decides *which* row refuses a
-//! transaction that breaks several.
+//! **Order.** `tx_form` runs I19 and I20 after H7 and before H9: the order
+//! decides *which* row refuses a transaction that breaks several.
 
 use crate::census::CenRow;
 use crate::rules::{Rule, TxContext, TxKind, TxRule, TxScope};
@@ -59,12 +53,11 @@ fn fields(cx: &TxContext<'_>) -> Option<Vec<TxExtraField>> {
 /// `0x06` KEM-ciphertext field of `1120·n` bytes and exactly one `0x07`
 /// leaf-entry field of `64·n` bytes when `n > 0`, neither when `n == 0`,
 /// every `0x07` entry's leading 32 bytes a canonical prime-order
-/// non-identity point (`PL-D3`). Every transaction, the coinbase included
-/// (`prevalidate_miner_transaction` runs the same adapter).
+/// non-identity point (`PL-D3`). Every transaction, the coinbase included.
 ///
 /// On a listed transaction the subject is [`ExtraSubject::General`], which
 /// also refuses a `0x02` nonce and a `0x0C` draw commitment — the clause
-/// the census files under I20 and the C++ emits here (module docs). On the
+/// the census files under I20 and the wire crate refuses here (module docs). On the
 /// coinbase the grammar is I20's, so this rule checks the PQC fields alone
 /// and leaves the pubkey, the nonce and the commitment to it.
 pub(crate) struct I19;
