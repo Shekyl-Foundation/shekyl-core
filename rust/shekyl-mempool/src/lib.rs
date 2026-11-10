@@ -58,6 +58,8 @@ mod relay;
 mod resolve;
 #[cfg(feature = "pool")]
 mod template;
+#[cfg(all(test, feature = "pool"))]
+mod test_paths;
 #[cfg(feature = "pool")]
 mod view;
 
