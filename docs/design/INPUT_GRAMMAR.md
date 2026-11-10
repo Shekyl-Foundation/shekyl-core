@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q90), the wire at the rename, POSED 2026-11-10 and not ruled.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -291,7 +291,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  |  | R; keeps its method set (`view` plus `submit` and `mining-work`) through RT-W10 and is re-scoped to `view` in RT-W12, with the clients that use it (RT-O33, ruled 2026-10-25); plaintext loopback at view, off by default (ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
 | `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
 | `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy (IG-Q12). The row stays live; `txpool-weight-max` closed as a rejected name (IG-Q11) and the pool's cap is CEN-M10 |
-| — | `dev-rpc` | switch | off | both |  |  | N; regtest only, admitted by regtest's row (`NETWORK_IDENTITY.md` NI-R6, NI-R8; IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks`, `pop_blocks`, and on regtest only `inject_archival_serve_credit`; RT-O9.2, `RPC_CHANNEL.md` §6.1) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
+| — | `dev-rpc` | switch | off | both |  |  | N; regtest only, admitted by regtest's row (`NETWORK_IDENTITY.md` NI-R6, NI-R8; IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks` and `pop_blocks`; RT-O9.2, `RPC_CHANNEL.md` §6.1) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
@@ -730,7 +730,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 ## 16. Part C — the RPC wire's names
 
-**RULED 2026-10-19 (Rick): IG-Q42…IG-Q57 as recommended.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. The names land in one rename PR after the store flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR (RW-Q8); until then the wire keeps today's names.
+**RULED 2026-10-19 (Rick): IG-Q42…IG-Q57 as recommended.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. The wire carries these names from `CORE_RPC_VERSION` 4.0: the one rename PR after the store flip, which changed every in-tree client with it (RW-Q8). Part F (§25–§26) re-takes the census at that PR's ground and names what Part C had not.
 
 The rules Part C applies are ruled. It adds no rule; each question in §20 is a convention needed to write the names, or a consequence of a rule for a row already ruled.
 
@@ -749,7 +749,7 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 |---|---|---|---|---|
 | `get_version` | `version` | — | every grant | frozen (§16) |
 | `/get_height` (`/getheight`), `get_block_count` (`getblockcount`) | `chain_height` | — | chain | IG-Q45, IG-Q46 |
-| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | `{"height": n}`, `{"hash": h}` or `"tip"`; `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56 |
+| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | `{"height": n}`, `{"hash": h}` or `"tip"`; `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56; `pow` is served to a bounded caller: the hash recorded at validation, inside the header cap (IG-F24) |
 | `get_block_headers_range` (`getblockheadersrange`) | `block_header_list` | `from`, `to` (inclusive heights), or `hash` (a list); `pow` (switch) | chain | RW-Q1; IG-Q53, IG-Q56 |
 | `get_block` (`getblock`) | `block_show` | the selector as `block_header_show`'s; `pow` (switch); `prune` (switch) | chain | RW-Q5's first output index is a field; IG-Q55 |
 | `/get_blocks_by_height.bin` (`/getblocks_by_height.bin`) | `block_list` | `height` (a list); `prune` (switch) | chain | RW-Q5; bounded, `RPC_CHANNEL.md` §6.3; IG-Q55 |
@@ -776,14 +776,14 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `flush_txpool` | `txpool_flush` | `id` (a list, optional) | node | |
 | `relay_tx` | `tx_relay` | `id` (a list) | node | |
 | `/submit_transaction` | `tx_submit` | `body` | submit | |
-| `get_block_template` (`getblocktemplate`), `get_miner_data` | `block_template` | `address`, `extra`, `extra_size` | mining-work | a view with inputs (IG-Q43); IG-Q46 |
+| `get_block_template` (`getblocktemplate`), `get_miner_data` | `block_template` | — | mining-work | the one posted job; it pays the node's `mine-address` (IG-F23); IG-Q46 |
 | `submit_block` (`submitblock`) | `block_submit` | `body` | mining-work | named, not positional (RW-Q2) |
 | `calc_pow` | `pow` | `height`, `hashing`, `seed` | mining-work | a view with inputs (IG-Q43); IG-Q48 |
-| `/start_mining`, `/stop_mining`, `/mining_status` | `mine_start`, `mine_stop`, `mine_status` | `address`, `threads` (an integer or `auto`) for `mine_start` | mining-control | §13's words |
+| `/start_mining`, `/stop_mining`, `/mining_status` | `mine_start`, `mine_stop`, `mine_status` | `threads` (an integer or `auto`) for `mine_start` | mining-control | §13's words; the node mines to its `mine-address` (IG-12, IG-F23) |
 | `set_bans` | `ban_add`, `ban_remove` | `host`; `duration` for `ban_add` | bans | one verb per change; IG-Q44 |
 | `get_bans`, `banned` | `ban_list`, `ban_show` | `host` for `ban_show` | bans | IG-Q46 |
 | `/get_stem_tallies` | `relay_stats` | — | host-only (RT-O9.3) | |
-| `generateblocks` | `dev_block_generate` | `count`, `address`, `nonce` | armed lever (RT-O9.2) | IG-Q49 |
+| `generateblocks` | `dev_block_generate` | `count` | armed lever (RT-O9.2) | IG-Q49; IG-F23 |
 | `/pop_blocks` | `dev_chain_pop` | `count` | armed lever (RT-O9.2) | IG-Q49 |
 | `save_bc`, `flush_cache`, `inject_archival_serve_credit`, `/set_log_hash_rate` | — | — | — | deleted (`DRS_X_STORE_FLIP.md` DX-Q3) |
 
@@ -884,13 +884,13 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Pool statistics** (`txpool_stats`): `pool_stats` unwraps. `txs_total` → `count`; `bytes_total`, `bytes_min`, `bytes_max`, `bytes_med` → `weight_total`, `weight_min`, `weight_max`, `weight_median`; `fee_total` → `fee_total`; `num_double_spends` goes (IG-Q57); `num_not_relayed` (host-only, RT-O9.3) → `private_count` (host-only); `num_failing`, `oldest`, `num_10m`, `histo_98pc` and `histo` go (IG-Q57).
 
-**Template** (`block_template`): parameters `wallet_address` → `address`, `reserve_size` → `extra_size` (bytes, at most 8), `extra_nonce` → `extra` (bytes); `prev_block`, refused when set, goes. Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
+**Template** (`block_template`): no parameters; the reply is the one posted job, which pays the node's `mine-address` (IG-F23). Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
 
 **Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict` and `cause` keep their names, and its `height` (the block that holds the transaction, on `already_in_chain`) → `mined_height`, as on the transaction entry.
 
 **Proof of work** (`pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
 
-**Miner** (`mine_start`, `mine_status`): `miner_address` → `address`; `threads_count` (0 for auto) → `threads` (an integer, or the keyword `auto`). Status: `active` → `active`; `speed` (hashes counted over its window) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
+**Miner** (`mine_start`, `mine_status`): `mine_start` takes `threads` (an integer, or the keyword `auto`) and no address (IG-F23). Status: `active` → `active`; `speed` (hashes counted over its window) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
 
 **Bans** (`ban_add`, `ban_remove`, `ban_list`, `ban_show`): `set_bans`' list of `{host, ip, ban, seconds}` → one `host` and `duration` per `ban_add` and one `host` per `ban_remove`; `ip` goes (the host carries it); `banned`'s `address` → `host`. An entry: `host`, `seconds` → `duration` (remaining), `permanent` → `permanent`; `banned`'s `banned` goes (`ban_show` replies `null` for a host not banned).
 
@@ -898,7 +898,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Relay statistics** (`relay_stats`): `floor` → `floor`, whose element is `connector` → `connector`, `achieved_out_connections` → `outbound_count`, the inner `floor` → `outbound_min`, `below` → `below`; `tallies` → `tally`, whose element is `peer` (a 16-byte id) → `peer` (bytes), `connector` → `connector`, `propagated`, `silent` → `propagated`, `silent`, `distinct_sources` → `sender_count`.
 
-**Armed levers**: `generateblocks`' `amount_of_blocks` → `count`, `wallet_address` → `address`, `starting_nonce` → `nonce`, `prev_block` goes; reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
+**Armed levers**: `generateblocks` takes `count` and nothing else (IG-F23); reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
 
 ### 18.1 The names the walk reads
 
@@ -924,12 +924,11 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | parameters of txpool_flush (argument) | `txpool` | `id` |
 | parameters of tx_relay (argument) | `tx` | `id` |
 | parameters of tx_submit (argument) | `tx` | `body` |
-| parameters of block_template (input) | `block template` | `address`, `extra`, `extra_size` |
 | parameters of block_submit (argument) | `block` | `body` |
 | parameters of pow (input) | `pow` | `height`, `hashing`, `seed` |
-| parameters of mine_start (argument) | `mine` | `address`, `threads` |
+| parameters of mine_start (argument) | `mine` | `threads` |
 | parameters of ban_add/remove/show | `ban` | `host`, `duration` |
-| parameters of dev_block_generate (argument) | `block` | `count`, `address`, `nonce` |
+| parameters of dev_block_generate (argument) | `block` | `count` |
 | parameters of dev_chain_pop (argument) | `chain` | `count` |
 | block header fields | `block header` | `version_major`, `version_minor`, `time`, `parent`, `nonce`, `orphan`, `height`, `depth`, `hash`, `difficulty`, `difficulty_cumulative`, `reward`, `weight`, `weight_longterm`, `tx_count`, `pow`, `coinbase`, `curve_root`, `attestation_root` |
 | block fields | `block` | `header`, `body`, `tx`, `output_index` |
@@ -1010,7 +1009,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) | |
 | confirmations | tx | blocks since the transaction's | |
 | parent | block, alt, header, template | the block this one extends (a hash) | |
-| nonce | block, header | the header's nonce; under `dev block generate`, the first nonce | |
+| nonce | block, header | the header's nonce | |
 | orphan | block, header | not on the main chain | |
 | reward | block, mine, header, template | the block's reward, an amount | |
 | cumulative | difficulty | summed over the chain to this block | |
@@ -1076,7 +1075,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | pace | span | the span queue's relative speed, a ratio (micro) | |
 | tier | peer | which peer list holds it, one-of `white`, `gray` | |
 | offset | extra | where the reserved extra bytes start | |
-| extra | template | the coinbase's extra nonce: the bytes, and with `size` how many to reserve | |
+| extra | template | the coinbase's reserved extra-nonce bytes; with `offset`, where they start | |
 | revision | daemon | the build's version string | |
 | joined | bond, claim | the epoch the bond joined | |
 | closing | epoch, shard | the epoch's closing height | |
@@ -1360,3 +1359,173 @@ Each is ruled (Rick, 2026-10-24); an amendment is stated in the question's own l
 - `rebuilding`: the epoch's origin pin is exhausted while a session is live (`connected` true, `routable` false). Health stays true.
 
 *Ruling:* there is no `hold` field. The two cases are `origination`'s `connecting` and `rebuilding` (IG-Q68), and the renderer leads with `tor.cause` when one stands. The keywords name what the operator sees (rule 81); `tor.since` dates the state, and an epoch's end would date the pin.
+
+---
+
+## 25. Part F — the wire at the rename
+
+**POSED 2026-11-10; no question below is ruled.** Ground: `dev` `cf561f79d`, `CORE_RPC_VERSION` 3.70. Part C's census was last re-taken at 3.64, and the wire has moved six minors since. This Part re-takes the census at the ground, names what the rename PR (`RPC_WIRE.md` RW-Q8) finds unnamed, and poses each name as a question in §26. It adds no rule and registers no family: the questions continue `IG-Q`, the findings `IG-F`. Citations are `file:line` at the ground; `T/` is `rust/shekyl-rpc-types/src/` and `D/` is `rust/shekyl-daemon-rpc/src/`.
+
+**The served surface at the ground.** `T/methods.rs:162-244` lists 51 methods under 64 served names: 32 JSON-RPC methods with 9 aliases, and 19 REST paths with 4 aliases, beside the `/json_rpc` endpoint's own row. Every row is served natively; the C++ table is gone (`D/handlers/json_rpc.rs:95-104`). Under Part C and this Part they become 42 methods on one path, with no alias.
+
+### 25.1 Findings: ruled names the code never adopted
+
+Each is ruled and is implemented by the rename PR as ruled. None is a question.
+
+- **IG-F17 — `option_set` takes a list.** Its request is `options`, a list of `{name, value}` (`T/options.rs:227-239`). IG-Q42 and §18 rule `value`, a map from option name to value, in which a name cannot appear twice.
+- **IG-F18 — `option_show` takes `names`, and both replies wrap.** The request key is `names` (`T/options.rs:243-247`); §17 rules `name`. Both replies wrap their rows under `options` (`T/options.rs:251-254`), which IG-Q53 unwraps, and a secret row carries `set` (`T/options.rs:156-164`), which IG-Q42 rules `assigned`.
+- **IG-F19 — a connection's byte counts.** `get_connections` carries `recv_count` and `send_count` (`T/p2p.rs:230`, `:233`); §18 rules `download` and `upload`.
+- **IG-F20 — a diagnostic's parameters are positional pairs.** `Diagnostic.params` and `Refusal.params` are lists of pairs (`T/errors.rs:139`, `T/options.rs:220`); §18 rules `parameter`, a map.
+- **IG-F21 — Part E's fields are ruled and not served.** `get_info`'s wire form (`T/info.rs:535-614`) carries none of `hiding`, `posture`, `origination`, `sync_connector` or `tor`. Their names stand as ruled (§23). The PR that puts them on the reply writes them on `daemon_status` under those names; the rename does not pose them again.
+- **IG-F22 — a wire type no reply carries.** `ConnectState` and `StoreInvariantRow` (`T/chain.rs:642`, `:656-668`) were minted for a halted store writer on `get_info`. No reply carries them at the ground, and no crate outside `shekyl-rpc-types` names the wire type. They are not in this census. Whether they are deleted or served is the maintainer's to say; the rename PR does not cut them without that word.
+- **IG-F23 — §17 and §5 rows the flip made stale.** `start_mining` takes `threads` only (`T/mining.rs:126-129`); `generateblocks` takes `count` only (`T/mining.rs:245-247`); `get_block_template` takes no parameters (`T/mining.rs:28`); §5's `dev-rpc` row still listed `inject_archival_serve_credit`, deleted with the C++ chain (`DRS_X_STORE_FLIP.md` DX-Q3). §17, §18.1 and §5 are corrected in the commit that poses this Part. §18's `address`, `extra` and `extra_size` parameter rows for `block_template`, and its `address` and `nonce` rows for `dev_block_generate`, name parameters that no longer exist.
+- **IG-F24 — `pow` on a header read is served to a bounded caller.** IG-Q56 refuses a caller "whose grant or resource bound does not cover it". Since 3.67 the bound covers it: the header's hash is the one recorded at validation (`D/store_facts.rs:325`), it spends nothing from the hash budget (`D/hash_budget.rs:31`), and a bounded read stays inside the header cap (`RPC_CHANNEL.md` §6.3). §17 now says so. No refusal code is needed for it.
+- **IG-F25 — the shard reply's closing height.** The reply key is `close_height` (`T/archival.rs:69`), where §18 reads today's name as `closing_height`. The ruled name, `closing_height`, is unchanged.
+
+### 25.2 The census delta since 3.64
+
+Every key added, changed or removed between Part C's last re-take and the ground. A row whose name is settled by a rule already ruled says so; the others are posed in §26.
+
+| Minor | Method today | Key at the ground | Source | Under this Part |
+|---|---|---|---|---|
+| 3.61 | `get_transactions` | `unavailable_tx` (a list of ids) | `T/transactions.rs:374-375` | folds into the slot (IG-Q73) |
+| 3.61 | `get_transactions` | `missed_tx` | `T/transactions.rs:358-359` | folds into the slot (IG-Q73) |
+| 3.64 | `get_transactions` | `archived`, a side list of `{tx_hash, shard}` | `T/transactions.rs:363-364`, `:330-334` | folds into the slot (IG-Q73) |
+| 3.64 | `get_blocks_by_height.bin` | a per-slot `Full`, `Skeleton` or `Archived` | `T/bin_commands.rs:251-259` | the slot (IG-Q73) |
+| 3.61 | `get_info` | `pool_retired`, written only when true | `T/info.rs:576-577` | IG-Q74 |
+| 3.61 | `get_info` | `tx_pool_size`, `null` when the pool is retired | `T/info.rs:578` | `txpool_count`, as ruled; IG-Q74 |
+| 3.61 | `get_info` | `tx_pool_unbroadcast_count`, `null` when retired | `T/info.rs:606-611` | `txpool_private_count`, as ruled; IG-Q74 |
+| 3.63 | `mining_status` | `pool_retired` | `T/mining.rs:220` | IG-Q74 |
+| 3.63 | `mining_status` | `height`, the posted job's | `T/mining.rs:217` | IG-Q77 |
+| 3.63 | `mining_status` | `no_template`, a diagnostic or `null` | `T/mining.rs:222` | IG-Q77 |
+| 3.63 | `mining_status` | `threads_count` | `T/mining.rs:204` | IG-Q77 |
+| 3.65 | `mining_status` | `speed`, `{count, window}` | `T/mining.rs:203`, `:150-155` | IG-Q77 |
+| 3.63 | `get_block_template` | `nonce_offset` | `T/mining.rs:47` | IG-Q78 |
+| 3.63 | `/submit_transaction` | the cause `consensus_rule`, and `row` beside it | `T/lib.rs:303`, `:247-248` | IG-Q76 |
+| 3.63 | `/submit_transaction` | the cause `join_market_unsupported` | gone from `T/lib.rs:264-312` | leaves the set; no name |
+| 3.69 | `/submit_transaction` | `relay` on `already_in_pool`: `held`, `held_overdue`, `published`, `untracked` | `T/lib.rs:209-213`, `:170-179` | IG-Q75 |
+| 3.66–3.67 | the four capped reads, `calc_pow` | the diagnostic `rpc.bound.exceeded` with `method`, `bound`, `asked`; `rpc.bound.budget` | `D/methods.rs:166-185`; `D/hash_budget.rs:141-143` | IG-Q79 |
+| 3.68 | `sync_info` | `height`, `target_height` (counts), `state`, `stalled` | `T/p2p.rs:319-334` | IG-Q80 |
+| 3.68 | `sync_info` | `peers[]`: `connection_id`, `address`, `claimed_height`, `mode`, `header_request`, `body_requests`, `rate` | `T/p2p.rs:294-312` | IG-Q80 |
+| 3.68 | `sync_info` | the timing objects: `age_ms`, `due_in_ms`; a body span's `start_height`, `count`, `planned_bytes` | `T/p2p.rs:267-288` | IG-Q80 |
+| 3.68 | `sync_info` | `spans`, `overview` | gone | §18's span rows and the terms `span` and `pace` go with them, but for `span` as IG-Q80 keeps it |
+| 3.68 | `get_connections` | `height` (the claim's count, or `null`), `state` (the session's mode, or `null`) | `T/p2p.rs:250`, `:237` | IG-Q81 |
+| 3.59 | `get_connections`, `sync_info` | `support_flags` | gone | no name |
+| 3.56 | `get_connections`, `sync_info`, `/get_peer_list` | the offline reply, `{"status": "offline"}` alone | `T/p2p.rs:345-350` | IG-Q85 |
+| 3.70 | `get_info` | `connectors[]`: `connector`, `incoming_sockets`, `outgoing_sockets`, `white_peerlist_size`, `gray_peerlist_size` | `T/info.rs:396-407`, `:601-602` | IG-Q82 |
+| 3.70 | `get_info` | the six flat socket and list-size keys | gone | §18's `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count` and `peer_gray_count` rows on `daemon_status` go |
+| `8494ffe88` | `/get_stem_tallies` | the connector value `unnamed`; `peer`, 32 hexadecimal characters | `T/p2p.rs:468-475`, `:494-495` | IG-Q83 |
+| — | `get_archival_emission_claim_source` | no hash of the gather's tip | `T/archival_reads.rs:85-110` | IG-Q84 |
+| 3.60 | `get_archival_emission_claim_source` | `is_support_complete_tree` | `T/archival_reads.rs:37` | `complete_tree`, as ruled |
+
+Keywords whose spelling is posed in IG-Q86: the sync modes `past_cap` and `evidence_candidate` and the sync state `no_view` (`T/p2p.rs:147-193`); the relay state `held_overdue`; the verdicts and causes of `/submit_transaction` (`T/lib.rs:193-312`); and the dotted diagnostic codes (`D/mining_methods.rs:39-92`, `D/ban_methods.rs:24-26`, `D/authority.rs:45-47`, `T/methods.rs:106`, `T/endpoint.rs:31`).
+
+### 25.3 Names the next slice builds
+
+RT-W10 step 4 builds enrolment over the channel. Its method names are posed here (IG-Q87, IG-Q88) so that step 4's submission contract and route-to-grant table are written once. The rows join §13 marked "built by RT-W10 step 4". They do not join the method table in the rename PR, whose gate requires every row to be served.
+
+## 26. Questions for Part F
+
+Each states the problem, then the question, then the recommendation. A question that amends a ruled row names it.
+
+**IG-Q73 — a list reply's slot — POSED; amends IG-Q53.** IG-Q53 puts `null` in a list reply's slot for "an unknown item". Under RK-D23, `null` means *no answer*. The daemon now tells three cases apart: asked and not found (`missed_tx`); could not ask, because the pool is retired (`unavailable_tx`, 3.61); and a body discarded with its shard at the archival horizon (`archived`, 3.64, SB-Q2). The wallet already treats them differently: `TransactionsUnavailable` is never "not found" (`rust/shekyl-engine-core/src/engine/block_fetch.rs`, `proofs_chain_facts.rs`). One `null` cannot carry three cases. *Question:* what is in a slot that does not hold the item? *Recommended:* a `list` reply's slot is exactly one of:
+- the item itself;
+- `{"missing": null}`: the node was asked and holds no such item (§23's `missing`: looked, and none is there);
+- `{"archived": {"id": h, "shard": n}}`: the body was discarded with its shard, and the archive serves it (§19's `archived`);
+- `null`: that item's source could not be asked (RK-D23).
+
+A state other than the item is a one-key object naming the state, with its payload as the value, or `null` when it has none. That is IG-Q70's rule for `tor.cause`, applied once across the wire. Four consequences:
+- A read whose only source cannot answer refuses whole (RW-Q3). A slot is `null` only in a read that spans sources which fail separately; today that is `tx_list`, over the chain and the pool.
+- An unrelayed pool entry is `{"missing": null}` to every caller without the host's view (RT-O9.3), so a list read never reveals that one exists.
+- `missed_tx`, `unavailable_tx` and the `archived` side list fold into the slot. No side list remains.
+- `tx_show`, which has no slot, refuses a missing id (`RefusedByMethod`, `tx.missing`) and an unaskable one (`NotReady`, `txpool.retired`), and answers an archived one as `{"archived": {…}}`, the reply itself.
+
+`missing` joins §19 beside `archived`, a slot state under `tx`: "the node was asked and holds no such item". It is §23's keyword, with the meaning it has there.
+
+**IG-Q74 — a retired pool — POSED.** A node whose pool file faults retires the pool until it restarts (`rust/shekyl-node/src/facts.rs`). `get_info` says so with `pool_retired`, written only when true (`T/info.rs:576-577`), and `mining_status` with `pool_retired`, always written (`T/mining.rs:220`). `pool` is not a term: the subject is `txpool`. A key written only when true is absent for a reason other than a grant, which RK-D23 refuses. *Question:* what is the field, and where? *Recommended:* `txpool_retired`, a switch, always present, on `daemon_status` in the Health part (a wallet needs it to know a submission cannot be admitted, and it says nothing lasting about the node) and on `mine_status`. It walks by reference: the subject `txpool`, then a new term `retired` under it, "the pool's file faulted and the node holds no pool until it restarts". When it is true, `txpool_count` and the host's `txpool_private_count` are `null` (no answer), as today.
+
+**IG-Q75 — the relay state on `already_in_pool` — POSED.** Since 3.69 the verdict `already_in_pool` carries a required `relay`: `held`, `held_overdue`, `published` or `untracked` (`T/lib.rs:170-179`, `:209-213`). `relay` under `tx` is the verb (§3: `tx relay`), so a field of that name states a kind it does not have. The glossary's word for an entry the relay has made public is `public` (§19), and `held` is §11's view of a wallet's shards. *Question:* what are the field and its states? *Recommended:* the field is `publication`, a new term under `tx`: "where the caller's own transaction stands with the relay". Its states are one-of `held` (unpublished, inside the daemon's publication budget), `overdue` (unpublished at or past that budget), `public` (the relay has made it public; §19's `public`) and `untracked` (pool-resident, with no origin row). `overdue` is judged on the daemon's clock when the state is read; the wallet converts it to neither blocks nor a duration. A caller without the owner's view is told `public` only, and only once the transaction is public (RT-O9.3). Keywords are not paths, so `held` here adds no edge to §11's `held`.
+
+**IG-Q76 — the consensus row on a rejection — POSED.** Since 3.63 a rejection may carry the cause `consensus_rule`, with the refusing row's id (`"CEN-J15"`) in a sibling field `row` that is absent for every other cause (`T/lib.rs:240-249`, `:294-303`). A field absent for a reason other than a grant is what RK-D23 refuses, and a `null` there would say "no answer" where the truth is "this cause has no row". `row` is not a term. *Question:* how does a cause carry its payload? *Recommended:* IG-Q70's form. `cause` is one object with one key, the cause; its value is that cause's payload, or `null` when it has none: `{"consensus-rule": "CEN-J15"}`, `{"fee-too-low": null}`. No sibling field exists, so a row cannot ride a cause that has none. The skew rule is unchanged: a key this build does not know reads as `unrecognized` (`DAEMON_SUBMIT_VERDICT.md` §2.3), and a new rejection is still an added key (F38). The alternative keeps `cause` a keyword and adds a field `rule`, `null` for every cause but one.
+
+**IG-Q77 — `mine_status` — POSED; amends §18's Miner row.** Three keys arrived with the Rust miner, and two ruled rows need their kind stated.
+- `speed` is `{count, window}` since 3.65 (`T/mining.rs:150-155`): hashes counted over a window of complete seconds. §19 already walks `mine` → `speed` → `count` and `window`. *Recommended:* `speed` stays an object; `count` is an integer and `window` a `duration` (IG-Q54), zero before the first second completes. No rate is carried: a quotient read `0` for a miner below one hash a second.
+- `threads_count` (`T/mining.rs:204`) names its kind. §18 rules `threads`. *Recommended:* `threads`, an integer: the count the miner runs with, never the keyword `auto`, which is an input.
+- `height` (`T/mining.rs:217`), `block_reward` and the difficulty triple describe the posted job and read `0` when none is posted. *Recommended:* the job's three fields — `height` (the ordinal the block connects at), `reward` and `difficulty` — are `null` when no job is posted (RK-D23). `height` gains the parent `mine`.
+- `no_template` (`T/mining.rs:222`) is a diagnostic saying why no job is posted, or `null`. `no` is refused as a term (IG-4). *Recommended:* `cause`, which gains the parent `mine`: "why no job is posted", a diagnostic (§19) or `null` when one is. `address` is `null` when `mine-address` is unset, as §18 rules.
+
+**IG-Q78 — the template's nonce offset — POSED.** `get_block_template` carries `nonce_offset`: where the header's four nonce bytes sit, in both blobs (`T/mining.rs:47`). §18 has `reserved_offset` → `extra_offset` and no row for this one. *Question:* its name. *Recommended:* `nonce_offset`. `nonce` already has the parents `block` and `header`; it gains `template`, and `offset` gains the parent `nonce`: "where its bytes start".
+
+**IG-Q79 — a refusal over a resource bound — POSED.** Since 3.66 a bounded caller over a bound is refused with class `OverResourceBound` (-32003). Every list cap shares one diagnostic, `rpc.bound.exceeded`, which names the method in a parameter (`D/methods.rs:166-185`); the hash budget's is `rpc.bound.budget` (`D/hash_budget.rs:141-143`). A client that must tell one bound from another reads a method name out of a parameter, and that name changes at the rename. *Question:* what does a client branch on? *Recommended:* the class, then one dotted code per bound, each with the parameters `bound` (the limit) and `asked`:
+
+| Code | The bound | Value | Where |
+|---|---|---|---|
+| `bound.block` | blocks one `block_list` or one `block_header_list` by hash may name | 1,000 | `D/methods.rs:627`, `:963`; `D/read_methods.rs:490` |
+| `bound.header` | headers one `block_header_list` range may span | 1,000 | `D/methods.rs:631`, `:1026` |
+| `bound.tx` | ids one `tx_list` may name | 100 | `D/methods.rs:635`; `D/read_methods.rs:573` |
+| `bound.key-image` | key images one `chain_spent` may name | 5,000 | `D/methods.rs:639`; `D/read_methods.rs:636` |
+| `bound.hashing` | the size of `pow`'s hashing bytes | `MAX_POW_BLOB_SIZE` | `D/read_methods.rs:191` |
+| `bound.hash` | the shared hash budget, when it cannot pay one hash | one hash | `D/hash_budget.rs:141` |
+
+The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coinbase_sum` waits for its one permit and is not refused. The method is never a parameter: the caller knows what it called.
+
+**IG-Q80 — `sync_status` — POSED; replaces §18's Sync status row.** CS-5 replaced the reply (3.68, `T/p2p.rs:267-334`). §18's `peer` (a list of connections) and `span` rows describe a block queue that is deleted. Several of the new keys break a rule: `address` holds a network location, which §3 reserves for `endpoint`; `claimed_height` carries a count (RW-Q4, IG-Q45); `_ms` and `_bytes` are units (RW-Q10); and `header_request` and `body_requests` use `request`, §11's payment request. *Question:* the reply's names. *Recommended:*
+
+| Today | Part F | Kind |
+|---|---|---|
+| `height` (a count) | `height` | integer, the tip's ordinal (IG-Q45) |
+| `target_height` (a count, always present) | `target_height` | integer, the ordinal of the best verified chain's tip |
+| `state` | `state` | one-of `unpeered`, `behind`, `following`, `synced` |
+| `stalled` | `stalled` | switch: behind, with nothing moving toward the target |
+| `peers` | `session` | a list, one element for each session chain sync holds; `[]` when none |
+| — `connection_id` | `connection` | the connection's id, as `peer_connections` gives it |
+| — `address` | `endpoint` | peer-endpoint |
+| — `claimed_height` (a count) | `height` | integer, the ordinal of the tip the peer claims; `null` before it has claimed |
+| — `mode` | `mode` | one-of `idle`, `reachable`, `slot`, `challenging`, `past-cap`, `evidence-candidate`, `evidence` |
+| — `header_request` | `header` | the header read in flight to the session, `{age, due}`, or `null` when none is |
+| — `body_requests` | `span` | a list of the body spans in flight; `[]` when none |
+| — — `start_height`, `count` | `from`, `blocks` | the span's first height, and its length |
+| — — `planned_bytes` | `size` | bytes: the response its deadline is planned for |
+| — `age_ms` | `age` | duration: since it was sent |
+| — `due_in_ms` | `due` | duration: until its response is late; `0` once it is |
+| — `rate` | `download_speed` | bytes per second its last response arrived at; `null` until one has |
+
+- `session` is a new term under `sync`: "a peer session chain sync holds". Its fields walk `sync` → `session`. `mode` and `due` are new terms; `stalled` is a new term under `sync`; `state` gains the parent `sync`; `connection`, `endpoint`, `height`, `header`, `span` and `download` gain the parent `session`; `age` and `due` sit under `header` and `span`. `header` under `session` is the read of headers in flight, which is §19's "with `show` and `list`, the read".
+- `no_view` is `unpeered`: no session has completed a handshake, which is `daemon_status`'s `peered` false. `no` is refused as a segment (IG-4, as Part E refused `not-installed`).
+- The timings are IG-Q54's `duration`, whole seconds: `age` rounds down and `due` rounds up, so `due` is `0` exactly when the response is late. The node's own test holds a deadline to a minute at most (`rust/shekyl-node/src/facts.rs:916`), and an operator reading a stall reads seconds. The alternative mints a second duration kind in milliseconds for these two fields alone.
+
+**IG-Q81 — a connection's claim and mode — POSED; amends §18's Connection row.** Since 3.68 `get_connections` takes two fields from chain sync's view: `height`, the block count the peer claims, and `state`, the session's mode (`T/p2p.rs:237`, `:250`); each is `null` for a connection chain sync does not hold. `sync_info` calls the same two facts `claimed_height` and `mode`. *Question:* one fact, one name. *Recommended:* on `peer_connections` they are `height` (the ordinal of the tip the peer claims, `null` before it has claimed) and `mode` (IG-Q80's keywords, `null` for a connection chain sync does not hold). `state` leaves the connection; its §19 row keeps `tor` and gains `sync` (IG-Q80), and `mode` gains the parent `connection`.
+
+**IG-Q82 — the connector rows on `daemon_status` — POSED; replaces six §18 rows.** Since 3.70 the Peers part reports one row for each connector the daemon runs, `connectors: [{connector, incoming_sockets, outgoing_sockets, white_peerlist_size, gray_peerlist_size}]` (`T/info.rs:396-407`); a connector it does not run has no row. `_sockets` and `_size` state a kind, `incoming` is ruled `inbound`, and an element that names its own connector lets one connector appear twice. *Question:* the field's shape and names. *Recommended:* `connector`, a map (IG-6) from connector — `clearnet`, `tor` — to that connector's counts: `inbound_count`, `outbound_count`, `peer_white_count` and `peer_gray_count`. A connector the daemon does not run has no key, and a name cannot appear twice, which is the reason IG-Q42 gave `option_set` a map. `connector` gains the parent `daemon`. Inside a connector's object the counts walk from its subject (`clearnet` → `inbound` → `count`) or by reference (`peer` → `white` → `count`); every edge exists. §18's six flat rows go. The alternative keeps a list whose element names its connector in `id`.
+
+**IG-Q83 — `relay_stats` — POSED.** §18 rules the reply's names. Two facts are unnamed. A tally's connector may be `unnamed`, "a successor whose connector has not been observed" (`T/p2p.rs:463-475`), a third value where §19's `connector` is one-of `clearnet`, `tor`; and a tally's `peer` is the connection's id, 32 hexadecimal characters (`T/p2p.rs:492-495`), where §18 says `peer` (bytes). *Question:* both. *Recommended:* a tally's `connector` is `null` when it has not been observed (RK-D23: no answer), so `connector` keeps its two values everywhere; `peer` becomes `connection`, the connection's id in the one encoding `peer_connections` gives it, so a reader can join the two replies. `connection` gains the parent `tally`. The method stays host-only (RT-O9.3).
+
+**IG-Q84 — the claim source's gather tip — POSED.** The reply carries the height it was gathered at (`chain_height`, `T/archival_reads.rs:88`) and not that block's hash, so the wallet cannot tell which chain the record was gathered on and brackets the read to close a reorg across it (FOLLOWUPS, "The claim-source reply should carry the hash of its own gather tip"). *Question:* the field. *Recommended:* `hash`, beside `height`: the hash of the block at `height`, read in the same snapshot. `hash` gains the parent `claim`, as `chain_height`'s reply pairs the two. The wallet's bracket goes when it reads the field.
+
+**IG-Q85 — a read about peers on an offline daemon — POSED.** A daemon started offline answers `sync_info`, `get_connections` and `/get_peer_list` with `{"status": "offline"}` alone (`T/p2p.rs:336-350`): it has no peers by configuration, and an empty list would read as a running node with none (Rick, 2026-10-14). `status` leaves every reply (RW-Q3). RW-Q3 keeps a state a reply legitimately describes as data and refuses where a method cannot answer. *Question:* which is this? *Recommended:* a refusal: class `RefusedByMethod`, diagnostic `p2p.offline`. The three methods have nothing to describe, the state itself is already data on `daemon_status` (`offline`), and a client branches on the dotted code. It is not `NotReady`: asking again does not help. The alternative applies IG-Q73's one-key form to a whole reply, `{"offline": null}`, which gives two list methods a reply that is not a list.
+
+**IG-Q86 — keywords and diagnostic codes on the wire — POSED.** IG-1 gives a path three renderings and says nothing of a keyword. Part E's keywords are hyphenated on the wire (`address-hiding`, `clearnet-only`, `restore-managed`), as §3's are (`complete-tree`); the keywords that arrived outside the grammar use `_` (`past_cap`, `held_overdue`, `already_in_pool`, `fee_too_low`). IG-11's diagnostic codes are dotted with hyphens inside a segment (`config.marker.network-id`); the daemon's RPC codes use `_` and negations (`mine.no_address`, `node.not_ready`, `rpc.grant.host_only`). *Question:* one spelling for each. *Recommended:*
+- **A keyword has one spelling on every surface**: lowercase segments joined with `-`, never translated (IG-1). `_` joins only the segments of a method, parameter or field name. A keyword may be an object's key where the object is a one-key state (IG-Q70, IG-Q73). The verdicts become `accepted`, `already-in-pool`, `already-in-chain`, `rejected`; the causes `malformed`, `fee-too-low`, `double-spend-conflict`, `stale-root`, `reference-too-recent`, `reference-unknown`, `consensus-rule`, `unrecognized`; the sync keywords as IG-Q80.
+- **No keyword and no code segment is a term IG-4 refuses**, as Part E refused `not-installed`: `reference_not_found` is `reference-unknown`, `no_view` is `unpeered`.
+- **A diagnostic code is dotted segments**, each lowercase and `-`-joined, none an IG-4 term. The first names what refused: a glossary subject (`mine`, `block`, `tx`, `txpool`, `p2p`, `daemon`), or `grant` or `bound` for RW-Q3's two classes that belong to no method. The rename PR rewrites every RPC code to that form and lists each in the registry `RPC_WIRE.md` RW-Q3 keeps: `mine.no_address` is `mine.address.unset`, `node.not_ready` is `daemon.starting`, `rpc.grant.host_only` is `grant.host-only`. The full list is the PR's error-code mapping, reviewed with it.
+
+**IG-Q87 — enrolment's names — POSED.** `RPC_CHANNEL.md` §5 names enrolment `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrolment runs over the channel, so each act is a method with a grant (`enrol`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enrol a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
+
+| Word | Method | Parameters | Grant |
+|---|---|---|---|
+| `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enrol |
+| `rpc client set <fingerprint> --ceiling <grants>` | `rpc_client_set` | `fingerprint`, `ceiling` | enrol |
+| `rpc client remove <fingerprint>` | `rpc_client_remove` | `fingerprint` | enrol |
+| `rpc client list` | `rpc_client_list` | — | enrol |
+| `rpc bundle show` | `rpc_bundle_show` | — | enrol |
+
+- `add` on an enrolled fingerprint is refused and names `set`; `set` on one not enrolled is refused and names `add`. Each call is bounded by §5's rule: the ceiling given, and the ceiling of the key being changed or removed, lie within the caller's effective grant. `list` returns the enrolments whose ceiling lies within it; the others are absent.
+- `fingerprint` is kind `hash`: 32 bytes (RT-O14). `ceiling` is a list of one-of the grant and preset keywords of `RPC_CHANNEL.md` §6.1. `rpc_bundle_show`'s reply is `{"bundle": b}`, kind `bytes`.
+- New terms: `client` under `rpc`, "a client identity enrolled on this daemon: a fingerprint and its ceiling"; `bundle` under `rpc`, "this daemon's static public keys, given to a client that will be enrolled"; `fingerprint` and `ceiling` under `client`. `add`, `set`, `remove` and `list` gain the parent `client`; `show` gains `bundle`.
+- `client` is used nowhere else as a term. `bundle` appears in prose for the Tor bundle and the witness bundle; neither is a name in any table, so the term has one meaning.
+
+**IG-Q88 — the console key's reset — POSED.** `RPC_CHANNEL.md` §5 rules an offline, local reset of the console key that takes the data home's exclusive lock, so by design it cannot run over the channel, and it is therefore no method and no `shekyl-cli` word. Under IG-Q8 `shekyld` has no command words. *Question:* where does it live? *Recommended:* a `shekyld` switch, `--rpc-console-key-reset`, given on the command line only (IG-7), the shape `config-verify` already has (IG-Q58): a switch that selects what the process does and exits. It takes the lock, replaces the console enrolment, writes the new private half and exits without starting the node; it is refused in a run mode that has no console key, and while the lock is held. IG-Q8 refuses bare words, not a one-shot switch. New terms: `console` under `rpc`, "the console key: the host administrator's credential in service mode"; `reset`, a verb under `key`; `key` gains the parent `console` and its meaning widens from "only in `key image`" to "a key: under `spent`, in `key image`; under `console`, the console key".
+
+**IG-Q89 — what a re-offer and a flush answer — POSED.** `relay_tx` and `flush_txpool` name ids and reply `status` alone (`D/pool_methods.rs:184-208`). Both hold the `node` grant, and a `node` key is bounded; entries not yet public are host-only (RT-O9.3). A reply that lets a bounded caller tell "held here, unpublished" from "not here" tells it this node originated the transaction, and so does a re-offer the caller can watch arrive on the network. *Question:* the reply, and what a bounded caller may cause. *Recommended:* each replies a list in selector order (IG-Q53): the id where the act was done, `{"missing": null}` where the pool the caller may see holds no such entry (IG-Q73). For a caller without the host's view an unpublished entry is not in that pool: its slot is `{"missing": null}` and the daemon neither re-offers nor removes it. The host's administrator sees and acts on every entry. A retired pool refuses the whole call (`NotReady`, `txpool.retired`). `txpool_flush` with no `id` removes every entry the caller may see and replies their ids.
+
+**IG-Q90 — what one `shard_fetch` may cost — POSED.** `request_archival_shard` holds the `node` grant. Its view desk caches one view for each closed shard and runs one flight for each shard asked (`rust/shekyl-archival-fetch-sched/src/view.rs:140-158`); a flight reads the whole shard from its holders through the node's Tor. `RPC_CHANNEL.md` §6.3 bounds the four caps, the hash and the coinbase read, and names no bound here, so a bounded caller naming many closed shards opens as many flights. *Question:* the bound. *Recommended:* §6.3 gains it, in the coinbase read's shape: bounded callers share one shard-fetch permit, a cached view takes none, and a bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`. The host's administrator takes no permit. The flight a refused caller did not open is not queued.
