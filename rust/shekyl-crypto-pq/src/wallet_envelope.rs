@@ -235,9 +235,15 @@ pub enum WalletEnvelopeError {
 
     /// A file from before the current format: refused, never
     /// reinterpreted (`NETWORK_IDENTITY.md` NI-Q8).
+    ///
+    /// Neither backup of such a file brings it back, so the text names no
+    /// restore path: a 64-character seed is refused, and 24 recovery words
+    /// derive other keys under NI-R7's derivation, so they open a different,
+    /// empty wallet.
     #[error(
         "wallet file format {got:#x} predates this build's format {current:#x} and cannot be \
-         opened; restore the wallet from its 24 seed words"
+         opened. Its backup will not bring it back: a 64-character seed is refused, and 24 \
+         recovery words open a different, empty wallet. Create a new wallet."
     )]
     FormatVersionRetired { got: u8, current: u8 },
 
@@ -1812,6 +1818,21 @@ mod tests {
             inspect_keys_file(&bytes),
             Err(WalletEnvelopeError::FormatVersionRetired { .. })
         ));
+    }
+
+    /// The refusal names no restore path, because neither backup of a
+    /// retired file brings it back; it says to create a new wallet. The
+    /// shekyl-cli and shekyl-wallet-rpc logs print this text.
+    #[test]
+    fn a_retired_format_refusal_names_no_restore_path() {
+        let text = WalletEnvelopeError::FormatVersionRetired {
+            got: 0x01,
+            current: WALLET_FILE_FORMAT_VERSION,
+        }
+        .to_string();
+        assert!(!text.to_lowercase().contains("restore"), "{text}");
+        assert!(text.contains("will not bring it back"), "{text}");
+        assert!(text.ends_with("Create a new wallet."), "{text}");
     }
 
     /// Composition check against the **frozen** fixture bytes (oracle:

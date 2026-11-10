@@ -417,11 +417,76 @@ fn print_staking_work(val: &Value) {
 }
 
 fn in_flight_line(entry: &InFlightEntry) -> String {
+    let line = in_flight_state_line(entry);
+    match funds_sentence(entry) {
+        Some(funds) => {
+            let line = line.trim_end();
+            let stop = if line.ends_with('.') { "" } else { "." };
+            format!("{line}{stop} {funds}")
+        }
+        None => line,
+    }
+}
+
+/// What `reserved` has been read as. The sentence that says a transaction
+/// was not mined is built only for [`ReservedReading::Holds`]. A zero hold
+/// and an unread amount are also how a zero-fee claim looks, and the
+/// staking scan cannot show whether that claim was mined
+/// (`WALLET_RPC_STAKING_OUTCOMES.md` §5): it ends `ended_unconfirmed`.
+enum ReservedReading {
+    Holds(shekyl_units::AtomicUnits),
+    HoldsNothing,
+    Unread,
+}
+
+fn reserved_reading(entry: &InFlightEntry) -> ReservedReading {
+    match entry.reserved.0.map(shekyl_units::AtomicUnits::from) {
+        Some(amount) if amount != shekyl_units::AtomicUnits::ZERO => ReservedReading::Holds(amount),
+        Some(_) => ReservedReading::HoldsNothing,
+        None => ReservedReading::Unread,
+    }
+}
+
+/// The record remains until the scan passes this height. Said for a zero
+/// hold and for an unread amount. It does not say the scan will decide
+/// whether the record was mined.
+fn record_stays_until(height: impl std::fmt::Display) -> String {
+    format!("This record stays until the staking scan passes height {height}.")
+}
+
+/// What an entry still holds (WR-Q6) and, when it has an end date, that
+/// the record stays until the staking scan passes it. Only an entry that
+/// holds something is said to hold funds that return: a zero-fee claim
+/// reserves none. When the staking scan has not run, the amount is not
+/// known yet, and the line says so rather than imply nothing is held.
+fn funds_sentence(entry: &InFlightEntry) -> Option<String> {
+    let end = entry.funds_return_at.0;
+    match reserved_reading(entry) {
+        ReservedReading::Holds(amount) => {
+            let amount = format_amount(amount.to_raw());
+            Some(match end {
+                Some(h) => format!(
+                    "It holds {amount}; if its transaction was not mined, that returns \
+                     once the staking scan passes height {h}."
+                ),
+                None => format!("It holds {amount}."),
+            })
+        }
+        ReservedReading::HoldsNothing => {
+            end.map(|h| format!("It holds nothing. {}", record_stays_until(h)))
+        }
+        ReservedReading::Unread => Some(match end {
+            Some(h) => format!(
+                "What it holds shows once the staking scan has run. {}",
+                record_stays_until(h)
+            ),
+            None => "What it holds shows once the staking scan has run.".to_owned(),
+        }),
+    }
+}
+
+fn in_flight_state_line(entry: &InFlightEntry) -> String {
     let kind = kind_word(&entry.kind);
-    let returns = entry
-        .funds_return_at
-        .0
-        .map(|h| format!("Its funds return once the staking scan passes height {h}."));
     match (entry.state.as_str(), entry.dispatched_at_height.0) {
         ("pending", _) => format!("{kind}: waiting to be sent"),
         ("dispatched", Some(h)) => format!(
@@ -430,9 +495,8 @@ fn in_flight_line(entry: &InFlightEntry) -> String {
             if entry.attempts == 1 { "" } else { "s" }
         ),
         ("refused", _) => format!(
-            "{kind}: refused. {} {}",
-            entry.reason.0.as_deref().unwrap_or(""),
-            returns.unwrap_or_default()
+            "{kind}: refused. {}",
+            entry.reason.0.as_deref().unwrap_or("")
         ),
         ("expired", _) => {
             let refused = entry
@@ -441,10 +505,7 @@ fn in_flight_line(entry: &InFlightEntry) -> String {
                 .as_deref()
                 .map(|reason| format!(" {reason}"))
                 .unwrap_or_default();
-            format!(
-                "{kind}: can no longer be mined.{refused} {}",
-                returns.unwrap_or_default()
-            )
+            format!("{kind}: can no longer be mined.{refused}")
         }
         ("held", _) => format!("{kind}: kept. {}", entry.reason.0.as_deref().unwrap_or("")),
         (other, _) => format!("{kind}: {other}"),
@@ -743,6 +804,7 @@ mod tests {
             dispatched_at_height: sent.into(),
             attempts: u32::from(sent.is_some()),
             funds_return_at: returns.into(),
+            reserved: Some(shekyl_units::AtomicUnits::ZERO.into()).into(),
             reason: (state == "refused")
                 .then(|| "The node refused its fee as too low.".to_owned())
                 .into(),
@@ -801,6 +863,79 @@ mod tests {
         );
         assert_eq!(kind_word("exit"), "release");
         assert_eq!(kind_word("stake"), "stake");
+    }
+
+    /// WR-Q6: a line says what the entry still holds, says nothing when it
+    /// holds nothing, and says the amount is not known yet rather than
+    /// imply nothing is held.
+    #[test]
+    fn an_in_flight_line_says_what_it_holds() {
+        let holding = |reserved: Option<u64>| {
+            let mut e = entry("pending", None, None);
+            e.reserved = reserved
+                .map(|n| shekyl_units::AtomicUnits::from_raw(n).into())
+                .into();
+            in_flight_line(&e)
+        };
+        assert_eq!(
+            holding(Some(2_500_000_000)),
+            format!(
+                "return: waiting to be sent. It holds {}.",
+                super::format_amount(2_500_000_000)
+            )
+        );
+        assert_eq!(holding(Some(0)), "return: waiting to be sent");
+        assert_eq!(
+            holding(None),
+            "return: waiting to be sent. What it holds shows once the staking scan has run."
+        );
+
+        // With an end date: only a record that holds something is said to
+        // hold funds that return. A zero-fee claim reserves none.
+        let refused = |reserved: Option<u64>| {
+            let mut e = entry("refused", Some(5_010), Some(5_100));
+            e.reserved = reserved
+                .map(|n| shekyl_units::AtomicUnits::from_raw(n).into())
+                .into();
+            in_flight_line(&e)
+        };
+        assert_eq!(
+            refused(Some(2_500_000_000)),
+            format!(
+                "return: refused. The node refused its fee as too low. It holds {}; if its \
+                 transaction was not mined, that returns once the staking scan passes height \
+                 5100.",
+                super::format_amount(2_500_000_000)
+            )
+        );
+        let nothing = refused(Some(0));
+        assert_eq!(
+            nothing,
+            "return: refused. The node refused its fee as too low. It holds nothing. This \
+             record stays until the staking scan passes height 5100."
+        );
+        let unknown = refused(None);
+        assert_eq!(
+            unknown,
+            "return: refused. The node refused its fee as too low. What it holds shows once \
+             the staking scan has run. This record stays until the staking scan passes height \
+             5100."
+        );
+        // A zero hold and an unread amount must not promise that passing
+        // the end height will show whether the record was mined. A
+        // zero-fee claim ends unconfirmed because the scan cannot see it.
+        for line in [&nothing, &unknown] {
+            for claim in [
+                "funds",
+                "returns",
+                "set aside",
+                "whether it was mined",
+                "was mined",
+                "mined",
+            ] {
+                assert!(!line.contains(claim), "{claim}: {line}");
+            }
+        }
     }
 
     #[test]
