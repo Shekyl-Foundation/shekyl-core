@@ -30,7 +30,8 @@ use crate::params::{
 /// [`EconomicParams::block_weight_surge_factor`].
 ///
 /// `config/consensus_constants.json` `block_weight_short_term_surge_factor`.
-/// Ratified `S = 4` (`CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3). Loosening `S`
+/// Ratified `S = 3` (`CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3, re-signed
+/// 2026-11-08 as an Assumption, re-derived at `BA-T10`). Loosening `S`
 /// reopens Q2: for the first ~100 000 blocks this bound is the only
 /// protection against early-chain weight growth. Production reads the
 /// field.
@@ -171,7 +172,7 @@ pub fn long_term_weight(
 /// each doubling costs `window / 2 + 1` blocks — 51 at the ratified 100
 /// (C2-R2 Q3's 51-block doubling envelope). Reaching a ceiling `S ×` above
 /// the starting median takes `ceil(log2(S))` crossings. At `S = 50` this
-/// returns 306; at `S = 4` it returns 102.
+/// returns 306; at `S = 3` and at `S = 4` it returns 102.
 #[must_use]
 pub const fn blocks_to_surge_saturation(surge_factor: u64) -> u64 {
     const BLOCKS_PER_CROSSING: u64 = BLOCK_WEIGHT_SHORT_TERM_WINDOW / 2 + 1;
@@ -198,7 +199,7 @@ mod tests {
     use crate::params::{EconomicParams, SCALE};
 
     const ZONE: u64 = 300_000;
-    const RATIFIED: u64 = 4;
+    const RATIFIED: u64 = 3;
 
     fn shipped() -> EconomicParams {
         EconomicParams::default()
@@ -279,6 +280,7 @@ mod tests {
     #[test]
     fn saturation_at_the_ratified_factor_is_two_crossings() {
         assert_eq!(blocks_to_surge_saturation(RATIFIED), 102);
+        assert_eq!(blocks_to_surge_saturation(4), 102);
     }
 
     #[test]
@@ -301,7 +303,7 @@ mod tests {
         assert_eq!(blocks_to_surge_saturation(0), 0);
     }
 
-    /// The shipped governor is the ratified one: `S = 4`, the limit at
+    /// The shipped governor is the ratified one: `S = 3`, the limit at
     /// twice the median, the long-term clamp at 1.7.
     #[test]
     fn the_shipped_governor_is_the_ratified_one() {

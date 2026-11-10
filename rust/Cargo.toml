@@ -761,6 +761,24 @@ shekyl-pow-randomx = { opt-level = 3 }
 argon2 = { opt-level = 3 }
 blake2 = { opt-level = 3 }
 aes = { opt-level = 3 }
+# The hybrid signature and KEM arms and the hash under them are lattice and
+# Keccak arithmetic: ML-KEM (`fips203`), ML-DSA (`fips204`), FN-DSA (the
+# `fn-dsa` crates) and SHA-3 (`sha3` over `keccak`). Unoptimised, they set
+# the length of the crypto-pq round-trip suite and of every chain test that
+# signs or verifies. `overflow-checks` stays on: `[profile.dev]` sets it for
+# every package, and an `opt-level` override does not change that.
+fips203 = { opt-level = 3 }
+fips204 = { opt-level = 3 }
+fn-dsa = { opt-level = 3 }
+fn-dsa-comm = { opt-level = 3 }
+fn-dsa-kgen = { opt-level = 3 }
+fn-dsa-sign = { opt-level = 3 }
+fn-dsa-vrfy = { opt-level = 3 }
+sha3 = { opt-level = 3 }
+keccak = { opt-level = 3 }
+# Every chain-store and chain-ingest test runs on redb; an unoptimised
+# B-tree is the floor under each of them.
+redb = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

@@ -1,6 +1,6 @@
 {
   "calibration_generation": 1,
-  "params_digest": "blake2b:5a63a1d174bf5ef7fda7bb966e3e5e1f2ec00c90c6f7374d37cf146c9238bed2",
+  "params_digest": "blake2b:50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e",
   "scenario": "baseline_steady_state",
   "staking_state": "live",
   "records": [
