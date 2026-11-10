@@ -410,25 +410,9 @@ pub enum StoreInvariant {
         /// What was observed.
         observed: DrawableFault,
     },
-    /// **SI-31** — a settled epoch's market membership is frozen with its
-    /// `Σwork` (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
-    /// `archival_complete_trees[E]` is in the slash pass's write set beside
-    /// `archival_sigma_work[E]` (SI-21): written whole by the block that
-    /// settles `E`, the empty set included, insert-once
-    /// ([`FrozenFault::Rewritten`]), and present wherever `Σwork(E)` is —
-    /// a claim's re-gather that finds `Σwork(E)` without it
-    /// ([`FrozenFault::Absent`]) would have to read the record's
-    /// complete-tree flag, which a later slash or release can change.
-    /// Undone with the block through the journal.
-    CompleteTreesNotFrozen {
-        /// The settled epoch.
-        epoch: shekyl_types::SettlementEpoch,
-        /// Which half failed.
-        observed: FrozenFault,
-    },
     /// **SI-32** — a per-epoch table is read only where it is kept
     /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`). Each read of
-    /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
+    /// `archival_sigma_work`, `archival_budget`,
     /// `archival_settlement`, `archival_issued_draw`,
     /// `archival_issued_digest`, `archival_drawable_digest`,
     /// `archival_slash_applied` and `archival_r_market` takes its family's
@@ -659,15 +643,6 @@ pub enum DrawableFault {
     NotBuilt(shekyl_chain_rules::DrawableEpochFault),
 }
 
-/// What SI-31 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrozenFault {
-    /// The pass's write found a set already recorded for the epoch.
-    Rewritten,
-    /// A reader found `Σwork(E)` and no set: the write set is not whole.
-    Absent,
-}
-
 /// What an SI-25 check observed (payload of
 /// [`StoreInvariant::SettlementNotSound`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -834,7 +809,6 @@ impl StoreInvariant {
             Self::ReleaseJournalReadBelowFloor { .. } => 28,
             Self::DrawableDigestNotSingular { .. } => 29,
             Self::DrawableSetNotSound { .. } => 30,
-            Self::CompleteTreesNotFrozen { .. } => 31,
             Self::EpochReadBelowFloor { .. } => 32,
             Self::BlockDrawsNotSingular { .. } => 33,
             Self::BlockDrawsReadBelowFloor { .. } => 34,
@@ -1083,18 +1057,6 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
-            Self::CompleteTreesNotFrozen { epoch, observed } => match observed {
-                FrozenFault::Rewritten => write!(
-                    f,
-                    "archival_complete_trees already holds settlement epoch {epoch}; the slash \
-                     pass freezes an epoch's complete trees once"
-                ),
-                FrozenFault::Absent => write!(
-                    f,
-                    "settlement epoch {epoch} has a frozen Σwork and no frozen complete-tree \
-                     set; the slash pass writes the two together"
-                ),
-            },
             Self::EpochReadBelowFloor {
                 table,
                 asked,
@@ -1244,7 +1206,6 @@ impl core::error::Error for StoreInvariant {
             | Self::ReleaseJournalReadBelowFloor { .. }
             | Self::DrawableDigestNotSingular { .. }
             | Self::DrawableSetNotSound { .. }
-            | Self::CompleteTreesNotFrozen { .. }
             | Self::EpochReadBelowFloor { .. }
             | Self::BlockDrawsNotSingular { .. }
             | Self::BlockDrawsReadBelowFloor { .. }

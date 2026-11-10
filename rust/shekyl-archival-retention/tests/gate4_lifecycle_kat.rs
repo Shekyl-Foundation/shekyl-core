@@ -178,7 +178,6 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
                 serve_credit: r["serve_credit"].as_bool().unwrap_or(false),
                 join_settlement_epoch: r["join_epoch"].as_u64().unwrap_or(0),
                 bad_intervals: bad,
-                is_foundation: r["foundation"].as_bool().unwrap_or(false),
             }
         })
         .collect();

@@ -488,7 +488,6 @@ fn emission_facts(
                         .into_iter()
                         .map(|bond| EmissionCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals,
                         })
                         .collect();

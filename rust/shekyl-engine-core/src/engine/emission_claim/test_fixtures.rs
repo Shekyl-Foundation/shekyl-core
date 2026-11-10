@@ -32,12 +32,10 @@ pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         bonds: vec![
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
         ],
@@ -194,10 +192,6 @@ pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
             bond.insert(
                 "join_settlement_epoch".into(),
                 b.join_settlement_epoch.into(),
-            );
-            bond.insert(
-                "is_support_complete_tree".into(),
-                b.is_support_complete_tree.into(),
             );
             let flat: Vec<u64> = b
                 .bad_intervals

@@ -2042,7 +2042,7 @@ The table above is the C++ store's. The Rust store retires the per-epoch
 tables by their last reader, not at one `tip − W`
 ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §17):
 the claimable family (`archival_sigma_work`, `archival_budget`,
-`archival_complete_trees`, `archival_settlement`) `W` epochs back, the
+`archival_settlement`) `W` epochs back, the
 settling family (the issued-draw index and digest, the drawable digest,
 `archival_slash_applied`) `k`, and `archival_r_market` `k + 1`, each below
 the epoch before the boundary's, with reads below each floor refused

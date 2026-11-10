@@ -65,7 +65,6 @@ const RETIRED_AT_A_BOUNDARY: &[&str] = &[
     "archival_block_draws",
     "archival_support_block",
     "archival_sigma_work",
-    "archival_complete_trees",
     "archival_budget",
     "archival_settlement",
     "archival_support_settlement",

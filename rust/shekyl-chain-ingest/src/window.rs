@@ -173,10 +173,9 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
         | Corrupt::BondRecordInvariant { .. }
         | Corrupt::AccrualOverflow { .. }
         | Corrupt::SettlementIntegrity { .. }
-        // An epoch's drawable set or its frozen complete-tree set, like
-        // settlement: the fault names the epoch, not a block.
-        | Corrupt::DrawableEpoch { .. }
-        | Corrupt::CompleteTreesAbsent { .. } => BlockHeight::ZERO,
+        // An epoch's drawable set, like settlement: the fault names the
+        // epoch, not a block.
+        | Corrupt::DrawableEpoch { .. } => BlockHeight::ZERO,
     }
 }
 

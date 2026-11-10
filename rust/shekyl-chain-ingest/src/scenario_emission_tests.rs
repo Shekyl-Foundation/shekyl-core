@@ -84,13 +84,13 @@ use crate::chain_drive::{catch_up, spender_owning_before, Driven};
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
-use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch_of, mine_to,
     settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
 };
+use crate::support_trees::{drive_support_trees, price_trees_claim};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 use std::sync::Arc;
 
@@ -238,7 +238,6 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // arithmetic, and the claim below is built from it.
     let bonds = [EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
-        is_support_complete_tree: false,
         bad_intervals: &[],
     }];
     let shards = [EpochCloseShard {
@@ -409,7 +408,6 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
                 row.bonds,
                 vec![ClaimBondRow {
                     join_settlement_epoch: join_epoch.to_raw(),
-                    is_support_complete_tree: false,
                     bad_intervals_flat: vec![],
                 }]
             );
@@ -587,35 +585,29 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     scenario.close().await;
 }
 
-/// `SO-D12h` on the driven chain (module docs), and the claim window's
-/// edge under the per-epoch retirement (§17). The compact persona `P`
-/// joins shard 0 beside two complete trees, `T1` and `T2`; all three are
-/// Served on shard 0 in `served`. The pass excludes `T1` and `T2` from the
-/// market as complete trees and freezes the set beside `Σwork(served)`.
-/// After the pass `T1` releases (an empty compact record, a clean
-/// zero-length interval) and `T2` misses eleven epochs and is slashed (an
-/// empty compact record, an interval that opens eleven epochs after
-/// `served`). Neither change reaches `served`'s market: the claim connects,
-/// at the first block where `served` is the oldest claimable epoch. A claim
-/// one epoch older is refused there as expired at CEN-J25, before any read.
+/// The claim window's edge under the per-epoch retirement (§17), on the
+/// support-trees chain (module docs). The compact persona `P` joins shard 0
+/// beside two complete trees, `T1` and `T2`. `P` is Served on shard 0 in
+/// `served`, and the trees are Served on the support stream. Neither tree
+/// is in `served`'s market: a complete tree lists no shard (CEN-J14), so no
+/// economy row credits it. After the pass `T1` releases (an empty compact
+/// record, a clean zero-length interval) and `T2` misses eleven epochs and
+/// is slashed (an empty compact record, an interval that opens eleven
+/// epochs after `served`). Neither change reaches `served`'s market: the
+/// claim connects, at the first block where `served` is the oldest
+/// claimable epoch. A claim one epoch older is refused there as expired at
+/// CEN-J25, before any read.
 ///
-/// The joins, the draws, the release and the slash are
-/// `drive_frozen_membership`. This test still judges the expired claim and
-/// the pool submission before
-/// it connects the claim those events left.
-///
-/// Red edit: take the flag in CEN-J23 from the records
-/// (`freeze_complete_trees` over A11's rows in place of A22) — `T1` and
-/// `T2` read compact, good through `served` and credited, so both join the
-/// re-gather's market, `R_market(0, served)` reads 3 and `Σwork` grows; the
-/// claim is refused at CEN-J25.
+/// The joins, the draws, the releases and the slash are
+/// `drive_support_trees`. This test still judges the expired claim and the
+/// pool submission before it connects the claim those events left.
 #[tokio::test]
 #[ignore = "minutes of proofs; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
     // The settled schedule: admitted draws give a pair its counted draws
     // only on it (`settled_epoch_blocks`).
     let rules = settled_rules();
-    let mut scenario = Scenario::open_under("scenario-emission-frozen-membership", FreeHash, rules);
+    let mut scenario = Scenario::open_under("scenario-emission-support-trees", FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
     let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
     let [closed] = filled.closed.as_slice() else {
@@ -628,7 +620,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     );
     mine_to(&mut scenario, &mut mined, join_height).await;
     let mut drive = Driven::begin(scenario, mined);
-    let facts = drive_frozen_membership(&mut drive, *closed).await;
+    let facts = drive_support_trees(&mut drive, *closed).await;
     let served = facts.served;
 
     // The persona's outputs were paid in the join. Own them before that
@@ -642,10 +634,9 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     let two_below = SettlementEpoch::from_raw(served.to_raw() - 2);
     let (expired_tx, older_tx, served_tx) = {
         let scenario = &mut drive.scenario;
-        let expired_tx = price_frozen_claim(scenario, &facts, &spender, expired, TWIN_TX_KEY).await;
-        let older_tx =
-            price_frozen_claim(scenario, &facts, &spender, two_below, OLDER_TX_KEY).await;
-        let served_tx = price_frozen_claim(scenario, &facts, &spender, served, CLAIM_TX_KEY).await;
+        let expired_tx = price_trees_claim(scenario, &facts, &spender, expired, TWIN_TX_KEY).await;
+        let older_tx = price_trees_claim(scenario, &facts, &spender, two_below, OLDER_TX_KEY).await;
+        let served_tx = price_trees_claim(scenario, &facts, &spender, served, CLAIM_TX_KEY).await;
         (expired_tx, older_tx, served_tx)
     };
 
@@ -669,7 +660,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     // the oldest claimable one, the rows are already retired. The claim on
     // the oldest claimable epoch is admitted.
     let submitted = [expired_tx, older_tx, served_tx.clone()];
-    let path = crate::test_support::tmp("scenario-emission-frozen-submit-pool");
+    let path = crate::test_support::tmp("scenario-emission-support-trees-submit-pool");
     let (reasons, verdicts) = drive
         .scenario
         .with_store(|store, rules| {

@@ -58,9 +58,6 @@
 //! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
 //!   written at its open (`SO-D10g`). `None` is no recorded set; an
 //!   all-zero digest is a digest.
-//! - **A22** [`complete_trees`] — the complete trees a settled epoch's
-//!   slash pass excluded from its market, frozen beside `Σwork(E)`
-//!   (`SO-D12h`). `None` is an epoch not settled; an empty set is a value.
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
@@ -131,8 +128,8 @@ use shekyl_chain_rules::{
 };
 use shekyl_store_codec::{BlobKind, CodecError};
 pub use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued, SupportRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, LoggedSlash, PassCount,
+    ReleasedRecord, ServedShard, SettlementRow, SupportIssued, SupportRow,
 };
 use shekyl_types::archival::{BundleReferences, SettlementOutcome};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -146,11 +143,10 @@ use crate::ids::{
 };
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED,
-    ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -187,8 +183,6 @@ const BLOCK_DRAWS: &str = "archival_block_draws";
 const SUPPORT_BLOCK: &str = "archival_support_block";
 /// The `archival_drawable_digest` cell as faults name it.
 const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
-/// The `archival_complete_trees` cell as faults name it.
-const COMPLETE_TREES: &str = "archival_complete_trees";
 
 /// SI-32: `epoch` is at or above its family's `floor`, or the read is
 /// refused before the table is opened — a row below the floor may have
@@ -811,19 +805,6 @@ pub(super) fn drawable_digest<T: ReadTables>(
         epoch.to_raw(),
         DRAWABLE_DIGEST,
     )
-}
-
-/// **A22.** `archival_complete_trees[epoch]` — the complete trees the
-/// epoch's slash pass excluded from its market, frozen beside `Σwork(E)`
-/// (`SO-D12h`). `None` is an epoch not settled; a written empty set is a
-/// value.
-pub(super) fn complete_trees<T: ReadTables>(
-    txn: &T,
-    epoch: SettlementEpoch,
-    floor: EpochFloor<Claimable>,
-) -> Result<Option<CompleteTreeSet>, ReadFault> {
-    kept(COMPLETE_TREES, epoch, floor)?;
-    chain_reads::cell(txn, ARCHIVAL_COMPLETE_TREES, epoch.to_raw(), COMPLETE_TREES)
 }
 
 /// The nine table-backed families of the archival snapshot

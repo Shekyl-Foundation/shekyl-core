@@ -409,8 +409,13 @@ use super::{Canonical, CodecError};
 ///   after it each move up one ordinal (`archival_support_block` 44 through
 ///   `archival_bundle_body` 48). `support_row.snap` replaces
 ///   `support_seats.snap` and `support_count.snap`, and `tables.snap`
-///   re-pins. A `35` file is refused at open. Rebuild from the block
-///   corpus, as at every bump.
+///   re-pins. `archival_complete_trees` (layout 29) is deleted with SI-31:
+///   a complete tree lists no shard (CEN-J14), so no gather credits one
+///   and the set each pass froze was always empty. The five tables after
+///   it move up one ordinal again (`archival_support_block` 43 through
+///   `archival_bundle_body` 47), and `complete_tree_set.snap` is removed.
+///   A `35` file is refused at open. Rebuild from the block corpus, as at
+///   every bump.
 ///
 /// [`FamilySet`]: crate::family_set::FamilySet
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);

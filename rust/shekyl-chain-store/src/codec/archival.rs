@@ -28,10 +28,9 @@ use shekyl_store_codec::BlobKind;
 use shekyl_types::archival::BundleReferences;
 
 pub use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight, HeldShard,
-    HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportRow,
-    SupportSeats, MAX_BOND_KEY_BYTES,
+    BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, HeldShards, Holdings,
+    HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, SupportCount, SupportIssued, SupportRow, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 /// `archival_bundle_references[height]` — a block's bundle references as

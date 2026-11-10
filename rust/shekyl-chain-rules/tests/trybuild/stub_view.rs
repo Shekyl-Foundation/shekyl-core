@@ -35,7 +35,7 @@ use shekyl_chain_rules::{
     TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest,
+    BlockDraws, BondRecord, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest,
     SupportRow,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
     SlashLogEntry,
@@ -309,13 +309,6 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: SettlementEpoch,
         _: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Infallible> {
-        Ok(None)
-    }
-    fn complete_trees(
-        &self,
-        _: SettlementEpoch,
-        _: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, Infallible> {
         Ok(None)
     }
     fn release_journal_after(

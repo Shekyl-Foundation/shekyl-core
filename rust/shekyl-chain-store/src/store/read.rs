@@ -62,8 +62,8 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_fold::{self, BlockArchivalFold};
 use super::archival_reads::{
-    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    ServedShard, SettlementRow, SupportRow,
+    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow, SupportRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1319,18 +1319,6 @@ impl ReadSnapshot<'_> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(&self.txn, epoch, floor)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A22.** The complete trees `epoch`'s slash pass excluded from its
-    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
-    /// settled. An empty set is a value.
-    pub fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, StoreError> {
-        archival_reads::complete_trees(&self.txn, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

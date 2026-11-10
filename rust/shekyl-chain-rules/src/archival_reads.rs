@@ -26,10 +26,10 @@
 ///   answers `None` for a height or an epoch never written, and that
 ///   absence is the hole.
 /// * `archival_reads!(empty, r_market from <path>, sigma_work from <path>,
-///   budget from <path>, complete_trees from <path>, slash_watermark from <path>)`
-///   — `empty`, except that five reads answer from `self.<path>`:
+///   budget from <path>, slash_watermark from <path>)`
+///   — `empty`, except that four reads answer from `self.<path>`:
 ///   `r_market` from a `BTreeMap<(ShardId, SettlementEpoch), RMarket>` of
-///   planted prices, `sigma_work`, `budget` and `complete_trees` each from
+///   planted prices, `sigma_work` and `budget` each from
 ///   a map keyed by epoch, and `last_settled_slash_epoch` from an
 ///   `Option<SettlementEpoch>`. The archival reads a no-bonds view may
 ///   plant: CEN-J15's accept needs a shard priced at the slash watermark,
@@ -38,8 +38,7 @@
 ///   reaches any of them (`rules/tx_bond.rs`, J15's witness note;
 ///   `rules/tx_emission_against.rs`). These are settled values the close
 ///   and the slash pass wrote, not records, so planting them tests no
-///   construction. `complete_trees` is its own map: a planted `Σwork` does
-///   not invent a set (SI-31). An absent key stays `None`. `block_draws`
+///   construction. An absent key stays `None`. `block_draws`
 ///   and `drawable_digest` are `empty`'s: this view has no bond history
 ///   either, so it records the same zero row and the same empty digest.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
@@ -61,11 +60,10 @@ macro_rules! archival_reads {
         r_market from $($price:ident).+,
         sigma_work from $($sigma:ident).+,
         budget from $($budget:ident).+,
-        complete_trees from $($trees:ident).+,
         slash_watermark from $($mark:ident).+
     ) => {
         $crate::archival_reads!(
-            @methods {planted $($price).+ ; $($sigma).+ ; $($budget).+ ; $($trees).+ ; $($mark).+}
+            @methods {planted $($price).+ ; $($sigma).+ ; $($budget).+ ; $($mark).+}
         );
     };
     (fault $err:expr) => {
@@ -241,14 +239,6 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::DrawableDigest>);
             (epoch, floor);
             (::core::option::Option::None));
-        $crate::archival_reads!(@emit $policy; complete_trees;
-            (
-                epoch: shekyl_types::SettlementEpoch,
-                floor: $crate::EpochFloor<$crate::Claimable>
-            );
-            (::core::option::Option<shekyl_types::archival::CompleteTreeSet>);
-            (epoch, floor);
-            (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; release_journal_after;
             (height: shekyl_types::BlockHeight, floor: $crate::ReleaseJournalFloor);
             (::std::vec::Vec<shekyl_types::archival::ReleasedRecord>);
@@ -279,42 +269,34 @@ macro_rules! archival_reads {
     // floor is the store's to compare, and a planted view keeps every row
     // it was given, so these arms `@touch` the floor and read their map.
     // A nested arm cannot name `self` (the note on `@methods`), so the
-    // lookup stays here: `.copied()` for the `Copy` rows, `.cloned()` for
-    // the set. `r_market`, `sigma_work`, `budget` and `complete_trees`
-    // are those maps. `complete_trees` is not derived from `Σwork`: a
-    // work total with no set is `Corrupt::CompleteTreesAbsent` (SI-31),
-    // and an absent key stays `None`. `last_settled_slash_epoch` reads
-    // its field. Every other archival read is `empty`'s.
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($shard:expr, $epoch:expr, $floor:expr); ($empty:expr)) => {
+    // lookup stays here, `.copied()` for each row. `r_market`,
+    // `sigma_work` and `budget` are those maps, and an absent key stays
+    // `None`. `last_settled_slash_epoch` reads its field. Every other
+    // archival read is `empty`'s.
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($shard:expr, $epoch:expr, $floor:expr); ($empty:expr)) => {
         fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $floor);
             ::core::result::Result::Ok(self.$($price).+.get(&($shard, $epoch)).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $floor);
             ::core::result::Result::Ok(self.$($sigma).+.get(&$epoch).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; complete_trees; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
-        fn complete_trees(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            $crate::archival_reads!(@touch $floor);
-            ::core::result::Result::Ok(self.$($trees).+.get(&$epoch).cloned())
-        }
-    };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn budget(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $floor);
             ::core::result::Result::Ok(self.$($budget).+.get(&$epoch).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn last_settled_slash_epoch(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             ::core::result::Result::Ok(self.$($mark).+)
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         $crate::archival_reads!(@empty_digest ($($params)*); $ok; $epoch; $floor);
     };
     (@empty_digest ($($params:tt)*); $ok:ty; $epoch:expr; $floor:expr) => {
@@ -325,7 +307,7 @@ macro_rules! archival_reads {
             ))
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
             ::core::result::Result::Ok($empty)

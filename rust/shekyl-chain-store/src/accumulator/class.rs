@@ -113,7 +113,6 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("archival_bundle_body", AccumulatorClass::Excluded),
     ("archival_bundle_queue", AccumulatorClass::Excluded),
     ("archival_bundle_references", AccumulatorClass::Small),
-    ("archival_complete_trees", AccumulatorClass::Excluded),
     ("archival_drawable_digest", AccumulatorClass::Excluded),
     ("archival_issued_digest", AccumulatorClass::Excluded),
     ("archival_issued_draw", AccumulatorClass::Excluded),

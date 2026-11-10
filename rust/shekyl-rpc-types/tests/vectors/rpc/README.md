@@ -263,6 +263,8 @@ predecessors reshaped that way and nothing else
 and do not move. `get_version_synced_v47` is the chain's 3.70 link.
 
 **3.71 — `get_blocks_by_height.bin`'s entries carry the block's bundle
-references and the bodies this node holds for them** (the switch's C4).
-No JSON fixture carries a `.bin` entry, so none has a successor.
+references and the bodies this node holds for them** (the switch's C4),
+**and a claim-source bond row drops `is_support_complete_tree`** (C7).
+No JSON fixture carries a `.bin` entry or a claim-source row, so none
+has a successor.
 `get_version_synced_v48` is the chain's 3.71 link.

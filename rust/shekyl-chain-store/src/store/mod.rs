@@ -138,9 +138,8 @@ pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
-    EdgeFault, EngineError, ErrorClass, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
-    PoolCannot, QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
-    UndoFault,
+    EdgeFault, EngineError, ErrorClass, HeldRegion, LeafCountFault, LeafDensity, PoolCannot,
+    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{

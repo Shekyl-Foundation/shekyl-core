@@ -127,8 +127,7 @@ use shekyl_chain_rules::{CappedEpoch, Corrupt, RuleSet, SettlementCheck, SlashLo
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
-    CompleteTreeSet, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
-    SigmaWorkMilli, SlashedHolding,
+    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SlashedHolding,
 };
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;

@@ -88,10 +88,10 @@ mod alt_tests;
 
 pub use alt::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 pub use archival::{
-    BlockDraws, BondRecord, BundleReferencesBytes, CompleteTreeSet, DrawableDigest,
-    FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
-    RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
-    SupportIssued, SupportRow, SupportSeats, MAX_BOND_KEY_BYTES,
+    BlockDraws, BondRecord, BundleReferencesBytes, DrawableDigest, FirstPayingHeight, HeldShard,
+    HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportRow,
+    SupportSeats, MAX_BOND_KEY_BYTES,
 };
 pub use bundle::{QueuedBody, QueuedBundle};
 pub(crate) use chain::stored_timelock;

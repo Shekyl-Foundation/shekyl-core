@@ -2746,9 +2746,8 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
     use crate::codec::{IssuedDigest, IssuedDraw, Present, RMarket, SettlementRow};
     use crate::ids::{IssuedDrawKey, SettlementKey, SlashAppliedKey};
     use crate::schema::{
-        ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-        ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
-        ARCHIVAL_SLASH_APPLIED,
+        ARCHIVAL_BUDGET, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW,
+        ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
     };
     use shekyl_types::archival::DrawableDigest;
     use shekyl_types::SettlementEpoch;
@@ -2836,7 +2835,6 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
     let retained = |store: &ChainStore| {
         (
             epochs_of(store, ARCHIVAL_SIGMA_WORK),
-            epochs_of(store, ARCHIVAL_COMPLETE_TREES),
             epochs_of(store, ARCHIVAL_BUDGET),
             epochs_of(store, ARCHIVAL_ISSUED_DIGEST),
             epochs_of(store, ARCHIVAL_DRAWABLE_DIGEST),
@@ -2854,20 +2852,19 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
         before[1..],
         "exactly the one epoch below the floor went"
     );
-    assert_eq!(after.1, after.0, "a complete-tree set beside every Σwork");
     assert_eq!(
-        after.2.first(),
+        after.1.first(),
         Some(&claim),
         "budgets kept from the claimable floor"
     );
-    assert_eq!(after.3, vec![settle]);
+    assert_eq!(after.2, vec![settle]);
     assert_eq!(
-        after.4,
+        after.3,
         (settle..=WINDOW_RULES.settlement_schedule().epoch_at_height(boundary)).collect::<Vec<_>>(),
         "the chain's opens at or above the settling floor stay; the planted epoch below it does not"
     );
     assert_eq!(
-        after.5,
+        after.4,
         [vec![claim], vec![settle], vec![settle], vec![price]],
         "settlement, slash-applied, issued draws, R_market: each at its floor"
     );
@@ -2892,13 +2889,6 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
     below(
         snap.sigma_work(e(claim - 1), floors.claimable).unwrap_err(),
         "archival_sigma_work",
-        claim - 1,
-        claim,
-    );
-    below(
-        snap.complete_trees(e(claim - 1), floors.claimable)
-            .unwrap_err(),
-        "archival_complete_trees",
         claim - 1,
         claim,
     );
@@ -2959,7 +2949,7 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
     // that insert. Nothing the batch retired comes back.
     let mut popped_rows = after.clone();
     let opened_here = WINDOW_RULES.settlement_schedule().epoch_at_height(boundary);
-    assert_eq!(popped_rows.4.pop(), Some(opened_here));
+    assert_eq!(popped_rows.3.pop(), Some(opened_here));
     assert_eq!(
         retained(&store),
         popped_rows,

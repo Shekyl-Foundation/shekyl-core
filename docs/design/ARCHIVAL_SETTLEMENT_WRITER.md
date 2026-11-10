@@ -1862,47 +1862,36 @@ increment 2 and sharing no code with it. Grounded at `dev@09402ea19`.
 | `SO-D12h` (A) | **Freeze the fact at the pass.** The slash pass for `E` writes the set of personas its gather excluded from `E`'s market as complete trees; a claim's re-gather reads the flag from that set. The Release journal cannot carry it: the slash log retires after `k + n` epochs plus the reorg cap, a claim reaches back over the 26-epoch claim window, and the reference point is the pass, not `h_open(E)` |
 | `SO-D12h` (retirement) | **Retire the per-epoch tables in this PR.** Each per-epoch table is retired below the epoch where its last reader stops, in the boundary batch, unjournaled, every horizon a function of the epoch calendar and the rule set. A read below a table's horizon is refused, never answered as absent. A table with no derivable horizon is reported, not given one |
 
-### 17.2 The defect
+### 17.2 The defect, and why it closed
 
 The slash pass for `E` gathers `Σwork(E)` over the bond records as it
 left them (`close.rs`, `Transition::gather`). A claim on `E` re-gathers
 with the records as they are at the claim (`tx_emission_against.rs`,
-`J23::gather`). Market membership (`market_member_at_epoch`) excludes a
-complete tree, and the gather read that flag off the record's holdings.
-A complete tree that is slashed or released after the pass holds a
-compact set, so it was a member in the claim's re-gather and not in the
-pass's. The recomputed `Σwork(E)` then differed from the frozen row and
-an honest claim failed CEN-J25 at any epoch of the claim window.
+`J23::gather`). Before the switch the gather excluded a credited complete
+tree from the market by its record's holdings, and a tree slashed or
+released after the pass held a compact set, so the two gathers could
+disagree. `SO-D12h` (A) froze the excluded set at the pass.
 
-### 17.3 What the pass freezes
+### 17.3 The frozen set is deleted (the switch's C7, 2026-11-10)
 
-- **The set.** `CompleteTreeSet` (`shekyl_types::archival`): persona
-  ids, strictly increasing. It holds the bonds the gather **credited** at
-  `E` (a Served settlement row) whose record held a complete tree as the
-  pass left them — the gather's exclusions as complete trees
-  (`freeze_complete_trees`). A complete tree with no credit is not in the
-  gather and not in the set. A bond excluded for a bad interval is in the
-  set only if it is also a complete tree.
-- **One source for both readers.** `gather_epoch_snapshot` takes the set
-  as an operand and never reads a record's holdings for the flag. The pass
-  computes the set from its post-images and gathers with it; CEN-J23
-  reads it back (A22) and gathers with it. The pass's
-  `freeze_complete_trees` is the one read of the record's flag on the
-  gather's path.
-- **The table.** `archival_complete_trees` (Rust-only, ordinal 45, layout 29): epoch
-  → the set. Written by the pass in its write set beside
-  `archival_sigma_work[E]`, insert-once, the empty set written and not
-  skipped (`ARW-Q4`), undone with the block through the journal. An epoch
-  with no row was not settled. Governed by `ArchivalFamily::SigmaWork`,
-  the family whose reader needs it.
-- **SI-31** (`StoreInvariant::CompleteTreesNotFrozen`): a second write
-  is refused at the insert; a settled epoch whose `Σwork` has no set is
-  `Corrupt::CompleteTreesAbsent` at the claim's read, a fault and never a
-  refusal of the claim.
+After the switch no gather credits a complete tree, so the set each pass
+froze was always empty:
 
-**No other field the gather reads moves under a settled epoch.** The
-gather reads the join epoch, the complete-tree flag and the interval
-log. The join epoch is immutable, and SI-19 makes a join insert once. A
+- a complete tree lists no shard (CEN-J14, `CompleteTreeWithShardIds`),
+  so it is drawn on the support stream only and no economy settlement row
+  is ever Served for it;
+- a record is never removed, and CEN-J14 refuses a JoinMarket for a
+  persona with a record (`RecordExists`), so no persona credited in `D`
+  becomes a tree, even across a release and a rejoin.
+
+`CompleteTreeSet`, `freeze_complete_trees`, `archival_complete_trees`
+(A22), SI-31 and `Corrupt::CompleteTreesAbsent` are deleted, and so is
+the gather's complete-tree flag: market membership is `good_through`
+alone. The two gathers read the same records and the same credits, and
+neither reads a holdings flag.
+
+**No field the gather reads moves under a settled epoch.** The
+gather reads the join epoch and the interval log. The join epoch is immutable, and SI-19 makes a join insert once. A
 slash opens `[E', ∞)` at the epoch it slashes for, and a later pass
 slashes for a later epoch. A Release appends the zero-length `[R, R)`,
 which `good_through` skips. A Reinstate closes the one open interval at
@@ -1921,7 +1910,7 @@ epoch below `epoch(h) − LAG`, and each read takes that floor
 
 | Family | Tables | Last reader | `LAG` | Tight at |
 | --- | --- | --- | --- | --- |
-| Claimable | `archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement` | a claim (CEN-J23, after the window check); the failure window (`settlement_retention_floor`) | `W` = `MAX_CLAIM_AGE_W` = 26 | a claim on the window's floor; the window's own bound, which is `epoch(h) − W` |
+| Claimable | `archival_sigma_work`, `archival_budget`, `archival_settlement` | a claim (CEN-J23, after the window check); the failure window (`settlement_retention_floor`) | `W` = `MAX_CLAIM_AGE_W` = 26 | a claim on the window's floor; the window's own bound, which is `epoch(h) − W` |
 | Settling | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | the slash pass of the epoch, in epoch `E + k` | `k` = `SLASH_GRACE_EPOCHS` = 1 | the pass reads its own epoch |
 | Pricing | `archival_r_market` | CEN-J15, at the slash watermark as of the parent | `k + 1` = 2 | the first block of an epoch, whose parent ran the pass of `epoch − 1 − k` |
 
@@ -1961,7 +1950,7 @@ is the refusal at open above.
 
 **A read below a floor is refused (SI-32,
 `StoreInvariant::EpochReadBelowFloor`).** Each read of these tables (A6–A8,
-A12, A14–A17, A19, A22) takes its family's floor from the caller, as A2
+A12, A14–A17, A19) takes its family's floor from the caller, as A2
 takes the slash log's (SI-26). The store compares and does not source the
 floor, and refuses an epoch below it rather than answer "absent": absent
 means never written, and a retired row was written. Every reader asks
@@ -2007,26 +1996,22 @@ it retires below `BlockDrawsFloor`, and a read below that floor is SI-34.
 
 ### 17.6 Pruning
 
-The frozen set and the claim's read of it come from kept state: bond
-records and settlement rows, themselves built from the kept transaction
-prefix. A node that replays from the pruned corpus, or syncs below an
+The gather comes from kept state: bond records and settlement rows,
+themselves built from the kept transaction prefix. A node that replays from the pruned corpus, or syncs below an
 anchor, builds the same row. Neither reads prunable transaction bytes or
 bundle bytes.
 
 ### 17.7 Tests
 
-- **The defect, driven** (`shekyl-chain-ingest`, live lane,
-  `a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`).
-  Two complete trees are Served beside the claimant in `E`. After `E`'s
-  pass one releases and the other is slashed at its eleventh miss. The
-  claim on `E` connects at the first block where `E` is the oldest
-  claimable epoch. A claim one epoch older is refused there at CEN-J25.
-  With the flag read from the records in CEN-J23, the same claim is
-  refused at CEN-J25.
-- **The frozen set** (`settlement_slash_tests`): a Served complete tree is
-  in it, a Missed one is not, and an epoch that credited nothing writes
-  the empty set. The pop of the settling block removes the row. A second
-  write is SI-31, and the absent half maps to SI-31.
+- **The claim window's edge, driven** (`shekyl-chain-ingest`, live lane,
+  `a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`,
+  on the support-trees chain). Two complete trees serve on the support
+  stream beside the claimant in `E`; `E`'s issued draws are the
+  claimant's pair alone. After `E`'s pass one tree releases (its early
+  release refused at CEN-J16, its rejoin at CEN-J14) and the other is
+  slashed at its eleventh miss. The claim on `E` connects at the first
+  block where `E` is the oldest claimable epoch. A claim one epoch older
+  is refused there at CEN-J25.
 - **Retirement** (`prune_tests`): each table retires at its family's floor
   at the boundary. A read below a floor is SI-32 with the table and both
   epochs; a read at it answers. A pop and a reconnect restore nothing and
@@ -2040,13 +2025,11 @@ bundle bytes.
 ### 17.8 Open
 
 - **#1102's `emission_epoch_facts`** is routed through the same gather:
-  the claimable floor, the frozen set, and the claim window. Each claimed
+  the claimable floor and the claim window. Each claimed
   epoch answers with one `EmissionEpochStanding`: `Expired` (below the
   claimable floor, with the window's floor; nothing is read, since its rows
   may be retired), `Unsettled` (the rows it has), or `Settled` (the rows and
   the snapshot). The submit shim carries the same state into its facts
   (`EpochClaimStanding`), and the verifier refuses an expired epoch as
   `EpochClaimExpired` at that floor before E7, so a submission is never
-  refused as a missing budget row and never becomes a `ShimFault`. A
-  settled epoch without its set is `Corrupt::CompleteTreesAbsent` (SI-31),
-  as on the claim path.
+  refused as a missing budget row and never becomes a `ShimFault`.

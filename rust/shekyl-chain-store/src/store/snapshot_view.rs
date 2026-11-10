@@ -35,8 +35,8 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -387,15 +387,6 @@ impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.snapshot.txn(), epoch, floor)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, StoreError> {
-        archival_reads::complete_trees(self.snapshot.txn(), epoch, floor)
             .map_err(ReadFault::into_plain)
     }
 

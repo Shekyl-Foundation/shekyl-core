@@ -8,7 +8,7 @@
 //!
 //! The chains are the ones the other drivers already mine.
 //! [`a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on`]
-//! is the frozen-membership chain, and
+//! is the support-trees chain, and
 //! [`a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the_join_on`]
 //! is the levered slash chain. Each connect after the proof fill is popped
 //! and connected again by [`Driven`](crate::chain_drive::Driven). The pop
@@ -42,13 +42,13 @@ use crate::chain_drive::{
     catch_up, priced_emission_claim, spender_owning_before, Driven, EmissionClaimParts,
 };
 use crate::emission_assembly::ClaimTerms;
-use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch_of, mine_to,
     settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
 };
+use crate::support_trees::{drive_support_trees, price_trees_claim};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 
 /// The claim chain's transaction key. The straddle's three claims each
@@ -64,7 +64,8 @@ const STRADDLE_AGAIN_TX_KEY: [u8; 32] = [0x73; 32];
 /// Events round-tripped, in chain order: three joins in one block at a
 /// non-zero epoch; the drain of their funding outputs into the tree ten
 /// blocks later (CEN-L11); each epoch's close; `served`'s pass (settlements,
-/// `R_market`, `Σwork`, the frozen complete-tree set); a Release; a slash,
+/// `R_market`, `Σwork`); a refused early Release and a Release; a refused
+/// rejoin; a slash,
 /// whose pop is its revert; the claim at the first block of `served + W`,
 /// which sets the first paying height once and is the block whose batch
 /// retires the claimable rows below `served − 1`. Popping the claim and
@@ -102,7 +103,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
     mine_to(&mut scenario, &mut mined, join_height).await;
     let mut drive = Driven::begin(scenario, mined);
     drive.round_trip_from_here().await;
-    let facts = drive_frozen_membership(&mut drive, *closed).await;
+    let facts = drive_support_trees(&mut drive, *closed).await;
 
     let generated_before = drive
         .scenario
@@ -115,7 +116,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
         facts.join_height,
         &[facts.backing_key, facts.fee_key],
     );
-    let claim_tx = price_frozen_claim(
+    let claim_tx = price_trees_claim(
         &mut drive.scenario,
         &facts,
         &spender,
@@ -126,7 +127,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
     let claimed = drive
         .connect(vec![claim_tx])
         .await
-        .unwrap_or_else(|outcome| panic!("the claim on the frozen membership connects: {outcome}"));
+        .unwrap_or_else(|outcome| panic!("the claim after the trees' paths connects: {outcome}"));
     assert_eq!(claimed.height, facts.connecting);
     let record = record_of(&drive.scenario, &facts.persona).await;
     assert_eq!(
@@ -219,7 +220,6 @@ async fn claim_of(
         .budget();
     let bonds = [EpochCloseBond {
         join_settlement_epoch: claim.join_epoch.to_raw(),
-        is_support_complete_tree: false,
         bad_intervals: &[],
     }];
     let shards = [EpochCloseShard {

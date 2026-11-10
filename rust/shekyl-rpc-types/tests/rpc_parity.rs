@@ -1086,7 +1086,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.68 (sync_info is chain sync's view, CS-5 §7; get_version gains nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
         &[], // 3.70 (get_info's Peers part is one row per connector; get_version gains nothing)
-        &[], // 3.71 (get_blocks_by_height.bin entries carry bundle_references and bundle_bodies, the switch's C4; get_version gains nothing)
+        &[], // 3.71 (get_blocks_by_height.bin entries carry bundle_references and bundle_bodies, the switch's C4; the claim-source bond row drops is_support_complete_tree, C7; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1145,7 +1145,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.68 (sync_info's spans and overview are not get_version's; it retires nothing)
         &[], // 3.69 (already_in_pool carries required relay, including untracked; get_version gains nothing)
         &[], // 3.70 (the Peers rows are not get_version's; it retires nothing)
-        &[], // 3.71 (the bundle arrays are not get_version's; it retires nothing)
+        &[], // 3.71 (the bundle arrays and the claim-source bond row are not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),

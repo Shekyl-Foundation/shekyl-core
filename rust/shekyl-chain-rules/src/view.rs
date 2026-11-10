@@ -64,9 +64,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
-    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SupportRow,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount,
+    RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportRow,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -800,21 +799,6 @@ pub trait ChainView<'id>: HeaderView<'id> {
         epoch: SettlementEpoch,
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
-
-    /// **A22.** The personas `epoch`'s slash pass excluded from the
-    /// epoch's market as complete trees, as it froze them beside `Σwork(E)`
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`), or `None` for an epoch
-    /// the pass has not settled. A written empty set is a value. CEN-J23's
-    /// re-gather takes every bond's complete-tree flag from it and never
-    /// from the record, which may have stopped holding a complete tree
-    /// since the pass.
-    ///
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, Self::Fault>;
 
     /// **A20.** Every Release journaled at a height **strictly above**
     /// `height`, ascending by height and then persona: each releasing

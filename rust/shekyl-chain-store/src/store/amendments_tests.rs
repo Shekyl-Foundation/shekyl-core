@@ -416,7 +416,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
     let alt_bodies = schema::ordinal_of("alt_block_bodies").expect("catalogued");
     let release_journal = schema::ordinal_of("archival_release_journal").expect("catalogued");
-    let complete = schema::ordinal_of("archival_complete_trees").expect("catalogued");
     let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
     let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
     let support_settlement = schema::ordinal_of("archival_support_settlement").expect("catalogued");
@@ -431,8 +430,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // (`SHT-Q2`) was appended after it, `SO-D10`'s two index tables after
     // that, `SO-D12`'s two draw-state tables after those, then the switch
     // PR's recorded proof-of-work, DRS-E5 PR-b's alternative bodies,
-    // `SO-D12`'s Release journal, `SO-D12h`'s frozen complete trees, the
-    // support stream's three tables, and `SO-D12` increment 4c's bundle
+    // `SO-D12`'s Release journal, the support stream's three tables, and `SO-D12` increment 4c's bundle
     // queue and body store last, so they hold the final slots in that
     // order.
     assert_eq!(ordinal.index() + 1, archival_len.index());
@@ -443,8 +441,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     assert_eq!(drawable_digest.index() + 1, block_pow.index());
     assert_eq!(block_pow.index() + 1, alt_bodies.index());
     assert_eq!(alt_bodies.index() + 1, release_journal.index());
-    assert_eq!(release_journal.index() + 1, complete.index());
-    assert_eq!(complete.index() + 1, support_block.index());
+    assert_eq!(release_journal.index() + 1, support_block.index());
     assert_eq!(support_block.index() + 1, support_issued.index());
     assert_eq!(support_issued.index() + 1, support_settlement.index());
     assert_eq!(support_settlement.index() + 1, bundle_queue.index());
@@ -455,13 +452,13 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         "archival_bundle_body is the final catalogue slot"
     );
     // 31 tables the LMDB store also held (`rule_set_in_force` under its
-    // old name, `hf_versions`) plus the eighteen Rust-only tables named
+    // old name, `hf_versions`) plus the seventeen Rust-only tables named
     // below.
     // The pool file holds `txpool_meta` / `txpool_blob`
     // (`schema::MIRRORED_ELSEWHERE`), `alt_blocks` holds the alternative
     // block's bundle references (`schema::FOLDED_INTO`), and the tables
     // `schema::NOT_PORTED` names are not here.
-    assert_eq!(catalogue_len, 49);
+    assert_eq!(catalogue_len, 48);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -478,7 +475,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "block_pow",
             "alt_block_bodies",
             "archival_release_journal",
-            "archival_complete_trees",
             "archival_support_block",
             "archival_support_issued",
             "archival_support_settlement",

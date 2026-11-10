@@ -162,11 +162,10 @@ use shekyl_units::AtomicUnits;
 
 use crate::codec::{
     AltBlock, AltBodies, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, BundleReferencesBytes,
-    Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
-    LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle, RMarket,
-    RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportIssued,
-    SupportRow, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
-    UndoLog,
+    Coded, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
+    OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle, RMarket, RecordedPow,
+    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportIssued, SupportRow,
+    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -452,14 +451,6 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          epochs after it opened, restores it, as it gives back the shards the slash log says \
          were taken. The undo log holds the same pre-image only for its window, and no other \
          table keeps it past that window",
-    ),
-    (
-        "archival_complete_trees",
-        "the personas each settled epoch's slash pass excluded from the epoch's market as \
-         complete trees (ARCHIVAL_SETTLEMENT_WRITER.md SO-D12h): the record does not keep the \
-         fact, since a complete tree slashed or released afterwards holds a compact set, so a \
-         claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
-         the records as they are now, so LMDB never holds it",
     ),
     (
         "archival_support_block",
@@ -863,17 +854,6 @@ tables! {
     pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
         TableDefinition::new("archival_release_journal");
 
-    /// `archival_complete_trees` — **Rust-only** ([`RUST_ONLY_TABLES`]);
-    /// epoch → the [`CompleteTreeSet`] its slash pass excluded from the
-    /// market as complete trees (`ARCHIVAL_SETTLEMENT_WRITER.md`
-    /// `SO-D12h`). Written by the pass beside `archival_sigma_work[E]`,
-    /// insert-once and whole (SI-21, SI-31), the empty set included, and
-    /// reversed by `pop` through the journal. A claim's re-gather reads it
-    /// for every bond's complete-tree flag (A22). An epoch with no row was
-    /// not settled. Ordinal 43.
-    pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
-        TableDefinition::new("archival_complete_trees");
-
     /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// height → the [`SupportRow`] of that block: the complete trees it
     /// seated, in persona order, whose count is the width of its support
@@ -885,7 +865,7 @@ tables! {
     /// connected; a pop removes the row, and with it the carry it left.
     /// Admission checks a row is one step of the carry (SI-43). Retired
     /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
-    /// Ordinal 44.
+    /// Ordinal 43.
     pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportRow>> =
         TableDefinition::new("archival_support_block");
 
@@ -893,14 +873,14 @@ tables! {
     /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
     /// shard the draw selected and whether a pass was admitted
     /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
-    /// is one range in `(height, draw)` order. Ordinal 45.
+    /// is one range in `(height, draw)` order. Ordinal 44.
     pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
         TableDefinition::new("archival_support_issued");
 
     /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
     /// epoch. One row per tree, not per shard. Written by the slash pass
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 46.
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 45.
     pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_support_settlement");
 
@@ -911,7 +891,7 @@ tables! {
     /// entry per `h`, the first valid one; at most `W₂` entries, since an
     /// entry leaves when its window closes. Not chain state: written
     /// outside any pop recording, as `alt_blocks` is. Its body is in
-    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 47).
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 46).
     pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
         TableDefinition::new("archival_bundle_queue");
 
@@ -920,7 +900,7 @@ tables! {
     /// by the hash its reference names (§7.5). Every body has a holder
     /// (SI-41): in 4c the queue; an alternative block and a main-chain
     /// block not past `D_max` are 4b's holders. Not chain state, as the
-    /// queue is not. Appended last (ordinal 48).
+    /// queue is not. Appended last (ordinal 47).
     pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
         TableDefinition::new("archival_bundle_body");
 }
@@ -1009,16 +989,13 @@ mod tests {
             ("alt_block_bodies", 41),
             // Layout 28 (`SO-D12` increment 2): the Release journal.
             ("archival_release_journal", 42),
-            // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
-            // market excluded, frozen at its slash pass.
-            ("archival_complete_trees", 43),
-            ("archival_support_block", 44),
-            ("archival_support_issued", 45),
-            ("archival_support_settlement", 46),
+            ("archival_support_block", 43),
+            ("archival_support_issued", 44),
+            ("archival_support_settlement", 45),
             // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
             // body store.
-            ("archival_bundle_queue", 47),
-            ("archival_bundle_body", 48),
+            ("archival_bundle_queue", 46),
+            ("archival_bundle_body", 47),
         ];
         for &(name, index) in pinned {
             assert_eq!(

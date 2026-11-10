@@ -554,7 +554,6 @@ fn verify_emission(
                 .iter()
                 .map(|b| EpochCloseBond {
                     join_settlement_epoch: b.join_settlement_epoch,
-                    is_support_complete_tree: b.is_support_complete_tree,
                     bad_intervals: &b.bad_intervals,
                 })
                 .collect()

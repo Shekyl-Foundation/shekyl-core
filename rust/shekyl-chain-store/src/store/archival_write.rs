@@ -35,7 +35,6 @@
 //!                archival_last_slash_epoch = watermark, when it moves
 //!  9c. close     archival_r_market[(s, E)], archival_sigma_work[E],
 //!                archival_budget[E] — each insert-once on E          (SI-21)
-//!                archival_complete_trees[E], beside Σwork(E)        (SI-31)
 //! ```
 //!
 //! The C++'s order is kept where the C++ had one (`blockchain_db.cpp:680–
@@ -103,16 +102,15 @@ use crate::codec::{
 use crate::ids::{ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
-    ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_RELEASE_JOURNAL,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
+    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
     ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
 };
 
 use super::archival_reads;
 use super::error::{
-    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreError,
-    StoreInvariant,
+    AccrualFault, DigestFault, EngineError, SettlementFault, SlashFault, StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
 
@@ -319,8 +317,7 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-21's two write sets are here. The close freezes the budget:
     /// `archival_budget[E]`, insert-once. The slash pass settles whole:
     /// `archival_sigma_work[E]` and every `(shard, E)` row of
-    /// `archival_r_market` its snapshot named, each insert-once on `E`,
-    /// and with them `archival_complete_trees[E]` (SI-31).
+    /// `archival_r_market` its snapshot named, each insert-once on `E`.
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
@@ -354,22 +351,6 @@ impl<'id> WriteBatch<'_, 'id> {
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
                 .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
-                // SI-31: the complete trees the gather excluded, frozen
-                // with the `Σwork` they were excluded from. Governed by the
-                // family whose reader needs it — a claim reads both or
-                // neither — as `archival_budget_accruing` is by the family
-                // it serves (`ARW-Q3`).
-                self.open_insert_table(
-                    ARCHIVAL_COMPLETE_TREES,
-                    StoreInvariant::CompleteTreesNotFrozen {
-                        epoch,
-                        observed: FrozenFault::Rewritten,
-                    },
-                )?
-                .insert(
-                    epoch.to_raw(),
-                    gather.complete_trees().encoded().as_encoded(),
-                )?;
             }
         }
         if let Some(close) = delta.close() {

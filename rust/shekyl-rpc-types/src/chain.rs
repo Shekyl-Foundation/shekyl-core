@@ -274,7 +274,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// 3.71: `/get_blocks_by_height.bin`'s entries carry the block's
 /// `bundle_references` and the `bundle_bodies` this node holds for them,
 /// each an array of strings absent when empty (the switch's C4). A block
-/// that admits no bundle reads as at 3.70. `get_version` gains nothing.
+/// that admits no bundle reads as at 3.70. A claim-source bond row loses
+/// `is_support_complete_tree` (the switch's C7): a complete tree is never
+/// in an epoch's market, so the flag was always false. A 3.70 reader
+/// requires the key and refuses the row. `get_version` gains nothing.
 pub const CORE_RPC_VERSION_MINOR: u32 = 71;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
@@ -746,7 +749,9 @@ mod tests {
         // (`held`, `held_overdue`, `published`, `untracked`). 3.70 makes
         // `get_info`'s Peers part one row per connector the daemon runs.
         // 3.71 gives `get_blocks_by_height.bin`'s entries the block's
-        // bundle references and the bodies held for them (the switch's C4).
+        // bundle references and the bodies held for them (the switch's C4),
+        // and takes `is_support_complete_tree` off the claim-source bond
+        // row (C7).
         assert_eq!(CORE_RPC_VERSION, 196_679);
         assert_eq!(CORE_RPC_VERSION, (3 << 16) | 71);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);

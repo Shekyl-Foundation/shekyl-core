@@ -88,8 +88,8 @@ use shekyl_chain_rules::{
 use shekyl_units::AtomicUnits;
 
 use super::error::{
-    CellFault, DigestFault, DrawRowFault, DrawableFault, EngineError, FrozenFault, SettlementFault,
-    StoreCannot, StoreError, StoreInvariant,
+    CellFault, DigestFault, DrawRowFault, DrawableFault, EngineError, SettlementFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
@@ -405,13 +405,6 @@ pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
         Corrupt::DrawCount { height, why } => StoreInvariant::BlockDrawsNotSingular {
             height,
             observed: DrawRowFault::Count(why),
-        },
-        // A claim's re-gather found `Σwork(E)` and no frozen
-        // complete-tree set: the slash pass's write set is not whole
-        // (SI-31). The block is not invalid; this node cannot judge it.
-        Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
-            epoch,
-            observed: FrozenFault::Absent,
         },
         // Admitting a block's section, the bundle view did not answer for
         // a block it holds (`SO-D12` 4b, C3). Each reason is the row the
