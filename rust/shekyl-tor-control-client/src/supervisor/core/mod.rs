@@ -695,8 +695,6 @@ pub struct Core {
     jump: clock_jump::JumpWatch,
     /// This bootstrap's certificate lines and closed handshakes (§4.2).
     clock_evidence: clock_evidence::ClockEvidence,
-    /// The previous consensus check (§4.2). Aging is not a correction.
-    consensus_sample: Option<clock::ConsensusSample>,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
 }
@@ -739,7 +737,6 @@ impl Core {
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
-            consensus_sample: None,
             service_republish: false,
         };
         let step = core.step(now, vec![Action::CheckPin]);
@@ -1021,7 +1018,6 @@ impl Core {
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.jump = clock_jump::JumpWatch::new(now);
         self.clock_evidence = clock_evidence::ClockEvidence::default();
-        self.consensus_sample = None;
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);

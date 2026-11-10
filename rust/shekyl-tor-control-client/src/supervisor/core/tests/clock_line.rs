@@ -237,10 +237,13 @@ fn the_runs_alternation_replayed_says_it_once() {
 
 /// **Correcting the clock says the recovery once.** Three days behind for a
 /// minute, then the clock is set right: Tor reports the jump, and the next
-/// sample reads the wall clock past `valid-after`. One line follows, and it
-/// no longer names the clock; nothing names it again before Tor is up.
-/// Fails if Tor's skew outlives the correction (a line that still says
-/// "behind"), or if the two clearings are said apart.
+/// sample reads the wall clock past `valid-after`. The consensus check's
+/// lower bound clears without a word, and Tor's report stands: this node
+/// cannot tell the clock set right from a sleep or an aging consensus, so
+/// only Tor retires it, by reaching Running. Then one line is said, and it
+/// does not name the clock. Fails if the check retires Tor's report (a line
+/// before Tor is up, which a sleep would also produce), or if the recovery
+/// is said twice.
 #[test]
 fn correcting_the_clock_says_the_recovery_once() {
     let mut core = bootstrapping();
@@ -271,17 +274,30 @@ fn correcting_the_clock_says_the_recovery_once() {
         30,
         right,
     );
-    assert_eq!(
-        after.announced.len(),
-        1,
-        "the recovery, once: {:#?}",
-        after.lines
-    );
     assert!(
-        after.naming_the_clock().is_empty(),
-        "the clock is right: {:#?}",
+        after.announced.is_empty(),
+        "nothing before Tor is up: {:#?}",
         after.lines
     );
+    assert_eq!(core.status().clock_behind, None, "the lower bound cleared");
+    let up = 121 * SECOND;
+    let mut recovery = Vec::new();
+    for input in [
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: Some(super::socks()),
+            read: None,
+        },
+        Input::BootstrapComplete,
+        Input::RouteInstalled,
+    ] {
+        let step = core.on(input, up);
+        if step.actions.contains(&Action::Announce) {
+            recovery.push(render(&core.status()));
+        }
+    }
+    assert_eq!(recovery.len(), 1, "the recovery, once: {recovery:#?}");
+    assert!(!recovery[0].contains("clock"), "{}", recovery[0]);
 }
 
 /// A status degraded by the clock: `cause`, and the consensus check's lower
@@ -528,4 +544,75 @@ fn an_aging_consensus_does_not_retire_tors_report() {
         !repeated.actions.contains(&Action::Announce),
         "the same report was a new line"
     );
+}
+
+/// **A sleep is not the clock set right** (Copilot on #1340). On Linux and
+/// macOS supervisor time stops in a sleep and the wall does not, so ten
+/// minutes asleep between two samples 5 s apart close a fixed consensus's
+/// gap from 900 s to 295 s. Tor's report stands, nothing is said, and Tor
+/// repeating it after the wake says nothing. Fails if the consensus check
+/// retires Tor's report when its gap closes faster than supervisor time.
+#[test]
+fn a_sleep_does_not_retire_tors_report() {
+    use super::super::super::posture::Cause;
+    let mut core = bootstrapping();
+    let valid_after = WALL_AT_START + 900;
+    let report = ReportedSkew::Measured(-900);
+    let skew = core.on(Input::ClockSkew { skew: report }, SECOND);
+    assert!(skew.actions.contains(&Action::Announce), "the report");
+    let before = core.on(
+        Input::ConsensusClock {
+            valid_after,
+            wall: WALL_AT_START,
+        },
+        2 * SECOND,
+    );
+    let after = core.on(
+        Input::ConsensusClock {
+            valid_after,
+            wall: WALL_AT_START + 605,
+        },
+        7 * SECOND,
+    );
+    let repeated = core.on(Input::ClockSkew { skew: report }, 8 * SECOND);
+    for (name, step) in [("before", before), ("after", after), ("repeated", repeated)] {
+        assert!(
+            !step.actions.contains(&Action::Announce),
+            "{name}: {}",
+            render(&core.status())
+        );
+    }
+    assert!(
+        matches!(core.status().cause, Cause::ClockSkew { skew } if skew == report),
+        "the report was retired: {:?}",
+        core.status().cause
+    );
+}
+
+/// **A blocked link named first gives way to the clock** (Copilot on
+/// #1340). While Tor bootstraps, Tor says the link is blocked, then the
+/// consensus check names the clock, then Tor reports the skew. The clock is
+/// said once, and no line says "cannot reach the Tor network" beside it.
+/// Fails if the check names the clock beside the standing block (two "Check
+/// this computer's date and time" sentences), or if the skew report, finding
+/// another cause standing, says the clock a second time.
+#[test]
+fn a_blocked_link_named_first_gives_way_to_the_clock() {
+    let mut core = bootstrapping();
+    let said = run(
+        &mut core,
+        0,
+        60 * SECOND,
+        &[
+            (ms(1_000), Tor::Blocked),
+            (ms(4_500), Tor::Skew(-259_201)),
+            (ms(20_000), Tor::Blocked),
+        ],
+        30,
+        three_days_behind,
+    );
+    assert_eq!(said.naming_the_clock().len(), 1, "said: {:#?}", said.lines);
+    let last = said.lines.last().expect("a line was said");
+    assert!(!last.contains("cannot reach the Tor network"), "{last}");
+    assert_eq!(last.matches("date and time").count(), 1, "{last}");
 }

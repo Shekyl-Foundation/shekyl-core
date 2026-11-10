@@ -46,30 +46,6 @@ use super::super::posture::{Cause, Inbound, InboundCause, ReportedSkew};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
 
-/// One consensus check, so the next one can tell a fixed `valid-after`
-/// aging into the tolerance from the wall clock being set forward.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ConsensusSample {
-    /// Supervisor time of the sample, in the caller's units.
-    at: u64,
-    /// `valid-after` minus the wall clock, in seconds. How far behind the
-    /// check measured.
-    gap: u64,
-}
-
-impl ConsensusSample {
-    /// The gap closed by at least `tolerance` beyond the time since this
-    /// sample. A fixed consensus ages one second per second. That is not
-    /// the clock being set forward, and it does not retire Tor's report.
-    pub(super) fn corrected(self, now: u64, gap: u64, tolerance: Duration) -> bool {
-        let elapsed = Duration::from_nanos(now.saturating_sub(self.at)).as_secs();
-        let closed = self.gap.saturating_sub(gap);
-        // `>=` so a clock just past the tolerance, set right in one sample,
-        // counts. Aging closes by `elapsed` and does not.
-        closed >= elapsed.saturating_add(tolerance.as_secs())
-    }
-}
-
 /// The republish backoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RepublishHold {
@@ -124,12 +100,20 @@ impl Core {
             return Vec::new();
         }
         let gap = valid_after.saturating_sub(wall);
-        let corrected = self
-            .consensus_sample
-            .is_some_and(|sample| sample.corrected(now, gap, self.policy.clock_behind_after));
-        self.consensus_sample = Some(ConsensusSample { at: now, gap });
         if gap > self.policy.clock_behind_after.as_secs() {
             let behind = Duration::from_secs(gap);
+            // While Tor bootstraps a named clock is what blocks it (§4.2): a
+            // blocked link or an unreachable directory named before this
+            // check gives way, so the line says the clock alone and Tor's
+            // next skew report finds it already named.
+            let displaced = matches!(self.phase, Phase::Bootstrapping { .. })
+                && matches!(
+                    self.cause,
+                    Cause::ExternalBlocked | Cause::DirectoryUnreachable
+                );
+            if displaced {
+                self.set_cause(Cause::None);
+            }
             // Tor's report or the certificates may have named it already.
             let named = self.clock_named_already();
             let newly = self.note_clock_behind(now, behind);
@@ -137,7 +121,7 @@ impl Core {
             // cannot replace. Drop it, including one this same deadline
             // armed before the sample was folded.
             let mut actions = self.stand_down_probe();
-            if newly && !named {
+            if (newly && !named) || displaced {
                 actions.extend(self.say(now, Cadence::Due));
             } else {
                 // The lag moved, or this check joined a clock already named.
@@ -149,17 +133,15 @@ impl Core {
         if !self.clock_is_behind() {
             return Vec::new();
         }
-        // The check no longer trips. Tor's report that the clock is behind
-        // is retired only when the gap closed faster than the time since the
-        // previous sample: the wall was set forward. A fixed consensus ages
-        // into the tolerance one second per second, and that must not clear
-        // the report or the next one says the fault again. A report that the
-        // clock is ahead stands either way: this check cannot see ahead.
+        // The check no longer trips: its lower bound clears. Tor's own report
+        // stands until Tor reaches Running, which clears every cause. This
+        // check cannot tell the clock being set right from a fixed consensus
+        // aging into the tolerance, or from a sleep: on Linux and macOS
+        // supervisor time stops in a sleep and the wall does not (`TSR-M8`),
+        // so either moves the wall without moving its offset. Retiring the
+        // report here would let Tor's next report say the same fault again.
         // Refused uploads still stand if they did; otherwise the facet is
         // unknown again until a probe judges it.
-        if corrected && matches!(self.cause, Cause::ClockSkew { skew } if skew.is_behind()) {
-            self.set_cause(Cause::None);
-        }
         if self.uploads_refused {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
