@@ -479,6 +479,13 @@ impl Driven {
         )
     }
 
+    /// The scenario and the chain back, for a caller that mines on past
+    /// what it handed to the drive. A round trip's ledger goes with the
+    /// drive.
+    pub(crate) fn into_parts(self) -> (Scenario<FreeHash>, Vec<Mined>) {
+        (self.scenario, self.chain)
+    }
+
     /// The scenario and the chain, for a straight prefix (`close_shards`).
     ///
     /// # Panics
@@ -536,10 +543,24 @@ impl Driven {
     /// not popped: the block never landed. A connected block is popped and
     /// connected again when round-tripping.
     pub(crate) async fn connect(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
-        let block = self.scenario.mine_listing(listed).await?;
+        self.connect_admitting(listed).await.map(|(block, _)| block)
+    }
+
+    /// [`Self::connect`], reporting the bundles the block admitted. Every
+    /// block carries the queued bundles inside its window as its section,
+    /// as the node's template does; an empty queue is an empty section. A
+    /// round trip pops the block, which returns its bundles to the queue
+    /// (the switch's C3), and reconnects it carrying them again, so the
+    /// block it reconnects is the same block.
+    pub(crate) async fn connect_admitting(
+        &mut self,
+        listed: Vec<Transaction>,
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let next = self.scenario.next_template(listed).await?;
+        let (block, admitted) = self.scenario.connect_next_admitting(next).await?;
         if !matches!(self.recording, Recording::RoundTrip(_)) {
             self.chain.push(block.clone());
-            return Ok(block);
+            return Ok((block, admitted));
         }
         let parent_height = match &self.recording {
             Recording::RoundTrip(ledger) => ledger.parent.height,
@@ -570,9 +591,9 @@ impl Driven {
                 is_pruning_boundary(block.height).then_some(&connected),
             );
         }
-        let again = self
+        let (again, readmitted) = self
             .scenario
-            .connect_template(NextBlock {
+            .connect_next_admitting(NextBlock {
                 height: block.height,
                 template: block.template.clone(),
                 seed: block.seed,
@@ -580,6 +601,12 @@ impl Driven {
             })
             .await
             .unwrap_or_else(|outcome| panic!("block {} reconnects: {outcome}", block.height));
+        assert_eq!(
+            readmitted.len(),
+            admitted.len(),
+            "block {} re-admits the bundles its pop returned to the queue",
+            block.height
+        );
         assert_eq!(again.hash, block.hash, "the same block");
         assert_eq!(again.archival, block.archival, "the same delta");
         let reconnected = tip_of(&self.scenario).await;
@@ -602,7 +629,7 @@ impl Driven {
             ledger.parent = connected;
         }
         self.chain.push(again.clone());
-        Ok(again)
+        Ok((again, readmitted))
     }
 
     /// Empty blocks until `to` is the next height. Each goes through

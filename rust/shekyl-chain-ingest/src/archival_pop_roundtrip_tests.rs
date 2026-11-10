@@ -384,14 +384,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let after = |epoch: SettlementEpoch| {
         BlockHeight::from_raw((epoch.to_raw() + 1) * settled_epoch_blocks())
     };
-    mine_serving(
-        &mut scenario,
-        &mut mined,
-        &witness,
-        &[&persona],
-        after(e_old),
-    )
-    .await;
+    (scenario, mined) = mine_serving(scenario, mined, &witness, &[&persona], after(e_old)).await;
     assert_issued_pair(&scenario, e_old, (persona.id(), shard));
 
     let claim = |fee_index: usize,
@@ -439,14 +432,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         BlockHeight::from_raw(schedule.open_height(e_new.to_raw())),
     )
     .await;
-    mine_serving(
-        &mut scenario,
-        &mut mined,
-        &witness,
-        &[&persona],
-        after(e_new),
-    )
-    .await;
+    (scenario, mined) = mine_serving(scenario, mined, &witness, &[&persona], after(e_new)).await;
     assert_issued_pair(&scenario, e_new, (persona.id(), shard));
 
     // 2. `E_new` at the first block of `at_epoch`: the insert prunes `E_old`.

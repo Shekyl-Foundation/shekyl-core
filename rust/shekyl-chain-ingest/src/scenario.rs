@@ -329,6 +329,22 @@ where
         listed: Vec<Transaction>,
     ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
         let next = self.next_template(listed).await?;
+        self.connect_next_admitting(next).await
+    }
+
+    /// [`Self::connect_template`] carrying every queued bundle inside the
+    /// block's window as its section, as [`Self::mine_admitting`] does. A
+    /// block re-formed from a popped block's template carries the same
+    /// section when the pop returned its bundles to the queue, so it hashes
+    /// the same.
+    ///
+    /// # Errors
+    ///
+    /// A refused block, as [`Self::mine_listing`]'s.
+    pub async fn connect_next_admitting(
+        &mut self,
+        next: NextBlock,
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
         let section = self.queued_section(next.height);
         let (height, formed, kept) = self.form_next_carrying(next, section)?;
         let out = self

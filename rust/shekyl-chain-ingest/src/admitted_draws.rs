@@ -3,15 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Admitted draws on a scenario chain (`SO-D12` increment 4b preparation).
+//! Admitted draws on a scenario chain (`SO-D12` 4b).
 //!
-//! The economy settlement chains mine through here. Each block commits to
-//! a [`DriverWitness`] this driver holds — the stand-in for the node's
+//! The settlement chains mine through here. Each block commits to a
+//! [`DriverWitness`] this driver holds — the stand-in for the node's
 //! witness ring, whose key never leaves it — and a block that draws files
-//! its bundle with every draw a pass. The next block carries that bundle
-//! as its section and `validate` admits it ([`Scenario::mine_admitting`]).
-//! The chain's
-//! issued-draw index is what a later assertion reads.
+//! its bundle. The next block carries that bundle as its section and
+//! `validate` admits it ([`Driven::connect_admitting`]). Which draws pass
+//! is the caller's ([`Passes`]): a withheld draw is filed with no record,
+//! so its bit is clear and the admitted bundle files it as a miss. The
+//! chain's issued-draw indexes are what a later assertion reads.
 //!
 //! Two boundaries are substituted, and only those two. The witness is
 //! [`DriverWitness`]. A persona's serve is its receipt signed directly
@@ -33,6 +34,7 @@ use shekyl_types::archival::{DrawCommitment, COUNTED_DRAWS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use zeroize::Zeroizing;
 
+use crate::chain_drive::Driven;
 use crate::connector::{BundleOffered, LearnDraws, Learned, OfferBundle};
 use crate::scenario::{FreeHash, Mined, Scenario};
 
@@ -85,7 +87,17 @@ impl DriverWitness {
     }
 }
 
-/// What [`mine_serving`] does with the block at `h`.
+/// Whether the draw `target` of the block at `h` passes: its holder serves
+/// the read and its receipt is filed. `false` is a holder that withholds:
+/// the draw is filed with no record.
+pub(crate) type Passes<'a> = &'a dyn Fn(BlockHeight, &DrawTarget) -> bool;
+
+/// Every draw passes.
+pub(crate) fn every_draw_passes(_: BlockHeight, _: &DrawTarget) -> bool {
+    true
+}
+
+/// What [`serve_to`] does with the block at `h`.
 struct ServeAt {
     /// Mine the block.
     mine: bool,
@@ -107,68 +119,72 @@ fn serve_at(h: BlockHeight, until: BlockHeight, waiting: bool) -> ServeAt {
 }
 
 /// Mine empty blocks up to `until`, every one committed to `witness`, and
-/// file each drawing block's bundle so the next block admits it.
+/// file each drawing block's bundle so the next block admits it. Each
+/// block goes through [`Driven::connect_admitting`], so a round-tripping
+/// drive pops and reconnects it too.
 ///
-/// Every learned draw is a pass, signed by the persona among `signers`
-/// that holds the shard. The bundle format carries both streams even when
-/// one of them drew nothing.
+/// Each learned draw passes when `passes` says so, signed by the persona
+/// among `signers` that holds the shard; otherwise it is withheld. The
+/// bundle format carries both streams even when one of them drew nothing.
 ///
 /// # Panics
 ///
 /// If a block does not land, if the connector cannot derive a block's
-/// draws, if a drawn persona is not among `signers`, if a drawing block
-/// has no parent, or if the queue or the next block refuses a bundle.
-pub(crate) async fn mine_serving(
-    scenario: &mut Scenario<FreeHash>,
-    mined: &mut Vec<Mined>,
+/// draws, if a passing draw's persona is not among `signers`, if a drawing
+/// block has no parent, or if the queue or the next block refuses a bundle.
+pub(crate) async fn serve_to(
+    drive: &mut Driven,
     witness: &DriverWitness,
     signers: &[&Persona],
+    passes: Passes<'_>,
     until: BlockHeight,
 ) {
     let mut waiting = false;
     loop {
-        let h = BlockHeight::from_raw(u64::try_from(mined.len()).expect("a test chain's length"));
+        let h = drive.height();
         let at = serve_at(h, until, waiting);
         if !at.mine {
             return;
         }
-        let block = mine_one(scenario, witness, h, waiting).await;
-        let hash = block.hash;
-        mined.push(block);
+        let block = mine_one(drive, witness, h, waiting).await;
         if !at.file {
             return;
         }
-        waiting = file_draws(scenario, witness, signers, mined, h, hash).await;
+        waiting = file_draws(drive, witness, signers, passes, h, block.hash).await;
     }
 }
 
-/// Mine the block at `h`. `admit` makes the block carry the queued section:
-/// the previous block filed a bundle, and this block is the one that
-/// reveals it.
+/// [`serve_to`] over a straight scenario chain, every draw a pass.
+pub(crate) async fn mine_serving(
+    scenario: Scenario<FreeHash>,
+    mined: Vec<Mined>,
+    witness: &DriverWitness,
+    signers: &[&Persona],
+    until: BlockHeight,
+) -> (Scenario<FreeHash>, Vec<Mined>) {
+    let mut drive = Driven::begin(scenario, mined);
+    serve_to(&mut drive, witness, signers, &every_draw_passes, until).await;
+    drive.into_parts()
+}
+
+/// Mine the block at `h`. `admit` is that the previous block filed a
+/// bundle, which this block carries and reveals.
 async fn mine_one(
-    scenario: &mut Scenario<FreeHash>,
+    drive: &mut Driven,
     witness: &DriverWitness,
     h: BlockHeight,
     admit: bool,
 ) -> Mined {
-    scenario.commit_next(witness.commitment(h));
-    let block = if admit {
-        let (block, admitted) = scenario
-            .mine_admitting(Vec::new())
-            .await
-            .unwrap_or_else(|outcome| panic!("block {h} admits: {outcome}"));
-        assert_eq!(
-            admitted.len(),
-            1,
-            "block {h} admits the bundle filed for it"
-        );
-        block
-    } else {
-        scenario
-            .mine_listing(Vec::new())
-            .await
-            .unwrap_or_else(|outcome| panic!("block {h} lands: {outcome}"))
-    };
+    drive.scenario.commit_next(witness.commitment(h));
+    let (block, admitted) = drive
+        .connect_admitting(Vec::new())
+        .await
+        .unwrap_or_else(|outcome| panic!("block {h} lands: {outcome}"));
+    assert_eq!(
+        admitted.len(),
+        usize::from(admit),
+        "block {h} admits the bundle filed for it, and only that"
+    );
     assert_eq!(block.height, h);
     block
 }
@@ -176,13 +192,15 @@ async fn mine_one(
 /// Learn `h`'s draws and, when it drew, file the bundle. Returns whether
 /// a bundle is now waiting for the next block.
 async fn file_draws(
-    scenario: &Scenario<FreeHash>,
+    drive: &Driven,
     witness: &DriverWitness,
     signers: &[&Persona],
-    mined: &[Mined],
+    passes: Passes<'_>,
     h: BlockHeight,
     hash: BlockHash,
 ) -> bool {
+    let scenario = &drive.scenario;
+    let mined = &drive.chain;
     let seed = witness.seed(h);
     let learned = scenario
         .connector()
@@ -206,7 +224,7 @@ async fn file_draws(
         height: parent,
         hash: mined[usize::try_from(parent.to_raw()).expect("a test chain's length")].hash,
     };
-    let filed = pass_every_draw(&targets.draws, &seed, &hash, anchor, signers);
+    let filed = file_passes(h, &targets.draws, &seed, &hash, anchor, signers, passes);
     let kept = BundleKept {
         h,
         seed,
@@ -233,37 +251,33 @@ async fn file_draws(
     true
 }
 
-/// Both streams of one block, every draw a pass. Economy records precede
-/// support records: the bitmaps' order.
+/// Both streams of one block, each draw passed or withheld by `passes`.
+/// Economy records precede support records: the bitmaps' order.
 struct FiledPasses {
     economy: PassBitmap,
     support: PassBitmap,
     records: Vec<BundleRecord>,
 }
 
-fn pass_every_draw(
+fn file_passes(
+    h: BlockHeight,
     targets: &[DrawTarget],
     seed: &[u8; 32],
     block_hash: &BlockHash,
     anchor: Anchor,
     signers: &[&Persona],
+    passes: Passes<'_>,
 ) -> FiledPasses {
-    let (economy, mut records) = stream_passes(
-        PassStream::Economy,
-        targets,
+    let filing = Filing {
+        h,
         seed,
         block_hash,
         anchor,
         signers,
-    );
-    let (support, support_records) = stream_passes(
-        PassStream::Support,
-        targets,
-        seed,
-        block_hash,
-        anchor,
-        signers,
-    );
+        passes,
+    };
+    let (economy, mut records) = filing.stream(PassStream::Economy, targets);
+    let (support, support_records) = filing.stream(PassStream::Support, targets);
     records.extend(support_records);
     FiledPasses {
         economy,
@@ -272,46 +286,66 @@ fn pass_every_draw(
     }
 }
 
-fn stream_passes(
-    stream: PassStream,
-    targets: &[DrawTarget],
-    seed: &[u8; 32],
-    block_hash: &BlockHash,
+/// What filing one block's draws reads.
+struct Filing<'a> {
+    h: BlockHeight,
+    seed: &'a [u8; 32],
+    block_hash: &'a BlockHash,
     anchor: Anchor,
-    signers: &[&Persona],
-) -> (PassBitmap, Vec<BundleRecord>) {
-    let drawn: Vec<&DrawTarget> = targets
-        .iter()
-        .filter(|target| target.stream == stream)
-        .collect();
-    let mut passed = Vec::with_capacity(drawn.len());
-    let mut records = Vec::with_capacity(drawn.len());
-    for target in &drawn {
-        let signer = signers
+    signers: &'a [&'a Persona],
+    passes: Passes<'a>,
+}
+
+impl Filing<'_> {
+    /// One stream's bitmap and records: a record for each draw that
+    /// passes, none for one withheld.
+    fn stream(
+        &self,
+        stream: PassStream,
+        targets: &[DrawTarget],
+    ) -> (PassBitmap, Vec<BundleRecord>) {
+        let drawn: Vec<&DrawTarget> = targets
             .iter()
-            .find(|persona| persona.id() == target.persona)
-            .unwrap_or_else(|| panic!("persona {:?} drew and is not a signer", target.persona));
-        let nonce = match stream {
-            PassStream::Economy => {
-                challenge_nonce(seed, block_hash, target.draw, FIRST_READ_ATTEMPT)
+            .filter(|target| target.stream == stream)
+            .collect();
+        let mut passed = Vec::with_capacity(drawn.len());
+        let mut records = Vec::with_capacity(drawn.len());
+        for target in &drawn {
+            if !(self.passes)(self.h, target) {
+                continue;
             }
-            PassStream::Support => {
-                support_challenge_nonce(seed, block_hash, target.draw, FIRST_READ_ATTEMPT)
-            }
-        };
-        records.push(signed_record(
-            &signer.keys().receipt_sign_sk,
-            stream,
-            &nonce,
-            anchor,
-            target.shard.to_raw(),
-            FIRST_READ_ATTEMPT,
-        ));
-        passed.push(target.draw);
+            let signer = self
+                .signers
+                .iter()
+                .find(|persona| persona.id() == target.persona)
+                .unwrap_or_else(|| {
+                    panic!("persona {:?} passed and is not a signer", target.persona)
+                });
+            let nonce = match stream {
+                PassStream::Economy => {
+                    challenge_nonce(self.seed, self.block_hash, target.draw, FIRST_READ_ATTEMPT)
+                }
+                PassStream::Support => support_challenge_nonce(
+                    self.seed,
+                    self.block_hash,
+                    target.draw,
+                    FIRST_READ_ATTEMPT,
+                ),
+            };
+            records.push(signed_record(
+                &signer.keys().receipt_sign_sk,
+                stream,
+                &nonce,
+                self.anchor,
+                target.shard.to_raw(),
+                FIRST_READ_ATTEMPT,
+            ));
+            passed.push(target.draw);
+        }
+        let count = u32::try_from(drawn.len()).expect("a block's draws fit u32");
+        let bitmap = PassBitmap::from_passes(count, passed).expect("passes below the count");
+        (bitmap, records)
     }
-    let count = u32::try_from(drawn.len()).expect("a block's draws fit u32");
-    let bitmap = PassBitmap::from_passes(count, passed).expect("passes below the count");
-    (bitmap, records)
 }
 
 /// The epoch's issued-draw index, and nothing else: `pair` is the only

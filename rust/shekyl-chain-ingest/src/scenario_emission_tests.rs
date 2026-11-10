@@ -205,14 +205,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     let shard = ShardId::from_raw(0);
     let witness = DriverWitness::new(0x61);
     let after_served = BlockHeight::from_raw((served.to_raw() + 1) * settled_epoch_blocks());
-    mine_serving(
-        &mut scenario,
-        &mut mined,
-        &witness,
-        &[&persona],
-        after_served,
-    )
-    .await;
+    (scenario, mined) = mine_serving(scenario, mined, &witness, &[&persona], after_served).await;
     assert_issued_pair(&scenario, served, (persona.id(), shard));
 
     // Up to the slash pass of `served`, not through it. The epoch closed
