@@ -43,13 +43,9 @@
 //! `content-length`. The signer is the host's ([`PassSigner`]); this crate
 //! holds no key.
 //!
-//! **The envelope's width is the signer's.** An endpoint is bound with a
-//! `PassSigner<W>` and every width on this path is that `W`: the envelope
-//! written, the term in the content length, and the refusal trailer's
-//! fill. `W` is the canonical length of the signer's scheme
-//! ([`EnvelopeWidth`]); the live one is the bond identity key's, 3,385
-//! bytes. `serve_wire_pin_tests.rs` holds the live scheme's whole response
-//! to bytes captured before the width became a parameter.
+//! **The envelope is the receipt's.** Every width on this path is
+//! [`RECEIPT_ENVELOPE_LEN`]: the envelope written, the term in the content
+//! length, and the refusal trailer's fill (`serve_receipt_width_tests.rs`).
 //!
 //! **What the body is.** Whatever the [`ShardProvider`] holds for the
 //! shard: the `shekyl_wire::shard_frame` body over the shard's archival
@@ -114,7 +110,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::countersign::{anchor_within_gate, EnvelopeWidth, PassEnvelope, PassSigner};
+use crate::countersign::{anchor_within_gate, envelope, PassSigner, RECEIPT_ENVELOPE_LEN};
 use crate::provider::{ShardBody, ShardProvider};
 use crate::serve_counters::{ServeCounterReader, ServeCounterWriter};
 use shekyl_archival_retention::{PassRequestHeader, PassTranscript, PASS_NONCE_LEN};
@@ -267,13 +263,10 @@ impl PServeEndpoint {
     ///
     /// The bind error, verbatim, if the loopback listener cannot be
     /// created.
-    pub async fn bind<const W: usize>(
+    pub async fn bind(
         provider: Arc<dyn ShardProvider>,
-        signer: Arc<dyn PassSigner<W>>,
-    ) -> io::Result<Self>
-    where
-        PassEnvelope: EnvelopeWidth<W>,
-    {
+        signer: Arc<dyn PassSigner>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
         Self::serve(listener, provider, signer)
     }
@@ -292,14 +285,11 @@ impl PServeEndpoint {
     /// for a persona serving over tor, and the bound it implies is the
     /// kernel's to give.
     #[cfg(test)]
-    pub(crate) fn bind_with_send_buffer<const W: usize>(
+    pub(crate) fn bind_with_send_buffer(
         provider: Arc<dyn ShardProvider>,
-        signer: Arc<dyn PassSigner<W>>,
+        signer: Arc<dyn PassSigner>,
         send_buffer_bytes: u32,
-    ) -> io::Result<Self>
-    where
-        PassEnvelope: EnvelopeWidth<W>,
-    {
+    ) -> io::Result<Self> {
         let socket = tokio::net::TcpSocket::new_v4()?;
         socket.set_send_buffer_size(send_buffer_bytes)?;
         socket.bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
@@ -308,14 +298,11 @@ impl PServeEndpoint {
 
     /// Start answering on `listener`. The one accept loop, whichever way
     /// the listener was made.
-    fn serve<const W: usize>(
+    fn serve(
         listener: TcpListener,
         provider: Arc<dyn ShardProvider>,
-        signer: Arc<dyn PassSigner<W>>,
-    ) -> io::Result<Self>
-    where
-        PassEnvelope: EnvelopeWidth<W>,
-    {
+        signer: Arc<dyn PassSigner>,
+    ) -> io::Result<Self> {
         let addr = listener.local_addr()?;
         let counters = ServeCounterReader::zeroed();
         let writer = counters.writer();
@@ -494,15 +481,12 @@ impl std::fmt::Debug for PServeEndpoint {
 /// Named here so a future change that lets an *ordinary* not-held answer
 /// truncate — for instance a body that resolves its own servability lazily
 /// — is recognised as widening a probe surface rather than as a refactor.
-async fn handle_connection<const W: usize>(
+async fn handle_connection(
     mut stream: TcpStream,
     provider: Arc<dyn ShardProvider>,
-    signer: Arc<dyn PassSigner<W>>,
+    signer: Arc<dyn PassSigner>,
     counters: &ServeCounterWriter,
-) -> io::Result<()>
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> io::Result<()> {
     let head = tokio::time::timeout(READ_TIMEOUT, read_head(&mut stream))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request head"))??;
@@ -600,15 +584,12 @@ enum Lookup {
 /// (`benches/serve_response_iai.rs`): Callgrind keeps one collection state
 /// per thread, so the gate measures these steps composed on one thread
 /// ([`serve_one_in_memory`]), and a closure has no name to compose.
-fn gate_and_open<const W: usize>(
-    signer: &dyn PassSigner<W>,
+fn gate_and_open(
+    signer: &dyn PassSigner,
     provider: &dyn ShardProvider,
     shard_id: u64,
     anchor_height: BlockHeight,
-) -> Lookup
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> Lookup {
     let Some(own_height) = signer.own_height() else {
         return Lookup::StoreFault;
     };
@@ -629,14 +610,11 @@ where
 /// `None` when the signer refuses or returns an envelope of another
 /// length. The length is the type, so a short or long envelope cannot
 /// reach the wire.
-fn sign_envelope<const W: usize>(
-    signer: &dyn PassSigner<W>,
+fn sign_envelope(
+    signer: &dyn PassSigner,
     transcript: &PassTranscript,
-) -> Option<[u8; W]>
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
-    <PassEnvelope as EnvelopeWidth<W>>::envelope(&signer.sign_pass(transcript).ok()?)
+) -> Option<[u8; RECEIPT_ENVELOPE_LEN]> {
+    envelope(&signer.sign_pass(transcript).ok()?)
 }
 
 /// The committed head of a 200: status line and headers as one byte
@@ -677,15 +655,12 @@ fn response_head(
 /// is not worth sending.
 ///
 /// [`PassKey::ready`]: crate::countersign::PassKey::ready
-async fn resolve<const W: usize>(
+async fn resolve(
     head: &[u8],
     provider: Arc<dyn ShardProvider>,
-    signer: Arc<dyn PassSigner<W>>,
+    signer: Arc<dyn PassSigner>,
     counters: &ServeCounterWriter,
-) -> Resolved
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> Resolved {
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Resolved::Invalid;
     };
@@ -725,7 +700,7 @@ where
 /// the wire by construction, and no more than one chunk of the shard is
 /// resident.
 ///
-/// `content-length` is [`ShardBody::len`] plus the envelope's width `W`,
+/// `content-length` is [`ShardBody::len`] plus the envelope's width ([`RECEIPT_ENVELOPE_LEN`]),
 /// both exact before a single byte is read, so the head is committed
 /// before the store is touched. Two things can go wrong after it:
 ///
@@ -748,15 +723,12 @@ where
 /// Generic over the sink so the invariant tests can stand a buffer in for
 /// the socket and say exactly how many bytes a requester took before it
 /// stopped (`serve_invariant_tests.rs`).
-async fn write_response<S: AsyncWrite + Unpin, const W: usize>(
+async fn write_response<S: AsyncWrite + Unpin>(
     stream: &mut S,
     resolved: Resolved,
-    signer: Arc<dyn PassSigner<W>>,
+    signer: Arc<dyn PassSigner>,
     counters: &ServeCounterWriter,
-) -> io::Result<()>
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> io::Result<()> {
     let Held {
         mut body,
         shard_id,
@@ -776,7 +748,7 @@ where
     // own cell framing quantizes everything downstream, so packet
     // boundaries here are not an observable and no privacy claim rests on
     // the write count.)
-    let (mut running, head) = response_head(body.len(), W, fields.nonce())
+    let (mut running, head) = response_head(body.len(), RECEIPT_ENVELOPE_LEN, fields.nonce())
         .ok_or_else(|| io::Error::other("response head"))?;
     write_bounded(stream, &head).await?;
     loop {
@@ -822,7 +794,7 @@ where
         // The body is out and cannot be taken back. Say so, in bytes only
         // this end can write.
         counters.record_late_sign_failure();
-        write_bounded(stream, &[REFUSAL_TRAILER_BYTE; W]).await?;
+        write_bounded(stream, &[REFUSAL_TRAILER_BYTE; RECEIPT_ENVELOPE_LEN]).await?;
         return Ok(());
     };
     write_bounded(stream, &signature).await?;
@@ -853,14 +825,11 @@ pub enum InMemoryServe {
 /// The request fields and the opened body of a valid request for a held
 /// shard, or the refusal a complete head gets instead.
 #[cfg(any(test, feature = "bench-internals"))]
-fn admit_in_memory<const W: usize>(
+fn admit_in_memory(
     provider: &dyn ShardProvider,
-    signer: &dyn PassSigner<W>,
+    signer: &dyn PassSigner,
     head: &[u8],
-) -> Result<(u64, PassRequestHeader, ShardBody), InMemoryServe>
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> Result<(u64, PassRequestHeader, ShardBody), InMemoryServe> {
     let Some(Request::Shard { shard_id, header }) = parse_request(head) else {
         return Err(InMemoryServe::BadRequest);
     };
@@ -895,15 +864,12 @@ where
 /// Not part of the shipped surface: `bench-internals` and tests only.
 #[cfg(any(test, feature = "bench-internals"))]
 #[doc(hidden)]
-pub fn serve_one_in_memory<const W: usize>(
+pub fn serve_one_in_memory(
     provider: &dyn ShardProvider,
-    signer: &dyn PassSigner<W>,
+    signer: &dyn PassSigner,
     head: &[u8],
     out: &mut Vec<u8>,
-) -> InMemoryServe
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> InMemoryServe {
     let (shard_id, fields, mut body) = match admit_in_memory(provider, signer, head) {
         Ok(admitted) => admitted,
         Err(refusal) => {
@@ -916,7 +882,9 @@ where
             return refusal;
         }
     };
-    let Some((mut running, response_head)) = response_head(body.len(), W, fields.nonce()) else {
+    let Some((mut running, response_head)) =
+        response_head(body.len(), RECEIPT_ENVELOPE_LEN, fields.nonce())
+    else {
         return InMemoryServe::Truncated;
     };
     out.extend_from_slice(&response_head);
@@ -939,7 +907,7 @@ where
             InMemoryServe::Served
         }
         None => {
-            out.extend_from_slice(&[REFUSAL_TRAILER_BYTE; W]);
+            out.extend_from_slice(&[REFUSAL_TRAILER_BYTE; RECEIPT_ENVELOPE_LEN]);
             InMemoryServe::Unsigned
         }
     }
@@ -954,19 +922,17 @@ where
 /// Not part of the shipped surface: `bench-internals` and tests only.
 #[cfg(any(test, feature = "bench-internals"))]
 #[doc(hidden)]
-pub fn prehead_in_memory<const W: usize>(
+pub fn prehead_in_memory(
     provider: &dyn ShardProvider,
-    signer: &dyn PassSigner<W>,
+    signer: &dyn PassSigner,
     head: &[u8],
     out: &mut Vec<u8>,
-) -> bool
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> bool {
     let Ok((_, fields, body)) = admit_in_memory(provider, signer, head) else {
         return false;
     };
-    let Some((_, response_head)) = response_head(body.len(), W, fields.nonce()) else {
+    let Some((_, response_head)) = response_head(body.len(), RECEIPT_ENVELOPE_LEN, fields.nonce())
+    else {
         return false;
     };
     out.extend_from_slice(&response_head);

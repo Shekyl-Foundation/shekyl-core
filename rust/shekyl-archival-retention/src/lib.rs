@@ -24,7 +24,6 @@
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
-//! - [`attestation`] — the kept per-record discriminant ([`AttestationKind`]).
 //! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
 //!   the challenge nonce, the serve-credit batch commitment, and the
 //!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
@@ -39,25 +38,19 @@
 //!   its emission gather `EpochSnapshot`.
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
-//! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
-//! - [`attestation_admission`] — the block-level admission body
-//!   ([`AttestationSet`]: parse, root, countersignatures) the daemon FFI
-//!   and the Rust validator (CEN-B4) both run.
-//! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
+//! - [`pass_anchor`] — SF-D8 window, the pass transcript, and the receipt
+//!   verify ([`verify_receipt_transcript`]).
 //! - [`shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
 //!   streaming [`ShardViewHasher`] over each in-domain transaction's prunable
 //!   region and `pqc_auths`. Not a verification digest; never a skeleton row.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
-//! credit-wire vectors in `tests/attestation_wire_kat.rs`.
+//! pass-transcript vectors in `tests/pass_transcript_kat.rs`.
 
 #![deny(unsafe_code)]
 
 pub mod admission;
-pub mod attestation;
-pub mod attestation_admission;
-pub mod attestation_wire;
 pub mod bond_connect;
 pub mod bond_ct_balance;
 pub mod bond_duration;
@@ -102,18 +95,6 @@ pub use admission::{
     admission_code_cstr, admission_code_static_str, check_admission, check_admission_of,
     credited_work_at_admission, parent_state_shards_from_gather, AdmissionError, AdmissionShard,
     ParentStateHoldings, ADMISSION_MIN_WORK_MILLI,
-};
-pub use attestation::AttestationKind;
-pub use attestation_admission::{
-    AttestationRootError, AttestationSet, AttestationSetError, CountersignatureRefusal,
-};
-pub use attestation_wire::{
-    attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
-    verify_pass_countersignature, verify_pass_transcript, verify_receipt_transcript,
-    AttestationHeader, AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError,
-    PassRecord, PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
-    ATTESTATION_ROOT_CUSTOMIZATION, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
-    WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
     clean_interval_close, is_clean_interval_close, reinstate_connect, release_connect,
@@ -194,12 +175,12 @@ pub use emission_verify::{
 };
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
-    pass_request_header_bytes, response_window_outrunning_anchor, PassAnchorWindow,
-    PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PassStream, PassTranscript,
-    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
-    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
-    PASS_REQUEST_HEADER_LEN,
+    pass_request_header_bytes, response_window_outrunning_anchor, verify_receipt_transcript,
+    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PassStream,
+    PassTranscript, ReceiptRefused, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
+    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT,
+    PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
+    PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 // The emission error is re-exported under a disambiguated name: the bare

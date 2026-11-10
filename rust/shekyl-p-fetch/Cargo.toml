@@ -28,7 +28,7 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Decoded request-header height is ordinal `BlockHeight` (C1 punch at encode).
 shekyl-types = { path = "../shekyl-types" }
-# The SF-D8 transcript and its verifier (`pass_anchor`, `verify_pass_transcript`)
+# The SF-D8 transcript and its verifier (`pass_anchor`, `verify_receipt_transcript`)
 # — one implementation shared with the admission verifier, so the client and
 # the chain can never disagree about what `P` signed — and the shard view
 # hash fold (`ShardViewHasher`, SV-D). Retention is a pure consensus library
@@ -50,7 +50,7 @@ getrandom = "0.2"
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
-# `TestKeySigner` for the conversation test. The SOCKS shim that test
+# `TestReceiptKeySigner` for the conversation test. The SOCKS shim that test
 # shares with the wallet's proving test is `shekyl-p-loopback`, which does
 # not enable `test-signer`. Dev-only — SF-D4 forbids the serve edge on the
 # shipped graph.

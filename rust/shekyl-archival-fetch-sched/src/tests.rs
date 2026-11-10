@@ -6,29 +6,28 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_p_fetch::{FetchTarget, ServingEndpoint};
 use shekyl_types::{BlockHeight, PCanonicalId};
 
 use crate::draw::Urn;
 use crate::facts::{BlockSpan, Holder};
 
-/// A holder the urn can tell apart. Nothing here is dialled, so the key
-/// is a placeholder shape, not a key; the urn is the same for any scheme.
-fn holder(tag: u8) -> Holder<HybridPublicKey> {
+/// A holder the urn can tell apart. Nothing here is dialled; the key is a
+/// receipt key seeded by the tag.
+fn holder(tag: u8) -> Holder {
+    let (verifying_key, _) =
+        HybridEd25519FnDsa::keypair_from_seeds(&[tag; 32], &[tag; 32]).expect("seeded keygen");
     Holder {
         id: PCanonicalId::from_bytes([tag; 32]),
         target: FetchTarget {
             endpoint: ServingEndpoint::from_record_bytes([tag; 32]),
-            verifying_key: HybridPublicKey {
-                ed25519: [tag; 32],
-                ml_dsa: Vec::new(),
-            },
+            verifying_key,
         },
     }
 }
 
-fn holders(n: u8) -> Vec<Holder<HybridPublicKey>> {
+fn holders(n: u8) -> Vec<Holder> {
     (1..=n).map(holder).collect()
 }
 

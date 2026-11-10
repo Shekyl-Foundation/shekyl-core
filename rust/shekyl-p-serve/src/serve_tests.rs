@@ -12,14 +12,14 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::countersign::{PassKey, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use crate::countersign::{PassKey, SignRefused, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
 use crate::provider::{ProviderError, ShardBody};
 use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
     PASS_REQUEST_HEADER_LEN,
 };
-use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_archival_retention::{pass_delivery_digest, verify_receipt_transcript};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_types::BlockHeight;
 
@@ -52,14 +52,13 @@ fn header_line(bytes: &[u8; PASS_REQUEST_HEADER_LEN]) -> String {
 
 /// Bind with a fresh ephemeral test signer at [`OWN_HEIGHT`]; the signer is
 /// returned so a test can verify the countersignature or move the height.
-async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let ep = PServeEndpoint::bind(
-        provider,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
-    )
-    .await
-    .expect("bind");
+async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestReceiptKeySigner>) {
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
+        .await
+        .expect("bind");
     (ep, signer)
 }
 
@@ -100,7 +99,7 @@ fn filler(n: usize, seed: u8) -> Vec<u8> {
 /// A 200 response, split at its seams.
 struct Served {
     head: String,
-    signature: HybridSignature,
+    signature: FnDsaHybridSignature,
     /// The body ahead of the envelope, byte for byte. What the
     /// countersignature's delivery digest is over.
     body: Vec<u8>,
@@ -115,9 +114,9 @@ fn parse_served(response: &[u8]) -> Served {
         .expect("response has a head");
     let head = String::from_utf8_lossy(&response[..end]).to_string();
     let after_head = &response[end + 4..];
-    let (body, sig) = after_head.split_at(after_head.len() - IDENTITY_ENVELOPE_LEN);
+    let (body, sig) = after_head.split_at(after_head.len() - RECEIPT_ENVELOPE_LEN);
     let signature =
-        HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
+        FnDsaHybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature");
     Served {
         head,
         signature,
@@ -172,7 +171,7 @@ fn good_get_shard_0() -> String {
 /// The `len` payload bytes a 200 response carries: the ones immediately
 /// ahead of the countersignature envelope that closes it.
 fn payload_tail(response: &[u8], len: usize) -> &[u8] {
-    let end = response.len() - IDENTITY_ENVELOPE_LEN;
+    let end = response.len() - RECEIPT_ENVELOPE_LEN;
     &response[end - len..end]
 }
 
@@ -530,7 +529,7 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     let (ep, _) = bind(FixtureProvider::new([(0, payload.clone())])).await;
     let r = fetch(ep.addr(), "/shard/0").await;
     let Served { head, body, .. } = parse_served(&r);
-    let expected_len = IDENTITY_ENVELOPE_LEN + payload.len();
+    let expected_len = RECEIPT_ENVELOPE_LEN + payload.len();
     assert!(head.contains(&format!("content-length: {expected_len}")));
     assert_eq!(body, payload);
 }
@@ -555,7 +554,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     assert!(head.starts_with("HTTP/1.1 200 OK"));
     // The countersignature verifies through the consensus verifier the
     // daemon runs, against exactly the header the request carried.
-    verify_pass_transcript(
+    verify_receipt_transcript(
         signer.public_key(),
         &shekyl_archival_retention::PassTranscript::new(
             shekyl_archival_retention::PassRequestHeader::from_parts(
@@ -571,7 +570,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     )
     .expect("the served signature covers the request header, shard id and delivered bytes");
     // ...and is bound to *this* shard id and *this* nonce.
-    assert!(verify_pass_transcript(
+    assert!(verify_receipt_transcript(
         signer.public_key(),
         &shekyl_archival_retention::PassTranscript::new(
             shekyl_archival_retention::PassRequestHeader::from_parts(
@@ -586,7 +585,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
         &signature
     )
     .is_err());
-    assert!(verify_pass_transcript(
+    assert!(verify_receipt_transcript(
         signer.public_key(),
         &shekyl_archival_retention::PassTranscript::new(
             shekyl_archival_retention::PassRequestHeader::from_parts(
@@ -609,7 +608,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
         pass_delivery_digest(&NONCE, &tampered),
         pass_delivery_digest(&[0u8; 32], &body),
     ] {
-        assert!(verify_pass_transcript(
+        assert!(verify_receipt_transcript(
             signer.public_key(),
             &shekyl_archival_retention::PassTranscript::new(
                 shekyl_archival_retention::PassRequestHeader::from_parts(
@@ -632,7 +631,7 @@ async fn the_served_body_is_the_providers_bytes_then_the_countersignature() {
     assert_eq!(body, payload);
     assert_eq!(
         r.len() - (head.len() + 4),
-        IDENTITY_ENVELOPE_LEN + payload.len()
+        RECEIPT_ENVELOPE_LEN + payload.len()
     );
 }
 
@@ -680,22 +679,27 @@ async fn an_unreadable_height_renders_the_503_and_counts_a_lookup_failure() {
     // looked up and nothing is signed: the bare 503, and the fault lands
     // in `lookup_failure_count` (a store read that failed), not in
     // `sign_failure_count` and not silently in neither.
-    struct Storeless(Arc<TestKeySigner>);
-    impl PassKey<IDENTITY_ENVELOPE_LEN> for Storeless {
+    struct Storeless(Arc<TestReceiptKeySigner>);
+    impl PassKey for Storeless {
         fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
             self.0.ready(shard_id, anchor_height)
         }
-        fn sign_pass(&self, m: &crate::PassTranscript) -> Result<HybridSignature, SignRefused> {
+        fn sign_pass(
+            &self,
+            m: &crate::PassTranscript,
+        ) -> Result<FnDsaHybridSignature, SignRefused> {
             self.0.sign_pass(m)
         }
     }
-    impl PassSigner<IDENTITY_ENVELOPE_LEN> for Storeless {
+    impl PassSigner for Storeless {
         fn own_height(&self) -> Option<BlockHeight> {
             None
         }
     }
-    let key = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> = Arc::new(Storeless(Arc::clone(&key)));
+    let key = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, filler(128, 1))]), signer)
         .await
         .expect("bind");
@@ -952,9 +956,6 @@ mod bench_seam;
 
 #[path = "serve_stall_tests.rs"]
 mod stall;
-
-#[path = "serve_wire_pin_tests.rs"]
-mod wire_pin;
 
 #[path = "serve_receipt_width_tests.rs"]
 mod receipt_width;

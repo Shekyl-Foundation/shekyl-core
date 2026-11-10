@@ -3,11 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! SF-D8 pass-countersignature transcript and admission window.
+//! SF-D8 pass transcript, its admission window, and the receipt verify.
 //!
 //! Design: [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
-//! `SF-D8`. Record codec and [`verify_pass_countersignature`](crate::verify_pass_countersignature)
-//! live in [`crate::attestation_wire`].
+//! `SF-D8`. A persona's receipt key signs the [`PassTranscript`] under the
+//! receipt domain, and [`verify_receipt_transcript`] is the one check of it.
 //!
 //! Inland clocks are ordinal [`BlockHeight`]; depths and lags are
 //! [`BlockCount`]. The 73-byte header still carries `anchor_height` as
@@ -41,6 +41,11 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
+
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+};
+use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 
 use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
 
@@ -394,11 +399,9 @@ impl PassRequestHeader {
 
 /// What `P` signs, typed: the request header (whose anchor is a
 /// [`BlockHash`]), the shard the route named, and the digest of the bytes
-/// delivered. Every function that applies a signing domain to a pass takes
-/// this, never the bytes, so the anchor reaches each domain as a block
-/// hash (`DOMAIN_BINDING_RATCHET.tsv`, the `input:BlockHash` rows of the
-/// attestation and receipt domains). [`Self::message`] is the 113-byte
-/// layout the signature covers.
+/// delivered. Every function that applies the receipt domain to a pass
+/// takes this, never the bytes, so the anchor reaches the domain as a block
+/// hash. [`Self::message`] is the 113-byte layout the signature covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PassTranscript {
     header: PassRequestHeader,
@@ -524,22 +527,10 @@ impl PassDeliveryHasher {
 
 /// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]` ‖
 /// [`pass_delivery_digest`]. Plain concatenation of fixed-width fields.
-///
-/// One transcript, two signing domains, by key:
-///
-/// - the identity key (hybrid scheme 1) signs it under
-///   [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION)
-///   — the live pass countersignature, verified by
-///   [`verify_pass_transcript`](crate::verify_pass_transcript) on the fetch
-///   client and by `verify_pass_countersignature` at attestation admission;
-/// - the receipt key (hybrid scheme 3) signs it under
-///   [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
-///   — the serve-credit receipt, verified by
-///   [`verify_receipt_transcript`](crate::verify_receipt_transcript) in the
-///   bundle verifier's step 8 and on the fetch client's scheme-3 target;
-///   both staged (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6, `FN_DSA_HYBRID.md` §9).
-///
-/// A signature under one domain is not a signature under the other.
+/// The persona's receipt key signs it under
+/// [`SCHEME_DOMAIN_RECEIPT`], and [`verify_receipt_transcript`] checks it
+/// on the fetch client and in the bundle verifier's step 8
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6, `FN_DSA_HYBRID.md` §9).
 #[must_use]
 pub fn pass_countersignature_message(
     stream: PassStream,
@@ -561,6 +552,50 @@ pub fn pass_countersignature_message(
     out[SHARD_END..].copy_from_slice(delivery_digest);
     out
 }
+
+/// A receipt that does not verify over its transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("receipt does not verify over the pass transcript")]
+pub struct ReceiptRefused;
+
+/// Verify a **receipt** over the pass transcript: the 113-byte transcript,
+/// signed by the persona's receipt key (Ed25519 + FN-DSA-1024, hybrid
+/// scheme 3) under [`SCHEME_DOMAIN_RECEIPT`] (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §6; `FN_DSA_HYBRID.md` §9).
+///
+/// It has two callers: the fetch client's target (`shekyl-p-fetch`,
+/// `target.rs`), which every drawn holder's target is, and the bundle
+/// verifier's step 8 (`shekyl-chain-rules`, `archival::bundle::verify_bundle`),
+/// which admission runs. Neither builds the message or names the domain
+/// itself, so the receipt a persona signs at serve time and the receipt
+/// admission verifies cannot drift.
+///
+/// The transcript's delivery digest is the caller's, recomputed from the
+/// body it received ([`pass_delivery_digest`]), so a signature over other
+/// bytes fails here.
+///
+/// # Errors
+///
+/// [`ReceiptRefused`] if the signature does not verify under
+/// `receipt_pubkey`, the receipt domain and this transcript.
+pub fn verify_receipt_transcript(
+    receipt_pubkey: &FnDsaHybridPublicKey,
+    transcript: &PassTranscript,
+    signature: &FnDsaHybridSignature,
+) -> Result<(), ReceiptRefused> {
+    HybridEd25519FnDsa
+        .verify(
+            receipt_pubkey,
+            SCHEME_DOMAIN_RECEIPT,
+            &transcript.message(),
+            signature,
+        )
+        .map_err(|_| ReceiptRefused)
+}
+
+#[cfg(test)]
+#[path = "receipt_transcript_tests.rs"]
+mod receipt_transcript_tests;
 
 #[cfg(test)]
 mod tests {

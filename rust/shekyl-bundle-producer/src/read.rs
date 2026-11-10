@@ -38,10 +38,9 @@ use shekyl_archival_fetch_sched::{
     ReadFailure, ServingEndpoint, ShardFacts, SuppliedNonce, Timeouts, MAX_INFLIGHT,
 };
 use shekyl_archival_retention::BundleRecord;
-use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::BlockCount;
 
-use crate::outcome::{Answered, ReadOutcome};
+use crate::outcome::ReadOutcome;
 use crate::producer::DueRead;
 use crate::{FILING_MARGIN, READ_START_SPREAD};
 
@@ -91,7 +90,7 @@ const _: () = assert!(
 /// The holder a due read dials: the drawn persona, at its record's
 /// endpoint, under its receipt key.
 #[must_use]
-pub fn receipt_holder(due: &DueRead) -> Holder<FnDsaHybridPublicKey> {
+pub fn receipt_holder(due: &DueRead) -> Holder {
     Holder {
         id: due.persona,
         target: FetchTarget {
@@ -170,42 +169,13 @@ pub fn classify(failure: &ReadFailure) -> ReadOutcome {
     match failure {
         ReadFailure::Exhausted { attempts } => match attempts.last().map(|a| &a.error) {
             Some(FetchError::Stall(_)) | None => ReadOutcome::Stall,
-            Some(error) if other_scheme(error) => ReadOutcome::Answered(Answered::ServingScheme),
-            Some(_) => ReadOutcome::Answered(Answered::Refused),
+            Some(_) => ReadOutcome::Refused,
         },
         ReadFailure::Facts(_)
         | ReadFailure::Draw(_)
         | ReadFailure::Open { .. }
         | ReadFailure::NoAnchor { .. }
         | ReadFailure::NoHolders { .. } => ReadOutcome::Stall,
-    }
-}
-
-/// Whether a refusal is an identity-scheme reply read under a receipt-key
-/// target. The client reads it one of two ways, by the shard's size
-/// (`FN_DSA_HYBRID.md` §9.3):
-///
-/// - The ceiling it holds a reply to is the frame's ceiling from the
-///   requester's rows plus the receipt envelope. A reply that the wider
-///   identity envelope takes past that ceiling declares more by at most
-///   the difference between the two envelopes, and is refused from the
-///   head (`Oversize`).
-/// - A reply under the ceiling is read: the receipt-width envelope is the
-///   tail of the identity signature, the whole frame parses, and exactly
-///   the difference is left ahead of the envelope (`FrameLong`).
-///
-/// Any other excess is no envelope of either scheme: a refusal like any
-/// other.
-fn other_scheme(error: &FetchError) -> bool {
-    use shekyl_archival_fetch_sched::{Malformed, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN};
-    let wider = u64::try_from(IDENTITY_ENVELOPE_LEN.saturating_sub(RECEIPT_ENVELOPE_LEN))
-        .expect("an envelope width fits u64");
-    match error {
-        FetchError::Malformed(Malformed::Oversize { declared, max }) => declared
-            .checked_sub(*max)
-            .is_some_and(|excess| excess <= wider),
-        FetchError::Malformed(Malformed::FrameLong { left }) => *left == wider,
-        _ => false,
     }
 }
 

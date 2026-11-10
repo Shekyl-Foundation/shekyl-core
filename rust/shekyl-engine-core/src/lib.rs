@@ -171,10 +171,7 @@ pub mod __test_helpers {
     pub fn resident_receipt_key(
         keys: shekyl_crypto_pq::archival_p::ArchivalPKeys,
         slot: u32,
-    ) -> (
-        ReceiptKeyHolder,
-        std::sync::Arc<dyn shekyl_p_host::PassKey<{ shekyl_p_host::RECEIPT_ENVELOPE_LEN }>>,
-    ) {
+    ) -> (ReceiptKeyHolder, std::sync::Arc<dyn shekyl_p_host::PassKey>) {
         use crate::engine::stake_engine::serving::receipt_key::ResidentReceiptKey;
         use crate::engine::stake_engine::StakeEngineHandle;
         let p_slot = PSlot::from_raw(slot);

@@ -22,9 +22,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_loopback::{
     client_through, endpoint_and_client, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{
-    PassSigner, TestKeySigner, TestReceiptKeySigner, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
-};
+use shekyl_p_serve::{PassSigner, TestReceiptKeySigner};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -91,7 +89,7 @@ impl HolderSource for Holders {
     fn holders_of(
         &self,
         _shard_id: ShardId,
-    ) -> Result<Vec<shekyl_archival_fetch_sched::Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    ) -> Result<Vec<shekyl_archival_fetch_sched::Holder>, FactsFault> {
         Ok(vec![shekyl_archival_fetch_sched::Holder {
             id: PCanonicalId::from_bytes([0x71; 32]),
             target: shekyl_p_loopback::fetch_target(self.0.clone()),
@@ -101,7 +99,7 @@ impl HolderSource for Holders {
     fn support_holders_of(
         &self,
         _shard_id: ShardId,
-    ) -> Result<Vec<shekyl_archival_fetch_sched::Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    ) -> Result<Vec<shekyl_archival_fetch_sched::Holder>, FactsFault> {
         Ok(Vec::new())
     }
 }
@@ -156,7 +154,7 @@ async fn a_receipt_endpoint_answers_a_pass_the_verifier_opens() {
     let (_endpoint, client) = endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
         timeouts(),
     )
     .await;
@@ -201,45 +199,13 @@ async fn a_receipt_endpoint_answers_a_pass_the_verifier_opens() {
     }
 }
 
-/// A host that signs with the identity key, not the receipt key the
-/// serving task binds. The producer's read of it is one completed exchange
-/// that is not a receipt, classified as the serving side's scheme: the
-/// bundle files with no passes and the log says why. Red edit: classify it `Refused` — the block's log line never
-/// fires.
-#[tokio::test]
-async fn an_identity_endpoint_is_the_serving_sides_scheme() {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let (_endpoint, client) = endpoint_and_client(
-        FIXTURE_SHARD_ID,
-        fixture_body(),
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
-        timeouts(),
-    )
-    .await;
-    let scheduler = FetchScheduler::new(
-        Arc::new(Facts),
-        Arc::new(Holders(another_receipt_key())),
-        client,
-    );
-    let receipt_key = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
-        .public_key()
-        .clone();
-    let outcome = read_due(&scheduler, &due(receipt_key, PassStream::Economy)).await;
-    assert_eq!(outcome, ReadOutcome::Answered(Answered::ServingScheme));
-}
-
-/// An excess past what an identity envelope can add is not the serving
-/// side's scheme, a frame with other than exactly the envelopes'
-/// difference left over is not, and neither is any other malformation.
-/// Red edits: drop the bound on the excess — a hostile oversized reply
-/// logs as the identity scheme; ignore the leftover count — any long frame
-/// does.
+/// Every completed exchange that is not a pass is `Refused`, a reply in
+/// another scheme among them (a long frame or an oversize declaration):
+/// the draw is done. Red edit: classify a malformed reply as `Stall` — the
+/// draw is read again against a host that answered.
 #[test]
-fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
-    use shekyl_archival_fetch_sched::{
-        Attempt, FetchError, Malformed, ReadFailure, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
-    };
-    let wider = u64::try_from(IDENTITY_ENVELOPE_LEN - RECEIPT_ENVELOPE_LEN).expect("fits");
+fn a_completed_exchange_that_is_not_a_pass_is_refused() {
+    use shekyl_archival_fetch_sched::{Attempt, FetchError, Malformed, ReadFailure};
     let ended = |error: FetchError| {
         classify(&ReadFailure::Exhausted {
             attempts: vec![Attempt {
@@ -248,36 +214,17 @@ fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
             }],
         })
     };
-    let oversize = |declared: u64| {
+    for error in [
         FetchError::Malformed(Malformed::Oversize {
-            declared,
+            declared: 3_029,
             max: 1_000,
-        })
-    };
-    assert_eq!(
-        ended(oversize(1_000 + wider)),
-        ReadOutcome::Answered(Answered::ServingScheme)
-    );
-    assert_eq!(
-        ended(oversize(1_001 + wider)),
-        ReadOutcome::Answered(Answered::Refused)
-    );
-    let long = |left: u64| FetchError::Malformed(Malformed::FrameLong { left });
-    assert_eq!(
-        ended(long(wider)),
-        ReadOutcome::Answered(Answered::ServingScheme)
-    );
-    for left in [1, wider - 1, wider + 1] {
-        assert_eq!(
-            ended(long(left)),
-            ReadOutcome::Answered(Answered::Refused),
-            "{left} bytes left"
-        );
+        }),
+        FetchError::Malformed(Malformed::FrameLong { left: 2_029 }),
+        FetchError::Malformed(Malformed::Envelope),
+        FetchError::Miss,
+    ] {
+        assert_eq!(ended(error), ReadOutcome::Refused);
     }
-    assert_eq!(
-        ended(FetchError::Miss),
-        ReadOutcome::Answered(Answered::Refused)
-    );
 }
 
 /// Stall-class failures read again; a requester that could not dial reads
@@ -356,7 +303,7 @@ async fn a_challenge_read_and_an_organic_read_differ_only_in_the_nonce() {
     let (endpoint, _direct) = endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
         timeouts(),
     )
     .await;

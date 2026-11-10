@@ -26,7 +26,7 @@
 //!
 //! Admission builds its window from `predecessor_height` — a block height —
 //! and the window's centre is `predecessor_height − 720`
-//! (`attestation_wire_kat.rs`'s `SIG_ANCHOR_HEIGHT`). `P`'s gate centres on
+//! (`pass_anchor::PassAnchorWindow`). `P`'s gate centres on
 //! `own_height − 720`, so the two centres coincide only when `own_height` is
 //! the **top block's height**.
 //!

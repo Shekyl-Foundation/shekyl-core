@@ -210,17 +210,14 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldRece
 /// asked of the persona, either built or undecodable, for the rest of the
 /// persona's life.
 ///
-/// **STAGED.** Nothing on the live serve path signs with this key: the
-/// serving task is handed the identity key's capability
-/// (`serving::pass_key`), and the receipt capability
-/// (`serving::receipt_key`) is built and tested but not selected. See that
-/// module for who switches and what would falsify the staging.
+/// The serving task signs with this key through its receipt capability
+/// (`serving::receipt_key`).
 ///
-/// **Why it is lazy.** A staged capability must cost the live path nothing.
-/// Decoding is the expensive step — up to 360 KiB of stack in an optimized
-/// build and 118,640 bytes of heap for the key — and until the cutover no
-/// persona is ever asked for a receipt. So the actor's start decodes nothing
-/// and the slot of a persona that never signs a receipt stays
+/// **Why it is lazy.** Decoding is the expensive step — up to 360 KiB of
+/// stack in an optimized build and 118,640 bytes of heap for the key — and
+/// a persona that does not serve is never asked for a receipt. So the
+/// actor's start decodes nothing and the slot of a persona that never signs
+/// a receipt stays
 /// [`Self::NotBuilt`] for its whole life. The first signature pays the
 /// decode; every later one signs from the held key (`FnDsaHybridSigner`).
 ///
@@ -786,23 +783,15 @@ pub(crate) enum StakeEngineError {
     #[error("drain assembly: {0}")]
     DrainAssembly(#[from] DrainAssemblyError),
 
-    /// Countersigning a pass transcript with the held persona's bond identity
-    /// key failed inside the scheme — **malformed resident key material**
-    /// (corrupted in-memory state), the same class as [`Self::ScanSetup`].
-    /// Not a refusal the serving host chose: the host reports it in its
-    /// `late_sign_failures` counter and the client sees a refusal trailer.
-    #[error("pass countersignature failed: {0}")]
-    PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
-
     /// Signing a pass transcript with the held persona's **receipt key**
     /// (hybrid scheme 3) failed inside the scheme, **with a key that
     /// decoded**: the scheme's signer gave up, or the domain was refused.
-    /// The same class as [`Self::PassCountersign`], kept apart from it so an
-    /// operator can tell which of the persona's two signing keys failed.
-    /// Says nothing about the next signature: the key stays held. A key
-    /// that does not decode is [`Self::ReceiptKeyUndecodable`], never this.
-    /// STAGED with the receipt capability (`serving::receipt_key`): no live
-    /// path constructs it.
+    /// **Malformed resident key material** (corrupted in-memory state), the
+    /// same class as [`Self::ScanSetup`]: not a refusal the serving host
+    /// chose; the host counts it in `late_sign_failures` and the client
+    /// sees a refusal trailer. Says nothing about the next signature: the
+    /// key stays held. A key that does not decode is
+    /// [`Self::ReceiptKeyUndecodable`], never this.
     #[error("receipt signature failed: {0}")]
     ReceiptSign(#[source] shekyl_crypto_pq::CryptoError),
 
@@ -811,7 +800,7 @@ pub(crate) enum StakeEngineError {
     /// first receipt and from the slot's remembered state on every later
     /// one (`HeldReceiptKey::Undecodable`); no later request can succeed
     /// while this persona is held. The receipt capability latches its
-    /// pre-flight on this variant and on no other. STAGED with it.
+    /// pre-flight on this variant and on no other.
     #[error(
         "receipt key does not decode: this persona cannot sign receipts; \
          its identity key and its other keys are unaffected"

@@ -26,7 +26,8 @@ use crate::body::{read_frame, BodyReader, Checker};
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
 use crate::target::{
-    ExpectedShard, FetchTarget, PassVerifyingKey, ServingEndpoint, TxSink, VerifiedShard,
+    parse_envelope, verifies, ExpectedShard, FetchTarget, ServingEndpoint, TxSink, VerifiedShard,
+    RECEIPT_ENVELOPE_LEN,
 };
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
@@ -275,13 +276,13 @@ impl PFetchClient {
     ///
     /// The [`FetchError`] taxonomy. [`FetchError::retries_same_p`] is the
     /// one-bit summary a scheduler needs.
-    pub async fn fetch<K: PassVerifyingKey>(
+    pub async fn fetch(
         &self,
-        target: &FetchTarget<K>,
+        target: &FetchTarget,
         header: &RequestHeader,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
-    ) -> Result<VerifiedShard<K>, FetchError> {
+    ) -> Result<VerifiedShard, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
             .await
@@ -300,7 +301,7 @@ impl PFetchClient {
         let (head, carried) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
         // The one scheme this exchange can be: the target's key's.
-        let envelope_len = u64::try_from(K::ENVELOPE_LEN).expect("envelope fits u64");
+        let envelope_len = u64::try_from(RECEIPT_ENVELOPE_LEN).expect("envelope fits u64");
         // A bare answer's verdict, or `None` for a 200.
         let bare = match head.status {
             400 | 404 | 503 => {
@@ -318,7 +319,7 @@ impl PFetchClient {
                 if declared < envelope_len {
                     return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
                 }
-                let max = expected.max_response_len::<K>();
+                let max = expected.max_response_len();
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
@@ -337,7 +338,6 @@ impl PFetchClient {
             &mut stream,
             carried,
             head.content_length,
-            K::ENVELOPE_LEN,
             header,
             self.timeouts.body_stall,
         )?;
@@ -380,12 +380,18 @@ impl PFetchClient {
             // This scheme's canonical signature, or nothing: there is no
             // second parse under another scheme.
             let signature =
-                K::parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
+                parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
             // The digest was recomputed from the bytes as they arrived
             // under this request's own nonce, never taken from `P`: a
             // signature over any other bytes, or over these bytes for
             // another request, fails this check.
-            if !verifying_key.verifies(&header, shard_id.to_raw(), &delivery_digest, &signature) {
+            if !verifies(
+                &verifying_key,
+                &header,
+                shard_id.to_raw(),
+                &delivery_digest,
+                &signature,
+            ) {
                 return Err(FetchError::BadCountersignature);
             }
             if let Some(mismatch) = mismatch {

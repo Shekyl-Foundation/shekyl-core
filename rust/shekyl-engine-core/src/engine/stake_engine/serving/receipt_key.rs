@@ -8,10 +8,9 @@
 //! (`FN_DSA_HYBRID.md` §9).
 //!
 //! [`ResidentReceiptKey`] implements the serving route's signer trait,
-//! `PassKey`, at the receipt envelope's width (1,356 bytes): an endpoint
+//! `PassKey` (the receipt envelope is 1,356 bytes): an endpoint
 //! bound with it closes every response with a scheme-3 receipt. The
-//! serving task is started with it (`serving/start.rs`), so the host's key
-//! type is the receipt width (`shekyl_p_host::PersonaServing::key`). The
+//! serving task is started with it (`serving/start.rs`). The
 //! bundle verifier checks each receipt under the bond record's
 //! `receipt_sign_pk`, and the daemon builds its drawn holders' fetch
 //! targets over that same key. Behind the capability are the actor message
@@ -71,18 +70,16 @@
 //!
 //! # What it is
 //!
-//! [`ResidentPassKey`](super::pass_key::ResidentPassKey)'s shape, for its
-//! reasons. It is not a key: it holds a non-owning handle to the stake actor
+//! It is not a key: it holds a non-owning handle to the stake actor
 //! and a slot. A signature is a message round-trip in which the 113-byte
 //! transcript goes in and the signature comes out. The handle is weak, so
 //! this role cannot keep the persona's secrets resident past the wallet
 //! close that wipes them, and a stopped actor is a refusal at pre-flight.
 //!
-//! Pre-flight matches the identity capability: actor liveness, and no
-//! round-trip. It differs afterwards. A signature that finds the receipt
-//! key undecodable is remembered on this capability, and later pre-flights
-//! refuse with that refusal. An unheld slot is still found at sign time, as
-//! the identity key finds it.
+//! Pre-flight is actor liveness, and no round-trip; a signature that finds
+//! the receipt key undecodable is remembered on this capability, and later
+//! pre-flights refuse with that refusal. An unheld slot is found at sign
+//! time.
 //!
 //! The decoded receipt key — 118,640 bytes of secret basis and working
 //! buffers — lives in the actor beside the bundle it was decoded from, and
@@ -93,7 +90,7 @@
 use std::sync::{Arc, OnceLock};
 
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
-use shekyl_p_host::{PassKey, SignRefused, RECEIPT_ENVELOPE_LEN};
+use shekyl_p_host::{PassKey, SignRefused};
 use shekyl_types::BlockHeight;
 
 use crate::engine::stake_engine::handle::{StakeEngineHandle, WeakStakeEngineHandle};
@@ -131,16 +128,13 @@ impl ResidentReceiptKey {
 }
 
 /// The serving route's signer: the receipt key, hybrid scheme 3, a
-/// 1,356-byte envelope ([`RECEIPT_ENVELOPE_LEN`]). An endpoint bound with
-/// this key writes that envelope and no other, and it is not a `PassKey`
-/// at the identity width, so it cannot be handed where the identity
-/// scheme's key is expected.
-impl PassKey<RECEIPT_ENVELOPE_LEN> for ResidentReceiptKey {
+/// 1,356-byte envelope ([`shekyl_p_host::RECEIPT_ENVELOPE_LEN`]).
+impl PassKey for ResidentReceiptKey {
     /// Refuses when the actor that holds the key has stopped, or when an
     /// earlier signature through this capability found the receipt key
     /// undecodable. The shard, the
     /// anchor and whether the slot is held are not consulted: an unheld slot
-    /// is the signer's answer, as it is for the identity key.
+    /// is the signer's answer.
     ///
     /// No actor round-trip. A key not yet decoded answers `Ok`.
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
@@ -182,34 +176,14 @@ fn latches_preflight(error: &StakeEngineError) -> bool {
     matches!(error, StakeEngineError::ReceiptKeyUndecodable)
 }
 
-// The types' own refusal of the falsifier, as a compile-time fact: this
-// capability is not a `PassKey` at the identity width, which is the width
-// of the key the serving host takes (`PersonaServing::key`). If an impl at
-// that width were ever added, the resolution below becomes ambiguous and
-// this crate stops compiling.
-const _: fn() = || {
-    trait AmbiguousIfImpl<A> {
-        fn receipt_key_must_not_be_an_identity_width_key() {}
-    }
-    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-    struct AtTheIdentityWidth;
-    impl<T: ?Sized + PassKey<{ shekyl_p_host::IDENTITY_ENVELOPE_LEN }>>
-        AmbiguousIfImpl<AtTheIdentityWidth> for T
-    {
-    }
-    let _ =
-        <ResidentReceiptKey as AmbiguousIfImpl<_>>::receipt_key_must_not_be_an_identity_width_key;
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use shekyl_archival_retention::{pass_countersignature_message, verify_pass_transcript};
+    use shekyl_archival_retention::pass_countersignature_message;
     use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
     use shekyl_crypto_pq::signature::{
-        HybridSignature, SignatureScheme, SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
-        SCHEME_DOMAIN_WITNESS_BUNDLE,
+        SignatureScheme, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
     };
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -218,7 +192,6 @@ mod tests {
         bundle_with_a_corrupted_receipt_key, is_built, receipt_pk, sign, slot, transcript, ANCHOR,
         ANCHOR_HASH, DIGEST, NONCE, OTHER_SLOT, SHARD, SLOT,
     };
-    use crate::engine::stake_engine::serving::pass_key::ResidentPassKey;
     use crate::engine::stake_engine::test_fixtures::{
         derive_bundle, ephemeral_body_store, spawn_over,
     };
@@ -235,8 +208,7 @@ mod tests {
 
     /// Through the actor: a signature over a real transcript verifies under
     /// the persona's receipt key with scheme 3 and the receipt domain, and
-    /// under nothing else — not another domain, not another transcript, and
-    /// not as an identity signature.
+    /// under nothing else — not another domain, not another transcript.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn signs_under_the_receipt_key_and_the_receipt_domain() {
         let stake = spawn_over(&[SLOT, OTHER_SLOT], &[SLOT], Some(SLOT));
@@ -260,13 +232,16 @@ mod tests {
         assert_eq!(bytes.len(), FnDsaHybridSignature::CANONICAL_LEN);
         assert_eq!(bytes.len(), 1_356);
 
-        // Not under another domain: the identity key's, or the other
-        // scheme-3 surface's, the bundle witness's.
-        for other in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_BUNDLE] {
-            assert!(scheme
-                .verify(&public, other, &transcript().message(), &signature)
-                .is_err());
-        }
+        // Not under the other scheme-3 surface's domain, the bundle
+        // witness's.
+        assert!(scheme
+            .verify(
+                &public,
+                SCHEME_DOMAIN_WITNESS_BUNDLE,
+                &transcript().message(),
+                &signature
+            )
+            .is_err());
         // Not over another transcript.
         let other_shard = pass_countersignature_message(
             shekyl_archival_retention::PassStream::Economy,
@@ -279,49 +254,6 @@ mod tests {
         assert!(scheme
             .verify(&public, SCHEME_DOMAIN_RECEIPT, &other_shard, &signature)
             .is_err());
-    }
-
-    /// The receipt signature is not an identity signature and the identity
-    /// signature is not a receipt. The types already say so — the identity
-    /// verifier takes a `HybridSignature` and cannot be handed this one — so
-    /// what is left to hold is the bytes: neither signature parses as the
-    /// other scheme's, and the identity key's own signature over the same
-    /// transcript still verifies under the bond identity, untouched.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_receipt_is_not_an_identity_signature() {
-        let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
-        let receipt = sign(ResidentReceiptKey::new(&stake, slot(SLOT)), transcript())
-            .await
-            .expect("receipt key signs");
-        let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
-        let identity = tokio::task::spawn_blocking(move || identity_key.sign_pass(&transcript()))
-            .await
-            .expect("blocking task")
-            .expect("identity key signs");
-
-        let receipt_bytes = receipt.to_canonical_bytes();
-        let identity_bytes = identity.to_canonical_bytes().expect("canonical");
-        assert!(HybridSignature::from_canonical_bytes(&receipt_bytes).is_err());
-        assert!(FnDsaHybridSignature::from_canonical_bytes(&identity_bytes).is_err());
-
-        // The live signer is what it was: the identity key, scheme 1, the
-        // attestation domain, verified by the consensus verifier.
-        let bundle = derive_bundle(SLOT);
-        verify_pass_transcript(
-            bundle.hybrid_bond_id(),
-            &shekyl_archival_retention::PassTranscript::new(
-                shekyl_archival_retention::PassRequestHeader::from_parts(
-                    shekyl_archival_retention::PassStream::Economy,
-                    NONCE,
-                    ANCHOR,
-                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
-                ),
-                SHARD,
-                DIGEST,
-            ),
-            &identity,
-        )
-        .expect("the identity signature verifies under bond_id");
     }
 
     /// Two personas' capabilities are not interchangeable: each signs with
@@ -401,11 +333,11 @@ mod tests {
         }
     }
 
-    /// An unheld slot refuses with the slot-boundary error the identity
-    /// capability gives, and at the same moment: sign time. Pre-flight is
-    /// liveness only for both, so a slot that is not held is still ready.
+    /// An unheld slot refuses with the slot-boundary error, at sign time.
+    /// Pre-flight is liveness only, so a slot that is not held is still
+    /// ready.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unheld_slot_refuses_as_the_identity_key_does() {
+    async fn an_unheld_slot_refuses_at_sign_time() {
         let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
         let unheld = slot(SLOT + 1_000);
         let key = ResidentReceiptKey::new(&stake, unheld);
@@ -423,17 +355,6 @@ mod tests {
         ready(&key)
             .await
             .expect("an unheld slot's refusal leaves the pre-flight as it was");
-
-        let identity_key = ResidentPassKey::new(&stake, unheld);
-        identity_key
-            .ready(SHARD, ANCHOR)
-            .expect("the identity pre-flight is liveness only");
-        let identity_refused =
-            tokio::task::spawn_blocking(move || identity_key.sign_pass(&transcript()))
-                .await
-                .expect("blocking task")
-                .expect_err("unheld slot refuses");
-        assert_eq!(refused, identity_refused);
     }
 
     /// The decoded key's life is the persona's. Activating the next slot
@@ -479,23 +400,21 @@ mod tests {
                 requested: slot(SLOT),
             },
             StakeEngineError::StakeActorUnavailable,
-            StakeEngineError::PassCountersign(CryptoError::InvalidKeyMaterial),
         ] {
             assert!(!latches_preflight(&error), "{error} latched the pre-flight");
         }
     }
 
     /// Once the actor is gone the capability reports it at the pre-flight
-    /// and at sign time, with the typed refusal the identity capability
-    /// returns — and it never kept the actor alive.
+    /// and at sign time, with the typed refusal — and it never kept the
+    /// actor alive.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actor_stop_is_observed_not_prevented() {
         let stake = spawn_over(&[SLOT], &[SLOT], Some(SLOT));
         let key = ResidentReceiptKey::new(&stake, slot(SLOT));
-        let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
         ready(&key).await.expect("actor alive → ready");
 
-        // The last strong owner. Both capabilities hold weak handles only.
+        // The last strong owner. The capability holds a weak handle only.
         drop(stake);
         // Actor stop is asynchronous to the last drop; wait for the mailbox
         // to close rather than for a fixed interval.
@@ -511,13 +430,6 @@ mod tests {
             refused.detail.contains("stake engine unavailable"),
             "refusal names the recovery action: {refused}"
         );
-        assert_eq!(
-            refused,
-            identity_key
-                .ready(SHARD, ANCHOR)
-                .expect_err("the identity capability refuses too"),
-            "the two capabilities refuse a stopped actor identically"
-        );
         let sign_refused = sign(key, transcript())
             .await
             .expect_err("stopped actor → sign refused");
@@ -526,8 +438,8 @@ mod tests {
 
     /// The same through the actor. Holding the corrupted key does not stop
     /// the actor from starting; the capability's refusal is the actor's
-    /// `ReceiptKeyUndecodable` error, identical on every call; the persona's
-    /// identity key and the other persona's receipt key are unaffected.
+    /// `ReceiptKeyUndecodable` error, identical on every call; the other
+    /// persona's receipt key is unaffected.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_corrupted_receipt_key_refuses_through_the_actor() {
         let bundles = BTreeMap::from([
@@ -594,27 +506,6 @@ mod tests {
             .await
             .expect("the other persona is ready");
         assert_eq!(is_built(&stake, SLOT).await, Some(false));
-
-        let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
-        let identity = tokio::task::spawn_blocking(move || identity_key.sign_pass(&transcript()))
-            .await
-            .expect("blocking task")
-            .expect("the identity key still signs");
-        verify_pass_transcript(
-            derive_bundle(SLOT).hybrid_bond_id(),
-            &shekyl_archival_retention::PassTranscript::new(
-                shekyl_archival_retention::PassRequestHeader::from_parts(
-                    shekyl_archival_retention::PassStream::Economy,
-                    NONCE,
-                    ANCHOR,
-                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
-                ),
-                SHARD,
-                DIGEST,
-            ),
-            &identity,
-        )
-        .expect("verifies under bond_id");
 
         let other = sign(
             ResidentReceiptKey::new(&stake, slot(OTHER_SLOT)),

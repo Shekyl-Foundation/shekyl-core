@@ -25,15 +25,15 @@ tokio = { version = "1", default-features = false, features = ["net", "io-util",
 # is a pure consensus library — it does not depend back on any serving
 # crate, so this edge stays inside SF-D4's cut.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# `HybridSignature` is the countersignature's type and canonical codec;
-# `SCHEME_DOMAIN_ATTESTATION` is the domain the signer binds under.
+# `FnDsaHybridSignature` is the receipt's type and canonical codec;
+# `SCHEME_DOMAIN_RECEIPT` is the domain the signer binds under.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Inland clocks on the pre-sign gate (`PassSigner::own_height`,
 # `anchor_within_gate`) are ordinal `BlockHeight`.
 shekyl-types = { path = "../shekyl-types" }
 
 [features]
-# Exposes `TestKeySigner` — a `PassSigner` over an ephemeral, non-derived
+# Exposes `TestReceiptKeySigner` — a `PassSigner` over an ephemeral, non-derived
 # keypair — to this crate's integration tests and to `shekyl-p-fetch`'s
 # conversation test (a *dev* edge; SF-D4 forbids it on the shipped graph).
 # The SOCKS shim that test shares lives in `shekyl-p-loopback`, which does
@@ -57,12 +57,7 @@ tokio = { version = "1", default-features = false, features = ["macros", "rt-mul
 # gungraun rather than criterion: wall clock on this path is the floor
 # device's measurement (`BA-T5`), not a CI runner's.
 gungraun = "0.19"
-# The bench signs under a SEEDED key with a seeded ML-DSA nonce, as
-# `shekyl-tx-builder`'s `transfer_e2e_iai` does: a fresh key or a hedged
-# signature moves the rejection-sampling trajectory and with it the count
-# by tens of millions of instructions between runs of the same input.
-ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
-fips204 = "0.4.6"
+# The bench's synthetic shard bytes come from a seeded stream.
 rand = "0.8"
 # Self-dependency: integration tests build the lib without cfg(test), so the
 # test signer must ride the dev graph explicitly (same shape as retention's

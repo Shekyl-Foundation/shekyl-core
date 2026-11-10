@@ -237,12 +237,12 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     (
         "shekyl-p-host",
         "test-signer",
-    ): "arms shekyl-p-serve's ephemeral TestKeySigner as a PassKey, so a host "
+    ): "arms shekyl-p-serve's ephemeral TestReceiptKeySigner as a PassKey, so a host "
     "under test can be bound with a key whose public half the test holds "
     "(and, since SH-2, exposes RefusingKey — the always-refusing PassKey the "
     "serving-task lifecycle tests bind in place of the persona's resident "
     "key). Enabled from shekyl-engine-core's [dev-dependencies] edge only; "
-    "the production PassKey is the stake actor's ResidentPassKey, and "
+    "the production PassKey is the stake actor's ResidentReceiptKey, and "
     "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
     "every production graph",
     (

@@ -473,7 +473,7 @@ mod tests {
         // The accept loop has to be the serving runtime's. A 400 is enough:
         // an invalid request is answered before the store or the key, and
         // any answer means the loop is running.
-        let signer = crate::signer_at_synced_tip::<{ crate::RECEIPT_ENVELOPE_LEN }>(
+        let signer = crate::signer_at_synced_tip(
             Arc::new(crate::RefusingKey),
             shekyl_types::BlockHeight::from_raw(10_000),
             Duration::from_secs(60),

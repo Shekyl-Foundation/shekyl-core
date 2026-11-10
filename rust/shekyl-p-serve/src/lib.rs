@@ -10,14 +10,14 @@
 //! witness pulls the **entire shard** and verifies the bytes against the
 //! chain-committed sub-root `R_k` (§2) — the response is
 //! **self-authenticating by content** — and, since `SF-D8` (§9.1 step
-//! (a), landed here), **bound to the request** by the persona's
-//! countersignature over the decoded request header and a nonce-salted
-//! digest of the delivered response,
+//! (a), landed here), **bound to the request** by the persona's receipt
+//! over the decoded request header and a nonce-salted digest of the
+//! delivered response,
 //! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖ delivery_digest[32]`,
-//! under `BondPost.hybrid_public_key`. The signature is produced by the
-//! host's [`PassSigner`]; this crate still holds no key. The verifier the
-//! daemon runs is step (a0)'s,
-//! `shekyl_archival_retention::verify_pass_transcript`.
+//! under the bond record's `receipt_sign_pk`. The signature is produced by
+//! the host's [`PassSigner`]; this crate still holds no key. The verifier
+//! the daemon runs is
+//! `shekyl_archival_retention::verify_receipt_transcript`.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!
@@ -120,13 +120,12 @@ pub mod provider;
 pub mod serve;
 pub mod serve_counters;
 
+#[cfg(any(test, feature = "test-signer"))]
+pub use countersign::TestReceiptKeySigner;
 pub use countersign::{
-    anchor_within_gate, sign_pass_transcript, sign_receipt_transcript, EnvelopeSignature,
-    EnvelopeWidth, PassEnvelope, PassKey, PassSigner, SignRefused, IDENTITY_ENVELOPE_LEN,
+    anchor_within_gate, sign_receipt_transcript, PassKey, PassSigner, SignRefused,
     RECEIPT_ENVELOPE_LEN,
 };
-#[cfg(any(test, feature = "test-signer"))]
-pub use countersign::{TestKeySigner, TestReceiptKeySigner};
 pub use provider::{HeldShardSource, ProviderError, ShardBody, ShardProvider, StoreShardProvider};
 #[cfg(any(test, feature = "bench-internals"))]
 pub use serve::{prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe};

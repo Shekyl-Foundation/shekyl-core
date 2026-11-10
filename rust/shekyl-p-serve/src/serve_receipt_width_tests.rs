@@ -3,15 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The serve loop at the **receipt** width (hybrid scheme 3, 1,356 bytes) —
-//! STAGED: no production endpoint is bound at it (`FN_DSA_HYBRID.md` §9).
+//! The serve loop's envelope: the receipt (hybrid scheme 3, 1,356 bytes,
+//! `FN_DSA_HYBRID.md` §9).
 //!
-//! The loop names no width of its own, so everything it writes that
-//! depends on one must follow the signer it was bound with. These tests
-//! bind it with a receipt signer and hold each such place: the envelope's
-//! length and position, the content length, and the refusal trailer's
-//! fill. The live width's bytes are held separately, against captured
-//! fixtures, in `serve_wire_pin_tests.rs`.
+//! These tests bind the loop with a receipt signer and hold each place
+//! the envelope's width reaches: its length and position, the content
+//! length, and the refusal trailer's fill.
 
 use std::sync::Arc;
 
@@ -22,8 +19,8 @@ use shekyl_types::BlockHeight;
 
 use super::{
     filler, good_get_shard_0, is_refusal_trailer, request_raw, serve_one_in_memory,
-    FixtureProvider, InMemoryServe, PServeEndpoint, ANCHOR_HASH, IDENTITY_ENVELOPE_LEN,
-    IN_GATE_ANCHOR, NONCE, OWN_HEIGHT, REFUSAL_TRAILER_BYTE,
+    FixtureProvider, InMemoryServe, PServeEndpoint, ANCHOR_HASH, IN_GATE_ANCHOR, NONCE, OWN_HEIGHT,
+    REFUSAL_TRAILER_BYTE,
 };
 use crate::countersign::{
     PassKey, PassSigner, SignRefused, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN,
@@ -50,11 +47,9 @@ fn content_length_of(response: &[u8]) -> usize {
 }
 
 #[test]
-fn the_two_widths_are_the_two_schemes_lengths() {
+fn the_envelope_is_a_receipts_length() {
     assert_eq!(RECEIPT_ENVELOPE_LEN, RECEIPT_LEN);
     assert_eq!(RECEIPT_ENVELOPE_LEN, FnDsaHybridSignature::CANONICAL_LEN);
-    assert_eq!(IDENTITY_ENVELOPE_LEN, 3_385);
-    assert_eq!(IDENTITY_ENVELOPE_LEN, HybridSignature::CANONICAL_LEN);
 }
 
 #[tokio::test]
@@ -65,7 +60,7 @@ async fn an_endpoint_bound_with_a_receipt_signer_closes_with_a_receipt() {
     )));
     let endpoint = PServeEndpoint::bind(
         FixtureProvider::new([(0, payload.clone())]),
-        Arc::clone(&signer) as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
     )
     .await
     .expect("bind");
@@ -105,7 +100,7 @@ async fn an_endpoint_bound_with_a_receipt_signer_closes_with_a_receipt() {
     let mut composed = Vec::new();
     let outcome = serve_one_in_memory(
         &*FixtureProvider::new([(0, payload.clone())]),
-        &*signer as &dyn PassSigner<RECEIPT_ENVELOPE_LEN>,
+        &*signer as &dyn PassSigner,
         good_get_shard_0().as_bytes(),
         &mut composed,
     );
@@ -116,7 +111,7 @@ async fn an_endpoint_bound_with_a_receipt_signer_closes_with_a_receipt() {
 
 /// A receipt signer that says it can sign and then refuses.
 struct ReceiptRefusesLate;
-impl PassKey<RECEIPT_ENVELOPE_LEN> for ReceiptRefusesLate {
+impl PassKey for ReceiptRefusesLate {
     fn ready(&self, _: u64, _: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -124,7 +119,7 @@ impl PassKey<RECEIPT_ENVELOPE_LEN> for ReceiptRefusesLate {
         Err(SignRefused::new("signer went away"))
     }
 }
-impl PassSigner<RECEIPT_ENVELOPE_LEN> for ReceiptRefusesLate {
+impl PassSigner for ReceiptRefusesLate {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -133,7 +128,7 @@ impl PassSigner<RECEIPT_ENVELOPE_LEN> for ReceiptRefusesLate {
 #[tokio::test]
 async fn the_refusal_trailer_is_the_signers_width() {
     let payload = filler(9 * 128, 0x40);
-    let signer: Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>> = Arc::new(ReceiptRefusesLate);
+    let signer: Arc<dyn PassSigner> = Arc::new(ReceiptRefusesLate);
     let endpoint = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]), signer)
         .await
         .expect("bind");

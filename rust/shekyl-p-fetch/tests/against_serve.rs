@@ -14,13 +14,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
-use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
+use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_p_fetch::{FetchError, NextMove, PFetchClient, Timeouts};
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, fixture_prunable,
     request_header, DiscardTxs, PServeEndpoint, TxSink, VerifiedTx, FIXTURE_SHARD_ID, FIXTURE_TXID,
 };
-use shekyl_p_serve::{PassKey, PassSigner, SignRefused, TestKeySigner, IDENTITY_ENVELOPE_LEN};
+use shekyl_p_serve::{PassKey, PassSigner, SignRefused, TestReceiptKeySigner};
 use shekyl_types::BlockHeight;
 
 const OWN_HEIGHT: u64 = 10_000;
@@ -40,9 +40,7 @@ fn ephemeral_timeouts() -> Timeouts {
 
 /// A real endpoint holding [`FIXTURE_SHARD_ID`] behind `signer`, and a
 /// client aimed at it through the shim.
-async fn stacks(
-    signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
-) -> (PServeEndpoint, PFetchClient) {
+async fn stacks(signer: Arc<dyn PassSigner>) -> (PServeEndpoint, PFetchClient) {
     endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
@@ -67,10 +65,11 @@ impl TxSink for Recorder {
 
 #[tokio::test]
 async fn fetch_client_accepts_a_real_served_body() {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let public: HybridPublicKey = signer.public_key().clone();
-    let (_ep, client) =
-        stacks(Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>).await;
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let public: FnDsaHybridPublicKey = signer.public_key().clone();
+    let (_ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
     let seen = Arc::new(Recorder::default());
     let shard = client
         .fetch(
@@ -98,10 +97,11 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
     // out-of-gate anchor is the 400 whether or not the shard is held, a
     // valid request for an unheld shard is the 404, and a held shard is
     // the read.
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let public: HybridPublicKey = signer.public_key().clone();
-    let (ep, client) =
-        stacks(Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>).await;
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let public: FnDsaHybridPublicKey = signer.public_key().clone();
+    let (ep, client) = stacks(Arc::clone(&signer) as Arc<dyn PassSigner>).await;
 
     for shard in [FIXTURE_SHARD_ID, FIXTURE_SHARD_ID + 1] {
         let err = client
@@ -147,7 +147,7 @@ async fn the_bare_answers_and_a_good_read_reach_the_client_as_typed_outcomes() {
 /// A signer with a height and no key: it knows before the first byte.
 struct Keyless;
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
+impl PassKey for Keyless {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Err(SignRefused::new("no key"))
     }
@@ -155,12 +155,12 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for Keyless {
     fn sign_pass(
         &self,
         _message: &shekyl_p_serve::PassTranscript,
-    ) -> Result<HybridSignature, SignRefused> {
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
         Err(SignRefused::new("no key"))
     }
 }
 
-impl PassSigner<IDENTITY_ENVELOPE_LEN> for Keyless {
+impl PassSigner for Keyless {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -169,7 +169,7 @@ impl PassSigner<IDENTITY_ENVELOPE_LEN> for Keyless {
 /// A signer that says it can sign and then fails: found out after the body.
 struct RefusesLate;
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
+impl PassKey for RefusesLate {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
@@ -177,19 +177,19 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for RefusesLate {
     fn sign_pass(
         &self,
         _message: &shekyl_p_serve::PassTranscript,
-    ) -> Result<HybridSignature, SignRefused> {
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
         Err(SignRefused::new("signer went away"))
     }
 }
 
-impl PassSigner<IDENTITY_ENVELOPE_LEN> for RefusesLate {
+impl PassSigner for RefusesLate {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
 }
 
-fn any_key() -> HybridPublicKey {
-    TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+fn any_key() -> FnDsaHybridPublicKey {
+    TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
         .public_key()
         .clone()
 }

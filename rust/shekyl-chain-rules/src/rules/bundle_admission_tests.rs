@@ -30,7 +30,7 @@ use crate::trust::Trust;
 use crate::validate::validate;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_archival_retention::{
-    bundle_root, empty_bundle_root, BundleKept, BundleRef, PassBitmap, ATTESTATION_HEADER_LEN,
+    bundle_root, empty_bundle_root, BundleKept, BundleRef, PassBitmap,
 };
 use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHeight, BundleRoot};
@@ -157,7 +157,8 @@ fn i20_an_attestation_field_in_the_coinbase_is_refused_in_form() {
     let chain = chain_of(3);
     let candidate = with_coinbase_field(
         candidate_on(&chain, Vec::new()),
-        TxExtraField::ArchivalAttestation(vec![0u8; ATTESTATION_HEADER_LEN]),
+        // One record header's worth: p_id ‖ shard ‖ epoch ‖ kind.
+        TxExtraField::ArchivalAttestation(vec![0u8; 32 + 8 + 8 + 1]),
     );
     assert_refused(
         judge_on(&chain, candidate),

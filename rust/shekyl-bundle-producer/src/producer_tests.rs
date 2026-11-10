@@ -170,7 +170,7 @@ fn a_mined_block_files_its_passes_in_draw_order() {
     let commitment = chain.blocks[&h(100)].commitment;
     drive(&mut producer, 101, 510, |due| {
         if due.key.stream == PassStream::Economy && due.key.draw == 1 {
-            ReadOutcome::Answered(Answered::Refused)
+            ReadOutcome::Refused
         } else {
             ReadOutcome::Pass(Box::new(record(due.key.attempt)))
         }
@@ -183,7 +183,6 @@ fn a_mined_block_files_its_passes_in_draw_order() {
     let filing = &filings[0];
     assert_eq!(filing.h, h(100));
     assert_eq!((filing.draws, filing.passes), (4, 3));
-    assert!(!filing.serving_scheme_absent);
     let kept = filing.reference.kept();
     assert_eq!(kept.passes.count(), 3);
     assert_eq!(kept.passes.iter_set().collect::<Vec<_>>(), [0, 2]);
@@ -217,7 +216,7 @@ fn a_stall_reads_again_and_an_answer_ends_the_draw() {
                 .push((due.key.attempt, h(tip), due.nonce));
             // Draw 0 always stalls; draw 1 stalls once, then is answered.
             let outcome = match (due.key.draw, due.key.attempt) {
-                (1, 1) => ReadOutcome::Answered(Answered::Refused),
+                (1, 1) => ReadOutcome::Refused,
                 _ => ReadOutcome::Stall,
             };
             producer.read_done(due.key, outcome);
@@ -244,9 +243,7 @@ fn a_stall_reads_again_and_an_answer_ends_the_draw() {
 #[test]
 fn a_block_with_no_passes_files_a_no_pass_bundle() {
     let (_ring, mut producer, _chain) = mined(3, 4, 0);
-    drive(&mut producer, 101, 510, |_| {
-        ReadOutcome::Answered(Answered::Refused)
-    });
+    drive(&mut producer, 101, 510, |_| ReadOutcome::Refused);
     let (filings, _) = producer.ready(h(510), W);
     assert_eq!(filings.len(), 1);
     assert_eq!(filings[0].reference.kept().passes.count(), 4);
@@ -388,10 +385,6 @@ fn a_block_of_ours_replaces_a_popped_one_at_its_height() {
     assert_eq!(ring.in_flight(), vec![h(100)]);
 }
 
-/// The live serving host signs with the identity key: every read meets
-/// another scheme, and the filing says so, for the one log line, with no
-/// passes. Red edit: drop the flag on `Answered::ServingScheme` — the
-/// filing does not say it.
 /// A read of a popped block that ends after another block of ours took
 /// its height names the old block's hash, and does not settle the new
 /// block's draw: it was read with the old block's nonce. Red edit: drop
@@ -456,17 +449,6 @@ fn a_started_read_waits_a_random_delay_below_one_block() {
         delays.iter().any(|delay| *delay > quarter * 3),
         "{delays:?}"
     );
-}
-
-#[test]
-fn the_identity_scheme_on_the_serving_side_files_no_passes_and_says_so() {
-    let (_ring, mut producer, _chain) = mined(5, 3, 0);
-    drive(&mut producer, 101, 510, |_| {
-        ReadOutcome::Answered(Answered::ServingScheme)
-    });
-    let (filings, _) = producer.ready(h(510), W);
-    assert!(filings[0].serving_scheme_absent);
-    assert_eq!(filings[0].passes, 0);
 }
 
 /// A popped block pauses: no reads, no filing. Reconnected under the same

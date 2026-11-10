@@ -15,10 +15,10 @@ use std::time::Duration;
 
 use crate::ServingEndpoint;
 use shekyl_archival_retention::{pass_delivery_digest, shard_view_hash, ArchivalTx};
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
-    SCHEME_DOMAIN_ATTESTATION,
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
+use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 use shekyl_socks::accept_userpass;
 use shekyl_types::{ArchivalLength, BlockHeight, ShardId, TxHash, SHARD_LENGTH};
 use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx, VarintFault};
@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 use crate::{
     ContentMismatch, DiscardTxs, ExpectedShard, FetchError, FetchTarget, FrameError, Malformed,
     NextMove, PFetchClient, RequestHeader, Stall, Timeouts, TxSink, VerifiedShard, VerifiedTx,
-    IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT,
+    MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
 };
 
 const SHARD: ShardId = ShardId::from_raw(17);
@@ -302,24 +302,22 @@ impl TxSink for Sink {
 }
 
 struct Keys {
-    public: HybridPublicKey,
-    secret: HybridSecretKey,
+    public: FnDsaHybridPublicKey,
+    secret: FnDsaHybridSecretKey,
 }
 
 fn keys() -> Keys {
-    let (public, secret) = HybridEd25519MlDsa
-        .generate_ephemeral_keypair_for_tests()
-        .expect("keygen");
+    let (public, secret) = HybridEd25519FnDsa::generate_keypair().expect("keygen");
     Keys { public, secret }
 }
 
-/// `P`'s countersignature for a response whose body is `body`: over the
-/// header, the shard id, and the digest of `body` under the header's nonce.
-fn sign(keys: &Keys, header: &RequestHeader, shard_id: u64, body: &[u8]) -> HybridSignature {
-    HybridEd25519MlDsa
+/// `P`'s receipt for a response whose body is `body`: over the header, the
+/// shard id, and the digest of `body` under the header's nonce.
+fn sign(keys: &Keys, header: &RequestHeader, shard_id: u64, body: &[u8]) -> FnDsaHybridSignature {
+    HybridEd25519FnDsa
         .sign(
             &keys.secret,
-            SCHEME_DOMAIN_ATTESTATION,
+            SCHEME_DOMAIN_RECEIPT,
             &header
                 .transcript(shard_id, pass_delivery_digest(header.nonce(), body))
                 .message(),
@@ -331,7 +329,7 @@ fn endpoint() -> ServingEndpoint {
     ServingEndpoint::from_record_bytes([0x42; 32])
 }
 
-fn target(keys: &Keys) -> FetchTarget<HybridPublicKey> {
+fn target(keys: &Keys) -> FetchTarget {
     FetchTarget {
         endpoint: endpoint(),
         verifying_key: keys.public.clone(),
@@ -374,10 +372,8 @@ fn head_only(status_line: &str, headers: &str) -> Vec<u8> {
 /// A 200 carrying `body`, countersigned by `keys` for `shard_id` over
 /// exactly those bytes — what a conforming `P` sends.
 fn signed_body(keys: &Keys, header: &RequestHeader, shard_id: u64, body: &[u8]) -> Vec<u8> {
-    let sig = sign(keys, header, shard_id, body)
-        .to_canonical_bytes()
-        .unwrap();
-    assert_eq!(sig.len(), IDENTITY_ENVELOPE_LEN);
+    let sig = sign(keys, header, shard_id, body).to_canonical_bytes();
+    assert_eq!(sig.len(), RECEIPT_ENVELOPE_LEN);
     ok_response(&sig, body)
 }
 
@@ -390,10 +386,7 @@ async fn run(
     script: Script,
     sink: Arc<dyn TxSink>,
     keys: &Keys,
-) -> (
-    Result<VerifiedShard<HybridPublicKey>, FetchError>,
-    Vec<Seen>,
-) {
+) -> (Result<VerifiedShard, FetchError>, Vec<Seen>) {
     let stub = Stub::start(script).await;
     let client = PFetchClient::with_timeouts(stub.proxy, fast());
     let out = client
@@ -404,7 +397,7 @@ async fn run(
     (out, stub.seen())
 }
 
-fn content_refused(r: Result<VerifiedShard<HybridPublicKey>, FetchError>) -> ContentMismatch {
+fn content_refused(r: Result<VerifiedShard, FetchError>) -> ContentMismatch {
     match r {
         Err(FetchError::ContentRefused(m)) => m,
         Err(other) => panic!("not content-refused: {other}"),
@@ -412,7 +405,7 @@ fn content_refused(r: Result<VerifiedShard<HybridPublicKey>, FetchError>) -> Con
     }
 }
 
-fn stall(r: Result<VerifiedShard<HybridPublicKey>, FetchError>) -> Stall {
+fn stall(r: Result<VerifiedShard, FetchError>) -> Stall {
     match r {
         Err(FetchError::Stall(s)) => s,
         Err(other) => panic!("not a stall: {other}"),
@@ -420,7 +413,7 @@ fn stall(r: Result<VerifiedShard<HybridPublicKey>, FetchError>) -> Stall {
     }
 }
 
-fn malformed(r: Result<VerifiedShard<HybridPublicKey>, FetchError>) -> Malformed {
+fn malformed(r: Result<VerifiedShard, FetchError>) -> Malformed {
     match r {
         Err(FetchError::Malformed(m)) => m,
         Err(other) => panic!("not malformed: {other}"),
@@ -445,8 +438,8 @@ async fn a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name() {
     assert_eq!(shard.tx_count(), 2);
     assert_eq!(shard.archival_len(), expected().archival_len());
     assert_eq!(
-        shard.signature().to_canonical_bytes().unwrap().len(),
-        IDENTITY_ENVELOPE_LEN
+        shard.signature().to_canonical_bytes().len(),
+        RECEIPT_ENVELOPE_LEN
     );
     // The sink was handed both entries, in order, with the bytes the frame
     // carried and the row each matched.
@@ -628,7 +621,7 @@ async fn a_body_closed_with_the_refusal_trailer_is_a_failed_read() {
     // sink saw content the rows vouch for — but no pass record follows.
     let keys = keys();
     let sink = Sink::new();
-    let trailer = [shekyl_curve_tree::serving_route::REFUSAL_TRAILER_BYTE; IDENTITY_ENVELOPE_LEN];
+    let trailer = [shekyl_curve_tree::serving_route::REFUSAL_TRAILER_BYTE; RECEIPT_ENVELOPE_LEN];
     let (out, _) = run(
         Script::Respond(ok_response(&trailer, &body())),
         sink.clone(),
@@ -644,7 +637,7 @@ async fn a_body_closed_with_the_refusal_trailer_is_a_failed_read() {
     // One byte off the trailer is not a refusal. It is an envelope that is
     // not a signature either, which is a `P` off the contract.
     let mut near = trailer;
-    near[IDENTITY_ENVELOPE_LEN - 1] = 0xFE;
+    near[RECEIPT_ENVELOPE_LEN - 1] = 0xFE;
     let (out, _) = run(
         Script::Respond(ok_response(&near, &body())),
         Arc::new(DiscardTxs),
@@ -663,7 +656,7 @@ async fn a_good_response_cut_exactly_at_the_frames_end_is_a_stall() {
     // declining to sign. So must a cut one byte either side of it.
     let keys = keys();
     let whole = signed_response(&keys, &header());
-    let frame_end = whole.len() - IDENTITY_ENVELOPE_LEN;
+    let frame_end = whole.len() - RECEIPT_ENVELOPE_LEN;
     for cut in [frame_end, frame_end - 1, frame_end + 1, whole.len() - 1] {
         let (out, _) = run(
             Script::Respond(whole[..cut].to_vec()),
@@ -721,7 +714,7 @@ async fn bytes_past_content_length_are_malformed_not_trimmed() {
     let keys = keys();
     let mut bytes = signed_response(&keys, &header());
     bytes.extend_from_slice(b"trailer");
-    let declared = u64::try_from(IDENTITY_ENVELOPE_LEN + body().len()).unwrap();
+    let declared = u64::try_from(RECEIPT_ENVELOPE_LEN + body().len()).unwrap();
     let (out, _) = run(Script::Respond(bytes), Arc::new(DiscardTxs), &keys).await;
     assert_eq!(malformed(out), Malformed::Overlength { declared });
 }
@@ -732,7 +725,7 @@ async fn a_late_trailer_is_caught_on_the_probe_for_the_close() {
     // the client has it all. The probe that a conforming `P` answers
     // with EOF is answered with a byte instead.
     let keys = keys();
-    let declared = u64::try_from(IDENTITY_ENVELOPE_LEN + body().len()).unwrap();
+    let declared = u64::try_from(RECEIPT_ENVELOPE_LEN + body().len()).unwrap();
     let (out, _) = run(
         Script::RespondThenTrail(signed_response(&keys, &header()), b"x".to_vec()),
         Arc::new(DiscardTxs),
@@ -814,10 +807,10 @@ async fn any_other_complete_head_is_malformed_and_typed() {
 #[tokio::test]
 async fn the_body_is_bounded_from_the_head_before_a_byte_is_read() {
     let keys = keys();
-    let max = expected().max_response_len::<HybridPublicKey>();
+    let max = expected().max_response_len();
 
     // Too short to hold a signature.
-    let declared = u64::try_from(IDENTITY_ENVELOPE_LEN).unwrap() - 1;
+    let declared = u64::try_from(RECEIPT_ENVELOPE_LEN).unwrap() - 1;
     let (out, _) = run(
         Script::Respond(head_only(
             "HTTP/1.1 200 OK",
@@ -868,7 +861,7 @@ async fn an_envelope_that_is_not_a_canonical_signature_is_malformed() {
     let (out, _) = run(
         // Not `0xff`: that fill is the refusal trailer, which is `P`
         // speaking and is typed apart.
-        Script::Respond(ok_response(&[0xa5u8; IDENTITY_ENVELOPE_LEN], &body())),
+        Script::Respond(ok_response(&[0xa5u8; RECEIPT_ENVELOPE_LEN], &body())),
         Arc::new(DiscardTxs),
         &keys,
     )
@@ -888,9 +881,7 @@ async fn a_signature_sent_ahead_of_the_body_is_refused() {
     let sink = Sink::new();
     let header = header();
     let body = body();
-    let sig = sign(&keys, &header, SHARD.to_raw(), &body)
-        .to_canonical_bytes()
-        .unwrap();
+    let sig = sign(&keys, &header, SHARD.to_raw(), &body).to_canonical_bytes();
     let mut leading = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n",
         shekyl_curve_tree::serving_route::CONTENT_TYPE,
@@ -917,9 +908,7 @@ async fn garbage_with_a_valid_signature_appended_is_refused() {
     // the same length with that signature behind them.
     let keys = keys();
     let body = body();
-    let sig = sign(&keys, &header(), SHARD.to_raw(), &body)
-        .to_canonical_bytes()
-        .unwrap();
+    let sig = sign(&keys, &header(), SHARD.to_raw(), &body).to_canonical_bytes();
 
     // Bytes that are not a frame are refused where they are read — the
     // first byte is not the frame version — and nothing else is consulted.
@@ -1035,7 +1024,7 @@ async fn every_incomplete_exchange_is_a_stall_that_retries_the_same_p() {
     let mut short = signed_response(&keys, &header());
     short.truncate(short.len() - 5);
     let (out, _) = run(Script::Respond(short), Arc::new(DiscardTxs), &keys).await;
-    let declared = u64::try_from(IDENTITY_ENVELOPE_LEN + body().len()).unwrap();
+    let declared = u64::try_from(RECEIPT_ENVELOPE_LEN + body().len()).unwrap();
     assert!(matches!(
         stall(out),
         Stall::Truncated { declared: d, received } if d == declared && received == declared - 5
@@ -1511,9 +1500,6 @@ async fn dropping_a_fetch_mid_check_keeps_the_slot_until_the_entry_is_gone() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
-
-#[path = "client_wire_pin_tests.rs"]
-mod wire_pin;
 
 #[path = "client_scheme_tests.rs"]
 mod scheme;

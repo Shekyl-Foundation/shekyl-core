@@ -8,8 +8,6 @@
 # Regenerate the current hit set with `--print-records` to see what remains.
 
 rust/shekyl-archival-retention/src/admission.rs	1	parent_height: u64,
-rust/shekyl-archival-retention/src/attestation_wire_tests.rs	1	fn chain_hash(height: u64) -> [u8; 32] {
-rust/shekyl-archival-retention/src/attestation_wire_tests.rs	1	fn window_at(predecessor_height: u64) -> PassAnchorWindow {
 rust/shekyl-archival-retention/src/bond_duration.rs	1	pub fn from_add(add_settlement_epoch: u64, freeze_height: u64) -> Self {
 rust/shekyl-archival-retention/src/challenge.rs	1	pub fn challenge_seal_height(h_open: u64) -> u64 {
 rust/shekyl-archival-retention/src/challenge.rs	1	pub fn challenge_seal_on_chain(h_open: u64, chain_height: u64) -> bool {
@@ -39,8 +37,6 @@ rust/shekyl-archival-retention/src/shard_coverage.rs	1	tip_height: u64,
 rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	fn coinbase_gindex(blocks: &[Block], target_height: u64) -> u64 {
 rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	height: u64,
-rust/shekyl-archival-retention/tests/attestation_wire_kat.rs	1	fn pinned_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
-rust/shekyl-archival-retention/tests/attestation_wire_kat.rs	1	fn pinned_window(predecessor_height: u64) -> PassAnchorWindow {
 rust/shekyl-archival-retention/tests/emission_verify_kat.rs	1	height: u64,
 rust/shekyl-archival-retention/tests/gate2_serve_credit_kat.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/corpus.rs	1	height: u64,

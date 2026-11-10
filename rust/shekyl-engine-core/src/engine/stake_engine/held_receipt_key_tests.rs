@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
-use shekyl_p_host::PassKey;
 
 use super::{HeldPersona, HeldReceiptKey, PSlot, StakeEngineError};
 use crate::engine::stake_engine::handle::StakeEngineHandle;
@@ -25,14 +24,12 @@ use crate::engine::stake_engine::receipt_test_fixtures::{
     bundle_with_a_corrupted_receipt_key, is_built, receipt_pk, sign, slot, transcript, OTHER_SLOT,
     SLOT,
 };
-use crate::engine::stake_engine::serving::pass_key::ResidentPassKey;
 use crate::engine::stake_engine::serving::receipt_key::ResidentReceiptKey;
 use crate::engine::stake_engine::test_fixtures::{derive_bundle, ephemeral_body_store, spawn_over};
 
 /// Starting the actor decodes no receipt key, however many personas it
-/// holds: the staged capability costs the live path nothing. The first
-/// receipt asked of a persona decodes that persona's key and no other,
-/// and the identity key signing does not decode one at all.
+/// holds. The first receipt asked of a persona decodes that persona's key
+/// and no other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn starting_the_actor_decodes_no_receipt_key() {
     const THIRD_SLOT: u32 = 5;
@@ -41,14 +38,6 @@ async fn starting_the_actor_decodes_no_receipt_key() {
         assert_eq!(is_built(&stake, held).await, Some(false), "slot {held}");
     }
     assert_eq!(is_built(&stake, SLOT + 1_000).await, None, "unheld");
-
-    // The live signer runs and the slot stays empty.
-    let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
-    tokio::task::spawn_blocking(move || identity_key.sign_pass(&transcript()))
-        .await
-        .expect("blocking task")
-        .expect("identity key signs");
-    assert_eq!(is_built(&stake, SLOT).await, Some(false));
 
     sign(ResidentReceiptKey::new(&stake, slot(SLOT)), transcript())
         .await

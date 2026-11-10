@@ -447,7 +447,11 @@ count_pattern() {
 # rust/shekyl-genesis-tool/src/txkey.rs called cshake256_32 under
 # shekyl/genesis-txkey-v2 over the name string and the recipients; it frames
 # the recipients under shekyl/genesis-txkey-v3 and the network's name_id.
-MECH1_EXPECTED=76
+# The attestation record (SO-D12 4b C7): 76 -> 75. `attestation_root` in
+# rust/shekyl-archival-retention/src/attestation_wire.rs called cshake256_32
+# under shekyl/archival-attestation-root-v1; it goes with the attestation
+# record surface, which no block carries since the switch's C3.
+MECH1_EXPECTED=75
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

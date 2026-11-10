@@ -102,27 +102,11 @@ pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multi
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).
 pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-backing-scheme-v1";
-/// Attestation pass countersignature (surface E), **v3**: the signed message is
-/// the fetching client's decoded request header, the served shard, and the
-/// digest of the bytes delivered under that request's nonce —
-/// `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖
-/// delivery_digest[32]` (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`; built by
-/// `shekyl_archival_retention::pass_anchor::pass_countersignature_message`).
-///
-/// One label never names two messages. The retired `…-scheme-v1` signed the
-/// 32-byte block-bound nonce alone, and the retired `…-scheme-v2` signed the
-/// first 80 bytes above with no delivery digest. Neither is reused: an
-/// earlier signature can never verify as a v3 one because the domain
-/// differs, independent of the message layout. Pre-genesis, no chain carried
-/// either.
-pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
 /// Serve-credit response (surface F).
 pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
 /// A serve receipt, under scheme 3: `P`'s signature over the 113-byte
 /// delivery transcript with its **receipt key**
-/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
-/// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
-/// identity key and scheme 1: one label never names two schemes.
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6).
 pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
 /// The witness's signature over a bundle's commitment, under scheme 3 with
 /// the key generated fresh for the block and committed in its `0x0C`

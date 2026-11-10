@@ -211,19 +211,6 @@ status = "unmeasured"
 carrier = "BA-T10. Nothing is measured past depth 7; the depth-24 verify cost the surge factor is signed on is composed from per-layer slopes (BA-G4)."
 path_set = "fcmp-tree-depth"
 
-[[path_set]]
-id = "archival-attestation-cap"
-spec = ["rust/shekyl-crypto-pq/src/signature.rs"]
-
-[[constant]]
-name = "archival_max_attestation_records"
-defined_in = "rust/shekyl-types/src/archival/mod.rs"
-needle = "pub const MAX_ATTESTATION_RECORDS: usize = 256;"
-measured_by = ["BA-T10"]
-status = "unmeasured"
-carrier = "BA-T10 (BA-G16). Justified in place as bounding per-block admission cost; no measurement of that cost exists."
-path_set = "archival-attestation-cap"
-
 # --- relay privacy ----------------------------------------------------
 
 [[path_set]]

@@ -85,10 +85,7 @@ impl StoreHolderSource {
 }
 
 impl HolderSource for StoreHolderSource {
-    fn holders_of(
-        &self,
-        shard_id: ShardId,
-    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    fn holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
         let mut holders = Vec::new();
         for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {
@@ -108,10 +105,7 @@ impl HolderSource for StoreHolderSource {
         Ok(holders)
     }
 
-    fn support_holders_of(
-        &self,
-        shard_id: ShardId,
-    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    fn support_holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         let snap = self.store.begin_read().map_err(|e| store_fault(&e))?;
         let mut holders = Vec::new();
         for (id, record) in snap.bond_records().map_err(|e| store_fault(&e))? {

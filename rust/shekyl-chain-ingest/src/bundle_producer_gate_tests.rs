@@ -16,8 +16,8 @@
 //!    ring, and the producer's own task ([`run`]) runs over the scenario's
 //!    connector and store. It reads through the daemon's fetch scheduler,
 //!    over the store's facts ([`StoreShardFacts`]), to P serving shard 0's
-//!    real bytes behind the loopback shim, signing with the staged
-//!    `ResidentReceiptKey` — the capability the cutover selects (4b).
+//!    real bytes behind the loopback shim, signing with its resident
+//!    `ResidentReceiptKey`.
 //! 3. Each block with draws: the producer reads, files, and the queue
 //!    admits the bundle; the next block carries every queued bundle as its
 //!    section and `validate` admits it ([`Scenario::mine_admitting`]). Every
@@ -27,12 +27,13 @@
 //!    entry survives it; a reorg pops the admitting tip and the entry is
 //!    judged again and kept under the new tip; an entry left untaken
 //!    leaves when its window closes.
-//! 5. The live path: P serving with an identity key. The producer files a
-//!    bundle with no passes, and the queue admits it.
+//! 5. P serving with a receipt key that is not its bond record's. Every
+//!    read is refused, the producer files a bundle with no passes, and the
+//!    queue admits it.
 //!
 //! Red edits, each of which turns this test red: P signing its receipts
-//! with the identity key (every read is the serving side's scheme, and
-//! the passed bits are clear); `challenge_nonce` without the attempt byte
+//! with another key (every read is refused, and the passed bits are
+//! clear); `challenge_nonce` without the attempt byte
 //! on the producer's side (the receipt is over another nonce than
 //! admission recomputes: J37 at the queue); a template commitment drawn
 //! outside the ring (no block is claimed, and no bundle is filed).
@@ -145,8 +146,8 @@ fn shard_body(scenario: &Scenario<FreeHash>, chain: &[Mined], shard: ShardId) ->
 /// P, serving `body` at `shard` behind the loopback shim, with its own
 /// height read from `tip`, and the one client aimed at it (the client is
 /// one per process by design: its in-flight cap is the Tor instance's).
-/// `receipts` picks the staged receipt capability or, for the live path,
-/// an identity key.
+/// `receipts` picks the persona's resident receipt capability or, for the
+/// no-pass path, a receipt key that is not the persona's.
 struct Serving {
     _endpoint: PServeEndpoint,
     _holder: Option<shekyl_engine_core::__test_helpers::ReceiptKeyHolder>,
@@ -174,11 +175,11 @@ async fn serve(
             client,
         )
     } else {
-        let key = Arc::new(shekyl_p_serve::TestKeySigner::ephemeral(BlockHeight::ZERO));
-        let signer = shekyl_p_host::signer_over_tip(
-            Arc::clone(tip),
-            key as Arc<dyn shekyl_p_host::PassKey<{ shekyl_p_host::IDENTITY_ENVELOPE_LEN }>>,
-        );
+        let key = Arc::new(shekyl_p_serve::TestReceiptKeySigner::ephemeral(
+            BlockHeight::ZERO,
+        ));
+        let signer =
+            shekyl_p_host::signer_over_tip(Arc::clone(tip), key as Arc<dyn shekyl_p_host::PassKey>);
         let (endpoint, client) =
             endpoint_and_client(shard.to_raw(), body, signer, timeouts()).await;
         (
@@ -471,12 +472,13 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     drop(snap);
     drop(store);
 
-    // 5. The live path: P signs with an identity key. The producer files a
-    // bundle with no passes, and the queue admits it. Left untaken, the
-    // entry leaves when its window closes.
+    // 5. P signs with a receipt key that is not its bond record's. Every
+    // read is refused, the producer files a bundle with no passes, and the
+    // queue admits it. Left untaken, the entry leaves when its window
+    // closes.
     producing.stop().await;
     drop(serving);
-    let (_identity, client) = serve(shard, body, &p_tip, false).await;
+    let (_stranger, client) = serve(shard, body, &p_tip, false).await;
     let mut producing = start(&scenario, &ring, client).await;
     let mut no_pass = None;
     for _ in 0..(2 * EPOCH_BLOCKS) {
@@ -486,25 +488,20 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
             break;
         }
     }
-    let (h, reference) =
-        no_pass.expect("a block with draws filed while P signed with an identity key");
+    let (h, reference) = no_pass.expect("a block with draws filed while P signed with another key");
     assert!(reference.count() > 0);
     assert_eq!(reference.passes().popcount(), 0, "no read was a receipt");
-    // Every read under the identity key that was answered was recognised
-    // as the serving side's scheme, the line the live path logs, and none
-    // as a refusal. A stall (a loopback hiccup under load) reads again and
-    // is not the subject.
+    // Every read that was answered was refused. A stall (a loopback hiccup
+    // under load) reads again and is not the subject.
     {
         let ended = producing.ended.lock().expect("the outcome list");
-        let serving = shekyl_bundle_producer::ReadOutcome::Answered(
-            shekyl_bundle_producer::Answered::ServingScheme,
+        let refused = shekyl_bundle_producer::ReadOutcome::Refused;
+        assert!(
+            ended.iter().any(|read| read.outcome == refused),
+            "the no-pass path read: {ended:#?}"
         );
         assert!(
-            ended.iter().any(|read| read.outcome == serving),
-            "the live path read: {ended:#?}"
-        );
-        assert!(
-            ended.iter().all(|read| read.outcome == serving
+            ended.iter().all(|read| read.outcome == refused
                 || read.outcome == shekyl_bundle_producer::ReadOutcome::Stall),
             "{ended:#?}"
         );
@@ -533,7 +530,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
 ///    next epoch's snapshot holds T as its one support member over an
 ///    archive of one shard, and no drawable pair.
 /// 2. T serves its prefix (shard 0's real bytes) behind the loopback shim,
-///    signing with the staged `ResidentReceiptKey`.
+///    signing with its resident `ResidentReceiptKey`.
 /// 3. Through the epoch's usable span and the last seat's window, every
 ///    admitted bundle is support only: each observation is T at shard 0,
 ///    passed, at a height whose row seats T. T is issued exactly its `c`

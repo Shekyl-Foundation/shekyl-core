@@ -21,9 +21,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{ExpectedShard, FetchTarget, ServingEndpoint};
-use shekyl_p_serve::{PServeEndpoint, PassSigner, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
+use shekyl_p_serve::{PServeEndpoint, PassSigner, TestReceiptKeySigner};
 use shekyl_socks::accept_userpass;
 use shekyl_sp_t3_spike::fixture::{FixtureShardProvider, FramedObject, LEAF_BYTES};
 use shekyl_sp_t3_spike::harness::{ClientLeg, APPARATUS_OWN_HEIGHT};
@@ -83,7 +82,7 @@ fn payload() -> Arc<[u8]> {
 async fn persona(signer: Arc<TestReceiptKeySigner>) -> (PServeEndpoint, SocketAddr) {
     let ep = PServeEndpoint::bind(
         Arc::new(FixtureShardProvider::new(payload())),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
     )
     .await
     .expect("bind endpoint");
@@ -91,7 +90,7 @@ async fn persona(signer: Arc<TestReceiptKeySigner>) -> (PServeEndpoint, SocketAd
     (ep, proxy)
 }
 
-fn target_for(signer: &TestReceiptKeySigner) -> FetchTarget<FnDsaHybridPublicKey> {
+fn target_for(signer: &TestReceiptKeySigner) -> FetchTarget {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes([0x42; 32]),
         verifying_key: signer.public_key().clone(),

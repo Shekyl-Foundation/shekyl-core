@@ -33,7 +33,7 @@ use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::sync::mpsc;
 
-use crate::bundle_producer::{spawn_read, ReadFn, SchemeLine};
+use crate::bundle_producer::{spawn_read, ReadFn};
 use crate::connector::{BundleOffered, LearnDraws, Learned, OfferBundle};
 use crate::scenario::{FreeHash, Mined, Scenario, RULES};
 
@@ -326,18 +326,6 @@ async fn the_producer_claims_what_its_ring_drew() {
     drop(snap);
     drop(store);
     scenario.close().await;
-}
-
-/// The serving-scheme line is logged once per block. Red edit: log on
-/// every offer — the second assertion fails.
-#[test]
-fn the_serving_scheme_line_is_once_per_block() {
-    let mut line = SchemeLine::default();
-    let h = BlockHeight::from_raw(7);
-    assert!(!line.due(h, false), "a block with receipts logs nothing");
-    assert!(line.due(h, true));
-    assert!(!line.due(h, true), "once per block");
-    assert!(line.due(BlockHeight::from_raw(8), true));
 }
 
 /// A producer with one block of ours claimed, its one draw learned, and

@@ -46,7 +46,7 @@ use crate::read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
 /// shard in ([`Read::span`]), so every field describes one standing of the
 /// chain. The type lives beside the ids it is keyed on so the RPC crate on
 /// the far side of the fetch-client dep cut shares it rather than copying it.
-fn assemble<K: shekyl_p_fetch::PassVerifyingKey>(read: &Read<K>) -> ShardView {
+fn assemble(read: &Read) -> ShardView {
     let span = &read.span;
     ShardView {
         shard_id: read.shard.shard_id(),

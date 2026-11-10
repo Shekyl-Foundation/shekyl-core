@@ -29,7 +29,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_loopback::{
     endpoint_and_client, fetch_target, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{PassSigner, TestKeySigner, TestReceiptKeySigner, RECEIPT_ENVELOPE_LEN};
+use shekyl_p_serve::{PassSigner, TestReceiptKeySigner};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::net::TcpListener;
 
@@ -142,8 +142,8 @@ impl ShardFacts for Facts {
 /// `n` holder ids, all resolving (through the shim) to the one endpoint.
 /// Support holders are a second list, empty unless a test sets one.
 struct Holders {
-    holders: Mutex<Vec<Holder<FnDsaHybridPublicKey>>>,
-    support: Mutex<Vec<Holder<FnDsaHybridPublicKey>>>,
+    holders: Mutex<Vec<Holder>>,
+    support: Mutex<Vec<Holder>>,
     /// How many needs have asked who holds the shard.
     lookups: AtomicUsize,
 }
@@ -167,24 +167,18 @@ impl Holders {
         self.holders.lock().unwrap().clear();
     }
 
-    fn set_support(&self, support: Vec<Holder<FnDsaHybridPublicKey>>) {
+    fn set_support(&self, support: Vec<Holder>) {
         *self.support.lock().unwrap() = support;
     }
 }
 
 impl HolderSource for Holders {
-    fn holders_of(
-        &self,
-        _shard_id: ShardId,
-    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    fn holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         Ok(self.holders.lock().unwrap().clone())
     }
 
-    fn support_holders_of(
-        &self,
-        _shard_id: ShardId,
-    ) -> Result<Vec<Holder<FnDsaHybridPublicKey>>, FactsFault> {
+    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         Ok(self.support.lock().unwrap().clone())
     }
 }
@@ -205,7 +199,7 @@ async fn stack(served_shard: u64, n: u8) -> Stack {
     let (endpoint, client) = endpoint_and_client(
         served_shard,
         fixture_body(),
-        Arc::clone(&signer) as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
         ephemeral_timeouts(),
     )
     .await;
@@ -872,7 +866,7 @@ fn placeholder_key() -> FnDsaHybridPublicKey {
 }
 
 /// One holder under the receipt scheme, over the receipt endpoint.
-fn receipt_holder(key: &FnDsaHybridPublicKey) -> Holder<FnDsaHybridPublicKey> {
+fn receipt_holder(key: &FnDsaHybridPublicKey) -> Holder {
     Holder {
         id: PCanonicalId::from_bytes([0x3c; 32]),
         target: fetch_target(key.clone()),
@@ -893,7 +887,7 @@ async fn receipt_stack() -> (
     let (endpoint, client) = endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
         ephemeral_timeouts(),
     )
     .await;
@@ -963,39 +957,4 @@ async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
         };
         assert!(verify(other).is_err(), "a receipt serves one stream");
     }
-}
-
-/// The serving host signs with the receipt key. A holder named under the
-/// identity key of such a host gets a reply its scheme cannot parse: one
-/// completed exchange, `Malformed`, and no signature.
-#[tokio::test]
-async fn an_identity_holder_of_a_receipt_endpoint_is_malformed() {
-    let s = stack(FIXTURE_SHARD_ID, 1).await;
-    let identity = TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT));
-    let err = s
-        .scheduler
-        .read_from_nonce(
-            &Holder {
-                id: PCanonicalId::from_bytes([0x3c; 32]),
-                target: fetch_target(identity.public_key().clone()),
-            },
-            SHARD,
-            SuppliedNonce {
-                stream: PassStream::Economy,
-                nonce: [0x5a; 32],
-            },
-            Arc::new(DiscardTxs),
-            NeedBudget::DEFAULT,
-        )
-        .await
-        .unwrap_err();
-    let ReadFailure::Exhausted { attempts } = err else {
-        panic!("expected exhaustion, got {err:?}");
-    };
-    assert_eq!(attempts.len(), 1, "{attempts:?}");
-    assert!(
-        matches!(attempts[0].error, FetchError::Malformed(_)),
-        "{attempts:?}"
-    );
-    assert_eq!(s.holders.lookups.load(Ordering::SeqCst), 0);
 }

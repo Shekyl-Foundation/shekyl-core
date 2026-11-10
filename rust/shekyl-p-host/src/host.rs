@@ -23,7 +23,7 @@ use crate::daemon_tip::DaemonTipCache;
 use crate::runtime::{PriorityFailures, ServingPool};
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
-use crate::{PassKey, RECEIPT_ENVELOPE_LEN};
+use crate::PassKey;
 
 /// The serving identity and the shape of its published port.
 ///
@@ -57,7 +57,7 @@ pub struct PersonaServing {
     /// domain (`FN_DSA_HYBRID.md` §9). The signer the host builds over it
     /// and the endpoint it binds take their width from this type and name
     /// none of their own.
-    pub key: Arc<dyn PassKey<RECEIPT_ENVELOPE_LEN>>,
+    pub key: Arc<dyn PassKey>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
     /// the daemon and not the served store — `WSS-24`).
@@ -81,7 +81,7 @@ impl fmt::Debug for PersonaServing {
             .field("identity", &self.identity)
             .field("virtual_port", &self.virtual_port)
             .field("max_streams", &self.max_streams)
-            .field("key", &"<dyn PassKey<RECEIPT_ENVELOPE_LEN>>")
+            .field("key", &"<dyn PassKey>")
             .field("tip", &self.tip)
             .field("bodies", &"<dyn HeldShardSource>")
             .finish()
@@ -429,8 +429,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // gate height is the daemon's tip on `serving.tip` (`WSS-24`).
         let provider = StoreShardProvider::new(serving.bodies);
         // The width is `serving.key`'s; the endpoint is bound at it.
-        let signer: Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>> =
-            Arc::new(HostSigner::new(serving.tip, serving.key));
+        let signer: Arc<dyn PassSigner> = Arc::new(HostSigner::new(serving.tip, serving.key));
         // The serving runtime first, then the bind *on* it: `tokio::spawn`
         // inside `bind` lands the accept loop on the runtime the bind future
         // runs on, and every connection task and blocking hop follows the

@@ -287,13 +287,13 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
-# `TestKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
+# `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
 # production graph.
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
-# SH-2's proving test (`serving::round_trip_tests`): the persona's resident
-# pass key behind a real `PServeEndpoint`, fetched by the daemon's real
-# `PFetchClient`, and the countersignature verified against the persona's
-# **bond identity**. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
+# SH-2's proving test (`serving::receipt_round_trip_tests`): the persona's
+# resident receipt key behind a real `PServeEndpoint`, fetched by the
+# daemon's real `PFetchClient`, and the receipt verified against the
+# persona's receipt key. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
 # `SF-D4` forbids the client on a wallet production graph, and
 # `check_p_fetch_dep_cut.py` does not follow this edge.
 shekyl-p-loopback = { path = "../shekyl-p-loopback" }

@@ -26,9 +26,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_archival_retention::{PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN};
-use shekyl_p_serve::{
-    EnvelopeWidth, PassEnvelope, PassSigner, ProviderError, ShardBody, ShardProvider,
-};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
+use shekyl_p_serve::{PassSigner, ProviderError, ShardBody, ShardProvider};
 use shekyl_socks::accept_userpass;
 use shekyl_types::{ArchivalLength, BlockHeight, ShardId, TxHash, SHARD_LENGTH};
 use shekyl_wire::shard_frame::{encode_frame, rows_of, FrameTx};
@@ -37,8 +36,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub use shekyl_p_fetch::{
-    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, PassVerifyingKey,
-    RequestHeader, ServingEndpoint, Timeouts, TxSink, VerifiedShard, VerifiedTx,
+    DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
+    ServingEndpoint, Timeouts, TxSink, VerifiedShard, VerifiedTx,
 };
 pub use shekyl_p_serve::PServeEndpoint;
 
@@ -144,13 +143,10 @@ pub fn request_header(anchor: BlockHeight) -> RequestHeader {
 
 /// A target whose endpoint the shim does not resolve.
 ///
-/// `verifying_key` is the caller's: the bond identity, an ephemeral test
-/// key, or a key that must not verify.
+/// `verifying_key` is the caller's: a persona's receipt key, an ephemeral
+/// test key, or a key that must not verify.
 #[must_use]
-///
-/// Generic over the key's scheme, as the target is: an identity key gives
-/// an identity-scheme target, a receipt key a receipt-scheme one.
-pub fn fetch_target<K: PassVerifyingKey>(verifying_key: K) -> FetchTarget<K> {
+pub fn fetch_target(verifying_key: FnDsaHybridPublicKey) -> FetchTarget {
     FetchTarget {
         endpoint: ServingEndpoint::from_record_bytes(UNRESOLVED_ENDPOINT),
         verifying_key,
@@ -178,18 +174,12 @@ impl ShardProvider for OneShard {
 ///
 /// Panics if the endpoint or the shim cannot bind a loopback port. Both
 /// are local and free; a failure is a broken test host.
-///
-/// Generic over the signer's envelope width, as the endpoint is: the shim
-/// forwards bytes and has no scheme of its own.
-pub async fn endpoint_and_client<const W: usize>(
+pub async fn endpoint_and_client(
     shard_id: u64,
     body: Arc<[u8]>,
-    signer: Arc<dyn PassSigner<W>>,
+    signer: Arc<dyn PassSigner>,
     timeouts: Timeouts,
-) -> (PServeEndpoint, PFetchClient)
-where
-    PassEnvelope: EnvelopeWidth<W>,
-{
+) -> (PServeEndpoint, PFetchClient) {
     let provider = Arc::new(OneShard { shard_id, body });
     let endpoint = PServeEndpoint::bind(provider, signer)
         .await
