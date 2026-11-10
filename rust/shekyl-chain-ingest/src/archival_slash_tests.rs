@@ -3,63 +3,58 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! One levered chain, judged in phases (`CHAIN_RULES_SLICE_8.md` §5 rows 2,
-//! 3 and 5).
+//! One slash chain, judged in phases (`CHAIN_RULES_SLICE_8.md` §5 rows 2,
+//! 3 and 5), on admitted bundles.
 //!
-//! The levered schedule (`scenario_shard`: a 20-block epoch, a 10-block
-//! reorg cap) puts the first slash deadline eleven settled misses can
-//! reach inside what a test mines. One persona
+//! The chain runs the settled schedule (`scenario_shard::settled_rules`):
+//! admitted draws give a pair its counted draws only there. One persona
 //! joins two shards, serves one of them, and is slashed on the shard it
-//! never served. Nothing admits a draw yet, so each epoch's draws are
-//! issued through the connector's regtest door
-//! ([`IssueDraws`](crate::connector::IssueDraws),
-//! `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): three per shard, passed on
-//! the served shard and not on the other. The phases then run on that record, in order, without
-//! re-mining the chain:
+//! never served. Every drawing block's bundle is filed and admitted by the
+//! next block (`admitted_draws::serve_to`); the persona passes its draws on
+//! the served shard and withholds those on the other, so the admitted
+//! bundles file those as misses. The phases then run on that record, in
+//! order, without re-mining the chain:
 //!
 //! - The chain fills shards 0 and 1 with real spends and lets them close
 //!   (`scenario_shard`, §5 row 6): a compact join names only shards that
 //!   are closed, final and priced at its parent (CEN-J15). One block before
 //!   both operands lift, the join is refused on J15; at the first
 //!   admissible height it connects.
-//! - J5 refuses a credit at the join epoch; the credit for `E_join + 1`
-//!   connects, and is the first pass the slash counts.
-//! - J6 refuses a credit inside the open interval, for the kept shard and
-//!   for the shard the slash removed.
+//! - The failure window: eleven epochs of draws on both pairs, the served
+//!   one passed and the other withheld, then the slash in the deadline
+//!   block.
 //! - The driver's Reinstate connects, and the wallet-side
 //!   `verify_reinstate_bond_post` agrees with the fold on the same vin.
-//! - J8's pin: after the interval closes, a credit for the shard no longer
-//!   held still connects. The holding is Slice C's question, not J6's.
 //! - J18 refuses a second Reinstate and one whose holdings changed. J16
 //!   refuses a Release inside the cooldown, then accepts one at the
-//!   cooldown's boundary over the served anchor.
+//!   cooldown's boundary over the served anchor: the last epoch in which a
+//!   draw on the kept shard passed.
 //!
 //! Live lane: the fill is some five hundred real proofs
 //! (`cargo test -p shekyl-chain-ingest --features pipeline -- --ignored
-//! the_levered_slash_chain`).
+//! the_slash_chain`).
 
 use shekyl_archival_retention::{
-    good_through, serve_credit_epoch_ok, verify_reinstate_bond_post, HoldingsKind,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
+    verify_reinstate_bond_post, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
 };
-use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, SettlementSchedule, TxSlot};
+use shekyl_bundle_producer::DrawTarget;
+use shekyl_chain_rules::{CenRow, RecordWriteKind, SettlementSchedule};
 use shekyl_types::archival::{BadInterval, BondRecord, HeldShard, Holdings, SettlementOutcome};
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
+use crate::admitted_draws::{serve_to, DriverWitness};
 use crate::archival_driver::{
     at_post, first_spending_height, record_of, refused_at, ENDPOINT, FEE,
 };
-use crate::chain_drive::{failure_window_epochs, Driven, IssuedPair};
-use crate::connector::{Inject, Injected};
+use crate::chain_drive::{failure_window_epochs, Driven};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, first_pricing_epoch, levered_rules,
-    levered_schedule, Filled, FILL_FROM_COINBASE,
+    close_shards, first_admissible_compact_join, first_pricing_epoch, settled_rules,
+    settled_schedule, Filled, FILL_FROM_COINBASE,
 };
 use crate::schedule::ChainRules;
-use crate::source::ServeCredit;
 use shekyl_harness_spender::Spender;
 
 /// The join this chain is about: two shards, one of them never served.
@@ -83,15 +78,17 @@ struct Reinstated {
 }
 
 /// The chain the phases share. Each phase mines forward; none rebuilds it.
-struct LeveredChain {
+struct SlashChain {
     rules: ChainRules,
     schedule: SettlementSchedule,
     drive: Driven,
     /// The two shards the fill closed, ascending.
     filled: Filled,
+    /// The witness every served block commits to.
+    witness: DriverWitness,
 }
 
-impl LeveredChain {
+impl SlashChain {
     /// The height of the next block.
     fn height(&self) -> BlockHeight {
         self.drive.height()
@@ -101,8 +98,8 @@ impl LeveredChain {
     /// The fill stays straight: round-tripping, when the caller asks for it,
     /// starts after this returns.
     async fn open(name: &str) -> Self {
-        let rules = levered_rules();
-        let schedule = levered_schedule();
+        let rules = settled_rules();
+        let schedule = settled_schedule();
         let mut scenario = Scenario::open_under(name, FreeHash, rules);
         let chain = scenario
             .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
@@ -125,7 +122,21 @@ impl LeveredChain {
             schedule,
             drive,
             filled,
+            witness: DriverWitness::new(0x64),
         }
+    }
+
+    /// Serve every block up to `until`: `join`'s persona passes each draw
+    /// on its served shard while `passes_through` (an epoch) allows, and
+    /// withholds every other draw.
+    async fn serve(&mut self, join: &Joined, passes_through: u64, until: BlockHeight) {
+        let served = ShardId::from_raw(join.served);
+        let schedule = self.schedule;
+        let passes = move |h: BlockHeight, target: &DrawTarget| {
+            target.shard == served && schedule.epoch_at_height(h.to_raw()) <= passes_through
+        };
+        let signers: [&shekyl_harness_spender::Persona; 1] = [&join.persona];
+        serve_to(&mut self.drive, &self.witness, &signers, &passes, until).await;
     }
 
     /// The join onto shards 0 and 1 — one block early, refused on J15; at
@@ -206,81 +217,15 @@ impl LeveredChain {
         }
     }
 
-    /// A credit at the join epoch is J5's. The credit for `E_join + 1`
-    /// connects, and is the first pass the slash below counts.
-    async fn assert_j5_refuses_the_join_epoch(&mut self, join: &Joined) {
-        let at_credit = Locus::Input {
-            slot: TxSlot::Listed(0),
-            input: 0,
-        };
-        assert!(
-            !serve_credit_epoch_ok(join.join_epoch, join.join_epoch),
-            "the retention crate refuses a credit at E_join"
-        );
-        refused_at(
-            self.drive
-                .connect(vec![join
-                    .persona
-                    .serve_credit(join.served, join.join_epoch)])
-                .await,
-            CenRow::J5,
-            at_credit,
-        );
-        let first_serving = self
-            .drive
-            .connect(vec![join
-                .persona
-                .serve_credit(join.served, join.join_epoch + 1)])
-            .await
-            .expect("the credit for E_join + 1 connects (J4, J5, J6 over the record)");
-        assert_eq!(first_serving.archival.serve_credits().len(), 1);
-    }
-
-    /// Eleven epochs of three draws on each shard, every one passed on the
-    /// served shard and none on the other, then the slash in the deadline
-    /// block. The served shard also keeps its serve credits — the mined
-    /// one and ten injected — which the Release's served anchor reads; the
-    /// slash reads the draws.
+    /// The failure window on admitted bundles: draws on both pairs in every
+    /// epoch from `E_join + 1`, passed on the served shard and withheld on
+    /// the other, then the slash in the deadline block.
     async fn slash_the_unserved_shard(&mut self, join: &Joined) -> Slashed {
         let window = failure_window_epochs();
-        for epoch in (join.join_epoch + 1)..=(join.join_epoch + window) {
-            let epoch_id = SettlementEpoch::from_raw(epoch);
-            self.drive
-                .issue_draws(
-                    epoch_id,
-                    &[
-                        IssuedPair {
-                            persona: join.persona.id(),
-                            shard: ShardId::from_raw(join.served),
-                            passed: true,
-                        },
-                        IssuedPair {
-                            persona: join.persona.id(),
-                            shard: ShardId::from_raw(join.unserved),
-                            passed: false,
-                        },
-                    ],
-                )
-                .await;
-        }
-        for epoch in (join.join_epoch + 2)..=(join.join_epoch + window) {
-            let Injected { .. } = self
-                .drive
-                .scenario
-                .connector()
-                .ask(Inject(ServeCredit {
-                    persona: join.persona.id(),
-                    shard: ShardId::from_raw(join.served),
-                    epoch: SettlementEpoch::from_raw(epoch),
-                }))
-                .await
-                .expect("the injector writes");
-        }
-        // The credits are a write beside a block. The next pop compares
-        // against the store they left.
-        self.drive.wrote_beside_a_block().await;
         let slash_epoch = join.join_epoch + window;
         let deadline = self.schedule.slash_deadline_height(slash_epoch);
+        self.serve(join, u64::MAX, BlockHeight::from_raw(deadline))
+            .await;
         self.drive
             .advance_to(BlockHeight::from_raw(deadline + 1))
             .await;
@@ -343,33 +288,6 @@ impl LeveredChain {
         Slashed {
             record,
             slash_epoch,
-        }
-    }
-
-    /// Inside the open interval both credits refuse on J6: the kept shard
-    /// and the shard the slash removed. J6 reads the interval.
-    async fn assert_j6_refuses_inside_the_open_interval(
-        &mut self,
-        join: &Joined,
-        slashed: &Slashed,
-    ) {
-        let at_credit = Locus::Input {
-            slot: TxSlot::Listed(0),
-            input: 0,
-        };
-        let inside = slashed.slash_epoch + 1;
-        assert!(
-            !good_through(join.join_epoch, inside, &slashed.record.bad_intervals),
-            "the retention crate says the persona is not good through `inside`"
-        );
-        for shard in [join.served, join.unserved] {
-            refused_at(
-                self.drive
-                    .connect(vec![join.persona.serve_credit(shard, inside)])
-                    .await,
-                CenRow::J6,
-                at_credit,
-            );
         }
     }
 
@@ -448,31 +366,6 @@ impl LeveredChain {
         }
     }
 
-    /// Past the closed interval the persona is good through again. A credit
-    /// for the shard it lost connects: J6 reads the interval, not the
-    /// holdings. That connect is J8's pin (`holds_shard_at`, E6 slice C).
-    async fn assert_j8_pin_an_unheld_shard_still_credits(
-        &mut self,
-        join: &Joined,
-        reinstated: &Reinstated,
-    ) {
-        let after_close = reinstated.reinstate_epoch + 1;
-        assert!(good_through(
-            join.join_epoch,
-            after_close,
-            &reinstated.stored.bad_intervals
-        ));
-        let past_interval = self
-            .drive
-            .connect(vec![
-                join.persona.serve_credit(join.served, after_close),
-                join.persona.serve_credit(join.unserved, after_close),
-            ])
-            .await
-            .expect("PIN (J8, slice C): a credit for a shard no longer held connects today");
-        assert_eq!(past_interval.archival.serve_credits().len(), 2);
-    }
-
     /// J18's two belts, then J16's cooldown refusal. Every post rides
     /// coinbase 2 at the same height; a refused block leaves the chain
     /// where it was.
@@ -537,16 +430,24 @@ impl LeveredChain {
         );
     }
 
-    /// J16's accept over a served anchor. The two serving operands lift at
-    /// one height: the slash fold settles `after_close` in the block at its
-    /// deadline, and the next block is the first of the cooldown's boundary
-    /// epoch. The pair is one block apart.
+    /// J16's accept over a served anchor. The anchor is the last epoch in
+    /// which a draw on the kept shard passed: the persona serves through
+    /// `after_close` and withholds after it. The two serving operands lift
+    /// at one height: the slash fold settles `after_close` in the block at
+    /// its deadline, and the next block is the first of the cooldown's
+    /// boundary epoch. The pair is one block apart.
     async fn assert_j16_accepts_over_the_served_anchor(
         &mut self,
         join: &Joined,
         reinstated: &Reinstated,
     ) {
         let anchor = reinstated.reinstate_epoch + 1;
+        self.serve(
+            join,
+            anchor,
+            BlockHeight::from_raw(self.schedule.open_height(anchor + 1)),
+        )
+        .await;
         let boundary = self.schedule.slash_deadline_height(anchor);
         assert_eq!(self.schedule.epoch_at_height(boundary), anchor + 1);
         assert_eq!(
@@ -633,7 +534,7 @@ impl LeveredChain {
     }
 }
 
-/// How the levered chain's connects are judged.
+/// How the slash chain's connects are judged.
 pub(crate) enum ConnectMode {
     /// Connect each block once.
     Straight,
@@ -642,33 +543,26 @@ pub(crate) enum ConnectMode {
 }
 
 /// What a round-tripped run counted. Both are zero for [`ConnectMode::Straight`].
-pub(crate) struct LeveredRun {
+pub(crate) struct SlashRun {
     pub trips: u64,
     pub boundaries: u64,
 }
 
-/// The levered chain, one phase at a time (module docs). `mode` selects
+/// The slash chain, one phase at a time (module docs). `mode` selects
 /// whether each connect after the fill is popped and connected again.
-pub(crate) async fn run_levered_slash_chain(mode: ConnectMode) -> LeveredRun {
+pub(crate) async fn run_slash_chain(mode: ConnectMode) -> SlashRun {
     let name = match mode {
         ConnectMode::Straight => "slice-8-reinstate",
         ConnectMode::RoundTrip => "archival-pop-reinstate",
     };
-    let mut chain = LeveredChain::open(name).await;
+    let mut chain = SlashChain::open(name).await;
     if matches!(mode, ConnectMode::RoundTrip) {
         chain.drive.round_trip_from_here().await;
     }
     let join = chain.join_two_shards().await;
-    chain.assert_j5_refuses_the_join_epoch(&join).await;
     let slashed = chain.slash_the_unserved_shard(&join).await;
-    chain
-        .assert_j6_refuses_inside_the_open_interval(&join, &slashed)
-        .await;
     let reinstated = chain
         .reinstate_and_match_the_wallet_verify(&join, &slashed)
-        .await;
-    chain
-        .assert_j8_pin_an_unheld_shard_still_credits(&join, &reinstated)
         .await;
     chain
         .assert_j18_belts_and_the_early_release(&join, &slashed, &reinstated)
@@ -676,7 +570,7 @@ pub(crate) async fn run_levered_slash_chain(mode: ConnectMode) -> LeveredRun {
     chain
         .assert_j16_accepts_over_the_served_anchor(&join, &reinstated)
         .await;
-    let run = LeveredRun {
+    let run = SlashRun {
         trips: chain.drive.trips(),
         boundaries: chain.drive.boundaries(),
     };
@@ -684,10 +578,10 @@ pub(crate) async fn run_levered_slash_chain(mode: ConnectMode) -> LeveredRun {
     run
 }
 
-/// The levered chain, one phase at a time. A refusal names the phase in the
+/// The slash chain, one phase at a time. A refusal names the phase in the
 /// stack: the chain is not re-mined as separate tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
-async fn the_levered_slash_chain_judges_each_row_on_one_record() {
-    run_levered_slash_chain(ConnectMode::Straight).await;
+async fn the_slash_chain_judges_each_row_on_one_record() {
+    run_slash_chain(ConnectMode::Straight).await;
 }

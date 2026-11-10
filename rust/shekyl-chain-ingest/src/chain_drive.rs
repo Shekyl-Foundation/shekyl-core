@@ -34,32 +34,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::FAILURE_WINDOW_M;
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::codec::{PropertyCell, TotalBurnedCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_harness_spender::{Owner, Spender};
-use shekyl_types::archival::{IndexedDraw, IssuedDigest, IssuedDraw};
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
-use crate::connector::{ArchivalState, IssueDraws, Rewound};
+use crate::connector::{ArchivalState, Rewound};
 use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
-use crate::scenario_shard::levered_schedule;
 use shekyl_chain_rules::SettlementSchedule;
-
-/// Draws issued for one persona on one shard. Three is this driver's
-/// witness, not [`shekyl_archival_retention`](shekyl_archival_retention)'s
-/// `SUPPORT_DRAWS_PER_EPOCH`.
-pub(crate) const DRAWS_PER_PAIR: u64 = 3;
-
-/// Every draw issued here is index 0 of its block.
-pub(crate) const WITNESS_DRAW_INDEX: u32 = 0;
 
 /// How many times a relay fee is repriced before its varint width has
 /// settled. The fee is an input of the weight it pays for, so the price
@@ -162,58 +151,6 @@ fn pop_keeps_the_floor(
             .collect::<BTreeMap<_, _>>()
     };
     pop.get(floor) == connected.get(floor) && others(pop) == others(parent)
-}
-
-/// One pair's draws for an epoch, as the regtest door records them.
-pub(crate) struct IssuedPair {
-    pub persona: PCanonicalId,
-    pub shard: ShardId,
-    /// Whether each of the pair's draws passed.
-    pub passed: bool,
-}
-
-/// Issue `epoch`'s draws: [`DRAWS_PER_PAIR`] per pair, at the epoch's first
-/// heights, each at [`WITNESS_DRAW_INDEX`]. One call per epoch — the door
-/// writes the epoch's digest whole.
-pub(crate) async fn issue_draws(
-    scenario: &Scenario<FreeHash>,
-    epoch: SettlementEpoch,
-    draws_of: &[IssuedPair],
-) {
-    let open = levered_schedule().open_height(epoch.to_raw());
-    let mut digest = IssuedDigest::ZERO;
-    let mut draws = Vec::new();
-    for pair in draws_of {
-        for k in 0..DRAWS_PER_PAIR {
-            let issuing_height = BlockHeight::from_raw(open + k);
-            digest.fold(&issued_draw_term(
-                &pair.persona,
-                pair.shard,
-                epoch,
-                issuing_height,
-                WITNESS_DRAW_INDEX,
-            ));
-            draws.push(IndexedDraw {
-                persona: pair.persona,
-                shard: pair.shard,
-                issuing_height,
-                draw: WITNESS_DRAW_INDEX,
-                state: IssuedDraw {
-                    revealed_at: BlockHeight::from_raw(open + k + 1),
-                    passed: pair.passed,
-                },
-            });
-        }
-    }
-    scenario
-        .connector()
-        .ask(IssueDraws {
-            epoch,
-            draws,
-            digest,
-        })
-        .await
-        .expect("the door issues the draws");
 }
 
 /// What an emission claim is priced from. The terms stay with the caller:
@@ -662,15 +599,8 @@ impl Driven {
         }
     }
 
-    /// [`issue_draws`], then reread the trip's parent. A draw is a write
-    /// beside a block; the next pop compares against the store it left.
-    pub(crate) async fn issue_draws(&mut self, epoch: SettlementEpoch, draws_of: &[IssuedPair]) {
-        issue_draws(&self.scenario, epoch, draws_of).await;
-        self.wrote_beside_a_block().await;
-    }
-
-    /// Reread the trip's parent after a write beside a block (an injected
-    /// serve credit). A straight chain has no parent to reread.
+    /// Reread the trip's parent after a write beside a block (a filed
+    /// bundle). A straight chain has no parent to reread.
     pub(crate) async fn wrote_beside_a_block(&mut self) {
         if matches!(self.recording, Recording::RoundTrip(_)) {
             let parent = tip_of(&self.scenario).await;

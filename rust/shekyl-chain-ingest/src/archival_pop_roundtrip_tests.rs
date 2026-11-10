@@ -37,7 +37,7 @@ use shekyl_wire::Transaction;
 
 use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, record_of, ENDPOINT, FEE};
-use crate::archival_slash_tests::{run_levered_slash_chain, ConnectMode};
+use crate::archival_slash_tests::{run_slash_chain, ConnectMode};
 use crate::chain_drive::{
     catch_up, priced_emission_claim, spender_owning_before, Driven, EmissionClaimParts,
 };
@@ -185,7 +185,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the_join_on() {
-    let run = run_levered_slash_chain(ConnectMode::RoundTrip).await;
+    let run = run_slash_chain(ConnectMode::RoundTrip).await;
     assert!(run.trips > 0, "blocks were round-tripped");
     assert!(run.boundaries > 0, "a pruning boundary was round-tripped");
 }
