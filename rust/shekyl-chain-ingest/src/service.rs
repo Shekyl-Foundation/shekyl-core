@@ -880,9 +880,10 @@ pub struct Door {
 }
 
 impl Door {
-    /// The seed window as last pinned and published: the pair the
-    /// lookup-only longhash answers from. `None` until the first pair is
-    /// pinned. A caller whose proof found a seed absent waits on this for
+    /// The seeds the two cache slots hold, as last recorded under the pin
+    /// lock: the pair the lookup-only longhash answers from. The window
+    /// installed, plus any seed a run or a branch has pinned there since.
+    /// `None` until the first pair is pinned. A caller whose proof found a seed absent waits on this for
     /// the slots to change, and reads it to see whether they already have.
     #[must_use]
     pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SeedPair>> {
