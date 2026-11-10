@@ -29,9 +29,9 @@ use crate::cache_window::{self, SeedPair};
 use crate::schedule::ChainRules;
 use tokio::sync::oneshot;
 
-/// Install the seed window, or leave it when it is already the pair the
-/// slots hold. A stop returns before a pin. A store read that fails is the
-/// caller's to record ([`record_store_read`]).
+/// Install the seed window, or leave it when it is the window last
+/// installed and the slots hold exactly it. A stop returns before a pin. A
+/// store read that fails is the caller's to record ([`record_store_read`]).
 ///
 /// # Errors
 ///
@@ -46,7 +46,18 @@ where
         return Ok(());
     }
     let pair = cache_window::seeds_for(&shared.store, shared.rules)?;
-    if shared.published_seeds() == Some(pair) {
+    // Both, read together under the pin lock (taken and dropped here, before
+    // the permit): the published pair alone is not enough, since a run's
+    // pin or a preparation can leave the slots holding the window while a
+    // seed the previous window named is still to be released (A2).
+    let settled = {
+        let installed = shared
+            .pin_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *installed == Some(pair) && shared.published_seeds() == Some(pair)
+    };
+    if settled {
         return Ok(());
     }
     let Some(_permit) = shared
@@ -55,37 +66,39 @@ where
     else {
         return Ok(());
     };
-    {
-        let mut installed = shared
-            .pin_lock
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        // Older endpoint first, so the second pin leaves it in the
-        // transient slot and the connecting height's seed canonical.
-        if let Some(transient) = pair.transient {
-            shared.substrate.pin_seed(&transient);
-        }
-        shared.substrate.pin_seed(&pair.canonical);
-        // A seed the previous window named and this one does not is
-        // released: nothing else would empty its slot before the next
-        // epoch's pin (A2). Only those. A run in flight pins the seeds of
-        // blocks it has not committed yet, and this window, read at the
-        // committed tip, cannot name them; a release by "whatever the
-        // second slot holds" evicted them under the run's forms.
-        if let Some(previous) = installed.replace(pair) {
-            for seed in [Some(previous.canonical), previous.transient]
-                .into_iter()
-                .flatten()
-            {
-                if !pair.holds(&seed) {
-                    shared.substrate.release_seed(&seed);
-                }
+    let mut installed = shared
+        .pin_lock
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let mut held = shared.published_seeds();
+    // Older endpoint first, so the second pin leaves it in the
+    // transient slot and the connecting height's seed canonical.
+    if let Some(transient) = pair.transient {
+        shared.substrate.pin_seed(&transient);
+        held = Some(after_pin(held, transient));
+    }
+    shared.substrate.pin_seed(&pair.canonical);
+    held = Some(after_pin(held, pair.canonical));
+    // A seed the previous window named and this one does not is
+    // released: nothing else would empty its slot before the next
+    // epoch's pin (A2). Only those. A run in flight pins the seeds of
+    // blocks it has not committed yet, and this window, read at the
+    // committed tip, cannot name them; a release by "whatever the
+    // second slot holds" evicted them under the run's forms.
+    if let Some(previous) = installed.replace(pair) {
+        for seed in [Some(previous.canonical), previous.transient]
+            .into_iter()
+            .flatten()
+        {
+            if !pair.holds(&seed) {
+                shared.substrate.release_seed(&seed);
+                held = held.map(|slots| after_release(slots, seed));
             }
         }
     }
-    if !shared.stopping() {
-        shared.seeds.send_replace(Some(pair));
-    }
+    // What the slots now hold, which is the window plus any seed a run
+    // pinned that this window does not name.
+    shared.seeds.send_replace(held);
     Ok(())
 }
 
@@ -288,32 +301,86 @@ fn body_of(bodies: &[Transaction], txid: &TxHash) -> Option<Transaction> {
         .cloned()
 }
 
-/// The seeds a pin just put in the slots: the last is canonical, and the
-/// distinct seed before it is transient. One seed demotes the previous
-/// canonical into the transient slot, which is what the cache store did.
+/// Record what the slots hold after `pinned` were pinned in order. The
+/// caller holds `pin_lock` across the pins and this record, so the
+/// published pair never names other seeds than the slots hold.
+///
+/// Folded from the record the pins started on, as the cache store moves
+/// its slots: re-pinning the canonical seed moves nothing, so the
+/// transient slot keeps what it held. Publishing "transient empty" there
+/// left the previous epoch's seed resident behind a record that said it
+/// was gone, and the window install, reading the record, never released
+/// it (A2, alpha.11 bug hunt).
 pub(super) fn note_pins<S>(shared: &Shared<S>, pinned: &[BlockHash])
 where
     S: Substrate,
     S::Fault: core::fmt::Debug,
 {
-    let Some(&canonical) = pinned.last() else {
+    if pinned.is_empty() {
         return;
-    };
-    let earlier = pinned
-        .iter()
-        .rev()
-        .skip(1)
-        .find(|seed| **seed != canonical)
-        .copied();
-    let transient = earlier.or_else(|| {
-        shared
-            .published_seeds()
-            .and_then(|pair| (pair.canonical != canonical).then_some(pair.canonical))
+    }
+    let held = pinned.iter().fold(shared.published_seeds(), |held, seed| {
+        Some(after_pin(held, *seed))
     });
-    shared.seeds.send_replace(Some(SeedPair {
-        canonical,
-        transient,
-    }));
+    shared.seeds.send_replace(held);
+}
+
+/// Record a branch seed prepared into the transient slot, so the next
+/// window install sees the slot it lost. The caller holds `pin_lock`.
+pub(super) fn note_prepared<S>(shared: &Shared<S>, seed: BlockHash)
+where
+    S: Substrate,
+    S::Fault: core::fmt::Debug,
+{
+    if let Some(slots) = shared.published_seeds() {
+        let prepared = after_prepare(slots, seed);
+        if prepared != slots {
+            shared.seeds.send_replace(Some(prepared));
+        }
+    }
+}
+
+/// The slots after the cache store pins `seed` canonical: a seed already
+/// canonical moves nothing; any other becomes canonical and demotes the
+/// previous canonical into the transient slot.
+fn after_pin(held: Option<SeedPair>, seed: BlockHash) -> SeedPair {
+    match held {
+        Some(slots) if slots.canonical == seed => slots,
+        Some(slots) => SeedPair {
+            canonical: seed,
+            transient: Some(slots.canonical),
+        },
+        None => SeedPair {
+            canonical: seed,
+            transient: None,
+        },
+    }
+}
+
+/// The slots after the cache store releases `seed`: the transient slot
+/// empties when it holds it; the canonical slot never moves.
+fn after_release(slots: SeedPair, seed: BlockHash) -> SeedPair {
+    if slots.transient == Some(seed) {
+        SeedPair {
+            transient: None,
+            ..slots
+        }
+    } else {
+        slots
+    }
+}
+
+/// The slots after the cache store prepares `seed`: a seed neither slot
+/// holds is built into the transient slot.
+fn after_prepare(slots: SeedPair, seed: BlockHash) -> SeedPair {
+    if slots.holds(&seed) {
+        slots
+    } else {
+        SeedPair {
+            transient: Some(seed),
+            ..slots
+        }
+    }
 }
 
 impl super::Admission {

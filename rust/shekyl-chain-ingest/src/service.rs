@@ -552,10 +552,13 @@ pub(crate) struct Shared<S: Substrate> {
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
-    /// Serializes cache pins. Taken after a hasher permit, never before.
+    /// Serializes cache pins. Taken after a hasher permit, never before
+    /// (the install's settled check takes and drops it holding none).
     /// Holds the seed window last installed: the only seeds a later
     /// install may release (A2). A run's pins and a branch preparation
-    /// take the lock and leave it as it is.
+    /// take the lock and leave it as it is. Every change to the slots and
+    /// the publish that records it are made under it, so `seeds` read
+    /// under it is what the slots hold.
     pin_lock: Arc<Mutex<Option<crate::cache_window::SeedPair>>>,
     /// Serialises every form under a branch's own seed (B2): an alternative
     /// arrival's, and a switch that promotes past its branch's seed point.
@@ -656,22 +659,15 @@ where
         }
     }
 
-    /// Record the seeds a pin just installed.
+    /// Record the slots after a pin of `pinned`. The caller holds `pin_lock`.
     pub(crate) fn note_pins(&self, pinned: &[BlockHash]) {
         window::note_pins(self, pinned);
     }
 
-    /// A branch seed was prepared into the transient slot: the published
-    /// pair says so, so the next window install sees the slot it lost.
+    /// Record a branch seed prepared into the transient slot. The caller
+    /// holds `pin_lock`.
     pub(crate) fn note_prepared(&self, seed: BlockHash) {
-        if let Some(pair) = self.published_seeds() {
-            if pair.canonical != seed {
-                self.seeds.send_replace(Some(crate::cache_window::SeedPair {
-                    canonical: pair.canonical,
-                    transient: Some(seed),
-                }));
-            }
-        }
+        window::note_prepared(self, seed);
     }
 
     /// The gate every form under a branch's own seed takes first.

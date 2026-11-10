@@ -243,9 +243,9 @@ where
     }
 }
 
-/// Pin `seeds` in order under one permit of `class`, then record the last
-/// as the canonical slot. The permit covers the derive. A hash does not.
-/// `false` when the service stopped before the pin.
+/// Pin `seeds` in order under one permit of `class`, then record what the
+/// slots hold, under the same pin lock. The permit covers the derive. A
+/// hash does not. `false` when the service stopped before the pin.
 async fn pin_seeds<S>(shared: &Arc<Shared<S>>, seeds: &[BlockHash], class: Class) -> bool
 where
     S: Substrate + Send + Sync + 'static,
@@ -254,27 +254,24 @@ where
     if seeds.is_empty() {
         return true;
     }
-    let budget = shared.budget.clone();
-    let substrate = Arc::clone(shared.substrate());
-    let pin_lock = Arc::clone(&shared.pin_lock);
-    let stop = Arc::clone(&shared.stop_flag);
+    let worker = Arc::clone(shared);
     let pinned = seeds.to_vec();
-    let did = tokio::task::spawn_blocking(move || {
-        let Some(_permit) = budget.acquire_unless(class, &stop) else {
+    tokio::task::spawn_blocking(move || {
+        let Some(_permit) = worker.budget.acquire_unless(class, &worker.stop_flag) else {
             return false;
         };
-        let _gate = pin_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let _gate = worker
+            .pin_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         for seed in &pinned {
-            substrate.pin_seed(seed);
+            worker.substrate().pin_seed(seed);
         }
+        worker.note_pins(&pinned);
         true
     })
     .await
-    .expect("a pin does not panic");
-    if did {
-        shared.note_pins(seeds);
-    }
-    did
+    .expect("a pin does not panic")
 }
 
 /// Seeds in the order a forward run names them: the first is the older.
@@ -998,9 +995,10 @@ where
                 .pin_lock
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            worker.substrate().prepare_seed(&seed)
+            let held = worker.substrate().prepare_seed(&seed);
+            worker.note_prepared(seed);
+            held
         };
-        worker.note_prepared(seed);
         let held = [(seed, held)];
         let branch = Branch::new(&**worker.substrate(), &held);
         let verdict = form(
@@ -1160,9 +1158,10 @@ where
                     .pin_lock
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                worker.substrate().prepare_seed(&seed)
+                let cache = worker.substrate().prepare_seed(&seed);
+                worker.note_prepared(seed);
+                cache
             };
-            worker.note_prepared(seed);
             drop(permit);
             cache
         })

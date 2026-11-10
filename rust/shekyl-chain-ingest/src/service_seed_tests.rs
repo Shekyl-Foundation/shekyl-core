@@ -88,9 +88,8 @@ fn seed_block(branch: &[Mined]) -> shekyl_types::BlockHash {
 async fn on_main(name: &str, chains: &Branches) -> (Running, Arc<Gated>) {
     let substrate = Arc::new(Gated::new());
     let service = service(name, Arc::clone(&substrate), ServiceConfig::default());
-    let door = service.door();
-    offer_all(&door, 1, &chains.prefix).await;
-    let replies = offer_all(&door, 1, &chains.main).await;
+    offer_all(&service, 1, &chains.prefix).await;
+    let replies = offer_all(&service, 1, &chains.main).await;
     assert!(
         replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "the main branch connects"
@@ -106,7 +105,7 @@ async fn on_main(name: &str, chains: &Branches) -> (Running, Arc<Gated>) {
 async fn a_heavier_branch_past_its_own_seed_point_is_followed() {
     let chains = branches().await;
     let (service, substrate) = on_main("seed-point-follow", chains).await;
-    let replies = offer_all(&service.door(), 2, &chains.z).await;
+    let replies = offer_all(&service, 2, &chains.z).await;
     let past: Vec<_> = chains
         .z
         .iter()
@@ -145,7 +144,7 @@ async fn a_heavier_branch_past_its_own_seed_point_is_followed() {
 /// genesis's id.
 async fn up_to_the_seed_point(service: &super::Service<Gated>, chains: &Branches) {
     for (session, branch) in [(2, &chains.z), (3, &chains.w)] {
-        let replies = offer_all(&service.door(), session, between(branch, PREFIX, PAST_SEED)).await;
+        let replies = offer_all(service, session, between(branch, PREFIX, PAST_SEED)).await;
         assert!(
             replies.iter().all(|r| matches!(r, Reply::Held { .. })),
             "{replies:?}"
@@ -226,10 +225,9 @@ async fn branch_forms_run_one_at_a_time() {
     let chains = branches().await;
     let (service, substrate) = on_main("seed-point-one", chains).await;
     up_to_the_seed_point(&service, chains).await;
-    let door = service.door();
     let (z, w) = tokio::join!(
-        offer_all(&door, 2, between(&chains.z, PAST_SEED, PAST_SEED + 8)),
-        offer_all(&door, 3, between(&chains.w, PAST_SEED, PAST_SEED + 8)),
+        offer_all(&service, 2, between(&chains.z, PAST_SEED, PAST_SEED + 8)),
+        offer_all(&service, 3, between(&chains.w, PAST_SEED, PAST_SEED + 8)),
     );
     assert!(
         z.iter().chain(&w).all(|r| matches!(r, Reply::Held { .. })),
