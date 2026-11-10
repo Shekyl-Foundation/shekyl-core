@@ -69,6 +69,7 @@ use shekyl_archival_retention::{
     claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
     epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
     EpochCloseInputs, EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim,
+    RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
@@ -390,8 +391,18 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
             assert!(source.has_bond_record);
             assert_eq!(source.join_settlement_epoch, join_epoch.to_raw());
             assert_eq!(source.held_shard_ids, vec![0]);
-            assert!(source.has_last_served_epoch);
-            assert_eq!(source.last_served_epoch, served.to_raw());
+            // The next block is the first of `served + 2`, and the
+            // persona's last pass is in `served`: outside the cooldown's
+            // window (`served + 1` and `served + 2`), so the source names no
+            // last-served epoch. The anchor inside the window is the
+            // support-trees chain's: its early release is refused on it.
+            assert_eq!(
+                settled_schedule().epoch_at(connecting),
+                SettlementEpoch::from_raw(served.to_raw() + RELEASE_COOLDOWN_EPOCHS),
+                "the pass's next block is past the cooldown from `served`"
+            );
+            assert!(!source.has_last_served_epoch);
+            assert_eq!(source.last_served_epoch, 0);
             let row = source
                 .epochs
                 .iter()

@@ -113,8 +113,10 @@ pub struct EpochSnapshot {
 /// consume this operand treat an absent anchor as *permissive*:
 /// `release_cooldown_elapsed` returns `true` on `None`, and
 /// `slashes_settled_through` returns `true` on `None`. That is correct at the
-/// daemon, where absence can only mean "no shard has ever served" — nothing
-/// served, nothing whose settlement an exit could outrun.
+/// daemon, where absence can only mean "no pass inside the cooldown's
+/// window": the record never passed a draw, or its last pass is old enough
+/// that its cooldown has elapsed and its epoch's slash deadline has run
+/// (`release_last_served`) — nothing whose settlement an exit could outrun.
 ///
 /// On this side of the wire a bare `None` could also mean "the field never
 /// arrived", and that fact must be *fail-closed*: it would otherwise flow into

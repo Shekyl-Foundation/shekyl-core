@@ -97,7 +97,12 @@ pub struct GetArchivalEmissionClaimSourceResponse {
     pub claimed_settlement_epochs: Vec<u64>,
     pub bonded_total_atomic: u64,
     pub bad_interval_count: u64,
-    /// Whether the record has ever served, and the last epoch it did.
+    /// Whether the record passed a draw inside the release cooldown's
+    /// window (the last `RELEASE_COOLDOWN_EPOCHS` epochs through the next
+    /// block's), and the last epoch in which it did. `false` is a record
+    /// that never passed a draw or whose last pass is older than the
+    /// window: for a release the two are one fact, since an older pass has
+    /// had its cooldown elapse and its epoch its slash deadline (CEN-J16).
     pub has_last_served_epoch: bool,
     pub last_served_epoch: u64,
     /// Whether any slash epoch has settled, and the last that did.
