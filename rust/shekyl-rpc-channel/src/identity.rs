@@ -16,92 +16,12 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use super::HandshakeError;
-use crate::mac1::{self, MAC1_KEY_LEN};
-use crate::{
-    static_fingerprint, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
-};
+use crate::mac1::Mac1Key;
+use crate::static_public::StaticPublic;
+use crate::{MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
-/// A static public bundle: an X25519 key and an ML-KEM-768 encapsulation
-/// key, the latter already checked as FIPS 203 requires.
-///
-/// The daemon's is what every enrolled client holds. The client's is what
-/// the daemon learns in message 3 and looks up.
-#[derive(Clone)]
-pub struct StaticPublic {
-    x25519: [u8; X25519_PUBLIC_LEN],
-    mlkem_ek_bytes: [u8; MLKEM768_EK_LEN],
-    pub(super) mlkem_ek: ml_kem_768::EncapsKey,
-    /// The mac1 key, derived once from the bundle (`crate::mac1`).
-    mac1_key: [u8; MAC1_KEY_LEN],
-}
-
-/// The two halves did not form a usable bundle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidStaticPublic;
-
-impl core::fmt::Display for InvalidStaticPublic {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("not a valid static public bundle")
-    }
-}
-
-impl std::error::Error for InvalidStaticPublic {}
-
-impl StaticPublic {
-    /// Build a bundle from its two halves, checking the encapsulation key.
-    ///
-    /// # Errors
-    ///
-    /// When the encapsulation key fails FIPS 203's input check.
-    pub fn from_parts(
-        x25519: [u8; X25519_PUBLIC_LEN],
-        mlkem_ek: [u8; MLKEM768_EK_LEN],
-    ) -> Result<Self, InvalidStaticPublic> {
-        let parsed =
-            ml_kem_768::EncapsKey::try_from_bytes(mlkem_ek).map_err(|_| InvalidStaticPublic)?;
-        Ok(Self {
-            x25519,
-            mlkem_ek_bytes: mlkem_ek,
-            mlkem_ek: parsed,
-            mac1_key: mac1::mac1_key(&x25519, &mlkem_ek),
-        })
-    }
-
-    /// The X25519 half.
-    pub fn x25519(&self) -> &[u8; X25519_PUBLIC_LEN] {
-        &self.x25519
-    }
-
-    /// The ML-KEM-768 half, as it travels.
-    pub fn mlkem_ek(&self) -> &[u8; MLKEM768_EK_LEN] {
-        &self.mlkem_ek_bytes
-    }
-
-    /// The fingerprint an operator compares and an allowlist stores (§5).
-    pub fn fingerprint(&self) -> StaticFingerprint {
-        static_fingerprint(&self.x25519, &self.mlkem_ek_bytes)
-    }
-
-    /// The mac1 a sender holding this bundle puts after its Noise message 1
-    /// (§4.3). [`crate::handshake::Client::start`] adds it; this is the same
-    /// computation, for a caller that builds the bytes itself.
-    #[must_use]
-    pub fn mac1(&self, noise_message1: &[u8]) -> [u8; MAC1_LEN] {
-        mac1::mac1(&self.mac1_key, noise_message1)
-    }
-
-    /// Whether `tag` is the mac1 of `noise_message1` under this bundle.
-    pub(super) fn mac1_verifies(&self, noise_message1: &[u8], tag: &[u8]) -> bool {
-        mac1::verify(&self.mac1_key, noise_message1, tag)
-    }
-
-    /// The daemon's busy reply to the message 1 whose mac1 is `mac1_tag`.
-    pub(super) fn busy_reply(&self, mac1_tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
-        mac1::busy(&self.mac1_key, mac1_tag)
-    }
-}
-
-/// A long-term identity: both secret halves and the public bundle.
+/// A long-term identity: both secret halves, the public bundle, and the
+/// bundle's mac1 key, derived once for the daemon's check on every message 1.
 ///
 /// The secrets wipe themselves when this is dropped (`x25519-dalek`'s and
 /// `fips203`'s types do it), and nothing here hands them out.
@@ -109,6 +29,7 @@ pub struct StaticKeypair {
     pub(super) x25519: StaticSecret,
     pub(super) mlkem_dk: ml_kem_768::DecapsKey,
     pub(super) public: StaticPublic,
+    mac1_key: Mac1Key,
 }
 
 impl StaticKeypair {
@@ -134,6 +55,7 @@ impl StaticKeypair {
         Ok(Self {
             x25519,
             mlkem_dk,
+            mac1_key: Mac1Key::of(&public),
             public,
         })
     }
@@ -141,6 +63,33 @@ impl StaticKeypair {
     /// The public bundle.
     pub fn public(&self) -> &StaticPublic {
         &self.public
+    }
+
+    /// The mac1 a holder of this bundle puts after a Noise message 1 (§4.3).
+    ///
+    /// The bytes only. The tag that can answer busy borrows the key that
+    /// made it, and that key stays on this identity.
+    #[must_use]
+    pub fn mac1(&self, noise_message1: &[u8]) -> [u8; MAC1_LEN] {
+        *self.mac1_key.mac1(noise_message1).as_bytes()
+    }
+
+    /// The tag, when `tag` is the mac1 of `noise_message1` under this
+    /// identity's bundle. The tag borrows this identity's mac1 key, so a
+    /// busy reply answers under the key that proved it.
+    pub(super) fn mac1_verifies(
+        &self,
+        noise_message1: &[u8],
+        tag: &[u8],
+    ) -> Option<crate::mac1::Mac1Tag<'_>> {
+        self.mac1_key.verify(noise_message1, tag)
+    }
+
+    /// The busy reply this identity would send for a message 1 whose Noise
+    /// bytes are `noise`: its own mac1, then the busy MAC under its own key.
+    #[cfg(test)]
+    pub(super) fn busy_for(&self, noise: &[u8]) -> [u8; crate::BUSY_LEN] {
+        self.mac1_key.mac1(noise).busy()
     }
 }
 

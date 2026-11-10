@@ -413,7 +413,9 @@ pub const MULTISIG_ADDRESS_FINGERPRINT: NameDomain<1> =
 /// `shekyl/receive-label-hash-v1`); `shekyl_crypto_hash::keccak256` keeps exactly
 /// the consumers that require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {
-    MULTISIG_ADDRESS_FINGERPRINT.frame(&payload.network.name_id(), [&payload.to_canonical_bytes()])
+    MULTISIG_ADDRESS_FINGERPRINT
+        .frame(&payload.network.name_id(), [&payload.to_canonical_bytes()])
+        .into_bytes()
 }
 
 /// Format a fingerprint as grouped hex (4-char blocks separated by spaces).
@@ -751,11 +753,13 @@ mod tests {
             address_fingerprint(&payload),
             MULTISIG_ADDRESS_FINGERPRINT
                 .frame(&Network::Mainnet.name_id(), [&payload.to_canonical_bytes()])
+                .into_bytes()
         );
         assert_ne!(
             address_fingerprint(&payload),
             MULTISIG_ADDRESS_FINGERPRINT
-                .frame(&Network::Testnet.name_id(), [&payload.to_canonical_bytes()]),
+                .frame(&Network::Testnet.name_id(), [&payload.to_canonical_bytes()])
+                .into_bytes(),
             "the name is load-bearing"
         );
     }

@@ -83,7 +83,7 @@ fn every_preimage_is_the_oracles() {
         let message = hex::decode(&case.message_hex).expect("message hex");
         let mut seen = Vec::new();
         for (net, hex) in by_network(&case.preimage_by_network) {
-            let got = message_preimage(net, &segment, &message);
+            let got = message_preimage(net, &segment, &message).into_bytes();
             assert_eq!(hex::encode(got), hex, "{}: {net}", case.name);
             seen.push(got);
         }
