@@ -24,6 +24,7 @@ use super::{AWAITING_AGE, AWAITING_PER_SESSION, AWAITING_TOTAL};
 use crate::model::{Event, HashClass, Proved, Sync};
 use crate::proof::{fixed, serialized};
 use crate::protocol::CloseCause;
+use crate::protocol::ProveItem;
 use crate::scenarios::Prefix;
 use crate::{Command, PeerClaim};
 
@@ -162,9 +163,34 @@ impl World {
         }
     }
 
-    /// Announce `announced` from session 1 and prove it: the commands the
-    /// proof's landing emitted.
-    fn announce(&mut self, announced: &Announced) -> Vec<Command<u8>> {
+    /// Open `session` beside session 1, with the same claim to main.
+    fn open(&mut self, session: u8) {
+        let mut out = self.drive(
+            Event::SessionOpened {
+                session,
+                transit: Duration::from_secs(1),
+            },
+            Duration::ZERO,
+        );
+        let top = self.records.last().expect("eight").clone();
+        self.sync
+            .claim(
+                session,
+                PeerClaim {
+                    count: ChainCount::from_raw(8),
+                    work: top.cumulative_difficulty,
+                    top: top.hash,
+                },
+                &Prefix(&self.records),
+                self.start,
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("the claim is a chain");
+    }
+
+    /// Announce `announced` from session 1 and stop at its proof job.
+    fn announce_unproven(&mut self, announced: &Announced) -> (crate::model::Job, ProveItem) {
         let out = self.drive(
             Event::Announce {
                 session: 1,
@@ -172,8 +198,8 @@ impl World {
             },
             Duration::ZERO,
         );
-        let (job, item) = out
-            .iter()
+        assert!(asked(&out).is_empty(), "nothing is asked before the proof");
+        out.iter()
             .find_map(|command| match command {
                 Command::Prove {
                     job,
@@ -183,7 +209,13 @@ impl World {
                 } => items.first().map(|item| (*job, item.clone())),
                 _ => None,
             })
-            .expect("the announce is proven");
+            .expect("the announce is proven")
+    }
+
+    /// Announce `announced` from session 1 and prove it: the commands the
+    /// proof's landing emitted.
+    fn announce(&mut self, announced: &Announced) -> Vec<Command<u8>> {
+        let (job, item) = self.announce_unproven(announced);
         let pow = PowBlob::read(&item.pow).expect("preimage");
         let formed = form_header(
             &pow,
@@ -393,10 +425,17 @@ fn the_total_bound_holds_back_a_new_block_and_evicts_no_other_wait() {
         let mut arrival = template.clone();
         arrival.session = 2 + u8::try_from(n % 4).expect("small");
         let key = BlockHash::from_bytes([u8::try_from(n).expect("small"); 32]);
-        world
-            .sync
-            .awaiting
-            .insert(key, super::Waiting { arrival, since });
+        world.sync.awaiting.insert(
+            key,
+            super::Waiting {
+                asked: std::collections::BTreeMap::from([(
+                    arrival.session,
+                    super::Sender::Announced,
+                )]),
+                arrival,
+                since,
+            },
+        );
     }
     assert_eq!(world.sync.awaiting.len(), AWAITING_TOTAL);
     let before: Vec<BlockHash> = world.sync.awaiting.keys().copied().collect();
@@ -470,4 +509,130 @@ fn a_whole_copy_offers_a_waiting_block_and_its_late_answer_offers_nothing() {
         "the late answer holds no second copy"
     );
     assert!(closed(&out).is_empty());
+}
+
+/// Only a proven header waits (`runs::awaiting` module docs). An announced
+/// block whose section names a body it did not carry is not waiting, and
+/// nothing is asked for it, while its proof of work is out; when the proof
+/// is refused it never waits, and its sender is closed. A session cannot
+/// fill the waiting set with bytes it merely sent. Red edit: make an
+/// announced body wait when it arrives, before its header is proven.
+#[test]
+fn a_block_does_not_wait_until_its_header_is_proven_and_never_when_refused() {
+    let mut world = World::new();
+    let block = world.block_with_section(500);
+    let (job, _item) = world.announce_unproven(&block);
+    assert!(
+        world.sync.awaiting.is_empty(),
+        "an unproven header's block does not wait"
+    );
+    let out = world.drive(
+        Event::Proven {
+            job,
+            results: vec![Proved::Refused(shekyl_chain_rules::InvalidBlock::new(
+                shekyl_chain_rules::CenRow::B6,
+                shekyl_chain_rules::Locus::Block,
+            ))],
+        },
+        Duration::ZERO,
+    );
+    assert!(asked(&out).is_empty(), "a refused proof asks nothing");
+    assert!(world.sync.awaiting.is_empty(), "and its block never waits");
+    assert_eq!(closed(&out).len(), 1, "the supplier is closed: {out:?}");
+}
+
+/// A wait is the block's, not its first sender's. Session 1 announces the
+/// block without its bundle body and withholds it; session 2 announces the
+/// same block and is asked too; its answer offers the block at once.
+/// Red edit: ask only the first sender — session 2 is not asked, and the
+/// block waits out the withholder.
+#[test]
+fn a_second_sender_is_asked_and_completes_a_block_the_first_withholds() {
+    let mut world = World::new();
+    world.open(2);
+    let block = world.block_with_section(600);
+    let out = world.announce(&block);
+    assert_eq!(asked(&out), vec![(1, block.hash, 1)]);
+    let out = world.drive(
+        Event::Announce {
+            session: 2,
+            body: block.body.clone(),
+        },
+        Duration::from_secs(1),
+    );
+    assert_eq!(
+        asked(&out),
+        vec![(2, block.hash, 1)],
+        "the second sender is asked too: {out:?}"
+    );
+    let again = world.drive(
+        Event::Announce {
+            session: 2,
+            body: block.body.clone(),
+        },
+        Duration::from_secs(1),
+    );
+    assert!(asked(&again).is_empty(), "a sender is asked once");
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 2,
+            block: block.hash,
+            bodies: vec![block.bundle.as_bytes().to_vec()],
+        },
+        Duration::from_secs(2),
+    );
+    assert_eq!(offered(&out), vec![block.hash], "the block is offered");
+    assert!(closed(&out).is_empty());
+}
+
+/// The first sender answers with nothing and is closed; the wait is then
+/// the second sender's, whose answer still completes it, and the arrival
+/// offered names the session that is left. Red edit: drop the wait with
+/// the sender that answered nothing — the second answer offers nothing.
+#[test]
+fn a_withholders_empty_answer_leaves_the_wait_to_the_other_sender() {
+    let mut world = World::new();
+    world.open(2);
+    let block = world.block_with_section(700);
+    world.announce(&block);
+    world.drive(
+        Event::Announce {
+            session: 2,
+            body: block.body.clone(),
+        },
+        Duration::from_secs(1),
+    );
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 1,
+            block: block.hash,
+            bodies: Vec::new(),
+        },
+        Duration::from_secs(2),
+    );
+    assert_eq!(closed(&out), vec![(1, &CloseCause::BundleBodiesWithheld)]);
+    assert!(
+        world.sync.awaiting.contains_key(&block.hash),
+        "the block still waits on the second sender"
+    );
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 2,
+            block: block.hash,
+            bodies: vec![block.bundle.as_bytes().to_vec()],
+        },
+        Duration::from_secs(3),
+    );
+    let sessions: Vec<u8> = out
+        .iter()
+        .flat_map(|command| match command {
+            Command::Offer { arrivals } => arrivals.iter().map(|arrival| arrival.session).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(
+        sessions,
+        vec![2],
+        "offered as the remaining sender's: {out:?}"
+    );
 }
