@@ -65,7 +65,9 @@
 # target now requires the feature (Cargo.toml), so a run without it is
 # refused by cargo instead of failing inside the programs. trybuild passes
 # the enabled features on to the programs' dependency on the crate (it
-# reads them from the crate's fingerprint).
+# reads them from the crate's fingerprint). Nothing is inferred: a harness
+# whose target requires a feature not named in features_for fails here by
+# cargo's refusal, and the entry is added where that harness is decided.
 set -euo pipefail
 . "$(dirname "$0")/ignored_set_mode.sh"
 ignored_set_mode "$@"
