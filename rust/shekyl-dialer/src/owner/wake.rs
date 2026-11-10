@@ -252,6 +252,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
             lists,
             attempts,
             pending,
+            tor_link,
             ..
         } = &mut *shared;
         let kept = attempts[index].kept_count();
@@ -275,6 +276,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
                     .any(|verdict| verdict.outcome.address() == address)
         };
         let seats = settled.census(&mut eligible);
+        tor_link.census(connector, seats.white.saturating_add(seats.gray));
         let census = Census {
             kept,
             in_flight,

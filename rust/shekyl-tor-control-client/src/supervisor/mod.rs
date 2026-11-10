@@ -33,5 +33,5 @@ pub use events::{
 pub use posture::{
     fixes, held_at_start_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace,
     Carriage, Cause, Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx,
-    Sessions, Shown, Space, Status, Syncing, TorSetting,
+    Sessions, Shown, Space, Status, Syncing, TorQuiet, TorSetting,
 };

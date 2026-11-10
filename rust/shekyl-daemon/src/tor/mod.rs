@@ -312,6 +312,7 @@ fn dial_tally(tally: TorLinkTally) -> DialTally {
         unopened: tally.unopened,
         last_sign_of_life: tally.last_sign_of_life.map(|at| at.tick().get()),
         failed_attempt_began: tally.failed_attempt_began.map(|at| at.tick().get()),
+        known: tally.known,
     }
 }
 

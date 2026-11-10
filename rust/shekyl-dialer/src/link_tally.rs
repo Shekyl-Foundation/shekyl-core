@@ -43,6 +43,12 @@ pub struct TorLinkTally {
     /// says it did not test the link since. `None` until the first. An
     /// opened stream does not clear it.
     pub failed_attempt_began: Option<Stamp>,
+    /// The Tor addresses the dialer holds, white and gray seats with the
+    /// cooling ones, at its latest census of the Tor connector. `None`
+    /// until the first. The posture line says "no peers known yet" from a
+    /// zero here, and "peers are known; none has answered" otherwise (Rick,
+    /// 2026-11-10).
+    pub known: Option<u32>,
 }
 
 /// Where the tally goes. Called under the dialer's lock: it must not block.
@@ -107,6 +113,17 @@ impl LinkFold {
         }
         let mut next = self.tally;
         next.last_sign_of_life = Some(at);
+        self.publish(next);
+    }
+
+    /// A census of `connector`'s seats: the tally's known addresses when it
+    /// is the Tor link.
+    pub(crate) fn census(&mut self, connector: ConnectorId, known: usize) {
+        if connector != ConnectorId::Tor {
+            return;
+        }
+        let mut next = self.tally;
+        next.known = Some(u32::try_from(known).unwrap_or(u32::MAX));
         self.publish(next);
     }
 
@@ -176,6 +193,7 @@ mod tests {
                 unopened: 8,
                 last_sign_of_life: None,
                 failed_attempt_began: Some(at(0)),
+                known: None,
             }
         );
         fold.observe(
@@ -217,6 +235,27 @@ mod tests {
         );
         assert_eq!(fold.tally().opened, 1, "the close is not a new stream");
         assert_eq!(fold.tally().unopened, 1, "failed dials since the open stay");
+    }
+
+    /// A census of the Tor connector sets the known count, and only a
+    /// change is published; another connector's census leaves it.
+    #[test]
+    fn a_tor_census_sets_the_known_count() {
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let mut fold = LinkFold::new();
+        let sink = Arc::clone(&published);
+        fold.set_sink(Arc::new(move |tally| {
+            sink.lock().expect("sink").push(tally.known)
+        }));
+        fold.census(ConnectorId::Tor, 0);
+        fold.census(ConnectorId::Tor, 0);
+        fold.census(ConnectorId::Clearnet, 5);
+        fold.census(ConnectorId::Tor, 6);
+        assert_eq!(
+            *published.lock().expect("sink"),
+            vec![None, Some(0), Some(6)],
+            "the first tally at the sink, then each change"
+        );
     }
 
     /// Another connector's dials say nothing about Tor.

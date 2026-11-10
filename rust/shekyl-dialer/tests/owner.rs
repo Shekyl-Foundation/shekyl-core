@@ -591,6 +591,30 @@ fn onion() -> NetworkAddress {
     }
 }
 
+/// **Each wake's census publishes how many Tor addresses the dialer
+/// holds** (Rick, 2026-11-10): the posture line says "no peers known yet"
+/// from a zero, and "peers are known" otherwise. `None` until the first
+/// census. Publishing nothing from the census fails this; the fold's own
+/// test holds another connector's census off the count.
+#[test]
+fn a_wake_publishes_how_many_tor_addresses_the_dialer_holds() {
+    let rig = Rig::new();
+    let mut rng = SplitMix64::new(3);
+    assert_eq!(rig.dialer.tor_link_tally().known, None, "no census yet");
+    rig.dialer.wake(TOR, &mut rng);
+    assert_eq!(rig.dialer.tor_link_tally().known, Some(0), "nothing held");
+    admit(&rig, &onion(), 5);
+    // The census runs before the draw; the wake then dials the onion and
+    // runs that dial to its end, so the test answers it as `dial_with` does.
+    let dialer = std::sync::Arc::clone(&rig.dialer);
+    let waker = thread::spawn(move || dialer.wake(TOR, &mut SplitMix64::new(6)));
+    let mut wire = rig.dialed();
+    wire.read_blocking();
+    wire.inject_blocking(reply(NETWORK, vec![]));
+    assert!(waker.join().expect("the wake"), "the onion was dialed");
+    assert_eq!(rig.dialer.tor_link_tally().known, Some(1), "one onion held");
+}
+
 /// The payload owner declines a delivery on a session whose dial already
 /// counted as opened. The close must not count as another open. The fold
 /// test holds the unopened count across that outcome; this one holds the
@@ -614,6 +638,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             last_sign_of_life: opened.last_sign_of_life,
             failed_attempt_began: None,
+            known: opened.known,
         }
     );
 
@@ -628,6 +653,7 @@ fn a_refused_payload_on_a_kept_tor_session_is_not_another_open() {
             unopened: 0,
             last_sign_of_life: opened.last_sign_of_life,
             failed_attempt_began: None,
+            known: opened.known,
         },
         "the close is not a new stream"
     );

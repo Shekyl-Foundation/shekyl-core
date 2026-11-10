@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use super::super::posture::Cause;
+use super::super::posture::{Cause, TorQuiet};
 use super::{Action, Core, Phase, Policy};
 
 /// The dialer's tally of this node's Tor dials. The supervisor never sees
@@ -35,6 +35,9 @@ pub struct DialTally {
     /// that same clock (`attempt_began`, `DIALER_OUTAGE_EVIDENCE.md` §6.1).
     /// `None` until the first.
     pub failed_attempt_began: Option<u64>,
+    /// The Tor addresses the dialer holds at its latest census, white and
+    /// gray with the cooling ones. `None` until the first census.
+    pub known: Option<u32>,
 }
 
 /// The supervisor's reading of the tally.
@@ -43,8 +46,8 @@ pub(super) struct Dials {
     last: DialTally,
     /// When this Tor reached Running, or the node woke from a sleep.
     running_at: u64,
-    /// The quiet span at the last evaluation, when the line stands.
-    line: Option<Duration>,
+    /// The line at the last evaluation, when it stands.
+    line: Option<TorQuiet>,
 }
 
 impl Dials {
@@ -92,14 +95,26 @@ impl Dials {
             .last
             .failed_attempt_began
             .is_some_and(|began| began >= since);
-        let stands = failed && quiet >= policy.quiet_after;
-        let began = stands && self.line.is_none();
-        self.line = stands.then_some(quiet);
+        // What the dialer knows splits the line (Rick, 2026-11-10): with no
+        // address held there is nothing to dial, which is not a peer that
+        // did not answer.
+        let line = if quiet < policy.quiet_after {
+            None
+        } else if self.last.known == Some(0) {
+            Some(TorQuiet::NoPeersKnown)
+        } else if failed {
+            Some(TorQuiet::Unanswered(quiet))
+        } else {
+            None
+        };
+        let kind = |line: &Option<TorQuiet>| line.as_ref().map(std::mem::discriminant);
+        let began = line.is_some() && kind(&line) != kind(&self.line);
+        self.line = line;
         began
     }
 
-    /// How long nothing has come through Tor, while the line stands.
-    pub(super) fn line(&self) -> Option<Duration> {
+    /// The line, while it stands.
+    pub(super) fn line(&self) -> Option<TorQuiet> {
         self.line
     }
 }

@@ -472,6 +472,18 @@ impl ProgressWindow {
     }
 }
 
+/// What the quiet line says, by what the dialer knows (`TOR_SUPERVISOR.md`
+/// §5; Rick, 2026-11-10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TorQuiet {
+    /// The dialer holds no Tor address: no peer is known yet, so there is
+    /// nothing to dial.
+    NoPeersKnown,
+    /// Peers are known, and none has answered through Tor for this long: a
+    /// Tor dial launched in the span failed.
+    Unanswered(std::time::Duration),
+}
+
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
@@ -505,11 +517,11 @@ pub struct Status {
     /// How the bootstrap is going, beside [`Self::cause`], never instead of
     /// it. Only while bootstrapping, once the first window has passed.
     pub pace: Option<BootstrapPace>,
-    /// How long nothing has come through Tor, by the dialer judge's last
-    /// sign of life, while Tor runs, names no cause, and a Tor dial has
-    /// failed since (§4.2). A neutral fact for the posture line, never a
-    /// cause.
-    pub tor_quiet: Option<std::time::Duration>,
+    /// Nothing has come through Tor for `quiet_after` by the dialer judge's
+    /// last sign of life, while Tor runs and names no cause (§4.2): either
+    /// the dialer holds no address, or a Tor dial has failed since. A
+    /// neutral fact for the posture line, never a cause.
+    pub tor_quiet: Option<TorQuiet>,
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.
     pub inbound: Inbound,
@@ -845,16 +857,19 @@ pub fn held_at_start_sentence(clearnet_on: bool) -> String {
 }
 
 /// The quiet fact, said only when the bootstrap line is not. A running Tor
-/// that still shows as bootstrapping keeps the fetching sentence.
+/// that still shows as bootstrapping keeps the fetching sentence. Split by
+/// what the dialer knows (Rick, 2026-11-10); neither names a cause
+/// (`TSR-Q14`).
 fn quiet_sentence(status: &Status) -> Option<String> {
     if speaks_bootstrap(status) {
         return None;
     }
-    status.tor_quiet.map(|quiet| {
-        format!(
-            "Nothing has come through Tor for {}: no connection has opened, and no peer has sent anything.",
-            spoken_duration(quiet)
-        )
+    status.tor_quiet.map(|quiet| match quiet {
+        TorQuiet::NoPeersKnown => "No peers are known yet.".to_owned(),
+        TorQuiet::Unanswered(span) => format!(
+            "Peers are known; none has answered through Tor for {}.",
+            spoken_duration(span)
+        ),
     })
 }
 

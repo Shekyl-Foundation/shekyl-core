@@ -210,6 +210,7 @@ fn the_quiet_stretch_counts_awake_time() {
         unopened,
         last_sign_of_life: None,
         failed_attempt_began: Some(began),
+        known: None,
     };
     core.on(Input::DialEvidence(failed(1, secs(1))), secs(1));
     run(&mut core, secs(15), 100, 1_000);
