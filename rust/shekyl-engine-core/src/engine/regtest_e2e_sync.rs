@@ -54,14 +54,19 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
     let sink_p2p = RegtestDaemon::free_port_excluding(&[source_p2p]);
     let joiner_p2p = RegtestDaemon::free_port_excluding(&[source_p2p, sink_p2p]);
     let address = mine_address_from_seed(&seed, shekyl_address::Network::Regtest);
-    let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Listening {
-        p2p_port: sink_p2p,
-        requests: false,
-    }))
+    let _sink = RegtestDaemon::spawn(
+        RegtestSpawn::new(None)
+            .with_ports_taken([source_p2p, joiner_p2p])
+            .with_peering(Peering::Listening {
+                p2p_port: sink_p2p,
+                requests: false,
+            }),
+    )
     .await;
     let source = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))
             .with_mine_address(address)
+            .with_ports_taken([joiner_p2p])
             .with_peering(Peering::Linked {
                 p2p_port: source_p2p,
                 peer_p2p_port: sink_p2p,
@@ -131,11 +136,12 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
 /// the forwarder that carries the publication to the dialer, a Rust
 /// daemon never dialed at all: readiness stayed `NoTip`.
 ///
-/// Two closed daemons, so each is synced from open. `B` first, listening
-/// and dialing nothing (`Peering::Listening`), then `A`, which dials `B`
-/// at genesis; when the session opens, the opening resolves on its claim
-/// of the same chain (CS-Q2 step 8). `B` dials nothing because a `B` that
-/// redialed `A` first would hold the one session the pair may have, and
+/// Two closed daemons, so each is synced from open. `B` first
+/// (`Peering::Listening`), then `A`, which dials `B` at genesis; when the
+/// session opens, the opening resolves on its claim of the same chain
+/// (CS-Q2 step 8). `B`'s closed peer is an unanswered port on `127.0.0.1`.
+/// Once `A`'s session is up, that host is held, so the session the pair
+/// holds is `A`'s: a `B` that reached `A` first would hold it instead, and
 /// `A` would not dial a host it already holds a session with. `A` mines
 /// `MINED` blocks,
 /// then **restarts on its own data directory**: the new process has no
@@ -146,9 +152,9 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
 /// is what makes it a fresh handshake rather than the old session's row
 /// updated by sync; `incoming` is what makes it `A`'s dial.
 ///
-/// The designed red is the tip forwarder's revert: `A` still mines (`B`
-/// dials it, which is `A`'s handshake), but the restarted `A` never dials
-/// (`NoTip`), and `B` sees no new incoming connection inside the wait.
+/// The designed red is the tip forwarder's revert: `A` never dials
+/// (`NoTip`), so the session never opens and `A` does not mine, and the
+/// restarted `A` still never dials. `B` sees no incoming connection.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons and one restart"]
 async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
@@ -175,12 +181,14 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     let serial = serial_lock().lock_owned().await;
     let port_a = RegtestDaemon::free_port();
     let port_b = RegtestDaemon::free_port_excluding(&[port_a]);
-    let b = RegtestDaemon::spawn(RegtestSpawn::new(Some(serial)).with_peering(
-        Peering::Listening {
-            p2p_port: port_b,
-            requests: true,
-        },
-    ))
+    let b = RegtestDaemon::spawn(
+        RegtestSpawn::new(Some(serial))
+            .with_ports_taken([port_a])
+            .with_peering(Peering::Listening {
+                p2p_port: port_b,
+                requests: true,
+            }),
+    )
     .await;
     let mut a = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
         p2p_port: port_a,
@@ -284,14 +292,19 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
     let sink_p2p = RegtestDaemon::free_port_excluding(&[node_p2p]);
     let alpha_p2p = RegtestDaemon::free_port_excluding(&[node_p2p, sink_p2p]);
     let address = mine_address_from_seed(&[7u8; 32], shekyl_address::Network::Regtest);
-    let _sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Listening {
-        p2p_port: sink_p2p,
-        requests: false,
-    }))
+    let _sink = RegtestDaemon::spawn(
+        RegtestSpawn::new(None)
+            .with_ports_taken([node_p2p, alpha_p2p])
+            .with_peering(Peering::Listening {
+                p2p_port: sink_p2p,
+                requests: false,
+            }),
+    )
     .await;
     let node = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))
             .with_mine_address(address)
+            .with_ports_taken([alpha_p2p])
             .with_peering(Peering::Linked {
                 p2p_port: node_p2p,
                 peer_p2p_port: sink_p2p,
@@ -576,12 +589,16 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     let a_p2p = RegtestDaemon::free_port();
     let b_p2p = RegtestDaemon::free_port_excluding(&[a_p2p]);
     let address = mine_address_from_seed(&[0x6b; 32], shekyl_address::Network::Regtest);
-    let b = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Listening {
-        p2p_port: b_p2p,
-        // Requests off: a timed sync must not be able to fetch the block
-        // the assertion credits to the local-tip announcement.
-        requests: false,
-    }))
+    let b = RegtestDaemon::spawn(
+        RegtestSpawn::new(None)
+            .with_ports_taken([a_p2p])
+            .with_peering(Peering::Listening {
+                p2p_port: b_p2p,
+                // Requests off: a timed sync must not be able to fetch the block
+                // the assertion credits to the local-tip announcement.
+                requests: false,
+            }),
+    )
     .await;
     let a = RegtestDaemon::spawn(
         RegtestSpawn::new(Some(serial))

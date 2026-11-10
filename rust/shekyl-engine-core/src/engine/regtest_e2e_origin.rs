@@ -48,12 +48,13 @@ use super::*;
 /// asserts that) and has nowhere to send it. Its only session is the
 /// origin's, the one the stem arrived on: a stem goes out on an outbound
 /// session other than its source, and a fluff to every peer but its source.
-/// The sink holds no outbound session to the origin because it dials
-/// nothing (`Peering::Listening`): the pair holds one session, the
-/// origin's, since the dialer dials no host it already holds a session
-/// with (Rick, 2026-11-09), and a sink that dialed first would take that
-/// session and leave the origin no stem successor. So the transaction stays
-/// `stem` on the origin until the origin's own embargo expires. A second
+/// The sink's closed peer is an unanswered port on `127.0.0.1`
+/// (`Peering::Listening`). Once the origin's session is up, that host is
+/// held and the sink does not dial it again (Rick, 2026-11-09), so the
+/// pair holds one session, the origin's. A sink that dialed the origin
+/// first would take that session and leave the origin no stem successor.
+/// The transaction stays `stem` on the origin until the origin's own
+/// embargo expires. A second
 /// session between the two would carry the stem straight back, the origin
 /// would take the second arrival as a fluff, and the hold would be over in
 /// seconds. The sink also runs `--dev-sync off`: it requests nothing and
@@ -116,10 +117,14 @@ impl StemSinkPair {
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Listening {
-            p2p_port: sink_p2p,
-            requests: false,
-        }))
+        let sink = RegtestDaemon::spawn(
+            RegtestSpawn::new(None)
+                .with_ports_taken([origin_p2p])
+                .with_peering(Peering::Listening {
+                    p2p_port: sink_p2p,
+                    requests: false,
+                }),
+        )
         .await;
         let origin = RegtestDaemon::spawn(
             RegtestSpawn::new(Some(serial))
