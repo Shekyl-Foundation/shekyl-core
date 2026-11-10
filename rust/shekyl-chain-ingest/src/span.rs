@@ -246,7 +246,7 @@ where
 /// Pin `seeds` in order under one permit of `class`, then record what the
 /// slots hold, under the same pin lock. The permit covers the derive. A
 /// hash does not. `false` when the service stopped before the pin.
-async fn pin_seeds<S>(shared: &Arc<Shared<S>>, seeds: &[BlockHash], class: Class) -> bool
+pub(super) async fn pin_seeds<S>(shared: &Arc<Shared<S>>, seeds: &[BlockHash], class: Class) -> bool
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
@@ -267,7 +267,7 @@ where
         for seed in &pinned {
             worker.substrate().pin_seed(seed);
         }
-        worker.note_pins(&pinned);
+        worker.record_slots();
         true
     })
     .await
@@ -996,7 +996,7 @@ where
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let held = worker.substrate().prepare_seed(&seed);
-            worker.note_prepared(seed);
+            worker.record_slots();
             held
         };
         let held = [(seed, held)];
@@ -1159,7 +1159,7 @@ where
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 let cache = worker.substrate().prepare_seed(&seed);
-                worker.note_prepared(seed);
+                worker.record_slots();
                 cache
             };
             drop(permit);

@@ -659,15 +659,10 @@ where
         }
     }
 
-    /// Record the slots after a pin of `pinned`. The caller holds `pin_lock`.
-    pub(crate) fn note_pins(&self, pinned: &[BlockHash]) {
-        window::note_pins(self, pinned);
-    }
-
-    /// Record a branch seed prepared into the transient slot. The caller
-    /// holds `pin_lock`.
-    pub(crate) fn note_prepared(&self, seed: BlockHash) {
-        window::note_prepared(self, seed);
+    /// Publish what the substrate's slots hold. The caller holds `pin_lock`
+    /// across the change to the slots and this call.
+    pub(crate) fn record_slots(&self) {
+        window::record_slots(self);
     }
 
     /// The gate every form under a branch's own seed takes first.

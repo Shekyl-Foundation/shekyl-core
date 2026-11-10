@@ -159,6 +159,11 @@ impl Substrate for Gated {
         }
     }
 
+    /// The two slots, as the cache store's `slots` reads them.
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        *self.slots.lock().expect("slots")
+    }
+
     /// The cache store's derive: a seed no slot holds is built into the
     /// transient slot; the canonical slot does not move.
     fn prepare_seed(&self, seed: &BlockHash) {
@@ -287,8 +292,8 @@ pub(crate) fn service_under(
 }
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
-/// After each reply the seeds the service publishes are the seeds the
-/// substrate's slots hold ([`the_record_is_the_slots`]).
+/// Once a span's replies are all in, the slots hold nothing outside the
+/// window ([`the_slots_hold_only_the_window`]).
 pub(crate) async fn offer_all(
     service: &Service<Gated>,
     session: u64,
@@ -310,30 +315,52 @@ pub(crate) async fn offer_all(
         let tickets = door.offer_span(span).expect("room");
         for ticket in tickets {
             replies.push(ticket.reply().await.reply);
-            the_record_is_the_slots(service);
         }
+        the_slots_hold_only_the_window(service).await;
     }
     replies
 }
 
-/// The pair the service publishes as "the seeds the slots hold" names
-/// exactly what the substrate's two slots hold. The door hands that pair
-/// to arrivals as the seeds they may hash under, and the window's install
-/// decides from it whether anything is left to release, so a record that
-/// drifts from the slots keeps a released seed's cache resident (A2).
-/// Read under `pin_lock`, which every pin, preparation and publish holds,
-/// so no change is midway.
-pub(crate) fn the_record_is_the_slots(service: &Service<Gated>) {
-    let _pinning = service.shared.pin_lock.lock().expect("pin lock");
-    let named = service
-        .shared
-        .published_seeds()
-        .map_or((None, None), |pair| (Some(pair.canonical), pair.transient));
-    let gate = &service.shared.substrate;
+/// A2's property: once a span's replies are in and the tip follower has
+/// installed the window at the tip they left, the slots hold nothing
+/// outside that window. The canonical slot holds the window's canonical
+/// seed, and the transient slot the window's transient seed or nothing. A
+/// seed the window stopped naming and the slots still hold is a missed
+/// release: the previous epoch's 256 MiB cache, resident for most of the
+/// next epoch on a live node (alpha.11 bug hunt). Read under `pin_lock`, so
+/// no pin, preparation or install is midway. Skipped once the service is
+/// stopping: no install follows then.
+pub(crate) async fn the_slots_hold_only_the_window(service: &Service<Gated>) {
+    if service.shared.stopping() {
+        return;
+    }
+    let seq = service
+        .watch_tip()
+        .await
+        .expect("the tip watch")
+        .borrow()
+        .seq;
+    let mut followed = service.followed();
+    let reached = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        followed.wait_for(|at| *at >= seq),
+    )
+    .await
+    .expect("the follower reaches the replies' tip");
+    if reached.is_err() || service.shared.stopping() {
+        return;
+    }
+    let installed = service.shared.pin_lock.lock().expect("pin lock");
+    let (canonical, transient) = service.shared.substrate.slots();
+    let window = installed.expect("a window is installed before any reply");
     assert_eq!(
-        named,
-        (gate.canonical(), gate.transient()),
-        "the published seeds (canonical, transient) are the seeds the slots hold"
+        canonical,
+        Some(window.canonical),
+        "the canonical slot holds the window's canonical seed"
+    );
+    assert!(
+        transient.is_none() || transient == window.transient,
+        "the transient slot holds {transient:?}, outside the window {window:?}"
     );
 }
 
@@ -454,6 +481,10 @@ impl Substrate for Faulting {
 
     fn release_seed(&self, seed: &BlockHash) {
         self.gate.release_seed(seed);
+    }
+
+    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
+        self.gate.slots()
     }
 
     fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
@@ -2797,7 +2828,7 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
         let _pins = service.shared.pin_lock.lock().expect("the pin lock");
         gate.pin_seed(&BlockHash::NULL);
         gate.pin_seed(&run_seed);
-        service.shared.note_pins(&[BlockHash::NULL, run_seed]);
+        service.shared.record_slots();
     }
     // The tip has not moved, so the window is still the empty chain's.
     super::window::install_blocking(&service.shared).expect("the window installs");
@@ -2807,8 +2838,87 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
         Some(run_seed),
         "the run's seed is still resident beside the window's"
     );
-    the_record_is_the_slots(&service);
+    let pinning = service.shared.pin_lock.lock().expect("the pin lock");
+    assert_eq!(
+        service.shared.published_seeds(),
+        Some(crate::cache_window::SeedPair {
+            canonical: BlockHash::NULL,
+            transient: Some(run_seed),
+        }),
+        "the published pair is what the slots hold, the run's seed included"
+    );
+    drop(pinning);
     service.stop().await.expect("stops");
+}
+
+/// A2, the sequence that leaked on a live node, on the connect path's own
+/// functions and at PR time (the test that mines to the release height is
+/// in the nightly lane, and #1301 merged with this sequence broken).
+///
+/// 1. The window `{b, a}` is installed: past the epoch switch, `b` the new
+///    epoch's seed and `a` the previous one's.
+/// 2. A connect re-pins `b` through the run's pin, which moves no slot.
+/// 3. The window's lower end passes the switch: `{b, none}` is installed.
+///
+/// `a` is released at step 3. Recording the second slot empty at step 2
+/// made the install at step 3 find its pair already recorded and skip.
+///
+/// One block connects first, and the tip follower acts on it, so no
+/// install of the follower's runs between the steps.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
+    use crate::cache_window::SeedPair;
+    let mut y = Scenario::open("service-repin-release-y");
+    let blocks = y.mine(1).await;
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-repin-release",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    // offer_all waits for the follower to act on the tip the block left.
+    offer_all(&service, 1, &blocks).await;
+    let a = BlockHash::from_bytes([0xa1; 32]);
+    let b = BlockHash::from_bytes([0xb2; 32]);
+    super::window::install_pair(
+        &service.shared,
+        SeedPair {
+            canonical: b,
+            transient: Some(a),
+        },
+    );
+    assert_eq!((gate.canonical(), gate.transient()), (Some(b), Some(a)));
+    assert!(
+        super::span::pin_seeds(&service.shared, &[b], shekyl_hash_budget::Class::Chain).await,
+        "the run's pin"
+    );
+    assert_eq!(
+        (gate.canonical(), gate.transient()),
+        (Some(b), Some(a)),
+        "a re-pin of the canonical seed moves no slot"
+    );
+    super::window::install_pair(
+        &service.shared,
+        SeedPair {
+            canonical: b,
+            transient: None,
+        },
+    );
+    assert_eq!(
+        (gate.canonical(), gate.transient()),
+        (Some(b), None),
+        "the seed the window stopped naming is released"
+    );
+    assert_eq!(
+        service.shared.published_seeds(),
+        Some(SeedPair {
+            canonical: b,
+            transient: None,
+        }),
+        "the published pair is the slots"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
 }
 
 /// A2, the connect path: once the window stops naming the previous epoch's
@@ -2825,7 +2935,7 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
 /// reading of 2026-11-09: two caches at tip 2840 on regtest). Ignored: it
 /// mines 2,124 blocks, and the nightly ignored lane runs it; every
 /// connect-path test checks the record against the slots per PR
-/// ([`the_record_is_the_slots`]).
+/// ([`the_slots_hold_only_the_window`]).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
 async fn a_connect_past_the_windows_end_empties_the_second_slot() {
