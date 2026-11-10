@@ -90,11 +90,36 @@ impl Core {
     /// Tor says the link is blocked. While the certificates still name the
     /// clock, the clock is what blocks it: a problem's `warn` would otherwise
     /// overwrite the clock at every problem, as `REASON=CLOCK_SKEW` did (§7).
+    /// So does a clock already named while Tor bootstraps: the macOS run of
+    /// 2026-11-09 named the blocked link at a `NOROUTE` and a `TIMEOUT`
+    /// between Tor's skew reports, and each turn was said again.
     pub(super) fn blocked(&mut self, now: u64) -> Vec<Action> {
         if self.clock_stands(now) {
             return self.clock_named(now);
         }
+        if self.clock_blocks() {
+            return Vec::new();
+        }
         self.external(now, Cause::ExternalBlocked)
+    }
+
+    /// Tor says no directory answers. A named clock is what blocks that too.
+    pub(super) fn unreachable_directories(&mut self, now: u64) -> Vec<Action> {
+        if self.clock_blocks() {
+            return Vec::new();
+        }
+        self.external(now, Cause::DirectoryUnreachable)
+    }
+
+    /// The clock is named while Tor bootstraps, by Tor's skew report or the
+    /// consensus check. A wrong clock stops every handshake, so Tor's other
+    /// problems then are the clock's. The certificates' verdict keeps its own
+    /// window ([`Self::clock_stands`]): past it, a block is named again.
+    /// Running, the outbound link carried traffic with the clock a day
+    /// behind (the VM run of 2026-11-01), so a block then is its own.
+    fn clock_blocks(&self) -> bool {
+        matches!(self.phase, Phase::Bootstrapping { .. })
+            && (matches!(self.cause, Cause::ClockSkew { .. }) || self.clock_is_behind())
     }
 
     fn clock_stands(&self, now: u64) -> bool {

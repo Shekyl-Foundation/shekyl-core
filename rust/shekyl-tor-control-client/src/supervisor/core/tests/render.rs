@@ -32,7 +32,10 @@ fn every_cause() -> Vec<Cause> {
         },
         Cause::ExternalBlocked,
         Cause::DirectoryUnreachable,
-        Cause::ClockSkew { seconds: -259_200 },
+        Cause::ClockSkew {
+            seconds: -259_200,
+            at_least: false,
+        },
         Cause::CertificatesOutOfDate,
         Cause::TooManyFiles { open: 1024 },
         Cause::ReplyLate,

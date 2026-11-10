@@ -37,7 +37,7 @@
 
 use std::time::Duration;
 
-use super::super::posture::{Inbound, InboundCause};
+use super::super::posture::{Cause, Inbound, InboundCause};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
 
@@ -97,7 +97,9 @@ impl Core {
         let behind = valid_after.saturating_sub(wall);
         if behind > self.policy.clock_behind_after.as_secs() {
             let behind = Duration::from_secs(behind);
-            let newly = self.note_clock_behind(now, behind);
+            // Tor's report or the certificates may have named it already.
+            let named = self.clock_named_already();
+            let newly = self.note_clock_behind(now, behind) && !named;
             // A probe already in hand would judge the copy a republish
             // cannot replace. Drop it, including one this same deadline
             // armed before the sample was folded.
@@ -110,8 +112,14 @@ impl Core {
         if !self.clock_is_behind() {
             return Vec::new();
         }
-        // Cleared. Refused uploads still stand if they did; otherwise the
-        // facet is unknown again until a probe judges it.
+        // Cleared. Tor's own report that the clock is behind was made of the
+        // clock before it was set right, and is cleared with it, so the
+        // recovery is one line. A report that it is ahead stands: this check
+        // cannot see ahead. Refused uploads still stand if they did;
+        // otherwise the facet is unknown again until a probe judges it.
+        if matches!(self.cause, Cause::ClockSkew { seconds, .. } if seconds < 0) {
+            self.set_cause(Cause::None);
+        }
         if self.uploads_refused {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
@@ -122,6 +130,30 @@ impl Core {
             };
         }
         self.say(now, Cadence::Due)
+    }
+
+    /// Tor reports the clock off. Said when it newly names the clock; while
+    /// the clock is already named (by an earlier report, the certificates,
+    /// or the consensus check) the figure is kept and nothing is said: a
+    /// clock three days behind for four minutes is said once (Rick,
+    /// 2026-11-10). Tor reports it at every handshake and directory fetch,
+    /// seconds apart (the macOS run of 2026-11-09).
+    pub(super) fn clock_skew(&mut self, now: u64, seconds: i64, at_least: bool) -> Vec<Action> {
+        let named = self.clock_named_already();
+        self.set_cause(Cause::ClockSkew { seconds, at_least });
+        if named {
+            return Vec::new();
+        }
+        self.say(now, Cadence::Due)
+    }
+
+    /// The clock is named: by Tor's report, the certificates, or the
+    /// consensus check beside no other cause.
+    fn clock_named_already(&self) -> bool {
+        matches!(
+            self.cause,
+            Cause::ClockSkew { .. } | Cause::CertificatesOutOfDate
+        ) || (self.cause == Cause::None && self.clock_is_behind())
     }
 
     /// A round in which more than half of the directories refused the

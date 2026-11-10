@@ -122,7 +122,13 @@ fn evidence_pairs_only_inside_the_window() {
 #[test]
 fn a_measured_skew_is_not_replaced() {
     let mut core = bootstrapping();
-    core.on(Input::ClockSkew { seconds: 259_200 }, secs(1));
+    core.on(
+        Input::ClockSkew {
+            seconds: 259_200,
+            at_least: false,
+        },
+        secs(1),
+    );
     for _ in 0..3 {
         core.on(Input::CertificateOutOfDate, secs(1));
     }
@@ -130,5 +136,11 @@ fn a_measured_skew_is_not_replaced() {
         closed(&mut core, n, secs(2));
     }
     core.on(Input::ExternalBlocked, secs(3));
-    assert_eq!(core.status().cause, Cause::ClockSkew { seconds: 259_200 });
+    assert_eq!(
+        core.status().cause,
+        Cause::ClockSkew {
+            seconds: 259_200,
+            at_least: false,
+        }
+    );
 }

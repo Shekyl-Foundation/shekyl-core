@@ -116,10 +116,14 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
         TorEvent::NetworkLiveness(Liveness::Up) => Some(Input::ExternalCleared),
         TorEvent::General { status, .. } => match status {
             GeneralStatus::DirAllUnreachable => Some(Input::DirectoryUnreachable),
-            GeneralStatus::ClockSkew { skew, .. } => skew.as_ref().map(|skew| Input::ClockSkew {
-                seconds: match skew {
-                    crate::control::ClockSkew::Measured(seconds)
-                    | crate::control::ClockSkew::AtLeast(seconds) => *seconds,
+            GeneralStatus::ClockSkew { skew, .. } => skew.as_ref().map(|skew| match *skew {
+                crate::control::ClockSkew::Measured(seconds) => Input::ClockSkew {
+                    seconds,
+                    at_least: false,
+                },
+                crate::control::ClockSkew::AtLeast(seconds) => Input::ClockSkew {
+                    seconds,
+                    at_least: true,
                 },
             }),
             GeneralStatus::ClockJumped { .. } => Some(Input::ClockJumped),
@@ -368,6 +372,43 @@ mod tests {
         assert_eq!(
             round_inputs(&[RoundMark::FirstUploaded], &mut draw),
             [Input::FirstUploaded { draw: 4 }]
+        );
+    }
+
+    /// **Tor's measure and Tor's lower bound stay apart** (Rick,
+    /// 2026-11-10): `SKEW=` is a measure and `MIN_SKEW=` a lower bound, and
+    /// the clock line says "at least" only for the second. Folding both into
+    /// one figure fails this.
+    #[test]
+    fn a_clock_skew_keeps_whether_tor_measured_it() {
+        use crate::control::{parse_event, ReplyFramer};
+        let parse = |line: &str| {
+            let mut framer = ReplyFramer::default();
+            framer.push_bytes(format!("650 {line}\r\n").as_bytes());
+            let reply = framer.next_reply().expect("frames").expect("a reply");
+            parse_event(&reply).expect("an event")
+        };
+        let measured = parse("STATUS_GENERAL WARN CLOCK_SKEW SKEW=-259201 SOURCE=OR:192.0.2.1:443");
+        assert!(
+            matches!(
+                input_of(&measured),
+                Some(Input::ClockSkew {
+                    seconds: -259_201,
+                    at_least: false
+                })
+            ),
+            "{measured:?}"
+        );
+        let bound = parse("STATUS_GENERAL WARN CLOCK_SKEW MIN_SKEW=7200 SOURCE=CONSENSUS");
+        assert!(
+            matches!(
+                input_of(&bound),
+                Some(Input::ClockSkew {
+                    seconds: 7_200,
+                    at_least: true
+                })
+            ),
+            "{bound:?}"
         );
     }
 

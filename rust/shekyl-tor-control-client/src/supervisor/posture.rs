@@ -193,10 +193,13 @@ pub enum Cause {
     ExternalBlocked,
     /// No directory Tor knows answered.
     DirectoryUnreachable,
-    /// A source reported the clock this far off, in seconds.
+    /// Tor reported this computer's clock this far off, in seconds:
+    /// negative behind the network, positive ahead.
     ClockSkew {
         /// The reported difference, in seconds.
         seconds: i64,
+        /// Tor gave a lower bound (`MIN_SKEW`), not a measure (`SKEW`).
+        at_least: bool,
     },
     /// Tor logged relays' certificates as expired or not yet valid, from
     /// enough distinct relays within the window that the clock, not a relay,
@@ -703,6 +706,9 @@ pub fn render(status: &Status) -> String {
     } else if let Some(quiet) = quiet_sentence(status) {
         append(&mut text, &quiet);
     }
+    if let Some(clock) = clock_sentence(status) {
+        append(&mut text, &clock);
+    }
     if let Some(inbound) = inbound_sentence(status) {
         append(&mut text, &inbound);
     }
@@ -876,18 +882,53 @@ fn inbound_sentence(status: &Status) -> Option<String> {
             "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
                 .to_owned()
         }
-        InboundCause::ClockBehind { behind } => format!(
-            "This computer's clock is at least {} behind the Tor network's. Others may not be able to reach this node. Check this computer's date and time.",
-            spoken_span(behind)
-        ),
+        // The clock's sentence: [`clock_sentence`].
+        InboundCause::ClockBehind { .. } => return None,
     })
+}
+
+/// The clock, in one sentence, whatever names it (§5, "Clock skew"; Rick,
+/// 2026-11-10). Tor's figure when Tor reported one, behind or ahead; this
+/// node's lower bound from the consensus otherwise, which only sees behind.
+/// "Others may not be able to reach this node" while the consensus check
+/// names it: behind, the directories refuse this node's address. A
+/// certificate verdict carries no figure, so it is said only when the
+/// lower bound is not there.
+fn clock_sentence(status: &Status) -> Option<String> {
+    let ours = status.clock_behind;
+    let unreachable = if ours.is_some() {
+        " Others may not be able to reach this node."
+    } else {
+        ""
+    };
+    let check = "Check this computer's date and time.";
+    let figure = match status.cause {
+        Cause::ClockSkew { seconds, at_least } => Some((seconds, at_least)),
+        Cause::CertificatesOutOfDate if ours.is_none() => {
+            return Some(format!(
+                "Tor reports that this computer's date or time looks wrong, so it cannot connect. {check}"
+            ));
+        }
+        _ => ours.map(|behind| (-i64::try_from(behind.as_secs()).unwrap_or(i64::MAX), true)),
+    }?;
+    let (seconds, at_least) = figure;
+    let span = spoken_span(std::time::Duration::from_secs(seconds.unsigned_abs()));
+    let bound = if at_least { "at least " } else { "" };
+    let direction = if seconds < 0 { "behind" } else { "ahead of" };
+    Some(format!(
+        "This computer's clock is {bound}{span} {direction} the Tor network's.{unreachable} {check}"
+    ))
 }
 
 /// The named cause. [`Cause::None`] is the absence of one: the bootstrap
 /// line and the quiet fact are [`render`]'s other clauses.
 fn named_cause(status: &Status) -> Option<String> {
     match &status.cause {
-        Cause::None => None,
+        // No cause; or the clock, whose one sentence comes from whichever
+        // evidence stands ([`clock_sentence`]). Tor's certificate verdict is
+        // its evidence, not a measurement: the source is relays, so that
+        // sentence says what Tor reports rather than that the clock is wrong.
+        Cause::None | Cause::ClockSkew { .. } | Cause::CertificatesOutOfDate => None,
         Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
             install_sentence(&status.cause).map(str::to_owned)
         }
@@ -907,15 +948,6 @@ fn named_cause(status: &Status) -> Option<String> {
         // 2026-10-30), and the date takes the operator ten seconds to check.
         Cause::ExternalBlocked | Cause::DirectoryUnreachable => Some(
             "This machine cannot reach the Tor network. Check this computer's date and time, then the firewall or the network."
-                .to_owned(),
-        ),
-        Cause::ClockSkew { seconds } => Some(format!(
-            "The clock is off by {seconds} seconds. Check time sync."
-        )),
-        // Tor's evidence, not a measurement: the source is relays, so the
-        // sentence says what Tor reports rather than that the clock is wrong.
-        Cause::CertificatesOutOfDate => Some(
-            "Tor reports that this computer's date or time looks wrong, so it cannot connect. Check this computer's date and time."
                 .to_owned(),
         ),
         Cause::TooManyFiles { open } => Some(format!(

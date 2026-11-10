@@ -387,8 +387,10 @@ pub enum Input {
     DirectoryUnreachable,
     /// A reported clock difference.
     ClockSkew {
-        /// Seconds.
+        /// Seconds: negative behind the network, positive ahead.
         seconds: i64,
+        /// Tor gave a lower bound (`MIN_SKEW`), not a measure (`SKEW`).
+        at_least: bool,
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
@@ -806,8 +808,8 @@ impl Core {
             Input::RepublishWithheld => self.republish_withheld(),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
-            Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
-            Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
+            Input::DirectoryUnreachable => self.unreachable_directories(now),
+            Input::ClockSkew { seconds, at_least } => self.clock_skew(now, seconds, at_least),
             Input::ClockJumped => self.clock_jumped(now),
             Input::Resumed { late_by } => self.resumed(now, late_by),
             Input::CertificateOutOfDate => self.line_logged(now),
@@ -912,8 +914,9 @@ impl Core {
                     self.progress.speak(now);
                     // A named cause is said by its own events, at most once
                     // per cap. The progress line is a different action, so
-                    // it cannot say the cause again.
-                    if self.cause == Cause::None {
+                    // it cannot say the cause again; nor the clock, which
+                    // the consensus check names beside no cause.
+                    if self.cause == Cause::None && !self.clock_is_behind() {
                         actions.push(Action::SayProgress);
                     }
                     self.arm_alive(now);

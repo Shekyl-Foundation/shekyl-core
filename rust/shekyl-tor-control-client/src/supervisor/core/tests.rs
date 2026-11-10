@@ -1112,6 +1112,7 @@ fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
 mod clock;
 mod clock_evidence;
 mod clock_jump;
+mod clock_line;
 mod directories;
 mod overdue;
 mod pace;
