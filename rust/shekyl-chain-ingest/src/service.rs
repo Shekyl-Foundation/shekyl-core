@@ -556,9 +556,9 @@ pub(crate) struct Shared<S: Substrate> {
     /// (the install's settled check takes and drops it holding none).
     /// Holds the seed window last installed: the only seeds a later
     /// install may release (A2). A run's pins and a branch preparation
-    /// take the lock and leave it as it is. Every change to the slots and
-    /// the publish that records it are made under it, so `seeds` read
-    /// under it is what the slots hold.
+    /// take the lock and leave the window as it is. The lock publishes
+    /// the slots when the critical section ends, so `seeds` read under
+    /// it is what the slots hold.
     pin_lock: Arc<Mutex<Option<crate::cache_window::SeedPair>>>,
     /// Serialises every form under a branch's own seed (B2): an alternative
     /// arrival's, and a switch that promotes past its branch's seed point.
@@ -566,8 +566,8 @@ pub(crate) struct Shared<S: Substrate> {
     /// With one such form at a time, the live caches are the canonical, the
     /// transient, and at most one evicted cache a form still holds.
     branch_gate: tokio::sync::Mutex<()>,
-    /// The seeds the two slots hold. `None` until the first install.
-    seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
+    /// The seeds the two slots hold. `None` until a seed is canonical.
+    seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SlotPair>>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
     /// The live phases' measurement sink ([`Follow::metrics`]).
@@ -624,12 +624,12 @@ where
     }
 
     /// The seeds the slots hold now, including while the service is stopping.
-    pub(crate) fn published_seeds(&self) -> Option<crate::cache_window::SeedPair> {
+    pub(crate) fn published_seeds(&self) -> Option<crate::cache_window::SlotPair> {
         *self.seeds.borrow()
     }
 
     /// The seeds an arrival may hash under. `None` while the service is stopping.
-    pub(crate) fn seed_now(&self) -> Option<crate::cache_window::SeedPair> {
+    pub(crate) fn seed_now(&self) -> Option<crate::cache_window::SlotPair> {
         if self.stopping() {
             None
         } else {
@@ -638,7 +638,7 @@ where
     }
 
     /// Wait until the slots hold a pair, or the service stops.
-    pub(crate) async fn seed_pair(&self) -> Option<crate::cache_window::SeedPair> {
+    pub(crate) async fn seed_pair(&self) -> Option<crate::cache_window::SlotPair> {
         let mut published = self.seeds.subscribe();
         let mut stopping = self.stop_signal();
         loop {
@@ -657,12 +657,6 @@ where
                 _ = stopping.wait_for(|stop| *stop) => return None,
             }
         }
-    }
-
-    /// Publish what the substrate's slots hold. The caller holds `pin_lock`
-    /// across the change to the slots and this call.
-    pub(crate) fn record_slots(&self) {
-        window::record_slots(self);
     }
 
     /// The gate every form under a branch's own seed takes first.
@@ -871,17 +865,18 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
-    seeds: tokio::sync::watch::Receiver<Option<SeedPair>>,
+    seeds: tokio::sync::watch::Receiver<Option<SlotPair>>,
 }
 
 impl Door {
-    /// The seeds the two cache slots hold, as last recorded under the pin
-    /// lock: the pair the lookup-only longhash answers from. The window
-    /// installed, plus any seed a run or a branch has pinned there since.
-    /// `None` until the first pair is pinned. A caller whose proof found a seed absent waits on this for
-    /// the slots to change, and reads it to see whether they already have.
+    /// The seeds the two cache slots hold, published before the pin lock
+    /// drops: the pair the lookup-only longhash answers from. The window
+    /// last installed, plus any seed a run or a branch has prepared there
+    /// since. `None` until a seed is canonical. A caller whose proof found
+    /// a seed absent waits on this for the slots to change, and reads it
+    /// to see whether they already have.
     #[must_use]
-    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SeedPair>> {
+    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SlotPair>> {
         self.seeds.clone()
     }
 
@@ -1535,7 +1530,7 @@ mod window;
 
 pub use window::Reservation;
 
-pub use crate::cache_window::SeedPair;
+pub use crate::cache_window::{SeedPair, SlotPair};
 pub(crate) use window::{
     divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
     PoolDivision,

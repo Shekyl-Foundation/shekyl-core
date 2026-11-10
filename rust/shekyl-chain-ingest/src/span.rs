@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use kameo::error::SendError;
 use shekyl_chain_rules::{
@@ -243,9 +243,9 @@ where
     }
 }
 
-/// Pin `seeds` in order under one permit of `class`, then record what the
-/// slots hold, under the same pin lock. The permit covers the derive. A
-/// hash does not. `false` when the service stopped before the pin.
+/// Pin `seeds` in order under one permit of `class`. The pin lock publishes
+/// the slots before it drops. The permit covers the derive. A hash does not.
+/// `false` when the service stopped before the pin.
 pub(super) async fn pin_seeds<S>(shared: &Arc<Shared<S>>, seeds: &[BlockHash], class: Class) -> bool
 where
     S: Substrate + Send + Sync + 'static,
@@ -260,14 +260,13 @@ where
         let Some(_permit) = worker.budget.acquire_unless(class, &worker.stop_flag) else {
             return false;
         };
-        let _gate = worker
-            .pin_lock
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        for seed in &pinned {
-            worker.substrate().pin_seed(seed);
-        }
-        worker.record_slots();
+        // Cloned so the closure does not borrow the service the lock borrows.
+        let substrate = Arc::clone(worker.substrate());
+        worker.with_pin_lock(|_| {
+            for seed in &pinned {
+                substrate.pin_seed(seed);
+            }
+        });
         true
     })
     .await
@@ -990,15 +989,8 @@ where
     let worker = Arc::clone(shared);
     let formed = tokio::task::spawn_blocking(move || {
         let seed = claims.seed;
-        let held = {
-            let _pin = worker
-                .pin_lock
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let held = worker.substrate().prepare_seed(&seed);
-            worker.record_slots();
-            held
-        };
+        let substrate = Arc::clone(worker.substrate());
+        let held = worker.with_pin_lock(|_| substrate.prepare_seed(&seed));
         let held = [(seed, held)];
         let branch = Branch::new(&**worker.substrate(), &held);
         let verdict = form(
@@ -1153,15 +1145,8 @@ where
         let permit = acquire(shared, Class::Chain).await?;
         let worker = Arc::clone(shared);
         let cache = tokio::task::spawn_blocking(move || {
-            let cache = {
-                let _pin = worker
-                    .pin_lock
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                let cache = worker.substrate().prepare_seed(&seed);
-                worker.record_slots();
-                cache
-            };
+            let substrate = Arc::clone(worker.substrate());
+            let cache = worker.with_pin_lock(|_| substrate.prepare_seed(&seed));
             drop(permit);
             cache
         })

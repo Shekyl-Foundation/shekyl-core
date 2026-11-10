@@ -18,14 +18,14 @@ use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, Substrate, Vi
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_hash_budget::Class;
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds, MAX_ATTESTATION_WITNESS_BYTES};
+use shekyl_types::{BlockHeight, TxHash, UnixSeconds, MAX_ATTESTATION_WITNESS_BYTES};
 use shekyl_wire::Transaction;
 
 use super::{
     Accepted, Arrival, ArrivalLengths, Door, Refusal, ReplySlot, ServiceFault, SessionId, Shared,
     Ticket,
 };
-use crate::cache_window::{self, SeedPair};
+use crate::cache_window::{self, SeedPair, SlotPair};
 use crate::schedule::ChainRules;
 use tokio::sync::oneshot;
 
@@ -64,14 +64,7 @@ where
     // the permit): slots that hold the window are not enough, since the
     // window last installed may name a seed this one does not, still to be
     // released (A2).
-    let settled = {
-        let installed = shared
-            .pin_lock
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *installed == Some(pair) && slot_pair(shared.substrate.slots()) == Some(pair)
-    };
-    if settled {
+    if shared.window_is_settled(pair) {
         return;
     }
     let Some(_permit) = shared
@@ -80,33 +73,32 @@ where
     else {
         return;
     };
-    let mut installed = shared
-        .pin_lock
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    // Older endpoint first, so the second pin leaves it in the
-    // transient slot and the connecting height's seed canonical.
-    if let Some(transient) = pair.transient {
-        shared.substrate.pin_seed(&transient);
-    }
-    shared.substrate.pin_seed(&pair.canonical);
-    // A seed the previous window named and this one does not is
-    // released: nothing else would empty its slot before the next
-    // epoch's pin (A2). Only those. A run in flight pins the seeds of
-    // blocks it has not committed yet, and this window, read at the
-    // committed tip, cannot name them; a release by "whatever the
-    // second slot holds" evicted them under the run's forms.
-    if let Some(previous) = installed.replace(pair) {
-        for seed in [Some(previous.canonical), previous.transient]
-            .into_iter()
-            .flatten()
-        {
-            if !pair.holds(&seed) {
-                shared.substrate.release_seed(&seed);
+    // The substrate is cloned so the closure does not borrow the service
+    // the pin lock borrows. Older endpoint first, so the second pin leaves
+    // it in the transient slot and the connecting height's seed canonical.
+    let substrate = Arc::clone(&shared.substrate);
+    shared.with_pin_lock(|installed| {
+        if let Some(transient) = pair.transient {
+            substrate.pin_seed(&transient);
+        }
+        substrate.pin_seed(&pair.canonical);
+        // A seed the previous window named and this one does not is
+        // released: nothing else would empty its slot before the next
+        // epoch's pin (A2). Only those. A run in flight pins the seeds of
+        // blocks it has not committed yet, and this window, read at the
+        // committed tip, cannot name them; a release by "whatever the
+        // second slot holds" evicted them under the run's forms.
+        if let Some(previous) = installed.replace(pair) {
+            for seed in [Some(previous.canonical), previous.transient]
+                .into_iter()
+                .flatten()
+            {
+                if !pair.holds(&seed) {
+                    substrate.release_seed(&seed);
+                }
             }
         }
-    }
-    record_slots(shared);
+    });
 }
 
 /// Why installing the seed window stops its caller.
@@ -308,30 +300,71 @@ fn body_of(bodies: &[Transaction], txid: &TxHash) -> Option<Transaction> {
         .cloned()
 }
 
-/// Publish what the substrate's slots hold now, read from the slots. The
-/// caller holds `pin_lock` across the change to the slots and this call, so
-/// the published pair is never behind them.
-///
-/// A record kept by replaying the pins drifted from the slots: re-pinning
-/// the canonical seed moves nothing, but the record said the second slot
-/// was empty, and the window install, reading the record, never released
-/// the previous epoch's seed (A2, alpha.11 bug hunt).
-pub(super) fn record_slots<S>(shared: &Shared<S>)
-where
-    S: Substrate,
-    S::Fault: core::fmt::Debug,
-{
-    shared
-        .seeds
-        .send_replace(slot_pair(shared.substrate.slots()));
+/// The window last installed, and the slots, read under the pin lock.
+pub(super) struct PinView {
+    /// The window last installed. `None` until the first install.
+    pub(super) window: Option<SeedPair>,
+    /// The seeds the slots hold. `None` until a seed is canonical.
+    pub(super) slots: Option<SlotPair>,
+    /// The pair last published, read under the same lock as `slots`.
+    /// The tests compare the two. Production reads `slots` for the
+    /// settled check, and the watch for everyone else.
+    #[cfg(test)]
+    pub(super) published: Option<SlotPair>,
 }
 
-/// The slots as a pair: `None` until a seed is canonical.
-fn slot_pair((canonical, transient): (Option<BlockHash>, Option<BlockHash>)) -> Option<SeedPair> {
-    canonical.map(|canonical| SeedPair {
-        canonical,
-        transient,
-    })
+impl<S: Substrate> Shared<S> {
+    /// Run `body` under the pin lock, then publish the slots before the
+    /// lock drops. A pin, a preparation and the install all enter here, so
+    /// a change to the slots cannot forget the publish. An unchanged pair
+    /// does not wake a waiter.
+    pub(super) fn with_pin_lock<R>(&self, body: impl FnOnce(&mut Option<SeedPair>) -> R) -> R {
+        // The guard, the slot read and the watch are three fields. Naming
+        // them keeps the publish inside the critical section: the slots are
+        // read and sent before the guard drops.
+        let Self {
+            pin_lock,
+            substrate,
+            seeds,
+            ..
+        } = self;
+        let mut installed = pin_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let result = body(&mut installed);
+        let next = SlotPair::from_stored(substrate.slots());
+        seeds.send_if_modified(|current| {
+            if *current == next {
+                return false;
+            }
+            *current = next;
+            true
+        });
+        drop(installed);
+        result
+    }
+
+    /// The window and the slots, read together under the pin lock.
+    pub(super) fn pin_view(&self) -> PinView {
+        let Self {
+            pin_lock,
+            substrate,
+            #[cfg(test)]
+            seeds,
+            ..
+        } = self;
+        let installed = pin_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        PinView {
+            window: *installed,
+            slots: SlotPair::from_stored(substrate.slots()),
+            #[cfg(test)]
+            published: *seeds.borrow(),
+        }
+    }
+
+    /// `pair` is the window last installed and the slots hold exactly it.
+    fn window_is_settled(&self, pair: SeedPair) -> bool {
+        let view = self.pin_view();
+        view.window == Some(pair) && view.slots.is_some_and(|slots| slots.same_seeds(pair))
+    }
 }
 
 impl super::Admission {

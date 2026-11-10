@@ -292,8 +292,8 @@ pub(crate) fn service_under(
 }
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
-/// Once a span's replies are all in, the slots hold nothing outside the
-/// window ([`the_slots_hold_only_the_window`]).
+/// After each reply the published pair is what the slots hold
+/// ([`the_record_is_the_slots`]).
 pub(crate) async fn offer_all(
     service: &Service<Gated>,
     session: u64,
@@ -315,52 +315,27 @@ pub(crate) async fn offer_all(
         let tickets = door.offer_span(span).expect("room");
         for ticket in tickets {
             replies.push(ticket.reply().await.reply);
+            the_record_is_the_slots(service);
         }
-        the_slots_hold_only_the_window(service).await;
     }
     replies
 }
 
-/// A2's property: once a span's replies are in and the tip follower has
-/// installed the window at the tip they left, the slots hold nothing
-/// outside that window. The canonical slot holds the window's canonical
-/// seed, and the transient slot the window's transient seed or nothing. A
-/// seed the window stopped naming and the slots still hold is a missed
-/// release: the previous epoch's 256 MiB cache, resident for most of the
-/// next epoch on a live node (alpha.11 bug hunt). Read under `pin_lock`, so
-/// no pin, preparation or install is midway. Skipped once the service is
-/// stopping: no install follows then.
-pub(crate) async fn the_slots_hold_only_the_window(service: &Service<Gated>) {
+/// The pair the service publishes names the seeds the substrate's slots
+/// hold. The door hands that pair to arrivals, and a template hashes under
+/// it. A branch seed the window does not name stays in the transient slot
+/// after the arrival is answered, and the pair names it too: the slots are
+/// not the window. Read under the pin lock, which every pin, preparation
+/// and publish holds, so no change is midway. Skipped once the service is
+/// stopping.
+pub(crate) fn the_record_is_the_slots(service: &Service<Gated>) {
     if service.shared.stopping() {
         return;
     }
-    let seq = service
-        .watch_tip()
-        .await
-        .expect("the tip watch")
-        .borrow()
-        .seq;
-    let mut followed = service.followed();
-    let reached = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        followed.wait_for(|at| *at >= seq),
-    )
-    .await
-    .expect("the follower reaches the replies' tip");
-    if reached.is_err() || service.shared.stopping() {
-        return;
-    }
-    let installed = service.shared.pin_lock.lock().expect("pin lock");
-    let (canonical, transient) = service.shared.substrate.slots();
-    let window = installed.expect("a window is installed before any reply");
+    let view = service.shared.pin_view();
     assert_eq!(
-        canonical,
-        Some(window.canonical),
-        "the canonical slot holds the window's canonical seed"
-    );
-    assert!(
-        transient.is_none() || transient == window.transient,
-        "the transient slot holds {transient:?}, outside the window {window:?}"
+        view.published, view.slots,
+        "the published pair is what the slots hold"
     );
 }
 
@@ -2785,7 +2760,7 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
     };
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| *pair == Some(window)),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(window))),
     )
     .await
     .expect("the window after genesis is installed within 30 s")
@@ -2824,12 +2799,10 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
     // A run over genesis and the blocks above it: genesis hashes under the
     // null seed, the rest under genesis's id, which the store has not got.
     let run_seed = BlockHash::from_bytes([7; 32]);
-    {
-        let _pins = service.shared.pin_lock.lock().expect("the pin lock");
+    service.shared.with_pin_lock(|_| {
         gate.pin_seed(&BlockHash::NULL);
         gate.pin_seed(&run_seed);
-        service.shared.record_slots();
-    }
+    });
     // The tip has not moved, so the window is still the empty chain's.
     super::window::install_blocking(&service.shared).expect("the window installs");
     assert_eq!(gate.canonical(), Some(BlockHash::NULL));
@@ -2838,16 +2811,15 @@ async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
         Some(run_seed),
         "the run's seed is still resident beside the window's"
     );
-    let pinning = service.shared.pin_lock.lock().expect("the pin lock");
+    let view = service.shared.pin_view();
     assert_eq!(
-        service.shared.published_seeds(),
-        Some(crate::cache_window::SeedPair {
+        view.published,
+        Some(crate::cache_window::SlotPair {
             canonical: BlockHash::NULL,
             transient: Some(run_seed),
         }),
         "the published pair is what the slots hold, the run's seed included"
     );
-    drop(pinning);
     service.stop().await.expect("stops");
 }
 
@@ -2876,8 +2848,23 @@ async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
-    // offer_all waits for the follower to act on the tip the block left.
+    // The follower installs the chain's window on its own task. Wait it
+    // out, so that install does not run between the steps below.
     offer_all(&service, 1, &blocks).await;
+    let seq = service
+        .watch_tip()
+        .await
+        .expect("the tip watch")
+        .borrow()
+        .seq;
+    let mut followed = service.followed();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        followed.wait_for(|at| *at >= seq),
+    )
+    .await
+    .expect("the follower acts on the block")
+    .expect("the tip watch is open");
     let a = BlockHash::from_bytes([0xa1; 32]);
     let b = BlockHash::from_bytes([0xb2; 32]);
     super::window::install_pair(
@@ -2897,6 +2884,15 @@ async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
         (Some(b), Some(a)),
         "a re-pin of the canonical seed moves no slot"
     );
+    let after_pin = service.shared.pin_view();
+    assert_eq!(
+        after_pin.published,
+        Some(crate::cache_window::SlotPair {
+            canonical: b,
+            transient: Some(a),
+        }),
+        "the re-pin leaves the second slot recorded"
+    );
     super::window::install_pair(
         &service.shared,
         SeedPair {
@@ -2910,8 +2906,8 @@ async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
         "the seed the window stopped naming is released"
     );
     assert_eq!(
-        service.shared.published_seeds(),
-        Some(SeedPair {
+        service.shared.pin_view().published,
+        Some(crate::cache_window::SlotPair {
             canonical: b,
             transient: None,
         }),
@@ -2934,8 +2930,8 @@ async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
 /// genesis's cache stayed resident until the next epoch's pin (the live
 /// reading of 2026-11-09: two caches at tip 2840 on regtest). Ignored: it
 /// mines 2,124 blocks, and the nightly ignored lane runs it; every
-/// connect-path test checks the record against the slots per PR
-/// ([`the_slots_hold_only_the_window`]).
+/// connect-path test checks the published pair against the slots
+/// ([`the_record_is_the_slots`]).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
 async fn a_connect_past_the_windows_end_empties_the_second_slot() {
@@ -2972,7 +2968,7 @@ async fn a_connect_past_the_windows_end_empties_the_second_slot() {
     };
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| *pair == Some(both)),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(both))),
     )
     .await
     .expect("the window naming both epochs is installed within 30 s")
@@ -2994,13 +2990,14 @@ async fn a_connect_past_the_windows_end_empties_the_second_slot() {
     };
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| *pair == Some(one)),
+        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(one))),
     )
     .await
     .expect("the window naming one epoch is installed within 30 s")
     .expect("the service is up");
-    // Wait out any install in flight: it takes the pin lock.
-    drop(service.shared.pin_lock.lock().expect("the pin lock"));
+    // Take the pin lock and release it, so an install in flight has
+    // finished before the slots are read. The view is not the lock.
+    let _ = service.shared.pin_view();
     assert_eq!(gate.canonical(), Some(epoch_seed));
     assert_eq!(
         gate.transient(),
