@@ -793,6 +793,62 @@ mod tests {
         );
     }
 
+    /// A transaction straddling `k·W` belongs to the shard it starts in,
+    /// and the next one opens shard `k`, whatever their lengths: the shard
+    /// is read off the running total before a transaction and nothing
+    /// else. A run of uneven lengths is placed one by one; each shard's
+    /// members are consecutive, a straddler closes the shard it started
+    /// in, and a shard overshoots `W` by less than its last member. Red
+    /// edit: place a transaction by the total after it.
+    #[test]
+    fn a_transaction_straddling_k_w_belongs_to_the_shard_it_starts_in() {
+        let w = SHARD_LENGTH.to_raw();
+        // One byte each side of 2·W, a start exactly on it, and one a
+        // byte short of it.
+        for (start, len, shard) in [
+            (2 * w - 1, 2, 1),
+            (2 * w - 1, 1, 1),
+            (2 * w - 100_000, 150_000, 1),
+            (2 * w, 150_000, 2),
+            (w - 1, w, 0),
+        ] {
+            assert_eq!(
+                shard_of(ArchivalLength::from_raw(start)).to_raw(),
+                shard,
+                "a {len}-byte transaction starting at {start}"
+            );
+        }
+        // Uneven lengths, none a divisor of `W`, so the run straddles
+        // every boundary it meets.
+        let lengths = [41_113u64, 97_001, 3, 149_999, 60_007, 1, 88_887];
+        let mut total = 0u64;
+        let mut last: Option<(u64, u64)> = None;
+        let mut straddles = 0u32;
+        for len in lengths.iter().cycle().take(400) {
+            let shard = shard_of(ArchivalLength::from_raw(total)).to_raw();
+            assert_eq!(shard, total / w);
+            if let Some((before, before_len)) = last {
+                assert!(
+                    shard == before || shard == before + 1,
+                    "members are consecutive: no transaction spans a whole shard"
+                );
+                if shard == before + 1 {
+                    let overshoot = total - shard * w;
+                    assert!(
+                        overshoot < before_len,
+                        "shard {before} overshoots W by less than its last member"
+                    );
+                    if overshoot > 0 {
+                        straddles += 1;
+                    }
+                }
+            }
+            last = Some((shard, *len));
+            total += len;
+        }
+        assert!(straddles >= 5, "the run straddled boundaries: {straddles}");
+    }
+
     #[test]
     fn storage_ids_count_one_coinbase_per_block() {
         // Height 0, no listed transactions: the genesis coinbase is id 0,
