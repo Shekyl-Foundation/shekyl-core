@@ -213,6 +213,7 @@ fn a_header_anchored_at_a_demoted_block_leaves_t_and_the_page_is_judged() {
                     block: serialized(&x_blocks[3]),
                     txs: Vec::new(),
                     bundle_references: Vec::new(),
+                    bundle_bodies: Vec::new(),
                 },
             },
         );

@@ -275,6 +275,7 @@ impl Chain {
                             block: block.clone(),
                             bodies: bodies.clone(),
                             bundle_references: Vec::new(),
+                            bundle_bodies: Vec::new(),
                         }) {
                             Ok(ticket) => break ticket,
                             Err(_) => tokio::task::yield_now().await,

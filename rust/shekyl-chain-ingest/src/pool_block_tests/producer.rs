@@ -377,6 +377,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
                     .map(shekyl_wire::Transaction::serialize)
                     .collect(),
                 bundle_references: Vec::new(),
+                bundle_bodies: Vec::new(),
             })
             .expect("room")
             .reply()

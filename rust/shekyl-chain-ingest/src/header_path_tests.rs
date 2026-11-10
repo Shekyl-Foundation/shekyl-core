@@ -540,6 +540,7 @@ fn body_of(candidate: &Candidate) -> BlockBody {
             .as_ref()
             .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
+        bundle_bodies: Vec::new(),
     }
 }
 

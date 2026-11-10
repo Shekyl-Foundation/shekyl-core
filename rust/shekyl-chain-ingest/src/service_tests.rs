@@ -202,6 +202,7 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -969,6 +970,7 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         block: vec![0xA5; len],
         bodies: Vec::new(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -2409,6 +2411,7 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     // The door bounds the block and its bodies; the references are a
     // sidecar with their own cap, a count, and the caller's measure is the
@@ -2491,6 +2494,7 @@ async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let room = door.room();
     assert!(

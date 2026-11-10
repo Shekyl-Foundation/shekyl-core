@@ -494,6 +494,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             block: raw,
             txs: Vec::new(),
             bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         };
         out = drive(
             &mut sync,
@@ -558,6 +559,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
                         block: raw2,
                         txs: Vec::new(),
                         bundle_references: Vec::new(),
+                        bundle_bodies: Vec::new(),
                     }],
                     deferred: Vec::new(),
                     missed_ids: Vec::new(),

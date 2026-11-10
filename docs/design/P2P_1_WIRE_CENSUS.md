@@ -412,6 +412,16 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 > on encode and on decode. The witness and its 885,000-byte cap are gone. The
 > same key carries the references on the sync bodies (2014). A reference that
 > does not parse is CEN-J29's refusal of the block, not a framing fault.
+>
+> **UPDATE 2026-11-09 — the sync bodies (2014) carry `bundle_bodies` too (the
+> switch's C3).** Beside the references, a body carries the bundle bodies its
+> server holds, as an array of strings in no set order; the asker matches each
+> to its reference by the prunable hash it hashes to (§7.5). Bounded at the
+> codec, by count, at the same 500 on encode and decode; the response's
+> string and field caps count them (`BODY_STRINGS` = `1 + 2 × 500`,
+> `BODY_FIELDS` = 4), and their bytes count toward `BODIES_RESPONSE_BYTES`.
+> 2008 carries references only: a body the announcing node did not send is
+> fetched by 2016.
 
 > **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. Live identifiers: `NOTIFY_NEW_COMPACT_BLOCK` (2008) and `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01 is unassigned.
 

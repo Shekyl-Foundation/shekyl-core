@@ -201,6 +201,11 @@ pub struct BlockBody {
     /// undecoded (`shekyl_types::archival::BundleReferences`). Empty when
     /// the block admits no bundle.
     pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles the sender holds, in no set order: each
+    /// is matched to its reference by the prunable hash it hashes to
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). A reference whose body is
+    /// not here is fetched by 2016. Never more than the references.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// A blob in `Debug` is its length and its keccak, never its bytes. A

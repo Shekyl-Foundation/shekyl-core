@@ -179,10 +179,11 @@ pub const RESPONSE_BODIES_MAX_OBJECTS: usize =
     cap_usize(MAX_OBJECT_REQUEST_COUNT) + RESPONSE_BODIES_MAX_TXS;
 
 /// Strings in the minimum (full) section: the blob. A body adds `block`
-/// and, at most, one per bundle reference. The root adds `deferred` and
-/// `missed_ids`.
+/// and, at most, one per bundle reference and one per bundle body the
+/// server holds (no more bodies than references). The root adds
+/// `deferred` and `missed_ids`.
 const FULL_TX_STRINGS: usize = 1;
-const BODY_STRINGS: usize = 1 + MAX_BUNDLE_REFERENCES;
+const BODY_STRINGS: usize = 1 + 2 * MAX_BUNDLE_REFERENCES;
 const ROOT_STRINGS: usize = 2;
 
 /// Strings a body response may declare, from the same two counts.
@@ -190,11 +191,11 @@ pub const RESPONSE_BODIES_MAX_STRINGS: usize = ROOT_STRINGS
     + cap_usize(MAX_OBJECT_REQUEST_COUNT) * BODY_STRINGS
     + RESPONSE_BODIES_MAX_TXS * FULL_TX_STRINGS;
 
-/// Fields: the root's three, at most three on a body (`block`, `txs`,
-/// `bundle_references`), two on the minimum transaction section (`form`,
-/// `blob`).
+/// Fields: the root's three, at most four on a body (`block`, `txs`,
+/// `bundle_references`, `bundle_bodies`), two on the minimum transaction
+/// section (`form`, `blob`).
 const ROOT_FIELDS: usize = 3;
-const BODY_FIELDS: usize = 3;
+const BODY_FIELDS: usize = 4;
 const FULL_TX_FIELDS: usize = 2;
 
 /// Fields a body response may declare, from the same two counts.
@@ -785,7 +786,8 @@ impl BodyPlanner {
 }
 
 /// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
-/// block, each carried transaction, and each bundle reference. [`plan_bodies`] and
+/// block, each carried transaction, each bundle reference and each bundle
+/// body. [`plan_bodies`] and
 /// the body codec ([`ResponseBodies::decode`], [`PortableMap::to_section`])
 /// both charge this and nothing else.
 #[must_use]
@@ -793,6 +795,9 @@ pub fn body_budget_bytes(body: &BlockBody) -> usize {
     let mut n = body.block.len();
     for reference in &body.bundle_references {
         n = n.saturating_add(reference.len());
+    }
+    for bundle in &body.bundle_bodies {
+        n = n.saturating_add(bundle.len());
     }
     for tx in &body.txs {
         n = n.saturating_add(match tx {
@@ -827,8 +832,21 @@ fn charge(sent_bytes: usize, size: usize, sent_one: bool) -> Option<usize> {
     }
 }
 
+/// No more bundle bodies than a section has references.
+fn check_bundle_bodies(bodies: &[Vec<u8>]) -> Result<(), Error> {
+    if bodies.len() > MAX_BUNDLE_REFERENCES {
+        Err(Error::TooManyBundleBodies {
+            got: bodies.len(),
+            max: MAX_BUNDLE_REFERENCES,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
     check_references(&body.bundle_references)?;
+    check_bundle_bodies(&body.bundle_bodies)?;
     let mut section = Section::new();
     section.insert("block", Value::Bytes(body.block.clone()));
     let mut txs = Vec::with_capacity(body.txs.len());
@@ -837,11 +855,14 @@ fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
     }
     get::insert_object_array(&mut section, "txs", txs);
     get::insert_bytes_array(&mut section, "bundle_references", &body.bundle_references);
+    get::insert_bytes_array(&mut section, "bundle_bodies", &body.bundle_bodies);
     Ok(section)
 }
 
 fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
     let bundle_references = opt_references(section)?;
+    let bundle_bodies = get::bytes_array(section, "bundle_bodies")?;
+    check_bundle_bodies(&bundle_bodies)?;
     let txs = get::object_array(section, "txs")?
         .into_iter()
         .map(tx_from)
@@ -850,6 +871,7 @@ fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
         block: get::bytes(section, "block")?.to_vec(),
         txs,
         bundle_references,
+        bundle_bodies,
     })
 }
 

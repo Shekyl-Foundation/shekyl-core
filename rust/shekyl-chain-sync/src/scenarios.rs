@@ -52,6 +52,7 @@ fn coinbase(raw: Vec<u8>) -> BlockBody {
         block: raw,
         txs: Vec::new(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -213,6 +214,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
             .as_ref()
             .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
+        bundle_bodies: Vec::new(),
     };
     let out = drive(
         &mut sync,

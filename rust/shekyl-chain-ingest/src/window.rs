@@ -422,6 +422,7 @@ impl Reservation {
                 bodies: staged.bodies,
                 proof: staged.proof,
                 references: staged.references,
+                bundle_bodies: staged.bundle_bodies,
             });
         }
         // A service that has ended drops the span here, and each slot
@@ -470,6 +471,7 @@ impl Door {
         let oversize = lengths.iter().any(|arrival| {
             !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX))
                 || arrival.reference_count > MAX_SECTION_REFERENCES
+                || arrival.bundle_body_count > MAX_SECTION_REFERENCES
         });
         if oversize {
             return Err(Refusal::Oversize);

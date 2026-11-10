@@ -776,6 +776,7 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
             block: sibling.serialize(),
             bodies,
             bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         })
         .expect("room");
     let reply = ticket.reply().await.reply;

@@ -1177,6 +1177,7 @@ where
                 .map(|tx| TxBody::Full(tx.blob))
                 .collect(),
             bundle_references: announced.b.bundle_references,
+            bundle_bodies: Vec::new(),
         };
         self.event(Event::Announce { session, body });
     }
@@ -1540,6 +1541,7 @@ where
                     block: body.block,
                     bodies: body.txs,
                     bundle_references: body.bundle_references,
+                    bundle_bodies: body.bundle_bodies,
                 }
             })
             .collect();

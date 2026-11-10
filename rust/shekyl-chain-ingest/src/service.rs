@@ -106,6 +106,10 @@ pub struct Arrival {
     /// The bundle references carried beside the block, undecoded; empty
     /// when none.
     pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash. Empty when
+    /// none were carried.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -138,6 +142,9 @@ pub struct BoundArrival {
     /// The bundle references carried beside the block, undecoded; empty
     /// when the block admits no bundle.
     pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl BoundArrival {
@@ -158,6 +165,7 @@ impl BoundArrival {
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
             reference_count: self.bundle_references.len(),
+            bundle_body_count: self.bundle_bodies.len(),
         }
     }
 }
@@ -178,6 +186,9 @@ pub struct ArrivalLengths {
     /// Bounded by [`shekyl_types::archival::MAX_SECTION_REFERENCES`], not by
     /// [`crate::admission::ArrivalBound`].
     pub reference_count: usize,
+    /// How many bundle bodies were carried: never more than a section has
+    /// references, and, like the references, not block bytes.
+    pub bundle_body_count: usize,
 }
 
 impl ArrivalLengths {
@@ -202,6 +213,7 @@ impl ArrivalLengths {
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
             reference_count: arrival.bundle_references.len(),
+            bundle_body_count: arrival.bundle_bodies.len(),
         }
     }
 }
@@ -424,6 +436,7 @@ struct Staged {
     bodies: Vec<Vec<u8>>,
     proof: Proof,
     references: Vec<Vec<u8>>,
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl Staged {
@@ -436,6 +449,7 @@ impl Staged {
                 class: class_of(arrival.origin),
             },
             references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 
@@ -446,6 +460,7 @@ impl Staged {
             bodies: arrival.bodies,
             proof: Proof::Judged(Box::new(arrival.judged)),
             references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 }
@@ -461,6 +476,8 @@ struct Accepted {
     /// The bundle references carried beside the block; empty when none
     /// were.
     references: Vec<Vec<u8>>,
+    /// The bundle bodies carried beside the block, unverified.
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// The service's knobs, each with its reason. How many `form` workers hash
@@ -998,6 +1015,7 @@ impl Door {
             block,
             bodies,
             bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         };
         loop {
             match self.offer(arrival.clone()) {

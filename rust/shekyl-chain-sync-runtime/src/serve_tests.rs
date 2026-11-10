@@ -21,6 +21,7 @@ fn body(bytes: usize) -> BlockBody {
         block: vec![0; bytes],
         txs: Vec::new(),
         bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 

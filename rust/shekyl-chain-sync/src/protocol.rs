@@ -366,6 +366,9 @@ pub struct OfferedBody {
     /// The bundle references beside the block, undecoded. Empty when the
     /// block admits no bundle.
     pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles the sender carried, unverified and in no
+    /// set order. Assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl OfferedBody {
@@ -383,6 +386,7 @@ impl OfferedBody {
             block: body.block.clone(),
             txs,
             bundle_references: body.bundle_references.clone(),
+            bundle_bodies: body.bundle_bodies.clone(),
         })
     }
 }

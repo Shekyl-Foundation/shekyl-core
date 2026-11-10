@@ -697,6 +697,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
             block: genesis[0].template.block.serialize(),
             bodies: Vec::new(),
             bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         })
         .expect("room")
         .reply()

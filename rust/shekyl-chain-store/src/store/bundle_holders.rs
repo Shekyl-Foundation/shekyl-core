@@ -180,6 +180,10 @@ impl WriteBatch<'_, '_> {
     /// bundle is not returned. Its window had closed against every tip
     /// since its block passed the horizon, and a peer can offer it again.
     ///
+    /// The queue's capacity is not checked: each entry was counted in the
+    /// queue before the connect that admitted it took it out, so returning
+    /// it cannot take the queue past where it stood.
+    ///
     /// # Errors
     ///
     /// SI-7 for a row that does not decode; engine faults.

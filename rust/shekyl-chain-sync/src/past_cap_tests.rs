@@ -409,6 +409,7 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
             block: raw,
             txs: vec![TxBody::Full(vec![1, 2, 3])],
             bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         };
         let bad = ResponseBodies {
             bodies: vec![body],
