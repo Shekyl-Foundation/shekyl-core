@@ -3,12 +3,14 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Sourced by the five nightly ignored-set scripts. Each script judges its
+# Sourced by the nightly ignored-set scripts. Each script judges its
 # crate's `--list --ignored` against the set it names, then runs that set.
 #
 # ignored_set_mode sets two variables:
 #   ignored_set_check    0, or 1 when the caller was invoked with --check.
 #   ignored_set_profile  (--release) for the nightly listing, empty for --check.
+#                        ignored_set_trybuild.sh lists and runs debug in both
+#                        modes (its header says why) and does not read it.
 #
 # --check is the per-PR judgement (rust-audit-test.yml). It lists the debug
 # build that job has already compiled. ignored_set_stop_after_judgement then
