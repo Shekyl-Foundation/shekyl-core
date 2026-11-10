@@ -199,9 +199,9 @@ impl MultisigOutputData {
 /// # Errors
 ///
 /// [`CryptoError::InvalidKeyMaterial`] for an address point that is not a
-/// prime-order, non-identity point, a KEM key of the wrong shape, a KEM
-/// key whose X25519 half is not a canonical Montgomery u-coordinate, or a
-/// KEM key that repeats the group key or another member's;
+/// prime-order, non-identity point. The KEM keys need no check here: a
+/// [`MultisigAddressPayload`] exists only once its keys are the right
+/// shape, canonical and pairwise different.
 /// [`CryptoError::InvalidInput`] for an output index above 255 (the `0x0D`
 /// entry names its output in one byte); the solo core's own errors.
 pub fn construct_multisig_output(
@@ -213,15 +213,9 @@ pub fn construct_multisig_output(
 ) -> Result<MultisigOutputData, CryptoError> {
     let out_idx = u8::try_from(output_index)
         .map_err(|_| CryptoError::InvalidInput("multisig output index above 255".into()))?;
-    // The address fields are public, so a value that passed `new` can be
-    // edited into a repeated key or a non-canonical Montgomery half.
-    // Encapsulation to either would make two signing slots the same secret.
-    address
-        .ensure_distinct_kem_keys()
-        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-    let spend_point = group_point(&address.b_group)? + group_point(&address.y_group)?;
+    let spend_point = group_point(address.b_group())? + group_point(address.y_group())?;
     let spend_key = spend_point.compress().to_bytes();
-    let (group_x25519, group_ml_kem) = split_kem_pubkey(&address.group_kem_pubkey)?;
+    let (group_x25519, group_ml_kem) = split_kem_pubkey(address.group_kem_pubkey())?;
 
     let core = construct_output_core(
         tx_key_secret,
@@ -233,9 +227,9 @@ pub fn construct_multisig_output(
         &crate::label::sentinel_plaintext(),
     )?;
 
-    let mut member_kem_ciphertexts = Vec::with_capacity(address.hybrid_kem_pubkeys.len());
-    let mut key_hashes = Vec::with_capacity(address.hybrid_kem_pubkeys.len());
-    for member_kem in &address.hybrid_kem_pubkeys {
+    let mut member_kem_ciphertexts = Vec::with_capacity(address.hybrid_kem_pubkeys().len());
+    let mut key_hashes = Vec::with_capacity(address.hybrid_kem_pubkeys().len());
+    for member_kem in address.hybrid_kem_pubkeys() {
         let (x25519, ml_kem) = split_kem_pubkey(member_kem)?;
         let member = encapsulate_deterministic(tx_key_secret, &x25519, ml_kem, output_index)?;
         let (member_pk, _member_sk) = derive_multisig_member_keypair(&member.combined_ss.0)?;
@@ -247,7 +241,7 @@ pub fn construct_multisig_output(
         // `member` (its shared secrets) and the keypair drop here, wiped.
     }
 
-    let committed = MultisigCommittedForm::new(address.m_required, key_hashes)
+    let committed = MultisigCommittedForm::new(address.m_required(), key_hashes)
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
     let n = committed.n_total();
     let pqc_leaf = pqc_leaf_commitment(&core.combined_ss.0, output_index, &committed.to_bytes())

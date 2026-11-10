@@ -231,30 +231,60 @@ pub enum MultisigAddressError {
     Io(#[from] std::io::Error),
 }
 
-/// Canonical multisig address payload (PQC_MULTISIG.md SS6.2).
+/// Canonical multisig address payload (PQC_MULTISIG.md §6.2).
+///
+/// The fields are private: [`Self::new`] and [`Self::from_canonical_bytes`]
+/// are the only ways to make one, and both check every invariant, the KEM
+/// key checks included. A payload that exists is valid, so a consumer such
+/// as the output constructor does not check it again.
+///
+/// A field cannot be edited after the checks:
+///
+/// ```compile_fail,E0616
+/// fn edit(p: &mut shekyl_address::MultisigAddressPayload) {
+///     p.hybrid_kem_pubkeys[0][31] |= 0x80;
+/// }
+/// ```
+///
+/// nor a payload written without them:
+///
+/// ```compile_fail,E0451
+/// let _ = shekyl_address::MultisigAddressPayload {
+///     version: 2,
+///     group_version: 1,
+///     spend_auth_version: 2,
+///     network: shekyl_address::Network::Mainnet,
+///     n_total: 1,
+///     m_required: 1,
+///     b_group: [0; 32],
+///     y_group: [0; 32],
+///     group_kem_pubkey: vec![],
+///     hybrid_kem_pubkeys: vec![],
+/// };
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigAddressPayload {
-    pub version: u8,
-    pub group_version: u8,
-    pub spend_auth_version: u8,
-    pub network: Network,
-    pub n_total: u8,
-    pub m_required: u8,
+    version: u8,
+    group_version: u8,
+    spend_auth_version: u8,
+    network: Network,
+    n_total: u8,
+    m_required: u8,
     /// `B_group` — the group's plaintext view/link key point (`B = b·G`). The
     /// `b` behind it is group-plaintext: every participant holds it, so scan,
     /// balance, and key-image are local and need no ceremony. A payer adds this
     /// point directly into `O = ho·G + B_group + y_out·T`.
-    pub b_group: [u8; 32],
+    b_group: [u8; 32],
     /// `Y_group` — the FROST M-of-N group spend key point (`Y = y·T`). No
     /// participant holds `y`; a spend is a threshold ceremony over it. A payer
     /// needs it to derive the per-output tweak `y_out = y_group + y_kem`.
-    pub y_group: [u8; 32],
+    y_group: [u8; 32],
     /// The group's hybrid KEM public key (`X25519 ‖ ML-KEM-768`, 1216 bytes).
     /// Every member holds its secret; a payer encapsulates the output's one
     /// `0x06` ciphertext to it.
-    pub group_kem_pubkey: Vec<u8>,
+    group_kem_pubkey: Vec<u8>,
     /// Each member's own hybrid KEM public key, member order.
-    pub hybrid_kem_pubkeys: Vec<Vec<u8>>,
+    hybrid_kem_pubkeys: Vec<Vec<u8>>,
 }
 
 impl MultisigAddressPayload {
@@ -327,19 +357,68 @@ impl MultisigAddressPayload {
         Self::canonical_len_for(self.n_total)
     }
 
-    /// Refuse a non-canonical X25519 half, or two KEM keys that are the same bytes.
-    ///
-    /// Each X25519 half must be a canonical u-coordinate, strictly less than
-    /// `2^255 - 19`. The group key and the member keys must then differ as
-    /// bytes. A non-canonical half is another encoding of a point the
-    /// bytewise check would miss, and the group secret would open a member
-    /// slot that copied the group key and flipped bit 255.
-    ///
-    /// [`Self::new`] and [`Self::from_canonical_bytes`] both call this. The
-    /// fields are public, so a caller that edits them afterwards must call it
-    /// again; the output constructor does.
-    pub fn ensure_distinct_kem_keys(&self) -> Result<(), MultisigAddressError> {
-        reject_aliased_kem_keys(&self.group_kem_pubkey, &self.hybrid_kem_pubkeys)
+    /// The payload format version (`0x02`).
+    #[must_use]
+    pub const fn version(&self) -> u8 {
+        self.version
+    }
+
+    /// The group format version.
+    #[must_use]
+    pub const fn group_version(&self) -> u8 {
+        self.group_version
+    }
+
+    /// The spend-authorization version (`0x02`, Option E′).
+    #[must_use]
+    pub const fn spend_auth_version(&self) -> u8 {
+        self.spend_auth_version
+    }
+
+    /// The network this address is for.
+    #[must_use]
+    pub const fn network(&self) -> Network {
+        self.network
+    }
+
+    /// `N`, the number of members.
+    #[must_use]
+    pub const fn n_total(&self) -> u8 {
+        self.n_total
+    }
+
+    /// `M`, the signers a spend needs.
+    #[must_use]
+    pub const fn m_required(&self) -> u8 {
+        self.m_required
+    }
+
+    /// `B_group`, compressed. Not checked as a point here; the output
+    /// constructor checks it is prime-order and not the identity.
+    #[must_use]
+    pub const fn b_group(&self) -> &[u8; 32] {
+        &self.b_group
+    }
+
+    /// `Y_group`, compressed. Checked as `B_group` is.
+    #[must_use]
+    pub const fn y_group(&self) -> &[u8; 32] {
+        &self.y_group
+    }
+
+    /// The group's hybrid KEM public key, `HYBRID_KEM_PUBKEY_LEN` bytes,
+    /// its X25519 half canonical and different from every member's key.
+    #[must_use]
+    pub fn group_kem_pubkey(&self) -> &[u8] {
+        &self.group_kem_pubkey
+    }
+
+    /// The members' hybrid KEM public keys, member order: `N` keys of
+    /// `HYBRID_KEM_PUBKEY_LEN` bytes, each X25519 half canonical, no two
+    /// the same.
+    #[must_use]
+    pub fn hybrid_kem_pubkeys(&self) -> &[Vec<u8>] {
+        &self.hybrid_kem_pubkeys
     }
 
     /// Serialize to canonical bytes.

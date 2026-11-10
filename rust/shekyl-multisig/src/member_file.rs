@@ -105,8 +105,8 @@ pub struct MemberFile {
 impl std::fmt::Debug for MemberFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemberFile")
-            .field("n_total", &self.address.n_total)
-            .field("m_required", &self.address.m_required)
+            .field("n_total", &self.address.n_total())
+            .field("m_required", &self.address.m_required())
             .field("member_index", &self.member_index)
             .field("secrets", &"[REDACTED]")
             .finish_non_exhaustive()
@@ -143,7 +143,7 @@ impl MemberFile {
         verification_shares: Vec<[u8; FIELD_LEN]>,
         secrets: MemberSecrets,
     ) -> Result<Self, MemberFileError> {
-        let n = address.n_total;
+        let n = address.n_total();
         if member_index >= n {
             return Err(MemberFileError::MemberIndex {
                 index: member_index,
@@ -273,7 +273,7 @@ impl MemberFile {
         let member_index = r.byte()?;
         let b = Zeroizing::new(r.field()?);
         let y_share = Zeroizing::new(r.field()?);
-        let verification_shares = (0..address.n_total)
+        let verification_shares = (0..address.n_total())
             .map(|_| r.field())
             .collect::<Result<Vec<_>, _>>()?;
         let group_kem_secret = Zeroizing::new(r.take(HYBRID_KEM_SECRET_LEN)?.to_vec());

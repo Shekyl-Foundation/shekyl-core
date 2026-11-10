@@ -80,8 +80,8 @@ fn group_ss(g: &Group, out: &MultisigOutputData) -> [u8; 64] {
 fn member_view<'a>(g: &'a Group, i: u8) -> MultisigMemberView<'a> {
     MultisigMemberView {
         member_index: i,
-        n_total: g.address.n_total,
-        m_required: g.address.m_required,
+        n_total: g.address.n_total(),
+        m_required: g.address.m_required(),
         member_x25519_sk: &g.member_sks[usize::from(i)].x25519,
         member_ml_kem_dk: &g.member_sks[usize::from(i)].ml_kem,
         network: &NET,
@@ -155,10 +155,10 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
         let out = construct_multisig_output(&tx_key(), &g.address, 7_000, index, &NET).unwrap();
 
         // The solo part: the group sees its own spend point.
-        let spend = curve25519_dalek::edwards::CompressedEdwardsY(g.address.b_group)
+        let spend = curve25519_dalek::edwards::CompressedEdwardsY(*g.address.b_group())
             .decompress()
             .unwrap()
-            + curve25519_dalek::edwards::CompressedEdwardsY(g.address.y_group)
+            + curve25519_dalek::edwards::CompressedEdwardsY(*g.address.y_group())
                 .decompress()
                 .unwrap();
         let ss = group_ss(&g, &out);
@@ -261,7 +261,7 @@ fn a_member_cannot_open_another_members_slot() {
             &group_ss(&g, &out),
             0,
             &view,
-            &entry_view(&out, 1, 0, g.address.n_total, &out.enc_key_hashes),
+            &entry_view(&out, 1, 0, g.address.n_total(), &out.enc_key_hashes),
             &out.pqc_leaf.entry_bytes(),
         ),
         Err(MultisigReceiveError::MemberKeyHash)
@@ -300,12 +300,12 @@ fn a_lie_about_one_members_hash_is_caught_by_every_member() {
         .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
     assert_eq!(
-        open_as(&g, &out, index, 1, g.address.n_total, &lied, &leaf),
+        open_as(&g, &out, index, 1, g.address.n_total(), &lied, &leaf),
         Err(MultisigReceiveError::MemberKeyHash)
     );
     for i in [0, 2] {
         assert_eq!(
-            open_as(&g, &out, index, i, g.address.n_total, &lied, &leaf),
+            open_as(&g, &out, index, i, g.address.n_total(), &lied, &leaf),
             Err(MultisigReceiveError::LeafMismatch)
         );
     }
@@ -322,7 +322,7 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
         &out,
         index,
         0,
-        g.address.n_total,
+        g.address.n_total(),
         &out.enc_key_hashes,
         &leaf
     )
@@ -331,7 +331,7 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
     let mut tampered = out.enc_key_hashes.clone();
     tampered[0] ^= 1;
     assert_eq!(
-        open_as(&g, &out, index, 0, g.address.n_total, &tampered, &leaf),
+        open_as(&g, &out, index, 0, g.address.n_total(), &tampered, &leaf),
         Err(MultisigReceiveError::HashesUndecryptable)
     );
     let mut other_leaf = leaf;
@@ -342,7 +342,7 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
             &out,
             index,
             0,
-            g.address.n_total,
+            g.address.n_total(),
             &out.enc_key_hashes,
             &other_leaf
         ),
@@ -355,7 +355,7 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
             &group_ss(&g, &out),
             index,
             &member_view(&g, 0),
-            &entry_view(&out, 0, 1, g.address.n_total, &out.enc_key_hashes),
+            &entry_view(&out, 0, 1, g.address.n_total(), &out.enc_key_hashes),
             &leaf,
         ),
         Err(MultisigReceiveError::HashesUndecryptable)
@@ -381,57 +381,64 @@ fn the_constructor_refuses_bad_inputs() {
         construct_multisig_output(&tx_key(), &g.address, 1, 256, &NET),
         Err(CryptoError::InvalidInput(_))
     ));
-    let mut bad = g.address.clone();
-    bad.y_group = [0u8; 32];
-    bad.y_group[0] = 1; // the identity's encoding
+
+    // The address carries its points opaque; the constructor checks them.
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let bad = rebuild(&g, identity, g.address.hybrid_kem_pubkeys().to_vec()).unwrap();
     assert!(matches!(
         construct_multisig_output(&tx_key(), &bad, 1, 0, &NET),
         Err(CryptoError::InvalidKeyMaterial)
     ));
+}
 
-    let mut overlap = g.address.clone();
-    overlap.hybrid_kem_pubkeys[0] = overlap.group_kem_pubkey.clone();
-    assert_eq!(
-        overlap.ensure_distinct_kem_keys().unwrap_err().to_string(),
-        "group KEM key equals member 0's KEM key"
-    );
-    assert!(matches!(
-        construct_multisig_output(&tx_key(), &overlap, 1, 0, &NET),
-        Err(CryptoError::InvalidKeyMaterial)
-    ));
+/// The constructor encapsulates to the address's KEM keys unchecked: an
+/// address with a repeated or aliased key cannot be made. With this
+/// group's own keys, a member key that repeats the group key, repeats
+/// another member, or is the group key with bit 255 of its X25519 half set
+/// (the same Montgomery point) is refused by the address.
+#[test]
+fn an_address_with_collapsed_kem_slots_cannot_be_built() {
+    use shekyl_address::multisig_address::MultisigAddressError;
+    let g = group(2, 2);
+    let y = *g.address.y_group();
+    let group_key = g.address.group_kem_pubkey().to_vec();
+    let members = g.address.hybrid_kem_pubkeys();
 
-    let mut duplicated = g.address.clone();
-    duplicated.hybrid_kem_pubkeys[1] = duplicated.hybrid_kem_pubkeys[0].clone();
-    assert_eq!(
-        duplicated
-            .ensure_distinct_kem_keys()
-            .unwrap_err()
-            .to_string(),
-        "member KEM keys 0 and 1 are the same key"
-    );
     assert!(matches!(
-        construct_multisig_output(&tx_key(), &duplicated, 1, 0, &NET),
-        Err(CryptoError::InvalidKeyMaterial)
+        rebuild(&g, y, vec![group_key.clone(), members[1].clone()]),
+        Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
     ));
+    assert!(matches!(
+        rebuild(&g, y, vec![members[0].clone(), members[0].clone()]),
+        Err(MultisigAddressError::DuplicateMemberKemKey {
+            first: 0,
+            second: 1
+        })
+    ));
+    let mut alias = group_key;
+    alias[31] |= 0x80;
+    assert!(matches!(
+        rebuild(&g, y, vec![alias, members[1].clone()]),
+        Err(MultisigAddressError::NonCanonicalMemberKemKey { index: 0 })
+    ));
+}
 
-    // The group key with bit 255 of its X25519 half flipped is the same
-    // Montgomery point and the same ML-KEM key. The constructor refuses it
-    // before encapsulation.
-    let mut alias = g.address.clone();
-    alias.hybrid_kem_pubkeys[0] = alias.group_kem_pubkey.clone();
-    alias.hybrid_kem_pubkeys[0][31] |= 0x80;
-    assert!(matches!(
-        alias.ensure_distinct_kem_keys(),
-        Err(
-            shekyl_address::multisig_address::MultisigAddressError::NonCanonicalMemberKemKey {
-                index: 0
-            }
-        )
-    ));
-    assert!(matches!(
-        construct_multisig_output(&tx_key(), &alias, 1, 0, &NET),
-        Err(CryptoError::InvalidKeyMaterial)
-    ));
+/// `g`'s address with `y_group` and the member keys replaced.
+fn rebuild(
+    g: &Group,
+    y_group: [u8; 32],
+    members: Vec<Vec<u8>>,
+) -> Result<MultisigAddressPayload, shekyl_address::multisig_address::MultisigAddressError> {
+    MultisigAddressPayload::new(
+        g.address.network(),
+        g.address.n_total(),
+        g.address.m_required(),
+        *g.address.b_group(),
+        y_group,
+        g.address.group_kem_pubkey().to_vec(),
+        members,
+    )
 }
 
 /// A hash list that repeats a member, even when the leaf is recomputed over
@@ -445,7 +452,7 @@ fn duplicate_decrypted_key_hashes_are_refused() {
     let ss = group_ss(&g, &out);
     let key = derive_multisig_key_hashes_key(&ss, index);
     let cipher = ChaCha20Poly1305::new((&*key).into());
-    let aad = hashes_aad(0, g.address.n_total);
+    let aad = hashes_aad(0, g.address.n_total());
     let mut hashes = cipher
         .decrypt(
             &Nonce::from(HASHES_NONCE),
@@ -470,16 +477,16 @@ fn duplicate_decrypted_key_hashes_are_refused() {
         .chunks_exact(width)
         .map(|chunk| chunk.try_into().unwrap())
         .collect();
-    let committed = MultisigCommittedForm::new(g.address.m_required, key_hashes).unwrap();
+    let committed = MultisigCommittedForm::new(g.address.m_required(), key_hashes).unwrap();
     let leaf = pqc_leaf_commitment(&ss, index, &committed.to_bytes()).unwrap();
-    for i in 0..g.address.n_total {
+    for i in 0..g.address.n_total() {
         assert_eq!(
             open_as(
                 &g,
                 &out,
                 index,
                 i,
-                g.address.n_total,
+                g.address.n_total(),
                 &repeated,
                 &leaf.entry_bytes()
             ),

@@ -134,8 +134,8 @@ fn member_scanner(g: &Group, i: u8) -> Scanner {
         Zeroizing::new(g.b.to_bytes()),
         MultisigMemberScan::new(
             i,
-            g.address.n_total,
-            g.address.m_required,
+            g.address.n_total(),
+            g.address.m_required(),
             Zeroizing::new(member.x25519),
             Zeroizing::new(member.ml_kem.clone()),
             NET,
