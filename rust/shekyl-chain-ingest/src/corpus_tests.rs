@@ -189,10 +189,18 @@ fn the_reader_re_verifies_and_refuses_a_tampered_body() {
     // reader does not trust the write-time check — it re-derives it.
     let (_, b0, t0) = blobs(0, 0);
     let (_, b1, t1) = blobs(1, 1);
+    let body = t1.last().expect("block 1 lists a transaction").clone();
     let mut bytes = write(&[(b0, t0), (b1, t1)]);
-    // Flip the last byte of the file: inside the second record's only body.
-    let last = bytes.len() - 1;
-    bytes[last] ^= 0x01;
+    // Flip the last byte of the second record's only body. The body is not
+    // the file's last bytes since format 4: the record's bundle section
+    // follows it.
+    let at = bytes
+        .windows(body.len())
+        .rposition(|window| window == body.as_slice())
+        .expect("the body is in the second record")
+        + body.len()
+        - 1;
+    bytes[at] ^= 0x01;
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     reader.next().expect("genesis is intact");
     let refused = reader.next().expect_err("tampered");
