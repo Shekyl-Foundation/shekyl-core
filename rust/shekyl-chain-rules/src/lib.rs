@@ -243,7 +243,7 @@ pub use rules::tx_emission_against::{
     EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
-pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
+pub use shekyl_archival_retention::{CarriedBodies, DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{

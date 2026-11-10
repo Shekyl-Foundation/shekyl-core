@@ -39,6 +39,7 @@ use shekyl_levin::{
     RequestCompactMissingTx, RequestHeaders, ResponseBodies, ResponseHeaders, TxBlobEntry,
     HASH_SIZE, HEADERS_RESPONSE_BYTES,
 };
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, TxHash};
 use shekyl_wire::{BlockBody, TxBody};
 
@@ -196,39 +197,24 @@ fn body_of(snap: &ReadSnapshot<'_>, hash: BlockHash) -> Result<Option<BlockBody>
         };
         txs.push(tx);
     }
-    let bundle_references = references_at(snap, height)?;
-    let bundle_bodies = bodies_held(snap, &bundle_references)?;
+    // The bodies of its section this store holds, passed over where it
+    // holds none: a recent block's are here, an older block's may not be,
+    // and the asker fetches what is missing by 2016 or does without (§8).
+    let section = section_at(snap, height)?;
+    let bundle_bodies = snap
+        .held_section_bodies(section.as_ref())?
+        .iter()
+        .map(|body| body.as_bytes().to_vec())
+        .collect();
+    let bundle_references = section
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default();
     Ok(Some(BlockBody {
         block: body.block.serialize(),
         txs,
         bundle_references,
         bundle_bodies,
     }))
-}
-
-/// The bodies of `references` this store holds, in section order, each by
-/// the prunable hash its reference names (§7.5). A main-chain block within
-/// the undo retention holds its section's bodies (`bundle_holders.rs` in
-/// the store), so a recent block's are here; an older block's are not, and
-/// the asker fetches what is missing by 2016 or does without (§8).
-///
-/// The references are a section this node admitted, opened by the
-/// validator's own [`shekyl_chain_rules::open_reference`]: an arrival's
-/// reference is opened only by the validator, and this is not one.
-fn bodies_held(
-    snap: &ReadSnapshot<'_>,
-    references: &[Vec<u8>],
-) -> Result<Vec<Vec<u8>>, StoreError> {
-    let mut bodies = Vec::new();
-    for (position, bytes) in references.iter().enumerate() {
-        let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
-            continue;
-        };
-        if let Some(body) = snap.bundle_body(reference.prunable_hash())? {
-            bodies.push(body.as_bytes().to_vec());
-        }
-    }
-    Ok(bodies)
 }
 
 /// The transaction `txid` as this store holds it: whole, or as its
@@ -250,13 +236,23 @@ fn tx_body(snap: &ReadSnapshot<'_>, txid: &TxHash) -> Result<Option<TxBody>, Sto
     })
 }
 
+/// The bundle section of the main-chain block at `height`, if it has one.
+fn section_at(
+    snap: &ReadSnapshot<'_>,
+    height: BlockHeight,
+) -> Result<Option<BundleReferences>, StoreError> {
+    Ok(match snap.bundle_references_at(height)? {
+        AtHeight::Recorded(section) => section,
+        AtHeight::AboveTip => None,
+    })
+}
+
 /// The bundle references of the main-chain block at `height`; empty when
 /// it has none.
 fn references_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<Vec<Vec<u8>>, StoreError> {
-    Ok(match snap.bundle_references_at(height)? {
-        AtHeight::Recorded(Some(references)) => references.into_inner(),
-        AtHeight::Recorded(None) | AtHeight::AboveTip => Vec::new(),
-    })
+    Ok(section_at(snap, height)?
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default())
 }
 
 /// Why a request for an announced block's missing transactions closes its

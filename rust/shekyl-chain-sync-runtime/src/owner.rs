@@ -1046,10 +1046,14 @@ where
     /// model's own per-session bound ([`shekyl_chain_sync::AWAITING_PER_SESSION`]).
     /// A session answers every 2016, if only with nothing (`SCS-P27`), and
     /// the transport keeps its answers in order, so matching a 2017 to the
-    /// oldest ask is sound. A session that already has that many asks
-    /// unanswered is not keeping up its side and is closed; dropping one ask
-    /// instead would match its next answer to the wrong block. Over every
-    /// session the asks are at most that bound times the sessions open.
+    /// oldest ask is sound. The model holds a block back rather than evict a
+    /// wait whose ask is out, so it asks a session past the bound only after
+    /// one of its asks has gone unanswered for
+    /// [`shekyl_chain_sync::AWAITING_AGE`]. A session that already has that
+    /// many asks unanswered is then not keeping up its side and is closed;
+    /// dropping one ask instead would match its next answer to the wrong
+    /// block. Over every session the asks are at most that bound times the
+    /// sessions open.
     fn ask_bundle_bodies(
         &mut self,
         session: Session,

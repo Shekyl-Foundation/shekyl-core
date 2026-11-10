@@ -418,7 +418,7 @@ impl ChainReadFacts for StoreFacts {
                 AtHeight::Recorded(None) | AtHeight::AboveTip => None,
             };
             let bundle_bodies = snap
-                .section_bodies(references.as_ref())
+                .held_section_bodies(references.as_ref())
                 .map_err(store_fault)?
                 .iter()
                 .map(|body| body.as_bytes().to_vec())

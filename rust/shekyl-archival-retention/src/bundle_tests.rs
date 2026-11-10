@@ -635,6 +635,25 @@ fn the_prunable_hash_matches_its_vectors() {
     );
 }
 
+/// Each reference finds the carried bytes that hash to its prunable hash,
+/// whatever order they came in and however often; a reference whose body
+/// was not carried finds none. Red edit: index only the first body carried.
+#[test]
+fn a_reference_finds_its_carried_body_by_its_hash() {
+    let (first, second) = vector_refs();
+    let carried = [
+        body(2).as_bytes().to_vec(),
+        body(3).as_bytes().to_vec(),
+        body(3).as_bytes().to_vec(),
+        body(0).as_bytes().to_vec(),
+    ];
+    let index = CarriedBodies::index(carried.iter().map(Vec::as_slice));
+    assert_eq!(index.named_by(&first), Some(body(3).as_bytes()));
+    assert_eq!(index.named_by(&second), Some(body(0).as_bytes()));
+    let not_carried = BundleRef::new(kept_at(H, 12, &[0x01, 0x0A]), body(1).prunable_hash());
+    assert_eq!(index.named_by(&not_carried), None);
+}
+
 /// The two references of the root's vectors: a bundle of twelve draws with
 /// three passes at `h`, and a bundle of no draws at `h + 7` under seed
 /// `0x12 × 32`.

@@ -180,7 +180,10 @@ fn assemble(
 /// The body of each of `section`'s references, in section order:
 /// one the arrival carried, accepted on hash equality (§7.5) by the
 /// validator's [`shekyl_chain_rules::open_body`], or else the one the body
-/// store holds under the reference's prunable hash.
+/// store holds under the reference's prunable hash. Each carried body is
+/// hashed once and found by its hash
+/// ([`shekyl_chain_rules::CarriedBodies`]), not tried against every
+/// reference.
 ///
 /// A reference with neither stops the list there. The candidate then lacks
 /// that body, which `validate` faults as `Stale::BundleBody`, never a
@@ -196,6 +199,7 @@ fn bundle_bodies(
     let Some(section) = section else {
         return Ok(Vec::new());
     };
+    let by_hash = shekyl_chain_rules::CarriedBodies::index(carried.iter().map(Vec::as_slice));
     let mut snapshot = None;
     let mut bodies = Vec::with_capacity(section.as_slice().len());
     for (position, bytes) in section.as_slice().iter().enumerate() {
@@ -203,18 +207,17 @@ fn bundle_bodies(
             return Ok(bodies);
         };
         let mut found = None;
-        for bytes in carried {
-            match shekyl_chain_rules::open_body::<core::convert::Infallible>(&reference, bytes) {
-                Ok(body) => {
-                    found = Some(body);
-                    break;
-                }
+        if let Some(named) = by_hash.named_by(&reference) {
+            match shekyl_chain_rules::open_body::<core::convert::Infallible>(&reference, named) {
+                Ok(body) => found = Some(body),
                 Err(shekyl_chain_rules::BundleRefused::Invalid(invalid)) => {
                     return Err(Assembly::Refused(InvalidBlock::new(
                         invalid.row(),
                         shekyl_chain_rules::Locus::Bundle { position },
                     )));
                 }
+                // The index matched the hash, so the validator's hash
+                // check holds; no other refusal is open to it here.
                 Err(_) => {}
             }
         }

@@ -60,6 +60,8 @@
 //! the reveal. The seed and the witness key *before* the reveal are the
 //! challenger's, held in its ring, and never pass through these types.
 
+use std::collections::BTreeMap;
+
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
@@ -836,6 +838,45 @@ pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u
 #[must_use]
 pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
     cshake256_32(BUNDLE_PRUNABLE_CUSTOMIZATION, prunable)
+}
+
+/// Bundle bodies a block carried or a peer sent, each hashed once by
+/// [`bundle_prunable_hash`], so that each of a section's references finds
+/// its body by a lookup (§7.5).
+///
+/// Trying every carried body against every reference hashes each body
+/// once per reference: `n` references and `n` bodies cost `n²` hashes of
+/// bytes a peer chose. Indexed, each body costs one hash and each
+/// reference one lookup. A body carried twice is indexed once.
+///
+/// A lookup matches on the hash alone. Whether the bytes are the
+/// reference's body is still [`BundleRef::accept_body`]'s to say (its
+/// length), and whether they parse is the validator's.
+#[derive(Clone, Debug, Default)]
+pub struct CarriedBodies<'a> {
+    by_hash: BTreeMap<[u8; 32], &'a [u8]>,
+}
+
+impl<'a> CarriedBodies<'a> {
+    /// Hash each of `carried` once and index it by its prunable hash.
+    #[must_use]
+    pub fn index<I>(carried: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let mut by_hash = BTreeMap::new();
+        for bytes in carried {
+            by_hash.entry(bundle_prunable_hash(bytes)).or_insert(bytes);
+        }
+        Self { by_hash }
+    }
+
+    /// The carried bytes whose prunable hash is the one `reference`
+    /// states, if any were carried.
+    #[must_use]
+    pub fn named_by(&self, reference: &BundleRef) -> Option<&'a [u8]> {
+        self.by_hash.get(reference.prunable_hash()).copied()
+    }
 }
 
 /// The header root over a block's bundle references, in the order given

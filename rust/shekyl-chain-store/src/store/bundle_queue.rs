@@ -479,7 +479,10 @@ impl ReadSnapshot<'_> {
     /// store by its reference's prunable hash. The list stops at the first
     /// reference with no stored body, or the first that does not parse: a
     /// candidate built from it lacks that body, which `validate` faults as
-    /// `Stale::BundleBody`, never a verdict.
+    /// `Stale::BundleBody`, never a verdict. A candidate's bodies are
+    /// positional (body `i` is reference `i`'s), so the list cannot skip
+    /// one; what a peer or a reader is sent is
+    /// [`Self::held_section_bodies`].
     ///
     /// # Errors
     ///
@@ -499,6 +502,37 @@ impl ReadSnapshot<'_> {
             match self.bundle_body(reference.prunable_hash())? {
                 Some(body) => bodies.push(body),
                 None => return Ok(bodies),
+            }
+        }
+        Ok(bodies)
+    }
+
+    /// The bodies of `section` this store holds, in section order, each
+    /// by its reference's prunable hash; a reference with no stored body,
+    /// or one that does not parse, is passed over and the walk goes on.
+    /// What a 2014 server sends beside a block, and what the daemon RPC
+    /// returns with it: the receiver matches each body to its reference by
+    /// length and hash (§7.5), so a gap costs it only that body. A block
+    /// within the undo retention holds its own (`bundle_holders.rs`); an
+    /// older block's may be held by another holder, or not at all.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub fn held_section_bodies(
+        &self,
+        section: Option<&shekyl_types::archival::BundleReferences>,
+    ) -> Result<Vec<BundleBody>, StoreError> {
+        let mut bodies = Vec::new();
+        let Some(section) = section else {
+            return Ok(bodies);
+        };
+        for bytes in section.as_slice() {
+            let Ok(reference) = BundleRef::decode(bytes) else {
+                continue;
+            };
+            if let Some(body) = self.bundle_body(reference.prunable_hash())? {
+                bodies.push(body);
             }
         }
         Ok(bodies)

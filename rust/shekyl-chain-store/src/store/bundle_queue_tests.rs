@@ -383,3 +383,42 @@ fn a_body_reads_by_its_hash_and_a_queued_height_by_its_entry() {
         "the body leaves with its entry"
     );
 }
+
+/// A section whose middle body the store does not hold: the candidate's
+/// list stops at the gap, since a candidate's bodies are positional; what
+/// a peer or a reader is sent passes over it and keeps the body after it
+/// (Copilot on #1327: an RPC read lost every body after the first one the
+/// store had released). Red edit: stop `held_section_bodies` at the first
+/// absent body — the third body is not read.
+#[test]
+fn a_section_with_a_gap_stops_for_a_candidate_and_is_passed_over_for_a_reader() {
+    let path = tmp("section-gap");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    queue(&store, 40).expect("queued");
+    queue(&store, 42).expect("queued");
+    let (first, first_body) = bundle(40);
+    let (absent, _) = bundle(41);
+    let (third, third_body) = bundle(42);
+    let section = shekyl_types::archival::BundleReferences::from_sidecar(vec![
+        first.encode(),
+        absent.encode(),
+        third.encode(),
+    ])
+    .expect("a section");
+    let snap = store.begin_read().expect("snapshot");
+    assert_eq!(
+        snap.section_bodies(section.as_ref()).expect("reads"),
+        vec![first_body.clone()],
+        "a candidate's list stops at the gap"
+    );
+    assert_eq!(
+        snap.held_section_bodies(section.as_ref()).expect("reads"),
+        vec![first_body, third_body],
+        "a reader is sent every body held"
+    );
+    assert_eq!(
+        snap.held_section_bodies(None).expect("reads"),
+        Vec::new(),
+        "no section, no bodies"
+    );
+}

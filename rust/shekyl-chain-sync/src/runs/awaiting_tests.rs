@@ -20,7 +20,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_types::{BlockHash, BlockHeight, BundleRoot, ChainCount, Timestamp};
 use shekyl_wire::{Block, BlockBody, PowBlob};
 
-use super::{AWAITING_AGE, AWAITING_PER_SESSION};
+use super::{AWAITING_AGE, AWAITING_PER_SESSION, AWAITING_TOTAL};
 use crate::model::{Event, HashClass, Proved, Sync};
 use crate::proof::{fixed, serialized};
 use crate::protocol::CloseCause;
@@ -328,28 +328,37 @@ fn a_block_that_waits_past_the_age_is_dropped_not_refused() {
     assert!(closed(&out).is_empty(), "an expired wait closes nobody");
 }
 
-/// One session holds at most [`AWAITING_PER_SESSION`] blocks waiting; the
-/// next drops the oldest, and a late body for it then completes nothing.
-/// The blocks are siblings on main's tip, so only the one on the selected
-/// chain is offered when it completes; the bound is read off the waiting
-/// set. Red edit: drop the per-session bound — five blocks wait.
+/// One session holds at most [`AWAITING_PER_SESSION`] blocks waiting. The
+/// next is held back: not asked for, and no wait is evicted for it, so the
+/// asks out to the session never pass the owner's bound (`runs::awaiting`
+/// module docs). The oldest wait still completes on its answer. The blocks
+/// are siblings on main's tip; the bound is read off the waiting set. Red
+/// edit: evict the oldest wait at the bound — the fifth block is asked
+/// for, a fifth ask out to a session that has done nothing wrong.
 #[test]
-fn a_session_waits_on_at_most_its_bound_and_the_oldest_goes() {
+fn a_session_at_its_bound_is_not_asked_again_and_no_wait_is_evicted() {
     let mut world = World::new();
     let blocks: Vec<Announced> = (0..=AWAITING_PER_SESSION)
         .map(|n| world.block_with_section(100 + u32::try_from(n).expect("small")))
         .collect();
-    for block in &blocks {
+    let (within, past) = blocks.split_at(AWAITING_PER_SESSION);
+    for block in within {
         let out = world.announce(block);
         assert_eq!(asked(&out).len(), 1, "each block's body is asked for");
     }
+    let out = world.announce(&past[0]);
+    assert!(
+        asked(&out).is_empty(),
+        "the session is at its bound: {out:?}"
+    );
     assert_eq!(world.sync.awaiting.len(), AWAITING_PER_SESSION);
     assert!(
-        !world.sync.awaiting.contains_key(&blocks[0].hash),
-        "the oldest wait was dropped at the bound"
+        within
+            .iter()
+            .all(|block| world.sync.awaiting.contains_key(&block.hash)),
+        "no wait was evicted"
     );
-    let newest = blocks.last().expect("one past the bound");
-    assert!(world.sync.awaiting.contains_key(&newest.hash));
+    assert!(!world.sync.awaiting.contains_key(&past[0].hash));
     let out = world.drive(
         Event::BundleBodies {
             session: 1,
@@ -358,6 +367,107 @@ fn a_session_waits_on_at_most_its_bound_and_the_oldest_goes() {
         },
         Duration::from_secs(1),
     );
-    assert!(offered(&out).is_empty() && closed(&out).is_empty());
-    assert_eq!(world.sync.awaiting.len(), AWAITING_PER_SESSION);
+    assert!(closed(&out).is_empty());
+    assert_eq!(world.sync.awaiting.len(), AWAITING_PER_SESSION - 1);
+}
+
+/// At [`AWAITING_TOTAL`] over every session, a new block is held back and
+/// no other session's wait is evicted: each of those has its ask out.
+/// Fifteen waits from sessions 2 to 5 stand in beside session 1's one.
+/// Red edit: evict the oldest wait at the total bound — the new block is
+/// asked for and another session's wait is gone.
+#[test]
+fn the_total_bound_holds_back_a_new_block_and_evicts_no_other_wait() {
+    let mut world = World::new();
+    let first = world.block_with_section(200);
+    world.announce(&first);
+    let template = world
+        .sync
+        .awaiting
+        .get(&first.hash)
+        .expect("the first block waits")
+        .arrival
+        .clone();
+    let since = world.start;
+    for n in 1..AWAITING_TOTAL {
+        let mut arrival = template.clone();
+        arrival.session = 2 + u8::try_from(n % 4).expect("small");
+        let key = BlockHash::from_bytes([u8::try_from(n).expect("small"); 32]);
+        world
+            .sync
+            .awaiting
+            .insert(key, super::Waiting { arrival, since });
+    }
+    assert_eq!(world.sync.awaiting.len(), AWAITING_TOTAL);
+    let before: Vec<BlockHash> = world.sync.awaiting.keys().copied().collect();
+    let next = world.block_with_section(201);
+    let out = world.announce(&next);
+    assert!(asked(&out).is_empty(), "the set is full: {out:?}");
+    let after: Vec<BlockHash> = world.sync.awaiting.keys().copied().collect();
+    assert_eq!(after, before, "no wait was evicted");
+}
+
+/// A waiting block is not put in a body span while its bundle bodies are
+/// asked for: its body is here, and asked for again it would come back
+/// without them on every plan (Copilot on #1327). The plan that follows the
+/// announce is the one that would ask, and so is every later one. Red edit:
+/// leave the waiting set out of the span planner — the announce's own
+/// batch asks for the block in a 2014.
+#[test]
+fn a_waiting_block_is_not_asked_for_again_in_a_body_span() {
+    let mut world = World::new();
+    let block = world.block_with_section(300);
+    let spans = |out: &[Command<u8>]| {
+        out.iter()
+            .filter(|command| {
+                matches!(command, Command::RequestBodies { request, .. }
+                    if request.hashes.contains(block.hash.as_bytes()))
+            })
+            .count()
+    };
+    let out = world.announce(&block);
+    assert_eq!(asked(&out).len(), 1);
+    assert_eq!(spans(&out), 0, "the waiting block was asked for: {out:?}");
+    let out = world.drive(Event::Room { seats: 4 }, Duration::from_secs(1));
+    assert_eq!(spans(&out), 0, "the waiting block was asked for: {out:?}");
+    assert!(world.sync.awaiting.contains_key(&block.hash));
+}
+
+/// A copy that carries the bundle body, announced while the block waits,
+/// is offered at once; the wait's own answer then holds nothing a second
+/// time. Red edit: hold the completed wait whatever the entry already has
+/// — the late answer leaves a second copy held behind the offered one.
+#[test]
+fn a_whole_copy_offers_a_waiting_block_and_its_late_answer_offers_nothing() {
+    let mut world = World::new();
+    let block = world.block_with_section(400);
+    world.announce(&block);
+    let mut whole = block.body.clone();
+    whole.bundle_bodies = vec![block.bundle.as_bytes().to_vec()];
+    let out = world.drive(
+        Event::Announce {
+            session: 1,
+            body: whole,
+        },
+        Duration::from_secs(1),
+    );
+    assert_eq!(
+        offered(&out),
+        vec![block.hash],
+        "the whole copy is offered: {out:?}"
+    );
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 1,
+            block: block.hash,
+            bodies: vec![block.bundle.as_bytes().to_vec()],
+        },
+        Duration::from_secs(2),
+    );
+    assert!(offered(&out).is_empty(), "offered once: {out:?}");
+    assert!(
+        !world.sync.held.contains(block.hash),
+        "the late answer holds no second copy"
+    );
+    assert!(closed(&out).is_empty());
 }

@@ -175,7 +175,8 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
 }
 
 /// The body of each of `references`, in section order, from `carried`,
-/// matched by length and hash (§7.5).
+/// matched by length and hash (§7.5). Each carried body is hashed once
+/// ([`shekyl_archival_retention::CarriedBodies`]).
 ///
 /// # Errors
 ///
@@ -187,15 +188,17 @@ fn section_bodies(
     references: &[Vec<u8>],
     carried: &[Vec<u8>],
 ) -> Result<Vec<Vec<u8>>, FetchFault> {
+    let by_hash =
+        shekyl_archival_retention::CarriedBodies::index(carried.iter().map(Vec::as_slice));
     let mut bodies = Vec::with_capacity(references.len());
     for bytes in references {
         let found = shekyl_archival_retention::BundleRef::decode(bytes)
             .ok()
             .and_then(|reference| {
-                carried
-                    .iter()
-                    .find(|body| reference.accept_body(body).is_ok())
-                    .cloned()
+                by_hash
+                    .named_by(&reference)
+                    .filter(|named| reference.accept_body(named).is_ok())
+                    .map(<[u8]>::to_vec)
             });
         match found {
             Some(body) => bodies.push(body),

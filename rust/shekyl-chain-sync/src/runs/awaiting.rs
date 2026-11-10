@@ -18,11 +18,27 @@
 //! marked invalid and never stalls the tip. The wait is bounded:
 //!
 //! - in count, per session ([`AWAITING_PER_SESSION`]) and in total
-//!   ([`AWAITING_TOTAL`]); a new wait past either bound drops the oldest;
+//!   ([`AWAITING_TOTAL`]); a block past either bound does not wait: it is
+//!   dropped, not refused, and asked for again like any body this node
+//!   does not hold;
 //! - in age ([`AWAITING_AGE`]); an expired wait is dropped, not refused.
 //!
 //! Each waiting entry pins one bound block body, so the memory the set can
 //! hold is [`AWAITING_TOTAL`] block bodies.
+//!
+//! **A bound holds back the new block; it never evicts a wait.** Every
+//! wait has an ask out, and the owner closes a session that has
+//! [`AWAITING_PER_SESSION`] asks unanswered when it is asked again. A wait
+//! dropped while its ask is still out would let this model ask that
+//! session once more than the owner allows, so one 2014 answer carrying
+//! five such blocks would close an honest server. Held back instead, a
+//! session's asks never outnumber its waits, and a wait is dropped with its
+//! ask unanswered only at [`AWAITING_AGE`]: the owner closes a session only
+//! for an ask it left that long. A span's lowest blocks, which connect
+//! first, keep their waits. A waiting block is not put in another body
+//! span while its bundle bodies are asked for, and a copy that carries
+//! them, announced while it waits, is held at once; the wait stays until
+//! its ask is answered, and its answer then offers nothing twice.
 //!
 //! **Withholding.** A relayer serves the bodies of the blocks it relays
 //! (`SCS-P27`). A session that announced a block and answers the 2016 for
@@ -42,6 +58,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use shekyl_chain_rules::CarriedBodies;
 use shekyl_types::BlockHash;
 
 use crate::protocol::{BoundArrival, CloseCause, Command, OfferedBody};
@@ -80,20 +97,21 @@ pub(crate) struct Waiting<K> {
 pub(crate) type Awaiting<K> = BTreeMap<BlockHash, Waiting<K>>;
 
 /// The references of `body`'s section that no carried body answers, in
-/// section order and undecoded. A body answers a reference when it is the
-/// reference's length and hashes to its prunable hash (§7.5). A reference
-/// that does not parse has no body to wait for: `bind_body` refused the
-/// block before it got here.
+/// section order and undecoded. A body answers a reference when it hashes
+/// to its prunable hash and is the reference's length (§7.5). Each carried
+/// body is hashed once ([`CarriedBodies`]), not once per reference. A
+/// reference that does not parse has no body to wait for: `bind_body`
+/// refused the block before it got here.
 pub(crate) fn unanswered(body: &OfferedBody) -> Vec<Vec<u8>> {
+    let carried = CarriedBodies::index(body.bundle_bodies.iter().map(Vec::as_slice));
     let mut missing = Vec::new();
     for (position, bytes) in body.bundle_references.iter().enumerate() {
         let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
             continue;
         };
-        let answered = body
-            .bundle_bodies
-            .iter()
-            .any(|carried| reference.accept_body(carried).is_ok());
+        let answered = carried
+            .named_by(&reference)
+            .is_some_and(|named| reference.accept_body(named).is_ok());
         if !answered {
             missing.push(bytes.clone());
         }
@@ -108,7 +126,8 @@ where
 {
     /// Hold `arrival` for the entry, or, when its section names bodies it
     /// did not carry, make it wait for them and ask the owner (module docs).
-    /// A block already waiting is not asked for twice.
+    /// A block already waiting is not asked for twice. A block past either
+    /// bound is dropped without an ask; no wait is evicted for it.
     pub(crate) fn hold_or_await(
         &mut self,
         arrival: BoundArrival<K>,
@@ -130,17 +149,13 @@ where
             return;
         }
         let session = arrival.session;
-        while self
+        let of_session = self
             .awaiting
             .values()
             .filter(|waiting| waiting.arrival.session == session)
-            .count()
-            >= AWAITING_PER_SESSION
-        {
-            self.drop_oldest_waiting(Some(session));
-        }
-        while self.awaiting.len() >= AWAITING_TOTAL {
-            self.drop_oldest_waiting(None);
+            .count();
+        if of_session >= AWAITING_PER_SESSION || self.awaiting.len() >= AWAITING_TOTAL {
+            return;
         }
         out.push(Command::RequestBundleBodies {
             session,
@@ -177,7 +192,11 @@ where
         let answered_nothing = bodies.is_empty();
         waiting.arrival.body.bundle_bodies.extend(bodies);
         if unanswered(&waiting.arrival.body).is_empty() {
-            self.held.insert(waiting.arrival);
+            // A whole copy announced while this waited is already on its
+            // way to the entry, or through it.
+            if !self.accepted.contains(&block) && !self.outstanding.contains(block) {
+                self.held.insert(waiting.arrival);
+            }
             self.flush_offers(out);
             return;
         }
@@ -202,21 +221,6 @@ where
     pub(crate) fn drop_waiting_from(&mut self, session: K) {
         self.awaiting
             .retain(|_, waiting| waiting.arrival.session != session);
-    }
-
-    /// Drop the oldest waiting block, of `session` when it is named.
-    fn drop_oldest_waiting(&mut self, session: Option<K>) {
-        let oldest = self
-            .awaiting
-            .iter()
-            .filter(|(_, waiting)| session.is_none_or(|s| waiting.arrival.session == s))
-            // Two waits that began at one instant are ordered by arrival:
-            // the tag rises with each bound body.
-            .min_by_key(|(_, waiting)| (waiting.since, waiting.arrival.tag))
-            .map(|(block, _)| *block);
-        if let Some(block) = oldest {
-            self.awaiting.remove(&block);
-        }
     }
 }
 
