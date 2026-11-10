@@ -62,6 +62,23 @@ fn params_for(g: &SplitGroup) -> SalSigningParams {
     .unwrap()
 }
 
+/// `params` with another rerandomization, `x` or `y_kem` (the type is not
+/// `Clone`; the tests build each variant field by field).
+fn variant(
+    params: &SalSigningParams,
+    rerandomized: Option<RerandomizedOutput>,
+    x: Option<Scalar>,
+    y_kem: Option<Scalar>,
+) -> SalSigningParams {
+    SalSigningParams {
+        output: params.output,
+        rerandomized: rerandomized.unwrap_or_else(|| params.rerandomized.clone()),
+        signable: params.signable,
+        x: x.unwrap_or(params.x),
+        y_kem: y_kem.unwrap_or(params.y_kem),
+    }
+}
+
 /// Every signer in `signers` runs both rounds and completes; each signer's
 /// result, by participant. `params(p)` is what signer `p` signs from.
 fn run<'a>(
@@ -310,10 +327,8 @@ fn keys_for_another_output_cannot_preprocess() {
     let params = params_for(&g);
     let keys = g.keys[&participant(0)].clone();
 
-    let mut wrong_tweak = params.clone();
-    wrong_tweak.y_kem = Scalar::ZERO;
-    let mut wrong_x = params.clone();
-    wrong_x.x += Scalar::ONE;
+    let wrong_tweak = variant(&params, None, None, Some(Scalar::ZERO));
+    let wrong_x = variant(&params, None, Some(params.x + Scalar::ONE), None);
     let other_group = group(3, 2).keys[&participant(0)].clone();
 
     for (params, keys) in [
@@ -364,8 +379,12 @@ fn without_the_y_kem_offset_the_aggregate_does_not_verify() {
 fn a_signer_with_another_rerandomization_is_blamed() {
     let g = group(5, 3);
     let params = params_for(&g);
-    let mut stray = params.clone();
-    stray.rerandomized = RerandomizedOutput::new(&mut OsRng, params.output);
+    let stray = variant(
+        &params,
+        Some(RerandomizedOutput::new(&mut OsRng, params.output)),
+        None,
+        None,
+    );
     let signers = ps(&[0, 2, 4]);
     let odd = participant(2);
     let results = run(&g, &signers, |p| if p == odd { &stray } else { &params });

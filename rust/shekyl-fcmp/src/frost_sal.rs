@@ -339,8 +339,9 @@ pub enum FrostSalError {
 ///
 /// `x` and `y_kem` are secret to the group (every member can compute them
 /// from the output), and the rerandomization links the input to its output,
-/// so the whole value wipes on drop and its `Debug` shows only the output.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+/// so the whole value wipes on drop, its `Debug` shows only the output, and
+/// it is not `Clone`: signers share it by reference.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SalSigningParams {
     #[zeroize(skip)]
     output: Output,
@@ -381,16 +382,21 @@ impl SalSigningParams {
         let c = decode_point(commitment).ok_or(FrostSalError::Commitment)?;
         let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(*output_key));
         let output = Output::new(o, i, c).map_err(|_| FrostSalError::OutputKey)?;
-        let x = Option::<Scalar>::from(Scalar::from_repr(*x)).ok_or(FrostSalError::SpendScalar)?;
-        let y_kem =
-            Option::<Scalar>::from(Scalar::from_repr(*y_kem)).ok_or(FrostSalError::OutputTweak)?;
-        Ok(Self {
+        // The wipe-on-drop owner exists before either secret is decoded, and
+        // each decodes straight into its field: a refusal of `y_kem` drops
+        // the params, which wipes `x`.
+        let mut params = Self {
             output,
             rerandomized: RerandomizedOutput::new(rng, output),
             signable,
-            x,
-            y_kem,
-        })
+            x: Scalar::ZERO,
+            y_kem: Scalar::ZERO,
+        };
+        params.x =
+            Option::<Scalar>::from(Scalar::from_repr(*x)).ok_or(FrostSalError::SpendScalar)?;
+        params.y_kem =
+            Option::<Scalar>::from(Scalar::from_repr(*y_kem)).ok_or(FrostSalError::OutputTweak)?;
+        Ok(params)
     }
 
     /// The output being spent, as `prove_with_sal` takes it.

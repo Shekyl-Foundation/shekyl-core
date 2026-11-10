@@ -125,14 +125,17 @@ fn load_keys(file: &MemberFile) -> ThresholdKeys<Ed25519T> {
     .unwrap()
 }
 
-/// What one member recovers from one output by scanning it alone.
-#[derive(PartialEq, Eq, Debug)]
+/// What one member recovers from one output by scanning it alone. `x`,
+/// `y_kem` and the blind are secrets: they wipe on drop, the type has no
+/// `Debug`, and the tests compare with `==`, so a failure prints none of
+/// them (rule 50).
+#[derive(PartialEq, Eq)]
 struct Scanned {
-    x: [u8; 32],
-    y_kem: [u8; 32],
+    x: Zeroizing<[u8; 32]>,
+    y_kem: Zeroizing<[u8; 32]>,
     key_image: KeyImage,
     committed_form: Vec<u8>,
-    blind: [u8; 32],
+    blind: Zeroizing<[u8; 32]>,
 }
 
 fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
@@ -145,8 +148,8 @@ fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
     )
     .unwrap()
     .0;
-    let y_kem = derive_output_secrets(&ss, index).y;
-    assert_eq!(y_kem, out.y, "the scan recovers the sender's y_kem");
+    let y_kem = Zeroizing::new(derive_output_secrets(&ss, index).y);
+    assert!(*y_kem == out.y, "the scan recovers the sender's y_kem");
     let spend =
         compute_output_key_image(&ss, index, file.b(), &key_image_generator(&out.output_key))
             .unwrap();
@@ -184,11 +187,11 @@ fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
         "the member re-derives the published CM"
     );
     Scanned {
-        x: *spend.spend_secret_x,
+        x: spend.spend_secret_x.clone(),
         y_kem,
         key_image: spend.key_image,
         committed_form,
-        blind: leaf.blind,
+        blind: Zeroizing::new(leaf.blind),
     }
 }
 
@@ -258,9 +261,8 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
         .map(|(out, index)| {
             let first = scan(&files[0], out, *index);
             for file in &files[1..] {
-                assert_eq!(
-                    scan(file, out, *index),
-                    first,
+                assert!(
+                    scan(file, out, *index) == first,
                     "every member recovers the same output"
                 );
             }
@@ -336,7 +338,7 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
         .zip(&scans)
         .map(|((out, _), s)| ProveInputLeafChunk {
             pqc_leaf_commitment: out.pqc_leaf.point,
-            pqc_leaf_blind: s.blind,
+            pqc_leaf_blind: *s.blind,
             leaf_outputs: leaf_outputs.clone(),
             leaf_cm_x: leaf_cm_x.clone(),
             c1_branch_layers: vec![],
