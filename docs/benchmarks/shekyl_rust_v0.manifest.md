@@ -803,7 +803,7 @@ split the signature's cost into its own cell):
 | Function | Cells | What is inside the count |
 | --- | --- | --- |
 | `crypto_bench_serve_response` | one leaf, an eighth of a segment, a full segment | One whole response to `GET /shard/{id}`: parse, anchor gate, open, the key's pre-flight, the head, every chunk read and folded into the delivery digest, the call for the countersignature (answered by a pinned envelope — see *Fixture shape*), the bytes written |
-| `crypto_bench_serve_sign` | one pinned transcript | The countersignature alone: the seeded persona key's hybrid sign (Ed25519 + ML-DSA-65) over a fixed transcript, so the cost of signing is gated on a rejection-sampling trajectory nothing on the wire can move |
+| `crypto_bench_serve_sign` | one pinned transcript | The receipt alone: the seeded receipt key's hybrid sign (Ed25519 + FN-DSA-1024, from the SO-D12 4b switch's C7; Ed25519 + ML-DSA-65 before it) over a fixed transcript, with FN-DSA's signing stream seeded, so the cost of signing is gated on a trajectory nothing on the wire can move |
 | `crypto_bench_serve_prehead` | one leaf, a full segment | The same request up to the 200 head being ready to write. No body byte is read |
 | `crypto_bench_serve_read_and_fold` | all three | Open the shard, then read it at the serve loop's chunk size and fold each chunk into the delivery digest |
 | `crypto_bench_serve_digest_alone` | all three | `pass_delivery_digest` in one call over the same body bytes |
@@ -889,7 +889,10 @@ byte is `0x0a`, which keeps the 113-byte transcript on that round count.
 until that constant and the tail are chosen again. The one-time drop in the serve
 cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
 leaving them, absorbed by the rolling baseline on the next `dev`
-rotation.
+rotation. At the SO-D12 4b switch's C7 the bench key became a receipt
+key (Ed25519 + FN-DSA-1024, FN-DSA's signing stream seeded), the serve's
+only scheme from then on: `crypto_bench_serve_sign` moves with the
+scheme, and the serve cells' envelope is 1,356 bytes where it was 3,385.
 
 **Measurement boundary.** Building the shard and the key, and a
 self-witness serve (asserting a `200` closed by a signature, so the gate
