@@ -16,6 +16,7 @@ on:
           - staking-sim-ignored
           - chain-ingest-ignored
           - wire-ignored
+          - trybuild-ignored
           - producer-gate
         default: all
       ref:
@@ -367,6 +368,49 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_wire.sh
 
+  trybuild-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored' }}
+    # The trybuild harnesses of shekyl-chain-rules, shekyl-mempool and
+    # shekyl-crypto-pq: programs compiled as a downstream crate whose whole
+    # stderr must match a snapshot (the brand gate on `validate`, the pool
+    # verdict that never connects, the output field that cannot be built
+    # unencrypted). trybuild builds the programs in a cargo project of its
+    # own, where each crate's dependency tree compiles again, about 19
+    # minutes per tree on this runner, and the workspace's profile does not
+    # reach it. The four tests left the per-PR Rust job on 2026-11-09 and
+    # this job is the lane that runs them. The set is read from the
+    # checked-out ref's scripts/ci/ignored_set_trybuild.sh (its header says
+    # what each test guards and why mempool's travel with chain-rules'), so
+    # each leg is judged by its own tree. The per-PR Rust job runs the
+    # script with `--check` and stops after that judgement.
+    runs-on: ubuntu-latest
+    # Not yet timed here: two dependency trees of about 19 minutes each in
+    # the pull-request runs, plus the harness crates' own debug build. Size
+    # it from the first runs.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the trybuild harnesses' ignored tests
+        # The set and its assertions are scripts/ci/ignored_set_trybuild.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_trybuild.sh
+
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
@@ -381,7 +425,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, trybuild-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -435,6 +479,14 @@ jobs:
                   'The `economics-sim-ignored` job failed. It runs five `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `esr10_nightly_narration_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
                   'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with `regen_stage2_narration_fixtures` or `regen_esr10_narration_fixtures` under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
                   'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
+                ],
+              },
+              'trybuild-ignored': {
+                title: 'nightly trybuild ignored tests RED',
+                lines: [
+                  'The `trybuild-ignored` job failed. It runs the four `#[ignore]`d trybuild tests of `shekyl-chain-rules`, `shekyl-mempool` and `shekyl-crypto-pq`: programs compiled as a downstream crate whose whole stderr must match a snapshot (the brand gate on `validate`, the pool verdict that cannot connect and the pool internals that are not public, the output field that cannot be built unencrypted).',
+                  'A mismatch is read as the harness\'s doc comment says: an E0046 means a stub fell behind a trait, fix the stub; a reworded diagnostic after a toolchain bump is regenerated with `TRYBUILD=overwrite` after reading it; a different error at the guarded call, or none, is a finding against the crate, not a snapshot to refresh.',
+                  'If the job stopped before running anything, a trybuild target\'s ignored set changed: decide in `scripts/ci/ignored_set_trybuild.sh` whether the new test is run here.',
                 ],
               },
             };
