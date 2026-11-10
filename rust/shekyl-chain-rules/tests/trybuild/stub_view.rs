@@ -226,6 +226,21 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     ) -> Result<Option<AtomicUnits>, Infallible> {
         Ok(None)
     }
+    fn support_issued(
+        &self,
+        _: SettlementEpoch,
+        _: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn support_settlement(
+        &self,
+        _: &PCanonicalId,
+        _: SettlementEpoch,
+        _: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, Infallible> {
+        Ok(None)
+    }
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
         Ok(None)
     }

@@ -726,10 +726,10 @@ pub fn release_last_served<'id, V: ChainView<'id>>(
 /// window is the last `RELEASE_COOLDOWN_EPOCHS` epochs, and the settling
 /// family reads back `SLASH_GRACE_EPOCHS` (`EpochFloor<Settling>`), so
 /// `RELEASE_COOLDOWN_EPOCHS − 1 ≤ SLASH_GRACE_EPOCHS`. With the cooldown
-/// above the grace, that pins the cooldown at one epoch past the grace.
-/// The switch's brief states the upper bound one looser, the grace plus
-/// two; that bound would put the window one epoch under the read floor
-/// (raised on #1327).
+/// above the grace, that pins the cooldown at one epoch past the grace:
+/// `SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`
+/// (`ARCHIVAL_BOND_GATE4.md`, the cooldown's bounds). The store's reach is
+/// the upper bound.
 const COOLDOWN_WINDOW_IS_READABLE: () = assert!(
     SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS
         && RELEASE_COOLDOWN_EPOCHS - 1 <= SLASH_GRACE_EPOCHS

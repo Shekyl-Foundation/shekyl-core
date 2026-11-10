@@ -23,8 +23,8 @@ use super::*;
 use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS,
-    CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_SUPPORT_BLOCK, BLOCKS, BLOCK_INFO,
+    CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
 };
 
 /// The store's fault is the only outer arm these tests expect; the
@@ -110,8 +110,9 @@ fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreEr
         .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
 }
 
-/// The zero draw row a connect writes, and epoch 0's empty digest. The
-/// count of the next block reads both.
+/// The zero draw row and the empty support row a connect writes, and
+/// epoch 0's empty digest. The count of the next block reads all three:
+/// the support step reads the carry the row before it left.
 fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<(), StoreError> {
     let row = shekyl_types::archival::BlockDraws {
         count: 0,
@@ -122,7 +123,15 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<()
     };
     batch
         .open_insert_table(ARCHIVAL_BLOCK_DRAWS, PROBE_ROW)?
-        .insert(height.to_raw(), row.encoded().as_encoded())
+        .insert(height.to_raw(), row.encoded().as_encoded())?;
+    batch
+        .open_insert_table(ARCHIVAL_SUPPORT_BLOCK, PROBE_ROW)?
+        .insert(
+            height.to_raw(),
+            shekyl_types::archival::SupportRow::EMPTY
+                .encoded()
+                .as_encoded(),
+        )
 }
 
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
