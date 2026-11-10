@@ -175,8 +175,10 @@ pub fn dealer_split(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<DealerSplit, FrostKeyError> {
     check_group_shape(n, m)?;
+    // `key_gen` refuses only a shape `check_group_shape` already refused.
+    // A refusal here is dkg disagreeing with that check, not a caller's group.
     let keys = dkg_dealer::key_gen::<_, Ed25519T>(rng, u16::from(m), u16::from(n))
-        .map_err(|_| FrostKeyError::GroupShape { n, m })?;
+        .expect("dkg-dealer splits every group check_group_shape accepts");
     let first = &keys[&participant(0)];
     let mut shares = Vec::with_capacity(usize::from(n));
     let mut verification_shares = Vec::with_capacity(usize::from(n));
@@ -257,15 +259,19 @@ pub fn threshold_keys(
         }
     }
 
+    // Both constructors refuse only shapes and participant sets this function
+    // already checked. A refusal is dkg disagreeing with those checks.
     let params = ThresholdParams::new(u16::from(m), u16::from(n), participant(member_index))
-        .map_err(|_| FrostKeyError::GroupShape { n, m })?;
+        .expect("dkg accepts a member of a group check_group_shape accepts");
     let by_participant = points
         .into_iter()
         .zip(0u8..)
         .map(|(point, member)| (participant(member), point))
         .collect::<HashMap<_, _>>();
-    ThresholdKeys::new(params, Interpolation::Lagrange, share, by_participant)
-        .map_err(|_| FrostKeyError::GroupShape { n, m })
+    Ok(
+        ThresholdKeys::new(params, Interpolation::Lagrange, share, by_participant)
+            .expect("dkg accepts one Lagrange share per participant of a checked group"),
+    )
 }
 
 /// dkg's participant for a 0-based member index.

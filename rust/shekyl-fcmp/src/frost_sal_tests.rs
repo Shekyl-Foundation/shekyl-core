@@ -6,7 +6,7 @@
 //! The FROST SAL layer over synthetic outputs: the dealer and loader, the
 //! machines end to end, and each way a signing session must fail. The
 //! end-to-end spend of real slice-1 outputs from member files is
-//! `shekyl-multisig/tests/frost_spend.rs`.
+//! `rust/shekyl-fcmp/tests/frost_spend.rs`.
 
 // CLIPPY(non_snake_case): `O`, `C`, `L` are the FCMP++ / SAL notation.
 #![allow(non_snake_case)]
