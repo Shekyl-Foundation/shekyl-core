@@ -776,22 +776,6 @@ fn validator_rejects_an_unparseable_extra() {
     assert!(err.to_string().contains("tx_extra"), "{err}");
 }
 
-/// The positive limb of the flip: an attestation field is now in the grammar,
-/// so a coinbase-shaped `extra` carrying one still validates rather than being
-/// refused by the newly unconditional parse.
-#[test]
-fn validator_accepts_an_attestation_alongside_the_pqc_fields() {
-    use shekyl_wire::tx_extra::{serialize, TxExtraField};
-    let mut extra = conforming_pqc_extra(2);
-    extra.extend_from_slice(
-        &serialize(&[TxExtraField::ArchivalAttestation(vec![0xA7; 16])])
-            .expect("attestation field serializes"),
-    );
-    spend_with_extra(extra)
-        .validate_context_free_pruned()
-        .expect("an attestation field must not make a valid spend invalid");
-}
-
 #[test]
 fn validator_rejects_a_kem_field_of_the_wrong_length() {
     let err = spend_with_extra(pqc_fields(1120, 32 * 2))

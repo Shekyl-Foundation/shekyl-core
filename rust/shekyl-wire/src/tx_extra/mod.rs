@@ -78,12 +78,6 @@ pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
 // producer. Both bytes stay retired like `0x03` / `0x05` / `0xDE` — never
 // reused — and parse as unknown tags.
 
-/// `0x0B` — archival attestation blob. A present tag with an empty payload
-/// encodes as two bytes (`0x0B 0x00`), not as an absent extra. The consensus
-/// reader's committed empty set is a successful parse with the tag **absent**;
-/// present-empty and absent both yield an empty blob at that API.
-pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
-
 /// `0x0C` — the secret draw's commitment: 32 bytes, no length prefix, as
 /// the pubkey is encoded (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2; `SO-D12i`).
 /// Required in every coinbase and refused everywhere else.
@@ -157,8 +151,6 @@ pub enum TxExtraField {
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
     PqcLeafEntries(Vec<u8>),
-    /// `0x0B` — archival attestation blob.
-    ArchivalAttestation(Vec<u8>),
     /// `0x0C` — the secret draw's commitment.
     DrawCommitment(DrawCommitment),
     /// `0x0D` — the multisig entries, in wire order.
@@ -176,7 +168,6 @@ impl TxExtraField {
             Self::AdditionalPubKeys(_) => TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
             Self::PqcKemCiphertext(_) => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
             Self::PqcLeafEntries(_) => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-            Self::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
             Self::DrawCommitment(_) => TX_EXTRA_TAG_DRAW_COMMITMENT,
             Self::PqcMultisig(_) => TX_EXTRA_TAG_PQC_MULTISIG,
         }
@@ -201,10 +192,9 @@ impl TxExtraField {
                 Some(Cow::Owned(bytes))
             }
             Self::PqcMultisig(entries) => Some(Cow::Owned(multisig_entries_bytes(entries))),
-            Self::Nonce(bytes)
-            | Self::PqcKemCiphertext(bytes)
-            | Self::PqcLeafEntries(bytes)
-            | Self::ArchivalAttestation(bytes) => Some(Cow::Borrowed(bytes)),
+            Self::Nonce(bytes) | Self::PqcKemCiphertext(bytes) | Self::PqcLeafEntries(bytes) => {
+                Some(Cow::Borrowed(bytes))
+            }
         }
     }
 }
@@ -319,9 +309,6 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_LEAF_ENTRIES => {
                 TxExtraField::PqcLeafEntries(read_blob(&mut cur, "pqc_leaf_hashes")?)
             }
-            TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
-                TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
-            }
             TX_EXTRA_TAG_DRAW_COMMITMENT => {
                 TxExtraField::DrawCommitment(DrawCommitment::from_bytes(read_array(&mut cur)?))
             }
@@ -390,9 +377,7 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
                     "tx_extra: 0x0d multisig entries exceed cap {READ_LEN_CAP}"
                 )));
             }
-            TxExtraField::PqcKemCiphertext(b)
-            | TxExtraField::PqcLeafEntries(b)
-            | TxExtraField::ArchivalAttestation(b)
+            TxExtraField::PqcKemCiphertext(b) | TxExtraField::PqcLeafEntries(b)
                 if b.len() > READ_LEN_CAP =>
             {
                 return Err(io::Error::other(format!(
@@ -445,9 +430,6 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             write_blob(w, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, blob)
         }
         TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob),
-        TxExtraField::ArchivalAttestation(blob) => {
-            write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
-        }
         TxExtraField::DrawCommitment(commitment) => {
             w.write_all(&[TX_EXTRA_TAG_DRAW_COMMITMENT])?;
             w.write_all(commitment.as_bytes())

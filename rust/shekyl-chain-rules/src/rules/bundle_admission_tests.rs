@@ -34,20 +34,11 @@ use shekyl_archival_retention::{
 };
 use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHeight, BundleRoot};
-use shekyl_wire::tx_extra::{parse, serialize, TxExtraField};
+use shekyl_wire::tx_extra::parse;
 
 /// `candidate` with its header's `bundle_root` replaced.
 fn with_root(mut candidate: Candidate, root: [u8; 32]) -> Candidate {
     candidate.block.header.bundle_root = BundleRoot::from_bytes(root);
-    candidate
-}
-
-/// `candidate` with `field` appended to its coinbase extra.
-fn with_coinbase_field(mut candidate: Candidate, field: TxExtraField) -> Candidate {
-    let extra = &mut candidate.block.miner_transaction.prefix.extra;
-    let mut fields = parse(extra).expect("the fixture coinbase extra parses");
-    fields.push(field);
-    *extra = serialize(&fields).expect("fields serialize");
     candidate
 }
 
@@ -143,26 +134,6 @@ fn i19_an_unreadable_coinbase_extra_is_refused_in_form() {
     assert_refused(
         judge_on(&chain, candidate),
         CenRow::I19,
-        Locus::Tx {
-            slot: TxSlot::Miner,
-        },
-    );
-}
-
-/// A `0x0B` attestation field in the coinbase is CEN-I20's, at the miner
-/// slot, in `form`: the header commits to bundles (`SCS-P34`), and the
-/// coinbase grammar admits no attestation field for a record to ride in.
-#[test]
-fn i20_an_attestation_field_in_the_coinbase_is_refused_in_form() {
-    let chain = chain_of(3);
-    let candidate = with_coinbase_field(
-        candidate_on(&chain, Vec::new()),
-        // One record header's worth: p_id ‖ shard ‖ epoch ‖ kind.
-        TxExtraField::ArchivalAttestation(vec![0u8; 32 + 8 + 8 + 1]),
-    );
-    assert_refused(
-        judge_on(&chain, candidate),
-        CenRow::I20,
         Locus::Tx {
             slot: TxSlot::Miner,
         },
