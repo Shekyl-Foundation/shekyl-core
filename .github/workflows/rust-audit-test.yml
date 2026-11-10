@@ -570,9 +570,13 @@ jobs:
         # and as warnings on the pull request; then the slowest tests and
         # binaries, which size the partition of the run. Report only: the
         # run's own exit status is the verdict. It fails when there is no
-        # JUnit file to read, so a run that wrote none cannot read as clean.
+        # JUnit file to read, so a run that wrote none cannot read as clean;
+        # under a scope, a selection nextest recorded as empty is reported
+        # as "0 tests", not refused.
         if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' && needs.changes.outputs.rust_tests != 'none' }}
-        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml --scope "$RUST_TESTS"
       - name: upload the test timings (JUnit)
         # Each test's time from the nextest run above, kept for the slow
         # tests to be named and the step to be partitioned by them.

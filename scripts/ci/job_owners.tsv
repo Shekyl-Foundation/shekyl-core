@@ -12,6 +12,7 @@
 .github/actions/set-make-job-count/action.yml	build:build-macos,build:build-ubuntu,nightly-live-daemon-slow:slow-gates,weekly-os:build-arch,weekly-os:build-windows-msys2
 .github/codeql/config.yml	codeql:analyze-rust
 .github/pull_request_template.md	none
+.github/workflows/release-tagged.yml.disabled	none
 scripts/ci/_census.py	docs-gates:check-doc-links
 scripts/ci/_gfm_table.py	docs-gates:check-doc-links
 scripts/ci/change_scope.py	build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
@@ -115,7 +116,7 @@ scripts/ci/ignored_set_wire.sh	nightly:report-red,nightly:wire-ignored,rust-audi
 scripts/ci/inland_height_u64_grandfather.txt	grep-gates:grep-gates
 scripts/ci/job_owners.tsv	build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
-scripts/ci/nextest_report.py	rust-audit-test:rust-audit-and-test
+scripts/ci/nextest_report.py	docs-gates:check-doc-links,rust-audit-test:rust-audit-and-test
 scripts/ci/p17_remote_dial.ps1	none
 scripts/ci/producer_gate.sh	nightly:producer-gate,nightly:report-red
 scripts/ci/push_scope_base.sh	build:changes,rust-audit-test:changes
