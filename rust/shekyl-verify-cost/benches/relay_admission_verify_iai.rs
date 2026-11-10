@@ -74,19 +74,17 @@
 
 use std::hint::black_box;
 
-use fips204::traits::SerDes;
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
-use shekyl_crypto_pq::derivation::{
-    derive_output_secrets, derive_pqc_public_key, keygen_from_seed,
-};
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SCHEME_DOMAIN_PQC_AUTH_TX};
+use shekyl_crypto_pq::kem::{SharedSecret, SHARED_SECRET_LEN};
+use shekyl_crypto_pq::output::sign_pqc_auth_for_output_with_ml_dsa_seed;
+use shekyl_crypto_pq::signature::{ML_DSA_SIGNING_SEED_LEN, SCHEME_DOMAIN_PQC_AUTH_TX};
 use shekyl_types::SigningPayloadHash;
-use shekyl_verify_cost::connect::{build_bp, PqcAuthFixture};
-use shekyl_verify_cost::door::{door_verify, stand_in_signed_hash, DoorFixture, DoorStatus};
-use shekyl_verify_cost::relay::{build_fixture, ChunkLayout};
+use shekyl_verify_cost::connect::{PqcAuthFixture, PQC_AUTH_FIXTURE_OUTPUT_INDEX};
+use shekyl_verify_cost::door::{build_door_fixture_with, door_verify, DoorFixture, DoorStatus};
+use shekyl_verify_cost::relay::ChunkLayout;
 
 /// Fixed seed for the gate fixture's derivation. Its value has no cryptographic
 /// meaning; it is pinned so the fixture — the FCMP++ proof included, which
@@ -115,56 +113,59 @@ const BENCH_SEED: [u8; 32] = [
 
 /// The ML-DSA signing nonce. Production signing is hedged (`OsRng`), so a
 /// signature made that way differs every run, and the Ed25519 half's
-/// variable-time verify with it. Seeded through
-/// `HybridEd25519MlDsa::sign_with_ml_dsa_seed`, the test-support path
-/// `transfer_e2e_iai` signs with, which `shekyl-crypto-pq`'s `test-utils`
-/// exposes on this crate's dev-dependency edge only.
-const ML_DSA_SEED: [u8; 32] = [0x5e; 32];
+/// variable-time verify with it. Passed to
+/// [`sign_pqc_auth_for_output_with_ml_dsa_seed`], the wallet signer's
+/// assembly with a fixed nonce. `transfer_e2e_iai` fixes a nonce the same
+/// way, through `sign_with_ml_dsa_seed`, on a key that bench draws itself.
+/// The seeded entry is `shekyl-crypto-pq`'s `test-utils` surface, on this
+/// crate's dev-dependency edge only.
+const ML_DSA_SIGNING_SEED: [u8; ML_DSA_SIGNING_SEED_LEN] = [0x5e; ML_DSA_SIGNING_SEED_LEN];
 
-/// One input's hybrid signature under the key the wallet's signer derives
-/// (`shekyl_crypto_pq::output::sign_pqc_auth_for_output`: the output
-/// secrets, the ML-DSA-65 keygen from their seed, the Ed25519 key from
-/// theirs), with the ML-DSA nonce seeded. The combined shared secret is
-/// drawn from `rng`, so the key is the seed's too.
+/// The gate's one cell. One input and two outputs is the modal transaction
+/// and the cheapest cell, so the count moves when the per-transaction floor
+/// moves.
+const MODAL_N_IN: usize = 1;
+const MODAL_N_OUT: usize = 2;
+/// Production's shallowest tree: a non-empty tree yields depth of at least 2.
+const MODAL_TREE_DEPTH: u8 = 2;
+const MODAL_LAYOUT: ChunkLayout = ChunkLayout::Shared;
+
+/// One input's hybrid signature: the wallet signer's key, with the ML-DSA
+/// nonce fixed. The combined shared secret is drawn from `rng`, so the key
+/// is the seed's too. The signer wipes the derived key; the
+/// [`SharedSecret`] wipes the shared secret when this returns.
 fn seeded_auth(rng: &mut ChaCha20Rng, message: SigningPayloadHash) -> PqcAuthFixture {
-    let mut combined_ss = [0u8; 64];
-    rng.fill_bytes(&mut combined_ss);
-    let secrets = derive_output_secrets(&combined_ss, 0);
-    let (_, ml_dsa) = keygen_from_seed(&secrets.ml_dsa_seed).expect("ML-DSA-65 keygen");
-    let secret = HybridSecretKey {
-        ed25519: secrets.ed25519_pqc_seed.to_vec(),
-        ml_dsa: ml_dsa.into_bytes().to_vec(),
-    };
-    let signature = HybridEd25519MlDsa
-        .sign_with_ml_dsa_seed(
-            &secret,
-            SCHEME_DOMAIN_PQC_AUTH_TX,
-            message.as_bytes(),
-            &ML_DSA_SEED,
-        )
-        .expect("seeded hybrid sign")
-        .to_canonical_bytes()
-        .expect("canonical signature");
+    let mut combined_ss = SharedSecret([0u8; SHARED_SECRET_LEN]);
+    rng.fill_bytes(&mut combined_ss.0);
+    let signed = sign_pqc_auth_for_output_with_ml_dsa_seed(
+        &combined_ss.0,
+        PQC_AUTH_FIXTURE_OUTPUT_INDEX,
+        SCHEME_DOMAIN_PQC_AUTH_TX,
+        message.as_bytes(),
+        &ML_DSA_SIGNING_SEED,
+    )
+    .expect("seeded hybrid sign");
     PqcAuthFixture {
-        public_key: derive_pqc_public_key(&combined_ss, 0).expect("hybrid public key"),
-        signature,
+        public_key: signed.hybrid_public_key,
+        signature: signed.signature,
         message,
     }
 }
 
-// The gate's fixed shape: one input, two outputs.
+// The gate's fixed shape.
 fn modal_shape() -> DoorFixture {
     let mut rng = ChaCha20Rng::from_seed(BENCH_SEED);
-    // Depth 2: the gate must sit at a shape production actually presents.
-    // The masks and the proof are drawn first, as they were when the gate
-    // timed those two alone, so their operands are unchanged and the
-    // signature and the range proof are what this shape added.
-    let adm = build_fixture(&mut rng, 1, 2, 2, ChunkLayout::Shared);
-    let auths = (0..adm.n_in)
-        .map(|input| seeded_auth(&mut rng, stand_in_signed_hash(input)))
-        .collect();
-    let bp = build_bp(&mut rng, adm.n_out);
-    let fixture = DoorFixture::new(adm, auths, bp);
+    // `build_door_fixture_with` draws the admission fixture first on this
+    // rng, then the signature, then the range proof. The admission operands
+    // are the ones the gate timed when it counted those two alone.
+    let fixture = build_door_fixture_with(
+        &mut rng,
+        MODAL_N_IN,
+        MODAL_N_OUT,
+        MODAL_TREE_DEPTH,
+        MODAL_LAYOUT,
+        seeded_auth,
+    );
     // Self-witness, asserted HERE because setup is outside the measured region.
     // Without it, a fixture that stopped verifying would still produce a
     // plausible instruction count -- the early-return reject path, an order of

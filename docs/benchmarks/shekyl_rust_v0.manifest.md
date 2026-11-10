@@ -760,16 +760,20 @@ input is single-signer, the modal form.
 `ChunkLayout::Shared` — the modal transaction shape and the
 cheapest cell, so the gate is sensitive to the per-transaction
 floor rather than to a tail cell. The fixture is
-`shekyl_verify_cost::door::DoorFixture`: the masks and the proof
-from `relay::build_fixture` (the wall-clock sweep's fixture), drawn
-first from the pinned seed, then the signature and the range proof
-from the same stream. The signature is made under the key the
-wallet's signer derives, with the ML-DSA nonce seeded
-(`sign_with_ml_dsa_seed`), because a hedged signature differs every
-run. The fixture is **asserted to VERIFY before it is timed**, all
-four checks; without that self-witness a broken fixture would time
-the early-return reject path and present as a large speed-up.
-`tests/door_pins.rs` pins the status from both sides.
+`shekyl_verify_cost::door::DoorFixture`, built by
+`build_door_fixture_with` so the draw order has one owner: the
+masks and the proof from `relay::build_fixture` (the wall-clock
+sweep's fixture) first, from the pinned seed, then the signature,
+then the range proof, on that same stream. The signature is
+`sign_pqc_auth_for_output_with_ml_dsa_seed`: the wallet signer's
+key assembly, with the ML-DSA nonce seeded, because a hedged
+signature differs every run. That function is `shekyl-crypto-pq`'s
+`test-utils` surface. The fixture is **asserted to VERIFY before
+it is timed**, all four checks; without that self-witness a broken
+fixture would time the early-return reject path and present as a
+large speed-up. `tests/door_pins.rs` pins the status from both
+sides, and that the builder asks for one signature per input in
+order.
 
 **Measurement boundary.** `prove` (fixture construction) is
 `setup`, excluded from the measured region. The fixture is returned

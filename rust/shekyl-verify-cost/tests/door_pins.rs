@@ -19,18 +19,40 @@
 //!    leaving the other three checks accepting and `verified()` false.
 //! 3. **Shape**: a fixture whose parts disagree on the shape is refused at
 //!    construction, before anything can time it.
+//! 4. **Order**: the builder asks the signer for one message per input,
+//!    input 0 then input 1. The gate and the hedged tests share that order.
+
+use std::cell::RefCell;
 
 use rand_core::OsRng;
 
 use shekyl_verify_cost::connect::{build_bp, build_pqc_auth};
 use shekyl_verify_cost::door::{
-    build_door_fixture, door_verify, stand_in_signed_hash, DoorFixture,
+    build_door_fixture, build_door_fixture_with, door_verify, stand_in_signed_hash, DoorFixture,
 };
 use shekyl_verify_cost::relay::{admission_verify, build_fixture, ChunkLayout};
 
 /// Two inputs, so a refusal can be named at an input other than the first.
 fn two_input_fixture() -> DoorFixture {
     build_door_fixture(&mut OsRng, 2, 2, 2, ChunkLayout::Spread)
+}
+
+#[test]
+fn the_builder_signs_each_input_in_order() {
+    let messages = RefCell::new(Vec::new());
+    let fixture =
+        build_door_fixture_with(&mut OsRng, 2, 2, 2, ChunkLayout::Spread, |rng, message| {
+            messages.borrow_mut().push(message);
+            build_pqc_auth(rng, message)
+        });
+    assert_eq!(
+        messages.into_inner(),
+        vec![stand_in_signed_hash(0), stand_in_signed_hash(1)]
+    );
+    assert!(
+        door_verify(&fixture).verified(),
+        "the signer's auths are the fixture's"
+    );
 }
 
 #[test]

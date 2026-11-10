@@ -31,6 +31,7 @@ use rand_core::{CryptoRng, RngCore};
 use curve25519_dalek::scalar::Scalar;
 use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
 use shekyl_crypto_pq::error::PqcVerifyError;
+use shekyl_crypto_pq::kem::{SharedSecret, SHARED_SECRET_LEN};
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{
     verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65, SCHEME_DOMAIN_PQC_AUTH_TX,
@@ -57,20 +58,45 @@ pub struct PqcAuthFixture {
     pub message: SigningPayloadHash,
 }
 
+/// Fill byte of [`stand_in_signed_hash`]. Distinct from a real
+/// `signed_hash`, and stable so a seeded signature over it replays.
+const STAND_IN_SIGNED_HASH_FILL: u8 = 0x5a;
+
+/// Output index passed to the wallet signer for a fixture key.
+///
+/// Each fixture signature draws a fresh combined shared secret, so the key
+/// is output 0 of that secret: the index a one-output derivation uses.
+/// [`build_pqc_auth`] and the drift gate's seeded signer both pass it.
+pub const PQC_AUTH_FIXTURE_OUTPUT_INDEX: u64 = 0;
+
+/// The stand-in for input `input`'s signing hash: a distinct message per
+/// input, of `signed_hash(i)`'s type and width ([`SigningPayloadHash::LEN`]).
+///
+/// # Panics
+///
+/// If `input` is past a byte, which no input index under the consensus cap
+/// (8) is.
+#[must_use]
+pub fn stand_in_signed_hash(input: usize) -> SigningPayloadHash {
+    let mut bytes = [STAND_IN_SIGNED_HASH_FILL; SigningPayloadHash::LEN];
+    bytes[0] = u8::try_from(input).expect("an input index fits a byte");
+    SigningPayloadHash::from_bytes(bytes)
+}
+
 /// Derive a keypair and sign `message` through the wallet's own signer
 /// ([`sign_pqc_auth_for_output`], under the tx-auth domain the verifier
 /// reads), from a combined shared secret drawn from `rng` — so the byte
 /// lengths entering the wire fixture are the production encodings, not
-/// guesses.
+/// guesses. The secret is a [`SharedSecret`], wiped when this returns.
 pub fn build_pqc_auth<R: RngCore + CryptoRng>(
     rng: &mut R,
     message: SigningPayloadHash,
 ) -> PqcAuthFixture {
-    let mut combined_ss = [0u8; 64];
-    rng.fill_bytes(&mut combined_ss);
+    let mut combined_ss = SharedSecret([0u8; SHARED_SECRET_LEN]);
+    rng.fill_bytes(&mut combined_ss.0);
     let signed = sign_pqc_auth_for_output(
-        &combined_ss,
-        0,
+        &combined_ss.0,
+        PQC_AUTH_FIXTURE_OUTPUT_INDEX,
         SCHEME_DOMAIN_PQC_AUTH_TX,
         message.as_bytes(),
     )
@@ -191,7 +217,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     layout: relay::ChunkLayout,
 ) -> ConnectTxFixture {
     let adm = relay::build_fixture(rng, n_in, n_out, tree_depth, layout);
-    let pqc = build_pqc_auth(rng, SigningPayloadHash::from_bytes([0x5a; 64]));
+    let pqc = build_pqc_auth(rng, stand_in_signed_hash(0));
     let bp = build_bp(rng, n_out);
 
     // Inputs: n_in FCMP++ spends, key images from the admission fixture.

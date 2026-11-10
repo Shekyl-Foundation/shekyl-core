@@ -23,8 +23,8 @@
 //! - **CEN-I17's derivation.** Each signing hash is keccak over the
 //!   finished transaction, which the fixture does not have ([`relay`]'s
 //!   module docs say why). Each signature is over a stand-in message of the
-//!   hash's type and width ([`stand_in_signed_hash`]); the verify's cost
-//!   depends on the message's length, not its content.
+//!   hash's type and width ([`connect::stand_in_signed_hash`]); the verify's
+//!   cost depends on the message's length, not its content.
 //! - **`tx_form`'s other rows**, which judge the wire form's structure and
 //!   verify nothing.
 //! - **The multisig container.** A single-signer input pays one hybrid
@@ -43,6 +43,8 @@ use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_ct_balance::OutputPointsError;
 use shekyl_fcmp::proof::VerifyError;
 use shekyl_types::SigningPayloadHash;
+
+pub use crate::connect::stand_in_signed_hash;
 
 use crate::connect::{self, BpFixture, PqcAuthFixture};
 use crate::relay::{self, AdmissionFixture, ChunkLayout};
@@ -91,9 +93,11 @@ pub struct DoorFixture {
 impl DoorFixture {
     /// Assemble a door fixture from its parts.
     ///
-    /// The gate signs under a seeded nonce, which only a dev-dependency edge
-    /// may reach (`shekyl-crypto-pq`'s `test-utils`), so the signatures are
-    /// made by the caller and handed in.
+    /// The signatures are made by the caller. The hedged path is
+    /// [`build_door_fixture`]; the drift gate passes a seeded signer to
+    /// [`build_door_fixture_with`], because
+    /// `sign_pqc_auth_for_output_with_ml_dsa_seed` is `shekyl-crypto-pq`'s
+    /// `test-utils` surface and this crate's library edge does not enable it.
     ///
     /// # Panics
     ///
@@ -121,26 +125,11 @@ impl DoorFixture {
     }
 }
 
-/// The stand-in for input `input`'s signing hash: a distinct message per
-/// input, of `signed_hash(i)`'s type and width.
-///
-/// # Panics
-///
-/// If `input` is past a byte, which no input index under the consensus cap
-/// (8) is.
-#[must_use]
-pub fn stand_in_signed_hash(input: usize) -> SigningPayloadHash {
-    let mut bytes = [0x5a; 64];
-    bytes[0] = u8::try_from(input).expect("an input index fits a byte");
-    SigningPayloadHash::from_bytes(bytes)
-}
-
 /// Build a door fixture at shape `(n_in, n_out)`, signed by the wallet's own
-/// signer ([`connect::build_pqc_auth`], whose ML-DSA half is hedged).
+/// hedged signer ([`connect::build_pqc_auth`]).
 ///
-/// For tests and wall-clock use. The drift gate builds its signatures under
-/// a seeded nonce instead, because an instruction count needs byte-identical
-/// operands, and assembles them with [`DoorFixture::new`].
+/// For tests and wall-clock use. The drift gate passes its seeded signer to
+/// [`build_door_fixture_with`] so both paths share this draw order.
 pub fn build_door_fixture<R: RngCore + CryptoRng>(
     rng: &mut R,
     n_in: usize,
@@ -148,11 +137,37 @@ pub fn build_door_fixture<R: RngCore + CryptoRng>(
     tree_depth: u8,
     layout: ChunkLayout,
 ) -> DoorFixture {
+    build_door_fixture_with(rng, n_in, n_out, tree_depth, layout, |rng, message| {
+        connect::build_pqc_auth(rng, message)
+    })
+}
+
+/// Build a door fixture, signing each input with `sign`.
+///
+/// Draw order, on one `rng`: the admission fixture (the masks and the
+/// proof), then one signature per input, then the range proof. The drift
+/// gate depends on that order. Its admission operands are whatever
+/// [`relay::build_fixture`] draws first from the pinned seed, and `sign`
+/// may draw from the same stream; the range proof continues after it.
+///
+/// `sign` receives each input's [`stand_in_signed_hash`], in input order.
+pub fn build_door_fixture_with<R, S>(
+    rng: &mut R,
+    n_in: usize,
+    n_out: usize,
+    tree_depth: u8,
+    layout: ChunkLayout,
+    mut sign: S,
+) -> DoorFixture
+where
+    R: RngCore + CryptoRng,
+    S: FnMut(&mut R, SigningPayloadHash) -> PqcAuthFixture,
+{
     let adm = relay::build_fixture(rng, n_in, n_out, tree_depth, layout);
-    let auths = (0..n_in)
-        .map(|input| connect::build_pqc_auth(rng, stand_in_signed_hash(input)))
+    let auths = (0..adm.n_in)
+        .map(|input| sign(rng, stand_in_signed_hash(input)))
         .collect();
-    let bp = connect::build_bp(rng, n_out);
+    let bp = connect::build_bp(rng, adm.n_out);
     DoorFixture::new(adm, auths, bp)
 }
 
