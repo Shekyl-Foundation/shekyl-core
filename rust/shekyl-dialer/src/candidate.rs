@@ -31,9 +31,13 @@ pub enum Skip {
     /// A session to this exact address already exists, in either
     /// direction.
     InUse,
-    /// This node already has an outbound session, or a pending attempt,
-    /// to this host on another port. One outbound session per host.
-    HostHasOutbound,
+    /// This node already has a session to this host, in either direction,
+    /// or a pending attempt to it. One session per host: a host that dialed
+    /// in is not dialed back. Dialing a node because it connected to us
+    /// would hand any node that connects a free outbound slot, the eclipse
+    /// attacker's cheapest step (Rick, 2026-11-09). The outbound target is
+    /// a best effort at that many distinct nodes.
+    HostInSession,
     /// It is a pending attempt or a kept session of the dialer's own.
     Pending,
 }
@@ -45,8 +49,9 @@ pub struct CandidateFilter<'a> {
     /// The address of every live session on the connector, inbound and
     /// outbound.
     pub sessions: &'a BTreeSet<NetworkAddress>,
-    /// The host of every outbound session on the connector.
-    pub outbound_hosts: &'a BTreeSet<Host>,
+    /// The host of every live session on the connector, inbound and
+    /// outbound.
+    pub session_hosts: &'a BTreeSet<Host>,
     /// The dialer's pending attempts and kept sessions.
     pub attempts: &'a Attempts,
 }
@@ -64,8 +69,8 @@ impl CandidateFilter<'_> {
             return Err(Skip::InUse);
         }
         let host = address.host();
-        if self.outbound_hosts.contains(&host) || self.attempts.holds_host(&host) {
-            return Err(Skip::HostHasOutbound);
+        if self.session_hosts.contains(&host) || self.attempts.holds_host(&host) {
+            return Err(Skip::HostInSession);
         }
         Ok(())
     }

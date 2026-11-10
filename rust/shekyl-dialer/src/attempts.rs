@@ -220,8 +220,8 @@ impl Attempts {
     }
 
     /// Whether an in-flight test or a kept session is to `host`, on any
-    /// port. One outbound session per host: an in-flight test's host is
-    /// not a candidate either. A waiting test does not hold the host.
+    /// port. One session per host: an in-flight test's host is not a
+    /// candidate either. A waiting test does not hold the host.
     #[must_use]
     pub fn holds_host(&self, host: &Host) -> bool {
         self.tests

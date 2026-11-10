@@ -82,30 +82,29 @@ pub(crate) fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
 pub(in crate::owner) struct LiveSessions {
     /// Every session's list address.
     pub(in crate::owner) addresses: BTreeSet<NetworkAddress>,
-    /// The host of every outbound session: one outbound session per host is
-    /// read from this set.
-    pub(in crate::owner) outbound_hosts: BTreeSet<Host>,
+    /// The host of every session, inbound and outbound: one session per
+    /// host is read from this set, so a host that dialed in is not dialed.
+    pub(in crate::owner) session_hosts: BTreeSet<Host>,
 }
 
 /// Live sessions on `connector`.
 pub(super) fn live_sessions(board: &Board, connector: ConnectorId) -> LiveSessions {
     let mut sessions = BTreeSet::new();
-    let mut outbound_hosts = BTreeSet::new();
+    let mut session_hosts = BTreeSet::new();
     for row in board.rows() {
         if row.connector() != connector {
             continue;
         }
+        // An inbound Tor session names no address, so it holds no host.
         let Some(address) = address_of(&row.endpoint()) else {
             continue;
         };
-        if row.direction() == Direction::Outbound {
-            outbound_hosts.insert(address.host());
-        }
+        session_hosts.insert(address.host());
         sessions.insert(address);
     }
     LiveSessions {
         addresses: sessions,
-        outbound_hosts,
+        session_hosts,
     }
 }
 

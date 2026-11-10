@@ -238,7 +238,7 @@ pub(super) fn plan_wake<R: RelayRng + ?Sized>(
         let filter = CandidateFilter {
             own: &own,
             sessions: &live.addresses,
-            outbound_hosts: &live.outbound_hosts,
+            session_hosts: &live.session_hosts,
             attempts: &attempts[index],
         };
         // An address whose verdict waits is not drawn again. A gray one's

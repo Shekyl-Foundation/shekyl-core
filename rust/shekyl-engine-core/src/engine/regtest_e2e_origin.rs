@@ -43,16 +43,21 @@ use super::*;
 /// sink. A transaction the origin's own wallet submits is a local origin, and
 /// a local origin takes the stem slot whatever the epoch draw
 /// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
-/// records it `stem`, embargoed. The sink runs `--dev-sync off`: it
-/// requests nothing and follows the origin by announcements alone, so once
-/// the origin has mined ahead (every walk here mines a coinbase to
-/// maturity before it spends) the sink is `Behind` and ignores the
-/// transaction on receipt, and nothing fluffs it back. It stays `stem` on
-/// the origin until the origin's own embargo expires. The flag is
-/// load-bearing: a second daemon that requests the chain catches up,
-/// stems the transaction straight back (its outbound session to the
-/// origin is a stem successor), the origin upgrades the second arrival to
-/// fluff, and the hold is over in seconds.
+/// records it `stem`, embargoed. The sink admits it
+/// (`restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
+/// asserts that) and has nowhere to send it. Its only session is the
+/// origin's, the one the stem arrived on: a stem goes out on an outbound
+/// session other than its source, and a fluff to every peer but its source.
+/// The sink holds no outbound session to the origin because the dialer does
+/// not dial a host that already holds a session with it (Rick, 2026-11-09).
+/// The sink starts first, its own dial to the origin fails, and the origin
+/// has dialed in long before the sink's next wake. So the transaction stays
+/// `stem` on the origin until the origin's own embargo expires. A second
+/// session between the two would carry the stem straight back, the origin
+/// would take the second arrival as a fluff, and the hold would be over in
+/// seconds. The sink also runs `--dev-sync off`: it requests nothing and
+/// follows the origin by announcements alone, which still keeps it at the
+/// origin's tip.
 ///
 /// **What the rig does not fix.** The embargo is a draw (geometric, mean
 /// 190 s on clearnet) with no lever, so a short one can end mid-assertion.

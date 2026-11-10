@@ -741,7 +741,7 @@ under it, is dropped with the C++ dial path.
 | Filter | Disposition | Reason |
 | --- | --- | --- |
 | Our own address (`zone.m_our_address`, and `is_self_dial` on a seed) | Kept, as one rule | A dial to ourselves is not a peer. The seed-specific `is_self_dial` was the C++ seed path's own copy of the check, needed because that path bypassed the peerlist; with seeds in gray (slice 1 §3) the one own-address rule covers them (exception audit, absorbed) |
-| One outbound per host (`has_outbound_connection_to_host`) | Kept | One outbound session per host on that connector |
+| One outbound per host (`has_outbound_connection_to_host`) | Kept, as one session per host in either direction (Rick, 2026-11-09) | A host with a live session on that connector, inbound or outbound, or a pending attempt, is not a candidate. Dialing a host that dialed in would give any node that connects a free outbound slot, the eclipse attacker's cheapest step; the outbound target is a best effort at that many distinct nodes |
 | Peer already in use (`is_peer_used`) | Kept | A second session to an address we already have |
 | Banned (`is_remote_host_allowed`, `net_node.inl:243`) | Kept | Calls `shekyl_ban_remaining_ns` (`seam_ffi.rs:706`). A return of 2 is banned. The check is already Rust |
 | Recently failed (`is_addr_recently_failed`) | Dropped (2026-10-24; *records-was* kept, Tor only, R2 2026-10-12) | A failed test cools its address on the lists (`Seat::Cooling`), and a cooling address is not a candidate, so the filter has no row for it. *Records-was: this slice's failed-address memory, which clearnet never wrote; on clearnet the row was vacuous* |
