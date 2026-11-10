@@ -11,10 +11,10 @@
 # Sections:
 #   input-raw  an input:<type> row whose applying function does not take the
 #              named type. The site is the function that applies the domain.
-#              No newtype exists yet for some values (a frame output, a key
-#              derived under salt_for, a Noise handshake message), or the
-#              function takes raw bytes. Owner: the archival lane; each row
-#              is typed when its own round touches it.
+#              No type exists yet for a key derived under salt_for, or the
+#              function takes raw bytes. Owner: SO-D12, unless a row's note
+#              names another; a note that says the input is not what the
+#              binding names waits on a ruling, not on a type.
 #   unframed   an id or name cSHAKE row not declared as an IdDomain or
 #              NameDomain constant: the binding is in its input, but not
 #              through frame.
@@ -22,23 +22,13 @@
 #              without a ruling; its registry binding is "-".
 #
 # section	literal	note
-input-raw	shekyl/ek-bind-v1	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/archival-p-id-v1	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/archival-emission-claim-scheme-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/archival-emission-backing-scheme-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype
-input-raw	shekyl/archival-witness-bundle-scheme-v1	input:frame: no type for a frame output yet
-input-raw	nonce	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl-outbound-tx-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-inbound-tx-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-reserve-proof-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-reserve-proof-dleq-v1	input:frame: no type for a frame output yet
-input-raw	shekyl/msg-sign-outer-v1	input:frame: no type for a frame output yet
-input-raw	shekyl-subaddr-v1\0	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: no type for a key derived under salt_for yet
-input-raw	shekyl/rpc-busy-v1	input:NoiseMessage: no type for a Noise handshake message yet
-input-raw	shekyl/rpc-mac1-v1	input:NoiseMessage: no type for a Noise handshake message yet
+input-raw	shekyl/ek-bind-v1	input:SaltForKey: the site hashes the address's ML-KEM encapsulation key, a public key decoded from address bytes, not a key derived under salt_for; the binding needs a ruling (2026-11-07)
+input-raw	shekyl/archival-p-id-v1	input:SaltForKey: the site hashes the persona's public hybrid key, which every verifier reads off the wire; the key is derived under salt_for, its public half is not; the binding needs a ruling (2026-11-07)
+input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype; owner SO-D12 4b, which moves the pass countersignature to the receipt key at the switch
+input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype; owner SO-D12 4b, which moves the pass countersignature to the receipt key at the switch
+input-raw	nonce	input:SaltForKey: the input is a multisig group secret expanded under HKDF with no salt, not salt_for, and the module has no production caller; the binding and the module need a ruling (2026-11-07)
+input-raw	shekyl-subaddr-v1\0	input:SaltForKey: the input is the reduced view scalar, not an HKDF output, and the function's only callers are tests and KATs; its type needs a ruling (2026-11-07)
+input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: a wallet's and a persona's d_z derive under salt_for, but the harness miner's derives under its own fixture salt and its keys are pinned in every fixture chain; typing waits on a ruling for the harness (2026-11-07)
 unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix
 unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the RPC rendezvous name
 pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record

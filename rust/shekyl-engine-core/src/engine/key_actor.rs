@@ -240,15 +240,21 @@ impl Message<SignTransaction> for KeyActor {
 }
 
 /// Actor message for the classical half of a wallet message signature
-/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**, length
-/// fixed by type ([`OUTER_MSG_LEN`](shekyl_crypto_pq::message_signing::OUTER_MSG_LEN))
-/// — so nothing secret crosses into or out of the mailbox: the master
-/// seed stays at the engine (its transient borrow never reaches the
-/// actor, the same posture the stake personas pin), and the spend
-/// scalar never leaves the actor. Wrong-shape payloads cannot be
-/// constructed; the type is the signing-oracle gate.
+/// (PR-SM-1). `preimage` is the envelope's frame output and `sig_pq` is
+/// the PQ half over it. Both are public, so nothing secret crosses the
+/// mailbox: the master seed stays at the engine (its transient borrow
+/// never reaches the actor, the same posture the stake personas pin),
+/// and the spend scalar never leaves the actor. The actor signs
+/// `preimage ‖ σ_pq`. A preimage that is not a frame output, or a PQ
+/// half of another length, cannot be constructed.
+///
+/// `sig_pq` is a heap copy. Assembly still holds the original, so the
+/// caller clones the box. `Box::clone` copies on the heap;
+/// `Box::new(*sig_pq)` would place the ~16 KB array on the caller's
+/// async frame.
 pub(crate) struct SignMessageOuter {
-    pub outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+    pub(crate) preimage: shekyl_network::envelope::Framed64,
+    pub(crate) sig_pq: Box<[u8; shekyl_crypto_pq::message_signing::SLH_192S_SIG_LEN]>,
 }
 
 impl Message<SignMessageOuter> for KeyActor {
@@ -261,7 +267,8 @@ impl Message<SignMessageOuter> for KeyActor {
     ) -> Self::Reply {
         shekyl_crypto_pq::message_signing::sign_outer_with_spend_scalar(
             self.local.keys.spend_sk.as_canonical_bytes(),
-            msg.outer.as_ref(),
+            &msg.preimage,
+            &msg.sig_pq,
         )
         .map_err(|_| KeyEngineError::Primitive {
             detail: "spend-scalar Schnorr signing failed",
@@ -502,15 +509,13 @@ impl KeyEngineHandle {
     /// Sign the classical half of a wallet message signature (PR-SM-1).
     /// Same inherent-method disposition as the proof methods above: one
     /// production caller, no `LocalKeys` equivalence oracle to abstract.
-    /// Outer length is compile-time fixed — see [`SignMessageOuter`].
+    /// The preimage is a frame output and the PQ half is fixed-width —
+    /// see [`SignMessageOuter`].
     pub(crate) async fn sign_message_outer(
         &self,
-        outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+        outer: SignMessageOuter,
     ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
-        self.actor
-            .ask(SignMessageOuter { outer })
-            .await
-            .map_err(collapse_send_error)
+        self.actor.ask(outer).await.map_err(collapse_send_error)
     }
 }
 

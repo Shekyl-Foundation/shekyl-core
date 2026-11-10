@@ -499,11 +499,7 @@ fn a_reference_of_any_length_but_its_own_refuses() {
 fn the_bundle_commitment_matches_its_vectors() {
     let three = records_bytes(3);
     let commit = |h: BlockHeight, count: u32, bitmap: &[u8], records: &[u8]| {
-        hex(&bundle_commitment(
-            &testnet(),
-            &kept_at(h, count, bitmap),
-            records,
-        ))
+        hex(bundle_commitment(&testnet(), &kept_at(h, count, bitmap), records).as_bytes())
     };
     assert_eq!(
         commit(H, 0, &[], &[]),
@@ -561,7 +557,7 @@ fn the_commitment_is_over_the_kept_parts_encoding_then_the_records() {
 fn the_commitment_differs_on_every_network() {
     let kept = kept_at(H, 12, &[0x01, 0x0A]);
     let three = records_bytes(3);
-    let mut seen: Vec<[u8; 64]> = shekyl_network::Network::ALL
+    let mut seen: Vec<shekyl_network::envelope::Framed64> = shekyl_network::Network::ALL
         .iter()
         .map(|net| bundle_commitment(&net.network_id(), &kept, &three))
         .collect();

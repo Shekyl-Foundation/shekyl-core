@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-08-26
+> **Last updated:** 2026-11-08
 >
 > **Status:** LIVING CONTRACT (spend-path hybrid). Address v2 / SLH-DSA-192s
 > message-signing field: [`design/WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md)
@@ -19,17 +19,17 @@ It defines:
 - the new transaction format used by the rebooted chain
 - canonical serialization rules for hybrid key/signature material
 - the exact payload to be signed and verified
-- FFI ownership expectations between Rust and C++
+- the Rust API contract for keys, signatures and buffers
 - what is explicitly deferred until after signatures are stable
 
 This document is source-of-truth for PQC-related implementation work in:
 
 - `rust/shekyl-crypto-pq` — hybrid signatures, KEM, address encoding, per-output derivation
 - `rust/shekyl-fcmp` — FCMP++ wrapper with 4-scalar PQC leaf
-- `rust/shekyl-ffi` — C++ FFI bridge for all PQC and FCMP++ operations
-- `src/cryptonote_basic`
-- `src/cryptonote_core`
-- `src/wallet`
+- `rust/shekyl-wire` — the `TransactionV3` container, `PqcAuth` and the signing preimage
+- `rust/shekyl-chain-rules` — consensus verification (CEN-I15, CEN-I18)
+- `rust/shekyl-tx-builder` and `rust/shekyl-engine-core` — wallet construction and signing
+- `rust/shekyl-scanner` — wallet scanning
 
 Wallet privacy threat-model propagation (pit-of-success vs adversary, T6/T7):
 [`docs/THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md) (FA-9, Round 4).
@@ -133,8 +133,12 @@ wire      = HybridSignature { ed25519: σ_ed, ml_dsa: σ_pq }   // sig_version 2
   frozen `SCHEME_DOMAIN_*` string (`shekyl/pqc-auth-tx-v1`,
   `shekyl/pqc-auth-tx-multisig-v1`, the archival emission/attestation/
   serve-credit/bond domains); a signature is valid only on the surface it was
-  minted for. The domain is applied inside Rust — C++ callers never carry a
-  domain string (rule 40 / SA-R-2).
+  minted for. `verify_pqc_auth` applies `SCHEME_DOMAIN_PQC_AUTH_TX`, and the
+  multisig verifier applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`.
+  `sign_emission_claim` and `sign_emission_backing_for_output` apply their
+  own constants. The spend signer `sign_pqc_auth_for_output` takes the
+  domain from its caller, and `shekyl-tx-builder` passes
+  `SCHEME_DOMAIN_PQC_AUTH_TX` (SA-R-2).
 - **`scheme_id` is inside the signed preimage** (SA-R-5), so cross-scheme
   reinterpretation of a signature's bytes is closed structurally.
 - **The preimage is 64 bytes, not 32.** The digest is the signed content, so
@@ -228,7 +232,6 @@ component, which is structurally unaffected.
 
 - Rust: `shekyl-crypto-pq/src/montgomery.rs` (`ed25519_pk_to_x25519_pk`,
   `ed25519_sk_as_montgomery_scalar`, `is_low_order_montgomery`)
-- FFI: `shekyl_view_pub_to_x25519_pub` in `shekyl-ffi`
 - Test vectors: `docs/test_vectors/PQC_TEST_VECTOR_005_X25519_DERIVATION.json`
 
 ### DH Semantics
@@ -442,8 +445,9 @@ The sender can re-derive `combined_ss` at proof time without storing it:
 
 - **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:
   Derives `ho` internally and computes `I = x * Hp(O)` where `x = ho + b`.
-  Returns both the key image and spend secret `x`. `Hp(O)` is provided by
-  C++ via `hash_to_ec` (Category 2 Keccak, stays in C++).
+  Returns both the key image and spend secret `x`. `Hp(O)` is the caller's
+  `biased_hash_to_point(O)` (`shekyl-curve-generators`); the scanner computes
+  it in `rust/shekyl-scanner/src/scan.rs`.
 
 - **`compute_output_key_image_from_ho(ho, spend_secret, hp_of_O)`**: Variant
   for the `tx_source_entry` boundary where `ho` has already been extracted.
@@ -694,7 +698,6 @@ Design notes:
   genesis-consensus follow-up, not a committed plan.
 - Implementation: `rust/shekyl-address/src/address.rs` (`ShekylAddress`
   type with `encode()`, `decode()`, `encode_classical_display()` methods).
-  FFI: `shekyl_address_encode()`, `shekyl_address_decode()`.
 
 ## Why `tx_extra` Is Not Used
 
@@ -1133,25 +1136,21 @@ withdrawn for V3.0.
 
 Adversary and phishing surfaces for leaked addresses: [`THREAT_MODEL_WALLET.md`](THREAT_MODEL_WALLET.md).
 
-## FFI Contract
+## Rust API Contract
 
-Rust provides the cryptographic implementation. C++ remains the primary caller.
+Every caller is Rust; the tree has no first-party C or C++
+(`scripts/ci/check_no_first_party_c.py`). `shekyl-crypto-pq` exposes:
 
-Phase-1 FFI must expose:
-
-- hybrid key generation
-- hybrid sign
-- hybrid verify
-- serialization helpers if needed by C++
-- explicit free/release functions for any Rust-owned buffers
+- per-output key derivation and the spend signer, `sign_pqc_auth_for_output`
+  (`rust/shekyl-crypto-pq/src/output.rs`)
+- hybrid verify, `verify_pqc_auth` (`rust/shekyl-crypto-pq/src/signature.rs`),
+  which dispatches on the container `scheme_id`
 
 Ownership rules:
 
-- caller-allocated input buffers are owned by the caller
-- Rust-owned returned buffers must have matching free helpers
-- secret-key buffers must be zeroized on drop/free
-- verification APIs should prefer caller-supplied buffers and simple boolean or
-  error-code returns
+- secret keys are wiped on drop (`HybridSecretKey` derives `ZeroizeOnDrop`;
+  rule 35)
+- verification returns a typed refusal, `PqcVerifyError`, never a fault
 
 ## Size and Bandwidth Considerations
 
@@ -1309,15 +1308,15 @@ removed from construction, scanning, and signing paths.
   `shekyl-output-mask`). Used directly by the Rust BP+ prover.
 - **Construction**: `construct_output` produces `enc_amount`, commitment,
   and `z` scalar; the one transaction builder is `shekyl-tx-builder`
-  (`shekyl-engine-core` drives it). The C++ `construct_tx_with_tx_key` that
-  once stored these for a C++ signing path was deleted 2026-09-23
-  (`TX_EXTRA_RUST_CUTOVER.md` TXE-Q1); only the coinbase is built in C++,
-  and its `extra` through `shekyl_coinbase_extra`.
-- **Signing**: `shekyl_sign_fcmp_transaction` receives commitment masks
-  directly; the C++ `proveRangeBulletproofPlus` function has been deleted.
-  All BP+ proof generation occurs in Rust.
-- **Scanning**: `shekyl_scan_and_recover` (Rust FFI) derives all output
-  secrets from `combined_ss` via HKDF. No Keccak fallback exists.
+  (`shekyl-engine-core` drives it). The coinbase is built by
+  `shekyl-block-template`, its `extra` through `shekyl-wire`'s
+  `tx_extra::build_coinbase_extra`.
+- **Signing**: `shekyl-tx-builder`'s `sign_transaction`
+  (`rust/shekyl-tx-builder/src/sign.rs`) receives the commitment masks
+  directly. All BP+ proof generation occurs in Rust.
+- **Scanning**: `scan_output_recover` (`rust/shekyl-crypto-pq/src/output.rs`)
+  derives all output secrets from `combined_ss` via HKDF. No Keccak fallback
+  exists.
 
 ## Deferred Scope
 
@@ -1341,23 +1340,23 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | # | Layer | Status | Key files |
 |---|-------|--------|-----------|
 | 1 | Rust hybrid sign/verify | Done | `rust/shekyl-crypto-pq/src/signature.rs` |
-| 2 | FFI ABI (keygen/sign/verify) | Done | `rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h` |
-| 3 | TransactionV3 serialization | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), boost serialization |
-| 4 | Core verification | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `blockchain.cpp` |
-| 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
+| 2 | Signing and verification API | Done | `rust/shekyl-crypto-pq/src/signature.rs` (`verify_pqc_auth`), `rust/shekyl-crypto-pq/src/output.rs` (`sign_pqc_auth_for_output`); every caller is Rust |
+| 3 | TransactionV3 serialization | Done | `rust/shekyl-wire/src/transaction.rs` (`PqcAuth`) |
+| 4 | Core verification | Done | `rust/shekyl-chain-rules/src/rules/proofs.rs` (CEN-I18); `rust/shekyl-daemon-rpc/src/submit/verifier.rs` at submit |
+| 5 | Wallet construction | Done | `rust/shekyl-tx-builder/`, `rust/shekyl-engine-core/` |
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
 | 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
-| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes) |
-| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ in-circuit leaf-commitment opening (`PL-D3`; see `PQC_MULTISIG.md` Attack 1) |
-| 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | Option-D `wallet2.cpp` group-creation fossil **deleted** (MS-5 PR-B; it threw on every input); E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
+| 8 | Scheme dispatch + multisig | Done | `rust/shekyl-crypto-pq/src/signature.rs` (`verify_pqc_auth` dispatches on `scheme_id`, typed `PqcVerifyError`), `rust/shekyl-crypto-pq/src/multisig.rs` |
+| 9 | Consensus verification + scheme downgrade | Done | `rust/shekyl-chain-rules/src/rules/tx_inputs.rs` (key length per scheme), FCMP++ in-circuit leaf-commitment opening (`PL-D3`; see `PQC_MULTISIG.md` Attack 1) |
+| 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
 | 11 | Fuzz testing (10 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
-| 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
-| 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
-| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/montgomery.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI; X25519 derived from Ed25519 view key via Edwards→Montgomery map |
-| 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
-| 16 | Per-input `pqc_auths` migration | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), `src/cryptonote_core/tx_pqc_verify.cpp`; signing via `shekyl_sign_fcmp_transaction` FFI |
-| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, PQC signing in pure Rust; CLI wallet uses `shekyl_sign_fcmp_transaction` FFI (collapsed signing), GUI uses `shekyl-wallet-rpc` `native-sign` feature |
-| 18 | Proof FFI (tx proof + reserve proof) | Done | `rust/shekyl-proofs/` — outbound/inbound tx proofs, reserve proofs; `rust/shekyl-ffi/src/lib.rs` (6 proof FFI exports); `src/wallet/wallet2.cpp` callers collapsed to Rust FFI |
+| 12 | FCMP++ prove/verify | Done | `rust/shekyl-fcmp/src/proof.rs` (`prove`, `verify`) |
+| 13 | Curve tree store (grow/trim/root/path) | Done | `rust/shekyl-curve-tree/`, `rust/shekyl-chain-store/src/store/grow.rs`, `rust/shekyl-chain-store/src/store/pop.rs`, `rust/shekyl-chain-store/src/store/curve_reads.rs` |
+| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/montgomery.rs`; construction via `construct_output`, wallet scanning via `scan_output_recover` (`rust/shekyl-scanner/src/scan.rs`); X25519 derived from Ed25519 view key via Edwards→Montgomery map |
+| 15 | FCMP++ verification at consensus | Done | `rust/shekyl-chain-rules/src/rules/tx_against.rs` (CEN-I15); see `docs/FCMP_PLUS_PLUS.md` |
+| 16 | Per-input `pqc_auths` | Done | `rust/shekyl-wire/src/transaction.rs` (`PqcAuth`), `rust/shekyl-wire/src/transaction/signing_preimage.rs`; verified at CEN-I18, signed by `rust/shekyl-tx-builder/src/sign.rs` |
+| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, PQC signing in pure Rust; `shekyl-cli` and `shekyl-wallet-rpc` sign through `shekyl-engine-core` (`rust/shekyl-engine-core/src/engine/sign_bridge.rs`) |
+| 18 | Tx proof + reserve proof | Done | `rust/shekyl-proofs/` — outbound/inbound tx proofs, reserve proofs; wallet callers in `rust/shekyl-engine-core/src/engine/proofs.rs` |
 
 Notes:
 - Staking and unstaking are built by `shekyl-tx-builder` through the Engine
@@ -1403,5 +1402,5 @@ This document is complete enough to implement against when:
 - verification semantics require both classical and PQ success
 - the design clearly places hybrid protection in the spend/ownership layer, not
   just a detached transaction-wrapper signature
-- FFI ownership expectations are explicit
+- the Rust API contract (key wiping, typed refusals) is explicit
 - deferred items are clearly listed so they do not creep into phase 1

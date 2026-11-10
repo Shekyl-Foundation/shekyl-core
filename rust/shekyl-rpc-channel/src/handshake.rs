@@ -86,6 +86,7 @@ use zeroize::Zeroizing;
 use std::time::Instant;
 
 use crate::budget::{Admission, HandshakeBudget};
+use crate::mac1::Mac1Key;
 use crate::{
     prologue, NetworkId, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
 };
@@ -95,7 +96,8 @@ mod identity;
 
 use identity::{dh, Ephemeral};
 
-pub use identity::{InvalidStaticPublic, StaticKeypair, StaticPublic};
+pub use crate::static_public::{InvalidStaticPublic, StaticPublic};
+pub use identity::StaticKeypair;
 
 /// The Noise protocol name. It is hashed into the transcript, so it is part
 /// of the wire format.
@@ -287,7 +289,7 @@ impl Client {
         // skem: encapsulate to the daemon's static key. No cipher key yet,
         // so the ciphertext travels in the clear and is hashed.
         let (shared, ciphertext) = daemon
-            .mlkem_ek
+            .encaps_key()
             .try_encaps_with_rng(rng)
             .map_err(|_| HandshakeError::Local)?;
         let sent = sym
@@ -319,9 +321,10 @@ impl Client {
         }
         // mac1, outside the Noise message: proof to the daemon that the
         // sender holds its bundle, checked before any long-term key is used.
-        let tag = daemon.mac1(&message);
-        message.extend_from_slice(&tag);
-        let busy = daemon.busy_reply(&tag);
+        let key = Mac1Key::of(daemon);
+        let mac1 = key.mac1(&message);
+        message.extend_from_slice(mac1.as_bytes());
+        let busy = mac1.busy();
         Ok((
             ClientAwaitingMessage2 {
                 sym,
@@ -567,17 +570,12 @@ impl<'a> Daemon<'a> {
             return Err(fail);
         }
         let (message1, mac1) = message1_wire.split_at(MESSAGE1_LEN);
-        if !self.own.public().mac1_verifies(message1, mac1) {
+        let Some(mac1) = self.own.mac1_verifies(message1, mac1) else {
             return Err(fail);
-        }
+        };
         let ciphertext: [u8; MLKEM768_CT_LEN] = array(&message1[..E]).ok_or(fail)?;
         let client_ephemeral: [u8; X25519_PUBLIC_LEN] = array(&message1[E..EKEM]).ok_or(fail)?;
         let client_ephemeral_ek: [u8; MLKEM768_EK_LEN] = array(&message1[EKEM..TAG]).ok_or(fail)?;
-        // The wire length makes this exactly one mac1. A fallible convert
-        // here would turn a sender who passed mac1 into a silent refusal.
-        let mac1: [u8; MAC1_LEN] = mac1
-            .try_into()
-            .expect("mac1 follows a fixed-length message 1");
 
         // FIPS 203's input check on the key message 2 will encapsulate to.
         // First, because it needs no secret and a key that fails it is
@@ -593,7 +591,7 @@ impl<'a> Daemon<'a> {
         match budget.present(&mac1, now) {
             Admission::Replay => return Err(fail),
             Admission::Busy => {
-                return Ok(Message1Admission::Busy(self.own.public().busy_reply(&mac1)));
+                return Ok(Message1Admission::Busy(mac1.busy()));
             }
             Admission::Admitted => {}
         }
@@ -786,7 +784,7 @@ impl DaemonReadyForMessage4 {
         // sealed.
         let (shared, ciphertext) = self
             .client
-            .mlkem_ek
+            .encaps_key()
             .try_encaps_with_rng(rng)
             .map_err(|_| fail)?;
         let sealed = self
@@ -1096,7 +1094,7 @@ mod support {
     /// check after mac1 uses this, so the message reaches that check.
     pub(super) fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
         let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
-        mac1.copy_from_slice(&daemon.public().mac1(noise));
+        mac1.copy_from_slice(&daemon.mac1(noise));
     }
 
     /// A budget that never runs out within a test.

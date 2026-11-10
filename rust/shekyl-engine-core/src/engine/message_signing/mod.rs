@@ -206,8 +206,13 @@ pub(crate) async fn sign_message(
     .await
     .map_err(|e| SignMessageError::Internal(format!("message-signing task failed: {e}")))??;
 
-    let outer = message_signing::outer_bytes(&preimage, &sig_pq);
-    let sig_cl = ctx.key.sign_message_outer(outer).await?;
+    let sig_cl = ctx
+        .key
+        .sign_message_outer(super::key_actor::SignMessageOuter {
+            preimage,
+            sig_pq: sig_pq.clone(),
+        })
+        .await?;
     Ok(message_signing::assemble_armored(&sig_pq, &sig_cl))
 }
 

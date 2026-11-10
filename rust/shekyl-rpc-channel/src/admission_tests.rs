@@ -237,25 +237,28 @@ fn a_forged_busy_reply_is_not_busy() {
     let daemon = StaticKeypair::generate().unwrap();
     let other = StaticKeypair::generate().unwrap();
     let client = StaticKeypair::generate().unwrap();
-    let busy_for = |wire: &[u8], who: &StaticKeypair| {
-        let mut mac1 = [0u8; MAC1_LEN];
-        mac1.copy_from_slice(&wire[MESSAGE1_LEN..]);
-        who.public().busy_reply(&mac1)
-    };
     let (earlier, earlier_wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
     let (waiting, wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-    let genuine = busy_for(&wire, &daemon);
+    let (noise, mac1) = wire.split_at(MESSAGE1_LEN);
+    assert!(
+        daemon.mac1_verifies(noise, mac1).is_some(),
+        "the client's mac1, under the daemon's bundle"
+    );
+    // A busy reply is the proved tag's method. Another bundle answers its
+    // own mac of the same Noise bytes, which is not this message's reply.
+    let genuine = daemon.busy_for(noise);
     assert!(waiting.is_busy(&genuine));
-    assert!(earlier.is_busy(&busy_for(&earlier_wire, &daemon)));
+    let (earlier_noise, _) = earlier_wire.split_at(MESSAGE1_LEN);
+    assert!(earlier.is_busy(&daemon.busy_for(earlier_noise)));
 
     assert!(!waiting.is_busy(&[0u8; BUSY_LEN]), "zeros");
     assert!(!waiting.is_busy(&[0xa5; BUSY_LEN]), "other bytes");
     assert!(
-        !waiting.is_busy(&busy_for(&wire, &other)),
+        !waiting.is_busy(&other.busy_for(noise)),
         "authenticated under a bundle other than the daemon's"
     );
     assert!(
-        !waiting.is_busy(&busy_for(&earlier_wire, &daemon)),
+        !waiting.is_busy(&daemon.busy_for(earlier_noise)),
         "the reply to an earlier message 1"
     );
     let mut flipped = genuine;

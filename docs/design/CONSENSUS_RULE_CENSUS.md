@@ -272,22 +272,22 @@ one of RC's 48 listed sites maps into that union (RC's FFI-verdict entries
 at `c72048125560c11112daaf464a6acfa65cc3e1da` deeper on `src/checkpoints/checkpoints.cpp` internals, `HardFork` internals, and the Rust
 verdict crates it crossed into.
 
-### 3.4 FFI scope statement (where the walk stops at a Rust verdict body)
+### 3.4 Verdict-body scope statement (where the walk stops at a Rust verdict body)
 
-| FFI verdict surface | Rows | Interior enumerated? | Spec it is enumerated/pinned against |
+| Rust verdict surface | Rows | Interior enumerated? | Spec it is enumerated/pinned against |
 | --- | --- | --- | --- |
-| `shekyl_fcmp_verify` | CEN-I15, J21, J26 | **No** (boundary read; proof math not walked). The §7.13 y-normalization question is open | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) |
-| `shekyl_pqc_verify` | CEN-I18 | **No** (boundary read; pinned KATs) | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) |
+| `shekyl_fcmp::proof::verify` (`rust/shekyl-fcmp/src/proof.rs`) | CEN-I15, J21, J26 | **No** (boundary read; proof math not walked). The §7.13 y-normalization question is open | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) |
+| `shekyl_crypto_pq::signature::verify_pqc_auth` (`rust/shekyl-crypto-pq/src/signature.rs`) | CEN-I18 | **No** (boundary read; pinned KATs) | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) |
 | `shekyl-economics` (reward, split, burn, release) | CEN-F13–F17, F20 | **Yes** (CEN read `rust/shekyl-economics/src/emission.rs`, `rust/shekyl-economics/src/release.rs`; 81-vector cross-language KAT) | `config/economics_params.json`; [`ECONOMY_EXPLAINED.md`](../ECONOMY_EXPLAINED.md) |
-| `shekyl-difficulty` (LWMA-1, `check_hash`, timestamp rule) | CEN-D1b, D4, C1, C2, C3 | **Yes** (`lwma1.rs` is a step-annotated transcription of the spec; `check_hash_vectors.rs`; `timestamp.rs` `check_timestamp_rule` is **production-live** through `shekyl_difficulty_check_timestamp_rule` since the C2-R3 crossing — the C++ validator's `check_block_timestamp` is a marshaling shim; vectors `MTP_BOUNDARY_V1.json` pin it natively and end-to-end) | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.3; [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §4.3/§7 |
+| `shekyl-difficulty` (LWMA-1, `check_hash`, timestamp rule) | CEN-D1b, D4, C1, C2, C3 | **Yes** (`lwma1.rs` is a step-annotated transcription of the spec; `check_hash_vectors.rs`; `timestamp.rs` `check_timestamp_rule` is **production-live**: the validator calls it from `shekyl-chain-rules` `rules/timestamps.rs`; vectors `MTP_BOUNDARY_V1.json` pin it natively and end-to-end) | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.3; [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §4.3/§7 |
 | `shekyl-pow-randomx` (hash); `shekyl-difficulty` (seed epoch — the schedule moved there 2026-09-19, E6 slice 2, so the validator adopts it without the engine) | CEN-D2, D3 | **Yes** (`shekyl-difficulty/src/seed_epoch.rs` read) | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823; [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) |
 | `shekyl-archival-retention` (bond, serve-credit, admission, emission, settlement) | CEN-J*, L7–L10 | **Partially** (CEN read bond_post, serve_credit_decisions, admission, failure_window, emission verify; RC did not cross) | gate-2 / [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) / E3 / [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) / [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) |
 | `shekyl-ct-balance` | CEN-H17, H18 | **Yes** (single-sourced with the builder) | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.3 |
-| `shekyl_tx_extra_shape_of` (over `shekyl-wire`'s `check_tx_extra_shape`) | CEN-I19, CEN-I20 | **Yes** (the rule is `check_one` over the two field-length lists, plus the coinbase grammar; every arm has a KAT, and the daemon logs the error type's own `Display` across the boundary rather than re-formatting it). The lengths-taking `shekyl_tx_extra_pqc_field_shape` and the C++ parser that fed it were deleted 2026-09-23 (`TX_EXTRA_RUST_CUTOVER.md`); this row records the walk, which stopped at that form. | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a |
+| `shekyl-wire`'s `check_tx_extra_shape` (called from `shekyl-chain-rules` `rules/tx_extra.rs`) | CEN-I19, CEN-I20 | **Yes** (the rule is `check_one` over the two field-length lists, plus the coinbase grammar; every arm has a KAT, and the daemon logs the error type's own `Display` rather than re-formatting it). The lengths-taking `shekyl_tx_extra_pqc_field_shape` and the C++ parser that fed it were deleted 2026-09-23 (`TX_EXTRA_RUST_CUTOVER.md`); this row records the walk, which stopped at that form. | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a |
 
 The rewrite consumes this table as its oracle-scope map: where the interior
-is not enumerated, the named spec — not the C++ or the FFI behavior — is
-the specification of record.
+is not enumerated, the named spec — not the code's behavior — is the
+specification of record.
 
 ### 3.5 Main-chain vs alt-chain rule application (carried from RC §1.2)
 

@@ -975,7 +975,7 @@ mod tests {
         input.extend_from_slice(&framed);
         assert_eq!(
             crate::hash::cshake256_64(EMISSION_AUTH_CLAIM.customization(), &input),
-            claim,
+            claim.into_bytes(),
             "the id sits at byte 0, ahead of the framed fields"
         );
     }
