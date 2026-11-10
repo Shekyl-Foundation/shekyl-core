@@ -13,7 +13,14 @@
 //! the request ([`Core::in_flight`]). The loop folds the answer's inputs and
 //! then [`Input::Replied`] with that number. An answer whose number the core
 //! no longer waits on is from a request the core gave up on; it is not
-//! folded, and a Tor it launched is stopped.
+//! folded, and what it holds is ended: a Tor stopped, a directory retired.
+//!
+//! The reap and the launch hold a Tor or a directory. Each runs after the
+//! one before it has finished ([`Drive::hold_later`]), so a late launch's
+//! directory is not swept by the next, and the stop waits for the last of
+//! them. A launch waits for Tor's first reply with no clock of its own: the
+//! core's bound decides, and when the core gives up on it, or the daemon
+//! stops, the driver abandons it ([`Drive::abandon_launch`]).
 //!
 //! What a request needs from the loop is read when it is sent: the control,
 //! the service, the rounds' directories, the CSPRNG draws. A request the loop
@@ -27,12 +34,16 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use tokio::sync::watch;
+
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_consensus_valid_after, parse_network_view,
     parse_service_descriptor, parse_socks_listeners, parse_traffic_read, Command, ControlReply,
     RelayFingerprint, ServiceId, UploadRounds,
 };
-use shekyl_tor_control_client::supervisor::{Action, DirectoryAnswer, DirectoryFetch, Input};
+use shekyl_tor_control_client::supervisor::{
+    Action, DirectoryAnswer, DirectoryFetch, Input, REPLY_BOUND,
+};
 use shekyl_tor_control_daemon::{
     ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
     KeptDataDir, OnionPow, SpawnError,
@@ -41,7 +52,7 @@ use shekyl_tor_control_daemon::{
 use super::inbox::Arrival;
 use super::{
     consensus_sample, incarnation, input_of_ask, sample_keys, say_retirement, space_short,
-    sweep_stale_data_dirs, Drive, CONSENSUS_VALID_AFTER, LAUNCH_BOUND, MAX_STREAMS, SOCKS_TIMEOUT,
+    sweep_stale_data_dirs, Drive, CONSENSUS_VALID_AFTER, MAX_STREAMS, SOCKS_TIMEOUT,
 };
 
 /// A request's answer, posted back to the loop.
@@ -87,6 +98,41 @@ impl std::fmt::Debug for Answer {
     }
 }
 
+impl Answer {
+    /// Whether this answer holds a Tor or a directory.
+    fn holds(&self) -> bool {
+        matches!(
+            self,
+            Self::Launched(Ok(_) | Err((_, Some(_))))
+                | Self::Reaped(_)
+                | Self::Held { kept: Some(_), .. }
+        )
+    }
+
+    /// End what this answer holds: a Tor is stopped, a directory retired.
+    /// For an answer the core no longer waits on, one that cannot be
+    /// delivered, and a launch abandoned before it answered.
+    pub(super) async fn discard(self) {
+        match self {
+            Self::Launched(Ok(control)) => {
+                tracing::info!(
+                    target: "tor",
+                    "a Tor launched for a request the supervisor gave up on is stopped"
+                );
+                if let Some(retirement) = control.shutdown().await.retirement {
+                    say_retirement(&retirement);
+                }
+            }
+            Self::Reaped(kept)
+            | Self::Held {
+                kept: Some(kept), ..
+            }
+            | Self::Launched(Err((_, Some(kept)))) => say_retirement(&kept.retire().await),
+            _ => {}
+        }
+    }
+}
+
 impl Drive {
     /// Send the request `action` names: the core has just put it in flight.
     /// Returns what the loop answers at once, `Replied` last; empty when a
@@ -128,6 +174,51 @@ impl Drive {
         });
     }
 
+    /// Run `work`, which holds a Tor or a directory, once the last such
+    /// work has finished, and post its answer for `number`. An answer that
+    /// cannot be posted (the loop has gone) is discarded here.
+    fn hold_later(&mut self, number: u64, work: impl Future<Output = Answer> + Send + 'static) {
+        let poster = self.poster.clone();
+        self.hold(async move {
+            let answer = Box::new(work.await);
+            if let Err(answer) = poster.deliver(number, answer) {
+                answer.discard().await;
+            }
+        });
+    }
+
+    /// Run `work` once the last work that holds a Tor or a directory has
+    /// finished. The driver keeps this one as the last: the next waits for
+    /// it, and so does the stop.
+    pub(super) fn hold(&mut self, work: impl Future<Output = ()> + Send + 'static) {
+        let before = self.held.take();
+        self.held = Some(tokio::spawn(async move {
+            if let Some(before) = before {
+                if let Err(error) = before.await {
+                    tracing::warn!(target: "tor", "Tor's previous process work ended abnormally: {error}");
+                }
+            }
+            work.await;
+        }));
+    }
+
+    /// Abandon the launch in flight when the core no longer waits on it,
+    /// or every launch when `stopping`: its wait for Tor's first reply
+    /// ends, and its task stops that Tor and retires its directory.
+    pub(super) fn abandon_launch(&mut self, stopping: bool) {
+        let waited = self
+            .launch
+            .as_ref()
+            .is_some_and(|(number, _)| !stopping && self.core.in_flight() == Some(*number));
+        if waited {
+            return;
+        }
+        if let Some((_, abandon)) = self.launch.take() {
+            // Set whether or not the task still listens: it may have finished.
+            abandon.send_replace(true);
+        }
+    }
+
     fn asker(&self) -> Option<ControlAsker> {
         self.control.as_ref().map(DaemonTorControl::asker)
     }
@@ -143,24 +234,28 @@ impl Drive {
         };
         // The stop's own death is not a second fault.
         self.generation = self.generation.wrapping_add(1);
-        self.answer_later(number, async move {
+        self.hold_later(number, async move {
             Answer::Reaped(control.stop_for_respawn().await)
         });
         None
     }
 
-    /// Launch off the loop. The directory work goes with it: a fresh
-    /// directory replaces the kept one (its sweep and retirement), and the
-    /// free space is read after that. A launch the space holds back hands
-    /// the kept directory back with its answer.
+    /// Launch off the loop, once the work before it has finished. The
+    /// directory work goes with it: a fresh directory replaces the kept one
+    /// (its sweep and retirement), and the free space is read after that. A
+    /// launch the space holds back hands the kept directory back with its
+    /// answer. The wait for Tor's first reply has no clock: it ends when the
+    /// driver abandons the launch, and the task then stops that Tor and
+    /// retires its directory itself, so the next launch, which waits for
+    /// this task, finds nothing of it.
     fn send_launch(&mut self, number: u64, fresh_directory: bool) -> Option<Vec<Input>> {
         // The core reaps an incarnation before the next launch, so none is
         // held here; one that is would be lost by the launch, so it is
-        // stopped off the loop instead.
+        // stopped first, in the same order.
         if let Some(stray) = self.control.take() {
             self.generation = self.generation.wrapping_add(1);
-            tokio::spawn(async move {
-                drop(stray.stop_for_respawn().await.retire().await);
+            self.hold(async move {
+                say_retirement(&stray.stop_for_respawn().await.retire().await);
             });
         }
         let Some(binary) = self.pinned.clone() else {
@@ -175,7 +270,9 @@ impl Drive {
         let kept = self.kept.take();
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
-        self.answer_later(number, async move {
+        let (abandon, abandoned) = watch::channel(false);
+        self.launch = Some((number, abandon));
+        self.hold_later(number, async move {
             let swept = match old {
                 Some(old) => {
                     say_retirement(&old.replace().await);
@@ -189,23 +286,34 @@ impl Drive {
             if let Some(input) = space_short(&data_dir, fresh) {
                 return Answer::Held { input, kept };
             }
+            let mut waiting = abandoned.clone();
+            // A driver that has gone abandons the launch too.
+            let until = async move {
+                drop(waiting.wait_for(|abandon| *abandon).await);
+            };
+            // The control's own awaiting methods take this bound. The
+            // driver asks through `ControlAsker` and calls none of them.
             let launched = match kept {
                 Some(directory) => DaemonTorControl::spawn_into(
                     directory,
                     binary,
                     events,
-                    LAUNCH_BOUND,
+                    REPLY_BOUND,
                     SOCKS_TIMEOUT,
+                    until,
                 )
                 .await
                 .map_err(|failure| (failure.error, Some(failure.directory))),
-                None => match DaemonTorControl::spawn_keeping(DaemonTorConfig {
-                    tor_binary: binary,
-                    data_dir_parent: data_dir,
-                    events,
-                    reply_deadline: LAUNCH_BOUND,
-                    socks_timeout: SOCKS_TIMEOUT,
-                })
+                None => match DaemonTorControl::spawn_keeping(
+                    DaemonTorConfig {
+                        tor_binary: binary,
+                        data_dir_parent: data_dir,
+                        events,
+                        reply_deadline: REPLY_BOUND,
+                        socks_timeout: SOCKS_TIMEOUT,
+                    },
+                    until,
+                )
                 .await
                 {
                     Ok(up) => Ok(up),
@@ -217,7 +325,12 @@ impl Drive {
                     }
                 },
             };
-            Answer::Launched(launched)
+            let answer = Answer::Launched(launched);
+            if *abandoned.borrow() || abandoned.has_changed().is_err() {
+                answer.discard().await;
+                return Answer::Inputs(Vec::new());
+            }
+            answer
         });
         None
     }
@@ -310,7 +423,7 @@ impl Drive {
     /// before the reply does. A publish starts the rounds afresh, since a
     /// round left open by the deleted service is not this one's. A refused
     /// add publishes nothing, so no event reaches the new tracker.
-    fn send_add(&mut self, number: u64) -> Option<Vec<Input>> {
+    pub(super) fn send_add(&mut self, number: u64) -> Option<Vec<Input>> {
         let Some(asker) = self.asker() else {
             return Some(vec![Input::ControlEnded]);
         };
@@ -469,24 +582,10 @@ impl Drive {
     pub(super) fn answered(&mut self, number: u64, answer: Answer) -> Vec<Input> {
         if self.core.in_flight() != Some(number) {
             // A request the core gave up on: whatever it holds is ended off
-            // the loop, so no Tor and no directory outlives it.
-            match answer {
-                Answer::Launched(Ok(control)) => {
-                    tracing::info!(target: "tor", "a Tor launched after its bound is stopped");
-                    tokio::spawn(async move {
-                        drop(control.shutdown().await);
-                    });
-                }
-                Answer::Reaped(kept)
-                | Answer::Held {
-                    kept: Some(kept), ..
-                }
-                | Answer::Launched(Err((_, Some(kept)))) => {
-                    tokio::spawn(async move {
-                        say_retirement(&kept.retire().await);
-                    });
-                }
-                _ => {}
+            // the loop, before the next launch's directory work, so no Tor
+            // and no directory outlives it.
+            if answer.holds() {
+                self.hold(answer.discard());
             }
             return Vec::new();
         }

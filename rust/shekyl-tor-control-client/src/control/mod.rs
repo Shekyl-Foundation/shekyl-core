@@ -59,7 +59,7 @@ pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, DiskWrites,
-    EventReceiver, EventSink, Fed, ManagedTor, Signal, SocksPort, SocksTimeout,
+    EventReceiver, EventSink, Fed, HandshakeWait, ManagedTor, Signal, SocksPort, SocksTimeout,
     SystemDirectoryError, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
     EVENT_QUEUE_EVENTS,
 };

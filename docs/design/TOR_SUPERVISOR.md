@@ -841,7 +841,10 @@ and `FAILED REASON=NOT_FOUND` when that directory does not have it.
   (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). Its answer
   window is `Policy::probe_within` from the moment Tor accepts that
   `HSFETCH` (`250`, `Input::DirectoryFetchAccepted`). The send arms a
-  provisional window, so a command that is never accepted still ends. The
+  provisional window, so a command that is never accepted still ends. A
+  fetch that has come due waits its turn in the request queue (§4.11): until
+  it is sent no window runs, and nothing Tor says about that directory
+  counts. The
   window is the supervisor's wait for the `HS_DESC` line on the control
   connection. It is not the connector's dial deadline, not Tor's SOCKS
   timeout, and not the dialer's outage backoff
@@ -1158,16 +1161,28 @@ stands when its turn comes is withheld there. The reply bound is a core
 deadline per request in flight, `Policy::reply_bound` (30 s) after the send
 in the core's clock (awake time, restarted at a wake like every other
 window); past it is `Cause::ReplyLate`, a process fault. An answer the core
-no longer waits on is not folded, and a Tor launched for it is stopped. So
+no longer waits on is not folded, and what it holds is ended: a Tor
+stopped, a directory retired. So
 a status ask (`Supervisor::status`) and the stop are taken in the next pass
 whatever Tor is doing, which is when an operator asks what is wrong
 (`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`). The
 one wait the loop makes is the only one classified for a sleep.
 
-The reap is a request like the others. A fault that ends an incarnation
-that had launched sends `Action::Reap` after the take-down, and the next
-launch waits behind it in the queue
-(`an_ended_tor_is_reaped_before_the_next_launch`). The task closes the
+Three orderings the awaiting loop gave are the queue's own. The onion's
+service and its upload rounds are set when `ADD_ONION` is sent, since Tor
+uploads as soon as it takes the service and its `HS_DESC` events can reach
+the inbox before the reply (`an_upload_before_the_add_onion_reply_is_read`).
+One publication is out at a time: the onion stays owed until the add is
+answered, and a sample deadline meanwhile asks for the one already out
+(`a_publication_spanning_a_sample_deadline_is_sent_once`). A directory fetch
+is open from its send (§4.5,
+`a_queued_fetch_is_not_open_and_its_window_runs_from_its_send`).
+
+The reap is a request like the others. A fault, or a hold, that ends an
+incarnation that had launched sends `Action::Reap` after the take-down, and
+the next launch waits behind it in the queue
+(`an_ended_tor_is_reaped_before_the_next_launch`,
+`a_late_reply_reaps_the_tor_it_was_asked_of`). The task closes the
 owning connection, waits Tor's grace (`SHUTDOWN_GRACE`, 5 s), kills what is
 still alive (the whole stop under `REAP_TIMEOUT`, 15 s), saves the directory
 cache after a clean exit, and answers with the kept directory. A frozen Tor
@@ -1180,16 +1195,31 @@ retired when its answer arrives, and the next launch takes a fresh one.
 The launch request covers everything between the send and Tor's first
 control reply: the old directory's retirement when the launch takes a fresh
 one, the stale-directory sweep, the space check, the copy of the directory
-cache (`TSR-Q8`), the process start, and `GETINFO version`. The reply bound
-holds all of it from the send. `LAUNCH_BOUND` (the same 30 s) bounds only
-`GETINFO version`, inside it. On the floor device, a cold start with a fresh
-data directory, while the node generated its genesis block, reached Tor's
-first event (after the version reply and the event subscription) 1.4 s and
-2.8 s after the daemon's first log line (2026-10-31, `ffb7259051`, runs 0
-and 1; shekyl-dev `data/tsr-acceptance/2026-10-31-pi-floor/`). Those runs
-had no cache to copy; the copy the launch makes took at most 0.063 s on the
-same device (§10, the seeded start, 2026-10-22, not synced).
-So the launch keeps the reply bound and needs no bound of its own.
+cache (`TSR-Q8`), the process start, and `GETINFO version`. It has no clock
+of its own: the core's reply bound holds all of it from the send, in awake
+time. The launch waits for Tor's first reply until the driver abandons it
+(`HandshakeWait::Until`), which the driver does when the core gives up on
+the request and at the stop. A Tor that has not answered is then killed and
+reaped at once, and the launch's own task retires its directory
+(`a_launch_the_core_gives_up_on_ends_its_tor`). On the floor device, a cold
+start with a fresh data directory, while the node generated its genesis
+block, reached Tor's first event (after the version reply and the event
+subscription) 1.4 s and 2.8 s after the daemon's first log line
+(2026-10-31, `ffb7259051`, runs 0 and 1; shekyl-dev
+`data/tsr-acceptance/2026-10-31-pi-floor/`). Those runs had no cache to
+copy; the copy the launch makes took at most 0.063 s on the same device
+(§10, the seeded start, 2026-10-22, not synced). So the reply bound holds a
+cold launch on the floor device with an order of magnitude to spare.
+
+Work that holds a Tor or a directory (a launch, a reap, and the end of what
+a stale answer held) runs in order, each after the one before it has
+finished. The next launch's sweep therefore never meets a directory a late
+launch still holds. The stop is taken at once: it abandons a launch still
+waiting, waits for the last of that work, and ends what any answer still
+queued holds, so no Tor and no directory outlives it. A Tor that answered
+and then froze keeps the stop for Tor's grace
+(`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`,
+`a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped`).
 
 One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
 they are different actions. While Running it is `Action::Sample`: one

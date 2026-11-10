@@ -1296,6 +1296,13 @@ impl Core {
 
     fn hold(&mut self, now: u64, cause: Cause, duty: AbsentDuty) -> Vec<Action> {
         self.requests.clear();
+        // A hold comes from the pin check or the launch, before a Tor runs.
+        // One that comes while a Tor runs ends it like a fault: reaped, off
+        // the loop.
+        let launched = matches!(
+            self.phase,
+            Phase::Bootstrapping { .. } | Phase::Running { .. }
+        );
         let installed = self.route_done();
         let dropped = self.drop_probe();
         self.phase = Phase::Absent { duty };
@@ -1309,6 +1316,9 @@ impl Core {
         let mut actions: Vec<Action> = dropped.into_iter().collect();
         if installed {
             actions.push(Action::TakeDown);
+        }
+        if launched {
+            actions.push(Action::Reap);
         }
         actions.extend(self.say(now, Cadence::Due));
         actions

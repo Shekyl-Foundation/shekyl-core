@@ -262,6 +262,7 @@ impl ManagedInstance {
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: None,
+                handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
             }),
             events,
             readiness,

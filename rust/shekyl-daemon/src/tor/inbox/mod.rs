@@ -192,6 +192,23 @@ impl Poster {
         }
     }
 
+    /// Post the answer to request `number`. When the inbox is gone the
+    /// answer comes back, for the caller to end what it holds.
+    pub(super) fn deliver(
+        &self,
+        number: u64,
+        answer: Box<super::requests::Answer>,
+    ) -> Result<(), Box<super::requests::Answer>> {
+        let Some(queue) = self.queue.upgrade() else {
+            return Err(answer);
+        };
+        match queue.send(Arrival::Reply { number, answer }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::SendError(Arrival::Reply { answer, .. })) => Err(answer),
+            Err(mpsc::error::SendError(_)) => unreachable!("the reply was sent"),
+        }
+    }
+
     fn set(&self, store: impl FnOnce(&mut Changed)) {
         if let Some(shared) = self.shared.upgrade() {
             shared.set(store);
@@ -289,6 +306,25 @@ impl Inbox {
             },
             () = self.shared.doorbell.notified() => Woken::Rang,
         }
+    }
+
+    /// At the stop: the answers still queued, each to have what it holds
+    /// ended. Everything else queued is dropped with the loop; a status
+    /// ask among it hears that the loop has gone.
+    pub(super) fn replies_left(&mut self) -> Vec<super::requests::Answer> {
+        let mut answers = Vec::new();
+        let mut take = |arrival| {
+            if let Arrival::Reply { answer, .. } = arrival {
+                answers.push(*answer);
+            }
+        };
+        while let Some(arrival) = self.ahead.pop_front() {
+            take(arrival);
+        }
+        while let Ok(arrival) = self.queue.try_recv() {
+            take(arrival);
+        }
+        answers
     }
 
     fn taken(&self, arrival: Arrival) -> Woken {

@@ -255,3 +255,35 @@ fn a_publication_spanning_a_sample_deadline_is_sent_once() {
     assert_eq!(sent, 1, "a second publication: {added:?}");
     assert_eq!(core.in_flight(), None);
 }
+
+/// **A request past its bound reaps the Tor it was asked of.** The launch
+/// is answered and its subscription sent; Tor never answers it. One bound
+/// later the subscription is late, a process fault while Bootstrapping,
+/// and the fault sends `Reap`: the Tor that went silent is stopped and its
+/// directory kept, before the next launch. Fails if a fault from the
+/// core's own deadline leaves a launched Tor running (no `Reap`).
+#[test]
+fn a_late_reply_reaps_the_tor_it_was_asked_of() {
+    let mut core = launching();
+    core.on(Input::Spawned, 0);
+    let subscribing = replied(&mut core, 0);
+    assert!(
+        subscribing.actions.contains(&Action::SubscribeEvents),
+        "{subscribing:?}"
+    );
+    let late = core.on_deadline(bound());
+    assert_eq!(core.status().cause, Cause::ReplyLate);
+    assert!(late.actions.contains(&Action::Reap), "{:?}", late.actions);
+}
+
+/// **A hold while Tor runs reaps it.** Holds come from the pin check and
+/// the launch, before a Tor runs; one folded while Tor runs ends that Tor
+/// as a fault does. Fails if `hold` clears the queue and leaves the
+/// running Tor to the next launch.
+#[test]
+fn a_hold_while_tor_runs_reaps_it() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    bring_up(&mut core);
+    let held = core.on(Input::PinRefused, secs(1));
+    assert!(held.actions.contains(&Action::Reap), "{:?}", held.actions);
+}

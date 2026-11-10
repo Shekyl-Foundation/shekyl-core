@@ -6,8 +6,8 @@
 //! One managed Tor incarnation (PWD-E7 piece 2).
 //!
 //! [`DaemonTorControl::spawn_keeping`] creates a data directory under the
-//! caller-named parent and returns when `GETINFO version` answers. Bootstrap
-//! is not a gate. The directory is kept across a respawn in the same boot
+//! caller-named parent and returns when `GETINFO version` answers, waiting
+//! for it as long as the caller says. Bootstrap is not a gate. The directory is kept across a respawn in the same boot
 //! (`TSR-Q1`) and retired when the daemon stops: Tor's log is kept beside it,
 //! the directory becomes a tombstone, and the tombstone is deleted off the
 //! stop path under [`TOMBSTONE_DELETE_BOUND`] (`TOR_SUPERVISOR.md` §4.7).
@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
@@ -107,6 +107,10 @@ pub enum DaemonTorStartError {
     /// or the actor stopped). Carries the reaped exit when teardown observed
     /// it.
     Died(Option<TorExit>),
+    /// The spawn stopped waiting for Tor's first control reply: the
+    /// caller's deadline passed, or its supervisor abandoned the launch.
+    /// The child was stopped and reaped.
+    Unanswered,
 }
 
 impl std::fmt::Display for DaemonTorStartError {
@@ -115,6 +119,9 @@ impl std::fmt::Display for DaemonTorStartError {
             Self::DataDir(e) => write!(f, "ephemeral tor data directory: {e}"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died(exit) => write!(f, "tor died during start ({exit:?})"),
+            Self::Unanswered => {
+                f.write_str("tor gave no first control reply before the spawn stopped waiting")
+            }
         }
     }
 }
@@ -239,6 +246,12 @@ pub struct DaemonTorControl {
     /// Bootstrap as the actor's poll reports it. The supervisor reads it;
     /// launch does not wait on it.
     ready: watch::Receiver<BootstrapState>,
+    /// Ends the actor's wait for Tor's first reply ([`HandshakeWait::Until`])
+    /// when sent on or dropped: the actor cannot be stopped while it waits,
+    /// so every stop drops this first. `None` once dropped.
+    ///
+    /// [`HandshakeWait::Until`]: shekyl_tor_control_client::control::HandshakeWait::Until
+    handshake: Option<oneshot::Sender<()>>,
     /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -288,6 +301,10 @@ impl DaemonTorControl {
 
     async fn stop_actor(&mut self) -> Option<TorExit> {
         self.stopping.store(true, Ordering::Release);
+        // A Tor that has not answered its first reply is killed and reaped
+        // by the actor's start, which then ends; the stop below finds it
+        // ended. One that answered is past this.
+        drop(self.handshake.take());
         let actor = self.actor.clone();
         let mut exit_watch = self.exit_watch.clone();
         let stop = async {
@@ -742,7 +759,7 @@ pub(crate) mod tests {
             VerifiedTorBinary::unchecked_for_test(PathBuf::from("/nonexistent/tor")),
             parent.path().to_path_buf(),
         );
-        let old = match DaemonTorControl::spawn_keeping(config).await {
+        let old = match DaemonTorControl::spawn_keeping(config, std::future::pending()).await {
             Err(SpawnError::Launch(failure)) => failure.directory,
             Err(SpawnError::DataDir(error)) => panic!("the directory was not created: {error}"),
             Ok(_) => panic!("a missing binary does not come up"),

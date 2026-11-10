@@ -53,6 +53,7 @@ use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 mod inbox;
@@ -62,11 +63,6 @@ mod probe;
 mod requests;
 
 use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, Timer, Wanted, Woken};
-
-/// The launch's own bound on its first control reply (`GETINFO version`),
-/// inside the request the core bounds ([`Policy::reply_bound`]). Not a
-/// bootstrap limit.
-const LAUNCH_BOUND: Duration = shekyl_tor_control_client::supervisor::REPLY_BOUND;
 
 /// The managed Tor answers a SOCKS request it cannot attach just inside the
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
@@ -389,73 +385,102 @@ async fn drive(
     inbox: Inbox,
     network: Network,
 ) {
-    let engine = network.engine();
-    let owner = match engine.register(OwnerClass::Housekeeping) {
-        Ok(owner) => owner,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no scheduler: {error:?}");
-            return;
-        }
-    };
-    let onion = match DaemonTorControl::mint_identity() {
-        Ok(onion) => onion,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
-            return;
-        }
-    };
-    // The probe's isolation pair, minted beside the onion and held with it
-    // for the boot (§4.5): the probe's circuits are its own.
-    let probe_pair = match IsolationPair::mint() {
-        Ok(pair) => pair,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
-            return;
-        }
-    };
-    let connectors = Connectors {
-        tor: TorSetting::Managed,
-        clearnet_on,
-    };
-    let clock = owner.clock().clone();
-    let poster = inbox.poster();
-    let timer = Timer::start(owner, poster.clone());
-    let started = clock.now().get();
-    let (core, step) = Core::start(policy, connectors, started);
-    let mut drive = Drive {
-        core,
-        step,
-        clock,
+    if let Some(drive) = Drive::start(
         binary,
-        data_dir,
-        events: poster.events(),
-        poster,
-        inbox,
-        timer,
-        forward: None,
-        onion: Arc::new(onion),
-        probe_pair,
+        policy,
+        clearnet_on,
         virtual_port,
+        data_dir,
+        inbox,
         network,
-        service: None,
-        rounds: None,
-        dropped_seen: 0,
-        probe: None,
-        network_view: NetworkView::default(),
-        control: None,
-        kept: None,
-        pinned: None,
-        incarnation: None,
-        generation: 0,
-    };
-    // What the network published before this loop: the relay's verdict,
-    // the tally and the sessions at start. Folded after the start's own
-    // step, so the pin check stays the first action. The tally's failures
-    // were launched before this Tor ran, and the quiet line leaves them out
-    // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
-    let first = drive.changed_inputs();
-    drive.fold_after_start(first, started);
-    drive.run().await;
+    ) {
+        drive.run().await;
+    }
+}
+
+impl Drive {
+    /// The driver, its core started and the network's state at start
+    /// folded; `None`, said, when the boot's secrets or a scheduler are
+    /// not to be had.
+    fn start(
+        binary: PinSource,
+        policy: Policy,
+        clearnet_on: bool,
+        virtual_port: u16,
+        data_dir: PathBuf,
+        inbox: Inbox,
+        network: Network,
+    ) -> Option<Self> {
+        let engine = network.engine();
+        let owner = match engine.register(OwnerClass::Housekeeping) {
+            Ok(owner) => owner,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no scheduler: {error:?}");
+                return None;
+            }
+        };
+        let onion = match DaemonTorControl::mint_identity() {
+            Ok(onion) => onion,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
+                return None;
+            }
+        };
+        // The probe's isolation pair, minted beside the onion and held with it
+        // for the boot (§4.5): the probe's circuits are its own.
+        let probe_pair = match IsolationPair::mint() {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
+                return None;
+            }
+        };
+        let connectors = Connectors {
+            tor: TorSetting::Managed,
+            clearnet_on,
+        };
+        let clock = owner.clock().clone();
+        let poster = inbox.poster();
+        let timer = Timer::start(owner, poster.clone());
+        let started = clock.now().get();
+        let (core, step) = Core::start(policy, connectors, started);
+        let mut drive = Drive {
+            core,
+            step,
+            clock,
+            binary,
+            data_dir,
+            events: poster.events(),
+            poster,
+            inbox,
+            timer,
+            forward: None,
+            onion: Arc::new(onion),
+            probe_pair,
+            virtual_port,
+            network,
+            service: None,
+            rounds: None,
+            dropped_seen: 0,
+            probe: None,
+            network_view: NetworkView::default(),
+            control: None,
+            kept: None,
+            pinned: None,
+            incarnation: None,
+            generation: 0,
+            held: None,
+            launch: None,
+        };
+        // What the network published before this loop: the relay's verdict,
+        // the tally and the sessions at start. Folded after the start's own
+        // step, so the pin check stays the first action. The tally's failures
+        // were launched before this Tor ran, and the quiet line leaves them out
+        // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
+        let first = drive.changed_inputs();
+        drive.fold_after_start(first, started);
+        Some(drive)
+    }
 }
 
 /// The process, the directory, and the route. The phase lives in [`Core`].
@@ -488,7 +513,7 @@ struct Drive {
     /// The network the route, the onion and the inbound facet are
     /// published on, and the probe is minted and dialed through.
     network: Network,
-    /// The onion as last published.
+    /// The onion as last sent to Tor (`ADD_ONION`).
     service: Option<ServiceId>,
     /// That onion's descriptor upload rounds (`TSR-Q5`).
     rounds: Option<UploadRounds>,
@@ -507,6 +532,13 @@ struct Drive {
     /// folded. It moves at each spawn and each reap, so the stop's own
     /// death is not a second fault.
     generation: u64,
+    /// The last task that holds a Tor or a directory: a launch, a reap, or
+    /// the end of what a stale answer held. The next waits for it, and so
+    /// does the stop ([`Self::hold`]).
+    held: Option<JoinHandle<()>>,
+    /// The launch in flight, by its number, and the signal that abandons
+    /// its wait for Tor's first reply ([`Self::abandon_launch`]).
+    launch: Option<(u64, watch::Sender<bool>)>,
 }
 
 impl Drive {
@@ -515,6 +547,9 @@ impl Drive {
             if self.perform() {
                 break;
             }
+            // A launch the core gave up on, in this pass or by what was
+            // just performed, stops waiting.
+            self.abandon_launch(false);
             // Captured before the wait. The wait's lateness is this
             // interval, not how late a deadline stored during `perform`
             // looks afterwards.
@@ -526,7 +561,20 @@ impl Drive {
             let lead = slept(armed, entered, woke).map(|late_by| Input::Resumed { late_by });
             self.pass(woken, lead, woke, wanted);
         }
+        // The stop. A launch still waiting for Tor stops waiting, and the
+        // work that holds a Tor or a directory ends before the supervisor
+        // does: what its answers hold is ended here, so no Tor and no
+        // directory outlives the stop.
+        self.abandon_launch(true);
         self.cancel_probe();
+        if let Some(held) = self.held.take() {
+            if let Err(error) = held.await {
+                tracing::warn!(target: "tor", "Tor's process work ended abnormally at the stop: {error}");
+            }
+        }
+        for answer in self.inbox.replies_left() {
+            answer.discard().await;
+        }
         if let Some(control) = self.control.take() {
             let teardown = control.shutdown().await;
             if let CacheSave::Failed(error) = teardown.cache {
