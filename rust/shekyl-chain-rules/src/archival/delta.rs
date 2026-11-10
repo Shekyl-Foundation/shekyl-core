@@ -9,7 +9,7 @@
 
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SupportSeats,
+    SigmaWorkMilli, SlashLogEntry, SupportRow,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -64,42 +64,11 @@ pub struct ArchivalDelta {
     /// The draw count of the connecting block. Present at every height,
     /// including a schedule with no response window, which records zeros.
     pub(super) draws: BlockDraws,
-    /// The complete trees the connecting block seated on the support
-    /// stream, in persona order. Present at every height; the empty row is
-    /// a block that seated nobody, and a missing row is the hole.
-    pub(super) support_seats: SupportSeats,
-    /// The support carry this block leaves (`archival_support_unissued`).
-    pub(super) support_carry: SupportCarryWrite,
-}
-
-/// What a block's transition does to the support carry
-/// (`archival_support_unissued`, the switch's C5): the epoch's counts it
-/// leaves, and the previous epoch whose counts lapse at this open.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SupportCarryWrite {
-    /// The connecting block's epoch.
-    pub epoch: shekyl_types::SettlementEpoch,
-    /// Each tree the carry has a count for, zero included, ascending by
-    /// persona. A zero removes the row.
-    pub counts: Vec<(
-        shekyl_types::PCanonicalId,
-        shekyl_archival_retention::SupportUnissued,
-    )>,
-    /// At an epoch's open, the epoch before it: every one of its rows
-    /// lapses (`SO-D12r`). `None` at any other height.
-    pub lapsed: Option<shekyl_types::SettlementEpoch>,
-}
-
-impl SupportCarryWrite {
-    /// A block that leaves the carry as it was.
-    #[must_use]
-    pub const fn untouched(epoch: shekyl_types::SettlementEpoch) -> Self {
-        Self {
-            epoch,
-            counts: Vec::new(),
-            lapsed: None,
-        }
-    }
+    /// The connecting block's support row: the trees it seated, in
+    /// persona order, and the carry it leaves. Present at every height; the
+    /// empty row is a block that seated nobody and left nothing owed, and a
+    /// missing row is the hole.
+    pub(super) support_row: SupportRow,
 }
 
 impl ArchivalDelta {
@@ -204,19 +173,13 @@ impl ArchivalDelta {
         self.draws
     }
 
-    /// The complete trees the connecting block seated on the support
-    /// stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12`
-    /// S1). Written at every height. The length is the number of support
-    /// draws the block issued.
+    /// The connecting block's support row (`ARCHIVAL_SUPPORT_DRAW.md` §5;
+    /// `SO-D12` S1): the complete trees it seated, in persona order, whose
+    /// count is the support draws it issued, and the carry it leaves.
+    /// Written at every height.
     #[must_use]
-    pub const fn support_seats(&self) -> &SupportSeats {
-        &self.support_seats
-    }
-
-    /// The support carry this block leaves (the field's docs).
-    #[must_use]
-    pub const fn support_carry(&self) -> &SupportCarryWrite {
-        &self.support_carry
+    pub const fn support_row(&self) -> &SupportRow {
+        &self.support_row
     }
 }
 

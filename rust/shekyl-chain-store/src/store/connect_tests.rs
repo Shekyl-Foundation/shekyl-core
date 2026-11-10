@@ -309,10 +309,10 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         Some(empty.digest())
     );
     assert_eq!(
-        snap.support_block_seats(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
+        snap.support_row(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
             .expect("read"),
-        Some(shekyl_types::archival::SupportSeats::EMPTY),
-        "genesis records that it issued no support draws"
+        Some(shekyl_types::archival::SupportRow::EMPTY),
+        "genesis records that it issued no support draws and carries nothing"
     );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
     // the null seed CEN-D3 names below the first epoch.

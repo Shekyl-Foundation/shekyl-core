@@ -123,14 +123,15 @@ use super::{
     FollowingDegraded, HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
     OutTx, PoolRecord, ProbeCell, PropertyCell, QueuedBody, QueuedBundle, RMarket, RecordedPow,
     RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportSeats, TreeDepth, TxIndex,
-    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportRow, SupportSeats,
+    TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::archival::SupportCarryAfter;
 use shekyl_types::{
     ArchivalLength, BadInterval, BlockHash, BlockHeight, BlockWeight, CommitmentBytes,
     CurveTreeRoot, GlobalOutputIndex, LongTermWeight, OneTimePubkey, OutputIndexInTx, PCanonicalId,
@@ -958,31 +959,33 @@ impl Fixtures for SupportIssued {
     }
 }
 
-impl Fixtures for SupportSeats {
+impl Fixtures for SupportRow {
     fn fixtures() -> Vec<(&'static str, Self)> {
+        let id = |b: u8| PCanonicalId::from_bytes([b; 32]);
         vec![
-            ("empty", SupportSeats::EMPTY),
+            ("empty", SupportRow::EMPTY),
             (
-                "two",
-                SupportSeats::new(vec![
-                    PCanonicalId::from_bytes([0x10; 32]),
-                    PCanonicalId::from_bytes([0x30; 32]),
-                ])
-                .expect("ascending"),
+                "two_seats",
+                SupportRow {
+                    seats: SupportSeats::new(vec![id(0x10), id(0x30)]).expect("ascending"),
+                    carry_after: SupportCarryAfter::EMPTY,
+                },
+            ),
+            (
+                "seated_and_carried",
+                SupportRow {
+                    seats: SupportSeats::new(vec![id(0x10)]).expect("one"),
+                    carry_after: SupportCarryAfter::new(vec![
+                        (id(0x10), SupportCount::new(1)),
+                        (id(0x30), SupportCount::new(10)),
+                    ])
+                    .expect("ascending, each owed"),
+                },
             ),
         ]
     }
 }
 
-impl Fixtures for SupportCount {
-    fn fixtures() -> Vec<(&'static str, Self)> {
-        vec![
-            ("none", SupportCount::new(0)),
-            ("capped", SupportCount::new(10)),
-            ("wide", SupportCount::new(0x0102_0304)),
-        ]
-    }
-}
 impl Fixtures for CompleteTreeSet {
     fn fixtures() -> Vec<(&'static str, Self)> {
         let id = |b: u8| PCanonicalId::from_bytes([b; 32]);
@@ -1619,8 +1622,7 @@ snapshotted_codecs! {
     IssuedDraw => codec_snapshot_issued_draw in Chain,
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
-    SupportCount => codec_snapshot_support_count in Chain,
-    SupportSeats => codec_snapshot_support_seats in Chain,
+    SupportRow => codec_snapshot_support_row in Chain,
     SupportIssued => codec_snapshot_support_issued in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
     CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,

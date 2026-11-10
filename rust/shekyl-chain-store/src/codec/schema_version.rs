@@ -402,8 +402,15 @@ use super::{Canonical, CodecError};
 ///   `BundleReferences::encode` (a length-framed section) where it was
 ///   witness bytes, and `alt_block`'s optional witness is the same section.
 ///   The table keeps its ordinal; the digest's family keeps its position.
-///   A `35` file is refused at open. Rebuild from the block corpus, as at
-///   every bump.
+///   The support carry moves onto the block's row (SI-43 restated):
+///   `archival_support_block[h]` is `support_row`, the seats and the carry
+///   the block leaves (`carry_after`, sparse), and the next block steps
+///   from it. `archival_support_unissued` is deleted, so the five tables
+///   after it each move up one ordinal (`archival_support_block` 44 through
+///   `archival_bundle_body` 48). `support_row.snap` replaces
+///   `support_seats.snap` and `support_count.snap`, and `tables.snap`
+///   re-pins. A `35` file is refused at open. Rebuild from the block
+///   corpus, as at every bump.
 ///
 /// [`FamilySet`]: crate::family_set::FamilySet
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);

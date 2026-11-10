@@ -54,8 +54,8 @@ impl SupportUnissued {
         self.0
     }
 
-    /// A count as `archival_support_unissued` stored it. `None` past the
-    /// cap: no writer stores one, so a row above it is not a count.
+    /// A count as a support row's `carry_after` stores it. `None` past the
+    /// cap: no transition writes one, so a row above it is not a count.
     #[must_use]
     pub const fn stored(count: u32) -> Option<Self> {
         if count > SUPPORT_DRAWS_PER_EPOCH {

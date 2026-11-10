@@ -93,9 +93,10 @@ fn prepare(label: &str) -> Prepared {
         .store
         .begin_read()
         .expect("read")
-        .support_block_seats(drawing_height(), BlockDrawsFloor::NONE)
+        .support_row(drawing_height(), BlockDrawsFloor::NONE)
         .expect("read")
-        .expect("the drawing block wrote its seat row");
+        .expect("the drawing block wrote its support row")
+        .seats;
     let support = u32::try_from(seats.len()).expect("a block seats fewer than 2^32 trees");
     Prepared {
         chain,
@@ -727,9 +728,10 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
         .expect("h wrote its draw row")
         .count;
     let support = u32::try_from(
-        read.support_block_seats(h, BlockDrawsFloor::NONE)
+        read.support_row(h, BlockDrawsFloor::NONE)
             .expect("read")
-            .expect("h wrote its seat row")
+            .expect("h wrote its support row")
+            .seats
             .len(),
     )
     .expect("a block seats fewer than 2^32 trees");

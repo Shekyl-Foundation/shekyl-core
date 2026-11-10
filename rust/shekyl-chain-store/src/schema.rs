@@ -164,9 +164,9 @@ use crate::codec::{
     AltBlock, AltBodies, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, BundleReferencesBytes,
     Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
     LeafCount, OutKey, OutTx, Present, PropertyCellBytes, QueuedBody, QueuedBundle, RMarket,
-    RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportCount,
-    SupportIssued, SupportSeats, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog,
+    RecordedPow, RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportIssued,
+    SupportRow, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    UndoLog,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -460,13 +460,6 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          fact, since a complete tree slashed or released afterwards holds a compact set, so a \
          claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
          the records as they are now, so LMDB never holds it",
-    ),
-    (
-        "archival_support_unissued",
-        "one complete tree's unissued support draws in one epoch, capped at c \
-         (ARCHIVAL_SUPPORT_DRAW.md §5): a scheduled block the producer did not file. It is not \
-         the economy's shortfall and it is not issued_short. The C++ draws no support stream, \
-         so LMDB never holds it",
     ),
     (
         "archival_support_block",
@@ -877,40 +870,37 @@ tables! {
     /// insert-once and whole (SI-21, SI-31), the empty set included, and
     /// reversed by `pop` through the journal. A claim's re-gather reads it
     /// for every bond's complete-tree flag (A22). An epoch with no row was
-    /// not settled. Appended last (ordinal 45).
+    /// not settled. Ordinal 43.
     pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
         TableDefinition::new("archival_complete_trees");
 
-    /// `archival_support_unissued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
-    /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
-    /// for that tree in that epoch and not filed, capped at `c`
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
-    /// Ordinal 44.
-    pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
-        TableDefinition::new("archival_support_unissued");
-
     /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
-    /// height → the [`SupportSeats`] that block seated: the complete trees
-    /// in persona order, whose length is the width of its support bitmap
-    /// (`SO-D12` S1). Written when the block connects, insert-once (SI-40),
-    /// the empty row included: a block that seated nobody still has a row.
-    /// A height with no row was not connected. Retired with
-    /// [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34). Ordinal 45.
-    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportSeats>> =
+    /// height → the [`SupportRow`] of that block: the complete trees it
+    /// seated, in persona order, whose count is the width of its support
+    /// bitmap (`SO-D12` S1), and the carry it left, sparse (the switch's
+    /// C5). The next block in the epoch steps the carry from it; at an
+    /// epoch's open the carry starts empty (`SO-D12r`). Written when the
+    /// block connects, insert-once (SI-40), the empty row included: a block
+    /// that seated nobody still has a row. A height with no row was not
+    /// connected; a pop removes the row, and with it the carry it left.
+    /// Admission checks a row is one step of the carry (SI-43). Retired
+    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
+    /// Ordinal 44.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportRow>> =
         TableDefinition::new("archival_support_block");
 
     /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
     /// shard the draw selected and whether a pass was admitted
     /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
-    /// is one range in `(height, draw)` order. Ordinal 46.
+    /// is one range in `(height, draw)` order. Ordinal 45.
     pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
         TableDefinition::new("archival_support_issued");
 
     /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
     /// epoch. One row per tree, not per shard. Written by the slash pass
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 47.
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 46.
     pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_support_settlement");
 
@@ -921,7 +911,7 @@ tables! {
     /// entry per `h`, the first valid one; at most `W₂` entries, since an
     /// entry leaves when its window closes. Not chain state: written
     /// outside any pop recording, as `alt_blocks` is. Its body is in
-    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 50).
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 47).
     pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
         TableDefinition::new("archival_bundle_queue");
 
@@ -930,7 +920,7 @@ tables! {
     /// by the hash its reference names (§7.5). Every body has a holder
     /// (SI-41): in 4c the queue; an alternative block and a main-chain
     /// block not past `D_max` are 4b's holders. Not chain state, as the
-    /// queue is not. Appended last (ordinal 51).
+    /// queue is not. Appended last (ordinal 48).
     pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
         TableDefinition::new("archival_bundle_body");
 }
@@ -1022,14 +1012,13 @@ mod tests {
             // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
             // market excluded, frozen at its slash pass.
             ("archival_complete_trees", 43),
-            ("archival_support_unissued", 44),
-            ("archival_support_block", 45),
-            ("archival_support_issued", 46),
-            ("archival_support_settlement", 47),
+            ("archival_support_block", 44),
+            ("archival_support_issued", 45),
+            ("archival_support_settlement", 46),
             // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
             // body store.
-            ("archival_bundle_queue", 48),
-            ("archival_bundle_body", 49),
+            ("archival_bundle_queue", 47),
+            ("archival_bundle_body", 48),
         ];
         for &(name, index) in pinned {
             assert_eq!(

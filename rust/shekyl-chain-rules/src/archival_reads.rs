@@ -20,8 +20,8 @@
 ///   Two reads answer the row an open with no bonds records, because the
 ///   count treats absence as a hole. `block_draws` is
 ///   `Some(BlockDraws::ZERO)`: a height that drew nothing.
-///   `support_block_seats` is `Some(SupportSeats::EMPTY)`: a height that
-///   seated nobody. `drawable_digest`
+///   `support_row` is `Some(SupportRow::EMPTY)`: a height that seated
+///   nobody and left nothing owed. `drawable_digest`
 ///   is [`crate::DrawableEpoch::empty`]'s digest for the epoch asked. The store
 ///   answers `None` for a height or an epoch never written, and that
 ///   absence is the hole.
@@ -201,16 +201,6 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::SettlementRow>);
             (persona, epoch, floor);
             (::core::option::Option::None));
-        $crate::archival_reads!(@emit $policy; support_unissued;
-            (epoch: shekyl_types::SettlementEpoch);
-            (
-                ::std::vec::Vec<(
-                    shekyl_types::PCanonicalId,
-                    shekyl_types::archival::SupportCount,
-                )>
-            );
-            (epoch);
-            (::std::vec::Vec::new()));
         $crate::archival_reads!(@emit $policy; issued_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -238,11 +228,11 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::BlockDraws>);
             (height, floor);
             (::core::option::Option::Some(shekyl_types::archival::BlockDraws::ZERO)));
-        $crate::archival_reads!(@emit $policy; support_block_seats;
+        $crate::archival_reads!(@emit $policy; support_row;
             (height: shekyl_types::BlockHeight, floor: $crate::BlockDrawsFloor);
-            (::core::option::Option<shekyl_types::archival::SupportSeats>);
+            (::core::option::Option<shekyl_types::archival::SupportRow>);
             (height, floor);
-            (::core::option::Option::Some(shekyl_types::archival::SupportSeats::EMPTY)));
+            (::core::option::Option::Some(shekyl_types::archival::SupportRow::EMPTY)));
         $crate::archival_reads!(@emit $policy; drawable_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -271,8 +261,8 @@ macro_rules! archival_reads {
             (::std::vec::Vec::new()));
     };
     // `block_draws` is the method table's `Some(BlockDraws::ZERO)`: the
-    // zero row does not depend on the height. `support_block_seats` is
-    // `Some(SupportSeats::EMPTY)` for the same reason. `drawable_digest` does
+    // zero row does not depend on the height. `support_row` is
+    // `Some(SupportRow::EMPTY)` for the same reason. `drawable_digest` does
     // depend on the epoch, so both bondless policies share one body. The
     // store answers `None` for an epoch never written; that absence is
     // the hole.

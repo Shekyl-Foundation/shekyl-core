@@ -617,9 +617,10 @@ async fn a_produced_support_bundle_is_admitted_and_connects_through_the_staged_d
     let snap = store.begin_read().expect("snapshot");
     for h in &observed {
         let row = snap
-            .support_block_seats(*h, shekyl_chain_rules::BlockDrawsFloor::NONE)
+            .support_row(*h, shekyl_chain_rules::BlockDrawsFloor::NONE)
             .expect("the row reads")
-            .expect("an admitted block's row");
+            .expect("an admitted block's row")
+            .seats;
         assert_eq!(row.as_slice(), [tree.id()], "{h}'s row seats T");
     }
     drop(snap);

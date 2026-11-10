@@ -63,7 +63,7 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 use super::archival_fold::{self, BlockArchivalFold};
 use super::archival_reads::{
     self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    ServedShard, SettlementRow, SupportSeats,
+    ServedShard, SettlementRow, SupportRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1296,27 +1296,17 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A23.** The complete trees the block at `height` seated, in persona
-    /// order, or `None` for a block no row was written for.
-    /// [`SupportSeats::EMPTY`] is a block that seated nobody. A height below `floor` is SI-34, the
-    /// same window as [`Self::block_draws`].
-    pub fn support_block_seats(
+    /// **A23.** The block at `height`'s support row: the complete trees it
+    /// seated, in persona order, and the carry it left, or `None` for a
+    /// block no row was written for. [`SupportRow::EMPTY`] is a block that
+    /// seated nobody and left nothing owed. A height below `floor` is
+    /// SI-34, the same window as [`Self::block_draws`].
+    pub fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(&self.txn, height, floor)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// The support carry of `epoch`: each complete tree owed draws from
-    /// blocks it was seated in and that went unfiled, ascending by persona.
-    /// Only the connecting epoch's rows are held; an open lapses the rest.
-    pub fn support_unissued(
-        &self,
-        epoch: SettlementEpoch,
-    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
-        archival_reads::support_unissued(&self.txn, epoch)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

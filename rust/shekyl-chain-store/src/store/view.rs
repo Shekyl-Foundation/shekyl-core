@@ -94,7 +94,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportSeats,
+    SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -501,13 +501,6 @@ impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
         archival_reads::support_issued(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn support_unissued(
-        &self,
-        epoch: SettlementEpoch,
-    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
-        archival_reads::support_unissued(self.batch.txn(), epoch).map_err(|f| self.arm(f))
-    }
-
     fn support_settlement(
         &self,
         persona: &PCanonicalId,
@@ -543,13 +536,12 @@ impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
         archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
     }
 
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(self.batch.txn(), height, floor)
-            .map_err(|f| self.arm(f))
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(

@@ -281,7 +281,9 @@ pub use bundle_section::{
 #[path = "support_carry.rs"]
 mod support_carry;
 
-pub use support_carry::{seats_with_carry, SupportCarry, WindowClosed};
+pub use support_carry::{
+    seats_with_carry, support_step, SupportCarry, SupportStepFault, WindowClosed,
+};
 
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A
 /// value filed under another epoch is not this epoch's `D`, and the

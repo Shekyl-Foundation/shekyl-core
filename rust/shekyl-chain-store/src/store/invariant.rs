@@ -551,20 +551,22 @@ pub enum StoreInvariant {
         /// Which region is held; the other is not.
         held: HeldRegion,
     },
-    /// **SI-43** — a block's seat row equals its epoch's schedule
-    /// ([`shekyl_chain_rules::scheduled_seats`], compared by
-    /// [`shekyl_types::archival::SupportSeats::first_one_sided`]; `SO-D12`
-    /// S1). The
-    /// store's bundle view checks it when admission reads a roster. A
-    /// persona on only one side is this halt: a member the schedule does
-    /// not seat, a stranger, and a scheduled member the row dropped. The
-    /// carry is staged and is not consulted; when it joins the transition
-    /// the seats it writes are the schedule this comparison takes. Raised
-    /// before any write. Fatal, never a verdict on the block.
-    SupportSeatsNotScheduled {
-        /// The height whose roster was read.
+    /// **SI-43.** A block's support row is one step of the carry from the
+    /// row before it: its seats and its `carry_after` both equal
+    /// [`shekyl_chain_rules::support_step`] over the epoch snapshot, from
+    /// the `carry_after` of `h − 1` (empty at an epoch's open) and the row
+    /// and `revealed` of the block whose window closes at `h` (`SO-D12` S1,
+    /// the switch's C5). The store's bundle view checks it when admission
+    /// reads a roster, in three reads. A persona on only one side of the
+    /// seats, or carried on only one side or owed a different count, is
+    /// this halt. A carry at `h − 1` owing past `c` is this halt at
+    /// `h − 1`. Raised before any write. Fatal, never a verdict on the
+    /// block.
+    SupportRowNotOneStep {
+        /// The height whose row is not the step.
         height: shekyl_types::BlockHeight,
-        /// The first persona, in persona order, present on only one side.
+        /// The first persona, in persona order, the row and the step
+        /// disagree on.
         persona: shekyl_types::PCanonicalId,
     },
 }
@@ -843,7 +845,7 @@ impl StoreInvariant {
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
             Self::ArchivalGoodHalfHeld { .. } => 42,
-            Self::SupportSeatsNotScheduled { .. } => 43,
+            Self::SupportRowNotOneStep { .. } => 43,
         }
     }
 }
@@ -1178,10 +1180,10 @@ impl core::fmt::Display for StoreInvariant {
                      archival good is one unit, held or discarded together"
                 )
             }
-            Self::SupportSeatsNotScheduled { height, persona } => write!(
+            Self::SupportRowNotOneStep { height, persona } => write!(
                 f,
-                "the seat row at height {height} is not the schedule: {persona:?} is on only \
-                 one side"
+                "the support row at height {height} is not one step of the carry: the row and \
+                 the step disagree on {persona:?}"
             ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
@@ -1253,7 +1255,7 @@ impl core::error::Error for StoreInvariant {
             | Self::SupportBlockNotSingular { .. }
             | Self::BundleBodyHolder(_)
             | Self::ArchivalGoodHalfHeld { .. }
-            | Self::SupportSeatsNotScheduled { .. }
+            | Self::SupportRowNotOneStep { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

@@ -127,7 +127,6 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("archival_support_block", AccumulatorClass::Excluded),
     ("archival_support_issued", AccumulatorClass::Excluded),
     ("archival_support_settlement", AccumulatorClass::Excluded),
-    ("archival_support_unissued", AccumulatorClass::Excluded),
     ("block_burn", AccumulatorClass::SetShaped),
     ("block_heights", AccumulatorClass::SetShaped),
     ("block_info", AccumulatorClass::AppendMostly),

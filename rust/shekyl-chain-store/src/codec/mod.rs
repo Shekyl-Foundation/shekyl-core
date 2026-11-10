@@ -91,7 +91,7 @@ pub use archival::{
     BlockDraws, BondRecord, BundleReferencesBytes, CompleteTreeSet, DrawableDigest,
     FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
     RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
-    SupportIssued, SupportSeats, MAX_BOND_KEY_BYTES,
+    SupportIssued, SupportRow, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 pub use bundle::{QueuedBody, QueuedBundle};
 pub(crate) use chain::stored_timelock;

@@ -126,10 +126,10 @@ pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssu
 pub(crate) use arm::BondArm;
 pub use bundle::{
     check_section, check_section_stateless, draw_targets, fill_section, judge_bundles, open_body,
-    open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted, BundleInvalid,
-    BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn,
-    SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding, SupportCarry, SupportSeat,
-    WindowClosed,
+    open_reference, seats_with_carry, support_step, verify_bundle, AdmissionFault, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
+    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportCarry, SupportSeat, SupportStepFault, WindowClosed,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
@@ -138,8 +138,7 @@ pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportCarryWrite,
-    SupportSettlement,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
@@ -225,7 +224,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let close = transition.close(accrued);
     let opened = transition.drawable_at_open(view)?;
     let drawable_digest = opened.as_ref().map(|(write, _)| *write);
-    let (draws, support_seats, support_carry) = transition.block_draws(
+    let (draws, support_row) = transition.block_draws(
         view,
         opened.as_ref().map(|(_, drawable)| drawable),
         count_memo,
@@ -237,8 +236,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
         close,
         drawable_digest,
         draws,
-        support_seats,
-        support_carry,
+        support_row,
     )))
 }
 
@@ -434,8 +432,7 @@ impl Transition {
         close: Option<EpochClose>,
         drawable_digest: Option<DrawableDigestWrite>,
         draws: shekyl_types::archival::BlockDraws,
-        support_seats: shekyl_types::archival::SupportSeats,
-        support_carry: SupportCarryWrite,
+        support_row: shekyl_types::archival::SupportRow,
     ) -> ArchivalDelta {
         let records = self
             .posts
@@ -480,8 +477,7 @@ impl Transition {
             close,
             drawable_digest,
             draws,
-            support_seats,
-            support_carry,
+            support_row,
         }
     }
 }

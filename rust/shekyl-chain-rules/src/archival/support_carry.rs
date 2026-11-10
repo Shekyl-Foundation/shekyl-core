@@ -5,9 +5,12 @@
 //! not file is re-seated later in the same epoch (`ARCHIVAL_SUPPORT_DRAW.md`
 //! §2; `SO-D12` S2, ruled 2026-11-01, option 1).
 //!
-//! **Live** since the switch's C5: the count phase steps the carry over
-//! the epoch's stored counts (`archival_support_unissued`) and writes the
-//! seats it returns in the block's seat row, and the counts back.
+//! **Live** since the switch's C5. A block's support row
+//! (`archival_support_block[h]`) holds its seats and the carry it leaves.
+//! [`support_step`] is one step: from the carry the row before left (empty
+//! at an epoch's open, `SO-D12r`) and the block whose window closes here,
+//! the row this block writes. The count phase writes it; admission checks
+//! a stored row is exactly that step (SI-43).
 //!
 //! # The rule
 //!
@@ -35,15 +38,15 @@
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{support_span, DrawableEpoch, SupportUnissued};
-use shekyl_types::archival::SupportSeats;
+use shekyl_types::archival::{SupportCarryAfter, SupportCount, SupportRow, SupportSeats};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::fault::Corrupt;
 use crate::{scheduled_seats, SettlementSchedule};
 
 /// One epoch's carry over that epoch's snapshot: each tree's count of
-/// unfiled seats not yet re-seated. The value the switch's transition keeps
-/// in `archival_support_unissued[(persona, epoch)]`.
+/// unfiled seats not yet re-seated. A block's row keeps it, sparse, as
+/// [`SupportCarryAfter`].
 ///
 /// The carry holds the snapshot it is for, so a carry and a snapshot of
 /// two epochs cannot meet in one step: the carry's epoch is its snapshot's.
@@ -74,8 +77,8 @@ impl<'s> SupportCarry<'s> {
         }
     }
 
-    /// The carry of `snapshot`'s epoch as stored: each tree's count of
-    /// unfiled seats not yet re-seated (`archival_support_unissued`).
+    /// The carry of `snapshot`'s epoch as a row left it: each tree's count
+    /// of unfiled seats not yet re-seated.
     #[must_use]
     pub fn resume(
         snapshot: &'s DrawableEpoch,
@@ -85,12 +88,6 @@ impl<'s> SupportCarry<'s> {
             snapshot,
             owed: counts.into_iter().collect(),
         }
-    }
-
-    /// Every tree this carry has a count for, zero included, ascending by
-    /// persona: what the transition writes back.
-    pub fn counts(&self) -> impl Iterator<Item = (PCanonicalId, SupportUnissued)> + '_ {
-        self.owed.iter().map(|(persona, owed)| (*persona, *owed))
     }
 
     /// The epoch this carry is for: its snapshot's.
@@ -179,6 +176,63 @@ pub fn seats_with_carry(
     }
     seats.sort_unstable();
     Ok(SupportSeats::new(seats).expect("members and the schedule are one persona each"))
+}
+
+/// Why [`support_step`] could not step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupportStepFault {
+    /// The carry before the block owes a tree more than `c`: the row that
+    /// stored it is not one this transition writes.
+    PastCap {
+        /// The tree.
+        persona: PCanonicalId,
+        /// What the row says it is owed.
+        count: u32,
+    },
+    /// [`seats_with_carry`]'s refusal.
+    Corrupt(Corrupt),
+}
+
+/// One step of the carry: the support row of the block at `h`.
+///
+/// `before` is the carry the row at `h − 1` left, or
+/// [`SupportCarryAfter::EMPTY`] when `h` opens its epoch (`SO-D12r`).
+/// `closed` is the block whose window closes at `h`, when it is in this
+/// epoch. The seats are [`seats_with_carry`]'s and the carry after is every
+/// tree still owed, sparse. The count phase writes this row, and
+/// admission's roster read requires a stored row to equal it (SI-43), so
+/// both go through this one function.
+///
+/// # Errors
+///
+/// [`SupportStepFault::PastCap`] when `before` owes a tree more than `c`;
+/// [`SupportStepFault::Corrupt`] when the snapshot is not `h`'s epoch's.
+pub fn support_step(
+    snapshot: &DrawableEpoch,
+    h: BlockHeight,
+    schedule: SettlementSchedule,
+    before: &SupportCarryAfter,
+    closed: Option<WindowClosed<'_>>,
+) -> Result<SupportRow, SupportStepFault> {
+    let mut owed = Vec::with_capacity(before.len());
+    for (persona, count) in before.as_slice() {
+        let stored = SupportUnissued::stored(count.get()).ok_or(SupportStepFault::PastCap {
+            persona: *persona,
+            count: count.get(),
+        })?;
+        owed.push((*persona, stored));
+    }
+    let mut carry = SupportCarry::resume(snapshot, owed);
+    let seats =
+        seats_with_carry(&mut carry, h, schedule, closed).map_err(SupportStepFault::Corrupt)?;
+    let carry_after = SupportCarryAfter::new(
+        carry
+            .owing()
+            .map(|(persona, owed)| (*persona, SupportCount::new(owed.get())))
+            .collect(),
+    )
+    .expect("the carry owes in persona order, and owing() leaves out a tree owed nothing");
+    Ok(SupportRow { seats, carry_after })
 }
 
 #[cfg(test)]

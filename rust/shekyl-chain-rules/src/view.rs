@@ -66,7 +66,7 @@ use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
     LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SupportSeats,
+    SlashLogEntry, SupportRow,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -722,16 +722,6 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, Self::Fault>;
 
-    /// The support carry of `epoch` (`archival_support_unissued`): each
-    /// complete tree's count of unfiled seats not yet re-seated, ascending
-    /// by persona; a tree with no row is owed nothing. The carry stays
-    /// inside its epoch (`SO-D12r`), so only the connecting block's epoch is
-    /// asked, and its rows lapse at the next open.
-    fn support_unissued(
-        &self,
-        epoch: SettlementEpoch,
-    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, Self::Fault>;
-
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.
@@ -784,19 +774,19 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: crate::BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Self::Fault>;
 
-    /// **A23.** The complete trees the block at `height` seated on the
-    /// support stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5;
-    /// `SO-D12` S1). `None` for a block no row was written for.
-    /// [`SupportSeats::EMPTY`] is a block that seated nobody: absence is
-    /// not that empty row.
+    /// **A23.** The block at `height`'s support row: the complete trees it
+    /// seated, in persona order, and the carry it left
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1). `None` for a block no
+    /// row was written for. [`SupportRow::EMPTY`] is a block that seated
+    /// nobody and left nothing owed: absence is not that empty row.
     ///
     /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34), the same
     /// window as [`Self::block_draws`]. A read below it is refused.
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: crate::BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, Self::Fault>;
+    ) -> Result<Option<SupportRow>, Self::Fault>;
 
     /// **A19.** The digest of `epoch`'s drawable set, as written when the
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never

@@ -385,26 +385,38 @@ fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
     );
 }
 
-/// A block's support seats (`SO-D12` S1): the empty row is a count of zero
-/// and reads back as a value, and the decode refuses each shape the type
-/// cannot hold — a repeat, a descent, a count past the bytes, a trailing
-/// byte. Seat `j` is bit `j` of the support bitmap, so an order the type
-/// sorted away would renumber the draws. Red edit: decode through
-/// `FromIterator`, which sorts — the descent then round-trips into a
-/// different encoding.
+/// The support row refuses what its type cannot hold, in either half: a
+/// repeated or descending seat, a repeated or descending carried tree, a
+/// carried tree owed nothing, a count past the bytes, a trailing byte.
+/// Seat `j` is bit `j` of the support bitmap, so an order the type sorted
+/// away would renumber the draws; a carried tree owed nothing is not in
+/// the sparse carry. Red edits: decode the seats through `FromIterator`,
+/// which sorts (the descent round-trips into a different encoding); drop
+/// the owes-nothing check (a zero entry round-trips).
 #[test]
-fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
+fn the_support_row_refuses_what_its_type_cannot_hold() {
+    use shekyl_types::archival::{SupportCarryAfter, SupportCount, SupportRow};
     let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
     let invalid = |reason: &'static str| CodecError::Invalid {
-        codec: SupportSeats::NAME,
+        codec: SupportRow::NAME,
         reason,
     };
-    assert_eq!(SupportSeats::EMPTY.encode(), [0, 0, 0, 0]);
-    assert_eq!(SupportSeats::decode(&[0, 0, 0, 0]), Ok(SupportSeats::EMPTY));
-    let two = SupportSeats::new(vec![id(1), id(2)]).expect("ascending");
-    assert_eq!(SupportSeats::decode(&two.encode()), Ok(two.clone()));
+    assert_eq!(SupportRow::EMPTY.encode(), [0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        SupportRow::decode(&[0, 0, 0, 0, 0, 0, 0, 0]),
+        Ok(SupportRow::EMPTY)
+    );
+    let row = SupportRow {
+        seats: SupportSeats::new(vec![id(1), id(2)]).expect("ascending"),
+        carry_after: SupportCarryAfter::new(vec![
+            (id(1), SupportCount::new(2)),
+            (id(3), SupportCount::new(1)),
+        ])
+        .expect("ascending, each owed"),
+    };
+    assert_eq!(SupportRow::decode(&row.encode()), Ok(row.clone()));
 
-    let raw = |ids: &[u8]| {
+    let seats = |ids: &[u8]| {
         let mut out = u32::try_from(ids.len())
             .expect("fits")
             .to_le_bytes()
@@ -414,22 +426,53 @@ fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
         }
         out
     };
-    let unordered = invalid("personas are not strictly increasing");
-    assert_eq!(SupportSeats::decode(&raw(&[1, 1])), Err(unordered));
-    assert_eq!(SupportSeats::decode(&raw(&[2, 1])), Err(unordered));
-    let mut short = raw(&[1, 2]);
+    let carry = |entries: &[(u8, u32)]| {
+        let mut out = u32::try_from(entries.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &(b, owed) in entries {
+            out.extend_from_slice(&[b; 32]);
+            out.extend_from_slice(&owed.to_le_bytes());
+        }
+        out
+    };
+    let with = |s: Vec<u8>, c: Vec<u8>| [s, c].concat();
+    let unordered = invalid("seats are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[1, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[2, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    let carried = invalid("carried personas are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(2, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 0)]))),
+        Err(invalid("a carried persona owes nothing"))
+    );
+    let mut short = with(seats(&[1, 2]), carry(&[]));
     short.truncate(4 + 32);
     assert_eq!(
-        SupportSeats::decode(&short),
+        SupportRow::decode(&short),
         Err(invalid(
             "element count exceeds what the row's bytes can hold"
         ))
     );
-    let mut long = two.encode();
+    let mut long = row.encode();
     long.push(0);
     assert_eq!(
-        SupportSeats::decode(&long),
-        Err(invalid("trailing bytes after the support seats"))
+        SupportRow::decode(&long),
+        Err(invalid("trailing bytes after the support row"))
     );
 }
 

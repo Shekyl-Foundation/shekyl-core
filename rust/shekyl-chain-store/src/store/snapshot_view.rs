@@ -36,7 +36,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportSeats,
+    SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -334,13 +334,6 @@ impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
             .map_err(ReadFault::into_plain)
     }
 
-    fn support_unissued(
-        &self,
-        epoch: SettlementEpoch,
-    ) -> Result<Vec<(PCanonicalId, shekyl_types::archival::SupportCount)>, StoreError> {
-        archival_reads::support_unissued(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
-    }
-
     fn support_settlement(
         &self,
         persona: &PCanonicalId,
@@ -379,12 +372,12 @@ impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
             .map_err(ReadFault::into_plain)
     }
 
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(self.snapshot.txn(), height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -465,12 +458,12 @@ impl super::bundle_view::BundleRows for SnapshotView<'_> {
         <Self as ChainView<'static>>::issued_draws(self, epoch, floor)
     }
 
-    fn support_seats_row(
+    fn support_row_at(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        <Self as ChainView<'static>>::support_block_seats(self, height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        <Self as ChainView<'static>>::support_row(self, height, floor)
     }
 
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
