@@ -18,7 +18,7 @@
 //!   [`DrawableEpoch::len`](shekyl_archival_retention::DrawableEpoch::len),
 //!   read here from [`BundleView::drawable_epoch`]. The function takes no
 //!   cap.
-//! - [`check_section_until_switch`] — the same form and window checks at
+//! - [`check_section_stateless`] — the same form and window checks at
 //!   arrival, when this chain does not yet hold those epochs (`SCS-P23`).
 //!   An empty section is admitted. Any other section that passes them
 //!   waits: the budget comparison is [`check_section`]'s, at the switch.
@@ -51,7 +51,7 @@
 //!   view ([`crate::ChainView::bundles`]; the store's is
 //!   `StoreBundleView`). The census rows CEN-J29 through CEN-J37 are
 //!   bound. `bind_body` runs [`open_reference`] and
-//!   [`check_section_until_switch`], the stateless half, when a body
+//!   [`check_section_stateless`], the stateless half, when a body
 //!   arrives. A body that cannot be had is no verdict
 //!   ([`BundleRefused::BodyNotReferenced`]; `crate::Stale::BundleBody`
 //!   inside `validate`).
@@ -272,7 +272,7 @@ mod bundle_section;
 mod records;
 
 pub use bundle_section::{
-    check_section, check_section_until_switch, fill_section, open_reference, SectionCharge,
+    check_section, check_section_stateless, fill_section, open_reference, SectionCharge,
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
 

@@ -5,7 +5,7 @@
 
 //! The section half of the bundle rule: form, the window, then the budget.
 //!
-//! [`check_section`] and [`check_section_until_switch`] are the only
+//! [`check_section`] and [`check_section_stateless`] are the only
 //! admission results. [`fill_section`] is the template's selection, and
 //! the references it returns are a section [`check_section`] admits. The
 //! charge arithmetic is [`SectionCharge`]; a cap compared there is not a
@@ -13,7 +13,7 @@
 //! [`inside_window`].
 //!
 //! [`check_section`] is live on the connect path (through
-//! `rules::bundle_admission`) and [`check_section_until_switch`] at arrival
+//! `rules::bundle_admission`) and [`check_section_stateless`] at arrival
 //! (`bind_body`). [`fill_section`] is the block template's selection. The
 //! disposition is the parent module's.
 
@@ -303,7 +303,7 @@ pub fn check_section<V: BundleView>(
 /// # Errors
 ///
 /// [`SectionRefused`], naming the first form or window check that failed.
-pub fn check_section_until_switch(
+pub fn check_section_stateless(
     refs: &[BundleRef],
     header_root: &[u8; 32],
     h_incl: BlockHeight,

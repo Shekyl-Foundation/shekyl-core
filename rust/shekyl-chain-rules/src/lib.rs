@@ -180,11 +180,11 @@ pub use archival::scheduled_seats;
 // the verifier's own selection, and the template fills its section at
 // the switch. `form` and `validate` do not call them.
 pub use archival::{
-    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
-    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
-    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
-    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
-    SupportCarry, SupportSeat, WindowClosed,
+    check_section, check_section_stateless, draw_targets, fill_section, judge_bundles, open_body,
+    open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted, BundleInvalid,
+    BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn,
+    SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding, SupportCarry, SupportSeat,
+    WindowClosed,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,

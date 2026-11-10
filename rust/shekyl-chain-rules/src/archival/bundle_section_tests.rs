@@ -8,7 +8,7 @@
 //! steps 1 and 2, `SCS-P39`, `SCS-P40`, `SCS-P41`).
 //!
 //! Admission in this file is [`check_section`] or
-//! [`check_section_until_switch`]. [`SectionCharge`] is the arithmetic
+//! [`check_section_stateless`]. [`SectionCharge`] is the arithmetic
 //! and is not a section result. The template's pack is `bundle_fill_tests`.
 //! Sibling of `bundle_tests`, which judges one bundle. Every test names
 //! the edit that turns it red.
@@ -88,7 +88,7 @@ fn judged(
 
 /// Arrival, before any `D` is known. A non-empty section waits.
 fn awaiting(refs: &[BundleRef]) -> Result<SectionStanding, SectionRefused> {
-    check_section_until_switch(refs, &root_of(refs), h_incl_of(refs), &RuleSet::GENESIS)
+    check_section_stateless(refs, &root_of(refs), h_incl_of(refs), &RuleSet::GENESIS)
 }
 
 /// References are in strictly ascending `h`, so none repeats. Red edit:
@@ -187,19 +187,19 @@ fn a_section_whose_root_does_not_recompute_refuses() {
     let refs = [a.clone(), b.clone()];
     let root = root_of(&refs);
     assert_eq!(
-        check_section_until_switch(&refs, &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(&refs, &root, incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Awaiting(SectionCharge::of(&refs)))
     );
 
     let mut wrong = root;
     wrong[5] ^= 1;
     assert_eq!(
-        check_section_until_switch(&refs, &wrong, incl, &RuleSet::GENESIS),
+        check_section_stateless(&refs, &wrong, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // The root of a section that omits a reference, or adds one.
     assert_eq!(
-        check_section_until_switch(
+        check_section_stateless(
             &refs,
             &root_of(std::slice::from_ref(&a)),
             incl,
@@ -208,13 +208,13 @@ fn a_section_whose_root_does_not_recompute_refuses() {
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(std::slice::from_ref(&a), &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(std::slice::from_ref(&a), &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // One field of one reference: a different prunable hash, and a
     // different stated count over the same bitmap bytes.
     assert_eq!(
-        check_section_until_switch(
+        check_section_stateless(
             &[a.clone(), with_hash(&b, [0xAC; 32])],
             &root,
             incl,
@@ -223,18 +223,18 @@ fn a_section_whose_root_does_not_recompute_refuses() {
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(&[a, reference_at(101, 4)], &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(&[a, reference_at(101, 4)], &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root),
         "three draws and four are one byte of bitmap and two roots"
     );
     // An empty section commits the empty root, and no other. It names no
     // epoch, so arrival admits it.
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), incl, &RuleSet::GENESIS),
+        check_section_stateless(&[], &root_of(&[]), incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
     assert_eq!(
-        check_section_until_switch(&[], &[0; 32], incl, &RuleSet::GENESIS),
+        check_section_stateless(&[], &[0; 32], incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
 }
@@ -403,7 +403,7 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     assert!(charge.within(SectionBudget::from_draws(u64::MAX)));
 
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
+        check_section_stateless(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }
@@ -679,7 +679,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
     );
     assert!(view.take_reads().is_empty(), "refused before any D is read");
     assert_eq!(
-        check_section_until_switch(&future, &root_of(&future), h_incl, &rules),
+        check_section_stateless(&future, &root_of(&future), h_incl, &rules),
         refused
     );
 
@@ -706,7 +706,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
     // The including block itself is not inside its own window.
     let itself = [reference_at(boundary, 1)];
     assert_eq!(
-        check_section_until_switch(&itself, &root_of(&itself), at_edge, &rules),
+        check_section_stateless(&itself, &root_of(&itself), at_edge, &rules),
         Err(SectionRefused::OutsideWindow { position: 0 })
     );
 }
@@ -725,11 +725,11 @@ fn no_window_admits_no_reference() {
     let one = [reference_at(100, 1)];
     let h_incl = BlockHeight::from_raw(101);
     assert_eq!(
-        check_section_until_switch(&one, &root_of(&one), h_incl, &rules),
+        check_section_stateless(&one, &root_of(&one), h_incl, &rules),
         Err(SectionRefused::OutsideWindow { position: 0 })
     );
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), h_incl, &rules),
+        check_section_stateless(&[], &root_of(&[]), h_incl, &rules),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }

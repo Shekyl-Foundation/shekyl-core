@@ -39,9 +39,8 @@ use shekyl_network::NetworkId;
 use shekyl_types::BlockHeight;
 
 use crate::archival::{
-    check_section_until_switch, judge_bundles, open_reference, remember_window_epochs,
-    AdmissionFault, Admitted, BundleRefused, BundleUnanswered, BundleView, DrawableMemo,
-    SectionRefused,
+    check_section_stateless, judge_bundles, open_reference, remember_window_epochs, AdmissionFault,
+    Admitted, BundleRefused, BundleUnanswered, BundleView, DrawableMemo, SectionRefused,
 };
 use crate::block::Candidate;
 use crate::census::CenRow;
@@ -121,7 +120,7 @@ pub(crate) fn admit<'id, V: ChainView<'id>>(
     // and no row is read.
     let Some(section) = candidate.bundle_references.as_ref() else {
         return Ok(
-            check_section_until_switch(&[], header_root, connecting, rule_set)
+            check_section_stateless(&[], header_root, connecting, rule_set)
                 .map(|_standing| Vec::new())
                 .map_err(section_refusal),
         );
@@ -192,7 +191,7 @@ pub(crate) fn admit<'id, V: ChainView<'id>>(
 /// The section's stateless half, for a body that arrives with no view:
 /// each reference parses (J29), the references ascend and are counted by
 /// the root the header commits (J29), and each names a block the including
-/// block is inside the window of (J31) — [`check_section_until_switch`]
+/// block is inside the window of (J31) — [`check_section_stateless`]
 /// (`SCS-P23`). The budget (J30) and the bundles (J32 through J37) need the
 /// chain and are [`admit`]'s.
 ///
@@ -212,7 +211,7 @@ pub(crate) fn bind_section(
     for (position, bytes) in references.iter().enumerate() {
         refs.push(open_reference(position, bytes).map_err(section_refusal)?);
     }
-    check_section_until_switch(&refs, header_root, h_incl, rule_set)
+    check_section_stateless(&refs, header_root, h_incl, rule_set)
         .map(|_standing| ())
         .map_err(section_refusal)
 }
