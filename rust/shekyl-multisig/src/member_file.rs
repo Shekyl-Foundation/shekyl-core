@@ -331,7 +331,7 @@ mod tests {
             2.min(n),
             [0xB1; 32],
             [0x71; 32],
-            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .unwrap();

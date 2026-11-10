@@ -95,15 +95,66 @@ pub const GROUP_VERSION: u8 = 0x01;
 /// payload lie about its own design.
 pub const SPEND_AUTH_VERSION: u8 = 0x02;
 
-/// The group key and every member key are different keys. A repeated key
-/// collapses two encapsulation slots onto one shared secret: the group
-/// secret would open a member's signing key, or two members would hold the
-/// same signing key.
-fn reject_repeated_kem_keys(
+/// Bytes of the X25519 u-coordinate that begins a hybrid KEM public key.
+///
+/// Pinned to the width `shekyl-crypto-pq` splits off before encapsulation.
+/// The two are the same 32 bytes; a drift would make this check look at
+/// the wrong half.
+pub const X25519_U_LEN: usize = 32;
+
+/// Little-endian byte `index` of `p = 2^255 - 19`.
+const fn montgomery_prime_byte(index: usize) -> u8 {
+    match index {
+        0 => 0xED,
+        31 => 0x7F,
+        _ => 0xFF,
+    }
+}
+
+/// A Montgomery u-coordinate is canonical when the integer is strictly
+/// less than `p`. X25519 ignores bit 255 and reduces modulo `p`, so a
+/// non-canonical encoding is a second byte string for one point. This is
+/// not the Edwards y check: there bit 255 is a sign and is masked, and
+/// masking it here would accept the alias.
+fn montgomery_u_is_canonical(u: &[u8; X25519_U_LEN]) -> bool {
+    for index in (0..X25519_U_LEN).rev() {
+        let prime = montgomery_prime_byte(index);
+        if u[index] < prime {
+            return true;
+        }
+        if u[index] > prime {
+            return false;
+        }
+    }
+    // Equal to `p`.
+    false
+}
+
+fn kem_x25519_is_canonical(kem: &[u8]) -> bool {
+    let Some(head) = kem.get(..X25519_U_LEN) else {
+        return false;
+    };
+    let u = <[u8; X25519_U_LEN]>::try_from(head).expect("the slice length is X25519_U_LEN");
+    montgomery_u_is_canonical(&u)
+}
+
+/// The group key and every member key are different points. A repeated
+/// point collapses two encapsulation slots onto one shared secret: the
+/// group secret would open a member's signing key, or two members would
+/// hold the same signing key. The X25519 half is compared as bytes, which
+/// is the point comparison only when that half is the one canonical
+/// encoding.
+fn reject_aliased_kem_keys(
     group_kem_pubkey: &[u8],
     hybrid_kem_pubkeys: &[Vec<u8>],
 ) -> Result<(), MultisigAddressError> {
+    if !kem_x25519_is_canonical(group_kem_pubkey) {
+        return Err(MultisigAddressError::NonCanonicalGroupKemKey);
+    }
     for (second, member) in hybrid_kem_pubkeys.iter().enumerate() {
+        if !kem_x25519_is_canonical(member) {
+            return Err(MultisigAddressError::NonCanonicalMemberKemKey { index: second });
+        }
         if member.as_slice() == group_kem_pubkey {
             return Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: second });
         }
@@ -133,6 +184,18 @@ pub enum MultisigAddressError {
     KemPubkeyLength { index: usize, got: usize },
     #[error("group KEM pubkey has wrong length: expected {HYBRID_KEM_PUBKEY_LEN}, got {got}")]
     GroupKemPubkeyLength { got: usize },
+
+    /// The group key's X25519 half is a second encoding of some u-coordinate.
+    /// X25519 would treat it as the reduced point, so a member key that
+    /// copied it would not look equal as bytes and would still open under
+    /// the group secret.
+    #[error("group KEM key's X25519 half is not a canonical Montgomery u-coordinate")]
+    NonCanonicalGroupKemKey,
+
+    /// A member key's X25519 half is a second encoding of some u-coordinate.
+    /// Copied from the group key with bit 255 flipped, it is the group point.
+    #[error("member {index}'s X25519 half is not a canonical Montgomery u-coordinate")]
+    NonCanonicalMemberKemKey { index: usize },
 
     /// The group KEM key is also some member's key. That member's per-output
     /// shared secret would equal the group secret, so anyone who holds the
@@ -233,7 +296,7 @@ impl MultisigAddressPayload {
                 });
             }
         }
-        reject_repeated_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
+        reject_aliased_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version: MULTISIG_ADDRESS_VERSION,
@@ -264,14 +327,19 @@ impl MultisigAddressPayload {
         Self::canonical_len_for(self.n_total)
     }
 
-    /// Refuse a group KEM key that repeats a member's, and refuse two members
-    /// sharing one KEM key.
+    /// Refuse a non-canonical X25519 half, or two KEM keys that are the same bytes.
+    ///
+    /// Each X25519 half must be a canonical u-coordinate, strictly less than
+    /// `2^255 - 19`. The group key and the member keys must then differ as
+    /// bytes. A non-canonical half is another encoding of a point the
+    /// bytewise check would miss, and the group secret would open a member
+    /// slot that copied the group key and flipped bit 255.
     ///
     /// [`Self::new`] and [`Self::from_canonical_bytes`] both call this. The
     /// fields are public, so a caller that edits them afterwards must call it
     /// again; the output constructor does.
     pub fn ensure_distinct_kem_keys(&self) -> Result<(), MultisigAddressError> {
-        reject_repeated_kem_keys(&self.group_kem_pubkey, &self.hybrid_kem_pubkeys)
+        reject_aliased_kem_keys(&self.group_kem_pubkey, &self.hybrid_kem_pubkeys)
     }
 
     /// Serialize to canonical bytes.
@@ -357,7 +425,7 @@ impl MultisigAddressPayload {
             offset += HYBRID_KEM_PUBKEY_LEN;
         }
         debug_assert_eq!(offset, data.len());
-        reject_repeated_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
+        reject_aliased_kem_keys(&group_kem_pubkey, &hybrid_kem_pubkeys)?;
 
         Ok(MultisigAddressPayload {
             version,
@@ -522,13 +590,15 @@ mod tests {
     use super::*;
 
     fn make_test_payload(n: u8, m: u8) -> MultisigAddressPayload {
+        // `0x40` keeps bit 255 clear. `0xC0` is the fingerprint pin's fill
+        // and is not a key `new` accepts.
         MultisigAddressPayload::new(
             Network::Mainnet,
             n,
             m,
             [0xB1; 32],
             [0x71; 32],
-            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
         .unwrap()
@@ -634,7 +704,9 @@ mod tests {
 
     #[test]
     fn rejects_a_group_key_that_repeats_a_member_and_duplicate_member_keys() {
-        let group_key = vec![0xC0; HYBRID_KEM_PUBKEY_LEN];
+        // `0x40` leaves bit 255 clear, so the refusal here is the repeated
+        // point and not the encoding.
+        let group_key = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
         let member_a = vec![0x01; HYBRID_KEM_PUBKEY_LEN];
         let overlap = MultisigAddressPayload::new(
             Network::Mainnet,
@@ -684,6 +756,82 @@ mod tests {
         assert!(matches!(
             MultisigAddressPayload::from_canonical_bytes(&bytes),
             Err(MultisigAddressError::GroupKemKeyRepeatsMember { index: 0 })
+        ));
+    }
+
+    /// Bit 255 of an X25519 u-coordinate is ignored, and `u >= p` is the
+    /// same field element as `u - p`. Either encoding of the group key, as
+    /// a member key, would open under the group secret. Both are refused
+    /// by `new` and by the byte parser.
+    #[test]
+    fn rejects_a_noncanonical_montgomery_half() {
+        let members = vec![
+            vec![0x01; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x02; HYBRID_KEM_PUBKEY_LEN],
+        ];
+        let mut group = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
+        group[31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                group,
+                members.clone(),
+            ),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
+        ));
+
+        let group = vec![0x40; HYBRID_KEM_PUBKEY_LEN];
+        let mut alias = group.clone();
+        alias[31] |= 0x80;
+        let built = MultisigAddressPayload::new(
+            Network::Mainnet,
+            2,
+            2,
+            [0xB1; 32],
+            [0x71; 32],
+            group.clone(),
+            vec![alias, members[1].clone()],
+        );
+        assert!(matches!(
+            built,
+            Err(MultisigAddressError::NonCanonicalMemberKemKey { index: 0 })
+        ));
+
+        // `p` itself: bit 255 clear, integer equal to `2^255 - 19`.
+        let mut at_prime = vec![0x11; HYBRID_KEM_PUBKEY_LEN];
+        at_prime[0] = 0xED;
+        for byte in &mut at_prime[1..31] {
+            *byte = 0xFF;
+        }
+        at_prime[31] = 0x7F;
+        assert!(matches!(
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                2,
+                2,
+                [0xB1; 32],
+                [0x71; 32],
+                at_prime,
+                members,
+            ),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
+        ));
+
+        let mut payload = make_test_payload(2, 2);
+        payload.hybrid_kem_pubkeys[0][31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&payload.to_canonical_bytes()),
+            Err(MultisigAddressError::NonCanonicalMemberKemKey { index: 0 })
+        ));
+        payload.hybrid_kem_pubkeys[0][31] &= 0x7F;
+        payload.group_kem_pubkey[31] |= 0x80;
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&payload.to_canonical_bytes()),
+            Err(MultisigAddressError::NonCanonicalGroupKemKey)
         ));
     }
 
@@ -861,16 +1009,33 @@ mod tests {
         );
         let mut seen = Vec::new();
         for net in Network::ALL {
-            let payload = MultisigAddressPayload::new(
-                net,
-                2,
-                2,
-                [0xB1; 32],
-                [0x71; 32],
-                vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
-                (0..2).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
-            )
-            .unwrap();
+            // The pin is these bytes. `0xC0` sets bit 255 of the X25519 half,
+            // which `new` now refuses; the fingerprint is of the payload, so
+            // the struct is built directly and the hash does not move.
+            let payload = MultisigAddressPayload {
+                version: MULTISIG_ADDRESS_VERSION,
+                group_version: GROUP_VERSION,
+                spend_auth_version: SPEND_AUTH_VERSION,
+                network: net,
+                n_total: 2,
+                m_required: 2,
+                b_group: [0xB1; 32],
+                y_group: [0x71; 32],
+                group_kem_pubkey: vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+                hybrid_kem_pubkeys: (0..2).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
+            };
+            assert!(matches!(
+                MultisigAddressPayload::new(
+                    net,
+                    2,
+                    2,
+                    payload.b_group,
+                    payload.y_group,
+                    payload.group_kem_pubkey.clone(),
+                    payload.hybrid_kem_pubkeys.clone(),
+                ),
+                Err(MultisigAddressError::NonCanonicalGroupKemKey)
+            ));
             let fp = address_fingerprint(&payload);
             let hex: String = fp.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(
@@ -950,7 +1115,7 @@ mod tests {
             2,
             [0xB1; 32],
             [0x71; 32],
-            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             vec![
                 vec![0; HYBRID_KEM_PUBKEY_LEN],
                 vec![1; HYBRID_KEM_PUBKEY_LEN],
@@ -963,7 +1128,7 @@ mod tests {
             2,
             [0xB1; 32],
             [0x71; 32],
-            vec![0xC0; HYBRID_KEM_PUBKEY_LEN],
+            vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             vec![
                 vec![0; HYBRID_KEM_PUBKEY_LEN],
                 vec![1; HYBRID_KEM_PUBKEY_LEN],

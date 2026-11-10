@@ -38,6 +38,7 @@
 use shekyl_network::envelope::IdDomain;
 use shekyl_network::NetworkId;
 use shekyl_types::SigningPayloadHash;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
@@ -144,11 +145,23 @@ pub fn multisig_key_hash(
 ///
 /// Fields are private and every constructor checks `1 ≤ m ≤ n ≤ MAX` and
 /// `n` hashes, so a committed form that does not parse does not exist.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The hashes are the decrypted `0x0D` plaintext until a spend publishes
+/// them, so the form and every serialization of it wipe on drop.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct MultisigCommittedForm {
     n_total: u8,
     m_required: u8,
     key_hashes: Vec<[u8; MULTISIG_KEY_HASH_LEN]>,
+}
+
+impl std::fmt::Debug for MultisigCommittedForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultisigCommittedForm")
+            .field("n_total", &self.n_total)
+            .field("m_required", &self.m_required)
+            .field("key_hashes", &self.key_hashes.len())
+            .finish()
+    }
 }
 
 impl MultisigCommittedForm {
@@ -168,13 +181,17 @@ impl MultisigCommittedForm {
         m_required: u8,
         key_hashes: Vec<[u8; MULTISIG_KEY_HASH_LEN]>,
     ) -> Result<Self, PqcVerifyError> {
-        let n_total =
-            u8::try_from(key_hashes.len()).map_err(|_| PqcVerifyError::ParameterBounds)?;
+        // Wiped on every refusal. On success the allocation moves into the
+        // form, which wipes it on drop.
+        let mut key_hashes = Zeroizing::new(key_hashes);
+        let Ok(n_total) = u8::try_from(key_hashes.len()) else {
+            return Err(PqcVerifyError::ParameterBounds);
+        };
         check_bounds(n_total, m_required)?;
         Ok(Self {
             n_total,
             m_required,
-            key_hashes,
+            key_hashes: std::mem::take(&mut *key_hashes),
         })
     }
 
@@ -197,8 +214,11 @@ impl MultisigCommittedForm {
     }
 
     /// The canonical bytes — what `k = H_ℓ(·)` hashes.
+    ///
+    /// The buffer wipes on drop. A caller that publishes the encoding copies
+    /// it out; that copy is the published blob, and this one does not remain.
     #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let mut out = Vec::with_capacity(Self::expected_len(self.n_total));
         out.push(MULTISIG_CONTAINER_VERSION);
         out.push(self.n_total);
@@ -206,7 +226,7 @@ impl MultisigCommittedForm {
         for h in &self.key_hashes {
             out.extend_from_slice(h);
         }
-        out
+        Zeroizing::new(out)
     }
 
     /// Parse the header and hashes at the front of `bytes`, returning the
@@ -254,8 +274,9 @@ impl MultisigCommittedForm {
         Ok(form)
     }
 
-    /// The committed form's length when `blob` starts with one, without
-    /// parsing the hashes: `3 + 32·n` once the version and bounds check.
+    /// The committed form's length when `blob` starts with one: `3 + 32·n`
+    /// after the version and bounds check. The hashes are parsed to know
+    /// that the prefix is that long, then wiped with the temporary form.
     pub(crate) fn prefix_len(blob: &[u8]) -> Result<usize, PqcVerifyError> {
         let (form, _) = Self::parse_prefix(blob)?;
         Ok(Self::expected_len(form.n_total))
@@ -363,7 +384,10 @@ impl MultisigKeyBlob {
     ///
     /// [`PqcVerifyError::DeserializationFailed`] if a key does not encode.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, PqcVerifyError> {
-        let mut out = self.committed.to_bytes();
+        let mut committed_bytes = self.committed.to_bytes();
+        // The committed form's own buffer wipes when it drops. What remains
+        // is the key blob, which a spend publishes.
+        let mut out = std::mem::take(&mut *committed_bytes);
         out.reserve(1 + self.signer_keys.len() * SINGLE_KEY_CANONICAL_LEN);
         out.push(self.signer_bitmap);
         for key in &self.signer_keys {

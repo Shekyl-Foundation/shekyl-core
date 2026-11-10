@@ -413,6 +413,25 @@ fn the_constructor_refuses_bad_inputs() {
         construct_multisig_output(&tx_key(), &duplicated, 1, 0, &NET),
         Err(CryptoError::InvalidKeyMaterial)
     ));
+
+    // The group key with bit 255 of its X25519 half flipped is the same
+    // Montgomery point and the same ML-KEM key. The constructor refuses it
+    // before encapsulation.
+    let mut alias = g.address.clone();
+    alias.hybrid_kem_pubkeys[0] = alias.group_kem_pubkey.clone();
+    alias.hybrid_kem_pubkeys[0][31] |= 0x80;
+    assert!(matches!(
+        alias.ensure_distinct_kem_keys(),
+        Err(
+            shekyl_address::multisig_address::MultisigAddressError::NonCanonicalMemberKemKey {
+                index: 0
+            }
+        )
+    ));
+    assert!(matches!(
+        construct_multisig_output(&tx_key(), &alias, 1, 0, &NET),
+        Err(CryptoError::InvalidKeyMaterial)
+    ));
 }
 
 /// A hash list that repeats a member, even when the leaf is recomputed over

@@ -103,6 +103,11 @@ pub fn derive_multisig_member_keypair(
     Ok((public, secret))
 }
 
+const _: () = assert!(
+    X25519_KEM_CT_LEN == shekyl_address::multisig_address::X25519_U_LEN,
+    "the address canonical-u check and this split name different widths"
+);
+
 fn split_kem_pubkey(pubkey: &[u8]) -> Result<([u8; 32], &[u8]), CryptoError> {
     if pubkey.len() != HYBRID_KEM_PUBKEY_LEN {
         return Err(CryptoError::InvalidKeyMaterial);
@@ -194,8 +199,9 @@ impl MultisigOutputData {
 /// # Errors
 ///
 /// [`CryptoError::InvalidKeyMaterial`] for an address point that is not a
-/// prime-order, non-identity point, a KEM key of the wrong shape, or a KEM
-/// key that repeats the group key or another member's;
+/// prime-order, non-identity point, a KEM key of the wrong shape, a KEM
+/// key whose X25519 half is not a canonical Montgomery u-coordinate, or a
+/// KEM key that repeats the group key or another member's;
 /// [`CryptoError::InvalidInput`] for an output index above 255 (the `0x0D`
 /// entry names its output in one byte); the solo core's own errors.
 pub fn construct_multisig_output(
@@ -208,8 +214,8 @@ pub fn construct_multisig_output(
     let out_idx = u8::try_from(output_index)
         .map_err(|_| CryptoError::InvalidInput("multisig output index above 255".into()))?;
     // The address fields are public, so a value that passed `new` can be
-    // edited into a repeated key. Encapsulation to a repeated key would
-    // make two signing slots the same secret.
+    // edited into a repeated key or a non-canonical Montgomery half.
+    // Encapsulation to either would make two signing slots the same secret.
     address
         .ensure_distinct_kem_keys()
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
@@ -250,7 +256,7 @@ pub fn construct_multisig_output(
         })?;
 
     let key = derive_multisig_key_hashes_key(&core.combined_ss.0, output_index);
-    let plaintext: Vec<u8> = committed.key_hashes().concat();
+    let plaintext = Zeroizing::new(committed.key_hashes().concat());
     let enc_key_hashes = ChaCha20Poly1305::new((&*key).into())
         .encrypt(
             &Nonce::from(HASHES_NONCE),

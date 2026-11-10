@@ -368,6 +368,14 @@ Edwards points in the address; the output constructor checks that each is a
 prime-order, non-identity point. There is no stored checksum: integrity is
 the fingerprint (§6.3). A `version` other than `0x02` is refused.
 
+The X25519 half of every KEM key is one canonical Montgomery u-coordinate:
+the integer is strictly less than `2^255 − 19`, so bit 255 is clear.
+X25519 ignores that bit and reduces modulo the prime, and the address
+compares keys as bytes. A second encoding of the group key would be a
+different byte string and the same point, and the group secret would open
+that member's slot. `new`, `from_canonical_bytes` and the output
+constructor refuse it, and they refuse a key that repeats another.
+
 Canonical payload: `70 + (N + 1) × 1216` bytes
 (`HEADER_LEN(6) + 2 × GROUP_POINT_LEN(32) + (1 + N) × 1216`). This is the
 fingerprint preimage and the file contents.
