@@ -469,8 +469,10 @@ info:
   # required: the amounts of the record's reserved inputs still unspent,
   # "0" when nothing is held (a held stake, an empty reservation), and
   # null when the staking scan has not run yet, so what is held cannot be
-  # read. A refused entry's reason no longer says its funds stay set
-  # aside; reserved says what is held. api_version stays 1.
+  # read. OpenAPI 3.1 does not treat `nullable` as null, so the schema is
+  # a oneOf of AtomicUnits and type null, the same shape as
+  # JsonRpcResponse.id. A refused entry's reason no longer says its funds
+  # stay set aside; reserved says what is held. api_version stays 1.
   version: 0.16.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -3026,9 +3028,9 @@ components:
             it. `null` in the other
             states, where no return is expected.
         reserved:
-          allOf:
+          oneOf:
             - $ref: "#/components/schemas/AtomicUnits"
-          nullable: true
+            - type: "null"
           description: >
             What the record still holds (WR-Q6): the amounts of its
             reserved inputs that are still unspent. A partly spent
