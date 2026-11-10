@@ -149,8 +149,10 @@ SCOPE = (
 # 138 after `settlement_epoch_slash_deadline_height` was deleted
 # (2026-11-08): its one reader, a test, calls the schedule method.
 # 134 with the attestation record's wire tests and KAT (SO-D12 4b C7),
-# four recorded fixture helpers among them.
-GRANDFATHER_CEILING = 134
+# four recorded fixture helpers among them. 132 with the pass-anchor
+# window (SO-D12 4b C7): its test helpers `window_at` and `chain_hash`
+# went with it.
+GRANDFATHER_CEILING = 132
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

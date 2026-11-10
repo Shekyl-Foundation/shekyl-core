@@ -24,16 +24,15 @@
 //!
 //! # Heights here are BLOCK heights, never chain heights
 //!
-//! Admission builds its window from `predecessor_height` — a block height —
-//! and the window's centre is `predecessor_height − 720`
-//! (`pass_anchor::PassAnchorWindow`). `P`'s gate centres on
-//! `own_height − 720`, so the two centres coincide only when `own_height` is
-//! the **top block's height**.
+//! A requester anchors at its top block's height minus 720
+//! (`pass_anchor::PASS_ANCHOR_DEPTH_BLOCKS`). `P`'s gate centres on
+//! `own_height − 720`, so the two coincide only when `own_height` is the
+//! **top block's height**.
 //!
 //! The daemon's `get_info.height` is the *chain* height — top block height
 //! plus one (`core_rpc_server.cpp`: `get_blockchain_top(res.height, …);
 //! ++res.height;`). A caller that stamped it unconverted would centre `P`'s
-//! gate one block high and let it sign anchors that admission then refuses.
+//! gate one block high, one block off every honest requester's anchor.
 //! [`DaemonTipCache::stamp_synced`] therefore names its parameter
 //! `top_block_height`, and the conversion belongs to whoever reads the RPC.
 //!

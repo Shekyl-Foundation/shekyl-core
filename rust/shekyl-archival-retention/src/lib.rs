@@ -106,7 +106,7 @@ pub use bond_ct_balance::{
 };
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
-    bond_floor, ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS,
     ARCHIVAL_REORG_DEPTH_BLOCKS, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE,
     BOND_DURATION_BASE_EPOCHS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS,
 };
@@ -176,10 +176,9 @@ pub use emission_verify::{
 pub use pass_anchor::{
     anchor_depth_covers_response_window, pass_countersignature_message, pass_delivery_digest,
     pass_request_header_bytes, response_window_outrunning_anchor, verify_receipt_transcript,
-    PassAnchorWindow, PassAnchorWindowError, PassDeliveryHasher, PassRequestHeader, PassStream,
-    PassTranscript, ReceiptRefused, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
-    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT,
-    PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
+    PassDeliveryHasher, PassRequestHeader, PassStream, PassTranscript, ReceiptRefused,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
     PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};

@@ -573,7 +573,7 @@ impl BurnOperands {
 """
 _ANCHOR = """
 pub(crate) fn anchor_window<'id, V: ChainView<'id>>(view: &V, c: BlockHeight)
-    -> Result<Option<PassAnchorWindow>, ViewRead<V::Fault>> { todo!() }
+    -> Result<Option<BlockHash>, ViewRead<V::Fault>> { todo!() }
 """
 _CONVERTER = """
 fn parent_read<VF>(fault: Fault<VF>) -> ViewRead<VF> { ViewRead::View(fault) }

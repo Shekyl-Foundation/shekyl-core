@@ -20,12 +20,10 @@
 //! enters the transcript.
 
 use shekyl_archival_retention::{
-    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes,
-    PassAnchorWindow, PassAnchorWindowError, PassStream, PASS_ANCHOR_DEPTH_BLOCKS,
-    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
-    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-    PASS_DELIVERY_DIGEST_CUSTOMIZATION, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
-    PASS_REQUEST_HEADER_LEN,
+    pass_countersignature_message, pass_delivery_digest, pass_request_header_bytes, PassStream,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_CUSTOMIZATION,
+    PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -148,33 +146,8 @@ fn pass_constants_are_pinned() {
     assert_eq!(PASS_REQUEST_HEADER_LEN, 73);
     assert_eq!(PASS_DELIVERY_DIGEST_LEN, 32);
     assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 113);
-    // The anchor window: depth from the generated reorg-depth constant, lag
-    // PROVISIONAL 4 (the JSON key carries the falsifier), threshold 724.
+    // The anchor: depth from the generated reorg-depth constant, lag
+    // PROVISIONAL 4 (the JSON key carries the falsifier).
     assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, BlockCount::from_raw(720));
     assert_eq!(PASS_ANCHOR_LAG_BLOCKS, BlockCount::from_raw(4));
-    assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, bh(724));
-    assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
-}
-
-/// 723 has no window; 724 is the first predecessor with one, and its window
-/// bottoms out at height 0. At 725 the window is `[1, 5]`: height 0 has
-/// fallen out of the bottom.
-#[test]
-fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
-    assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(723)), None);
-    assert_eq!(
-        PassAnchorWindow::from_table(bh(723), &[[0u8; 32]; PASS_ANCHOR_WINDOW_LEN]).unwrap_err(),
-        PassAnchorWindowError::BelowThreshold {
-            predecessor_height: bh(723)
-        }
-    );
-    assert_eq!(
-        PassAnchorWindow::shape_for_predecessor(bh(724)),
-        Some((bh(0), 5))
-    );
-    let window = PassAnchorWindow::from_table(bh(725), &[[0u8; 32]; PASS_ANCHOR_WINDOW_LEN])
-        .expect("725 has a window");
-    assert_eq!((window.first(), window.last()), (bh(1), bh(5)));
-    assert!(window.hash_at(bh(0)).is_none());
-    assert!(window.hash_at(bh(1)).is_some());
 }

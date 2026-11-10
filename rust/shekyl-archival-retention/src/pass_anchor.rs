@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! SF-D8 pass transcript, its admission window, and the receipt verify.
+//! SF-D8 pass transcript, its anchor depth and lag, and the receipt verify.
 //!
 //! Design: [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
 //! `SF-D8`. A persona's receipt key signs the [`PassTranscript`] under the
@@ -13,14 +13,6 @@
 //! [`BlockCount`]. The 73-byte header still carries `anchor_height` as
 //! eight LE bytes (C1); [`PassRequestHeader::from_bytes`] /
 //! [`pass_request_header_bytes`] are the punch.
-//!
-//! ```compile_fail
-//! // HEIGHT_SEMANTICS.md C9: predecessor is ordinal, depth is a span.
-//! use shekyl_archival_retention::pass_anchor::{
-//!     PassAnchorWindow, PASS_ANCHOR_DEPTH_BLOCKS,
-//! };
-//! let _ = PassAnchorWindow::shape_for_predecessor(PASS_ANCHOR_DEPTH_BLOCKS);
-//! ```
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: decoded header height is ordinal, not a count.
@@ -47,7 +39,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
 };
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
 
-use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
+use crate::bond_floor::{ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
 
 /// Requester-random nonce `P` signs over (`SF-D5`: exactly 32 bytes).
 pub const PASS_NONCE_LEN: usize = 32;
@@ -110,22 +102,11 @@ pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize =
 /// (C4); the inland constant is the span.
 pub const PASS_ANCHOR_DEPTH_BLOCKS: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
-/// Window lag `L` (PROVISIONAL 4). Same `L` on P's pre-sign gate (`RF-R1`).
+/// Anchor lag `L` (PROVISIONAL 4): the half-width of P's pre-sign gate
+/// (`RF-R1`), and the margin `W₂ + L ≤` depth keeps between an honest
+/// read's anchor and the block it answers for.
 pub const PASS_ANCHOR_LAG_BLOCKS: BlockCount =
-    BlockCount::from_raw(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS);
-
-/// Lowest predecessor with a window: genesis plus depth plus lag.
-/// A predecessor below this has no admissible anchor. The sum is
-/// checked, so an overflowing pair fails to compile.
-pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: BlockHeight = {
-    match BlockHeight::ZERO.checked_add(PASS_ANCHOR_DEPTH_BLOCKS) {
-        Some(after_depth) => match after_depth.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
-            Some(floor) => floor,
-            None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
-        },
-        None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
-    }
-};
+    BlockCount::from_raw(ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS);
 
 /// Whether an honest read under `schedule` is anchored below the block it
 /// answers for: `W₂ + L ≤` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
@@ -184,94 +165,6 @@ pub const fn response_window_outrunning_anchor(
             // the window reaches past the anchor.
             Some(_) | None => Some(window),
         },
-    }
-}
-
-/// Heights (and hashes) in one window: `L + 1`.
-pub const PASS_ANCHOR_WINDOW_LEN: usize = {
-    assert!(PASS_ANCHOR_LAG_BLOCKS.to_raw() <= u32::MAX as u64);
-    #[allow(clippy::cast_possible_truncation)]
-    let lag = PASS_ANCHOR_LAG_BLOCKS.to_raw() as usize;
-    lag + 1
-};
-
-/// Window construction failed: genesis boundary, or the caller's table is the
-/// wrong length.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PassAnchorWindowError {
-    #[error(
-        "no pass anchor window below predecessor height {PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT} \
-         (got {predecessor_height})"
-    )]
-    BelowThreshold { predecessor_height: BlockHeight },
-    #[error("pass anchor hash table has {got} entries, expected {expected}")]
-    WrongLength { expected: usize, got: usize },
-}
-
-/// Connecting-chain hashes for `[h − depth − L, h − depth]`, `hashes[i]` at
-/// `first + i`. Length is [`PASS_ANCHOR_WINDOW_LEN`] in the type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PassAnchorWindow {
-    first: BlockHeight,
-    hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN],
-}
-
-impl PassAnchorWindow {
-    /// `(first_height, len)` the caller must fill, or `None` below
-    /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`].
-    #[must_use]
-    pub fn shape_for_predecessor(predecessor_height: BlockHeight) -> Option<(BlockHeight, usize)> {
-        if predecessor_height < PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT {
-            return None;
-        }
-        // The floor is genesis + depth + lag, so both spans fit. A floor
-        // that does not match these subtractions panics here.
-        let last = predecessor_height - PASS_ANCHOR_DEPTH_BLOCKS;
-        let first = last - PASS_ANCHOR_LAG_BLOCKS;
-        Some((first, PASS_ANCHOR_WINDOW_LEN))
-    }
-
-    /// Build from the caller's table for `predecessor_height`. The slice must
-    /// be exactly [`PASS_ANCHOR_WINDOW_LEN`] hashes, ascending from `first`.
-    pub fn from_table(
-        predecessor_height: BlockHeight,
-        hashes: &[[u8; PASS_ANCHOR_HASH_LEN]],
-    ) -> Result<Self, PassAnchorWindowError> {
-        let Some((first, _)) = Self::shape_for_predecessor(predecessor_height) else {
-            return Err(PassAnchorWindowError::BelowThreshold { predecessor_height });
-        };
-        let hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN] = hashes
-            .try_into()
-            .map_err(|_| PassAnchorWindowError::WrongLength {
-                expected: PASS_ANCHOR_WINDOW_LEN,
-                got: hashes.len(),
-            })?;
-        Ok(Self { first, hashes })
-    }
-
-    #[must_use]
-    pub const fn first(&self) -> BlockHeight {
-        self.first
-    }
-
-    /// Inclusive end of the window (`first + L`).
-    ///
-    /// Panics if the sum overflows. [`Self::from_table`] cannot build
-    /// such a window: `first` was produced by subtracting `L`.
-    #[must_use]
-    pub const fn last(&self) -> BlockHeight {
-        match self.first.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
-            Some(last) => last,
-            None => panic!("pass anchor window end overflowed BlockHeight"),
-        }
-    }
-
-    /// Connecting-chain hash at `anchor_height`, or `None` outside the window.
-    #[must_use]
-    pub fn hash_at(&self, anchor_height: BlockHeight) -> Option<&[u8; PASS_ANCHOR_HASH_LEN]> {
-        let offset = anchor_height.checked_sub(self.first)?;
-        let i = usize::try_from(offset.to_raw()).ok()?;
-        self.hashes.get(i)
     }
 }
 
@@ -601,27 +494,8 @@ mod receipt_transcript_tests;
 mod tests {
     use super::*;
 
-    const H: u64 = 5000;
-
     const fn bh(n: u64) -> BlockHeight {
         BlockHeight::from_raw(n)
-    }
-
-    fn chain_hash(height: u64) -> [u8; 32] {
-        let mut h = [0u8; 32];
-        h[..8].copy_from_slice(&height.to_le_bytes());
-        h[8] = 0xC4;
-        h
-    }
-
-    fn window_at(predecessor_height: u64) -> PassAnchorWindow {
-        let (first, len) =
-            PassAnchorWindow::shape_for_predecessor(bh(predecessor_height)).expect("window");
-        let hashes: Vec<_> = (0..len as u64)
-            .map(|i| chain_hash(first.to_raw() + i))
-            .collect();
-        PassAnchorWindow::from_table(bh(predecessor_height), &hashes)
-            .expect("table sized to the window")
     }
 
     #[test]
@@ -829,51 +703,10 @@ mod tests {
     }
 
     #[test]
-    fn anchor_window_heights_are_depth_and_lag_below_the_predecessor() {
+    fn anchor_depth_and_lag_are_the_generated_constants() {
         assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, BlockCount::from_raw(720));
         assert_eq!(PASS_ANCHOR_LAG_BLOCKS, BlockCount::from_raw(4));
-        assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, bh(724));
-        assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
-
-        let (first, len) = PassAnchorWindow::shape_for_predecessor(bh(H)).unwrap();
-        assert_eq!((first, len), (bh(H - 724), 5));
-        let w = window_at(H);
-        assert_eq!((w.first(), w.last()), (bh(H - 724), bh(H - 720)));
-        assert_eq!(w.hash_at(bh(H - 724)), Some(&chain_hash(H - 724)));
-        assert_eq!(w.hash_at(bh(H - 720)), Some(&chain_hash(H - 720)));
-        assert_eq!(w.hash_at(bh(H - 725)), None);
-        assert_eq!(w.hash_at(bh(H - 719)), None);
-
-        assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(723)), None);
-        let (first, _) = PassAnchorWindow::shape_for_predecessor(bh(724)).unwrap();
-        assert_eq!(first, bh(0));
-        assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(0)), None);
     }
-
-    #[test]
-    fn anchor_window_table_must_match_the_window_exactly() {
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(723), &[[0u8; 32]; 5]).unwrap_err(),
-            PassAnchorWindowError::BelowThreshold {
-                predecessor_height: bh(723)
-            }
-        );
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(H), &[[0u8; 32]; 4]).unwrap_err(),
-            PassAnchorWindowError::WrongLength {
-                expected: 5,
-                got: 4
-            }
-        );
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(H), &[[0u8; 32]; 6]).unwrap_err(),
-            PassAnchorWindowError::WrongLength {
-                expected: 5,
-                got: 6
-            }
-        );
-    }
-
     /// The window a refusal names is the window that outran the anchor,
     /// and nothing else: `None` where the relation holds, including the
     /// epoch too short to have a window, and `Some(W₂)` — the schedule's
