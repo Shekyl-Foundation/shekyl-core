@@ -100,6 +100,7 @@ mod archival_fold;
 mod archival_reads;
 mod archival_write;
 mod at_index;
+mod bundle_holders;
 mod bundle_queue;
 mod bundle_view;
 mod chain_reads;

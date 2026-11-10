@@ -431,6 +431,13 @@ impl<'id> WriteBatch<'_, 'id> {
             Some(through) => self.retire_alt_blocks(BlockHeight::from_raw(through))?,
             None => 0,
         };
+        // ---- 14. bundle holders (`store/bundle_holders.rs`) ---------------
+        // After the seal for the prune's reason: the queue and the body
+        // store are not chain state (SI-41). The block holds the bodies of
+        // the bundles it admitted and their queue entries leave; the block
+        // that has just passed the undo retention gives its bodies up.
+        self.hold_section(block.admitted(), block.bundle_bodies())?;
+        self.sweep_section(height)?;
         Ok(Connected {
             height,
             journaled,

@@ -32,23 +32,26 @@
 //!
 //! # SI-41: every body has a holder
 //!
-//! An entry and its body are written together and removed together. In
-//! 4c the queue is the only holder kind that exists. An alternative block
-//! and a main-chain block not past `D_max` become holders when references
-//! travel (4b), and this module's check widens with them.
+//! The queue is one of three holders; a main-chain block not past the pop
+//! horizon and an alternative block are the others (`bundle_holders.rs`,
+//! which derives them from their rows and owns the one definition of
+//! held). An entry and its body are written together. An entry leaves
+//! alone, and its body goes with it only when nothing else holds it.
 //!
 //! - **At open**, [`WriteBatch::reconcile_bundle_queue`] drops a body no
-//!   entry names and an entry whose body is gone, and returns what it
+//!   holder names and an entry whose body is gone, and returns what it
 //!   dropped for the caller to log. The store does not log.
-//! - **After open**, every read of the queue holds the two tables to each
-//!   other, and a disagreement is SI-41: the write path never makes one,
-//!   so one seen later is a store fault.
+//! - **After open**, every read of the queue holds each entry to its body,
+//!   and a missing one is SI-41: the write path never makes one, so one
+//!   seen later is a store fault.
 //!
 //! # Not chain state, so not journaled
 //!
 //! As `alt_blocks` is (`store/alt.rs`): `Excluded` from every digest,
-//! never pop-journaled, written between connects. A pop does not remove
-//! an entry; the connector's re-check after a reorg does.
+//! never pop-journaled, written outside a connect's recording. A connect
+//! takes the entries its block admits out (after the seal), and a pop puts
+//! the popped block's bundles back (`bundle_holders.rs`); the connector's
+//! re-check after a reorg judges the entries that moved.
 
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_archival_retention::{BundleBody, BundleRef};
@@ -64,9 +67,9 @@ use super::read::ReadSnapshot;
 use super::write::WriteBatch;
 
 /// The queue table as faults name it.
-const QUEUE_CELL: &str = "archival_bundle_queue";
+pub(super) const QUEUE_CELL: &str = "archival_bundle_queue";
 /// The body table as faults name it.
-const BODY_CELL: &str = "archival_bundle_body";
+pub(super) const BODY_CELL: &str = "archival_bundle_body";
 
 /// One queued bundle, read back whole.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,22 +156,17 @@ fn queued_bundles<T: ReadTables>(txn: &T) -> Result<Vec<QueueEntry>, ReadFault> 
             .0;
         out.push(QueueEntry { h, queued, body });
     }
-    let held = out.len();
-    let stored = usize::try_from(bodies.len()?).unwrap_or(usize::MAX);
-    // Each entry found its own body above, and two entries cannot share
-    // one: the body's witness signature covers its `h`. So more bodies
-    // than entries is a body no entry names.
-    if stored != held {
-        return Err(ReadFault::Invariant(StoreInvariant::BundleBodyHolder(
-            BodyHolderFault::BodyWithoutHolder,
-        )));
-    }
+    // More bodies than entries is not a fault: a main-chain block or an
+    // alternative block holds the rest (`bundle_holders.rs`). A body no
+    // holder names is the open's reconcile to find.
     Ok(out)
 }
 
 impl WriteBatch<'_, '_> {
     /// The queue table, never inside a connect's recording (module docs).
-    fn queue_table(&self) -> Result<redb::Table<'_, u64, Coded<QueuedBundle>>, StoreError> {
+    pub(super) fn queue_table(
+        &self,
+    ) -> Result<redb::Table<'_, u64, Coded<QueuedBundle>>, StoreError> {
         assert!(
             !self.journal().is_recording(),
             "the bundle queue is not chain state and must not be written inside a connect"
@@ -179,7 +177,9 @@ impl WriteBatch<'_, '_> {
     }
 
     /// The body table, under [`Self::queue_table`]'s rule.
-    fn body_table(&self) -> Result<redb::Table<'_, [u8; 32], Coded<QueuedBody>>, StoreError> {
+    pub(super) fn body_table(
+        &self,
+    ) -> Result<redb::Table<'_, [u8; 32], Coded<QueuedBody>>, StoreError> {
         assert!(
             !self.journal().is_recording(),
             "the bundle body store is not chain state and must not be written inside a connect"
@@ -203,8 +203,8 @@ impl WriteBatch<'_, '_> {
     /// [`QueueCannot::Held`] when the queue already holds a bundle for the
     /// reference's `h` (the first valid one wins);
     /// [`QueueCannot::BodyNotReferenced`] when the body does not hash to
-    /// the reference's prunable hash; [`QueueCannot::Full`] at `capacity`;
-    /// SI-41 when the two tables' lengths already disagree; engine faults.
+    /// the reference's prunable hash; [`QueueCannot::Full`] at `capacity`; engine
+    /// faults.
     ///
     /// Held is a point read of `h`. Capacity is the queue table's length.
     /// Neither decodes a body. The full SI-41 walk — each entry's body,
@@ -221,7 +221,6 @@ impl WriteBatch<'_, '_> {
         if body.prunable_hash() != *reference.prunable_hash() {
             return Err(QueueCannot::BodyNotReferenced { h }.into());
         }
-        self.holder_lengths_agree()?;
         if self
             .queue_table()?
             .get(queue_key(h))
@@ -261,15 +260,14 @@ impl WriteBatch<'_, '_> {
     ///
     /// # Errors
     ///
-    /// SI-41 when `h` is not queued or the two tables' lengths disagree;
-    /// SI-7 when the queue row does not decode; engine faults.
+    /// SI-41 when `h` is not queued; SI-7 when the queue row does not
+    /// decode; engine faults.
     pub fn retip_bundle(
         &self,
         h: BlockHeight,
         tip_height: BlockHeight,
         tip_hash: BlockHash,
     ) -> Result<(), StoreError> {
-        self.holder_lengths_agree()?;
         let mut queue = self.queue_table()?;
         let key = queue_key(h);
         // The guard borrows the table. Decode into an owned row, then drop
@@ -304,107 +302,148 @@ impl WriteBatch<'_, '_> {
         Ok(())
     }
 
-    /// The two tables hold the same number of rows (SI-41), without
-    /// decoding either. A length mismatch is a body with no holder or a
-    /// holder with no body; [`queued_bundles`] names which.
-    fn holder_lengths_agree(&self) -> Result<(), StoreError> {
-        let queued = self.queue_table()?.len().map_err(EngineError::Storage)?;
-        let stored = self.body_table()?.len().map_err(EngineError::Storage)?;
-        if queued != stored {
-            return Err(self.arm_if_invariant(
-                StoreInvariant::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder).into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Remove the entry for `h` and its body. Whether the queue held one.
+    /// Remove the entry for `h`, and its body unless another holder names
+    /// it (`bundle_holders.rs`). Whether the queue held one.
     ///
     /// # Errors
     ///
-    /// SI-41 when the entry's body is not stored; engine faults.
+    /// SI-41 when the entry's body is not stored; SI-7 for a row that does
+    /// not decode; engine faults.
     pub fn unqueue_bundle(&self, h: BlockHeight) -> Result<bool, StoreError> {
-        let removed = self
-            .queue_table()?
-            .remove(queue_key(h))
-            .map_err(EngineError::Storage)?
-            .map(|row| row.value().decode());
-        let Some(queued) = removed else {
+        let Some(queued) = self.take_queue_row(h)? else {
             return Ok(false);
         };
-        let queued = queued.map_err(|cause| self.arm_read_fault(undecodable(QUEUE_CELL, cause)))?;
-        let body = self
+        let hash = *queued.reference.prunable_hash();
+        let stored = self
             .body_table()?
-            .remove(*queued.reference.prunable_hash())
+            .get(hash)
             .map_err(EngineError::Storage)?
             .is_some();
-        if !body {
+        if !stored {
             return Err(self.arm_if_invariant(
                 StoreInvariant::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }).into(),
             ));
         }
+        self.drop_unheld(&[(h, hash)])?;
         Ok(true)
+    }
+
+    /// The entry for `h`, if queued. Its body is not read.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub(super) fn queue_row(&self, h: BlockHeight) -> Result<Option<QueuedBundle>, StoreError> {
+        let loaded = {
+            let queue = self.queue_table()?;
+            let row = queue.get(queue_key(h)).map_err(EngineError::Storage)?;
+            row.map(|row| row.value().decode())
+        };
+        match loaded {
+            None => Ok(None),
+            Some(Ok(queued)) => Ok(Some(queued)),
+            Some(Err(cause)) => Err(self.arm_read_fault(undecodable(QUEUE_CELL, cause))),
+        }
+    }
+
+    /// Remove the entry for `h` and return it. Its body stays: whether
+    /// anything else holds it is the caller's to ask.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub(super) fn take_queue_row(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<QueuedBundle>, StoreError> {
+        let removed = {
+            let mut queue = self.queue_table()?;
+            let row = queue.remove(queue_key(h)).map_err(EngineError::Storage)?;
+            row.map(|row| row.value().decode())
+        };
+        match removed {
+            None => Ok(None),
+            Some(Ok(queued)) => Ok(Some(queued)),
+            Some(Err(cause)) => Err(self.arm_read_fault(undecodable(QUEUE_CELL, cause))),
+        }
+    }
+
+    /// Every entry, ascending by `h`, with its key. Bodies are not read.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a row that does not decode; engine faults.
+    pub(super) fn queue_rows(&self) -> Result<Vec<(BlockHeight, QueuedBundle)>, StoreError> {
+        let mut rows = Vec::new();
+        {
+            let queue = self.queue_table()?;
+            for item in queue.range::<u64>(..).map_err(EngineError::Storage)? {
+                let (k, v) = item.map_err(EngineError::Storage)?;
+                rows.push((BlockHeight::from_raw(k.value()), v.value().decode()));
+            }
+        }
+        let mut entries = Vec::with_capacity(rows.len());
+        for (h, decoded) in rows {
+            let queued =
+                decoded.map_err(|cause| self.arm_read_fault(undecodable(QUEUE_CELL, cause)))?;
+            entries.push((h, queued));
+        }
+        Ok(entries)
     }
 
     /// Every entry, ascending by `h`, each with its body.
     ///
     /// # Errors
     ///
-    /// SI-41 when the two tables disagree, SI-7 for a row that does not
-    /// decode; engine faults. Either invariant poisons this batch.
+    /// SI-41 when an entry's body is not stored, SI-7 for a row that does
+    /// not decode; engine faults. Either invariant poisons this batch.
     pub fn queued_bundles(&self) -> Result<Vec<QueueEntry>, StoreError> {
         queued_bundles(self.txn()).map_err(|fault| self.arm_read_fault(fault))
     }
 
-    /// The open's reconcile (module docs, SI-41): drop every body no entry
-    /// names and every entry whose body is not stored, and say what went.
-    /// A clean store drops nothing. The store opened by this binary at
-    /// this layout never needs to; the reconcile is what makes that a
-    /// checked fact rather than an assumption, and the caller logs a
-    /// report that is not clean.
+    /// The open's reconcile (module docs, SI-41): drop every body no
+    /// holder names and every entry whose body is not stored, and say what
+    /// went. A clean store drops nothing. The store opened by this binary
+    /// at this layout never needs to; the reconcile is what makes that a
+    /// checked fact rather than an assumption, and the caller logs a report
+    /// that is not clean. The holders are `bundle_holders.rs`'s three.
     ///
     /// # Errors
     ///
     /// SI-7 for a row that does not decode; engine faults.
     pub fn reconcile_bundle_queue(&self) -> Result<QueueReconciled, StoreError> {
         let mut report = QueueReconciled::default();
-        let mut named = std::collections::BTreeSet::new();
-        let mut entries = Vec::new();
-        {
-            let queue = self.queue_table()?;
-            for item in queue.range::<u64>(..).map_err(EngineError::Storage)? {
-                let (k, v) = item.map_err(EngineError::Storage)?;
-                let queued = v
-                    .value()
-                    .decode()
-                    .map_err(|cause| self.arm_read_fault(undecodable(QUEUE_CELL, cause)))?;
-                entries.push((BlockHeight::from_raw(k.value()), queued));
-            }
-        }
-        let mut bodies = self.body_table()?;
-        for (h, queued) in entries {
-            let hash = *queued.reference.prunable_hash();
-            if bodies.get(hash).map_err(EngineError::Storage)?.is_some() {
-                named.insert(hash);
-            } else {
+        for (h, queued) in self.queue_rows()? {
+            let stored = self
+                .body_table()?
+                .get(*queued.reference.prunable_hash())
+                .map_err(EngineError::Storage)?
+                .is_some();
+            if !stored {
                 report.entries_without_body.push(h);
             }
         }
-        let mut orphans = Vec::new();
-        for item in bodies.range::<[u8; 32]>(..).map_err(EngineError::Storage)? {
-            let (k, _) = item.map_err(EngineError::Storage)?;
-            let hash = k.value();
-            if !named.contains(&hash) {
-                orphans.push(hash);
+        {
+            let mut queue = self.queue_table()?;
+            for h in &report.entries_without_body {
+                queue.remove(queue_key(*h)).map_err(EngineError::Storage)?;
             }
         }
+        let named = self.named_bodies()?;
+        let mut orphans = Vec::new();
+        {
+            let bodies = self.body_table()?;
+            for item in bodies.range::<[u8; 32]>(..).map_err(EngineError::Storage)? {
+                let (k, _) = item.map_err(EngineError::Storage)?;
+                let hash = k.value();
+                if !named.contains(&hash) {
+                    orphans.push(hash);
+                }
+            }
+        }
+        let mut bodies = self.body_table()?;
         for hash in &orphans {
             bodies.remove(*hash).map_err(EngineError::Storage)?;
-        }
-        drop(bodies);
-        let mut queue = self.queue_table()?;
-        for h in &report.entries_without_body {
-            queue.remove(queue_key(*h)).map_err(EngineError::Storage)?;
         }
         report.bodies_without_holder = orphans;
         Ok(report)

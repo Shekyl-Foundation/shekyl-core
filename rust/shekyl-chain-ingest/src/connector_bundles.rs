@@ -726,7 +726,7 @@ fn commit_upkeep(batch: &WriteBatch<'_, '_>, plan: &Upkeep) -> Result<(), RunFau
 
 /// Test only: apply one block through the connector's own judge and
 /// connect, and report what its section admitted — the verdict's
-/// admissions — then take those entries out of the queue. The block
+/// admissions; `connect` takes those entries out of the queue. The block
 /// carries the section ([`Scenario::mine_admitting`](crate::scenario::Scenario::mine_admitting)),
 /// and `validate` admits it as it admits any block's.
 #[cfg(test)]
@@ -777,10 +777,9 @@ impl Message<ApplyAdmitting> for Connector {
             let in_force = judged.rule_set;
             let admitted = judged.valid.block().admitted().to_vec();
             applied.exercised.extend(judged.exercised());
+            // `connect` takes the admitted entries out of the queue and
+            // holds their bodies under the block (`bundle_holders.rs`).
             batch.connect(judged.valid, in_force)?;
-            for bundle in &admitted {
-                batch.unqueue_bundle(bundle.kept.h)?;
-            }
             super::connect_step::record_connected(&mut applied, height, judged.facts);
             Ok(AppliedAdmitting { applied, admitted })
         })?;

@@ -528,13 +528,14 @@ pub enum StoreInvariant {
         height: shekyl_types::BlockHeight,
     },
     /// **SI-41** — every stored bundle body has a holder, and every queue
-    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
-    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
-    /// alternative block and a main-chain block not past `D_max` are 4b's.
-    /// The open reconciles the two tables and reports what it dropped;
-    /// after it, a read of the queue that finds them apart is this halt.
-    /// Not chain state, so it poisons the batch and leaves the writer
-    /// live. Never a verdict on a block.
+    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). The
+    /// holders are the queue, a main-chain block within the undo retention
+    /// and an alternative block, derived from their rows
+    /// (`bundle_holders.rs`). The open reconciles and reports what it
+    /// dropped; after it, an entry without its body, an entry whose
+    /// reference is for another block, or a rewrite of a height the queue
+    /// does not hold is this halt. Not chain state, so it poisons the batch
+    /// and leaves the writer live. Never a verdict on a block.
     BundleBodyHolder(BodyHolderFault),
     /// **SI-42** — the archival good is one unit (`PDM-Q6` item 1; `SB-Q2`).
     /// A 4-part transaction's prunable region (`txs_prunable[id]`) and its
@@ -588,8 +589,6 @@ pub enum BodyHolderFault {
         /// The entry's block.
         h: shekyl_types::BlockHeight,
     },
-    /// A stored body no queue entry names.
-    BodyWithoutHolder,
     /// A queue entry's reference is for another block than its key.
     EntryNotItsHeight {
         /// The key the entry is stored under.
@@ -1158,10 +1157,7 @@ impl core::fmt::Display for StoreInvariant {
             Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
                 f,
                 "the bundle queue's entry for height {h} names a body the body store does not \
-                 hold; an entry and its body are written and removed together"
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
-                "the body store holds a bundle body no holder names; every body has a holder",
+                 hold; an entry and its body are written together"
             ),
             Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
                 f,

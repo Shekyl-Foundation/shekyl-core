@@ -239,18 +239,37 @@ impl WriteBatch<'_, '_> {
     /// it; whether it did. The connect's half of "a block id has one home"
     /// (module docs): the block it records leaves the alt table in the same
     /// write. Its children stay: their parent is now a main-chain block.
+    ///
+    /// The bundle bodies the row's section named lose this holder; each goes
+    /// unless another holds it (`bundle_holders.rs`, SI-41). When the block
+    /// is being connected, its own section row already holds them.
     pub(super) fn take_alt_block(&self, id: &BlockHash) -> Result<bool, StoreError> {
         let mut table = self.alt_table()?;
         let removed = table.remove(key(id)).map_err(EngineError::Storage)?;
-        let held = removed.is_some();
-        drop(removed);
+        let row = removed.map(|row| row.value().decode());
         drop(table);
-        if held {
-            self.alt_bodies_table()?
-                .remove(key(id))
-                .map_err(EngineError::Storage)?;
-        }
-        Ok(held)
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        self.alt_bodies_table()?
+            .remove(key(id))
+            .map_err(EngineError::Storage)?;
+        // A row that does not decode named nothing this store can read; the
+        // reconcile at open drops what it held.
+        let released: Vec<_> = row
+            .ok()
+            .and_then(|block| block.bundle_references().cloned())
+            .map(|section| {
+                section
+                    .as_slice()
+                    .iter()
+                    .filter_map(|bytes| shekyl_archival_retention::BundleRef::decode(bytes).ok())
+                    .map(|reference| (reference.h(), *reference.prunable_hash()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.drop_unheld(&released)?;
+        Ok(true)
     }
 
     /// **The death rule** (module docs): remove every alt block at or below

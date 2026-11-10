@@ -255,11 +255,12 @@ fn the_open_reconcile_drops_what_has_no_holder_and_says_so() {
     drop(store);
 }
 
-/// A body no entry names is SI-41 at the queue's read once the open has
-/// passed. Red edit: compare the counts with `<=` — the orphan reads as
-/// held.
+/// A body the queue does not name is not the queue read's fault: a block
+/// or an alternative block may hold it (`bundle_holders.rs`). The open's
+/// reconcile is what finds a body nothing holds, and drops it. Red edit:
+/// make the reconcile keep every stored body — the orphan stays.
 #[test]
-fn a_body_without_a_holder_is_si_41() {
+fn a_body_the_queue_does_not_name_is_the_reconciles_to_drop() {
     let path = tmp("queue-orphan");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     queue(&store, 40).expect("queued");
@@ -277,16 +278,13 @@ fn a_body_without_a_holder_is_si_41() {
         Ok(())
     });
     planted.expect("planted");
-    let refused = store.begin_read().expect("snapshot").queued_bundles();
-    assert!(
-        matches!(
-            refused,
-            Err(StoreError::InvariantViolated(
-                StoreInvariant::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder)
-            ))
-        ),
-        "{refused:?}"
-    );
+    let read = store.begin_read().expect("snapshot").queued_bundles();
+    assert_eq!(read.expect("the queue reads").len(), 1);
+    let report: Result<QueueReconciled, StoreError> =
+        store.write(|batch| batch.reconcile_bundle_queue());
+    let report = report.expect("the reconcile runs");
+    assert_eq!(report.bodies_without_holder, vec![orphan.prunable_hash()]);
+    assert!(report.entries_without_body.is_empty());
     drop(store);
 }
 

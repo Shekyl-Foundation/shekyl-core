@@ -420,6 +420,7 @@ impl fmt::Debug for StructurallyValid {
 ///     archival: todo!(),
 ///     bundle_references: todo!(),
 ///     admitted: todo!(),
+///     bundle_bodies: todo!(),
 ///     pow: todo!(),
 /// };
 /// ```
@@ -471,6 +472,10 @@ pub struct ValidatedBlock {
     /// reveals, the issued draws and the digest terms from it. Empty when
     /// the block carries no references, and then `connect` writes nothing.
     admitted: Vec<Admitted>,
+    /// The section's bodies, in section order: what `connect` holds under
+    /// this block once it is on the main chain (SI-41), so a pop can return
+    /// each bundle to the queue and a peer's request can be answered.
+    bundle_bodies: Vec<BundleBody>,
     /// The PoW `form` computed under its seed, accepted by this verdict
     /// (CEN-D1/D2/D3). `connect` records it beside the block.
     pow: ProvenPow,
@@ -730,13 +735,11 @@ impl ValidatedBlock {
     /// block — all seven arrive as one [`Derived`], named field by field at
     /// the call site.
     pub(crate) fn derive(candidate: Candidate, hash: BlockHash, derived: Derived) -> Self {
-        // The bodies were admitted into `admitted`; the verdict keeps what
-        // that derived, not the bytes.
         let Candidate {
             block,
             transactions,
             bundle_references,
-            bundle_bodies: _,
+            bundle_bodies,
         } = candidate;
         let Derived {
             target,
@@ -766,6 +769,7 @@ impl ValidatedBlock {
             archival,
             bundle_references,
             admitted,
+            bundle_bodies,
             pow,
         }
     }
@@ -790,6 +794,13 @@ impl ValidatedBlock {
     #[must_use]
     pub fn admitted(&self) -> &[Admitted] {
         &self.admitted
+    }
+
+    /// The section's bodies, in section order (the field's docs). Empty
+    /// when the block admits none.
+    #[must_use]
+    pub fn bundle_bodies(&self) -> &[BundleBody] {
+        &self.bundle_bodies
     }
 
     /// [`crate::ChainValid::with_admitted`]'s write: a test instrument.

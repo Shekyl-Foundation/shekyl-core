@@ -766,3 +766,114 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
         "the previous epoch's bundle is admitted"
     );
 }
+
+/// Connect the next block carrying `reference` and `body` as its section.
+fn connect_carrying(chain: &mut SlashedChain, reference: &BundleRef, body: &BundleBody) {
+    let txs = chain.grown.realise(&[]);
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = chain.grown.judge_listing_with_section(
+            &view,
+            &RULES,
+            &txs,
+            None,
+            std::slice::from_ref(reference),
+            vec![body.clone()],
+        )?;
+        batch.connect(judged, RULES)?;
+        Ok(())
+    });
+    out.expect("the block admits the bundle");
+}
+
+fn queued_hs(chain: &SlashedChain) -> Vec<(BlockHeight, BlockHeight)> {
+    chain
+        .store
+        .begin_read()
+        .expect("read")
+        .queued_bundles()
+        .expect("the queue reads")
+        .into_iter()
+        .map(|entry| (entry.h, entry.queued.tip_height))
+        .collect()
+}
+
+fn body_stored(chain: &SlashedChain, hash: &[u8; 32]) -> bool {
+    chain
+        .store
+        .begin_read()
+        .expect("read")
+        .bundle_body(hash)
+        .expect("the body table reads")
+        .is_some()
+}
+
+/// SI-41's holders across a bundle's life (`bundle_holders.rs`). Queued,
+/// the queue holds the body. Admitted, the block holds it and the entry
+/// leaves. Popped, the bundle is back in the queue against the tip the pop
+/// left. Admitted again, then buried past the undo retention, the body
+/// goes: nothing holds it. Red edits: drop `hold_section`'s queue removal
+/// (the entry stays after admission); drop `return_section` from `pop` (the
+/// popped bundle is not queued); drop `sweep_section` (the body outlives
+/// its last holder). The open's reconcile finds nothing to drop at each
+/// step.
+#[test]
+fn a_bundle_body_is_held_by_the_queue_then_its_block_and_returns_on_pop() {
+    let mut prepared = prepare("holders");
+    let (reference, body) = produce(&prepared);
+    let hash = *reference.prunable_hash();
+    let h = drawing_height();
+    let including = prepared.chain.grown.height();
+    let tip_hash = prepared.chain.grown.tip();
+    let tip_height = including - BlockCount::ONE;
+    let queued: Result<(), TestErr> = prepared.chain.store.write(|batch| {
+        batch.queue_bundle(&reference, &body, tip_height, tip_hash, 64)?;
+        Ok(())
+    });
+    queued.expect("the bundle queues");
+    assert_eq!(queued_hs(&prepared.chain), vec![(h, tip_height)]);
+    assert!(body_stored(&prepared.chain, &hash));
+    let reconcile = |chain: &SlashedChain| {
+        let out: Result<crate::store::QueueReconciled, TestErr> = chain
+            .store
+            .write(|batch| Ok(batch.reconcile_bundle_queue()?));
+        assert!(
+            out.expect("the reconcile runs").is_clean(),
+            "every body has a holder"
+        );
+    };
+    reconcile(&prepared.chain);
+
+    connect_carrying(&mut prepared.chain, &reference, &body);
+    assert!(
+        queued_hs(&prepared.chain).is_empty(),
+        "the admitted entry leaves the queue"
+    );
+    assert!(body_stored(&prepared.chain, &hash), "the block holds it");
+    reconcile(&prepared.chain);
+
+    pop_one(&mut prepared.chain);
+    assert_eq!(
+        queued_hs(&prepared.chain),
+        vec![(h, tip_height)],
+        "the pop returns the bundle, against the tip it left"
+    );
+    assert!(body_stored(&prepared.chain, &hash));
+    reconcile(&prepared.chain);
+
+    connect_carrying(&mut prepared.chain, &reference, &body);
+    assert!(queued_hs(&prepared.chain).is_empty());
+    let retention = prepared.chain.store.horizons().undo_retention().to_raw();
+    while prepared.chain.grown.height().to_raw() <= including.to_raw() + retention {
+        assert!(
+            body_stored(&prepared.chain, &hash),
+            "held while its block is within the retention"
+        );
+        connect_plain(&mut prepared.chain, None);
+    }
+    assert!(
+        !body_stored(&prepared.chain, &hash),
+        "past the retention nothing holds it"
+    );
+    reconcile(&prepared.chain);
+}

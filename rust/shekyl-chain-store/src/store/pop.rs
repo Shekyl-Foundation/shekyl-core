@@ -133,14 +133,24 @@ impl WriteBatch<'_, '_> {
             }
             Some(_) => {}
         }
+        // The bundles the tip admitted go back to the queue after the undo
+        // (`bundle_holders.rs`): the section is read before the undo
+        // removes its row.
+        let returned = self.popped_section(tip)?;
         // The tip's row was seen above; the only way replay finds no row is
         // a journal that lost the tip between the check and here —
         // impossible inside one transaction, and named rather than assumed.
         match self.replay_undo(tip)? {
-            Replayed::Entries(reversed) => Ok(Popped {
-                height: BlockHeight::from_raw(tip),
-                reversed,
-            }),
+            Replayed::Entries(reversed) => {
+                if !returned.is_empty() {
+                    let (parent_height, parent_hash) = self.parent_of(tip)?;
+                    self.return_section(&returned, parent_height, parent_hash)?;
+                }
+                Ok(Popped {
+                    height: BlockHeight::from_raw(tip),
+                    reversed,
+                })
+            }
             Replayed::NoRow => Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
                 height: tip,
                 fault: UndoFault::NoRowForTip,
