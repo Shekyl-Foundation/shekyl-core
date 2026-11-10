@@ -384,10 +384,11 @@ jobs:
     # each leg is judged by its own tree. The per-PR Rust job runs the
     # script with `--check` and stops after that judgement.
     runs-on: ubuntu-latest
-    # Not yet timed here: two dependency trees of about 19 minutes each in
-    # the pull-request runs, plus the harness crates' own debug build. Size
-    # it from the first runs.
-    timeout-minutes: 120
+    # 22 minutes on the first dispatched run (2026-11-10, run 42741303959:
+    # the harness builds 3.5 min, chain-rules' tree 555 s, mempool's 544 s,
+    # crypto-pq 31 s reusing them). About three times that, for a cold
+    # registry and a slow runner.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
