@@ -24,16 +24,23 @@ The timing half is what the partition of the test run is sized from:
 * the run's wall time and test count.
 
 Usage:
-  nextest_report.py <junit.xml>   # markdown to $GITHUB_STEP_SUMMARY, else stdout
+  nextest_report.py <junit.xml> [--scope <rust_tests>]
+                                  # markdown to $GITHUB_STEP_SUMMARY, else stdout
   nextest_report.py --selftest
+
+`--scope` is the Rust job's `rust_tests` value (`scripts/ci/change_scope.py`):
+`all` for the workspace run, else the changed packages, whose reverse
+closure may hold no test at all (a binary with no tests and no dependents).
+nextest records that empty selection as `tests="0"` and passes it
+(`--no-tests=pass`); the report then says "0 tests" and exits 0.
 
 The warning annotations are printed only under GitHub Actions, where they
 are commands; a local run gets the markdown alone, flaky tests included.
 
 Exit 0 when the report was written, flaky tests or not; this report is not
 the job's verdict, nextest's exit status is. Exit 2 when the file is
-missing, does not parse, or holds no test: a report over nothing would read
-as a clean run (rule 47).
+missing, does not parse, or holds no test outside that scoped empty
+selection: a report over nothing would read as a clean run (rule 47).
 """
 
 from __future__ import annotations
@@ -72,13 +79,22 @@ class NoSubject(Exception):
     pass
 
 
-def parse(xml_text: str) -> Run:
+def parse(xml_text: str, scoped: bool = False) -> Run:
+    """`scoped` is a run over the changed packages' reverse closure, not the
+    workspace. There an empty selection is a decision nextest made and
+    recorded (`tests="0"` on the root, under `--no-tests=pass`), and the
+    report says so; a workspace run with no test is a broken run, and a
+    file without that count is not nextest's, so both are refused."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
         raise NoSubject(f"the JUnit file does not parse: {e}") from e
     if root.tag != "testsuites":
         raise NoSubject(f"the root element is <{root.tag}>, not <testsuites>")
+    try:
+        wall_seconds = float(root.get("time", ""))
+    except ValueError as e:
+        raise NoSubject(f"the run has no readable time ({e})") from e
     cases = []
     for suite in root.iter("testsuite"):
         binary = suite.get("name", "?")
@@ -102,12 +118,8 @@ def parse(xml_text: str) -> Run:
                     failed=tc.find("failure") is not None or tc.find("error") is not None,
                 )
             )
-    if not cases:
+    if not cases and not (scoped and root.get("tests") == "0"):
         raise NoSubject("the JUnit file holds no test")
-    try:
-        wall_seconds = float(root.get("time", ""))
-    except ValueError as e:
-        raise NoSubject(f"the run has no readable time ({e})") from e
     return Run(cases=cases, wall_seconds=wall_seconds)
 
 
@@ -119,6 +131,8 @@ def fmt_secs(s: float) -> str:
 
 def report(run: Run) -> tuple[str, list[str]]:
     """The markdown summary, and one annotation line per flaky test."""
+    if not run.cases:
+        return "## Rust tests (nextest)\n\n0 tests: the scope selected none.\n", []
     flaky = [c for c in run.cases if c.flaky_tries and not c.failed]
     failed = [c for c in run.cases if c.failed]
     lines = ["## Rust tests (nextest)", ""]
@@ -186,6 +200,13 @@ SELFTEST_XML = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+# nextest 0.9.138 for a filterset that selects no test, under --no-tests=pass.
+EMPTY_SCOPED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" failures="0" errors="0" uuid="21e2338b-8546-48f4-81a4-2a792acfc45c" timestamp="2026-11-09T19:12:12.374-05:00" time="0.000">
+</testsuites>
+"""
+
+
 def selftest() -> int:
     """The fixture's flaky and failed cases are nextest's own output for a
     test that failed once then passed, and one that failed on both tries
@@ -210,7 +231,11 @@ def selftest() -> int:
     clean, ann_clean = report(parse(SELFTEST_XML.replace("<flakyFailure", "<x").replace("</flakyFailure>", "</x>")))
     if ann_clean or "None." not in clean:
         problems.append("a run with no flaky test did not say None")
+    empty, ann_empty = report(parse(EMPTY_SCOPED_XML, scoped=True))
+    if ann_empty or "0 tests: the scope selected none." not in empty:
+        problems.append("a scoped run that selected no test was not reported as such")
     for bad, why in [
+        (EMPTY_SCOPED_XML, "no test, outside a scoped run"),
         ('<testsuites name="nextest-run" time="0"></testsuites>', "no test"),
         ("<testsuites", "does not parse"),
         ("<testsuite name='x'/>", "not <testsuites>"),
@@ -223,15 +248,22 @@ def selftest() -> int:
             problems.append(f"a file with {why} was accepted")
         except NoSubject:
             pass
+    # A scoped run accepts nextest's own empty selection and nothing else
+    # that is empty: a count of zero is the subject.
+    try:
+        parse('<testsuites name="nextest-run" time="0"></testsuites>', scoped=True)
+        problems.append("a scoped run accepted an empty file with no test count")
+    except NoSubject:
+        pass
     if problems:
         for p in problems:
             print(f"SELFTEST FAIL: {p}")
         return 1
     print(
         "SELFTEST PASS: a flaky test is listed and annotated, a test failed on "
-        "every try is not flaky, the slow tables lead with the slowest, and an "
-        "empty, unparseable or foreign file, or one missing a test's timestamp "
-        "or time, is refused"
+        "every try is not flaky, the slow tables lead with the slowest, a scoped "
+        "run that selected no test says so, and an empty, unparseable or foreign "
+        "file, or one missing a test's timestamp or time, is refused"
     )
     return 0
 
@@ -239,13 +271,16 @@ def selftest() -> int:
 def main(argv: list[str]) -> int:
     if argv == ["--selftest"]:
         return selftest()
-    if len(argv) != 1:
-        print("usage: nextest_report.py <junit.xml> | --selftest", file=sys.stderr)
+    if len(argv) == 3 and argv[1] == "--scope" and argv[2]:
+        path, scoped = argv[0], argv[2] != "all"
+    elif len(argv) == 1:
+        path, scoped = argv[0], False
+    else:
+        print("usage: nextest_report.py <junit.xml> [--scope <rust_tests>] | --selftest", file=sys.stderr)
         return 2
-    path = argv[0]
     try:
         with open(path, encoding="utf-8") as f:
-            run = parse(f.read())
+            run = parse(f.read(), scoped)
     except (OSError, NoSubject) as e:
         print(f"nextest report: {path}: {e}", file=sys.stderr)
         return 2

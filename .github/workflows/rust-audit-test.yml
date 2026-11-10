@@ -68,6 +68,13 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      # The Rust job's scope, decided by dependency (scripts/ci/change_scope.py):
+      # whether the job runs, which packages' tests run (`all`, `none`, or the
+      # changed packages, expanded below to them and their dependents), and
+      # the `-p` list for the doctests.
+      rust_job: ${{ steps.scope.outputs.rust_job }}
+      rust_tests: ${{ steps.scope.outputs.rust_tests }}
+      rust_doc_pkgs: ${{ steps.scope.outputs.rust_doc_pkgs }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
     permissions:
       contents: read
@@ -95,13 +102,18 @@ jobs:
           # One classifier for every scope job: scripts/ci/change_scope.py.
           # It finds the code inputs that live under docs/ (the domain
           # registry, the test vectors) by reading the tree, and fails closed.
+          # Fail closed: if the classifier does not run at all, every output
+          # is written as its widest value, so no step below reads an empty one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
-            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            || printf '%s\n' docs_only=false rust_job=run rust_tests=all rust_doc_pkgs= >> "$GITHUB_OUTPUT"
 
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # Skipped for a docs-only change, and for a change owned by other jobs
+    # alone (a documentation gate, another workflow's job). It still
+    # reports, as "skipped", so branch protection does not wait on it.
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
     runs-on: ubuntu-latest
     # The six green runs under nextest (2026-11-07) took 120, 179, 180,
     # 181, 183 and 236 min, so twice the p90 passes the 360 min platform
@@ -506,26 +518,69 @@ jobs:
         # tests, same exclusions as the build above; `--profile ci` is in
         # `.config/nextest.toml` (no fail-fast, one retry, slow tests named
         # and killed at 30 min, JUnit timings).
-        run: cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
-      - name: doctests (all workspace crates)
+        #
+        # The scope job names the changed packages; the run is every test
+        # of those packages and of every package that depends on them
+        # (`rdeps`, dev-dependencies included), so a changed fixture runs
+        # its consumers' tests. The build above stays the whole workspace,
+        # so the features each crate compiles with are the full run's.
+        # `none` is a job that runs for its gate steps alone (a changed
+        # script it executes); the test steps are skipped, not run empty. A
+        # scoped expression that selects no test passes: the selection was
+        # the decision, and a package name that no longer exists fails the
+        # expression instead.
+        if: ${{ needs.changes.outputs.rust_tests != 'none' }}
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+        run: |
+          set -u
+          if [ "$RUST_TESTS" = all ]; then
+            echo "scope: every workspace test"
+            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential
+          else
+            expr=""
+            for pkg in $RUST_TESTS; do expr="${expr:+$expr + }rdeps($pkg)"; done
+            echo "scope: $expr"
+            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential \
+              --no-tests=pass -E "$expr"
+          fi
+      - name: doctests (workspace crates in scope)
         working-directory: rust
         # nextest does not run doctests. They run whether or not a test
         # above failed, so one run reports both; only a failed build skips
-        # them, since they would fail on the same error.
-        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' }}
-        run: cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
+        # them, since they would fail on the same error. The scope's `-p`
+        # list is the reverse closure of the changed packages, cut to those
+        # with a library target (`cargo test --doc` refuses the others).
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' && needs.changes.outputs.rust_tests != 'none' }}
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+          RUST_DOC_PKGS: ${{ needs.changes.outputs.rust_doc_pkgs }}
+        run: |
+          set -u
+          if [ "$RUST_TESTS" = all ]; then
+            cargo test --locked --doc --workspace --exclude shekyl-randomx-differential
+          elif [ -z "$RUST_DOC_PKGS" ]; then
+            echo "scope: no package in scope has a library target; no doctests"
+          else
+            echo "scope: cargo test --doc $RUST_DOC_PKGS"
+            cargo test --locked --doc $RUST_DOC_PKGS
+          fi
       - name: report flaky and slow tests
         # Flaky tests (failed, then passed on the retry) to the job summary
         # and as warnings on the pull request; then the slowest tests and
         # binaries, which size the partition of the run. Report only: the
         # run's own exit status is the verdict. It fails when there is no
-        # JUnit file to read, so a run that wrote none cannot read as clean.
-        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' }}
-        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml
+        # JUnit file to read, so a run that wrote none cannot read as clean;
+        # under a scope, a selection nextest recorded as empty is reported
+        # as "0 tests", not refused.
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' && needs.changes.outputs.rust_tests != 'none' }}
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml --scope "$RUST_TESTS"
       - name: upload the test timings (JUnit)
         # Each test's time from the nextest run above, kept for the slow
         # tests to be named and the step to be partitioned by them.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.changes.outputs.rust_tests != 'none' }}
         uses: actions/upload-artifact@v6
         with:
           name: rust-nextest-junit
