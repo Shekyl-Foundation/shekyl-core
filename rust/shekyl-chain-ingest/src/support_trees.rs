@@ -36,14 +36,14 @@ use shekyl_archival_retention::{
     RELEASE_COOLDOWN_EPOCHS,
 };
 use shekyl_bundle_producer::DrawTarget;
-use shekyl_chain_rules::{CenRow, EpochFloor, Locus, TxSlot};
+use shekyl_chain_rules::{CenRow, EpochFloor};
 use shekyl_harness_spender::{Owner, Recipient, Spender};
 use shekyl_types::archival::SettlementOutcome;
 use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 
 use crate::admitted_draws::{assert_issued_pair, serve_to, DriverWitness};
-use crate::archival_driver::{record_of, refused_at, ENDPOINT, FEE};
+use crate::archival_driver::{at_post, record_of, refused_at, ENDPOINT, FEE};
 use crate::chain_drive::{
     catch_up, failure_window_epochs, priced_emission_claim, Driven, EmissionClaimParts,
 };
@@ -333,9 +333,7 @@ pub(crate) async fn drive_support_trees(drive: &mut Driven, closed: ClosedShard)
     refused_at(
         drive.connect(vec![releasing_early]).await,
         CenRow::J16,
-        Locus::Tx {
-            slot: TxSlot::Listed(0),
-        },
+        at_post(0),
     );
 
     // The cooldown runs out two epochs after A's last pass. Served to
@@ -389,9 +387,7 @@ pub(crate) async fn drive_support_trees(drive: &mut Driven, closed: ClosedShard)
     refused_at(
         drive.connect(vec![rejoining]).await,
         CenRow::J14,
-        Locus::Tx {
-            slot: TxSlot::Listed(0),
-        },
+        at_post(0),
     );
 
     let slash_height = BlockHeight::from_raw(schedule.slash_deadline_height(slash_epoch.to_raw()));
