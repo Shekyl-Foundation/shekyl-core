@@ -10,24 +10,42 @@
 use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Shown, TorQuiet};
-use super::super::{duration_ns, Action, Core, DialTally, Input, Step};
+use super::super::{duration_ns, Action, Core, DialTally, Input, Step, TorCensus};
 use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down};
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
-/// the latest of them launched at `began`, and no sign of life.
+/// the latest of them launched at `began`, and no sign of life. The census
+/// is one seat held since the clock's origin, so the unanswered span is
+/// the quiet stretch.
 fn dials(opened: u64, unopened: u32, began: Option<u64>) -> Input {
     lived(opened, unopened, None, began)
 }
 
 /// [`dials`], with the judge's last sign of life at `life`.
 fn lived(opened: u64, unopened: u32, life: Option<u64>, began: Option<u64>) -> Input {
+    tally(
+        opened,
+        unopened,
+        life,
+        began,
+        TorCensus::Held { seats: 1, since: 0 },
+    )
+}
+
+fn tally(
+    opened: u64,
+    unopened: u32,
+    life: Option<u64>,
+    began: Option<u64>,
+    census: TorCensus,
+) -> Input {
     Input::DialEvidence(DialTally {
         opened,
         unopened,
         last_sign_of_life: life,
         failed_attempt_began: began,
-        known: None,
+        census,
     })
 }
 
@@ -422,16 +440,10 @@ fn the_line_reads_whether_dials_failed_not_how_many() {
     assert!(seen[0].1.tor_quiet.is_some());
 }
 
-/// A tally of what the dialer holds: `known` addresses at its census, with
-/// `unopened` failed Tor dials, the latest launched at `began`.
-fn held(known: Option<u32>, unopened: u32, began: Option<u64>) -> Input {
-    Input::DialEvidence(DialTally {
-        opened: 0,
-        unopened,
-        last_sign_of_life: None,
-        failed_attempt_began: began,
-        known,
-    })
+/// A tally whose census is `census`, with `unopened` failed Tor dials, the
+/// latest launched at `began`.
+fn held(census: TorCensus, unopened: u32, began: Option<u64>) -> Input {
+    tally(0, unopened, None, began, census)
 }
 
 /// **No peers known yet is its own line** (Rick, 2026-11-10). With the
@@ -443,7 +455,7 @@ fn held(known: Option<u32>, unopened: u32, began: Option<u64>) -> Input {
 fn no_peers_known_yet_is_said_once() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    let mut steps = vec![core.on(held(Some(0), 0, None), secs(1))];
+    let mut steps = vec![core.on(held(TorCensus::Empty, 0, None), secs(1))];
     steps.extend(run_until(&mut core, secs(120)));
     assert_eq!(says_progress(&steps), 1, "said once");
     assert_eq!(steps.iter().map(announces).sum::<usize>(), 0);
@@ -455,36 +467,73 @@ fn no_peers_known_yet_is_said_once() {
     assert!(!text.contains("answered"), "{text}");
 }
 
-/// **Before the dialer's first census, nothing is said**: an unknown count
-/// is not zero. Reading `None` as no peers fails this.
+/// **Before the dialer's first census, nothing is said**, including when a
+/// dial has failed. A pending census is not an empty one, and a failed
+/// dial is not a census. Reading pending as empty says "no peers"; reading
+/// it as peers known says "none has answered".
 #[test]
 fn no_census_yet_says_nothing() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    let mut steps = vec![core.on(held(None, 0, None), secs(1))];
+    let mut steps = vec![core.on(held(TorCensus::Pending, 0, None), secs(1))];
+    let failed = Some(secs(2));
+    steps.push(core.on(held(TorCensus::Pending, 1, failed), secs(2)));
     steps.extend(run_until(&mut core, secs(120)));
     assert_eq!(says_progress(&steps), 0);
     assert_eq!(core.status().tor_quiet, None);
+    let text = render(&core.status());
+    assert!(!text.contains("Peers are known"), "{text}");
+    assert!(!text.contains("No peers are known"), "{text}");
 }
 
-/// **Peers learned, then none answering, is said again, once.** The line
-/// changes kind, which is a new fact; the same kind evaluated again is not.
-/// Fails if a line already standing swallows the change (said once only),
-/// or if every evaluation says it.
+/// **Peers learned, then none answering, is said again, once, and the
+/// span starts when the run did.** The empty stretch is not time peers
+/// were silent. The same fact evaluated again is not said. A return to an
+/// empty census is said once more. Fails if a standing line swallows the
+/// change, if every evaluation says it, or if the spoken span includes the
+/// time before the dialer held anyone.
 #[test]
 fn peers_learned_and_unanswered_switch_the_line_once() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    let mut steps = vec![core.on(held(Some(0), 0, None), secs(1))];
+    let after = duration_ns(policy().quiet_after);
+    let mut steps = vec![core.on(held(TorCensus::Empty, 0, None), secs(1))];
     steps.extend(run_until(&mut core, secs(60)));
     assert_eq!(says_progress(&steps), 1, "no peers known yet");
     steps.clear();
-    steps.push(core.on(held(Some(6), 1, Some(secs(61))), secs(62)));
-    steps.extend(run_until(&mut core, secs(180)));
-    steps.push(core.on(held(Some(6), 9, Some(secs(170))), secs(180)));
-    assert_eq!(says_progress(&steps), 1, "peers known, none answering");
-    assert!(matches!(
+
+    let learned = secs(61);
+    let held_run = TorCensus::Held {
+        seats: 6,
+        since: learned,
+    };
+    steps.push(core.on(held(held_run, 1, Some(learned)), learned + secs(1)));
+    steps.extend(run_until(&mut core, learned + after - 1));
+    assert_eq!(
+        says_progress(&steps),
+        0,
+        "one second of peers is not the empty stretch"
+    );
+    assert_eq!(core.status().tor_quiet, None);
+
+    let due = learned + after;
+    let step = core.on(held(held_run, 1, Some(learned)), due);
+    assert!(
+        step.actions.contains(&Action::SayProgress),
+        "peers known, none answering"
+    );
+    assert_eq!(
         core.status().tor_quiet,
-        Some(TorQuiet::Unanswered(_))
-    ));
+        Some(TorQuiet::Unanswered(policy().quiet_after)),
+        "the span is the run, not the empty stretch"
+    );
+    steps.push(step);
+    steps.extend(run_until(&mut core, due + secs(30)));
+    steps.push(core.on(held(held_run, 9, Some(due)), due + secs(30)));
+    assert_eq!(says_progress(&steps), 1, "the same fact is not said again");
+
+    steps.clear();
+    steps.push(core.on(held(TorCensus::Empty, 9, Some(due)), due + secs(31)));
+    assert_eq!(says_progress(&steps), 1, "empty again is a new fact");
+    assert_eq!(core.status().tor_quiet, Some(TorQuiet::NoPeersKnown));
 }

@@ -976,14 +976,15 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
         connector: ConnectorId,
         rng: &mut R,
     ) -> Option<(NetworkAddress, DialAim)> {
-        let now = self.now();
+        let census_at = self.stamp();
+        let now = census_at.tick();
         if let Err(missing) = self.readiness(connector) {
             tracing::debug!("{connector:?} wake: nothing drawn: {}", missing.describe());
             return None;
         }
         let live = live_sessions(&self.board(), connector);
         let mut shared = self.shared();
-        let wake = plan_wake(&mut shared, connector, &live, now, rng);
+        let wake = plan_wake(&mut shared, connector, &live, now, census_at, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 // `plan_wake` already reported this wake. A report that

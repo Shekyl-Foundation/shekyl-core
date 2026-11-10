@@ -472,8 +472,8 @@ impl ProgressWindow {
     }
 }
 
-/// What the quiet line says, by what the dialer knows (`TOR_SUPERVISOR.md`
-/// §5; Rick, 2026-11-10).
+/// What the quiet line says, by the dialer's census (`TOR_SUPERVISOR.md`
+/// §4.2; Rick, 2026-11-10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TorQuiet {
     /// The dialer holds no Tor address: no peer is known yet, so there is
@@ -517,10 +517,12 @@ pub struct Status {
     /// How the bootstrap is going, beside [`Self::cause`], never instead of
     /// it. Only while bootstrapping, once the first window has passed.
     pub pace: Option<BootstrapPace>,
-    /// Nothing has come through Tor for `quiet_after` by the dialer judge's
-    /// last sign of life, while Tor runs and names no cause (§4.2): either
-    /// the dialer holds no address, or a Tor dial has failed since. A
-    /// neutral fact for the posture line, never a cause.
+    /// The quiet line, while Tor runs and names no cause (§4.2).
+    /// [`TorQuiet::NoPeersKnown`] is an empty census once `quiet_after` has
+    /// passed. [`TorQuiet::Unanswered`] is a non-empty run whose held span
+    /// has reached `quiet_after` with a Tor dial launched inside it that
+    /// failed. A neutral fact, never a cause. The duration on
+    /// [`TorQuiet::Unanswered`] is that held span.
     pub tor_quiet: Option<TorQuiet>,
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.
