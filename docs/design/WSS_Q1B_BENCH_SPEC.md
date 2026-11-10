@@ -143,7 +143,7 @@ derived here and computed by *calling* the landed functions, never by restating
 a value.
 
 **`config/consensus_constants.json` does not carry a maximum block weight.** It
-carries `block_weight_short_term_surge_factor: 4` and nothing else of this
+carries `block_weight_short_term_surge_factor: 3` and nothing else of this
 chain; `shekyl_wire::block::MAX_BLOCK_BLOB_SIZE` is a parse-DoS guard, not a
 consensus bound. An earlier draft of this spec derived the rate "from the
 block-weight constants in `config/consensus_constants.json`" — naming an operand
@@ -153,7 +153,7 @@ The chain that does exist:
 
 1. The long-term effective median is floored at the full-reward zone
    `shekyl_wire::transaction::MIN_BLOCK_WEIGHT` = **300 000**.
-2. The short-term governor may run it to `S ×` that floor, `S = 4`
+2. The short-term governor may run it to `S ×` that floor, `S = 3`
    (`shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR`, ratified
    `CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3). `shekyl-economics/src/block_weight.rs`
    records in its own words that for the first ~100 000 blocks this clamp is
@@ -162,7 +162,7 @@ The chain that does exist:
    `shekyl_economics::emission::block_weight_limit(median, zone)` =
    `2 × max(median, zone)` — `shekyl-economics/src/emission.rs:265`.
 
-   **Sustained early-chain ceiling = `2 × 4 × 300 000` = 2 400 000 weight.**
+   **Sustained early-chain ceiling = `2 × 3 × 300 000` = 1 800 000 weight.**
 
 4. The densest leaf-producing shape is searched over the type-bounded
    `(n_in, n_out)` grid through `shekyl_tx_weight::predict_weight` — the
@@ -174,8 +174,8 @@ The chain that does exist:
    there is no second filter to discount by. The coinbase is charged at
    `MAX_OUTPUTS` (16), an upper bound that cannot move a five-figure result.
 
-**Result at depth 6: 1 056 leaves/block**, hence a worst-case replay window of
-`1 056 × 725` = **765 600 leaves** (~98 MB of leaf scalars — comfortably within
+**Result at depth 6: 800 leaves/block**, hence a worst-case replay window of
+`800 × 725` = **580 000 leaves** (~74 MB of leaf scalars — comfortably within
 the 8 GB rig).
 
 **The rate falls as the tree deepens**, because a deeper tree means a larger
@@ -335,7 +335,7 @@ by the 5 s budget.
 
 **Why this is a ruling and not an oversight.** Do the arithmetic the spend edge
 invites and the open edge's answer is pre-written: 790 blocks at the
-2 400 000-weight sustained ceiling is **≈ 1.9 GB decoded** (≈ 3.8 GB on the
+1 800 000-weight sustained ceiling is **≈ 1.4 GB decoded** (≈ 2.8 GB on the
 wire, which is hex). No hardware refetches that in 5 s. **Grading there would
 write §6.3.4 row 3's miss response — the companion file — before measuring
 anything**, which is precisely the failure the amendment above was made to
@@ -345,7 +345,7 @@ avoid, arrived at from the other direction.
 
 | Density | Outcome | Verdict as evidence |
 | --- | --- | --- |
-| Adversarial ceiling (2.4 MB) | ~1.9 GB in 5 s | Foregone **fail** |
+| Adversarial ceiling (1.8 MB) | ~1.4 GB in 5 s | Foregone **fail** |
 | Empty / coinbase-only | ~1.4 kB per block | Foregone **pass** |
 | **Full-reward zone (300 kB)** | 790 × 300 kB ≈ **237 MB** in 5 s ⇒ ~47 MB/s decoded | **Genuinely open** |
 

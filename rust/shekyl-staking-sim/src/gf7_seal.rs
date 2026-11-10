@@ -5,8 +5,7 @@
 
 //! `--gf7-seal <artifact>` — the sealing-form grader for the GF-7 leg-(b)
 //! wall-clock sweep-phase channel (`ARCHIVAL_BOND_WI4_MEASUREMENT.md` §19.8;
-//! scope per §19.10: a dispersal-regression tripwire — the form's former
-//! `K_COVER` seal-input status was withdrawn 2026-07-19).
+//! scope per §19.10.3: a dispersal-regression tripwire).
 //!
 //! The harness (`shekyl-engine-core` `gf7_sealing_run.rs`, `gf7-hooks`
 //! feature) drives the **production** P-scan task + dispatch driver against a

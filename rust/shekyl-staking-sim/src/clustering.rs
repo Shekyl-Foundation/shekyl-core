@@ -67,67 +67,36 @@
 //! network) there is no slack to rotate onto a fresh deep set, and dispersion runs
 //! out regardless of α.
 //!
-//! Focused harness (like `cover.rs` / `standoff.rs`), not `run_sim`. Its
+//! Focused harness (like `standoff.rs`), not `run_sim`. Its
 //! load-bearing claim is only that it reproduces the known capacity-regime result
 //! (the positive control: redundant deep coverage at the lean attractor, the
 //! coverage edge at the trough). Every verdict is a ratio (haircut fraction), so
 //! the arbitrary reward scale cancels.
 
+use crate::rng::SplitMix64;
 use serde::Serialize;
 
-use crate::model::g_age;
+use crate::model::{g_age, AGE_WEIGHT};
+use crate::scenarios;
 
 // ===========================================================================
-// Deterministic RNG (local, like cover.rs — determinism is load-bearing so the
-// sweep is reproducible and git-diffable across runs).
+// Grounded constants. `AGE_WEIGHT` is the production slope (`model::AGE_WEIGHT`).
+// The rest are the baseline scenario's shape, read from `scenarios.rs`'s named
+// baseline values so this harness sits on the same substrate (Appendix B, R19).
+// Per-shard `phi` is the one term not in the protocol — the injected
+// sensitivity axis.
 // ===========================================================================
 
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        SplitMix64(seed)
-    }
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn below(&mut self, n: usize) -> usize {
-        if n == 0 {
-            0
-        } else {
-            (self.next_u64() % n as u64) as usize
-        }
-    }
-    fn shuffle<T>(&mut self, s: &mut [T]) {
-        for i in (1..s.len()).rev() {
-            let j = self.below(i + 1);
-            s.swap(i, j);
-        }
-    }
-}
-
-// ===========================================================================
-// Grounded constants — single-sourced shape from the baseline scenario
-// (`scenarios.rs`) so the harness sits on the same economic substrate the rest of
-// the sim is validated against. Per-shard `phi` is the one term NOT in the
-// protocol — the injected sensitivity axis.
-// ===========================================================================
-
-/// `g_age = 1 + age_weight·age`; baseline `age_weight = 2` ⇒ the deepest shards
-/// carry a 3× scarcity premium over the hot frontier — the value-curve steepness.
-const AGE_WEIGHT: f64 = 2.0;
 /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a retention bond.
-const DEEP_THRESHOLD: f64 = 0.5;
+const DEEP_THRESHOLD: f64 = scenarios::BASELINE_DEEP_THRESHOLD;
 /// Flat per-deep-shard bond (mid rung).
-const BOND_RATE: f64 = 2.0;
+const BOND_RATE: f64 = scenarios::BASELINE_BOND_RATE;
 /// Flow cost per held shard (storage/bandwidth) — uniform across shards (protocol).
-const STORAGE_UNIT_COST: f64 = 0.03;
-/// Flow opportunity cost of capital locked in one deep-shard bond.
-const BOND_CARRY: f64 = 0.03;
+const STORAGE_UNIT_COST: f64 = scenarios::BASELINE_STORAGE_UNIT_COST;
+/// Flow opportunity cost of capital locked in one deep-shard bond. This
+/// harness keeps the registered shape: deep shards only bond, at a flat carry
+/// (Appendix B, R19, declared).
+const BOND_CARRY: f64 = scenarios::BASELINE_BOND_CARRY;
 /// Reward scale (arbitrary; cancels in every ratio). Sets `value = SCALE/R·g(age)`.
 const REWARD_SCALE: f64 = 1.0;
 /// Storage units a deep shard occupies (iteration-1 uniform value).
@@ -153,8 +122,8 @@ impl Archetype {
     /// `(storage_capacity, capital)` per the baseline scenario.
     fn endowment(self) -> (usize, f64) {
         match self {
-            Archetype::StorageRich => (22, 20.0),
-            Archetype::CapitalRich => (10, 100.0),
+            Archetype::StorageRich => scenarios::BASELINE_STORAGE_RICH,
+            Archetype::CapitalRich => scenarios::BASELINE_CAPITAL_RICH,
         }
     }
 }

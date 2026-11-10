@@ -104,6 +104,11 @@ pub const SEEDS: [u64; 8] = [
 /// mining purse pretended as thin as the fee-era lean attractor, so the *full*
 /// throttle lands at the leanest possible operating point. `real = false`
 /// excludes it from the verdict (the regime does not occur).
+///
+/// **Declared copy (Appendix B, R18).** The `emis_frac` column is economics-sim
+/// output copied by hand, not computed: production's owners are
+/// `shekyl_economics`' `emission_share` and `burn`. The coupling half computes it
+/// from the economy's purse; until then it is exogenous here.
 pub const POINTS_SPEC: [(&str, f64, f64, bool); 3] = [
     ("fee_era_lean", 100.0, 0.012, true),
     ("mining_saturated", 200.0, 1.0, true),
