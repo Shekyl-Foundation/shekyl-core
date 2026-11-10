@@ -82,7 +82,13 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    source.generate_blocks(blocks - 1).await;
+    // The chain is topped up from what it holds, not from the count of
+    // successful calls: a call that mined and then failed in transport is
+    // retried above, and a second block would overshoot `blocks`.
+    let mined = source.height().await;
+    if let Some(more) = (blocks + 1).checked_sub(mined).filter(|more| *more > 0) {
+        source.generate_blocks(more).await;
+    }
     let want = source.height().await;
     assert_eq!(want, blocks + 1, "the source mined its chain");
     let source_tip = source.last_block_hash().await;
