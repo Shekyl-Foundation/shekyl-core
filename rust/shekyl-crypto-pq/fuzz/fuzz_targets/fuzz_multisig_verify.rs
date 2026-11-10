@@ -8,6 +8,10 @@ use libfuzzer_sys::fuzz_target;
 use shekyl_crypto_pq::multisig::verify_multisig;
 use shekyl_types::SigningPayloadHash;
 
+/// The network id the key hashes are checked under. Fixed: the fuzzed
+/// surface is the blobs, and a random id only makes every hash miss.
+const NET: [u8; 16] = [0x4E; 16];
+
 /// The message is a 64-byte signing payload hash, so the fuzzed surface is
 /// the key and signature blobs: whatever input is left after them fills the
 /// payload, zero-padded or cut to its width.
@@ -20,7 +24,7 @@ fn payload(rest: &[u8]) -> SigningPayloadHash {
 
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
-        let _ = verify_multisig(0, &[], &[], &payload(&[]));
+        let _ = verify_multisig(0, &[], &[], &payload(&[]), &NET);
         return;
     }
 
@@ -28,7 +32,7 @@ fuzz_target!(|data: &[u8]| {
     let mut i = 1usize;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, &[], &[], &payload(&data[i..]));
+        let _ = verify_multisig(scheme_id, &[], &[], &payload(&data[i..]), &NET);
         return;
     }
 
@@ -41,7 +45,7 @@ fuzz_target!(|data: &[u8]| {
     i += key_take;
 
     if data.len() < i + 2 {
-        let _ = verify_multisig(scheme_id, key_blob, &[], &payload(&data[i..]));
+        let _ = verify_multisig(scheme_id, key_blob, &[], &payload(&data[i..]), &NET);
         return;
     }
 
@@ -53,5 +57,5 @@ fuzz_target!(|data: &[u8]| {
     let sig_blob = &data[i..i + sig_take];
     i += sig_take;
 
-    let _ = verify_multisig(scheme_id, key_blob, sig_blob, &payload(&data[i..]));
+    let _ = verify_multisig(scheme_id, key_blob, sig_blob, &payload(&data[i..]), &NET);
 });

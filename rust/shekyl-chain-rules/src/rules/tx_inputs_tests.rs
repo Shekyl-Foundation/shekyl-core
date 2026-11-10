@@ -281,11 +281,11 @@ fn g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it() {
 
 /// CEN-I16: each structural departure is refused at both sites — the
 /// version, the flags, an unknown scheme, a solo key blob one byte off
-/// either way, a multisig blob below the header and above the cap — and
+/// either way, a multisig blob below the floor and above the cap — and
 /// the solo shape and a minimal multisig shape are admitted.
 #[test]
 fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
-    use shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG;
+    use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
     use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB};
     let with_auth = |edit: &dyn Fn(&mut shekyl_wire::PqcAuth)| {
         let mut tx = listed(KI);
@@ -307,10 +307,10 @@ fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
             with_auth(&|a| a.hybrid_public_key.push(0)),
         ),
         (
-            "multisig key below the header",
+            "multisig key one below the floor",
             with_auth(&|a| {
                 a.scheme_id = HYBRID_SCHEME_ID_MULTISIG;
-                a.hybrid_public_key = vec![0; 2];
+                a.hybrid_public_key = vec![0; MULTISIG_KEY_BLOB_MIN - 1];
             }),
         ),
         (
@@ -333,10 +333,10 @@ fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
         .contains(CenRow::I16));
     let minimal_multisig = with_auth(&|a| {
         a.scheme_id = HYBRID_SCHEME_ID_MULTISIG;
-        a.hybrid_public_key = vec![0; 3];
+        a.hybrid_public_key = vec![0; MULTISIG_KEY_BLOB_MIN];
     });
     assert!(tx_form(&minimal_multisig, TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("the multisig header alone is I16's floor; the parse is I17/I18's")
+        .expect("a 1-of-1 blob's length is I16's floor; the parse is I18's")
         .contains(CenRow::I16));
 }
 

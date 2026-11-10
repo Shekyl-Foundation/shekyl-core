@@ -11,7 +11,6 @@ use shekyl_engine_core::RefreshSummary;
 use shekyl_engine_core::SubmitOutcome;
 use shekyl_engine_state::{
     DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
-    UnspendableReason,
 };
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -80,10 +79,7 @@ pub fn transfer_state(
 /// Wire string for a row's received-but-unspendable reason
 /// (`TransferView::unspendable_reason`); `None` for a spendable row.
 pub fn unspendable_reason_string(td: &TransferDetails) -> Option<String> {
-    td.unspendable.map(|reason| match reason {
-        UnspendableReason::PqcLeafMismatch => "PQC_LEAF_MISMATCH".to_owned(),
-        UnspendableReason::PqcLeafEntryAbsent => "PQC_LEAF_ENTRY_ABSENT".to_owned(),
-    })
+    td.unspendable.map(|reason| reason.rpc_name().to_owned())
 }
 
 /// Project ledger receive-attribution to the RPC view (no cleartext labels).
@@ -508,7 +504,7 @@ mod tests {
     fn unspendable_row_projects_state_reason_and_sender() {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
         use shekyl_curve_primitives::Commitment;
-        use shekyl_engine_state::SendJournalBlock;
+        use shekyl_engine_state::{SendJournalBlock, UnspendableReason};
         use shekyl_scanner::{TransferDetailsExt, WalletOutput};
 
         let sender_tx = [0x5au8; 32];

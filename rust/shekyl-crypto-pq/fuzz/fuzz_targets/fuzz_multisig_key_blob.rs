@@ -6,49 +6,38 @@
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_crypto_pq::multisig::{
-    MultisigKeyContainer, MAX_MULTISIG_PARTICIPANTS, MULTISIG_CONTAINER_VERSION,
-    SINGLE_KEY_CANONICAL_LEN, SPEND_AUTH_PUBKEY_LEN,
+    MultisigCommittedForm, MultisigKeyBlob, MAX_MULTISIG_PARTICIPANTS, MULTISIG_CONTAINER_VERSION,
 };
+use shekyl_crypto_pq::signature::pqc_leaf_key_bytes;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = MultisigKeyContainer::from_canonical_bytes(data);
+    let _ = MultisigKeyBlob::from_canonical_bytes(data);
+    let _ = MultisigCommittedForm::from_bytes(data);
+    let _ = pqc_leaf_key_bytes(2, data);
 
-    // V3.1 wire format: version(1) || n_total(1) || m_required(1) || keys || spend_auth_pks
+    // A blob of the right length for a fuzzed (n, m), its body filled from
+    // the input, so the bitmap, hash and key parses are reached and not
+    // only the length gate: version(1) ‖ n ‖ m ‖ n·32 ‖ bitmap ‖ m·1996.
     if data.len() >= 3 {
         let n_total = (data[0] % MAX_MULTISIG_PARTICIPANTS) + 1;
-        let m_required = (data[1] as usize % n_total as usize) as u8 + 1;
-
-        let key_payload_len = (n_total as usize).saturating_mul(SINGLE_KEY_CANONICAL_LEN);
-        let sa_payload_len = (n_total as usize).saturating_mul(SPEND_AUTH_PUBKEY_LEN);
-        let total = 3usize
-            .saturating_add(key_payload_len)
-            .saturating_add(sa_payload_len);
+        let m_required = (data[1] % n_total) + 1;
+        let total = MultisigKeyBlob::expected_len(n_total, m_required);
 
         let mut buf = Vec::with_capacity(total);
         buf.push(MULTISIG_CONTAINER_VERSION);
         buf.push(n_total);
         buf.push(m_required);
-
-        let tail = &data[3..];
-        for j in 0..(key_payload_len + sa_payload_len) {
-            let b = if tail.is_empty() {
-                0u8
-            } else {
-                tail[j % tail.len()]
-            };
-            buf.push(b);
+        let tail = &data[2..];
+        while buf.len() < total {
+            buf.push(tail[(buf.len() - 3) % tail.len()]);
         }
 
-        let _ = MultisigKeyContainer::from_canonical_bytes(&buf);
+        let _ = MultisigKeyBlob::from_canonical_bytes(&buf);
+        let _ = pqc_leaf_key_bytes(2, &buf);
 
-        if buf.len() > 3 {
-            let idx = if data.len() > 3 {
-                (data[3] as usize) % buf.len()
-            } else {
-                0
-            };
-            buf[idx] ^= 0x5A;
-            let _ = MultisigKeyContainer::from_canonical_bytes(&buf);
-        }
+        let idx = usize::from(data[2]) % buf.len();
+        buf[idx] ^= 0x5A;
+        let _ = MultisigKeyBlob::from_canonical_bytes(&buf);
+        let _ = pqc_leaf_key_bytes(2, &buf);
     }
 });

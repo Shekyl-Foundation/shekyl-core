@@ -1028,6 +1028,34 @@
                               {
                                 "name": "PqcLeafEntryAbsent",
                                 "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigEntryAbsent",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigGroupSize",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigHashesUndecryptable",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigMemberDecap",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigMemberKeyHash",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigDuplicateKeyHash",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "MultisigLeafMismatch",
+                                "ty": "UnitVariant"
                               }
                             ]
                           }

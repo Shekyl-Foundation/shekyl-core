@@ -231,15 +231,34 @@ mod tests {
     }
 
     /// A received-but-unspendable output (`PL-D3` §6.2) is retained — it is
-    /// on chain, so `total` counts it — but never spendable, in either
-    /// reason.
+    /// on chain, so `total` counts it — and never spendable. Every reason
+    /// is counted that way.
     #[test]
     fn unspendable_counted_in_total_never_in_unlocked() {
         use shekyl_engine_state::UnspendableReason;
         for reason in [
             UnspendableReason::PqcLeafMismatch,
             UnspendableReason::PqcLeafEntryAbsent,
+            UnspendableReason::MultisigEntryAbsent,
+            UnspendableReason::MultisigGroupSize,
+            UnspendableReason::MultisigHashesUndecryptable,
+            UnspendableReason::MultisigMemberDecap,
+            UnspendableReason::MultisigMemberKeyHash,
+            UnspendableReason::MultisigDuplicateKeyHash,
+            UnspendableReason::MultisigLeafMismatch,
         ] {
+            // Total: a new reason does not compile until this test counts it.
+            match reason {
+                UnspendableReason::PqcLeafMismatch
+                | UnspendableReason::PqcLeafEntryAbsent
+                | UnspendableReason::MultisigEntryAbsent
+                | UnspendableReason::MultisigGroupSize
+                | UnspendableReason::MultisigHashesUndecryptable
+                | UnspendableReason::MultisigMemberDecap
+                | UnspendableReason::MultisigMemberKeyHash
+                | UnspendableReason::MultisigDuplicateKeyHash
+                | UnspendableReason::MultisigLeafMismatch => {}
+            }
             let mut td = make_td(1000, 50);
             td.unspendable = Some(reason);
             let transfers = vec![td];

@@ -35,6 +35,10 @@
 ///    [`crate::output::OutputData::enc_amount_wire`], which return the
 ///    [`EncryptedOutputField`] values `construct_output` assembled at the
 ///    moment of encryption.
+/// 2. [`crate::multisig_output::MultisigOutputData::enc_label_wire`] /
+///    [`crate::multisig_output::MultisigOutputData::enc_amount_wire`], the
+///    same for `construct_multisig_output`, which assembles them in the same
+///    shared output core.
 ///
 /// That is the whole list: a value cannot exist without a derivation behind
 /// it. There is deliberately **no** test-only byte

@@ -23,6 +23,11 @@ build = "build.rs"
 [dependencies]
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The member file (`member_file.rs`) carries the address payload. The group
+# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes
+# (rule 36); this crate does not HKDF it. The address crate reaches no
+# transport crate, so the dependency list still enforces the "no transport" ban.
+shekyl-address = { path = "../shekyl-address" }
 serde = { workspace = true }
 serde_json = "1"
 thiserror = { workspace = true }
@@ -42,6 +47,9 @@ serde_json = "1"
 # `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge (cargo permits
 # dev-dep cycles), so it never enters the runtime dependency surface the ban covers.
 shekyl-wire = { path = "../shekyl-wire" }
+# Test-only pin of the member file's hybrid KEM secret length against the
+# cryptographic source of truth. Not a runtime dependency (rule 36).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Wall-clock micro-benchmarks for the format-module operations (moved here with

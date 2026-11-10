@@ -11,7 +11,8 @@
 //! # Four blobs, two round-trips, pqc-last
 //!
 //! `pqc-last` — a hybrid `scheme_id=2` sig signs over the *finished* SAL proof
-//! (the daemon's anti-substitution binding, `tx_pqc_verify.cpp`) — forces **two**
+//! (the anti-substitution binding: `signed_hash(i)` frames `prunable_hash`,
+//! CEN-I17) — forces **two**
 //! round-trips: a cosigner's hybrid sig cannot exist until the SAL is aggregated,
 //! which needs the cosigner's FROST share first. So one spend is:
 //!

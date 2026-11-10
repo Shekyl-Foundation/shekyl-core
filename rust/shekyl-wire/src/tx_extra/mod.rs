@@ -20,7 +20,8 @@
 //! part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
 //! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay
 //! retired. The coinbase admission grammar (CEN-I20) is [`coinbase`]: one
-//! constructor and one slice match. This file is the codec those call.
+//! constructor and one slice match. The `0x0D` entry codec is [`multisig`].
+//! This file is the tag parser those call.
 
 use std::borrow::Cow;
 use std::io::{self, Read, Write};
@@ -32,12 +33,18 @@ use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
 mod coinbase;
+mod multisig;
 
 pub use coinbase::{
     build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, coinbase_extra_len,
     CoinbaseBuildError, CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES,
     COINBASE_NONCE_OFFSET_FROM_PUBKEY, COINBASE_NONCE_OFFSET_IN_EXTRA,
 };
+pub use multisig::{
+    check_pqc_multisig_shape, MultisigEntry, MultisigEntryError, MULTISIG_HASHES_TAG_BYTES,
+    MULTISIG_KEY_HASH_BYTES, MULTISIG_MAX_MEMBERS, MULTISIG_MEMBER_WIRE_STRIDE,
+};
+use multisig::{multisig_entries_bytes, parse_multisig_entries};
 
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).
 pub const TX_EXTRA_TAG_PADDING: u8 = 0x00;
@@ -65,15 +72,11 @@ pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
 // (`docs/PQC_MULTISIG.md` §7.4, "Reserved tags"): a reserved slot lives in
 // the spec's table with no code symbol until its producer is designed
 // (rule 23).
-/// `0x09` — PQC view-tag hints blob: one byte per multisig-recipient output.
-/// **Staged**: the producer is the multisig receive path
-/// (`docs/PQC_MULTISIG.md` §7.4; crate `shekyl-multisig`, MS-/MSW- rows);
-/// until it lands, single-sig outputs never carry this tag.
-pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
-/// `0x0A` — PQC spend-auth pubkeys blob: `spend_auth_version ‖ N × Y_i`,
-/// REQUIRED on every multisig-recipient output. **Staged** with the same
-/// producer as `0x09` (`docs/PQC_MULTISIG.md` §7.4).
-pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
+// `0x09` was the Option D multisig view-tag hints and `0x0A` its per-member
+// spend-auth pubkeys. Option E′ replaced both with `0x0D` (one entry per
+// multisig output; `docs/PQC_MULTISIG.md` §7.4). Neither ever had a
+// producer. Both bytes stay retired like `0x03` / `0x05` / `0xDE` — never
+// reused — and parse as unknown tags.
 
 /// `0x0B` — archival attestation blob. A present tag with an empty payload
 /// encodes as two bytes (`0x0B 0x00`), not as an absent extra. The consensus
@@ -85,6 +88,12 @@ pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 /// the pubkey is encoded (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2; `SO-D12i`).
 /// Required in every coinbase and refused everywhere else.
 pub const TX_EXTRA_TAG_DRAW_COMMITMENT: u8 = 0x0C;
+
+/// `0x0D` — the multisig entries: one [`MultisigEntry`] per output paid to
+/// a multisig group, sorted by output index (`docs/PQC_MULTISIG.md` §7.4).
+/// Each entry carries the group members' own KEM ciphertexts and the
+/// encrypted hashes of their per-output signing keys.
+pub const TX_EXTRA_TAG_PQC_MULTISIG: u8 = 0x0D;
 
 /// X25519 ciphertext bytes per output.
 pub const X25519_CT_BYTES: usize = 32;
@@ -119,6 +128,9 @@ mod kem_layout_pins {
     const _: () = assert!(
         super::PQC_LEAF_POINT_BYTES == shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN
     );
+    const _: () = assert!(
+        super::MULTISIG_MAX_MEMBERS == shekyl_crypto_pq::multisig::MAX_MULTISIG_PARTICIPANTS
+    );
 }
 
 /// Max padding run in bytes, **including** the tag byte. Longer padding does
@@ -145,14 +157,12 @@ pub enum TxExtraField {
     PqcKemCiphertext(Vec<u8>),
     /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
     PqcLeafEntries(Vec<u8>),
-    /// `0x09` — PQC view-tag hints blob.
-    PqcViewTagHints(Vec<u8>),
-    /// `0x0A` — PQC spend-auth pubkeys blob.
-    PqcSpendAuthPubkeys(Vec<u8>),
     /// `0x0B` — archival attestation blob.
     ArchivalAttestation(Vec<u8>),
     /// `0x0C` — the secret draw's commitment.
     DrawCommitment(DrawCommitment),
+    /// `0x0D` — the multisig entries, in wire order.
+    PqcMultisig(Vec<MultisigEntry>),
 }
 
 impl TxExtraField {
@@ -166,18 +176,17 @@ impl TxExtraField {
             Self::AdditionalPubKeys(_) => TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
             Self::PqcKemCiphertext(_) => TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
             Self::PqcLeafEntries(_) => TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
-            Self::PqcViewTagHints(_) => TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-            Self::PqcSpendAuthPubkeys(_) => TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
             Self::ArchivalAttestation(_) => TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
             Self::DrawCommitment(_) => TX_EXTRA_TAG_DRAW_COMMITMENT,
+            Self::PqcMultisig(_) => TX_EXTRA_TAG_PQC_MULTISIG,
         }
     }
 
     /// The payload a reader of this field is handed.
     ///
     /// Padding is a length, not a payload, and returns `None`. Additional
-    /// pubkeys are owned because the enum stores them as separate keys; every
-    /// other payload is borrowed from the field.
+    /// pubkeys and multisig entries are owned because the enum stores them
+    /// parsed; every other payload is borrowed from the field.
     #[must_use]
     pub fn payload(&self) -> Option<Cow<'_, [u8]>> {
         match self {
@@ -191,11 +200,10 @@ impl TxExtraField {
                 }
                 Some(Cow::Owned(bytes))
             }
+            Self::PqcMultisig(entries) => Some(Cow::Owned(multisig_entries_bytes(entries))),
             Self::Nonce(bytes)
             | Self::PqcKemCiphertext(bytes)
             | Self::PqcLeafEntries(bytes)
-            | Self::PqcViewTagHints(bytes)
-            | Self::PqcSpendAuthPubkeys(bytes)
             | Self::ArchivalAttestation(bytes) => Some(Cow::Borrowed(bytes)),
         }
     }
@@ -209,6 +217,27 @@ pub struct KemCiphertext {
     /// ML-KEM-768 ciphertext — fixed size by spec, so a wrong length is
     /// unrepresentable (and the split avoids a per-output heap allocation).
     pub ml_kem: [u8; ML_KEM_768_CT_BYTES],
+}
+
+impl KemCiphertext {
+    /// The `x25519 ‖ ml_kem` wire bytes.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; HYBRID_KEM_CT_BYTES] {
+        let mut out = [0u8; HYBRID_KEM_CT_BYTES];
+        out[..X25519_CT_BYTES].copy_from_slice(&self.x25519);
+        out[X25519_CT_BYTES..].copy_from_slice(&self.ml_kem);
+        out
+    }
+
+    /// Split `HYBRID_KEM_CT_BYTES` wire bytes.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8; HYBRID_KEM_CT_BYTES]) -> Self {
+        let mut x25519 = [0u8; X25519_CT_BYTES];
+        x25519.copy_from_slice(&bytes[..X25519_CT_BYTES]);
+        let mut ml_kem = [0u8; ML_KEM_768_CT_BYTES];
+        ml_kem.copy_from_slice(&bytes[X25519_CT_BYTES..]);
+        Self { x25519, ml_kem }
+    }
 }
 
 fn read_blob<R: Read>(r: &mut R, what: &str) -> io::Result<Vec<u8>> {
@@ -290,18 +319,15 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_LEAF_ENTRIES => {
                 TxExtraField::PqcLeafEntries(read_blob(&mut cur, "pqc_leaf_hashes")?)
             }
-            TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS => {
-                TxExtraField::PqcViewTagHints(read_blob(&mut cur, "pqc_view_tag_hints")?)
-            }
-            TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS => {
-                TxExtraField::PqcSpendAuthPubkeys(read_blob(&mut cur, "pqc_spend_auth_pubkeys")?)
-            }
             TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
                 TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
             }
             TX_EXTRA_TAG_DRAW_COMMITMENT => {
                 TxExtraField::DrawCommitment(DrawCommitment::from_bytes(read_array(&mut cur)?))
             }
+            TX_EXTRA_TAG_PQC_MULTISIG => TxExtraField::PqcMultisig(parse_multisig_entries(
+                &read_blob(&mut cur, "pqc_multisig")?,
+            )?),
             other => {
                 return Err(io::Error::other(format!(
                     "tx_extra: unknown tag {other:#04x}"
@@ -353,10 +379,19 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
                     keys.len()
                 )));
             }
+            TxExtraField::PqcMultisig(entries)
+                if entries
+                    .iter()
+                    .map(|e| MultisigEntry::wire_len(e.n()))
+                    .sum::<usize>()
+                    > READ_LEN_CAP =>
+            {
+                return Err(io::Error::other(format!(
+                    "tx_extra: 0x0d multisig entries exceed cap {READ_LEN_CAP}"
+                )));
+            }
             TxExtraField::PqcKemCiphertext(b)
             | TxExtraField::PqcLeafEntries(b)
-            | TxExtraField::PqcViewTagHints(b)
-            | TxExtraField::PqcSpendAuthPubkeys(b)
             | TxExtraField::ArchivalAttestation(b)
                 if b.len() > READ_LEN_CAP =>
             {
@@ -410,10 +445,6 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             write_blob(w, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, blob)
         }
         TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob),
-        TxExtraField::PqcViewTagHints(blob) => write_blob(w, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS, blob),
-        TxExtraField::PqcSpendAuthPubkeys(blob) => {
-            write_blob(w, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, blob)
-        }
         TxExtraField::ArchivalAttestation(blob) => {
             write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
         }
@@ -421,6 +452,11 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
             w.write_all(&[TX_EXTRA_TAG_DRAW_COMMITMENT])?;
             w.write_all(commitment.as_bytes())
         }
+        TxExtraField::PqcMultisig(entries) => write_blob(
+            w,
+            TX_EXTRA_TAG_PQC_MULTISIG,
+            &multisig_entries_bytes(entries),
+        ),
     }
 }
 
@@ -497,7 +533,9 @@ impl PqcExtraField {
     }
 }
 
-/// Why a `0x06` / `0x07` field is refused (§9.6a as ruled 2026-09-05; CEN-I19).
+/// Why a `0x06`, `0x07`, or `0x0D` field is refused (§9.6a as ruled
+/// 2026-09-05; CEN-I19). `0x0D` is not a fixed-stride field: its variants
+/// name the entry list, and [`PqcExtraField`] stays the two fixed-stride tags.
 ///
 /// Every variant names its field, and every variant whose defect is a count
 /// or a length names those numbers — a rejected transaction says what was
@@ -553,6 +591,27 @@ pub enum PqcFieldShapeError {
         /// The blob length that was handed over.
         got: usize,
     },
+    /// More than one `0x0D` field. One field holds every entry.
+    MultisigDuplicate {
+        /// How many `0x0D` fields appeared.
+        count: usize,
+    },
+    /// A `0x0D` field with no entries.
+    MultisigEmpty,
+    /// The entry at `position` does not name a later output than the entry
+    /// before it. Entries are strictly ascending by output index, which also
+    /// makes a duplicate index unrepresentable.
+    MultisigOrder {
+        /// Position of the entry in the field.
+        position: usize,
+    },
+    /// An entry names an output the transaction does not have.
+    MultisigOutputIndex {
+        /// The output index the entry named.
+        out_idx: u8,
+        /// The transaction's output count.
+        n_outputs: usize,
+    },
 }
 
 impl std::fmt::Display for PqcFieldShapeError {
@@ -594,6 +653,20 @@ impl std::fmt::Display for PqcFieldShapeError {
                 f,
                 "tx_extra 0x07 content check: blob is {got} bytes; a whole, non-zero \
                  multiple of {PQC_LEAF_ENTRY_LEN} required"
+            ),
+            Self::MultisigDuplicate { count } => write!(
+                f,
+                "tx_extra 0x0d appears {count} times; at most one is admitted"
+            ),
+            Self::MultisigEmpty => write!(f, "tx_extra 0x0d is present with no entries"),
+            Self::MultisigOrder { position } => write!(
+                f,
+                "tx_extra 0x0d entry {position} does not follow the entry before it; \
+                 entries are strictly ascending by output index"
+            ),
+            Self::MultisigOutputIndex { out_idx, n_outputs } => write!(
+                f,
+                "tx_extra 0x0d entry names output {out_idx}; the transaction has {n_outputs}"
             ),
         }
     }
@@ -726,7 +799,8 @@ pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), PqcFieldShapeError> {
     Ok(())
 }
 
-/// [`check_pqc_field_shape`] then [`check_pqc_leaf_entries`] over parsed fields.
+/// [`check_pqc_field_shape`], [`check_pqc_leaf_entries`] and
+/// [`check_pqc_multisig_shape`] over parsed fields.
 pub fn check_pqc_field_shape_of(
     fields: &[TxExtraField],
     n_outputs: usize,
@@ -748,10 +822,10 @@ pub fn check_pqc_field_shape_of(
     let leaf_lens: Vec<usize> = leaf.iter().map(|b| b.len()).collect();
     check_pqc_field_shape(n_outputs, &kem, &leaf_lens)?;
     // The shape rule admitted exactly one field (or none, with no outputs).
-    match leaf.as_slice() {
-        [blob] => check_pqc_leaf_entries(blob),
-        _ => Ok(()),
+    if let [blob] = leaf.as_slice() {
+        check_pqc_leaf_entries(blob)?;
     }
+    check_pqc_multisig_shape(fields, n_outputs)
 }
 
 /// The `0x07` blob a passing [`check_tx_extra_shape`] admitted.

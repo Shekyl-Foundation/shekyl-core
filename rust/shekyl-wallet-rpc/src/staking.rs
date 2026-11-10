@@ -34,8 +34,8 @@ use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, require_empty_object};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    GetStakedBalanceResult, GetStakedOutputsResult, InFlightEntry, StakedOutputView,
-    StakingInfoResult, StakingOutcomeEntry,
+    AtomicUnitsString, GetStakedBalanceResult, GetStakedOutputsResult, InFlightEntry,
+    StakedOutputView, StakingInfoResult, StakingOutcomeEntry,
 };
 
 /// Params for `get_staked_outputs`.
@@ -247,6 +247,7 @@ fn in_flight_entry(r: &InFlightRecord) -> InFlightEntry {
         dispatched_at_height: r.sends.map(|s| height_wire(s.first_at_height)).into(),
         attempts: r.sends.map_or(0, |s| s.attempts),
         funds_return_at: funds_return_at.map(height_wire).into(),
+        reserved: r.reserved.map(AtomicUnitsString::from).into(),
         reason: r.state.reason().into(),
     }
 }
@@ -325,6 +326,27 @@ mod tests {
             })),
             (Some("market".to_owned()), Some(3))
         );
+    }
+
+    /// WR-Q6 on the wire: a known amount is its decimal string, and "not
+    /// known yet" stays `null`, never `"0"`.
+    #[test]
+    fn an_in_flight_entry_carries_what_it_holds() {
+        use shekyl_units::AtomicUnits;
+        let record = |reserved| InFlightRecord {
+            kind: RecordKind::Post,
+            state: InFlightState::Pending,
+            sends: None,
+            reserved,
+        };
+        let held = |reserved| {
+            serde_json::to_value(in_flight_entry(&record(reserved))).expect("an entry encodes")
+                ["reserved"]
+                .clone()
+        };
+        assert_eq!(held(Some(AtomicUnits::from_raw(350))), "350");
+        assert_eq!(held(Some(AtomicUnits::ZERO)), "0");
+        assert_eq!(held(None), Value::Null);
     }
 
     #[test]

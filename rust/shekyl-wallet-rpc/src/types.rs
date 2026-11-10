@@ -464,9 +464,14 @@ pub struct TransferView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
     /// Why the output is `UNSPENDABLE` (present exactly when `state` is
-    /// `UNSPENDABLE`): `PQC_LEAF_MISMATCH` — the published leaf entry is not
-    /// this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the transaction
-    /// carries no entry for the output.
+    /// `UNSPENDABLE`). Solo: `PQC_LEAF_MISMATCH` — the published leaf entry
+    /// is not this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the
+    /// transaction carries no leaf entry for the output. Multisig:
+    /// `MULTISIG_ENTRY_ABSENT`, `MULTISIG_GROUP_SIZE`,
+    /// `MULTISIG_HASHES_UNDECRYPTABLE`, `MULTISIG_MEMBER_DECAP`,
+    /// `MULTISIG_MEMBER_KEY_HASH`, `MULTISIG_DUPLICATE_KEY_HASH`,
+    /// `MULTISIG_LEAF_MISMATCH` — the check of that name failed, and the
+    /// output can never be spent from this wallet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unspendable_reason: Option<String>,
     /// Receive attribution (WI-RPC-4).
@@ -865,10 +870,15 @@ pub struct InFlightEntry {
     /// Sends so far, the first included; `0` when never sent.
     pub attempts: u32,
     /// For `refused` and `expired`: the end date, after which the
-    /// transaction can never be mined. The funds return once
-    /// `pscan_synced_height` is greater than it. `null` in the other states,
+    /// transaction can never be mined. What the record holds (`reserved`)
+    /// returns once `pscan_synced_height` is greater than it. `null` in the other states,
     /// where no return is expected.
     pub funds_return_at: Nullable<i64>,
+    /// What the record still holds (WR-Q6): the amounts of its reserved
+    /// inputs that are still unspent, `"0"` when nothing is held. `null`
+    /// when the staking scan has not run yet, so what is held cannot be
+    /// read.
+    pub reserved: Nullable<AtomicUnitsString>,
     /// What a node said, whenever one refused the record (`refused`, and
     /// `expired` after a refusal), and for `held` why the stake is kept, as a
     /// user sentence. `null` otherwise.
@@ -1122,6 +1132,7 @@ mod tests {
                 "dispatched_at_height": 5_010,
                 "attempts": 1,
                 "funds_return_at": 5_100,
+                "reserved": "350",
                 "reason": "The node refused it."
             }],
             "outcomes": [{
@@ -1142,6 +1153,26 @@ mod tests {
             serde_json::from_value(staking_info_reply()).expect("the full reply decodes");
         assert_eq!(ok.pscan_synced_height, Nullable::NULL);
         assert_eq!(ok.in_flight[0].funds_return_at, Nullable::value(5_100));
+        assert_eq!(
+            ok.in_flight[0].reserved,
+            Nullable::value(AtomicUnitsString::from(
+                shekyl_units::AtomicUnits::from_raw(350)
+            ))
+        );
+        // WR-Q6: `null` is "not known yet", an answer; an amount is a
+        // decimal string, never a JSON number.
+        let mut unknown = staking_info_reply();
+        unknown["in_flight"][0]["reserved"] = Value::Null;
+        assert_eq!(
+            serde_json::from_value::<StakingInfoResult>(unknown)
+                .expect("a null reserved decodes")
+                .in_flight[0]
+                .reserved,
+            Nullable::NULL
+        );
+        let mut number = staking_info_reply();
+        number["in_flight"][0]["reserved"] = json!(350);
+        assert!(serde_json::from_value::<StakingInfoResult>(number).is_err());
         // A later contract may add a state; an unknown value still decodes.
         let mut later = staking_info_reply();
         later["in_flight"][0]["state"] = json!("some_later_state");
@@ -1172,7 +1203,12 @@ mod tests {
                 "`{field}: null` must not decode"
             );
         }
-        for field in ["dispatched_at_height", "funds_return_at", "reason"] {
+        for field in [
+            "dispatched_at_height",
+            "funds_return_at",
+            "reserved",
+            "reason",
+        ] {
             let mut missing = staking_info_reply();
             missing["in_flight"][0]
                 .as_object_mut()
