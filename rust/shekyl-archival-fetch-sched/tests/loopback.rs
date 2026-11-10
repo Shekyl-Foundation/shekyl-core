@@ -418,6 +418,36 @@ async fn an_assigned_holder_is_dialled_once_then_the_other_support_holder() {
     assert_eq!(holder_tags(&attempts), vec![1, 9], "{attempts:?}");
 }
 
+/// Every drawn holder of the shard fails, and the scheduler reaches a
+/// complete tree, which serves the read (`ARCHIVAL_SUPPORT_DRAW.md` §7).
+/// The three drawn holders answer under a key that is not theirs, so each
+/// body fails its receipt; the one support holder answers under the
+/// serving key. Red edit: make `support_turn` false once a drawn holder
+/// exists — the need ends `Exhausted` after the three drawn holders.
+#[tokio::test]
+async fn every_drawn_holder_failing_reaches_a_complete_tree_that_serves() {
+    let s = stack(FIXTURE_SHARD_ID, 3).await;
+    let serving = s.holders.holders_of(SHARD).unwrap()[0].target.clone();
+    let stranger = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+        .public_key()
+        .clone();
+    for holder in s.holders.holders.lock().unwrap().iter_mut() {
+        holder.target = fetch_target(stranger.clone());
+    }
+    let tree = Holder {
+        id: PCanonicalId::from_bytes([9; 32]),
+        target: serving,
+    };
+    s.holders.set_support(vec![tree]);
+    let read = s
+        .scheduler
+        .read(SHARD, Arc::new(DiscardTxs), budget(4, 1))
+        .await
+        .expect("the complete tree serves the shard");
+    assert_eq!(read.holder, PCanonicalId::from_bytes([9; 32]));
+    assert_eq!(read.shard.shard_id(), SHARD);
+}
+
 #[tokio::test]
 async fn a_challenge_read_carries_the_derived_nonce() {
     let s = stack(FIXTURE_SHARD_ID, 1).await;
