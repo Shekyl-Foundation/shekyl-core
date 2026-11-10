@@ -13,7 +13,8 @@
 //!    connecting height (the reconcile at the new tip);
 //! 2. admits the block's demand, built on the tip below it, making room
 //!    under CEN-M10's limit from strictly cheaper entries and refusing what
-//!    it cannot make room for;
+//!    it cannot make room for. Demand arrives on the fee ladder's rungs
+//!    ([`Rung`]), richest first ([`Rung::ADMISSION`]);
 //! 3. offers the cohorts to the producer's fill rule
 //!    ([`Fill`](shekyl_block_template::Fill)) in the template's order, at the
 //!    effective median [`MedianWindow`](crate::median_window::MedianWindow)
@@ -26,6 +27,11 @@
 //! `shekyl_curve_tree::select_reference_height`, and the window is
 //! `shekyl_chain_rules::admissible_references`. The block's recorded weight
 //! includes the coinbase reserve, the maximum coinbase.
+//!
+//! Each cohort keeps the rung it was built on, so the pool counts what each
+//! rung carries and drops. The rung orders nothing: the daemon cannot see
+//! it, and the template's order by fee per weight is the rung order on the
+//! shipped ladder (§5.29 of the design document).
 
 use core::cmp::Ordering;
 
@@ -38,6 +44,7 @@ use shekyl_wire::transaction::COINBASE_RESERVE;
 
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
+use crate::rung_mix::{PerRung, Rung, RungTraffic};
 
 /// Seconds in the pool's received key: `ReceivedHour::of` is Unix seconds
 /// over this (`shekyl-chain-store`, `codec/pool.rs`), pinned by
@@ -57,6 +64,8 @@ struct Cohort {
     fee: u64,
     weight: u64,
     count: u64,
+    /// The rung it was priced on. Counted, never ordered on.
+    rung: Rung,
 }
 
 impl Cohort {
@@ -109,9 +118,9 @@ pub(crate) struct BlockSpace {
     waiting_total: u64,
     /// The pool's weight, kept as it changes.
     weight_total: u128,
-    /// Bodies listed since the last [`Self::take_ages`], by age at
-    /// inclusion: the listing height less the cohort's arrival.
-    ages: Vec<u64>,
+    /// Bodies listed since the last [`Self::take_ages`], per rung, by age
+    /// at inclusion: the listing height less the cohort's arrival.
+    ages: PerRung<Vec<u64>>,
     /// The last block's listing, group by group, in the order offered.
     listed: Vec<ListedBodies>,
     /// This block's listing per entry of `waiting`, for the trim.
@@ -121,15 +130,10 @@ pub(crate) struct BlockSpace {
 /// What one block took, and what left the pool unserved.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Filled {
-    /// Transactions the block lists.
-    pub(crate) included: u64,
-    /// Transactions whose reference left CEN-I11's window before this block.
-    pub(crate) expired: u64,
-    /// Transactions CEN-M10 evicted at this block: to make room for an
-    /// arrival paying more per weight, or to bring the pool within its limit.
-    pub(crate) evicted: u64,
-    /// Arrivals the pool refused: no strictly cheaper entries freed room.
-    pub(crate) refused: u64,
+    /// Each rung's traffic at this block: its arrivals, its listing, and its
+    /// drops (an expiry is of a reference that left CEN-I11's window before
+    /// this block).
+    pub(crate) rungs: PerRung<RungTraffic<u64>>,
     /// Transactions waiting after the block.
     pub(crate) waiting: u64,
     /// The penalised gross reward at the block's weight
@@ -139,8 +143,26 @@ pub(crate) struct Filled {
     pub(crate) block_weight: u64,
     /// The listed bodies' weight.
     pub(crate) bodies_weight: u64,
-    /// The listed bodies' fees.
-    pub(crate) fees: u64,
+}
+
+impl Filled {
+    /// Transactions the block lists, every rung.
+    pub(crate) fn carried_txs(&self) -> u64 {
+        self.rungs.sum(|rung| rung.carried_txs)
+    }
+
+    /// The listed bodies' fees, every rung.
+    pub(crate) fn fees_atomic(&self) -> u64 {
+        self.rungs.sum(|rung| rung.fees_atomic)
+    }
+}
+
+/// One rung's demand at a block: `count` transactions, each `tx`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Arrival {
+    pub(crate) rung: Rung,
+    pub(crate) count: u64,
+    pub(crate) tx: OrdinaryTx,
 }
 
 /// `k` shared across `counts` in proportion, by largest remainder; an equal
@@ -171,18 +193,21 @@ fn pro_rata(counts: &[u64], k: u64) -> Vec<u64> {
 }
 
 /// The pool's order: the template's ([`template_order`]), then the lighter,
-/// then the cheaper, then build order. Eviction's order is this one's groups
-/// read backwards: [`eviction_order`](shekyl_mempool::policy::eviction_order)
+/// then the cheaper, then build order, then the rung (which only places
+/// interchangeable cohorts). Eviction's order is this one's groups read
+/// backwards: [`eviction_order`](shekyl_mempool::policy::eviction_order)
 /// reverses the template's rate and hour.
 fn template_cmp(a: &Cohort, b: &Cohort) -> Ordering {
     template_order(a.key(), b.key())
         .then(a.weight.cmp(&b.weight))
         .then(a.fee.cmp(&b.fee))
         .then(a.arrived.cmp(&b.arrived))
+        .then(a.rung.cmp(&b.rung))
 }
 
 /// Whether two cohorts are one group: tied by the order, at one fee and
-/// weight. Their transactions are then interchangeable but for age.
+/// weight. Their transactions are then interchangeable but for age, whatever
+/// rung each was priced on.
 fn same_group(a: &Cohort, b: &Cohort) -> bool {
     template_order(a.key(), b.key()) == Ordering::Equal && a.weight == b.weight && a.fee == b.fee
 }
@@ -216,9 +241,9 @@ impl BlockSpace {
         self.waiting_total
     }
 
-    /// Bodies listed since the last call, by age at inclusion (index = age
-    /// in blocks), and start counting again.
-    pub(crate) fn take_ages(&mut self) -> Vec<u64> {
+    /// Bodies listed since the last call, per rung, by age at inclusion
+    /// (index = age in blocks), and start counting again.
+    pub(crate) fn take_ages(&mut self) -> PerRung<Vec<u64>> {
         core::mem::take(&mut self.ages)
     }
 
@@ -256,14 +281,16 @@ impl BlockSpace {
             .sum()
     }
 
-    /// Take `k` from the cohorts of `group`, in proportion.
-    fn take_from(&mut self, group: core::ops::Range<usize>, k: u64) {
+    /// Take `k` from the cohorts of `group`, in proportion, counting each
+    /// taken transaction against its rung in `taken`.
+    fn take_from(&mut self, group: core::ops::Range<usize>, k: u64, taken: &mut PerRung<u64>) {
         if k == 0 {
             return;
         }
         let weight = self.waiting[group.start].weight;
         if group.len() == 1 {
             self.waiting[group.start].count -= k;
+            taken[self.waiting[group.start].rung] += k;
         } else {
             let counts: Vec<u64> = self.waiting[group.clone()]
                 .iter()
@@ -271,6 +298,7 @@ impl BlockSpace {
                 .collect();
             for (index, share) in group.zip(pro_rata(&counts, k)) {
                 self.waiting[index].count -= share;
+                taken[self.waiting[index].rung] += share;
             }
         }
         self.waiting_total -= k;
@@ -281,23 +309,24 @@ impl BlockSpace {
         self.waiting.retain(|cohort| cohort.count > 0);
     }
 
-    /// Step 1: the reconcile at the tip below `connecting`.
-    fn expire(&mut self, connecting: u64) -> u64 {
+    /// Step 1: the reconcile at the tip below `connecting`. Returns what
+    /// expired, per rung.
+    fn expire(&mut self, connecting: u64) -> PerRung<u64> {
+        let mut expired = PerRung::<u64>::default();
         let Some((oldest, _)) = admissible_references(BlockHeight::from_raw(connecting)) else {
-            return 0;
+            return expired;
         };
         let oldest = oldest.to_raw();
-        let mut expired = 0;
         let mut expired_weight: u128 = 0;
         self.waiting.retain(|cohort| {
             let keep = cohort.reference >= oldest;
             if !keep {
-                expired += cohort.count;
+                expired[cohort.rung] += cohort.count;
                 expired_weight += u128::from(cohort.weight) * u128::from(cohort.count);
             }
             keep
         });
-        self.waiting_total -= expired;
+        self.waiting_total -= expired.iter().sum::<u64>();
         self.weight_total -= expired_weight;
         expired
     }
@@ -310,8 +339,9 @@ impl BlockSpace {
         self.weight_total += u128::from(cohort.weight) * u128::from(k);
     }
 
-    /// Step 2: admit `demand` copies of `tx`, built on the tip below
-    /// `connecting`, under `limit`. Returns `(evicted, refused)`.
+    /// Step 2: admit `arrival`'s transactions, built on the tip below
+    /// `connecting`, under `limit`. Evictions are counted against the
+    /// evicted entries' rungs in `evicted`; returns the arrivals refused.
     ///
     /// Each arrival is [`make_room`]'s question: the entries paying
     /// strictly less per weight, the cheapest first, until it fits. An
@@ -323,13 +353,18 @@ impl BlockSpace {
     fn admit(
         &mut self,
         connecting: u64,
-        demand: u64,
-        tx: OrdinaryTx,
+        arrival: Arrival,
         limit: u64,
         daa: u64,
-    ) -> (u64, u64) {
+        evicted: &mut PerRung<u64>,
+    ) -> u64 {
+        let Arrival {
+            rung,
+            count: demand,
+            tx,
+        } = arrival;
         if demand == 0 {
-            return (0, 0);
+            return 0;
         }
         let tip = connecting.saturating_sub(1);
         let reference =
@@ -341,6 +376,7 @@ impl BlockSpace {
             fee: tx.fee_atomic,
             weight: tx.weight,
             count: 0,
+            rung,
         };
         let rate = arrival.rate();
         let new = self
@@ -348,7 +384,7 @@ impl BlockSpace {
             .partition_point(|cohort| template_cmp(cohort, &arrival) == Ordering::Less);
         self.waiting.insert(new, arrival);
 
-        let (mut evicted, mut remaining) = (0u64, demand);
+        let mut remaining = demand;
         while remaining > 0 {
             let free = u128::from(limit).saturating_sub(self.weight_total);
             let fits = if tx.weight == 0 {
@@ -377,9 +413,8 @@ impl BlockSpace {
             if let Some(first) = victims.first() {
                 if self.waiting[first.start].weight == tx.weight && over <= u128::from(tx.weight) {
                     let batch = self.group_count(first).min(remaining);
-                    self.take_from(first.clone(), batch);
+                    self.take_from(first.clone(), batch, evicted);
                     self.add(new, batch);
-                    evicted += batch;
                     remaining -= batch;
                     continue;
                 }
@@ -397,20 +432,20 @@ impl BlockSpace {
                 per_group[at] += 1;
             }
             for (group, n) in victims.iter().zip(per_group) {
-                self.take_from(group.clone(), n);
-                evicted += n;
+                self.take_from(group.clone(), n, evicted);
             }
             self.add(new, 1);
             remaining -= 1;
         }
         // Nothing above removes an entry, so `new` held; drop the empties now.
         self.drop_empty();
-        (evicted, remaining)
+        remaining
     }
 
     /// Step 3: offer the pool to `fill` in the template's order; the bodies
     /// listed are recorded in `self.listed` (per group), `self.taken` (per
-    /// entry) and `self.ages`, and taken from the pool.
+    /// entry), `self.ages` and `rungs` (per rung: carried and fees), and
+    /// taken from the pool.
     ///
     /// **The stop rule.** A group is offered with [`Fill::admit_up_to`], and
     /// a refusal ends it. It also ends every later group of the same weight:
@@ -421,12 +456,11 @@ impl BlockSpace {
     /// by fee per weight, so both conditions refuse it as well. A group of
     /// another weight faces a different penalty and limit test and is still
     /// offered, as the template walks every candidate.
-    fn offer(&mut self, fill: &mut Fill<'_>, height: u64) -> u64 {
+    fn offer(&mut self, fill: &mut Fill<'_>, height: u64, rungs: &mut PerRung<RungTraffic<u64>>) {
         self.listed.clear();
         self.taken.clear();
         self.taken.resize(self.waiting.len(), 0);
         let mut closed: Vec<u64> = Vec::new();
-        let mut included = 0u64;
         let mut start = 0;
         while start < self.waiting.len() {
             let end = self.group_end(start);
@@ -460,11 +494,15 @@ impl BlockSpace {
                 if share == 0 {
                     continue;
                 }
-                let age = usize::try_from(height - self.waiting[index].arrived).expect("small");
-                if self.ages.len() <= age {
-                    self.ages.resize(age + 1, 0);
+                let cohort = self.waiting[index];
+                let age = usize::try_from(height - cohort.arrived).expect("small");
+                let ages = &mut self.ages[cohort.rung];
+                if ages.len() <= age {
+                    ages.resize(age + 1, 0);
                 }
-                self.ages[age] += share;
+                ages[age] += share;
+                rungs[cohort.rung].carried_txs += share;
+                rungs[cohort.rung].fees_atomic += share * cohort.fee;
                 self.taken[index] += share;
                 self.waiting[index].count -= share;
             }
@@ -475,15 +513,13 @@ impl BlockSpace {
                 weight: head.weight,
                 count: taken,
             });
-            included += taken;
         }
-        included
     }
 
     /// Step 4: bring the pool within `limit`, the bodies this block listed
     /// (`self.taken`) counting toward the weight and never chosen
-    /// ([`trim_to`]).
-    fn trim(&mut self, limit: u64) -> u64 {
+    /// ([`trim_to`]). Evictions are counted per rung in `evicted`.
+    fn trim(&mut self, limit: u64, evicted: &mut PerRung<u64>) {
         let listed_weight: u128 = self
             .waiting
             .iter()
@@ -491,7 +527,7 @@ impl BlockSpace {
             .map(|(cohort, &taken)| u128::from(cohort.weight) * u128::from(taken))
             .sum();
         if self.weight_total + listed_weight <= u128::from(limit) {
-            return 0;
+            return;
         }
         // Units in eviction order: per group, the listed ones (never chosen)
         // and the ones still waiting.
@@ -513,29 +549,37 @@ impl BlockSpace {
         for key in trimmed {
             per_group[key.expect("only waiting units are chosen")] += 1;
         }
-        let mut total = 0;
         for (group, n) in order.into_iter().zip(per_group) {
-            self.take_from(group, n);
-            total += n;
+            self.take_from(group, n, evicted);
         }
-        total
     }
 
     /// Build the block at `height` under `medians` — what [`Self::medians`]
-    /// returned for it — from the pool and `demand` new transactions, each
-    /// the ordinary transaction `tx` priced at `at`, then record it.
+    /// returned for it — from the pool and the block's `arrivals`, each
+    /// rung's ordinary transaction priced at `at`, admitted in the order
+    /// given ([`Rung::ADMISSION`]), then record it.
     pub(crate) fn fill(
         &mut self,
         height: u64,
         medians: EffectiveMedian,
-        demand: u64,
-        tx: OrdinaryTx,
+        arrivals: &[Arrival],
         at: &FeePoint<'_>,
     ) -> Filled {
         let limit = Limits::of_block_limit(medians.limit(at.params).to_raw()).max_weight;
         let expired = self.expire(height);
-        let (made_room, refused) =
-            self.admit(height, demand, tx, limit, at.params.daa_target_seconds);
+        let mut evicted = PerRung::<u64>::default();
+        let mut rungs = PerRung::<RungTraffic<u64>>::default();
+        for &arrival in arrivals {
+            let rung = &mut rungs[arrival.rung];
+            rung.demand_txs += arrival.count;
+            rung.refused_txs += self.admit(
+                height,
+                arrival,
+                limit,
+                at.params.daa_target_seconds,
+                &mut evicted,
+            );
+        }
 
         let effective = medians.effective_median.to_raw();
         let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
@@ -547,23 +591,29 @@ impl BlockSpace {
             at.params,
         )
         .expect("sim trajectory stays within the reward's arithmetic domain");
-        let included = self.offer(&mut fill, height);
-        let trimmed = self.trim(limit);
+        self.offer(&mut fill, height, &mut rungs);
+        self.trim(limit, &mut evicted);
         self.drop_empty();
+        for rung in Rung::ALL {
+            rungs[rung].expired_txs = expired[rung];
+            rungs[rung].evicted_txs = evicted[rung];
+        }
 
         let weight = fill.block_weight();
         self.medians.push(medians, weight, at.params);
-        Filled {
-            included,
-            expired,
-            evicted: made_room + trimmed,
-            refused,
+        let filled = Filled {
+            rungs,
             waiting: self.waiting_total,
             paid_reward: fill.reward(),
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),
-            fees: fill.fees(),
-        }
+        };
+        assert_eq!(
+            filled.fees_atomic(),
+            fill.fees(),
+            "every listed fee is some rung's"
+        );
+        filled
     }
 }
 

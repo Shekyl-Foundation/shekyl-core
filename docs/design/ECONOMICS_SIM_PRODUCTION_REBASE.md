@@ -81,11 +81,15 @@ question, and nothing in this sim can respond to it.
   The post-quantum transaction made both wrong by a factor of 4–5. ESR-6's
   fee re-base is the first thing that priced them. Re-deriving them is a
   ruling for their owners (`docs/FOLLOWUPS.md`), not this lane's. Until it
-  lands, the sim keeps the inherited values, and ESR-10 runs a second
-  declared arm with the pair re-derived.
-- A share of Priority transactions (ESR-10's rung mix). Priority pays
-  `max(2RC/M, 4F)` per byte, which buys deep into the penalty zone, so blocks
-  grow from genesis.
+  lands, the sim keeps the inherited values. ESR-10's declared arm with the
+  pair re-derived (`w_ref′` 12 595 B, `zone′` 1 259 500 B) carries the
+  baseline's 50 from genesis, with nothing dropped (§5.29.1).
+- A share of Priority transactions does not change it (ESR-10's rung mix,
+  §5.29.1). At 15/80/5 the 2.5 Priority a block fit inside the penalty-free
+  room and displace Standard: blocks carry 2.5 Priority and 19.5 Standard of
+  22, Economy is not carried, and blocks grow in year 19 as on the default.
+  Priority grows a block only where Priority demand alone passes the room
+  (sustained growth, in year 14).
 - An elasticity. It would lower demand instead of expiring it.
 - A wallet that escalates its rung under congestion.
 
@@ -96,7 +100,8 @@ Each is an input, not a result, and none is modelled.
 - **Corpus growth.** The baseline's closed shards at year 10 are 229 864.
 - **The purse.** Emission is paced at the release multiplier's 0.8 floor
   for eighteen years, so every later year's reward is higher than on a chain
-  that carries its demand. ESR-10's re-derived arm measures by how much.
+  that carries its demand: 1.258× ESR-10's re-derived arm's from year 20
+  (§5.29.1).
 - **The escalation knee.** Its band's low anchor moved with the corpus
   (`docs/FOLLOWUPS.md`; GF-7's, after ESR-10).
 - **Every onset year** (§5.7).
@@ -278,12 +283,12 @@ else. A control cell that moves at ESR-4 or later is the fold change
 showing on that arm, not a wiring error.
 
 **Added 2026-10-02: ESR-10**, the fee sensitivity the first two items
-left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
-the type and nothing sweeps it, and the rung mix is not modelled at all.
-ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
-mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
-the default report's. The predictions, written before any ESR-10 code, are
-[`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md).
+left out. ESR-10 prints A1-T at a swept multiplier and at the defaulted
+15/80/5 mix, including a zero-Priority arm. Its falsifier: the `×1` column
+equals the default report's. The predictions, written before any ESR-10
+code, are [`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md). **Landed
+2026-11-08** (`--esr10`; registered in §5.29, graded in §5.29.1): P1 held,
+so `--stage2` runs through the rung pool unchanged.
 
 **Amended 2026-10-03 (design owner, after ESR-6).** ESR-10 runs every rung
 mix twice:
@@ -293,11 +298,13 @@ mix twice:
   declared arm that states its derivation until the owners' ruling
   replaces it.
 
-The reason is reading-pass finding 1. A Priority share grows blocks from
-genesis, and a table that showed only that would credit users paying
-several times Standard with what is partly a reference weight wrong by
-4–5×. Run on both constants, the ceremony sees which part of block growth
-is demand paying up and which part is the constant.
+The reason is reading-pass finding 1: a table run on one pair of constants
+would credit users paying more than Standard with what is partly a
+reference weight wrong by 4–5×. Run on both, the ceremony sees which part
+of block growth is demand paying up and which part is the constant. The
+run (§5.29.1) found that a 5 % Priority share does not grow blocks from
+genesis on either pair; the multiplier does, from `m*` (×1.352) on the
+inherited pair, and the re-derived pair carries its demand at ×1.
 
 The re-derived arm is expressible through parameters:
 `shekyl_chain_rules::medians_from` floors the medians at
@@ -310,7 +317,8 @@ reader, and `w_ref` is `RelayPolicy::ref_tx_weight`, which a run sets with
 prediction set is amended against the post-#1152 fixture before the run
 (the year-1 operands are unchanged, `ρ` 0.879 and `θ` 1.188; the boom-bust
 cycle crosses in year 15); the multi-class pool (`ESR10_PREDICTIONS.md`
-§0.1: one waiting queue per rung, by rung then by age); then both constant
+§0.1, as amended: ESR-17's pool with each cohort's rung counted, in the
+template's order); then both constant
 arms, the inherited `w_ref` and zone and the re-derived pair. ESR-10 runs
 before the sweep grades the release rails, because `M_r` sits at its 0.8
 floor while 22 of 50 are carried.
@@ -320,8 +328,8 @@ year-1 operands are this document's growth-gate table (finding 2), not
 §5.6's older figures: `ρ = 0.879` and `θ = 1.188`. The Standard multiplier
 that removes the constrained era is `θ(y1)/ρ(y1) ≈ 1.35`, registered as
 1.30–1.40. Those are what ESR-9 measured. They are inputs to the
-prediction. ESR-10 has not run, so the multiplier is not fitted to an
-ESR-10 outcome.
+prediction, registered before ESR-10 ran (§5.29), so the multiplier was
+not fitted to an ESR-10 outcome.
 
 **Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
 ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
@@ -486,14 +494,16 @@ it is fixed.
 | Divergence | Why it exists | Reported as | Ground |
 | --- | --- | --- | --- |
 | Control arm: flat `0.1 SKL` per transaction | The fee §12.13–§12.14 were measured on. The two arms of one run differ by the fee and nothing else | Named arm, printed beside the production arm | Arm |
-| Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `×1`, the production default, is what runs. The sweep is ESR-10 and is not printed yet | Behaviour (users) |
-| Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Not modelled yet: every ordinary transaction pays Standard. ESR-10 | Behaviour (users) |
+| Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `--stage2` runs `×1`, the production default. `--esr10` sweeps ×1.00, ×1.25, `m*`, ×1.50, ×2.00 and ×3.00, all Standard, on both `w_ref` arms (§5.29) | Behaviour (users) |
+| Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay most of the fees | `--stage2` runs all Standard. `--esr10` runs 15/80/5 and 15/85/0 at ×1 on both arms. A block's demand splits by largest remainder on the cumulative target (`rung_mix.rs`), so each rung stays under one transaction from its share | Behaviour (users) |
+| One block's arrivals reach the pool Priority, Standard, then Economy | How a block's arrivals on different rungs interleave is the network's and the users'. Each arrival is CEN-M10's `make_room` question in turn, so at equal weights the order moves only a drop's label (`at_equal_weights_the_admission_order_relabels_a_drop_and_leaves_the_pool`), and at unequal weights, which the rungs have through their fees' varints, it can move the pool (`at_unequal_weights_the_admission_order_can_change_the_pool`). Its bias: a richer arrival is never refused for a cheaper one that reached the pool first in the same block. Against the reverse order the run moves drop labels and little else (§5.29.1) | Stated at `Rung::ADMISSION` and in `--esr10`'s header | Behaviour (users and the network) |
+| The re-derived `w_ref` and zone | `w_ref` (3 000) and the 300 KB zone were never derived for Shekyl (EUP-5 G). The arm takes `w_ref′` as the ordinary 1-in/2-out weight at genesis depth at its own genesis Standard fee, and `zone′ = 100 · w_ref′`, the ratio inherited and declared | `--esr10`'s second arm, "re-derived (declared; the owners' ruling replaces it, EUP-5 G)", two overrides derived by `esr10::rederived_pair` | Arm (declared until the owners rule) |
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table | Arm (the control arm) |
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer | Arm (the shard-count instruments) |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field | Behaviour (the adversary) |
 | A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` | Behaviour (the scenario's world: history the sim does not have) |
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` | Arm (a counterfactual) |
-| Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix | Behaviour (users) |
+| A transaction keeps the rung it was built on | No wallet escalates its rung under congestion; the user chooses | Stated at `RungMix`. Demand is inelastic as well (below) | Behaviour (users) |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope (51 200 weight priced) and the wallet's value gate, `Σreward ≥ max(live fee, hold)` with the hold `RelayPolicy::emission_claim_fee_floor` (1 398 068 000 atomic, the genesis Economy fee at that weight), are not modelled | Stated here | **Defect.** The claim's priced weight and its value gate are production (`shekyl-engine-core`'s `CLAIM_PRICED_WEIGHT`, crate-private, and the cadence gate), which the sim cannot reach. Blocker: the weight moves to a crate the sim can call, which is the wallet lane's. It re-bases with the A3 base path (FOLLOWUPS, EUP-4 prep) |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 | Arm (ESR-7's second) |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition | Behaviour (the world) |
@@ -3051,7 +3061,243 @@ supply invariant allows.
 The registered tables stay at `ONSET_HORIZON_YEARS = 60`. Turning on the
 135-year horizon is not part of this change.
 
+### 5.29 ESR-10, the fee multiplier and the rung mix on both `w_ref` arms, predicted before it is built (2026-11-08)
+
+Written against `dev` at `8d78bbacf`, before any ESR-10 code. Nothing
+below is a result.
+
+**The registered set** is [`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md),
+amended in this commit against ESR-17's fixture. Every operand it reads
+re-reads unchanged: `n` = 22, `ρ(y1)` 0.879, `θ(y1)` 1.188, the crossing in
+year 19 (boom-bust year 15), the post-ratchet median 733 KB and 765 KB from
+year 23. In substance:
+
+- **Inherited arm** (`w_ref` 3 000, zone 300 KB):
+  - **P1.** The `×1` all-Standard cell is the default report, byte for byte.
+  - **P2.** One `θ` gates growth in every multiplier cell; the growth year is
+    the first with `m·ρ ≥ θ`. `m*` = `θ(y1)/ρ(y1)` ≈ 1.35 (1.30–1.40)
+    removes the constrained era.
+  - **P3.** 15/80/5 does not grow blocks from genesis: 2.5 Priority and
+    19.5 Standard of 22, and Economy is never carried. Fee revenue is about
+    6.6× all-Standard, Priority 85–90 % of it. The ratchet moves by at most
+    a year.
+  - **P4.** After the ratchet on 15/80/5, Economy is never carried; blocks
+    plateau near 42.5 transactions' weight (≈ 624 KB, ≈ 651 KB from year
+    23), and Priority's share of fees reaches about 89 %. The drop is
+    refusal or eviction, not expiry (the owner's restatement for ESR-17).
+    The agent's arithmetic, registered beside it, expects expiry after the
+    ratchet, where only Economy waits and the cap cannot bind.
+  - **P5.** 15/85/0 equals P1 up to the ratchet year and departs exactly
+    there, plateauing at 42.5 carried with 7.5 Economy dropped a block.
+  - **P6.** The rung mix moves every onset later; the leg split at onset is
+    printed so the shift is attributed. No size is registered.
+- **Re-derived arm** (`w_ref′`, `zone′` = 100·`w_ref′`):
+  - **R1.** The baseline carries 50 of 50 from genesis with nothing dropped.
+  - **R2.** No constrained era in any scenario at any `m ≥ 1`; the sweep
+    moves fees only.
+  - **R3.** The year-1 Standard fee is 0.25–0.30× the inherited arm's,
+    crossing to 1.2–1.45× once the inherited arm ratchets.
+  - **R4.** Emission runs at `M_r` 1.0 from genesis; after the inherited
+    ratchet the inherited reward is 1.25–1.35× this arm's.
+  - **R5.** Closed shards at year 10 ≈ 523 841 ± 5 %; `final_n` at year 60
+    ≈ 1.10–1.15× the inherited arm's.
+  - **R6.** 15/80/5 carries all three rungs on the baseline; Priority's
+    share of fees is about 75 %.
+  - **R7 (weak).** A1 onsets earlier by 1–5 years on the baseline.
+
+**The ceiling the run reports against** (umbrella §4, Usability,
+ratified 2026-11-06): the year-1 Standard-rung fee for an ordinary
+1-in/2-out transaction is at most 0.05 % of the year-1 block reward,
+496 289 839 atomic. The run derives it from
+`shekyl_economics::projected_already_generated` over the first year's
+blocks and pins it in a test. ESR-17 measured the inherited arm's year-1
+fee at about 1.19 SKL, 2.4× the ceiling.
+
+**Choices stated before the run.**
+
+- **The demand split.** `RungMix` holds three thousandths summing to
+  1 000. A block's demand splits by largest remainder on the cumulative
+  target: each rung's share of all demand so far, less what it has been
+  given. A per-block largest remainder fails on the registered mix: 15/80/5
+  of 50 is 7.5/40/2.5, two equal remainders, so a fixed tie-break gives the
+  same rung the extra transaction every block and it drifts 500 in 1 000
+  blocks. Carried, the remainder alternates. Integers only.
+- **The arrival order within a block.** Production's arrival process does
+  not fix how one block's three classes interleave. The sim admits them
+  richest first: Priority, then Standard, then Economy, a declared order
+  (§4). Each arrival is CEN-M10's `make_room` question in turn, so at equal
+  weights the order moves only a drop's label (Economy admitted and then
+  evicted by a richer arrival is the same pool as Economy refused after it;
+  this order counts the second), and at unequal weights it can move the
+  pool. §5.29.1 measures it against the reverse order.
+- **The offer order** is ESR-17's, the template's, with no rung-first walk.
+  On the shipped ladder it is the rung order (`ESR10_PREDICTIONS.md` §0.1,
+  restated in the amendment): Priority pays `M/(2·w_ref)` = 50 times
+  Standard per byte on both arms, every swept Standard multiplier pays more
+  than Economy, and within a rung the oldest is the richest.
+- **Each rung's fee** is the one fee loop (ESR-15) at that rung's rate at
+  the block it was built in: Economy the ladder's `economy`, Standard the
+  multiplier times its `standard`, Priority its `priority`, each on the
+  run's lattice. The sim composes no ladder arithmetic. A mix with no
+  demand on a rung prices nothing for it, so the all-Standard mix prices
+  the Standard rung alone, as today.
+- **P1 is wired, not compared.** `--stage2` runs through the rung pool at
+  0/1 000/0, so the unregenerated `--stage2` fixtures are P1's falsifier.
+- **The re-derived pair.** `w_ref′` is the ordinary transaction's weight at
+  genesis depth (`tree_depth_for_leaves(0)`), at the Standard fee the fold
+  prices at its first block under the pair itself: a fixed point, iterated
+  until the weight repeats, because the fee's varint is in the weight.
+  `zone′ = 100·w_ref′`, the ratio inherited and declared.
+- **The `m*` cell** runs at `⌈1000·θ(y1)/ρ(y1)⌉` thousandths, from the
+  inherited arm's year-1 gate.
+- **Definitions the report prints in its header:**
+  - the year-1 Standard fee is the Standard fees carried in year 1 over
+    the Standard transactions carried, ESR-17's measure;
+  - the crossing is the first year `m·ρ ≥ θ` at the cell's multiplier
+    (`m` = 1 for the mixes), and the growth year is the growth gate's
+    "blocks grow" year;
+  - the queue first empties in the first year whose last block leaves
+    nothing waiting;
+  - Economy's served fraction is Economy carried over Economy demanded,
+    over the 60 years.
+
+#### 5.29.1 What the run said (2026-11-08)
+
+Run at the ESR-10 code commit, branched from `dev` at `8d78bbacf`, release
+build, 16 threads. The registered narration is
+`rust/shekyl-economics-sim/tests/fixtures/esr10_narration.txt`; the
+nightly lane's scope (both arms, every cell, the baseline and the stuffing
+attack) is `esr10_narration_nightly.txt`.
+
+**The arms.** The re-derived pair is `w_ref′` = 12 595 B, the ordinary
+1-in/2-out weight at genesis tree depth 1 at its own genesis Standard fee,
+0.3277 SKL, and `zone′` = 1 259 500 B. The fee's varint moved the weight
+from the zero-fee seed, and the fixed point settled in two passes. The `m*`
+cell runs at ×1.352, `⌈1000·θ(y1)/ρ(y1)⌉` on the inherited arm's year 1.
+
+**The headline: the year-1 Standard fee against the ratified ceiling**
+(496 289 839 atomic, 0.4963 SKL), on the baseline:
+
+| Cell | Inherited | Re-derived |
+| --- | --- | --- |
+| ×1.000 all-Standard | 1.1888 SKL, **2.40×** | 0.3944 SKL, **0.79×** |
+| ×1.250 | 1.1537, 2.32× | 0.4930, 0.99× |
+| ×1.352 (`m*`) | 0.4109, 0.83× | 0.5333, 1.07× |
+| ×1.500 | 0.4390, 0.88× | 0.5916, 1.19× |
+| ×2.000 | 0.5850, 1.18× | 0.7889, 1.59× |
+| ×3.000 | 0.8761, 1.77× | 1.1833, 2.38× |
+| 15/80/5 ×1 | 1.1888, 2.40× | 0.3944, 0.79× |
+| 15/85/0 ×1 | 1.1888, 2.40× | 0.3944, 0.79× |
+
+The production default on the inherited constants is 2.40× the ceiling,
+as ESR-17 measured. Two things bring it inside: the re-derived pair, at
+×1; or, on the inherited pair, a multiplier at or just above `m*`, because
+a chain that carries its demand grows its median and the fee falls as
+`1/M²`. Across scenarios the inherited ×1 cell spans 0.03× (the late-chain
+tail, which starts mid-chain) to 2.61× (chain bootstrap); the re-derived
+×1 cell spans 0.11× to 0.79×.
+
+**Outcomes, graded against `ESR10_PREDICTIONS.md`** (§4 there says what
+each outcome means):
+
+| Prediction | Outcome |
+| --- | --- |
+| **P1.** ×1 all-Standard is the default report | **Held.** `--stage2` runs through the rung pool at 0/1 000/0, and both `--stage2` fixtures pass unregenerated. The inherited ×1 cell prints the default report's figures: 22 a block to year 18, closed shards 229 864 at year 10 and 2 716 751 at year 60, onset y31 and y34 |
+| **P2.** One `θ` gates growth; `m*` ≈ 1.35 removes the constrained era | **Held where the gate finds a constrained era.** In every cell and scenario whose crossing comes after year 1 and that has a constrained year, the year blocks grow is the year `m·ρ` first reaches `θ`: ×1 year 19 (boom-bust 15), ×1.25 year 5 (registered y4–y10), `m*` year 2. At ×1.352 the baseline carries 47.7 of 50 in year 1 and all 50 from year 2; at ×1.5 and above, 49.9 in year 1 and no constrained year at all. The late growth years of sustained growth (y22–y25 inherited at ×1.5 and above, y26–y29 re-derived) are its demand meeting the block weight limit long after `m·ρ` passed `θ`. Three cells cross after year 1 with no growth year, and the gate (`congestion_escape_year`) reads them as built: chain bootstrap at `m*` never drops more than one transaction a block, so no year is constrained; the stuffing attack at ×1.25 and `m*` is constrained only in year 1, where the stuffer's own blocks carry 61 against honest demand of 50, so no later year passes the ceiling the stuffer set. None is a growth year that disagrees with its crossing |
+| **P3.** 15/80/5 does not grow blocks from genesis | **Held in shape; the fee ratio is 4 % over.** The baseline carries 0/19.5/2.5 (E/S/P) to year 18 and grows in year 19, as the default. Before the ratchet Economy is carried only where a year's demand fits under the room: boom-bust's troughs carry all 2.2 a block (years 4–12), and congested years carry none. Fees are 6.84× all-Standard (registered 6.6×; 179.3 against 26.2 SKL a block in year 1), Priority 87.0 % of them. The ratchet year moves by at most a year in every scenario but sustained growth, which grows in year 14 against 19: its Priority demand alone (5 % of 534 a block in year 14) passes the penalty-free room, M3's case |
+| **P4.** After the ratchet, Economy is never carried; plateau ≈ 624 KB; drop by refusal or eviction | **Missed in the count and the mechanism, held in the fee share.** On the baseline the ratchet leaves the long-term median at 50 transactions' weight (733 KB in year 20, 735 KB from year 30), and Economy is carried inside it: 7.5 of 7.5 in year 20, 5.5 from year 30, 52 % of Economy demand over 60 years. On the stuffing attack the plateau is 631–659 KB, P4's figure, and Economy is served 4.6 %. The median is neutrally stable anywhere between the non-Economy demand and the full demand: a block carries what fits under the median and keeps it there, so where it settles is the level the ratchet's overshoot leaves. Before the ratchet Economy's drop is expiry, 7.5 a block with nothing refused or evicted: with Priority listed on arrival the pool's stock stays under the cap (the agent's arithmetic registered beside P4 had the direction; it expected about one a block refused, and none was). Refusal is Economy's drop only where demand far exceeds the cap: high-history refuses 22.5–37.5 Economy a block. Priority's share of fees after the ratchet is 87.5–88.1 % (registered about 89 %), and Priority pays 122× Standard per byte at the post-ratchet median (registered 120–127×) |
+| **P5.** 15/85/0 equals P1 to the ratchet, then plateaus at 42.5 | **Held to the ratchet where the chain is congested, missed after it in size.** Carried, fees and the growth year equal the ×1 cell before the ratchet in the six scenarios whose demand exceeds the room; the drop's label moves to Economy (0.7 refused, 1.0 evicted, 5.7 expired a block, where ×1 refuses 1.7–1.9 Standard). Where demand is under the room (boom-bust's bust years, chain bootstrap's year 1, the late-chain tail) Economy is carried at its own rung, so the carried count matches and the fees are lower (boom-bust year 4: 16.57 against 18.67 SKL a block): P5's premise, that Economy expires either way, holds only on a congested chain. The growth year matches in all nine. It departs exactly at the ratchet year. After it the baseline carries 50 in year 20 and 48 from year 30 (5.5 Economy, 2.0 expiring), for P4's reason |
+| **P6.** The mix moves every onset later | **Held.** Flat-25 onset at 10 % moves later in all nine scenarios: baseline y31 → y40, boom-bust y26* → y28*, sustained growth y22 → y27, stuffing y31 → y41, chain bootstrap y30 → y40, late-chain tail y3 → y14, high-history y31 → y37. The leg split at the baseline's onset is 90.2 % fee on 15/80/5 against 30.5 % on ×1 |
+| **R1.** The re-derived baseline carries 50 of 50 from genesis, nothing dropped | **Held.** Zero refused, evicted and expired in every sampled year; the median stays on `zone′` |
+| **R2.** No constrained era; the sweep moves fees only | **Held but for two named cases.** No multiplier cell on any scenario has a constrained year but sustained growth from year 26–29, which is its demand meeting the block weight limit, not `θ`. On the mixes, boom-bust and high-history (demand 150–250 against a room of 100) drop Economy for two to four years, R6's case |
+| **R3.** Year-1 Standard fee 0.25–0.30× the inherited; 1.2–1.45× late | **Missed in size, held in place: inside the ceiling.** 0.332× (0.3944 against 1.1888 SKL), 0.79× the ceiling. Two operands differ from the prediction's: `w_ref′` at genesis depth is 12 595 B (`k` = 4.2, not 4.5–4.8), and the inherited arm's year-1 long-term median is 315 KB, not the zone, which lowers the inherited fee by 0.907. Late, the re-derived per-transaction fee is 1.25× the inherited at year 20, 1.28× at year 30 and 1.26× at year 40 (registered 1.2–1.45×) |
+| **R4.** `M_r` 1.0 from genesis; inherited reward 1.25–1.35× after its ratchet | **Held.** The re-derived arm's year-1 reward is 992.58 SKL a block, the design curve's mean; the inherited arm's is 799.01, the 0.8 floor. From year 20 the inherited reward is 1.258× the re-derived at every sampled year |
+| **R5.** Closed shards at y10 ≈ 523 841; `final_n` 1.10–1.15× | **Held at year 10, missed in size at 60.** 523 841 exactly at year 10. 3 283 051 at year 60, 1.21× the inherited arm's 2 716 751 |
+| **R6.** 15/80/5 on the re-derived baseline carries all three rungs; Priority about 75 % of fees | **Held on the baseline.** 7.5/40/2.5 every year, nothing dropped; Priority 74.9 %. Elsewhere Economy expires where demand passes the room: boom-bust and high-history in their first years (8.3 a block in year 1) until `ρ` passes about 1.07–1.28 (registered `4θ′` = 1); the stuffing attack in year 1 (0.5 a block); and sustained growth from year 8, 41.7 a block at year 30 and 18.9 at year 40, once its demand meets the block weight limit (R2's case) |
+| **R7 (weak).** A1 onsets earlier by 1–5 years | **Held.** Baseline flat-25 y31 → y28, best y34 → y32. The emission leg dominates at onset on both arms (69.5 % inherited, 66.6 % re-derived) |
+
+**The demand split** keeps every rung under one transaction from its share
+at every block. Over a 1 000-block span the drift is at most one
+transaction on every registered scenario but sustained growth's 15/80/5,
+which reaches 1.15 (Priority) as its demand grows block by block; under
+two is what the split guarantees for any demand.
+
+**The admission order** is declared, not derived (§4): richest first. Run
+against the reverse order (Economy, Standard, Priority) on every scenario,
+66 of the narration's 2 094 lines move, all in the inherited arm's two mix
+cells. Every one moves refused into evicted; 11 move expiry by at most 0.3
+a block, 7 move Standard's p95 age by one block, and 2 move a year's fees
+in the third decimal. No carried count, median, reward, onset, growth
+year, summary row or headline row moves: at the rungs' weights the order
+decides how a drop is labelled, not what the chain carries.
+
+**2026-11-08: the `--esr10` narrations regenerated for one header line**
+(the review of #1321). The header states the admission order as a
+declared order that can move the pool. No other line of either `--esr10`
+fixture moved, and the `--stage2` fixtures did not move.
+
+**2026-11-09: `baseline_steady_state.json` regenerated for its
+`params_digest` only** (rule 50). The consensus surge re-sign moved the
+parameter-set digest to
+`blake2b:50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e`.
+No recorded row moved. The sim's behavior did not change; the fixture's
+header names the parameter set it was folded under, and that set's surge
+factor is the re-signed 3.
+
+**Cost.** The full narration, 144 folds of 60 years, takes 379 s wall and
+85 CPU-minutes on 16 threads (load 5 to 16). The nightly lane already runs
+80–120 minutes on `dev` against its 180, so it runs the baseline and the
+stuffing attack on both arms (32 folds), and the full set runs on demand
+(`nightly.yml`, `scripts/ci/ignored_set_economics_sim.sh`).
+
+**The reach.** `--esr10` reads `--stage2`'s production fields and the
+Priority factor, less the four archival fields only `--stage2`'s archival
+sections read (the settlement epoch, the claim age, the failure window's
+`m` and `n`): measured on the 15/80/5 cell over every scenario, they move
+no `--esr10` line, so an override on one is refused. The reader test's
+probe is that cell on the baseline, the stuffing attack, boom-bust and the
+late-chain tail: the release multiplier's ceiling, the burn cap, the surge
+factor and the tail subsidy move the report only in scenarios outside the
+nightly pair.
+
+**What it means for EUP-5** (its three carried items are in the umbrella
+plan's EUP-5 row):
+
+- **The year-1 fee.** On the inherited constants only the re-derived pair or
+  a multiplier near `m*` meets the ceiling; the default is 2.40×. The
+  re-derived pair meets it at ×1 on every scenario, and stops meeting it
+  between ×1.25 and ×1.352.
+- **Capacity.** On the re-derived pair no all-Standard cell has a
+  constrained era (carried within one transaction a block of demand)
+  until sustained growth meets the block weight limit in years 26–29.
+  Nothing is refused or evicted; Standard expires at most 0.9 a block
+  (the stuffing attack's year 1 at ×1, falling to 0.2 at ×3) and 0.1 in
+  boom-bust, the late-chain tail and high-history. The mixes drop Economy
+  where demand passes the room (R6). The inherited pair carries 22 to
+  year 18 at ×1, and all from year 2 at `m*`.
+- **The pool cap.** Where the inherited chain is constrained and all
+  Standard, the cap refuses about 2 a block; with Priority in the mix the
+  stock stays under it and the drop is expiry. On the re-derived arm the
+  pool is empty on the baseline.
+- **Economy after the ratchet** is decided by where the median settles,
+  which is path-dependent: 52 % served on the baseline, 4.6 % on the
+  stuffing attack.
+
+**Landed 2026-11-08.** ESR-10's code is `rung_mix.rs` (the rungs, the
+split, and each rung's traffic for a block and a year), the rung-tagged
+pool (`block_space.rs`), per-rung pricing at a typed Standard multiplier
+(`FeeModel::rung_txs`, `StandardMultiplier`), and `esr10.rs` (`--esr10`:
+the re-derived pair, the cells, the folds and the readings taken of them
+once, the narration and the reach probe). The committed narrations move
+only under a cited decision in this document (`committed_fixture.rs`,
+rule 50).
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
+
+**The check half landed 2026-11-08** (EUP-3, branch
+`chore/eup3-staking-sim-check`). Appendix B is its census with every row
+disposed, §6.1 its falsifier and §6.2 what it puts to Rick. ESR-10 has landed
+(§5.29.1), so the coupling half starts on Rick's authorization.
 
 Under the cycle ruling (§0), staking is being designed now, and the
 staking sim is where it is designed. It is not a
@@ -3067,15 +3313,10 @@ for the pieces that have been implemented and settled:
 - the settlement epoch;
 - the block time.
 
-Appendix B lists every place the sim restates or departs from one of them.
-Each row is resolved in one of two ways, and says which:
-
-- **The sim is behind the code.** The sim incorporates the code, and calls
-  it.
-- **The plan is ahead of the code.** The sim keeps its mechanism as the plan,
-  declared, and the code follows. The release cooldown's per-shard versus
-  whole-record anchoring (Appendix B, R10) is the first row that has to say
-  which.
+Appendix B lists every place the sim restates or departs from one of them,
+and gives each row one of four dispositions (its header): Incorporate,
+Plan ahead, Retired or Exogenous. The release cooldown's per-shard versus
+whole-record anchoring (R10) is §6.2's item 2.
 
 What has not been built — the purse's shape, the parts of the bond
 lifecycle not yet coded, the yield a staker sees — stays the sim's design
@@ -3086,17 +3327,127 @@ abstract-purse control arm reproduces the existing L11 and L13 pins in
 
 Two consequences are recorded here so they are not discovered later.
 
-- When that PR lands, each L11–L19 section that reports a run reports
-  the new one, and cites the run it replaces by its commit. No test pins
-  a population result today; they are pinned in documents only.
+- When the coupling half lands, each L11–L19 section that reports a run
+  reports the new one, and cites the run it replaces by its commit.
+  `l11_l13_five_seed_pins` and `l11_l13_five_seed_production_pins` pin the
+  five-seed L11/L13 vector on both reward arms, and the nightly
+  `staking-sim-ignored` lane runs them.
 - The consensus constants calibrated from those runs — the bond floor, the
   age weight, the bond duration, the failure window, the release cooldown
   — keep their values and lose their derivation until the runs are
   repeated.
 
-It is a separate PR because it is a separate validation surface (rule 19),
-and it is carried by the `FOLLOWUPS.md` row *Check `shekyl-staking-sim`
-against the staking code built so far*.
+It is a separate PR because it is a separate validation surface (rule 19).
+The coupling half is carried by the `FOLLOWUPS.md` row *EUP-3's coupling
+half: run the staking sim on the economy's purse*, and the retirement list's
+last two rows by *Delete the staking sim's last two retired mechanisms when
+their triggers fire*.
+
+**Complete-tree floor, checked 2026-10-22.** `bond_floor_of` posts one
+`ARCHIVAL_BOND_FLOOR_ATOMIC` for `HoldingsKind::CompleteTree`, however
+many shards the tree contains. The reward path does not pay that holding
+per shard. `freeze_complete_trees` (`shekyl-chain-rules`
+`src/archival/close.rs`) marks every credited persona whose record is a
+complete tree, and `market_member_at_epoch` excludes that set, so the
+work is not in `Σwork`. The shape "k complete-tree personas claim k
+copies of the archive at one floor each" is not the code. Wallet
+construction keeps the kind off the ordinary market path. Consensus
+still accepts the kind from any poster, and that poster earns nothing.
+
+The coupling half carries the correlated
+failure-domain arm. The lowest floor that clears its lower bound is
+EUP-5 I, blocked on that half. Both are `FOLLOWUPS.md` rows.
+
+### 6.1 The check half's falsifier
+
+The registered arm reproduces the five-seed L11/L13 pins after every
+incorporation that does not touch the purse. The registered arm is the
+configuration L11 and L13 were published on: the plateau, deep shards
+only bonded, a flat carry per bonded shard, and an exit refunded at once
+(`SimConfig::arm_defaults`).
+`l11_l13_five_seed_pins` runs that arm and holds every bit at the PR's
+head, after the one RNG body, the failure-confirmation model on
+production's window and fold, the bond floor and the named baseline, the
+slash, the bond-scope default, the carry split and the exit's release
+cooldown. The reward arithmetic touches the purse: it changes how the
+purse is split. It is a second arm, `RewardArm::Production`, the default,
+which also takes production's bond scope (every held shard), the split
+carry and the exit's cooldown, and
+`l11_l13_five_seed_production_pins` holds its vector. The nightly
+`staking-sim-ignored` lane runs both. The predictions and their grades are
+[`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) §*EUP-3 check half*.
+
+### 6.2 Rick's rulings (2026-11-08)
+
+Rick took the review's recommendation on each item. The sim has two
+goals: to measure what was built and to design what comes next. Plan-ahead
+designs and named arms stay; only superseded, deprecated or rejected
+mechanisms are dropped. Each item below gives the ruling and what landed.
+
+**1. The retirement list. Ruled 2026-11-08:** D5 and D7–D10 are deleted,
+and D6 and D3 after their re-runs (P9, P10); they are in the Deleted table
+below. Two rows stay, each with its trigger:
+- **D1, the registered arm**, until the coupling half's falsifier no
+  longer needs a control taken on the abstract purse;
+- **D2, in-place holdings**, until a participation model built on
+  `Release` and `JoinMarket` replaces it.
+
+| Module and functions | Production mechanism that replaced it | Callers | What deleting it removes from a published figure |
+| --- | --- | --- | --- |
+| `reward.rs`: `RewardArm::RegisteredPlateau`, `evaluate_registered`, `curve`, `split_decision`, `CurveImpl`; `curve.rs` `curve_banded`; the `cap`, `pseudonym_cost` and `curve_impl` fields; `--reward-arm=registered-plateau`, `--curve-impl`; the split cost in `participation::flow_cost` (D1, R1–R4, X `reward.rs:36`) | Linear credited work, `credited_work_milli` (D3/R2) | `l11_l13_five_seed_pins` (the falsifier's control); the `cap` sweep; `reconciliation_curve_float_vs_integer` and `reconciliation_plateau_cross_check` in `main.rs`; the `reward.rs` tests | Every population figure in `STAKER_ARCHIVAL_SIM.md` dated before 2026-11-08 stops reproducing, and the falsifier loses its control |
+| `agent.rs` `best_response`'s in-place add and drop, `World::cooling` (the per-shard drop escrow), the `holdingsupdate_cooldown` axis and `dodge_pref` (D2) | `Release` and `JoinMarket` (`HoldingsUpdate` rejected 2026-09-20). The whole-record cooldown on `Release` is modeled (R10) | Every population scenario | Every population figure. **Blocked**: it cannot go until a participation model built on `Release` and `JoinMarket` replaces it |
+
+**Deleted 2026-11-08.** Each row's code was last at the parent of the
+commit that removed it; that hash is the citation for its figures.
+
+| Module and functions | Production mechanism that replaced it | Last at | What stopped reproducing |
+| --- | --- | --- | --- |
+| `cover.rs` and its six modes (`--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`); `SplitMix64::geometric`, which only it called (D7, X `cover.rs:87`, X `cover.rs:1585`) | `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`shekyl-standoff`), count-free | `68f84376d` | `docs/completed/ARCHIVAL_COVER_DRAW.md`'s figures, and the `--cover-targeting` figure `ARCHIVAL_FIREWALL_THREATS.md` quotes |
+| `standoff.rs`'s order coin: the `inversion` field, the search-width doubling, the inversion-prior figure, Arm C (`thin_inv_on`, `thin_inv_off`) and `inversion_breaks_the_ordering_prior` (D8). There was no `bond_first` code, only a comment | `draw_entry_gap`, spread only | `c9d11d569` | Finding 3 and the inversion half of the recommendation in `STAKER_ARCHIVAL_SIM.md` §*Funding-seam entry standoff*. The other 15 rows reproduce bit for bit; Arm D keeps its seeds |
+| `partition_adversary.rs` (`--partition-adversary`, `PARTITION_ARM_WITHDRAWN`), `riders.rs` and `gf7_breakeven.rs` (`--gf7-breakeven`), whole; in `gf7_timeline.rs`, the correlator: its three arms, the §5 controls, the swept rows, `GF7_FAIL_CLOSED` and the trap draw, low-activity regime and control couplings only they used (D9). Rider 3, the holdings↔session-period bridge, went with the riders: its harness draws the two attributes independently by construction, so it measured only its own generator | None: the banners already withdrew them (WI-4 §13.1, PR #354) | `76677fcfa` | The withdrawn verdicts' figures, cited in `ARCHIVAL_BOND_WI4_MEASUREMENT.md` and `ARCHIVAL_FIREWALL_GATE6.md` to that hash. `--gf7-timeline` keeps the recorder of production's broadcast seam, the coverage sample and the wallclock leg, and they print as before |
+| The `K_COVER` comments in `main.rs` and `gf7_seal.rs` (D10). `--partition-adversary` went with D9. `--gf7-seal` **stays**: WI-4 §19.10.3 keeps its grader as a dispersal tripwire, and `shekyl-engine-core`'s `gf7_sealing_run` still writes its input. The retirement list said deleting D10 removed nothing current; for `--gf7-seal` that was wrong, and only its `K_COVER` wording went | The M1 gate is retired; withholding is individual only | `76677fcfa` | Nothing. `--gf7-seal` grades the session-2 receipts to the recorded grade |
+| The fire beacon (D5) | `select_draw` | — | Nothing: no code modeled it, and the three strings already named `select_draw` |
+| The composition axis: `REGISTERED_SHARD_TX_COUNT`, `CompositionParams`, `EraShape`, `Shard`'s size and size seed, demand matching, the size-banded metrics and their result fields; `f34_heavy_era.rs` and its six modes (`--f34-heavy-era`, `--f34-levers`, `--f34-unit-cost`, `--f34-calibrated`, `--f34-l19j`, `--f34-shard-length`); the 15 composition scenarios and their flat controls (D6, X `model.rs:221`). Re-run first on `SHARD_LENGTH` (P9 in `STAKER_ARCHIVAL_SIM.md`): on the registered arm the covered base is CLEAR with every delta 0 | `shekyl_types::SHARD_LENGTH`, by archival bytes (`SHT-Q2`) | `40f98fc44` | L19–L19j. Every other scenario reproduces byte for byte, less the four size fields and columns |
+| The decaying foundation floor: `participation::foundation_floor`, `foundation_floor_aged`; `floor_replicas`, `floor_decay_pop`, `floor_age_tilt`; the floored extinction read; the result fields `boot_deep_under_floored_peak`, `deep_extinct_floored_total`, `shock_deep_extinct_floored` (each equal to its market field with no floor) and the `bDUf` and `shkExF` columns; the 17 floor scenarios (D3). `boot_oldest_floored_peak` is `boot_oldest_under_peak`, read on the market. Re-run first without the floor (P10): every market field is bit-identical to the floor-free sibling | A permanent complete-tree support role, outside the market (`market_member_at_epoch`), at one floor (`bond_floor_of`) | `b4f753d90` | The L12 cold-start, L13 re-engagement, P3 tilt, L16 backstop and swan-3 floored figures. Every surviving scenario reproduces byte for byte, less the removed fields |
+
+**2. R10, the exit's cooldown. Ruled 2026-11-08:** the sim's exit waits
+`RELEASE_COOLDOWN_EPOCHS` and stays slashable during it, and the per-shard
+escrow goes with D2. The voluntary exit is a production `Release`, so its
+whole bond goes into a release escrow for the cooldown: it cannot fund a
+bond if the actor re-enters, and a slash before it clears burns it. The
+anchor's source does not change the sim, because the sim's archiver
+serves until it leaves; the Release anchor still reads the serve-credit
+table at `3533e9405`, with `SO-D12j` deferred. On the production arm the
+L11 rows move most: about 6 actors enter and 6 leave every epoch there,
+and a re-entrant whose bond is still escrowed posts less (P8 in
+`STAKER_ARCHIVAL_SIM.md`).
+
+**3. A7, the bond's scope, and A6, the carry. Ruled 2026-11-08:** every
+held shard bonds by default, as production does, and deep only is a named
+arm. The carry is capital carry on the posted bond, a model correction,
+plus an operating cost per held shard, which the coupling half calibrates
+and which is 0 until then. Five-seed means on the production arm, lean
+point / L13 knee (`a7_bond_scope`):
+
+| arm | `cDeepU` | `oUmx` | `bondA` |
+| --- | --- | --- | --- |
+| every held shard at 2.0 (default) | 0.424 / 0.748 | 1.000 / 1.000 | 88.0 / 73.5 |
+| deep only at 2.0 | 0.061 / 0.072 | 0.078 / 0.299 | 72.1 / 66.5 |
+| every held shard at the floor | 0.157 / 0.180 | 1.000 / 1.000 | 81.8 / 69.7 |
+| deep only at the floor | 0.000 / 0.000 | 0.000 / 0.000 | 123.2 / 93.1 |
+
+At 2.0 the capital carry is the registered 0.03 per bonded shard, so the
+2.0 rows read as they did under the flat carry, bit for bit. Whenever every
+held shard bonds, at 2.0 or at the floor, the oldest band is uncovered on
+every seed. That reading goes to EUP-5 I, the floor's sweep (`FOLLOWUPS.md`).
+
+**4. Calibrations an incorporation would move. Ruled 2026-11-08: agreed.** The bond floor (0.75 SKL;
+the sim's 2.0 is an arm above it), the age weight (2000 milli), the bond
+duration (base 4, scale 4), the failure window (11 of 13) and the release
+cooldown (2 epochs) keep their values. Each was derived on runs taken on
+the registered plateau arm against the abstract purse, so each derivation
+is marked to be repeated at the coupling half, on the production arm and
+the economy's purse.
 
 ## 7. What this round does not decide
 
@@ -3129,11 +3480,11 @@ found. It built nothing and ran nothing.
   registered families and with the sim's arm names. Cite a row as
   "Appendix A2 row R9"; the identifiers of this round are `ESR-`.
 - **Line numbers are at each appendix's pin** and will move.
-- **Appendix B is the report as returned**, less two lines about the
-  reporting environment and one local path, its headings demoted one
-  level to sit under the appendix heading. Nothing else is edited, so a
-  claim in it is the pass's, not this document's. The economics sim's
-  first report as returned is in this document at `486c754e6`;
+- **Appendix B was the report as returned** at `bb021f254` (less two
+  lines about the reporting environment and one local path). That text
+  is in git at that commit. **As of 2026-10-22, Appendix B is the
+  re-census at `c2dcfe601`**, dispositions still blank. The economics
+  sim's first report as returned is in this document at `486c754e6`;
   Appendix A2 carries each of its rows forward.
 - The census did not sweep the design documents that quote sim output;
   ESR-9 did.
@@ -3329,212 +3680,153 @@ before height 1 is that same 23. Later rows move by the emission that
 listing changed. The engine differential still recomputes each row from
 its own operands.
 
-## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
+## Appendix B — the staking sim against production, at `3533e9405`
 
-Read-only pass, 2026-10-02. Row labels are local to these tables (§8).
+Census taken 2026-10-22 at `c2dcfe601`. It replaced the census taken at `bb021f254` on 2026-10-02; that text is in git at that commit. The census pass opened each row's sim site and its production owner, and changed no sim code. **Dispositions 2026-11-08, at `3533e9405`** (the branch on `dev` at `8cd87c769`). Every owner cell that `dev` moved since `c2dcfe601` was re-read at that head: `ArchivalParams` through `archival_params()` (#1218), the count rule's fields, `COUNTED_DRAWS` with `CHALLENGES_PER_PAIR_PER_EPOCH` deleted, the store's retention from `EpochFloor` with `RETENTION_HORIZON_BLOCKS` deleted, and the Release anchor. Line numbers in the sim columns are at `c2dcfe601`.
 
-The sim calls production in only a handful of places; the population model restates or assumes almost everything else, and three of its core mechanisms model things production has since retired. No file was edited.
+Paths: `sim/` = `rust/shekyl-staking-sim/src/`, `prod/` = `rust/shekyl-archival-retention/src/`. `DOC` = `docs/design/STAKER_ARCHIVAL_SIM.md`. Tags: **V** = the definition and a use were both read; **I** = inferred. Row labels are local to this appendix (§8).
 
-Paths: `sim/` = `rust/shekyl-staking-sim/src/`, `prod/` = `rust/shekyl-archival-retention/src/`, `econ/` = `rust/shekyl-economics/src/`, `DOC` = `docs/design/STAKER_ARCHIVAL_SIM.md`. Tags: **V** = verified by reading definition and use; **I** = inferred.
+**The four dispositions.**
+- **Incorporate.** Production owns the mechanism and it is settled. The sim calls the owner and deletes its restatement. Where the restatement belongs to an arm that production retired, it stays with that arm, and the arm goes on the retirement list.
+- **Plan ahead.** The sim's mechanism is the design and production has not built it. Declared at the site, with its design section.
+- **Retired.** Production retired the mechanism, or built a different one. The row goes on the retirement list (§6.2), and is deleted as Rick rules it.
+- **Exogenous.** An assumption about the world, declared at the site with the run that calibrated it, or "uncalibrated".
 
-### Confirmation of the four known items
+"Plan ahead" is reserved for a mechanism the sim designs and production lacks. Where production has settled a mechanism and the sim lags, the row is Incorporate. Where production built something different, the row is Retired. The census's provisional column used "Plan ahead" for both; those rows are re-disposed here.
 
-1. **Confirmed.** `sim/model.rs:641` `g_age` (f64) and `sim/reward.rs:67-76` `raw_work` (f64) sit beside the imports at `sim/reward.rs:25`.
-2. **Confirmed.** The purse is `budget: 100.0` at `sim/scenarios.rs:2067`; only `sim/budget_throttle.rs:58,69-71` reads `EconomicParams`.
-3. **Confirmed.** `REGISTERED_SHARD_TX_COUNT = 200.0` at `sim/model.rs:221`, declared at `:214-220`.
-4. **Confirmed.** `storage_unit_cost: 0.03` at `sim/scenarios.rs:2074` and `age_weight: 2.0` at `:2070`. The L19h calibration lives only in the doc (`DOC:4868-4891`), not in code.
+**Units.** One model unit is one SKL. This is the scale the lean pins already used (`bond_rate` 0.75 at `sim/scenarios.rs:3435`, the floor in SKL), and the one scale both seams read: the bond floor, and the purse's crossing into `reward_share_floor`'s atomic budget. The purse's size in SKL is not calibrated (A1); the coupling half replaces it.
 
-### (D) Dead / stale referent
+**The two arms.** `RewardArm::Production` is the default: linear credited work on production's integer operands, every held shard bonded, capital carried on the bond, and the exit held for the release cooldown. `RewardArm::RegisteredPlateau` is the configuration the June pins and the five-seed vector were taken on (`SimConfig::arm_defaults`): float work, the retired banded plateau, the pseudonym split, a float price, deep shards only bonded, a flat carry and an exit refunded at once. It is the falsifier's control (§6.1), and it stays on the retirement list as D1.
+
+### The four items the 2026-10-02 brief already knew
+
+1. **Still true.** `sim/model.rs:648` `g_age` (f64) and `sim/reward.rs:67` `raw_work` (f64) sit beside the production imports at `sim/reward.rs:25`. `model::AGE_WEIGHT` sits directly above `g_age`.
+2. **Still true.** The purse is `budget: 100.0` at `sim/scenarios.rs:2067`. Only `sim/budget_throttle.rs` reads `EconomicParams`.
+3. **Still true.** `REGISTERED_SHARD_TX_COUNT = 200.0` at `sim/model.rs:221`, declared at `:214`.
+4. **Still true for storage.** `storage_unit_cost: 0.03` at `sim/scenarios.rs:2074`. **Wired for the slope.** `age_weight` at `:2070` is `model::AGE_WEIGHT` (`ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE`). The value is still 2.0. See R7.
+
+### Rows this census adds
+
+The 2026-10-02 pass could not have these. Production settled them after `bb021f254`.
+
+| # | Sim site | What production owns now | Tag | Disposition |
+| --- | --- | --- | --- | --- |
+| N1 | No urn and no `select_draw` in the crate. `sim/failure_confirmation.rs:269`, `:789`, `:969` still name the production baseline as the `H_fire` beacon (strings only). `sim/audit.rs:22` is an L14 challenge *rate*, not an assignment. `sim/fingerprint.rs:145` is a serve-credit bit, not a draw | Secret per-block draw: `prod/secret_draw.rs:319` `draw_count`, `:111` `select_draw`. `ChallengeUrn` and `assign_epoch` are gone from `rust/` (deleted with the secret-draw cutover, 2026-10-10; economics-sim module last at `4de99d1e1b`). `prod/constants.rs:70` still *documents* derived assignment as what superseded the fire-beacon shape; the live selector is `select_draw` | V | Incorporate where a draw outcome is modeled: the failure-confirmation observation is `settle_pair`'s verdict (R14). The population arm models no draw; it declares an archiver that holds a seated shard as Served, which is `settle_pair`'s outcome when every counted draw passes. L19i's egress is the coupling half's. The `H_fire` strings are D5. |
+| N2 | The sim does not model pass-record carriers or a per-block bundle. The only "carrier" hits are the GF-7 live-driver note (`sim/wallclock_leg.rs:23`, `sim/main.rs` report text) | One bundle per block (`SCS-P14`, 2026-10-11): `prod/bundle.rs` `BundleKept` / `BundleRef`. Spec: `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md` | V | Incorporate, with no site to call. The population arm moves no pass. Where pass bytes enter a figure, the traffic check (R13, R14), the count is the count cap, `count_cap_base_multiple()` draws per pair per epoch, measured against the genesis block-weight limit. |
+| N3 | R10's anchor, restated: per-shard escrow at the voluntary drop (`sim/agent.rs:319`, default `release_cooldown_epochs: 0` at `sim/scenarios.rs:2100`) | The pass fact's home is `IssuedDraw.passed` (`rust/shekyl-types/src/archival/settlement.rs:234`, `SO-D10c`). The Release cooldown does **not** read it. `prod/release_cooldown.rs:42` `whole_record_last_served` is the max of per-shard last-served epochs, and those epochs still come from the serve-credit table (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` at the A3/A4 row and at `SO-D12j`). Rick, 2026-10-21, ruled `SO-D12o` (draw rows retire below the floor) and left `SO-D12j` **deferred**: what the served anchor reads once that table is deleted | V | Incorporate, with R10 (ruled 2026-11-08). Re-read at `3533e9405`: the Release anchor is still the serve-credit table's last pass (`release_last_served` in `shekyl-chain-rules` `rules/tx_bond.rs`, through `whole_record_last_served`), and `SO-D12j` is still deferred. Either source gives the sim the same epoch, because its archiver serves until it leaves. The per-shard drop escrow goes with D2. |
+| N4 | `sim/standoff.rs:132` still runs an order-coin inversion (`bond_first`). `sim/gf7_timeline.rs:71` and `sim/partition_adversary.rs` call production `draw_entry_gap` and fail closed on the entry seam. No sim site models a bond-post delay | `draw_entry_gap` is spread only (`rust/shekyl-standoff/src/draw.rs:89`). Bond-post delay: `docs/design/ARCHIVAL_BOND_POST_DELAY.md` §3, BD-Q1, BD-Q2, BD-Q3 and BD-Q5 ruled 2026-10-16/17; BD-Q4's window was still open at this pin. The wallet calls `draw_entry_gap` into `bond_post_offset_blocks` (`shekyl-engine-core` stake actor). `MIN_COLD_START_SPACING` is still present (BD-Q5's deletion had not landed) | V | Incorporate where modeled: the GF-7 modes call `draw_entry_gap`. The population arm has no sub-epoch timing, so the delay has nothing to act on there, which is declared. `MIN_COLD_START_SPACING` is still in `shekyl-engine-core` (`engine/stake_timing.rs`) at `3533e9405`, and BD-Q4's window is still open. The order coin is D8. |
+| N5 | Four SplitMix64 bodies: `sim/model.rs:25` (`Rng`), `sim/standoff.rs:176` (the one other modules import), `sim/clustering.rs:85`, `sim/cover.rs:166`. Reuses of the standoff body, not fifth copies: `partition_adversary.rs`, `wallclock_leg.rs`, `gf7_breakeven.rs`, `gf7_timeline.rs`, `riders.rs` | No production owner. The economics sim's precedent is one body, `rust/shekyl-economics-sim/src/rng.rs`. Cross-crate sharing is a dependency this check does not take; the staking sim's own module is the shape | V | Incorporate. One SplitMix64 body, `sim/rng.rs`. The four `next_u64` bodies were diffed first: same constants, same order. The five-seed vector is the proof that no stream moved. |
+
+### (D) Dead or stale referent
 
 The first three rows are structural: every registered run inherits them from `baseline()`.
 
-| # | Sim site | What it models | Production state | Tag |
-|---|---|---|---|---|
-| D1 | `sim/reward.rs:121-132` `curve`, `:135-154` `split_decision`, `:184-199`; `sim/curve.rs:9-39`; defaults `cap: 8.0`, `pseudonym_cost: 0.05` at `sim/scenarios.rs:2068-2069`; cap sweep `:2262-2268` | Per-pseudonym banded plateau on work, plus optimal pseudonym splitting | Plateau deleted from the reward path (D3/R2); credited work is linear and membership-gated: `prod/consensus_state.rs:190-210`, `prod/reward_arithmetic.rs:109-110`, `config/consensus_constants.json` `_comment_archival_reward_path`. The sim's `8.0` restates `ARCHIVAL_PROVISIONAL_CURVE` (`prod/reward_arithmetic.rs:120-121`). `curve_milli` is imported but is sim/counterfactual-only in production. `docs/design/ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md:1609-1610` lists `shekyl-staking-sim::reward` among the plateau's consumers; the sim still applies it. DOC never mentions D3/R2 (grep empty). | V |
-| D2 | `sim/agent.rs:104-342` (whole portfolio re-chosen in place every epoch); L9 lock `sim/agent.rs:288-295`, `sim/model.rs:670-673`; L18 escrow `sim/model.rs:356-372`, `sim/agent.rs:131-151,333-339`; axis `holdingsupdate_cooldown` `sim/scenarios.rs:3899-4065` | In-place per-shard add/drop (`HoldingsUpdate`) with a per-shard duration lock and per-shard release cooldown | `HoldingsUpdate` rejected 2026-09-20; a bond is fixed at join and holdings change by `Release` + `JoinMarket`: `prod/bond_wire.rs:47-58`, `prod/admission.rs:79-83`. DOC did not record the rejection at this row's pin (grep empty); its §L18 heading carries it since 2026-10-04. | V |
-| D3 | `sim/participation.rs:227-233` `foundation_floor`, `:247-263` `foundation_floor_aged`; arms `sim/scenarios.rs:2798-2815,2943-2944,3198-3214,3288-3289,3815-3846` | Foundation floor that decays to zero at `decay_pop` | The sim's own comment at `sim/scenarios.rs:3862-3866` says the ratified design is a permanent complete-tree floor with no `decay_pop` withdrawal. Production: foundation excluded from market, `prod/consensus_state.rs:106-116,699`; single-floor bond `prod/bond_floor.rs:28-30`. | V (sim) / I (ratified design, from the comment) |
-| D4 | `sim/audit.rs:22-49`; defaults `sim/scenarios.rs:2161-2166` | L14 read-credited probabilistic audit cadence | Fixed 3 challenges per pair per epoch (`prod/constants.rs:30`), 2-of-3 threshold (`prod/attestation.rs:71`), m-of-n slash (`prod/failure_window.rs:334-337`). No read credit: `DOC:4904`. | V / I (no read credit) |
-| D5 | `sim/failure_confirmation.rs:269,789,969` | "Production baseline: `H_fire` beacon" | Fire-beacon shape superseded by derived assignment: `prod/constants.rs:67-78`. | V |
-| D6 | `sim/model.rs:221-227,265` | `T = 200` tx-count partition | Retired by SHT-Q2; `shekyl_types::SHARD_LENGTH` at `rust/shekyl-types/src/archival/mod.rs:128`. Declared, so also in (X). | V |
-| D7 | `sim/cover.rs` (whole module; `:1574-1600` `cover_dial_span_atomic`) | Count-dependent `span(C)` cover curve | Retired 2026-07-21; production is `COVER_RUNG_ATOMIC` at `rust/shekyl-standoff/src/cover.rs:41`. Declared at `sim/cover.rs:70-79,1630-1636`. | V |
-| D8 | `sim/standoff.rs:75-87,132-134,246-250,295-302` | Inversion / order coin (`bond_first`) | No order coin: `rust/shekyl-standoff/src/draw.rs:89-96`. Undeclared in this module. | V |
-| D9 | `sim/gf7_timeline.rs:77-93`, `sim/riders.rs:316-322`, `sim/gf7_breakeven.rs:109,245`, `sim/partition_adversary.rs:90-93` | Entry-seam correlator, founder-cover arm | Declared fail-closed / retracted in their own banners. | V (banners only) |
-| D10 | `sim/main.rs:30,2028`; `sim/gf7_seal.rs:9`; `sim/partition_adversary.rs:113` | `K_COVER` seal references | `K_COVER` gate retired: `prod/consensus_state.rs:680-684`. | V |
-| D11 | `rust/shekyl-staking-sim/Cargo.toml:27` | Comment "(ARCHIVAL_REWARD_GATE_M1.md §4) — delete this feature at the §14.4 seal" above the archival-retention dependency | M1 gate retired (doc now under `docs/completed/`); the dependency carries no feature. | V |
+| # | Sim site | What it models | Production state | Tag | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| D1 | `sim/reward.rs:121` `curve`, `:135` `split_decision`, evaluate loop `:184`; `sim/curve.rs:9` `curve_banded`; defaults `cap: 8.0`, `pseudonym_cost: 0.05` at `sim/scenarios.rs:2068`; cap sweep `:2262` | Per-pseudonym banded plateau, plus optimal pseudonym splitting | Plateau deleted from the reward path. Credited work is linear and membership-gated: `prod/consensus_state.rs` `credited_work_milli` / `sigma_work_milli`. `curve_milli` moved to `shekyl-units` and is re-exported at `prod/reward_arithmetic.rs:111`; `ARCHIVAL_PROVISIONAL_CURVE` (`:120`) is sim/counterfactual only. The sim still applies the plateau | V | Retired. The production arm credits linear work (`credited_work_milli`). `curve_banded`, `split_decision`, `cap` and `pseudonym_cost` carry only `RewardArm::RegisteredPlateau`, which is on the retirement list. |
+| D2 | `sim/agent.rs:104` `best_response` (portfolio rewritten in place); L9 lock `:288`; L18 escrow `sim/model.rs:356` and `sim/agent.rs:131`, `:333`; axis `holdingsupdate_cooldown` `sim/scenarios.rs:3899` | In-place per-shard add/drop, per-shard duration lock, per-shard release cooldown | `HoldingsUpdate` rejected 2026-09-20. A bond is fixed at join; holdings change by `Release` and `JoinMarket`: `prod/bond_wire.rs:47`, `prod/admission.rs:80` | V | Retired. `HoldingsUpdate` was rejected 2026-09-20. In-place add and drop carries every scenario, so it cannot be cut until a Release and JoinMarket participation model replaces it. The retirement list names that replacement as its blocker. |
+| D3 | `sim/participation.rs:227` `foundation_floor`, `:247` `foundation_floor_aged`; arms at `sim/scenarios.rs:2798` and the other `floor_decay_pop` sites | Foundation floor that decays to zero at `decay_pop` | The sim's own comment (`sim/scenarios.rs:3862`) says the ratified design is a permanent complete-tree floor. Production excludes the foundation from the market (`prod/consensus_state.rs` `market_member_at_epoch`) and prices one floor (`prod/bond_floor.rs:28`) | V (sim) / I (the ratified-design half, from the sim's comment) | Retired, and deleted 2026-11-08 (§6.2) after the re-run without it (P10): last at `b4f753d90`. Production keeps a permanent complete-tree support role outside the market, not modeled as replicas, so every coverage figure is the market's. The flat-floor question is the coupling half's row (`e1f99748e`). |
+| D4 | `sim/audit.rs:22` `read_prob`, `:31` `deterrence_threshold`, `:44` `challenge_needed`; defaults `sim/scenarios.rs:2161` | L14 read-credited probabilistic audit cadence, off by default | Fixed `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (`prod/constants.rs:28`). Serve threshold `SERVE_THRESHOLD_PASSES = 2` lives in `rust/shekyl-types/src/archival/settlement.rs:25` and is applied by `prod/settlement_select.rs:150` `settle_pair`. Slash window is `FAILURE_WINDOW_M/N` (`prod/failure_window.rs:450`). `prod/attestation.rs` no longer holds the threshold (the 2026-10-02 cite `:71` is gone; `SO-D10e`) | V / I (no read credit: not re-derived from a full read of the draw path) | Plan ahead. The read-credited cadence is EUP-5 H, and it is off by default. Re-read at `3533e9405`: `CHALLENGES_PER_PAIR_PER_EPOCH` is deleted. The per-pair count is `COUNTED_DRAWS` (`shekyl-types` `archival/settlement.rs`), and the draws a block issues come from the count rule's `ArchivalParams` fields. |
+| D5 | `sim/failure_confirmation.rs:269`, `:789`, `:969` | The string "production baseline: `H_fire` beacon". No fire-beacon implementation | Assignment shape superseded (`prod/constants.rs:70`, `CHALLENGE_BEACON_SEAL_BLOCKS` marked retired-mechanism). Interim serve-credit still has `challenge_fire_height` at `prod/challenge.rs:157`. Live selection is N1 | V | Incorporate. The three strings name the production selector, `select_draw`, the secret per-block draw. The fire beacon had no code to delete (§6.2). |
+| D6 | `sim/model.rs:221` `REGISTERED_SHARD_TX_COUNT`, `:265` `size_at_birth` | `T = 200` transaction-count partition, for composition shape | Retired by SHT-Q2. Owner: `shekyl_types::SHARD_LENGTH` (`rust/shekyl-types/src/archival/mod.rs:128`). Declared, so also in (X) | V | Retired, and deleted 2026-11-08 (§6.2) after the re-run on `SHARD_LENGTH` (P9): the axis was last at `40f98fc44`. |
+| D7 | `sim/cover.rs` (module; banner `:70`; `cover_dial_span_atomic` `:1585`) | Count-dependent `span(C)` cover curve, kept as a record | Retired 2026-07-21 (`docs/completed/ARCHIVAL_COVER_DRAW.md`). Production is `COVER_RUNG_ATOMIC` and `draw_cover_amount` (`rust/shekyl-standoff/src/cover.rs:41`, `:74`), count-free. Callers of the sim curve: `--cover`, `--cover-fn`, `--cover-targeting`, `--cover-dispersion`, `--cover-magnitudes`, `--cover-dial`, and the module's own tests | V | Retired, and deleted 2026-11-08 (§6.2): the module and its six modes were last at `68f84376d`. |
+| D8 | `sim/standoff.rs:75`, `:132` `inversion`, `:246`, `:295` `bond_first` | Order coin. Undeclared in the module | No order coin: `draw_entry_gap` (`rust/shekyl-standoff/src/draw.rs:89`). Caller: `--standoff` and `inversion_breaks_the_ordering_prior`. GF-7 does not use this model (N4) | V | Retired, and deleted 2026-11-08 (§6.2): the coin was last at `c9d11d569`. The standoff's window, rate and trigger arms stay. |
+| D9 | `sim/gf7_timeline.rs:77` `GF7_FAIL_CLOSED`; `sim/riders.rs:316`; `sim/gf7_breakeven.rs:108`; `sim/partition_adversary.rs:88` `PARTITION_ARM_WITHDRAWN` | Entry-seam correlator and founder-cover arm, already withdrawn in their banners | No live production counterpart. Banners only | V | Retired, and deleted 2026-11-08 (§6.2): the three modules and `gf7_timeline.rs`'s correlator were last at `76677fcfa`. `gf7_timeline.rs` keeps the recorder, the coverage sample and the wallclock leg. |
+| D10 | `sim/main.rs:30`, `:2028`; `sim/gf7_seal.rs:9`; `sim/partition_adversary.rs:113` | `K_COVER` named in comments, as history | Gate retired (M1, 2026-07-19; `docs/completed/ARCHIVAL_REWARD_GATE_M1.md`). `prod/consensus_state.rs` `epoch_close_compute` documents that the early return is gone. No live `K_COVER` symbol. Modes `--gf7-seal` and `--partition-adversary` still run, on the withdrawn verdict | V | Retired, and deleted 2026-11-08 (§6.2): the `K_COVER` comments, last at `76677fcfa`. `--gf7-seal` stays as the WI-4 §19.10.3 dispersal tripwire; `--partition-adversary` went with D9. |
+| D11 | `rust/shekyl-staking-sim/Cargo.toml` | The M1 "delete this feature" comment. The dependency is a path dependency with no feature | M1 is under `docs/completed/` | V | Incorporate. Done at `e721363c3`: the comment says the dependency is not a feature. |
 
 ### (R) Restated production constant or formula
 
-| # | Sim site | Name / value | Represents | Production owner | Tag |
-|---|---|---|---|---|---|
-| R1 | `sim/model.rs:641-643` | `g_age = 1 + w·age` (f64) | Age premium | `g_age_milli`, `prod/reward_arithmetic.rs:50-54` | V |
-| R2 | `sim/reward.rs:67-76` | `raw_work = Σ (1/R)·g` (f64, no floor) | Per-actor work | `scarcity_micro` `prod/reward_arithmetic.rs:71-82`; `shard_work_micro` `prod/consensus_state.rs:154-164`; `shard_contribution_micro` `:646-661`; micro accumulation with a single milli floor `:605-626`, `work_milli_from_micro` `prod/reward_arithmetic.rs:94` | V |
-| R3 | `sim/reward.rs:194-202` | `price = budget/Σcapped`; `reward = price·capped` | Per-epoch split | `reward_share_floor` `prod/reward_arithmetic.rs:128-133` (floors, dust unminted); `sigma_work_milli` `prod/consensus_state.rs:175-186` | V |
-| R4 | `sim/agent.rs:198-201`; `sim/clustering.rs:251-264` | `value = price·(1/r_eff)·g_age` | Marginal value, a second float copy of R1/R2 | same as R1/R2 | V |
-| R5 | `sim/reward.rs:177`, `sim/model.rs:548-558` | `r = World::replication()` | Replica count in the reward | `r_market`: `prod/consensus_state.rs:131-148,591-596` (semantics below) | V |
-| R6 | `sim/model.rs:670-673` | `bond_duration = round(base·(1+scale·age)).max(1)` (f64) | Retention horizon | `prod/bond_duration.rs:142-153`; relationship declared there at `:51-63` (stale pointers `model.rs:417`, `agent.rs:275-280`). Sim defaults `0.0/0.0` (`sim/scenarios.rs:2088-2089`), `4.0` in `dyn_base` (`:2355`), scale grid {0,2,4,8}; production 4/4. | V |
-| R7 | `sim/scenarios.rs:2070`; `sim/clustering.rs:122` | `age_weight: 2.0` | `g` slope | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI = 2000` (generated, `prod/build.rs:207`), used at `prod/consensus_state.rs:436` | V |
-| R8 | `sim/scenarios.rs:2075` (2.0), `:3435,3532,3553,3583,3612,3760` (0.75); `sim/clustering.rs:126` (2.0) | `bond_rate` | Per-shard bond | `ARCHIVAL_BOND_FLOOR_ATOMIC = 750_000_000`, `prod/bond_floor.rs:27-43`. Never imported by the population sim. | V |
-| R9 | `sim/main.rs:1887` | `let floor_atomic = 750_000_000u64` | Bond floor literal | same (already imported at `sim/cover.rs:83`) | V |
-| R10 | `sim/scenarios.rs:2100` (default 0), grids `:3941,3966,4002,4045`; comments `sim/agent.rs:73`, `sim/scenarios.rs:112,3903` | `release_cooldown_epochs`, "`= 2`" | Cooldown | `RELEASE_COOLDOWN_EPOCHS`, imported only at `sim/timing_cluster.rs:22`. Mechanism differs: production is whole-record, anchored at last-served epoch (`prod/release_cooldown.rs:54-90`); sim is per-shard, anchored at drop. | V |
-| R11 | `sim/fingerprint.rs:20`; `sim/scenarios.rs:2177,3446`; `sim/cover.rs:1062-1063` (`600.0/10_000.0`) | `SEB_DEFAULT = 10_000` | Settlement epoch | `SETTLEMENT_EPOCH_BLOCKS` `prod/constants.rs:245`; `DEFAULT_ENTRY_GAP_WINDOW` `rust/shekyl-standoff/src/draw.rs:80`. Both are imported elsewhere in the crate. | V |
-| R12 | `sim/timing_cluster.rs:32`; `sim/fingerprint.rs:22` | `BLOCK_TIME_SEC = 120` (twice) | Block time | `daa_target_seconds` (config) → `rust/shekyl-difficulty/src/consts.rs:33` | V |
-| R13 | `sim/failure_confirmation.rs:36` | `BLOCK_WEIGHT_LIMIT_BYTES = 300_000` | Block budget | `FULL_REWARD_ZONE` `econ/params.rs:17`. That is the reward zone, not the limit (`econ/emission.rs:265`). | V |
-| R14 | `sim/failure_confirmation.rs:668-672` | 1 baseline challenge per pair per epoch | Challenge volume | `CHALLENGES_PER_PAIR_PER_EPOCH = 3`, `prod/constants.rs:30` | V |
-| R15 | `sim/failure_confirmation.rs:1087-1088` (m=2, n=5), sweep `:748-749`, `:1127-1136` | Sliding window m-of-n | Slash window | `FAILURE_WINDOW_M/N = 11/13`, `prod/failure_window.rs:334-337`. Imported only in tests (`sim/failure_confirmation.rs:1193`). The policy function `:526-551` is equivalence-tested against production (`:1254`). | V |
-| R16 | `sim/fingerprint.rs:145-149` | `serve_credit_bit = deep && held && inflight==0` | Serve credit | `settle_epoch` and `SERVE_THRESHOLD_PASSES = 2`, `prod/attestation.rs:71,192`. **UPDATE 2026-10-08 (`SO-D10e`):** `settle_epoch` is deleted; the fold is `settle_pair` (`prod/settlement_select.rs`) and `SERVE_THRESHOLD_PASSES = 2` is in `rust/shekyl-types/src/archival/settlement.rs` | V |
-| R17 | `sim/timing_cluster.rs:33`, `:171` | `JOIN_LAG_BLOCKS = SEB`; `verify_f4_slow_emitter(25, 1)` | Join lag; W−1 | `good_through` `prod/consensus_state.rs:85-102`; `MAX_CLAIM_AGE_W = 26` | V |
-| R18 | `sim/budget_throttle.rs:107-111` | `emis_frac` 1.0 / 0.012 | Emission share of the purse | Hand-copied from `shekyl-economics-sim` output; computable from `econ/emission_share.rs:33`, `econ/burn.rs:124` | V (literal) / I (source) |
-| R19 | `sim/failure_confirmation.rs:24-27`; `sim/clustering.rs:122-134,156-157,205-206`; `sim/cover.rs:336-337,912-915`; `sim/budget_throttle.rs:115` | L16 constants, baseline constants and endowments, 80/20 operators, `N_P` 17/79/154, knee 80/86 | Intra-sim copies of `baseline()` values and of registered-run outputs | Owner is `sim/scenarios.rs:2051-2197` and the doc tables. `sim/clustering.rs:114-117` claims "single-sourced" but retypes. | V |
-| R20 | `sim/model.rs:25-41`, `sim/standoff.rs:176-185`, `sim/clustering.rs:85-97`, `sim/cover.rs:166-179` | Four SplitMix64 copies | PRNG | Intra-crate | V |
+| # | Sim site | Value | Production owner | Tag | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| R1 | `sim/model.rs:648` `g_age`; use `sim/agent.rs:201` | `1 + age_weight·age` (f64) | `g_age_milli`, `prod/reward_arithmetic.rs:50`: `SCALE + floor(weight·age / SCALE)` | V | Incorporate on the production arm: `g_age_milli` through `scarcity_micro`, with the shard age crossing once into milli. The float `g_age` stays with the registered arm. |
+| R2 | `sim/reward.rs:67` `raw_work` | `Σ (1/r)·g` over held shards, no floor, no serve gate | `scarcity_micro` `prod/reward_arithmetic.rs:71`; `shard_work_micro` / `shard_contribution_micro` in `prod/consensus_state.rs`; one milli floor at `work_milli_from_micro` (`prod/reward_arithmetic.rs:94`) | V | Incorporate on the production arm: per-shard `scarcity_micro`, summed in micro and floored to milli once by `work_milli_from_micro`. |
+| R3 | `sim/reward.rs:194` | `price = budget / Σcapped`; `reward = price·capped` | `reward_share_floor` `prod/reward_arithmetic.rs:128`: `floor(budget·credited / σ)`, dust unminted. `sigma_work_milli` in `prod/consensus_state.rs` | V | Incorporate on the production arm: `credited_work_milli`, `sigma_work_milli` and `reward_share_floor`, with the purse crossing once into atomic units. The dust stays unminted, as production does. |
+| R4 | `sim/agent.rs:201`; `sim/clustering.rs:251` | `price·(1/r_eff)·g_age`, a second float copy of R1/R2 | same as R1 and R2 | V | Incorporate on the production arm. The agent values a shard at `scarcity_micro` over the last epoch's price per milli. The float copy stays with the registered arm. |
+| R5 | `sim/reward.rs:177` via `sim/model.rs:548` `World::replication` | count of holders, in-flight fetches included | `r_market_count` in `prod/consensus_state.rs`: served market members at epoch close | V | Incorporate on the production arm: `r` counts seated holders, which is `r_market_count`'s served count when every seated holder passes (N1). Membership onset at `join + 1` belongs with D2's participation model. |
+| R6 | `sim/model.rs:670` `bond_duration`; defaults `0/0` at `sim/scenarios.rs:2088`; `4.0` in `dyn_base` | `round(base·(1+scale·age)).max(1)` (f64) | `prod/bond_duration.rs:147`. Genesis base 4 and age scale 4, generated. The module's parity KAT re-types the sim formula | V | Plan ahead. Production has the function, with its parity KAT, and no caller: nothing gates a Release on a term at `3533e9405`. The L9 lock is the sim's design. Its default stays off. |
+| R7 | `sim/model.rs` `AGE_WEIGHT`; read by `baseline` (`sim/scenarios.rs:2070`), `sim/clustering.rs`, the gate-4 fine base, the §L19c ladder's middle rung, and `reconciliation_curve_float_vs_integer` | production slope as `f64` | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE` (`WORK_MILLI_SCALE` is 1 000). Generated milli constant, consumed in `prod/consensus_state.rs` | V | Incorporate. Done. |
+| R8 | `sim/scenarios.rs:2075` (`2.0`); lean pins `:3435`, `:3532`, `:3553`, `:3583`, `:3612`, `:3760` (`0.75`); `sim/clustering.rs:126` (`2.0`) | `bond_rate` | `ARCHIVAL_BOND_FLOOR_ATOMIC = 750_000_000`, generated and `include!`d at `prod/bond_floor.rs:8`. `bond_floor_of` (`:28`) is that floor times shard count, flat, no age. The population model never imports it. `sim/cover.rs:83` does | V | Incorporate. Re-read at `3533e9405`: `archival_params().bond_floor_atomic`. The sim reads it as `model::BOND_FLOOR` (0.75 at one unit per SKL). `bond_rate` 2.0 is a declared above-floor arm calibrated against the abstract purse; its derivation is repeated at the coupling half. Flat per shard against deep only is A7. |
+| R9 | `sim/main.rs:1887` | `let floor_atomic = 750_000_000u64` | same as R8 | V | Incorporate. Done. |
+| R10 | `sim/scenarios.rs:2100` (default 0); grids `:3950`, `:3975`, `:4002`, `:4053`; mechanism `sim/agent.rs:333` | per-shard cooldown, anchored at the drop. Default 0; the grids include 2 | `RELEASE_COOLDOWN_EPOCHS` (generated, genesis 2). Whole-record, anchored at last served: `prod/release_cooldown.rs:51` and `:73`. Imported in the sim only at `sim/timing_cluster.rs:22`. The passed-bit question is N3, and it is not settled | V | Incorporate (ruled 2026-11-08). The sim's voluntary exit is a `Release`: its whole bond waits `RELEASE_COOLDOWN_EPOCHS` in a release escrow, read from `archival_params()` as `model::RELEASE_COOLDOWN_EPOCHS`, unspendable on re-entry and burned by a slash before it clears (`World::release_exit`, `participation::slash_exit`). The registered arm refunds at once, as its figures were taken. The per-shard drop escrow (`release_cooldown_epochs`, L18) models the rejected `HoldingsUpdate` and goes with D2; its default stays 0. |
+| R11 | `sim/fingerprint.rs:20` `SEB_DEFAULT = 10_000`; `sim/scenarios.rs:2177`, `:3446`; `sim/cover.rs:1062` (`600.0/10_000.0`) | 10 000, and one hand ratio against the entry-gap window | `SETTLEMENT_EPOCH_BLOCKS = 10_000` at `prod/constants.rs:248`, imported by `sim/timing_cluster.rs`. `DEFAULT_ENTRY_GAP_WINDOW = 600` at `rust/shekyl-standoff/src/draw.rs:80`. No sim-epoch-to-SEB mapping: TA1 sets `blocks_per_sim_epoch = 2000` (`sim/scenarios.rs:2178`) | V | Incorporate. Done at `e721363c3`. One sim epoch is one reward epoch: it pays one purse and runs one best-response. TA1 alone maps it to blocks (`blocks_per_sim_epoch`, 2 000), so five sim epochs are one settlement epoch there. No other mode reads blocks. |
+| R12 | `sim/timing_cluster.rs:32` and `sim/fingerprint.rs:22`, both `BLOCK_TIME_SEC = 120` | 120 s, twice | `shekyl_difficulty::consts::T_SECONDS` (`rust/shekyl-difficulty/src/consts.rs:33`), generated from `daa_target_seconds` | V | Incorporate. Done. |
+| R13 | `sim/failure_confirmation.rs:36` `BLOCK_WEIGHT_LIMIT_BYTES = 300_000`, used at `:674` | treats 300 000 as the block budget | That number is `FULL_REWARD_ZONE` (`rust/shekyl-economics/src/params.rs:17`), the zone, not the limit. C2-R2 is signed (`docs/completed/CONSENSUS_C2_R2_WEIGHT_FEES.md`). The block-weight limit is `EffectiveMedian::limit`, twice the effective median (`rust/shekyl-chain-rules/src/rules/block_weight.rs:132`). Per-transaction bound: `TX_WEIGHT_LIMIT = 149_400` | V | Incorporate. The 300 000 is the reward zone, `shekyl_economics::FULL_REWARD_ZONE`, and it is not the budget the traffic check divides by. The check divides by `block_weight_limit` at the genesis median (the median sits at the zone, so the limit is `k · zone`). The zone is smaller by that multiple. At the shipped set the count cap's share of the zone is over the 5% bar and its share of the limit is under it, so the zone cannot be what the non-binding verdict rests on. |
+| R14 | `sim/failure_confirmation.rs:668` (`1 / baseline_period`); default `baseline_period: 1` at `:1089` | 1 challenge per pair per epoch | `COUNTED_DRAWS = 3` (`shekyl-types` `archival/settlement.rs`); `CHALLENGES_PER_PAIR_PER_EPOCH` is deleted at `3533e9405`. `settle_pair` (`prod/settlement_select.rs`) folds a pair's counted draws into one Served or Missed row per epoch, Served at `SERVE_THRESHOLD_PASSES = 2`. How many draws a block issues is the count rule's (`ArchivalParams`' catch-up, horizon floor, cap multiple), a different quantity | V | Incorporate. The observation is `settle_pair`'s verdict on `COUNTED_DRAWS` draws. The micro-sim's availability is per epoch, so every counted draw passes or every one fails, and the verdict equals the old single probe. The traffic check counts the count cap, `archival_params().count_cap_base_multiple()` draws per pair per epoch, not `COUNTED_DRAWS` and not the sim's baseline grid. |
+| R15 | defaults `miss_threshold: 2`, `sliding_window_epochs: 5` at `sim/failure_confirmation.rs:1087`; sweep `:1127` | m-of-n default 2 of 5 | `FAILURE_WINDOW_M = 11`, `FAILURE_WINDOW_N = 13` (`prod/failure_window.rs:450`). Imported in the sim's tests (`:1193`). The policy function is equivalence-tested against production | V | Incorporate. The default is `archival_params()`'s `(m, n)`, 11 of 13. 2 of 5 and the other windows are a declared sweep around it. |
+| R16 | `sim/fingerprint.rs:145` `serve_credit_bit` | `deep && held && inflight == 0` | `settle_epoch` is deleted (`SO-D10e`, 2026-10-08). The fold is `settle_pair` (`prod/settlement_select.rs:150`), which counts `IssuedDraw.passed` against `SERVE_THRESHOLD_PASSES = 2` | V | Incorporate. The serve bit is `settle_pair`'s Served under the population arm's all-pass abstraction (N1), declared at the site. |
+| R17 | `sim/timing_cluster.rs:33` `JOIN_LAG_BLOCKS = SEB`; `:171` `verify_f4_slow_emitter(25, 1)` | join lag of one settlement epoch; the slow-emitter check uses 25 by hand | `good_through` in `prod/consensus_state.rs` credits from `join_epoch + 1`. `MAX_CLAIM_AGE_W = 26`, generated, re-exported through `prod/bond_floor`. The 25 is `W − 1`, not an import | V | Incorporate. Done. `JOIN_LAG_BLOCKS` went with the retired retention horizon on `dev`. |
+| R18 | `sim/budget_throttle.rs:107` `POINTS_SPEC` | `emis_frac` 1.0 and 0.012 | Hand-copied from economics-sim output. Computable from `rust/shekyl-economics/src/emission_share.rs` and `burn.rs`. Not this check's seam | V (the literals) / I (which run they were copied from) | Exogenous until the coupling half. Declared at `POINTS_SPEC` as copied economics-sim output. The coupling half recomputes it. |
+| R19 | `sim/failure_confirmation.rs:24`; `sim/clustering.rs:122`; `sim/cover.rs` endowments; `sim/budget_throttle.rs:115` | copies of `baseline()` and of registered-run outputs | Owner is `sim/scenarios.rs:2051` `baseline` and the doc tables. `sim/clustering.rs:114` says "single-sourced" and then retypes | V | Incorporate. `sim/clustering.rs`'s retyped deep threshold, bond rate and storage cost read `baseline()`. The other copies hold registered-run outputs and are declared at their sites. `sim/clustering.rs` keeps the registered bond shape, deep shards only at a flat carry, declared at its site: it is the TM1 privacy harness, and A7 and A6 are not its axis. |
+| R20 | the four bodies in N5 | SplitMix64, four times | Intra-crate. See N5 for the economics-sim precedent | V | Incorporate. Same as N5. |
 
 ### (X) Declared exception
 
-| Sim site | Value | Declared where | Tag |
-|---|---|---|---|
-| `sim/model.rs:221` | `REGISTERED_SHARD_TX_COUNT = 200.0` | `sim/model.rs:214-220` | V |
-| `sim/cover.rs:87` | `ATOMIC_PER_SKL = 1e9` (owner `rust/shekyl-units/src/lib.rs:59-68`) | `sim/cover.rs:85-86` | V |
-| `sim/wallclock_leg.rs:69` | `TICK_MS = 60_000` (owner `DEFAULT_PSCAN_CADENCE`, `rust/shekyl-engine-core/src/engine/pscan/start.rs`) | `sim/wallclock_leg.rs:64-68` | V |
-| `sim/reward.rs:36-40` | `CurveImpl::Float` (`curve_banded`) | `sim/reward.rs:27-34`; it wrongly calls `Integer` "authoritative" (see D1) | V |
-| `sim/model.rs:493-510` | Fixed recycling window, "retire at age 1" | `sim/model.rs:459-463` | V |
-| `sim/cover.rs:1574-1600` | Local `k(C)` copy | `sim/cover.rs:1630-1636` | V |
+| Sim site | Value | Declared where | Tag | Disposition |
+| --- | --- | --- | --- | --- |
+| `sim/model.rs:221` | `REGISTERED_SHARD_TX_COUNT = 200.0` | `sim/model.rs:214` | V | Retired. Deleted with D6 (last at `40f98fc44`). |
+| `sim/cover.rs:87` | `ATOMIC_PER_SKL = 1e9` (owner `shekyl_units::ATOMIC_UNITS_PER_SKL`) | `sim/cover.rs:85` | V | Incorporate. Done; the site went with D7 (deleted 2026-11-08, last at `68f84376d`). |
+| `sim/wallclock_leg.rs:69` | `TICK_MS = 60_000` | `sim/wallclock_leg.rs:64` | V | Exogenous. Declared wall-clock tick. No production owner. |
+| `sim/reward.rs:36` | `CurveImpl::Float` (`curve_banded`). The comment still calls `Integer` authoritative; production reward is linear (D1) | `sim/reward.rs:27` | V | Retired with D1. The "authoritative" wording is corrected: `CurveImpl` selects the registered arm's plateau backend, and production credits linear work. |
+| `sim/model.rs:493` | fixed recycling window, retire at age 1 | `sim/model.rs:459` | V | Exogenous. Declared at the site. No production owner. |
+| `sim/cover.rs:1585` | local `k(C)` copy of the retired span | `sim/cover.rs:1630` | V | Retired. Deleted with D7 (last at `68f84376d`). |
 
-### (A) Assumed exogenous (no production owner)
+### (A) Assumed exogenous
 
-| # | Sim site | Name / default | Declared? | Tag |
-|---|---|---|---|---|
-| A1 | `sim/scenarios.rs:2067`; `sim/reward.rs:44-47` | `budget = 100` model units per epoch, constant | Declared as a fixed pool. Not derived from emission and fees. | V |
-| A2 | `sim/scenarios.rs:1161-1179`; `:2121-2127`; L13 `:2853-2855` | Fee-era purse: `base ← floor + (base−floor)(1−decay)`; `budget_floor`, `budget_ceiling`, `budget_decay 0.02` | Declared as a stress model. No link to `econ/emission.rs:79` or `econ/emission_share.rs:33,62`. | V |
-| A3 | `sim/scenarios.rs:1164-1175` | Adaptive servo `budget_eff = base·(1+gain·signal)`, `share_gain 8.0` | No production owner. The nearest lever, `staker_pool_share_at` (`econ/escalation.rs:283`), keys on closed-shard count and is flat today. `DOC:2773-2780` states the servo as a gate-5 requirement. | V |
-| A4 | `sim/scenarios.rs:1634` | Trust EMA `0.75/0.25` | Literal in an expression; rationale in a comment. | V |
-| A5 | `sim/scenarios.rs:2074`; `sim/agent.rs:202` | `storage_unit_cost = 0.03` per shard per epoch | Silently pinned in code. `DOC:4865`: "never calibrated against anything". | V |
-| A6 | `sim/scenarios.rs:2077`; `sim/agent.rs:202-203`; `sim/participation.rs:88-90` | `bond_carry = 0.03`, flat per deep shard; does not scale with `bond_rate` | Silently pinned. | V |
-| A7 | `sim/scenarios.rs:2078`; `sim/model.rs:90-92`; `sim/agent.rs:123-129,249` | `deep_threshold = 0.5`; only deep shards bond | Undeclared divergence: production floor is flat times shard count with no age input (`prod/bond_floor.rs:27-38`). | V |
-| A8 | `sim/scenarios.rs:2189-2190`; `sim/model.rs:692-696` | `r_target` 3 hot / 6 deep, linear in age | Stipulated; DOC L15 says so. No production replica target. | V |
-| A9 | `sim/scenarios.rs:2110-2111` (0), L11 `:2689-2690` (0.02); `sim/model.rs:311-318` | Reservation yield ρ | Declared exogenous, post-testnet: `DOC:2586-2588`. | V |
-| A10 | `sim/scenarios.rs:2670-2671` | `entry_per_epoch = 6`, `participation_patience = 3` | Declared in comments. | V |
-| A11 | `sim/scenarios.rs:2055-2066` | World size: 240 shards, 80 actors (240 from L11); endowments 22/20, 10/100; whale 150/600 | Calibrated to sit at the coverage margin, `:2037-2050`. | V |
-| A12 | `sim/scenarios.rs:2127,2131-2134,2138-2145` | `price_coupling`, `token_price`, `price_decay`, shock knobs | Declared exogenous (`:1075-1078`). | V |
-| A13 | `sim/scenarios.rs:2093-2097`; `sim/model.rs:681-686` | `fetch_latency_per_unit`, `acq_rate`, `reseed_rate` (3 = "N_active seeds", `:3870`) | Declared as a post-testnet measurement. | V |
-| A14 | `sim/scenarios.rs:2151-2156,2174-2175`; `sim/transport.rs:28-36` | Uptime 0.9, SLA 0.999, survival 0.999, `transport_u_k 0.07` | Declared. | V |
-| A15 | `sim/scenarios.rs:2087` (0), 0.05 in dynamic bases (`:2353`), 0.02 in f34 (`sim/f34_heavy_era.rs:43`) | `epoch_aging` | Sets the window length; no production mapping. | V |
-| A16 | `sim/scenarios.rs:1923-1937`; `sim/metrics.rs:16,172-174`; `sim/budget_throttle.rs:75,80`; `sim/f34_heavy_era.rs:39` | Verdict bars 0.05 / 0.20 / 0.10; band grids | Stated. | V |
-| A17 | `sim/model.rs:655-659` | `bond_age` tilt (`deep_mid`, `.max(0.05)`) | Declared L4 counter-evidence; default scale 0. | V |
-| A18 | `sim/model.rs:405-408,370`; no `capital` mutation anywhere (grep) | Slashing | Comments say exit "forfeits" collateral; the code never reduces capital. Production: `prod/failure_window.rs:362`, `prod/consensus_state.rs:85-102`. | V |
-| A19 | `sim/failure_confirmation.rs:29,32-35,39,42,45` | Outage mean 2.0, 2,000 archivers, 6 shards per P, 2,048-byte vin, 0.05, 0.90, 0.99 | Stated as order-of-magnitude. | V |
-| A20 | `sim/fingerprint.rs:25-35`; `sim/standoff.rs:106-118`; `sim/riders.rs:44-75`; `sim/partition_adversary.rs:98-122,472-546` | Privacy-harness thresholds and geometries | Stated. | V (consts only) |
+No production owner. Line numbers are at this pin; the claims are the 2026-10-02 claims, re-read, and they still hold.
 
-### Answers to the specific questions
+| # | Sim site | Name / default | Declared? | Tag | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| A1 | `sim/scenarios.rs:2067`; `sim/reward.rs:47` | `budget = 100` model units per epoch, constant | Declared as a fixed pool. Not emission plus fees | V | Exogenous. The abstract purse. The coupling half replaces it. The pin arm keeps it. |
+| A2 | `sim/scenarios.rs:1161`, `:2121`; L13 base `:2853` | fee-era purse: decay toward `budget_floor`, `budget_decay 0.02` | Declared as a stress model | V | Exogenous. Declared fee-era stress. The coupling half replaces the purse. |
+| A3 | `sim/scenarios.rs:1164` | adaptive servo `budget_eff = base·(1+gain·signal)`, `share_gain 8.0` | No production owner. `staker_pool_share_at` keys on closed-shard count and is flat | V | Exogenous. No production owner. The L13 servo stays the model's. |
+| A4 | `sim/scenarios.rs:1634` | trust EMA `0.75/0.25` | Comment only | V | Exogenous. Declared in a comment. No production owner. |
+| A5 | `sim/scenarios.rs:2074`; `sim/agent.rs:202` | `storage_unit_cost = 0.03` per shard per epoch | Pinned in code. `DOC` L19h: never calibrated | V | Exogenous. Declared uncalibrated storage cost. |
+| A6 | `sim/scenarios.rs:2077`; `sim/agent.rs:202`; `sim/participation.rs:88` | `bond_carry = 0.03`, flat per deep shard, does not scale with `bond_rate` | Pinned in code. No calibration run named | V | Incorporate (ruled 2026-11-08). The carry is two terms (`CarryShape::Split`): capital carry on the posted bond at `BASELINE_CAPITAL_CARRY_RATE` (0.015 per unit per epoch, the registered 0.03 at 2.0), a model correction; and an operating cost per held shard, `BASELINE_OPERATING_COST`, 0 until the coupling half calibrates it. Where a scenario pays its flow cost in fiat, the capital carry stays in tokens and only storage, the operating cost and pseudonym upkeep are converted at the token price (P11, `participation::FlowCost`). The flat 0.03 per bonded shard is the registered arm's carry (`CarryShape::FlatPerBond`), converted with the fiat expenses as its figures were taken, and goes with that arm. |
+| A7 | `sim/scenarios.rs:2078`; `sim/model.rs:90`; `sim/agent.rs:123`, `:249` | `deep_threshold = 0.5`; only deep shards bond | Undeclared against production. `bond_floor_of` is flat per held shard, no age input (`prod/bond_floor.rs:28`) | V | Incorporate (ruled 2026-11-08). Every held shard bonds by default (`BondScope::EveryHeld`), as `bond_floor_of` does. Deep only (`BondScope::DeepOnly`) is a named arm (`a7_*_deep_*`) and the registered arm's scope. `deep_threshold` still classes deep history for coverage. |
+| A8 | `sim/scenarios.rs:2189`; `sim/model.rs` `r_target` | `r_target` 3 hot / 6 deep, linear in age | Stipulated. No production replica target | V | Exogenous. Stipulated replica target. No production owner. |
+| A9 | `sim/scenarios.rs:2110` (0); L11 `:2689` (0.02) | reservation yield ρ | Declared exogenous, post-testnet | V | Exogenous. Reservation yield. Declared post-testnet. |
+| A10 | `sim/scenarios.rs:2670` | `entry_per_epoch = 6`, `participation_patience = 3` | Declared in the L11 comments | V | Exogenous. Declared entry rate and patience. |
+| A11 | `sim/scenarios.rs:2055` | world: 240 shards, 80 actors at baseline; L11 pool 240; endowments 22/20 and 10/100; whale 150/600 | Calibrated to the coverage margin, in the comment above `baseline` | V | Exogenous. World size, declared as calibrated to the coverage margin. |
+| A12 | `sim/scenarios.rs:2127` | `price_coupling`, `token_price`, `price_decay`, shock knobs | Declared exogenous | V | Exogenous. Declared price coupling. |
+| A13 | `sim/scenarios.rs:2093` | `fetch_latency_per_unit`, `acq_rate`, `reseed_rate` | Declared as a post-testnet measurement | V | Exogenous. Declared post-testnet fetch and bandwidth. |
+| A14 | `sim/scenarios.rs:2151`, `:2174`; `sim/transport.rs:28` | uptime 0.9, SLA 0.999, survival 0.999, `transport_u_k 0.07` | Declared | V | Exogenous. Declared uptime, SLA, and transport depression. |
+| A15 | `sim/scenarios.rs:2087` (0); 0.05 in dynamic bases; 0.02 in `sim/f34_heavy_era.rs:43` | `epoch_aging` | Sets the window length. No production mapping | V | Exogenous. Window length. No production mapping. |
+| A16 | `sim/scenarios.rs:1923`; `sim/metrics.rs:16`; `sim/budget_throttle.rs:75` | verdict bars and band grids | Stated | V | Exogenous. Verdict bars. Stated. |
+| A17 | `sim/model.rs:655` | `bond_age` tilt; default scale 0 | Declared L4 counter-evidence | V | Exogenous. Declared L4 counter-evidence. Default scale 0. |
+| A18 | `sim/model.rs:370`, `:405`. No `capital` write on slash (the exit path does not subtract) | slashing leaves capital unchanged | Comments say exit forfeits collateral. Production slash is `prod/failure_window.rs` and `good_through` in `prod/consensus_state.rs`. The comment and the code disagree | V | Incorporate production's slash. A slash burns the bond (`failure_window.rs` module docs; `Reinstate` posts new collateral). The sim's slash sites are the three L17 shock exits: each now burns the actor's bonded deep capital. A voluntary exit is a `Release` in production, which refunds, so the comment is corrected and the code there was already right. The age-1 recycle has no production event. |
+| A19 | `sim/failure_confirmation.rs:29` | outage mean 2.0, 2 000 archivers, 6 shards per P, 2 048-byte vin, and the three probabilities beside them | Stated as order-of-magnitude | V | Exogenous. Stated order-of-magnitude outage. |
+| A20 | `sim/fingerprint.rs:25`; `sim/standoff.rs:106`; `sim/riders.rs:44`; `sim/partition_adversary.rs:98` | privacy-harness thresholds and geometries | Stated | V | Exogenous. Stated privacy-harness geometry. The `riders.rs` and `partition_adversary.rs` sites were deleted with D9 (last at `76677fcfa`). |
 
-- **Reward and split.** `reward_a = budget · Curve(raw_a) / Σ Curve(raw)` in f64, with the plateau and pseudonym split active (`sim/reward.rs:176-210`). Production is linear, membership-gated, micro-accumulated, floored once per bond, then `floor(budget·credited/Σ)`.
-- **What `r` counts, and lag.** The sim counts bonded (committed) holdings: actor-distinct, in-flight fetches included, no serve-credit gate (`sim/model.rs:543-558`; `sim/reward.rs:60-66`). Production counts served, member pairs as of epoch close.
-  - Lag on `r` is zero in the sim: `evaluate` runs after `run_epoch` in the same epoch (`sim/scenarios.rs:1291,1326`). The one-epoch lag is on `price` only (`:1327-1331`, seeded 1.0 at `:999`).
-  - There is no membership onset: entrants earn in their entry epoch (`:1282`). Production credits from `join_epoch + 1` (`prod/consensus_state.rs:90`).
-  - Foundation is excluded in both.
-  - `serving_replication` (`sim/model.rs:568-578`) feeds metrics only.
-- **Bond per shard and carry.** Bond is `bond_rate` flat per deep shard: 2.0 at baseline, 0.75 in pinned arms; hot shards carry none. Constraint is `Σ bond ≤ capital` (`sim/agent.rs:249-252`). Carry is a flat 0.03 per deep shard regardless of bond size. Production is 0.75 SKL per shard for every held shard.
-- **Unit mapping (I).** `config/consensus_constants.json` `_comment_archival` and `docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md:264-295` set 1 sim capital unit = 1 SKL. The purse is 100 units per epoch, while `DOC:4908` computes production `budget(E)` at 2,413,775 SKL per epoch in year 1. L19h sidesteps this with a dimensionless ratio; nothing else reconciles it.
-- **Epoch length.** No fixed mapping. Duration (4) and cooldown (2) are compared to settlement-epoch constants, L19h treats an epoch as 1 SEB (`DOC:4902`), but TA1 sets `blocks_per_sim_epoch = 2000`, i.e. 0.2 SEB (`sim/scenarios.rs:2178,3440-3446`).
-- **Shard size / length.** Relative units only (`deep_shard_size 1.0`, `Shard.size`). The crate does not depend on `shekyl-types`, `shekyl-chain-rules` or `shekyl-units`, so `SHARD_LENGTH`, `shard_of` and shard close are unused. `DOC:4903,4909` still size shards as 200 tx.
-- **Age units.** Sim age is position in a fixed recycling window. Production is epochs since shard close over chain depth in epochs, in milli (`prod/consensus_state.rs:234-251`); open shards score 0. Both range over [0,1] but with different referents (`DOC:937-950`).
-- **Challenge / witness.** See R14-R16 and D4. `p_attempt` is not in this crate; it is at `rust/shekyl-economics-sim/src/mn_feasibility.rs:79,386`.
-- **Holdings cap.** None; `storage_capacity` is the only bound. `MAX_HOLDINGS_SHARDS = 4096` (`rust/shekyl-types/src/archival/mod.rs:78`) is never referenced.
-- **Admission.** No counterpart to `ADMISSION_MIN_WORK_MILLI` (`prod/admission.rs:97`).
-- **Defaults: where set.**
-  - The single source is `baseline()` at `sim/scenarios.rs:2051-2197`. There is no `Default` impl and no config file.
-  - Per-layer closures: `dyn_base :2350`, `surplus_base :2391`, `lean_base :2450`, `lag_base :2540`, `l11_base :2660`, `l12_base :2760`, `l13_base :2846`, `l11_coloc_base :2963`, `l13_fiat_base :3013`, `l15_base :3068`, `l14_base :3127`, `l16_base :3224`, `l15d_base :3297`, `gate4_fine_base :3384`, `ta1_hygiene_base :3433`, `layer2_base :3530`, `swan_base :3610`.
-  - World init: `sim/model.rs:376-395`, `sim/scenarios.rs:680-790`.
-  - CLI overrides: only `--curve-impl` and `--axis` (`sim/main.rs:2115-2163`).
-  - f34 levers: `sim/f34_heavy_era.rs:63-95`.
+### Owners that moved since `c2dcfe601`
 
-### Reverse provenance: production constants calibrated from this sim
+Read at `3533e9405`.
 
-- Bond floor 0.75 SKL: `config/consensus_constants.json` `_comment_archival`; `DOC:1904-1911`.
-- Age weight 2000, band [1500, 2500]: config comment; `DOC:928-950`.
-- Bond duration 4/4: `DOC:63-65`.
-- Failure window 11/13: from `--failure-confirmation` (config `_comment_archival_failure_window`).
-- Release cooldown 2: L18 seal.
-- Production `bond_duration` has no caller in `rust/` or `src/`: only the re-export at `prod/lib.rs:99` and a comment at `src/blockchain_db/shekyl_types.h` (grep). Its parity KAT (`prod/bond_duration.rs:212-226`) re-types the sim's f64 formula.
+- **R8, R10, R15, R6.** `ArchivalParams`, read through `archival_params()` (#1218), holds the bond floor, the cooldown, the failure window and the bond duration's base and scale.
+- **R14, D4.** `CHALLENGES_PER_PAIR_PER_EPOCH` is deleted. Settlement folds `COUNTED_DRAWS`. The count rule's catch-up, horizon floor, cap multiple and section multiple are `ArchivalParams` fields. Corrected 2026-11-09: the traffic check's ceiling is that cap, `count_cap_base_multiple()` draws per pair per epoch, against the genesis block-weight limit.
+- **R17.** `RETENTION_HORIZON_BLOCKS` is deleted. The sim asks `EpochFloor` for the deepest retention (`timing_cluster::deepest_retention_epochs`), and `JOIN_LAG_BLOCKS` went with the horizon.
+- **N3, R10.** Unmoved: the Release anchor is still the serve-credit table's last pass. `SO-D12j` is still deferred.
+- **N4.** Unmoved: `MIN_COLD_START_SPACING` is still in the wallet, and BD-Q4 is open.
 
-### (S) Sweeps / grids
+### Owners that moved between `bb021f254` and `c2dcfe601`
 
-- bond_rate {0.5, 2, 8} `:2207`; 20-point fine window `:3404-3407`
-- age_weight {0, 2, 3, 4, 5} `:2225`; {1.5…4.0} `:3535`; {3…8} `:3994`; f34 ladder to 8.0 (`sim/f34_heavy_era.rs:351`). These go beyond the config band [1.5, 2.5].
-- cap {4, 8, 16} `:2262`
-- n_actors {25, 80, 200} `:2240`
-- storage_scale `:2281,2299,2420`
-- duration scale {0, 2, 4} `:2358`; {0, 1, 2, 4, 8} `:2577`
-- latency {0, 1, 2, 3, 4, 6} `:2551,3245`
-- ρ `:2701,2977`
-- budget {50, 100, 200} `:2725`; {100, 200, 400} `:2994`; {100, 130, 160, 200} `:3560`; {140, 160, 180} `:3965`
-- budget_floor {100, 80, 60, 40, 20} `:2867`; ceiling {70, 110, 200} `:2918`
-- floor decay {40, 80, 160} `:2809`; tilt {0, 0.3, 0.6, 0.9} `:3193`
-- cooldown {0, 1, 2, 4} `:3941`
-- composition S {1, 2, 4, 10, 60} `:4078`
-- f34 ladders `sim/f34_heavy_era.rs:349-351,434,475-478,507-509`
-- seeds `sim/budget_throttle.rs:87-96`
-- failure-confirmation `sim/failure_confirmation.rs:797,1102-1151`
-- standoff `sim/standoff.rs:372-378`
+- **D4 / R16.** `settle_epoch` and the 2-of-3 cite in `prod/attestation.rs` are gone. Settlement is `settle_pair`. The threshold constant lives in `shekyl-types`.
+- **R8.** The bond floor is a generated include, not a hand-written `const` in `bond_floor.rs`'s source. The value is still `750_000_000`.
+- **R13.** C2-R2 has landed. `300_000` is the reward zone. The limit is `EffectiveMedian::limit`.
+- **N1.** The public urn is gone. The sim's failure-confirmation text still says `H_fire`.
+- **N2.** The per-block bundle replaced carriers. The sim never had a carrier model to delete; it also has no bundle model.
+- **N3.** The passed bit is the pass fact. The Release anchor still reads serve-credit last-served. `SO-D12j` is the open question, deferred 2026-10-21, not a landed re-home.
+- **N4.** BD-Q1, BD-Q2, BD-Q3 and BD-Q5 are ruled. The sim's standoff module still flips an order coin. The GF-7 modes already call `draw_entry_gap`.
+- **D1.** `curve_milli`'s body is in `shekyl-units`. The sim still applies the plateau on the population path.
+- **R11.** Still no sim-epoch to settlement-epoch mapping. `timing_cluster` imports `SETTLEMENT_EPOCH_BLOCKS`; `fingerprint` and one cover ratio restate `10_000`.
 
-### (P) Correct production imports, one line per file
+### Not re-checked at this pin
 
-- `sim/reward.rs:25` — `curve_milli`, `BandedCurveParams`, `WORK_MILLI_SCALE`. Correct as an import; the mechanism is retired (D1).
-- `sim/budget_throttle.rs:58,69-71` — `EconomicParams::default().release_min / SCALE`.
-- `sim/timing_cluster.rs:21-30` — `ARCHIVAL_REORG_DEPTH_BLOCKS`, `MAX_CLAIM_AGE_W`, `RELEASE_COOLDOWN_EPOCHS`, `RETENTION_HORIZON_BLOCKS`, `SETTLEMENT_EPOCH_BLOCKS`, `SLASH_GRACE_EPOCHS`, `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`.
-- `sim/standoff.rs:102,226,589` — SEB via `timing_cluster`; `GapRng`; `conformance::certify_draw` (test).
-- `sim/failure_confirmation.rs:18,1193` — SEB; `failure_window_slashable`, `FAILURE_WINDOW_M/N` (tests only).
-- `sim/cover.rs:83` — `ARCHIVAL_BOND_FLOOR_ATOMIC`.
-- `sim/gf7_timeline.rs:71-72` — `BroadcastTimelineObserver`, `TimelineEvent`, `bounded_uniform`, `draw_entry_gap`, `DEFAULT_ENTRY_GAP_WINDOW`.
-- `sim/partition_adversary.rs:80,115` — `draw_entry_gap`, `DEFAULT_ENTRY_GAP_WINDOW`.
-- `sim/wallclock_leg.rs:60` — `bounded_uniform`.
-- `sim/main.rs:2360,2392` — test-only curve imports.
-- No production imports: `model.rs`, `agent.rs`, `participation.rs`, `metrics.rs`, `scenarios.rs`, `audit.rs`, `retrieval.rs`, `transport.rs`, `fingerprint.rs`, `clustering.rs`, `f34_heavy_era.rs`, `curve.rs`, `riders.rs`, `gf7_breakeven.rs`, `gf7_seal.rs`.
-
-### Pinned tests and registered runs
-
-**Crate tests.** No `#[test]` calls `run_sim`, `evaluate` or `build_scenarios` (grep). No CI job pins sim output; the only workflow touching the crate is `.github/workflows/gf7-no-emit-guard.yml:71-113` (dependency graph). All population-run numbers are pinned in docs only.
-
-**(a) Purse replaced by production emission + fee inflow**
-
-- Tests: none change. `sim/budget_throttle.rs:167-172` panics if `l11_bud_b100` is renamed.
-- Every run changes, because `budget` sets `price` against costs fixed in model units (0.03 / 0.03 / 0.05) and ρ times bond. Directly purse-defined:
-  - L11: `DOC:2527-2528,2536-2543,2553-2557,2564`
-  - L12: `DOC:2609,2615,2625,2638-2642,2656-2660`
-  - L13: `DOC:2733-2738,2744,2748-2749,2758-2762,2767`. The decay / floor / ceiling / servo model is the thing being replaced.
-  - Layer-2: `DOC:857-864,877-882,891-895`
-  - Gate-4 bond window, the evidence for the 0.75 floor: `DOC:1904-1911`
-  - L17: `DOC:1117-1148`
-  - L18: `DOC:3738-3745` (lean budget 120; buffered 140/160/180)
-  - L19 family: `DOC:4187-4199,4454-4463,4590-4596,4681-4694,5006-5010,5154-5160`, plus the calibration `storage_unit_cost = φ·budget_sim/H` at `DOC:4870-4891`
-  - `--budget-throttle` (`sim/budget_throttle.rs:107-115`)
-- An existing production-sourced `budget(E)` is at `rust/shekyl-economics-sim/src/budget.rs:51-52,139`. Era figures: 2,413,775 / 960,334 / 304,084 / 3,004 SKL per epoch at years 1 / 5 / 10 / 30 (`DOC:4908`).
-
-**(b) Float work replaced by production integer arithmetic**
-
-- Tests that lose their subject if the production path (linear, no plateau) is adopted:
-  - `split_raises_credited_work_below_plateau_work` — `sim/reward.rs:217`
-  - `degenerate_cap_credits_zero_on_both_backends` — `sim/reward.rs:240`
-  - `backends_agree_to_milli_precision` — `sim/reward.rs:262` (tolerates 2e-3 if only precision changes)
-  - `reaches_plateau_at_twice_cap_work`, `monotone_increasing` — `sim/curve.rs:46,51`
-  - `reconciliation_curve_float_vs_integer` — `sim/main.rs:2358`
-  - `reconciliation_plateau_cross_check` — `sim/main.rs:2390`, pins `curve_milli(16_000) == 8_000`
-- Tests that change signature or units:
-  - `g_age_*` — `sim/main.rs:2219,2225`
-  - `bond_duration_*` — `sim/main.rs:2249,2256`, pins `bond_duration(0.5,4.0,0.0) == 4`
-  - clustering thresholds — `sim/clustering.rs:859-912` (`mean_r > 1.5`, `< 2.0`)
-  - production `bond_duration_matches_sim_f64_over_full_age_sweep` — `prod/bond_duration.rs:212`
-- Registered runs: all of the above. Precedent: Finding 0 (`DOC:839-851`) records that the last curve change moved `bondA` 79 to about 113 and broke the gate-4 cross-check rows; reversion clause (b) at `DOC:967-975` already names this trigger. L11/L12/L13 counts are marked pre-repair record at `DOC:2520-2523`. Most exposed: the lean and knee rows, L18 `oldest_min_committed = 6` (`DOC:3740-3745`), L19 SPLIT cells (`DOC:5010,5157,5159`), and the `cap` and `gini_pseudonym` columns.
-- Unaffected by either: `--failure-confirmation`, `--timing-cluster`, `--standoff`, `--cover*` and the GF-7 modes (separate harnesses).
-
-### Not checked / uncertain
-
-- Const-swept and import-checked, not line-read: `gf7_timeline.rs` (other than `:76-130,236-300`), `partition_adversary.rs`, `gf7_breakeven.rs`, `gf7_seal.rs`, `wallclock_leg.rs`, `cover.rs:420-1545`, `main.rs:420-2000` (report printers). All other files were read in full.
-- D3's "ratified design" rests on the sim's own comment; `docs/V3_STAKER_ARCHIVAL.md` was not opened.
-- D4's "no read credit in production" rests on `DOC:4904` and the `prod/constants.rs` docs, not a full read of `challenge_assignment.rs`.
-- "`bond_duration` has no production caller" is a grep over `rust/` and `src/`; the FFI was not line-read.
-- The unit-mapping mismatch is inferred from documents; the 2.4M SKL figure is the doc's, not recomputed.
+- `main.rs` report printers were not line-read. Their public entry points were.
+- D3's "ratified design" is still the sim's comment. `docs/V3_STAKER_ARCHIVAL.md` was not opened.
 - `reseed_rate = 3` and `FOUNDER_COUNT = 5` (`sim/partition_adversary.rs:98`) were not traced to a production owner.
-- Sim outputs pinned in other docs (`docs/completed/ARCHIVAL_COVER_DRAW.md`, `ARCHIVAL_TM1_CLUSTERING.md`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) were not enumerated.
-- Outside scope but seen: `sim/timing_cluster.rs:14-20` notes `SETTLEMENT_EPOCH_BLOCKS` is dual-sourced in production (`prod/constants.rs:245` and the JSON key), and `prod/release_cooldown.rs:6` and `prod/bond_duration.rs:9` still name `HoldingsUpdate`-drop.
+- Sim figures pinned in `docs/completed/` (`ARCHIVAL_COVER_DRAW.md`, `ARCHIVAL_TM1_CLUSTERING.md`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) were not enumerated.
+- The L11 and L13 headline numbers in `DOC` were re-run after this census (2026-10-22). The June point estimates are one seed. The current five-seed reading, and which commits moved it, are the blocks at the head of `DOC` §L11 and §L13. `l11_l13_five_seed_pins` holds that reading.
 
 ---
 

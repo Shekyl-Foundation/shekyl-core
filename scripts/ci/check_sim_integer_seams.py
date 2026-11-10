@@ -57,7 +57,9 @@ SIM = ROOT / "rust" / "shekyl-economics-sim" / "src"
 # honest chain's output count and the shard partition, which set the tree
 # depth and the burden operand. The two fee instruments price `C`, the
 # floor and the traced emission at the validator's window operand
-# (FL PR C, 2026-10-16), so they are fold files too.
+# (FL PR C, 2026-10-16), so they are fold files too. The pool (ESR-17), the
+# split of demand across the fee ladder's rungs and each rung's fee (ESR-10)
+# form the block every fold prices, so they are fold files as well.
 FOLD_FILES = [
     "chain_cursor.rs",
     "engine.rs",
@@ -67,6 +69,9 @@ FOLD_FILES = [
     "burden.rs",
     "fee_ladder.rs",
     "fee_floor.rs",
+    "block_space.rs",
+    "rung_mix.rs",
+    "fee_model.rs",
 ]
 
 # (file, function) -> reason. One entry: the fee instruments' one named

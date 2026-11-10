@@ -61,13 +61,6 @@ pub fn settlement_epoch_last_block(epoch: u64) -> u64 {
     SettlementSchedule::effective().last_block(epoch)
 }
 
-/// [`SettlementSchedule::slash_deadline_height`] under the process-latched
-/// schedule.
-#[must_use]
-pub fn settlement_epoch_slash_deadline_height(epoch: u64) -> u64 {
-    SettlementSchedule::effective().slash_deadline_height(epoch)
-}
-
 /// [`SettlementSchedule::prune_below_epoch_at_height`] under the
 /// process-latched schedule.
 #[must_use]
@@ -1480,7 +1473,7 @@ mod tests {
     fn slash_settle_strictly_follows_close_write_at_every_epoch() {
         let diff_at = |e: u64| {
             let close_write = epoch_close_height(e).expect("no overflow at test epochs");
-            let slash_settle = settlement_epoch_slash_deadline_height(e) + 1;
+            let slash_settle = SettlementSchedule::effective().slash_deadline_height(e) + 1;
             assert!(
                 slash_settle > close_write,
                 "epoch {e}: slash settles at {slash_settle} but close writes at \

@@ -13,6 +13,7 @@ on:
           - proptest-exhaustive
           - store-ignored
           - economics-sim-ignored
+          - staking-sim-ignored
           - chain-ingest-ignored
           - wire-ignored
           - producer-gate
@@ -189,9 +190,19 @@ jobs:
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
-    # against their committed fixtures (150 s and 100 s in release) and the
-    # secret draw at ESR-11's timing on ESR-13's loop. This job is the lane
-    # that invokes them. Before it none
+    # against their committed fixtures (150 s and 100 s in release), the
+    # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
+    # test, and ESR-10's nightly scope. This job is the lane that invokes
+    # them.
+    #
+    # ESR-10's split (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.29): its full
+    # narration, every cell on both w_ref arms over all nine scenarios, is
+    # 144 folds of 60 years, about 85 CPU-minutes, and this job already runs
+    # 80-120 minutes on dev against its 180. Nightly runs every cell on both
+    # arms on the baseline and the stuffing attack
+    # (esr10_nightly_narration_matches_the_committed_fixture); the full set
+    # runs on demand (esr10_narration_matches_the_committed_fixture, named
+    # on demand in the script below). Before it none
     # did: on PR #1009 the sim's share calls moved onto a function that is
     # zero at height 0 (783053554), both narrations drifted, and CI stayed
     # green until a fresh clone ran the tests by hand two commits later
@@ -231,6 +242,41 @@ jobs:
         env:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_economics_sim.sh
+
+  staking-sim-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
+    # The staking sim's `#[ignore]`d set: the five-seed L11/L13 pins on both
+    # reward arms (EUP-3 check half). The registered plateau arm is the check
+    # half's falsifier; the production arm is the default the documents
+    # quote. No lane ran either before this job. The set is read from the
+    # checked-out ref's scripts/ci/ignored_set_staking_sim.sh, as the
+    # economics sim's is, so each leg is judged by its own tree. About 35 s
+    # in release on a 16-core workstation; the budget is for a 4-vCPU runner
+    # building the workspace's dependencies.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the staking sim's ignored tests
+        # The set and its assertions are scripts/ci/ignored_set_staking_sim.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_staking_sim.sh
 
   chain-ingest-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
@@ -335,7 +381,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -375,11 +421,19 @@ jobs:
                   'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_wire.sh` whether the new test is run or is a helper.',
                 ],
               },
+              'staking-sim-ignored': {
+                title: 'nightly staking-sim ignored tests RED',
+                lines: [
+                  'The `staking-sim-ignored` job failed. It runs two `#[ignore]`d tests of `shekyl-staking-sim`: `l11_l13_five_seed_pins` (the registered plateau arm, the EUP-3 check half\'s falsifier) and `l11_l13_five_seed_production_pins` (the production arm).',
+                  'A pin that moved is a sim change: predict it in `docs/design/STAKER_ARCHIVAL_SIM.md`, then re-pin; otherwise the sim drifted from its record.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_staking_sim.sh` whether the new test is run.',
+                ],
+              },
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs four `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
-                  'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
+                  'The `economics-sim-ignored` job failed. It runs five `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `esr10_nightly_narration_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
+                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with `regen_stage2_narration_fixtures` or `regen_esr10_narration_fixtures` under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
                   'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
                 ],
               },

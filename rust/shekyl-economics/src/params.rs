@@ -286,7 +286,7 @@ pub struct EconomicParams {
     /// median clamped to `[LTEM, S · LTEM]`
     /// ([`effective_median`](crate::effective_median)). At least one.
     /// Authority: `config/consensus_constants.json`
-    /// `block_weight_short_term_surge_factor` (ratified 4, C2-R2 Q3).
+    /// `block_weight_short_term_surge_factor` (ratified 3, C2-R2 Q3).
     pub block_weight_surge_factor: u64,
     /// The block-weight limit as a multiple of the effective median, in
     /// [`SCALE`] units (`2_000_000` is the ratified 2×). The weight penalty

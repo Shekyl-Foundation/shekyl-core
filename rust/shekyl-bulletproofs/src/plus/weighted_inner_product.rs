@@ -6,19 +6,39 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
 
 use crate::{
-    batch_verifier::BulletproofsPlusBatchVerifier,
+    batch_verifier::{BatchTerms, BulletproofsPlusBatchVerifier},
     core::{challenge_products, multiexp, multiexp_vartime},
     plus::{padded_pow_of_2, BpPlusGenerators, GeneratorsList, PointVector, ScalarVector},
 };
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::{keccak256_to_scalar, INV_EIGHT};
 
-// Figure 1 of the Bulletproofs+ paper
+// Figure 1 of the Bulletproofs+ paper: the prover's statement, `P` as a point.
 #[derive(Clone, Debug)]
 pub(crate) struct WipStatement {
     generators: BpPlusGenerators,
     P: EdwardsPoint,
     y: ScalarVector,
+}
+
+/// The verifier's statement: `P` as its terms over the batch's slots
+/// ([`BatchTerms`]), never evaluated. The verifier adds them into the batch
+/// at the weight it would have given `P`, so `P`'s own multiscalar
+/// multiplication folds into the batch's one.
+pub(crate) struct WipVerifierStatement {
+    generators: BpPlusGenerators,
+    P: BatchTerms,
+    y: ScalarVector,
+}
+
+/// `[y, y², …, yⁿ]` for `n` generators.
+fn y_powers(n: usize, y: Scalar) -> ScalarVector {
+    let mut y_vec = ScalarVector::new(n);
+    y_vec[0] = y;
+    for i in 1..y_vec.len() {
+        y_vec[i] = y_vec[i - 1] * y;
+    }
+    y_vec
 }
 
 impl Zeroize for WipStatement {
@@ -68,19 +88,8 @@ pub(crate) struct WipProof {
 impl WipStatement {
     pub(crate) fn new(generators: BpPlusGenerators, P: EdwardsPoint, y: Scalar) -> Self {
         debug_assert_eq!(generators.len(), padded_pow_of_2(generators.len()));
-
-        // y ** n
-        let mut y_vec = ScalarVector::new(generators.len());
-        y_vec[0] = y;
-        for i in 1..y_vec.len() {
-            y_vec[i] = y_vec[i - 1] * y;
-        }
-
-        Self {
-            generators,
-            P,
-            y: y_vec,
-        }
+        let y = y_powers(generators.len(), y);
+        Self { generators, P, y }
     }
 
     fn transcript_L_R(transcript: &mut Scalar, L: CompressedPoint, R: CompressedPoint) -> Scalar {
@@ -324,6 +333,14 @@ impl WipStatement {
             delta_answer,
         })
     }
+}
+
+impl WipVerifierStatement {
+    pub(crate) fn new(generators: BpPlusGenerators, P: BatchTerms, y: Scalar) -> Self {
+        debug_assert_eq!(generators.len(), padded_pow_of_2(generators.len()));
+        let y = y_powers(generators.len(), y);
+        Self { generators, P, y }
+    }
 
     pub(crate) fn verify<R: RngCore + CryptoRng>(
         self,
@@ -342,7 +359,12 @@ impl WipStatement {
     ) -> bool {
         let verifier_weight = Scalar::random(rng);
 
-        let WipStatement { generators, P, y } = self;
+        let WipVerifierStatement { generators, P, y } = self;
+
+        // `P`'s terms address no more generators than the statement has.
+        if P.bold_len() > generators.len() {
+            return false;
+        }
 
         // Verify the L/R lengths
         {
@@ -378,7 +400,7 @@ impl WipStatement {
             |p| CompressedPoint::decompress(&p).map(|p| EdwardsPoint::mul_by_cofactor(&p));
 
         for (L_i, R_i) in L.into_iter().zip(R) {
-            e_is.push(Self::transcript_L_R(&mut transcript, L_i, R_i));
+            e_is.push(WipStatement::transcript_L_R(&mut transcript, L_i, R_i));
 
             let (Some(L_i), Some(R_i)) = (decomp_mul_cofactor(L_i), decomp_mul_cofactor(R_i))
             else {
@@ -392,15 +414,13 @@ impl WipStatement {
         let L = L_decomp;
         let R = R_decomp;
 
-        let e = Self::transcript_A_B(&mut transcript, A, B);
+        let e = WipStatement::transcript_A_B(&mut transcript, A, B);
 
         let (Some(A), Some(B)) = (decomp_mul_cofactor(A), decomp_mul_cofactor(B)) else {
             return false;
         };
 
         let neg_e_square = verifier_weight * -(e * e);
-
-        verifier.0.other.push((neg_e_square, P));
 
         let mut challenges = Vec::with_capacity(L.len());
         let product_cache = {
@@ -434,6 +454,9 @@ impl WipStatement {
         while verifier.0.h_bold.len() < generators.len() {
             verifier.0.h_bold.push(Scalar::ZERO);
         }
+
+        // `P`, at the weight the batch would have given the evaluated point.
+        P.add_into(neg_e_square, &mut verifier.0);
 
         let re = r_answer * e;
         for i in 0..generators.len() {

@@ -14,15 +14,25 @@
 #
 # The tests run here are the narration pins, the ESR-11 timing set and the
 # per-mode reader test (each field a mode declares moves its report). The
-# two regeneration helpers, `regen_baseline_fixture` and
-# `regen_stage2_narration_fixtures`, WRITE the committed fixtures: they are
-# named as helpers and never run here, because a lane that regenerated the
-# fixtures and then compared against them would pass every night.
+# regeneration helpers, `regen_baseline_fixture`,
+# `regen_stage2_narration_fixtures` and `regen_esr10_narration_fixtures`,
+# WRITE the committed fixtures: they are named as helpers and never run
+# here, because a lane that regenerated the fixtures and then compared
+# against them would pass every night. They are armed (rule 50): each
+# refuses unless SHEKYL_PINNED_REGEN_DECISION cites the dated
+# ECONOMICS_SIM_PRODUCTION_REBASE.md entry that records what moved.
+#
+# ESR-10's full narration (144 folds of 60 years, about 85 CPU-minutes) does
+# not fit this lane's budget beside its other tests, so it is named on
+# demand and never run here. The lane runs ESR-10's nightly scope instead:
+# every cell on both arms, on the baseline and the stuffing attack, against
+# its own fixture (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29).
 #
 # Rule 47: the lane asserts its subject before running it. The crate's
-# ignored set must be EXACTLY the tests run here plus the helpers. A
-# renamed, deleted or un-ignored member fails by name; a new ignored test
-# fails too, until someone decides here whether it is run or is a helper.
+# ignored set must be EXACTLY the tests run here, the helpers and the
+# on-demand tests. A renamed, deleted or un-ignored member fails by name; a
+# new ignored test fails too, until someone decides here whether it is run,
+# is a helper, or runs on demand.
 # The tests are passed by exact name, so the helpers cannot be reached by a
 # filter. Rule 46: the run's log is written and its exit kept, then the log
 # shown; no verdict travels through a pipe, and every pipe below carries
@@ -41,10 +51,13 @@ branch="${BRANCH:-the checked-out ref}"
 
 run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
 stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
+esr10::tests::esr10_nightly_narration_matches_the_committed_fixture
 secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
 baseline::tests::every_declared_reader_moves_its_report'
 helpers='record::tests::regen_baseline_fixture
-stage2::tests::regen_stage2_narration_fixtures'
+stage2::tests::regen_stage2_narration_fixtures
+esr10::tests::regen_esr10_narration_fixtures'
+on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
@@ -61,17 +74,17 @@ listing=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-economics-si
 # locale-independent either way; LC_ALL=C makes the printed listing the
 # same on every runner.
 found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | LC_ALL=C sort)
-expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | LC_ALL=C sort)
+expected=$(printf '%s\n%s\n%s\n' "$run_tests" "$helpers" "$on_demand" | LC_ALL=C sort)
 if [ "$found" != "$expected" ]; then
   echo "::error::shekyl-economics-sim's ignored set is not the one this lane was written for."
-  echo "expected (the tests run, then the helpers that are not):"
+  echo "expected (the tests run, the helpers, and the tests run on demand):"
   printf '%s\n' "$expected"
   echo "found:"
   printf '%s\n' "$found"
-  echo "Decide in scripts/ci/ignored_set_economics_sim.sh whether each new ignored test is run here or is a regeneration helper."
+  echo "Decide in scripts/ci/ignored_set_economics_sim.sh whether each new ignored test is run here, is a regeneration helper, or runs on demand."
   exit 1
 fi
-echo "shekyl-economics-sim ignored set: ${want} test(s) run and the regeneration helpers, exactly the listed set"
+echo "shekyl-economics-sim ignored set: ${want} test(s) run, the regeneration helpers and the on-demand tests, exactly the listed set"
 ignored_set_stop_after_judgement
 
 START=$(date +%s)
@@ -81,7 +94,7 @@ cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim
   --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
 cat sim-ignored.log
 if [ "$status" -ne 0 ]; then
-  echo "::error::economics-sim-ignored: a named test failed. If a narration drifted, regenerate with regen_stage2_narration_fixtures only if the sim change is intended; otherwise the sim drifted from its record."
+  echo "::error::economics-sim-ignored: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)

@@ -19,7 +19,7 @@
 //! - **CEN-G6b** — the remainder: the effective median is the short-term
 //!   median over the last `min(W_short, h)` weights clamped to
 //!   `[LTEM, S · LTEM]` (`shekyl_economics::effective_median`, the ratified
-//!   `S = 4`); the block-weight limit is twice it; and the connecting
+//!   `S = 3`); the block-weight limit is twice it; and the connecting
 //!   block's **long-term weight** is its weight clamped to
 //!   `[LTEM · 10/17, LTEM · 1.7]` (`shekyl_economics::long_term_weight`).
 //!   Recorded by [`Weights::derive`], which needs the block's weight and so

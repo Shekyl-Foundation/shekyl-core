@@ -10,7 +10,7 @@
 //!
 //! where `reward_a` is the realized servo share (`reward.rs`), `flow_costs_a` is the
 //! per-epoch storage + bond-carry + pseudonym-split cost, and the denominator is the
-//! capital the actor has actually deployed into deep-shard bonds. An actor stays a
+//! capital the actor has actually deployed into bonds. An actor stays a
 //! bonded archiver only while `apr_a ≥ reservation_a` (its opportunity cost); it also
 //! exits if it deploys *no* bond capital (it came to stake and couldn't — idle capital
 //! pursues its alternative). Exit is hysteretic (a `patience` window) to damp
@@ -25,7 +25,7 @@
 //! stay, unprofitable ones leave). Coverage at that emergent point is then *read*, not
 //! tuned: the L11 question is whether free entry self-provisions to `R_target`.
 
-use crate::agent::AgentParams;
+use crate::agent::{AgentParams, CarryShape};
 use crate::model::{bond_age, World};
 use crate::reward::RewardEval;
 
@@ -44,17 +44,17 @@ pub struct ParticipationParams {
     pub pseudonym_cost: f64,
 }
 
-/// Committed bond capital actor `a` has deployed = Σ over its held **deep** shards of
-/// the (age-dependent) per-shard bond. This is the denominator of the participation
+/// Committed bond capital actor `a` has deployed = Σ over its held **bonded** shards
+/// ([`AgentParams::bonds`]) of the (age-dependent) per-shard bond. This is the denominator of the participation
 /// yield: capital actually at stake, not the actor's whole endowment (undeployed
 /// capital is free to pursue the alternative, so it is not "lost to staking").
-fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
+pub(crate) fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
     if ap.bond_rate <= 0.0 {
         return 0.0;
     }
     let mut cap = 0.0;
     for (s, &held) in world.holdings[a].iter().enumerate() {
-        if held && world.shards[s].is_deep(ap.deep_threshold) {
+        if held && ap.bonds(&world.shards[s]) {
             cap += bond_age(
                 world.shards[s].age,
                 ap.bond_rate,
@@ -66,28 +66,89 @@ fn committed_bond_capital(world: &World, a: usize, ap: &AgentParams) -> f64 {
     cap
 }
 
-/// Per-epoch flow cost for actor `a`: storage on every held shard, bond-carry on each
-/// deep shard, and the split cost of any extra pseudonyms.
+/// A slash exit (A18): production's slash burns the bond, so the actor's posted
+/// bond capital leaves its endowment before it is deactivated. A bond still in
+/// the release escrow from an earlier exit is slashable too (R10), and burns
+/// with it. An actor that re-enters later bonds from what is left. Returns the
+/// capital burned.
+///
+/// The sim's slash sites are the L17 shock exits: an operator that vanishes
+/// stops serving, the failure window slashes every pair it held, and nobody
+/// is left to post a `Release`. A voluntary exit is a `Release` and goes
+/// through `World::deactivate` alone.
+pub(crate) fn slash_exit(world: &mut World, a: usize, ap: &AgentParams) -> f64 {
+    let burned = committed_bond_capital(world, a, ap) + world.released_capital(a);
+    world.actors[a].capital = (world.actors[a].capital - burned).max(0.0);
+    world.releasing[a].clear();
+    world.deactivate(a);
+    burned
+}
+
+/// One actor's per-epoch flow cost, split by the unit it is paid in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FlowCost {
+    /// The capital carry on the posted bond ([`CarryShape::Split`]): a rate on
+    /// token capital, like the reservation it adds to, so no price level
+    /// changes it.
+    tokens: f64,
+    /// Storage on every held shard, the operating cost per held shard,
+    /// pseudonym upkeep, and the registered arm's flat carry: the expenses a
+    /// scenario with `flow_cost_fiat` pays in fiat.
+    fiat: f64,
+}
+
+impl FlowCost {
+    /// The cost in tokens. With `flow_cost_fiat`, the fiat part is converted
+    /// at `token_price` (fiat per token); without it, every term is in tokens.
+    fn in_tokens(self, flow_cost_fiat: bool, token_price: f64) -> f64 {
+        let fiat = if flow_cost_fiat {
+            self.fiat / token_price
+        } else {
+            self.fiat
+        };
+        self.tokens + fiat
+    }
+}
+
+/// Per-epoch flow cost for actor `a`: storage on every held shard, the carry
+/// ([`CarryShape`]), and the split cost of any extra pseudonyms.
+///
+/// The registered arm's flat carry is in the fiat part, as its figures were
+/// taken (D1); its token part is exactly 0.0, so its cost is the sum it
+/// always was.
 fn flow_cost(
     world: &World,
     a: usize,
     ap: &AgentParams,
     pseudonyms: usize,
     pp: &ParticipationParams,
-) -> f64 {
+) -> FlowCost {
     let mut shards = 0.0;
-    let mut deep = 0.0;
+    let mut bonded = 0.0;
     for (s, &held) in world.holdings[a].iter().enumerate() {
         if held {
             shards += 1.0;
-            if world.shards[s].is_deep(ap.deep_threshold) {
-                deep += 1.0;
+            if ap.bonds(&world.shards[s]) {
+                bonded += 1.0;
             }
         }
     }
-    shards * ap.storage_unit_cost
-        + deep * ap.bond_carry
-        + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost
+    let (tokens, fiat_carry) = match ap.carry {
+        CarryShape::Split {
+            capital_rate,
+            operating_per_shard,
+        } => (
+            capital_rate * committed_bond_capital(world, a, ap),
+            shards * operating_per_shard,
+        ),
+        CarryShape::FlatPerBond(per_bond) => (0.0, bonded * per_bond),
+    };
+    FlowCost {
+        tokens,
+        fiat: shards * ap.storage_unit_cost
+            + fiat_carry
+            + (pseudonyms.saturating_sub(1)) as f64 * pp.pseudonym_cost,
+    }
 }
 
 /// Admit up to `entry_per_epoch` currently-inactive actors (lowest index first, so the
@@ -110,8 +171,9 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// Process exits after the epoch's reward is known. An active actor's realized yield
 /// `apr = (reward − flow_cost) / committed_bond_capital` is compared to its
 /// reservation; it accrues a strike if `apr < reservation` *or* it deployed no bond
-/// capital. After `patience` consecutive strikes it exits (`World::deactivate`). Call
-/// **after** `evaluate`.
+/// capital. After `patience` consecutive strikes it exits with a `Release`
+/// (`World::release_exit`): its bond waits `exit_cooldown_epochs` in the release
+/// escrow. Call **after** `evaluate`.
 ///
 /// `reservation_add` (L13) is a *uniform* additive bump to every active actor's
 /// reservation — the **price-coupling / death-spiral channel**. The staking yield and
@@ -133,15 +195,18 @@ pub fn admit_entrants(world: &mut World, pp: &ParticipationParams) {
 /// `reward_a` and the bond are token-denominated, so they cancel in the ratio and only
 /// *expected* depreciation (the `reservation_add` channel) bites — **if every term is
 /// token-denominated**. But the operational flow cost (bandwidth, storage hardware) is
-/// paid in fiat regardless of token price. When `flow_cost_fiat` is set, the flow cost
-/// is divided by the token price before netting:
+/// paid in fiat regardless of token price. When `flow_cost_fiat` is set, the fiat part
+/// of the flow cost ([`FlowCost`]) is divided by the token price before netting; the
+/// capital carry `K` stays in tokens (P11):
 ///
-/// `apr = (reward_a − flow_cost_a / token_price) / committed_a = R/B − F/(B·p)`
+/// `apr = (reward_a − K_a − F_a / token_price) / committed_a = R/B − K/B − F/(B·p)`
 ///
 /// so a *low static price* raises the real flow-cost drag and can force exit with **no
 /// trust-loss trigger** (`reservation_add = 0`) — a level-driven ignition the
 /// expectation channel does not model. `token_price = 1.0` ⇒ identical to the
-/// token-denominated case; `flow_cost_fiat = false` ⇒ legacy (price never consulted).
+/// token-denominated case; `flow_cost_fiat = false` ⇒ the price is never consulted.
+/// The registered arm has no `K`: its flat carry is in `F`, as its figures were
+/// taken.
 // The exit rule composes one channel per crisis leg (trust bump, acute stress, fiat
 // price); a parameter struct would only relocate the argument list.
 #[allow(clippy::too_many_arguments)]
@@ -166,14 +231,11 @@ pub fn process_exits(
             // Deployed no capital — came to stake, couldn't. Idle capital exits.
             true
         } else {
-            let fcost = flow_cost(world, a, ap, eval.pseudonyms[a], pp);
             // Fiat flow cost (P2): the fiat burden in token terms rises as the price
-            // falls. `token_price = 1.0` (and `!flow_cost_fiat`) reduce to the legacy net.
-            let net = if flow_cost_fiat {
-                eval.rewards[a] - fcost / token_price
-            } else {
-                eval.rewards[a] - fcost
-            };
+            // falls; the capital carry does not (P11).
+            let net = eval.rewards[a]
+                - flow_cost(world, a, ap, eval.pseudonyms[a], pp)
+                    .in_tokens(flow_cost_fiat, token_price);
             let apr = net / committed;
             apr < world.actors[a].reservation * reservation_mult + reservation_add
         };
@@ -187,7 +249,8 @@ pub fn process_exits(
         }
     }
     for a in to_exit {
-        world.deactivate(a);
+        let bond = committed_bond_capital(world, a, ap);
+        world.release_exit(a, bond, ap.exit_cooldown_epochs);
     }
 }
 
@@ -200,64 +263,168 @@ pub fn bonded_active_count(world: &World, ap: &AgentParams) -> usize {
         .count()
 }
 
-/// **Foundation floor** (L12): the number of deep-shard replicas the foundation runs
-/// as a *bootstrap* coverage guarantee, decaying as the staker population thickens.
-///
-/// L5/L6 framed the floor as a thin-period backstop; bootstrapping reframes it as the
-/// **genesis coverage guarantee that backs off on a population-indexed schedule** —
-/// foundation holds the line until the market can, then withdraws (per
-/// `75-system-autonomy.mdc`: population-adaptive, no manual reset). The schedule is a
-/// linear decay in the bonded-archiver population `pop`:
-///
-/// `floor(pop) = round( floor0 · max(0, 1 − pop / decay_pop) )`
-///
-/// so `pop = 0 ⇒ floor0` (full genesis backstop) and `pop ≥ decay_pop ⇒ 0` (the market
-/// is deemed thick enough; foundation withdraws). `decay_pop` is the population at which
-/// the floor reaches zero — set near the emergent steady-state bonded-archiver count so
-/// the floor is ≈0 in steady state and re-engages adaptively only if the population dips
-/// (the backstop property). `floor0 = 0` or `decay_pop ≤ 0` ⇒ no floor (legacy / the
-/// pure-market read).
-///
-/// **The floor is invisible to the reward servo by construction.** Foundation replicas
-/// are separately funded (not paid from `budget`) and are *not* counted in the staker
-/// reward `R`/`Σwork` — they add retrieval coverage only. So the floor backstops
-/// availability **without** raising on-shard `R` (which would lower the `1/R` staker
-/// reward and crowd out the very entry the bootstrap needs). The market keeps its full
-/// reason to come; the floor only guarantees the chain is retrievable while it does.
-pub fn foundation_floor(pop: usize, floor0: usize, decay_pop: f64) -> usize {
-    if floor0 == 0 || decay_pop <= 0.0 {
-        return 0;
-    }
-    let frac = (1.0 - pop as f64 / decay_pop).max(0.0);
-    (floor0 as f64 * frac).round() as usize
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::BondScope;
+    use crate::model::{Actor, Shard};
+    use crate::scenarios::baseline;
 
-/// **Age-stratified floor (P3).** The uniform `foundation_floor` adds the same backstop to
-/// every deep shard; P3 (and L13 finding 2 / L15) show the **oldest band fails first** — it
-/// is the most irreplaceable *and* the thinnest in replicas and domain diversity. This tilts
-/// the floor **oldest-ward, mean-preserving**: a deep shard at normalized age `age` (with
-/// `deep_threshold ≤ age ≤ 1`) gets `floor_uniform · (1 + tilt·(2x − 1))` replicas, where
-/// `x = (age − deep_threshold)/(1 − deep_threshold) ∈ [0,1]`. So the just-deep shoulder
-/// (`x=0`) gets `floor_uniform·(1−tilt)` and the oldest tail (`x=1`) gets
-/// `floor_uniform·(1+tilt)`; the mean over a uniform deep-age distribution is unchanged —
-/// the **same total foundation cost, reallocated to the irreplaceable tail** (the same
-/// mean-preserving shape the L4 bond-age tilt used, applied to the backstop instead of the
-/// bond). `tilt = 0` ⇒ uniform (byte-identical to `foundation_floor`). Mirrors `R_target(age)`
-/// tilting redundancy toward the deep, one level deeper into the irreplaceable tail.
-pub fn foundation_floor_aged(
-    pop: usize,
-    floor0: usize,
-    decay_pop: f64,
-    tilt: f64,
-    age: f64,
-    deep_threshold: f64,
-) -> usize {
-    let base = foundation_floor(pop, floor0, decay_pop);
-    if base == 0 || tilt == 0.0 {
-        return base;
+    fn shard(age: f64) -> Shard {
+        Shard { age }
     }
-    let span = (1.0 - deep_threshold).max(f64::EPSILON);
-    let x = ((age - deep_threshold) / span).clamp(0.0, 1.0);
-    let factor = 1.0 + tilt * (2.0 * x - 1.0);
-    (base as f64 * factor).round().max(0.0) as usize
+
+    /// A slash exit burns exactly the posted bond and deactivates; a
+    /// voluntary exit (`deactivate` alone) leaves capital whole.
+    #[test]
+    fn a_slash_burns_the_posted_bond_and_a_release_does_not() {
+        let ap = baseline().agent_params();
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        // Two deep shards and one hot shard held. Every held shard posts
+        // `bond_rate` (the default scope), so the bond is three of them.
+        let mut world = World::new(
+            vec![shard(0.9), shard(0.6), shard(0.1)],
+            vec![actor.clone(), actor],
+        );
+        for w in [0, 1] {
+            world.holdings[w] = vec![true, true, true];
+        }
+        let burned = slash_exit(&mut world, 0, &ap);
+        assert_eq!(burned, 3.0 * ap.bond_rate);
+        assert_eq!(world.actors[0].capital, 20.0 - 3.0 * ap.bond_rate);
+        assert!(!world.active[0]);
+        world.deactivate(1);
+        assert_eq!(world.actors[1].capital, 20.0);
+    }
+
+    /// A7: the default scope bonds the hot shard too; deep only does not.
+    #[test]
+    fn every_held_shard_scope_bonds_the_hot_shard() {
+        let mut ap = baseline().agent_params();
+        assert_eq!(ap.bond_scope, BondScope::EveryHeld);
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.6), shard(0.1)], vec![actor]);
+        world.holdings[0] = vec![true, true, true];
+        assert_eq!(committed_bond_capital(&world, 0, &ap), 3.0 * ap.bond_rate);
+        ap.bond_scope = BondScope::DeepOnly;
+        assert_eq!(committed_bond_capital(&world, 0, &ap), 2.0 * ap.bond_rate);
+    }
+
+    /// R10: a voluntary exit's bond waits the cooldown in the release escrow,
+    /// is not spendable there, and burns if the actor is slashed before it
+    /// clears. A cooldown of 0 refunds at once.
+    #[test]
+    fn a_release_escrows_the_bond_for_the_cooldown_and_stays_slashable() {
+        let ap = baseline().agent_params();
+        assert_eq!(
+            ap.exit_cooldown_epochs,
+            crate::model::RELEASE_COOLDOWN_EPOCHS
+        );
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.1)], vec![actor.clone(), actor]);
+        world.holdings[0] = vec![true, true];
+        let bond = committed_bond_capital(&world, 0, &ap);
+        world.release_exit(0, bond, 2);
+        assert!(!world.active[0]);
+        assert_eq!(world.released_capital(0), bond);
+        assert_eq!(world.actors[0].capital, 20.0);
+        // The start of the next epoch: still held. The one after: back.
+        world.tick_releases();
+        assert_eq!(world.released_capital(0), bond);
+        world.tick_releases();
+        assert_eq!(world.released_capital(0), 0.0);
+
+        // Re-entered inside the cooldown and slashed: the escrow burns too.
+        world.release_exit(0, bond, 2);
+        world.active[0] = true;
+        world.holdings[0] = vec![true, false];
+        let posted = committed_bond_capital(&world, 0, &ap);
+        let burned = slash_exit(&mut world, 0, &ap);
+        assert_eq!(burned, posted + bond);
+        assert_eq!(world.actors[0].capital, 20.0 - posted - bond);
+        assert_eq!(world.released_capital(0), 0.0);
+
+        // A cooldown of 0 (the registered arm) refunds at once.
+        world.holdings[1] = vec![true, true];
+        world.release_exit(1, 2.0 * ap.bond_rate, 0);
+        assert_eq!(world.released_capital(1), 0.0);
+    }
+
+    /// A6: the split carry charges capital carry on the posted bond and the
+    /// operating cost on every held shard; the registered flat carry charges
+    /// one amount per bonded shard. At the baseline's 2.0 the split's capital
+    /// carry is exactly the registered 0.03, in `f64`.
+    #[test]
+    fn the_split_carry_scales_with_the_bond() {
+        let split = CarryShape::Split {
+            capital_rate: 0.015,
+            operating_per_shard: 0.002,
+        };
+        assert_eq!(split.per_shard(true, 2.0), 0.015 * 2.0 + 0.002);
+        assert_eq!(split.per_shard(true, 0.75), 0.015 * 0.75 + 0.002);
+        assert_eq!(split.per_shard(false, 2.0), 0.002);
+        let flat = CarryShape::FlatPerBond(0.03);
+        assert_eq!(flat.per_shard(true, 0.75), 0.03);
+        assert_eq!(flat.per_shard(false, 2.0), 0.0);
+        assert_eq!(
+            crate::scenarios::BASELINE_CAPITAL_CARRY_RATE * crate::scenarios::BASELINE_BOND_RATE,
+            crate::scenarios::BASELINE_BOND_CARRY
+        );
+    }
+
+    /// P11: under a fiat flow cost, the split carry's capital term stays in
+    /// tokens and only the fiat expenses are divided by the price. The
+    /// registered flat carry is a fiat expense, as its figures were taken.
+    #[test]
+    fn a_fiat_flow_cost_converts_the_expenses_and_not_the_capital_carry() {
+        let pp = ParticipationParams {
+            entry_per_epoch: 0,
+            patience: 1,
+            pseudonym_cost: 0.05,
+        };
+        let actor = Actor {
+            storage_capacity: 4,
+            capital: 20.0,
+            is_whale: false,
+            reservation: 0.0,
+        };
+        let mut world = World::new(vec![shard(0.9), shard(0.1)], vec![actor]);
+        world.holdings[0] = vec![true, true];
+        let price = 0.25;
+
+        let mut ap = baseline().agent_params();
+        ap.carry = CarryShape::Split {
+            capital_rate: 0.015,
+            operating_per_shard: 0.002,
+        };
+        let bond = committed_bond_capital(&world, 0, &ap);
+        let cost = flow_cost(&world, 0, &ap, 2, &pp);
+        assert_eq!(cost.tokens, 0.015 * bond);
+        let expenses = 2.0 * ap.storage_unit_cost + 2.0 * 0.002 + 0.05;
+        assert_eq!(cost.fiat, expenses);
+        assert_eq!(cost.in_tokens(true, price), 0.015 * bond + expenses / price);
+        assert_eq!(cost.in_tokens(false, price), 0.015 * bond + expenses);
+
+        ap.carry = CarryShape::FlatPerBond(0.03);
+        let cost = flow_cost(&world, 0, &ap, 2, &pp);
+        assert_eq!(cost.tokens, 0.0);
+        let registered = 2.0 * ap.storage_unit_cost + 2.0 * 0.03 + 0.05;
+        assert_eq!(cost.in_tokens(true, price), registered / price);
+        assert_eq!(cost.in_tokens(false, price), registered);
+    }
 }
