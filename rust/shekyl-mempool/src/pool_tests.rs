@@ -13,17 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 
 use super::{Admission, Arrival, Duplicate, Pool, Step1};
 use crate::door::Judged;
-
-fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "shekyl-mempool-{name}-{}-{:?}.redb",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&p));
-    p
-}
+use crate::test_paths::tmp;
 
 /// CEN-M1 answers before the door: a transaction the chain holds is a
 /// duplicate even when its bytes would be refused — nothing is judged.
@@ -53,7 +43,6 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
         .unwrap()
     });
     assert_eq!(admission, Admission::Duplicate(Duplicate::OnChain));
-    drop(std::fs::remove_file(&path));
 }
 
 /// A refusal is the door's answer and leaves nothing: not in memory, not
@@ -83,7 +72,6 @@ fn duplicate_names_a_transaction_the_chain_carries_and_nothing_else() {
     });
     assert_eq!(carried, Some(Duplicate::OnChain));
     assert_eq!(absent, None);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -132,7 +120,6 @@ fn a_refused_transaction_leaves_no_trace() {
         assert!(pool.is_empty());
         assert_eq!(reconciled, crate::reconcile::Reconciled::default());
     });
-    drop(std::fs::remove_file(&path));
 }
 
 fn marker(height: u64, byte: u8, work: u128) -> super::JudgedTip {
