@@ -134,13 +134,16 @@ fn seated(label: &str, through: u64) -> Seated {
     }
 }
 
-/// A tree's seats over an epoch when no seat is ever filed, from the
-/// specification and not from the rules crate (`ARCHIVAL_SUPPORT_DRAW.md`
-/// §2, the carry): the epoch-relative heights it sits at, and what it is
-/// owed after each one. A seated block whose window closes inside the
-/// epoch unfiled owes one more draw, capped at `c`; an owed tree takes a
-/// seat on each usable block it is not scheduled on, one owed draw each.
-/// The close is noted before the block seats, as the connect does.
+/// A tree's seats over an epoch when no seat is ever filed, written from
+/// the specification's carry passage and not from the rules crate
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §2): the epoch-relative heights it sits at,
+/// and what it is owed after each one. The spec states that a seat at `h`
+/// is first seen unfiled at `h + W₂ + 1`, that it is owed again, capped at
+/// `c`, and that an owed tree takes one seat on each later block below
+/// `SEB − W₂` that its schedule does not seat. The spec does not say
+/// whether the block at `h + W₂ + 1` can itself carry it. This oracle
+/// follows the connect, which notes the close before that block seats, so
+/// it can.
 fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
     let scheduled = specified_seats(persona);
     let span = seb() - window();

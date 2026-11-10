@@ -671,7 +671,7 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
 /// its epoch has reached its slash deadline, which falls in the epoch
 /// after it (`SLASH_GRACE_EPOCHS`). So an omitted pass changes neither of
 /// J16's checks. The window lies above the issued indexes' read floor
-/// ([`EpochFloor`]`<Settling>`) — [`COOLDOWN_WINDOW_IS_READABLE`] holds it
+/// ([`EpochFloor`]`<Settling>`) — `COOLDOWN_WINDOW_IS_READABLE` holds it
 /// at compile time — so the read never asks for a retired epoch.
 ///
 /// Public for the submit engine's Release facts over the Rust pool and the
