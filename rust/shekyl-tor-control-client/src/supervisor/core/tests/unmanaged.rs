@@ -73,3 +73,38 @@ fn an_operators_tor_status_carries_the_verdict_and_the_sessions() {
     assert_eq!(status.own_tx, OwnTx::AddressHiding);
     assert!(status.sync.tor && status.sync.clearnet, "{:?}", status.sync);
 }
+
+/// **An unmanaged supervisor's status never carries an install cause.**
+/// A Tor this node does not run has no pin and no launch. Were a pin or
+/// launch answer folded anyway, the core would show `unavailable` or a
+/// refused pin, with the install fixes, against a Tor the operator runs;
+/// it folds none of them, and the status keeps no cause and offers no fix.
+/// Fails if the unmanaged core folds a launch's answer.
+#[test]
+fn an_unmanaged_status_never_carries_an_install_cause() {
+    use super::super::super::posture::{Cause, Space};
+    for tor in [TorSetting::Off, TorSetting::Operator] {
+        let (mut core, _) = Core::start(policy(), unmanaged(tor), 0);
+        for input in [
+            Input::PinRefused,
+            Input::BundleMissing,
+            Input::Unavailable,
+            Input::DirectoryUnusable {
+                space: Some(Space {
+                    available: 1,
+                    needed: 2,
+                }),
+            },
+            Input::PinAccepted,
+            Input::Spawned,
+            Input::SpawnFailed,
+        ] {
+            let named = format!("{tor:?} {input:?}");
+            let step = core.on(input, 1);
+            assert!(step.actions.is_empty(), "{named}: {step:?}");
+            let status = core.status();
+            assert_eq!(status.cause, Cause::None, "{named}");
+            assert!(status.fixes.is_empty(), "{named}: {:?}", status.fixes);
+        }
+    }
+}

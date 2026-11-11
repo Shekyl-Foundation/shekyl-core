@@ -742,7 +742,7 @@ impl Drive {
                 tracing::info!(target: "global", "{text}");
                 Vec::new()
             }
-            Action::CheckPin => vec![self.pin()],
+            Action::CheckPin => self.pin(),
             // A request: sent off the loop, answered as an arrival.
             Action::Reap
             | Action::Spawn { .. }
@@ -945,10 +945,18 @@ impl Drive {
         inputs
     }
 
-    fn pin(&mut self) -> Input {
-        // The core asks no pin of a Tor this node does not run.
+    /// Check the binary a managed Tor launches. A supervisor that runs no
+    /// Tor has no source, and the core asks it no pin
+    /// (`AbsentDuty::Unmanaged`). Were it asked, no answer is made up: an
+    /// unavailable or refused pin would project an install cause and its
+    /// fixes onto a Tor the operator runs. It says so and answers nothing.
+    fn pin(&mut self) -> Vec<Input> {
         let Some(source) = &self.binary else {
-            return Input::Unavailable;
+            tracing::error!(
+                target: "global",
+                "the Tor supervisor was asked to check a Tor binary under a tor setting that runs none; nothing was checked"
+            );
+            return Vec::new();
         };
         let verified = match source {
             PinSource::Discover(Some(path)) => discover_and_verify_at(path),
@@ -967,7 +975,7 @@ impl Drive {
             }
         };
         self.pin_checked = true;
-        input
+        vec![input]
     }
 
     fn watch_state(&self) -> Option<Input> {

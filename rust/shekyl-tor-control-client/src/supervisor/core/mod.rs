@@ -558,6 +558,23 @@ pub enum Input {
     ExternalCleared,
 }
 
+impl Input {
+    /// An answer to the pin check or a launch: what only a supervisor that
+    /// runs its Tor asks for.
+    fn answers_a_launch(&self) -> bool {
+        matches!(
+            self,
+            Self::PinAccepted
+                | Self::PinRefused
+                | Self::BundleMissing
+                | Self::Unavailable
+                | Self::DirectoryUnusable { .. }
+                | Self::Spawned
+                | Self::SpawnFailed
+        )
+    }
+}
+
 /// How one upload round ended (§4.5). The three counts are one fact: how
 /// many reached a directory, how many of the uploads that began were
 /// refused, and how many began. A refused majority is read from `begun`,
@@ -795,6 +812,12 @@ impl Core {
     /// not keep it, and a reference would only clone the fields out.
     #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
+        // A Tor this node does not run has no pin and no launch, so their
+        // answers are not this core's: one folded would show an install or
+        // launch cause, and its fixes, against a Tor the operator runs.
+        if !self.managed() && input.answers_a_launch() {
+            return self.step(now, Vec::new());
+        }
         let actions = match input {
             Input::PinAccepted => self.pin_accepted(),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
