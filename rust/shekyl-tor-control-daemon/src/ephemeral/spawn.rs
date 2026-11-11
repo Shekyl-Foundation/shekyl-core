@@ -10,11 +10,12 @@
 //! again is retired ([`KeptDataDir::retire`]): Tor's log is kept beside it and
 //! the rest becomes a tombstone (`TSR-Q1`, `TOR_SUPERVISOR.md` §4.7).
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use kameo::actor::Spawn;
@@ -22,7 +23,7 @@ use tokio::sync::{oneshot, watch};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, Resume, SocksPort,
+    BootstrapReadiness, Command, DiskWrites, EventSink, HandshakeWait, ManagedTor, SocksPort,
     SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_tor_control_client::directory_cache;
@@ -84,19 +85,28 @@ pub enum SpawnError {
 
 impl DaemonTorControl {
     /// Spawn tor and return when `GETINFO version` answers. Bootstrap is
-    /// not a gate.
-    pub async fn spawn_keeping(config: DaemonTorConfig) -> Result<Self, SpawnError> {
+    /// not a gate. The spawn waits for that first reply until `until`
+    /// resolves, and past it stops and reaps the child and fails with
+    /// [`DaemonTorStartError::Unanswered`]: a deadline is the caller's to
+    /// give (`tokio::time::sleep`), and a supervisor that holds its own
+    /// bound gives the signal it abandons the launch with.
+    pub async fn spawn_keeping(
+        config: DaemonTorConfig,
+        until: impl Future<Output = ()> + Send,
+    ) -> Result<Self, SpawnError> {
         let data_dir =
             EphemeralDataDir::create_under(&config.data_dir_parent).map_err(SpawnError::DataDir)?;
         let kept = KeptDataDir { dir: data_dir };
-        Self::spawn_in(kept, config, true)
+        Self::spawn_in(kept, config, true, until)
             .await
             .map_err(SpawnError::Launch)
     }
 
-    /// [`Self::spawn_keeping`], retiring the directory when the spawn fails.
+    /// [`Self::spawn_keeping`] within the config's reply deadline, retiring
+    /// the directory when the spawn fails.
     pub async fn launch(config: DaemonTorConfig) -> Result<Self, DaemonTorStartError> {
-        match Self::spawn_keeping(config).await {
+        let deadline = tokio::time::sleep(config.reply_deadline);
+        match Self::spawn_keeping(config, deadline).await {
             Ok(up) => Ok(up),
             Err(SpawnError::DataDir(error)) => Err(DaemonTorStartError::DataDir(error)),
             Err(SpawnError::Launch(failure)) => {
@@ -107,13 +117,14 @@ impl DaemonTorControl {
     }
 
     /// Spawn into a directory a previous incarnation kept. The cache is not
-    /// copied again.
+    /// copied again. `until` is as [`Self::spawn_keeping`]'s.
     pub async fn spawn_into(
         directory: KeptDataDir,
         tor_binary: VerifiedTorBinary,
         events: EventSink,
         reply_deadline: Duration,
         socks_timeout: SocksTimeout,
+        until: impl Future<Output = ()> + Send,
     ) -> Result<Self, LaunchFailure> {
         let parent = directory
             .path()
@@ -130,6 +141,7 @@ impl DaemonTorControl {
                 socks_timeout,
             },
             false,
+            until,
         )
         .await
     }
@@ -138,6 +150,7 @@ impl DaemonTorControl {
         directory: KeptDataDir,
         config: DaemonTorConfig,
         install_cache: bool,
+        until: impl Future<Output = ()> + Send,
     ) -> Result<Self, LaunchFailure> {
         let DaemonTorConfig {
             tor_binary,
@@ -182,6 +195,7 @@ impl DaemonTorControl {
             }
         });
         let (readiness, ready) = BootstrapReadiness::new();
+        let (handshake, abandoned) = oneshot::channel();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary,
@@ -191,6 +205,8 @@ impl DaemonTorControl {
                 disable_network: false,
                 disk_writes: DiskWrites::Prompt,
                 exit_observer: Some(exit_tx),
+                // The caller's `until` is the only bound on the first reply.
+                handshake: HandshakeWait::Until(abandoned),
             }),
             events,
             readiness,
@@ -200,17 +216,20 @@ impl DaemonTorControl {
             exit_watch,
             socks_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             reply_deadline,
-            resume: Mutex::new(Resume::Awake),
             stopping: Arc::new(AtomicBool::new(false)),
             copied,
             bootstrapped: false,
             ready,
+            handshake: Some(handshake),
             data_dir: Some(directory.dir),
         };
-        if let Err(error) = handle
-            .ask_bounded(Command::GetInfo(vec!["version".to_owned()]), reply_deadline)
-            .await
-        {
+        let asker = handle.asker();
+        let first = asker.ask(Command::GetInfo(vec!["version".to_owned()]));
+        let answered = tokio::select! {
+            reply = first => reply.map(drop),
+            () = until => Err(DaemonTorStartError::Unanswered),
+        };
+        if let Err(error) = answered {
             let directory = handle.abandon().await;
             return Err(LaunchFailure { error, directory });
         }

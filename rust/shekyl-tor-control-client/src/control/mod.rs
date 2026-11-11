@@ -59,7 +59,7 @@ pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, DeathSignal, DiskWrites,
-    EventReceiver, EventSink, Fed, ManagedTor, Signal, SocksPort, SocksTimeout,
+    EventReceiver, EventSink, Fed, HandshakeWait, ManagedTor, Signal, SocksPort, SocksTimeout,
     SystemDirectoryError, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
     EVENT_QUEUE_EVENTS,
 };
@@ -85,10 +85,7 @@ pub use onion::{
     evaluate_add_onion_reply, parse_service_id, AddOnion, AddOnionReplyError, OnionFlags, OnionKey,
     OnionPort, OnionPow, ServiceId, ONION_KEY_BYTES, SERVICE_ID_CHARS,
 };
-pub use ready::{
-    ask_timed, resume_lateness, wait_until_ready, AskError, Asked, Resume, WaitReadyError,
-    RESUMED_AFTER,
-};
+pub use ready::{resume_lateness, wait_until_ready, Resume, WaitReadyError, RESUMED_AFTER};
 pub use safecookie::{verify_server_hash, ControlCookie, ServerVerified};
 pub use stream::{parse_stream_event, CircId, StreamEvent, StreamStatus};
 pub use traffic::parse_traffic_read;

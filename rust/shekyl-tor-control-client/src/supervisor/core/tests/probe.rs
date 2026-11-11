@@ -16,7 +16,7 @@ use std::time::Duration;
 use super::super::super::posture::{render, Carriage, Cause, Inbound, InboundCause, OwnTx, Shown};
 use super::super::{duration_ns, Action, Core, Input, RoundTally, Step};
 use super::{
-    announces, bring_up, carrying, held, managed, policy, reach_usable, socks, takes_down,
+    announces, bring_up, carrying, held, managed, policy, reach_usable, replied, socks, takes_down,
 };
 
 pub(super) fn secs(seconds: u64) -> u64 {
@@ -124,6 +124,7 @@ pub(super) fn published() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
+    replied(&mut core, 0);
     assert_eq!(core.status().inbound, Inbound::Publishing);
     core
 }
@@ -154,6 +155,51 @@ fn fold_unnamed_directories(core: &mut Core, at: u64) {
     );
 }
 
+/// Answer what the driver would answer: a sample's reply, a directory
+/// check's list, and `Replied` after each, until nothing is in flight.
+/// Every action a step sent is kept, the requests answered among them.
+fn answer_requests(core: &mut Core, at: u64, actions: &mut Vec<Action>) {
+    let sent = |actions: &[Action]| {
+        (
+            actions.contains(&Action::Sample),
+            actions.contains(&Action::CheckDirectories),
+        )
+    };
+    let (mut sampled, mut checked) = sent(actions);
+    while core.in_flight().is_some() {
+        if sampled {
+            core.on(
+                Input::DirectorySample {
+                    progress: Some(100),
+                    socks: None,
+                    read: None,
+                },
+                at,
+            );
+        }
+        if checked {
+            fold_unnamed_directories(core, at);
+        }
+        let next = replied(core, at);
+        (sampled, checked) = sent(&next.actions);
+        actions.extend(next.actions);
+    }
+}
+
+/// `step`, with every request it sent answered at `at` by
+/// [`answer_requests`]; the actions of each `Replied` step, which send what
+/// was queued, join the step's. A request other than a sample or a
+/// directory check is answered with `Replied` alone: what its reply carries
+/// is the test's to fold.
+pub(super) fn served(core: &mut Core, step: Step, at: u64) -> Step {
+    let mut actions = step.actions;
+    answer_requests(core, at, &mut actions);
+    Step {
+        actions,
+        deadline: core.deadline(),
+    }
+}
+
 /// [`run_to`], with the time of the step it returns.
 pub(super) fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
     // A check asked before this wait, by a round ending.
@@ -166,26 +212,15 @@ pub(super) fn run_timed(core: &mut Core, at: u64) -> (u64, Step) {
     while let Some(due) = core.deadline().filter(|due| *due <= at) {
         when = due;
         let step = core.on_deadline(due);
-        let sampled = step.actions.contains(&Action::Sample);
-        // A check asked by this deadline, the round's wait among them.
-        // Fold it before the next deadline, as the driver does.
-        if step.actions.contains(&Action::CheckDirectories) {
-            fold_unnamed_directories(core, due);
-        }
+        let mut actions = step.actions;
+        // A sample or a check asked by this deadline, the round's wait
+        // among them: answered before the next deadline, as the driver
+        // does, each with `Replied`.
+        answer_requests(core, due, &mut actions);
         last = Step {
-            actions: step.actions,
-            deadline: step.deadline,
+            actions,
+            deadline: core.deadline(),
         };
-        if sampled {
-            core.on(
-                Input::DirectorySample {
-                    progress: Some(100),
-                    socks: None,
-                    read: None,
-                },
-                due,
-            );
-        }
         if probes(&last) > 0 || cancels(&last) > 0 {
             return (when, last);
         }
@@ -392,7 +427,10 @@ fn a_timely_arrival_folded_late_is_reachable_and_a_late_one_still_misses() {
         Inbound::Reachable { evidence_at: taken }
     );
     assert_eq!(publishes_inbound(&arrived).len(), 1);
+    // Each deadline's liveness sample is answered; a request queued behind
+    // it is sent by its `Replied`, and counted with the step.
     let later = core.on_deadline(bound + secs(5));
+    let later = served(&mut core, later, bound + secs(5));
     assert_eq!(cancels(&later), 0, "the probe already arrived");
     assert_eq!(republishes(&later), 0);
 
@@ -405,6 +443,7 @@ fn a_timely_arrival_folded_late_is_reachable_and_a_late_one_still_misses() {
     assert!(publishes_inbound(&late).is_empty());
     assert_eq!(core.status().inbound, Inbound::Publishing);
     let missed = core.on_deadline(bound);
+    let missed = served(&mut core, missed, bound);
     assert_eq!(cancels(&missed), 1);
     assert_eq!(
         refetches(&missed),
@@ -440,12 +479,19 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     let died = core.on(Input::ProcessEnded { exit_code: None }, secs(116));
     assert_eq!(cancels(&died), 1, "the fault drops the probe");
     assert!(takes_down(&died));
+    // The ended Tor is reaped off the loop before the next launch.
+    assert!(died.actions.contains(&Action::Reap), "{:?}", died.actions);
+    replied(&mut core, secs(116));
 
     // The respawn reaches Running again; the onion is republished.
     let due = core.deadline().expect("the pin check");
     core.on_deadline(due);
     core.on(Input::PinAccepted, due);
     core.on(Input::Spawned, due);
+    // The launch, then the subscription; its `Replied` sends the first
+    // sample, answered here.
+    replied(&mut core, due);
+    replied(&mut core, due);
     core.on(
         Input::DirectorySample {
             progress: Some(100),
@@ -454,11 +500,15 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
         },
         due,
     );
+    replied(&mut core, due);
     let running = core.on(Input::BootstrapComplete, due);
     assert!(running.actions.contains(&Action::RepublishOnion));
     assert_eq!(core.status().inbound, Inbound::Publishing);
     core.on(Input::RouteInstalled, due);
+    // The publish's `DEL_ONION`, then its `ADD_ONION`.
+    replied(&mut core, due);
     core.on(Input::OnionPublished, due);
+    replied(&mut core, due);
     let stale = core.on(arrival(secs(115), due + 1), due + 1);
     assert!(publishes_inbound(&stale).is_empty());
     assert_eq!(core.status().inbound, Inbound::Publishing);
@@ -632,19 +682,12 @@ fn a_round_open_for_five_minutes_is_counted_once_and_never_a_cause() {
         turns += 1;
         assert!(turns < 1_000, "a deadline that never moves");
         now = due;
+        // The sample and the check a step sends are answered, each with
+        // `Replied`, as the driver answers them ([`served`]).
         let step = core.on_deadline(due);
+        let step = served(&mut core, step, due);
         said += stucks(&step);
         probed += probes(&step);
-        if step.actions.contains(&Action::Sample) {
-            core.on(
-                Input::DirectorySample {
-                    progress: Some(100),
-                    socks: None,
-                    read: None,
-                },
-                due,
-            );
-        }
         if probes(&step) > 0 {
             core.on(Input::ProbeDialed { minted_at: due }, due);
             core.on(arrival(due, due), due);

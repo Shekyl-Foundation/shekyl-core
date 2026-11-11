@@ -21,7 +21,7 @@
 
 use super::super::super::posture::{render, ReportedSkew};
 use super::super::{Action, Core, Input};
-use super::{managed, policy};
+use super::{managed, policy, replied};
 
 const SECOND: u64 = 1_000_000_000;
 const DAY: u64 = 86_400;
@@ -61,11 +61,19 @@ impl Tor {
     }
 }
 
-/// A Bootstrapping core: the pin passed, Tor spawned at 0.
+/// A Bootstrapping core: the pin passed, Tor spawned at 0, the launch and
+/// the event subscription answered. The first sample is in flight: [`run`]
+/// answers it at its start, as every other.
 fn bootstrapping() -> Core {
     let (mut core, _) = Core::start(policy(), managed(false), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    replied(&mut core, 0);
+    let subscribed = replied(&mut core, 0);
+    assert!(
+        subscribed.actions.contains(&Action::Sample),
+        "the first sample follows the subscription: {subscribed:?}"
+    );
     core
 }
 
@@ -77,6 +85,19 @@ struct Said {
 }
 
 impl Said {
+    /// Render each line `actions` asks to say.
+    fn hear(&mut self, core: &Core, actions: &[Action]) {
+        for action in actions {
+            if matches!(action, Action::Announce | Action::SayProgress) {
+                let line = render(&core.status());
+                if matches!(action, Action::Announce) {
+                    self.announced.push(line.clone());
+                }
+                self.lines.push(line);
+            }
+        }
+    }
+
     fn naming_the_clock(&self) -> Vec<&String> {
         self.lines
             .iter()
@@ -88,7 +109,10 @@ impl Said {
 /// Drive `core` to `until`: each of `events` at its time, every deadline up
 /// to it served, each sample answered with `progress` and the consensus
 /// clock `wall_at` reads then (the time is the test's, in
-/// nanoseconds; the wall clock and `valid-after` are seconds).
+/// nanoseconds; the wall clock and `valid-after` are seconds), and then
+/// [`Input::Replied`], whose step sends what was queued behind it. A sample
+/// in flight when the run starts (the first one [`bootstrapping`] left) is
+/// answered at `from`.
 fn run(
     core: &mut Core,
     from: u64,
@@ -97,19 +121,31 @@ fn run(
     progress: u8,
     wall_at: impl Fn(u64) -> (u64, u64),
 ) -> Said {
-    let mut lines = Vec::new();
-    let mut announced = Vec::new();
-    let mut said = |core: &Core, actions: &[Action]| {
-        for action in actions {
-            if matches!(action, Action::Announce | Action::SayProgress) {
-                let line = render(&core.status());
-                if matches!(action, Action::Announce) {
-                    announced.push(line.clone());
-                }
-                lines.push(line);
-            }
+    let mut said = Said {
+        lines: Vec::new(),
+        announced: Vec::new(),
+    };
+    let answer = |core: &mut Core, said: &mut Said, at: u64, mut sampled: bool| {
+        while sampled {
+            let folded = core.on(
+                Input::DirectorySample {
+                    progress: Some(progress),
+                    socks: None,
+                    read: None,
+                },
+                at,
+            );
+            said.hear(core, &folded.actions);
+            let (valid_after, wall) = wall_at(at);
+            let read = core.on(Input::ConsensusClock { valid_after, wall }, at);
+            said.hear(core, &read.actions);
+            let next = replied(core, at);
+            said.hear(core, &next.actions);
+            sampled = next.actions.contains(&Action::Sample);
         }
     };
+    let first = core.in_flight().is_some();
+    answer(core, &mut said, from, first);
     let mut next_event = 0;
     let mut now = from;
     loop {
@@ -126,30 +162,16 @@ fn run(
         }
         assert!(at >= now, "time went back from {now} to {at}");
         now = at;
-        if event_at == Some(at) {
-            let step = core.on(events[next_event].1.input(), at);
-            said(core, &step.actions);
+        let step = if event_at == Some(at) {
             next_event += 1;
-            continue;
-        }
-        let step = core.on_deadline(at);
-        said(core, &step.actions);
-        if step.actions.contains(&Action::Sample) {
-            let folded = core.on(
-                Input::DirectorySample {
-                    progress: Some(progress),
-                    socks: None,
-                    read: None,
-                },
-                at,
-            );
-            said(core, &folded.actions);
-            let (valid_after, wall) = wall_at(at);
-            let read = core.on(Input::ConsensusClock { valid_after, wall }, at);
-            said(core, &read.actions);
-        }
+            core.on(events[next_event - 1].1.input(), at)
+        } else {
+            core.on_deadline(at)
+        };
+        said.hear(core, &step.actions);
+        answer(core, &mut said, at, step.actions.contains(&Action::Sample));
     }
-    Said { lines, announced }
+    said
 }
 
 /// The wall clock `at` the test's time, three days behind, and the consensus

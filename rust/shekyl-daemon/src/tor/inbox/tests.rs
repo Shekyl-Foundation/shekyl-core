@@ -104,19 +104,15 @@ async fn next_arrival(inbox: &mut Inbox) -> Arrival {
 // Producers that end
 // ---------------------------------------------------------------------
 
-/// **The owner's stop is said once.** Closing the queue is the stop, and
-/// it sets the latch an ask races. A closed queue answers at once, every
-/// time, so it is not read again: the next wait stays pending. Posting a
-/// stop and then closing would say it twice and fail that pending check.
+/// **The owner's stop is said once.** Closing the queue is the stop. A
+/// closed queue answers at once, every time, so it is not read again: the
+/// next wait stays pending. Posting a stop and then closing would say it
+/// twice and fail that pending check.
 #[tokio::test(start_paused = true)]
 async fn the_owners_stop_is_said_once() {
     let (mut owner, mut inbox, _feeds) = inbox();
     owner.stop();
     assert!(matches!(inbox.wait().await, Woken::Arrived(Arrival::Stop)));
-    let latch = inbox.latch();
-    tokio::time::timeout(Duration::from_millis(1), latch.stopped())
-        .await
-        .expect("the latch is set");
     assert!(pending_a_minute(&mut inbox).await.is_none(), "it spun");
 }
 
@@ -477,11 +473,14 @@ async fn a_deadline_goes_after_the_arrivals_already_queued_behind_it() {
 // The bound on passes
 // ---------------------------------------------------------------------
 
-/// The five producers of the inbox.
+/// The six producers of the inbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Producer {
-    /// The supervisor's handle: the forward listener, and the stop.
+    /// The supervisor's handle: the forward listener, a status ask, and the
+    /// stop.
     Owner,
+    /// A request to Tor run off the loop: its answer (`super::requests`).
+    Request,
     /// The network: the tally, the verdict, the sessions, probe arrivals.
     Network,
     /// Tor's control connection: its events.
@@ -492,8 +491,9 @@ enum Producer {
     Timer,
 }
 
-const PRODUCERS: [Producer; 5] = [
+const PRODUCERS: [Producer; 6] = [
     Producer::Owner,
+    Producer::Request,
     Producer::Network,
     Producer::Events,
     Producer::Incarnation,
@@ -520,6 +520,7 @@ fn orders(items: &[Producer]) -> Vec<Vec<Producer>> {
 /// The producers, live, as one run holds them.
 struct Live {
     owner: Option<Owner>,
+    request: Option<Poster>,
     feeds: Option<SupervisorFeeds>,
     events: Option<EventSink>,
     boot: Option<watch::Sender<BootstrapState>>,
@@ -540,6 +541,16 @@ impl Live {
             Producer::Owner => {
                 if let Some(owner) = &self.owner {
                     owner.forward(forward());
+                    drop(owner.ask_status());
+                    self.fed += 2;
+                }
+            }
+            Producer::Request => {
+                if let Some(request) = &self.request {
+                    request.post(Arrival::Reply {
+                        number: u64::try_from(self.fed).expect("small"),
+                        answer: Box::new(super::super::requests::Answer::Inputs(Vec::new())),
+                    });
                     self.fed += 1;
                 }
             }
@@ -609,6 +620,7 @@ impl Live {
                     self.fed += 1;
                 }
             }
+            Producer::Request => drop(self.request.take()),
             Producer::Network => drop(self.feeds.take()),
             Producer::Events => drop(self.events.take()),
             Producer::Incarnation => {
@@ -647,7 +659,7 @@ async fn drain(inbox: &mut Inbox, passes: &mut usize) {
 
 /// **One property: for any order of producers closing, the loop's passes
 /// are bounded by the inputs and deadlines fed in** (Rick, 2026-11-05).
-/// Every one of the 120 orders: each live producer feeds an input, one
+/// Every one of the 720 orders: each live producer feeds an input, one
 /// closes, each still live feeds again, and so on until all have closed.
 /// Every wait that returns is a pass. The passes never exceed what was fed.
 /// The owner's close is one of those inputs, the stop said once; a second
@@ -670,6 +682,7 @@ async fn for_any_order_of_producers_closing_the_passes_are_bounded_by_the_inputs
         let clocked = Clocked::new(inbox.poster());
         let mut live = Live {
             owner: Some(owner),
+            request: Some(inbox.poster()),
             feeds: Some(feeds),
             events: Some(events),
             boot: Some(boot),

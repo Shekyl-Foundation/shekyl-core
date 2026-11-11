@@ -352,11 +352,10 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
     let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
     let parent = tempfile::tempdir().expect("tempdir");
     let (events, mut received) = EventSink::bounded();
-    let mut boot = DaemonTorControl::spawn_keeping(subscribed_config(
-        binary.clone(),
-        parent.path().to_path_buf(),
-        events.clone(),
-    ))
+    let mut boot = DaemonTorControl::spawn_keeping(
+        subscribed_config(binary.clone(), parent.path().to_path_buf(), events.clone()),
+        tokio::time::sleep(Duration::from_secs(30)),
+    )
     .await
     .unwrap_or_else(|_| panic!("start"));
     subscribe(&boot).await;
@@ -401,6 +400,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         events,
         Duration::from_secs(30),
         SocksTimeout::TorDefault,
+        tokio::time::sleep(Duration::from_secs(30)),
     )
     .await
     .unwrap_or_else(|_| panic!("respawn"));
