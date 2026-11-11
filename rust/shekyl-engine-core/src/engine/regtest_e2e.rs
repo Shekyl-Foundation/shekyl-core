@@ -144,8 +144,8 @@ impl RegtestSchedule {
 
 pub(super) struct RegtestDaemon {
     child: Child,
-    /// The daemon's `data-dir`: [`Self::data_dir`] unless the spawn named
-    /// another ([`RegtestSpawn::with_chain_dir`]).
+    /// The daemon's `data-dir`. The full-disk gate, Linux only, names
+    /// another directory for the chain and keeps the logs in [`Self::data_dir`].
     chain_dir: PathBuf,
     /// Where the logs are, and the chain too unless the spawn moved it.
     data_dir: PathBuf,
@@ -375,7 +375,9 @@ impl RegtestSpawn {
     }
 
     /// Keep the chain and pool files under `dir`, and the logs where every
-    /// spawn keeps them.
+    /// spawn keeps them. The full-disk gate is the caller, and it is
+    /// Linux-only, so the method is too: a Windows build has no caller.
+    #[cfg(target_os = "linux")]
     fn with_chain_dir(mut self, dir: PathBuf) -> Self {
         self.chain_dir = Some(dir);
         self
