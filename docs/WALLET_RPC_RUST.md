@@ -163,11 +163,10 @@ dispatcher):
 FROST multisig never crossed this dispatcher. It is Shekyl-native, owned by
 `rust/shekyl-multisig` (the ceremony / blob format) and reached through
 `shekyl-engine-core`; the CI lane that compiles it under `--features
-multisig` is `.github/workflows/multisig-feature.yml`. **DKG is not exposed
-over RPC** — the `dkg-pedpop` crate's round message types do not implement
-`serde::Serialize`/`Deserialize`, so DKG runs through the
-`shekyl-engine-core` API with file-based message exchange (air-gap
-compatible). See [`PQC_MULTISIG.md`](PQC_MULTISIG.md) for the ceremony flow.
+multisig` is `.github/workflows/multisig-feature.yml`. There is no DKG to
+expose: an E′ group is dealt, and the dealer gives each member a member
+file (air-gap compatible). See [`PQC_MULTISIG.md`](PQC_MULTISIG.md) §5.2
+and §6.6.
 
 ## Sync driver
 

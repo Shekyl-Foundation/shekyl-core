@@ -49,7 +49,10 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # FROST multisig (optional)
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"], optional = true }
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
-dkg-pedpop = { version = "0.6", optional = true }
+# The dealer split of a new group's `y_group` (`frost_sal::dealer_split`): the
+# same publisher and pin family as `modular-frost`, already in the lockfile as
+# its optional dependency.
+dkg-dealer = { version = "0.6", default-features = false, features = ["std"], optional = true }
 
 tracing = "0.1"
 thiserror.workspace = true
@@ -61,14 +64,18 @@ rand = "0.8"
 # check; its refusal test exercises it through a real serde format.
 serde_json = "1"
 modular-frost = { version = "0.11", features = ["ed25519", "tests"] }
-dkg-pedpop = "0.6"
+# `tests/frost_spend.rs`: a multisig spend end to end, from a dealt group's
+# member files and slice 1's outputs. Test-only edges; `shekyl-multisig`
+# takes no curve dependency, so there is no cycle.
+shekyl-multisig = { path = "../shekyl-multisig" }
+shekyl-address = { path = "../shekyl-address" }
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"] }
 rand_chacha = "0.3"
 
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-pedpop"]
+multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-dealer"]
 
 [lints]
 workspace = true

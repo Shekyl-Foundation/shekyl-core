@@ -656,17 +656,6 @@ rust/
 | `shekyl_derive_pqc_leaf_entry()` | `shekyl-ffi/src/legacy_fcmp.rs` | Derive the 64-byte `0x07` entry `CM ‖ record` from combined_ss (blinds stay in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/legacy_fcmp.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/legacy_fcmp.rs` | Convert outputs to 4-scalar leaves |
-| `shekyl_frost_sal_session_new()` | `shekyl-ffi/src/lib.rs` | Create FROST SAL session per input (Rust-only, `multisig` feature) |
-| `shekyl_frost_sal_get_rerand()` | `shekyl-ffi/src/lib.rs` | Get rerandomized output from session (Rust-only, `multisig` feature) |
-| `shekyl_frost_sal_aggregate_and_prove()` | `shekyl-ffi/src/lib.rs` | Aggregate FROST shares and produce FCMP++ proof (Rust-only, `multisig` feature) |
-| `shekyl_frost_coordinator_*()` | `shekyl-ffi/src/lib.rs` | Coordinator lifecycle: new, add_preprocess, nonce_sums, add_shares, aggregate (Rust-only, `multisig` feature) |
-| `shekyl_frost_signer_*()` | `shekyl-ffi/src/lib.rs` | Signer lifecycle: preprocess, sign (Rust-only, `multisig` feature) |
-| `shekyl_frost_sal_session_free()` | `shekyl-ffi/src/lib.rs` | Free FROST SAL session handle (Rust-only, `multisig` feature) |
-| `shekyl_frost_keys_import()` | `shekyl-ffi/src/lib.rs` | Import serialized FROST threshold keys (Rust-only, `multisig` feature) |
-| `shekyl_frost_keys_export()` | `shekyl-ffi/src/lib.rs` | Export serialized FROST threshold keys (Rust-only, `multisig` feature) |
-| `shekyl_frost_keys_group_key()` | `shekyl-ffi/src/lib.rs` | Extract 32-byte Ed25519T group key (Rust-only, `multisig` feature) |
-| `shekyl_frost_keys_validate()` | `shekyl-ffi/src/lib.rs` | Validate M-of-N params against threshold keys (Rust-only, `multisig` feature) |
-| `shekyl_frost_keys_free()` | `shekyl-ffi/src/lib.rs` | Free FROST threshold keys handle (Rust-only, `multisig` feature) |
 | `shekyl_pqc_verify()` | `shekyl-ffi/src/lib.rs` | Verify hybrid PQC signature |
 | `shekyl_kem_encapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM encapsulation |
 | `shekyl_kem_decapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM decapsulation |
@@ -681,12 +670,8 @@ All non-multisig FFI declarations are in `src/shekyl/shekyl_ffi.h`.
 Functions use `#[no_mangle] pub extern "C" fn` in Rust and are declared
 with `extern "C"` linkage in the header.
 
-**Note:** FROST multisig FFI functions (marked "Rust-only" in the table
-above) exist in the Rust `shekyl-ffi` crate behind
-`#[cfg(feature = "multisig")]` but their C header declarations in
-`shekyl_ffi.h` have been removed. FROST multisig is consumed exclusively
-through the Rust wallet crates (`shekyl-engine-core`, `shekyl-wallet-rpc`),
-not through C++ code.
+FROST multisig has no FFI: it is `shekyl_fcmp::frost_sal`, consumed by
+the Rust wallet crates.
 
 ### Build Integration
 
@@ -1366,28 +1351,18 @@ Do not reintroduce them. Archival emission is a different vin
 | Staking tier edge-case tests (Rust) | **Done** | `rust/shekyl-staking/src/tiers.rs` |
 | Real `prove()` in `shekyl-fcmp` (SAL + FCMP circuit + pseudo-outs) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | Real `verify()` in `shekyl-fcmp` (batch verifiers: Ed25519/Selene/Helios) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
-| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Deleted 2026-08-22** | Export gone with the legacy prove seam; `ShekylFcmpProveResult` survives as the multisig coordinator's return type (`legacy_frost.rs`) |
+| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Deleted 2026-08-22** | Export gone with the legacy prove seam; the multisig spend proves through `prove_with_sal` |
 | FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | C++ callers updated for new FFI signatures | **Done** | `ct_semantics.cpp`, `blockchain.cpp` (`wallet2.cpp` deleted 2026-08-19) |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
-| FROST SAL module (`frost_sal.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
+| FROST SAL layer over `modular_frost`'s machines; dealer split and member-share loader | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | `prove_with_sal()` for multisig proof construction | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
-| FROST DKG key management (`frost_dkg.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
-| FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export is gone with the legacy prove seam; the witness format survives as `parse_prove_witness` / `shekyl_fcmp_build_witness_header` in `rust/shekyl-ffi/src/legacy_fcmp.rs` and `legacy_tx.rs`, both `#[cfg(feature = "multisig")]` and read by the FROST coordinator |
+| FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export and its witness format are gone with the legacy prove seam and `shekyl-ffi` |
 | `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deleted 2026-08-22** | Had no caller; production signing is `shekyl_sign_fcmp_transaction` (`CT_SURFACE_NAMING_PIN.md` §5 step 1) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **REMOVED 2026-09-18** with the RPC (`SOK-10` Q7 → A) | — |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
-| Rust FROST DKG ceremony (`MultisigDkgSession`) | **Done** | `rust/shekyl-engine-core/src/multisig/dkg.rs` |
-| Rust FROST signing orchestration (`MultisigSigningSession`) | **Done** | `rust/shekyl-engine-core/src/multisig/signing.rs` |
-| `FrostSigningCoordinator` (nonce aggregation + share collection) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
-| Rust multisig group management (`MultisigGroup`) | **Done** | `rust/shekyl-engine-core/src/multisig/group.rs` |
-| FROST multisig RPC endpoints (signing only) | **Done** | `rust/shekyl-wallet-rpc/src/multisig_handlers.rs` |
-| FROST SAL unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
-| FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
-| FROST FFI lifecycle tests (8 tests) | **Done** | `rust/shekyl-ffi/src/lib.rs` |
+| FROST SAL tests: loader refusals, signing negatives, 2-of-3 and 3-of-5 spends of E′ outputs | **Done** | `rust/shekyl-fcmp/src/frost_sal_tests.rs`, `rust/shekyl-fcmp/tests/frost_spend.rs` |
 | `shekyl-tx-builder` crate (native Rust signing) | **Done** | `rust/shekyl-tx-builder/` |
 | `shekyl_sign_transaction` FFI export | **Removed 2026-09-23** | The C export is gone. Signing is `sign_transaction_with_terms` in `shekyl-tx-builder`; `shekyl_sign_fcmp_transaction` remains for the C++ test caller |
 | Wallet RPC `native-sign` feature (`transfer_native`) | **Done** | `rust/shekyl-wallet-rpc/src/wallet.rs` |
@@ -1892,9 +1867,11 @@ typed `ProveInputFields` `#[repr(C)]` struct, replacing raw `memcpy` calls.
   separation. Full separation requires a Carrot-style address scheme
   (V4 consideration). The y-component binds the key image to a
   recipient-controlled blinder, which is the SAL design requirement.
-- **FROST SAL multisig**: With `y` derived from the shared secret (not a
-  FROST group key), the FROST SAL path operates with a per-output T-component.
-  Gate behind "requires two-component address scheme" until V4.
+- **FROST SAL multisig**: An Option E′ output's T-component is
+  `y_group + y_kem`: `y_group` is the FROST group secret, shared M-of-N;
+  `y_kem` is the per-output tweak every member derives from the shared
+  secret. The signers' keys are offset by `y_kem` and the rerandomization
+  before signing (`shekyl_fcmp::frost_sal`; `PQC_MULTISIG.md` §15.4a).
 - **Coinbase commitment mask**: `zeroCommit(amount) = G + amount*H`, so the
   mask scalar is 1 (`ct::identity()`), not 0.
 
