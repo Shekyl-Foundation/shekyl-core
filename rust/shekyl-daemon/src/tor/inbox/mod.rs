@@ -33,15 +33,14 @@
 //! inbox hands those out first ([`Inbox::wait`]): a probe's nonce taken
 //! inside its bound is folded before the deadline that would time it out.
 //!
-//! A control ask to Tor runs between waits and can take seconds. The stop
-//! must still end it, and the ask cannot read the queue without taking the
-//! inputs behind the stop. So closing the queue also sets the inbox's stop
-//! latch, which an ask races ([`StopLatch`]). The stop itself is still the
-//! queue's close, said once: the loop folds it in its turn.
+//! Nothing between waits waits on Tor (Rick, 2026-11-10): a request to Tor
+//! runs in a task that posts its answer here ([`Arrival::Reply`]). So the
+//! stop, the queue's close said once, and a status ask ([`Arrival::Status`])
+//! are folded in the next pass, whatever Tor is doing.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use shekyl_p2p::{
@@ -51,8 +50,9 @@ use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_tor_control_client::control::{
     BootstrapState, ControlReply, EventSink, Fed, EVENT_QUEUE_EVENTS,
 };
+use shekyl_tor_control_client::supervisor::Status;
 use shekyl_tor_control_daemon::TorDeath;
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 /// One thing that happened, in the order it was posted.
 #[derive(Debug)]
@@ -70,6 +70,16 @@ pub(super) enum Arrival {
     Probe(ProbeArrival),
     /// The deadline the loop gave `generation` came due.
     Deadline { generation: u64 },
+    /// The answer to the request the core numbered `number`, posted by the
+    /// task that ran it ([`super::requests`]). Boxed: a launch's answer
+    /// carries the whole incarnation.
+    Reply {
+        number: u64,
+        answer: Box<super::requests::Answer>,
+    },
+    /// A caller asks for the status. The loop answers in the pass that
+    /// takes this.
+    Status(oneshot::Sender<Status>),
     /// The daemon is stopping.
     Stop,
 }
@@ -91,8 +101,6 @@ pub(super) struct Changed {
 struct Shared {
     cells: Mutex<Changed>,
     doorbell: Notify,
-    stopping: AtomicBool,
-    stop_rung: Notify,
     /// Tor events posted and not yet taken: the event feed's bound.
     events_held: AtomicUsize,
 }
@@ -104,11 +112,6 @@ impl Shared {
         store(&mut self.cells.lock().expect("supervisor cells"));
         self.doorbell.notify_one();
     }
-
-    fn latch_stop(&self) {
-        self.stopping.store(true, Ordering::Release);
-        self.stop_rung.notify_waiters();
-    }
 }
 
 /// Make the supervisor's inbox: its owner, the loop's end, and the feeds
@@ -118,8 +121,6 @@ pub(super) fn inbox() -> (Owner, Inbox, SupervisorFeeds) {
     let shared = Arc::new(Shared {
         cells: Mutex::new(Changed::default()),
         doorbell: Notify::new(),
-        stopping: AtomicBool::new(false),
-        stop_rung: Notify::new(),
         events_held: AtomicUsize::new(0),
     });
     let (queue, receiver) = mpsc::unbounded_channel();
@@ -155,12 +156,17 @@ impl Owner {
         self.shared.set(|cells| cells.forward = Some(at));
     }
 
-    /// Close the queue. That close is the stop, said once, and it sets the
-    /// latch an ask races. Posting a stop as well would say it a second time
-    /// when the loop reads the close.
+    /// Close the queue. That close is the stop, said once. Posting a stop
+    /// as well would say it a second time when the loop reads the close.
     pub(super) fn stop(&mut self) {
         self.queue.take();
-        self.shared.latch_stop();
+    }
+
+    /// Ask the loop for its status. `None` once the queue has closed.
+    pub(super) fn ask_status(&self) -> Option<oneshot::Receiver<Status>> {
+        let (reply, answer) = oneshot::channel();
+        self.queue.as_ref()?.send(Arrival::Status(reply)).ok()?;
+        Some(answer)
     }
 }
 
@@ -183,6 +189,23 @@ impl Poster {
     pub(super) fn post(&self, arrival: Arrival) {
         if let Some(queue) = self.queue.upgrade() {
             let _posted = queue.send(arrival);
+        }
+    }
+
+    /// Post the answer to request `number`. When the inbox is gone the
+    /// answer comes back, for the caller to end what it holds.
+    pub(super) fn deliver(
+        &self,
+        number: u64,
+        answer: Box<super::requests::Answer>,
+    ) -> Result<(), Box<super::requests::Answer>> {
+        let Some(queue) = self.queue.upgrade() else {
+            return Err(answer);
+        };
+        match queue.send(Arrival::Reply { number, answer }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::SendError(Arrival::Reply { answer, .. })) => Err(answer),
+            Err(mpsc::error::SendError(_)) => unreachable!("the reply was sent"),
         }
     }
 
@@ -285,6 +308,25 @@ impl Inbox {
         }
     }
 
+    /// At the stop: the answers still queued, each to have what it holds
+    /// ended. Everything else queued is dropped with the loop; a status
+    /// ask among it hears that the loop has gone.
+    pub(super) fn replies_left(&mut self) -> Vec<super::requests::Answer> {
+        let mut answers = Vec::new();
+        let mut take = |arrival| {
+            if let Arrival::Reply { answer, .. } = arrival {
+                answers.push(*answer);
+            }
+        };
+        while let Some(arrival) = self.ahead.pop_front() {
+            take(arrival);
+        }
+        while let Ok(arrival) = self.queue.try_recv() {
+            take(arrival);
+        }
+        answers
+    }
+
     fn taken(&self, arrival: Arrival) -> Woken {
         self.count_taken(&arrival);
         Woken::Arrived(arrival)
@@ -303,8 +345,8 @@ impl Inbox {
     /// The loop folds a deadline at the moment it takes it, and an arrival
     /// already queued happened before that moment. Folded after it, a
     /// probe's nonce taken inside its bound would find the probe already
-    /// timed out by a deadline the loop reached late, a control ask having
-    /// held it. Only what is queued when the deadline is taken goes ahead:
+    /// timed out by a deadline the loop reached late, behind a pass that was
+    /// still folding. Only what is queued when the deadline is taken goes ahead:
     /// an event stream that keeps arriving cannot hold the deadline back.
     fn behind_queued(&mut self, generation: u64) -> Woken {
         let queued = self.queue.len();
@@ -330,35 +372,9 @@ impl Inbox {
         std::mem::take(&mut self.shared.cells.lock().expect("supervisor cells"))
     }
 
-    /// The stop latch, for an ask that borrows the driver.
-    pub(super) fn latch(&self) -> StopLatch {
-        StopLatch {
-            shared: Arc::clone(&self.shared),
-        }
-    }
-
     /// A producer's end.
     pub(super) fn poster(&self) -> Poster {
         self.poster.clone()
-    }
-}
-
-/// The stop as an ask sees it: set once the owner closes the queue.
-#[derive(Clone)]
-pub(super) struct StopLatch {
-    shared: Arc<Shared>,
-}
-
-impl StopLatch {
-    /// Resolves once the owner has closed the queue.
-    pub(super) async fn stopped(&self) {
-        loop {
-            let rung = self.shared.stop_rung.notified();
-            if self.shared.stopping.load(Ordering::Acquire) {
-                return;
-            }
-            rung.await;
-        }
     }
 }
 

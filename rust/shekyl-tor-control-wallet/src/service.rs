@@ -600,6 +600,7 @@ async fn supervise(
                 disable_network: config.disable_network,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
             }),
             events: config.events.clone(),
             readiness,

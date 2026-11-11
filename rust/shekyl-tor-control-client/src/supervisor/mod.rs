@@ -25,7 +25,7 @@ mod posture;
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
     Action, Core, DialTally, DirectoryAnswer, DirectoryFetch, Input, ManagedRunning, Policy,
-    RoundTally, Step, TorCensus, DESCRIPTOR_LIFETIME,
+    RoundTally, Step, TorCensus, DESCRIPTOR_LIFETIME, REPLY_BOUND,
 };
 pub use events::{
     clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
