@@ -8,9 +8,9 @@
 //! Every trigger reaches one latch: the POSIX signals and every Windows
 //! console event through [`own`], which holds the operating system's
 //! streams for the process's life on the signal runtime; the RPC's
-//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a part
-//! the daemon cannot run without ending, chain sync's owner, through
-//! [`fatal`], whose stop also makes the exit a failure. A wait is
+//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a
+//! task the node owns ending on its own, through [`fatal`], whose stop also
+//! makes the exit a failure. A wait is
 //! [`stop_requested`], which answers at once when the latch is already
 //! set, so a trigger that arrives between two waits (the managed Tor's
 //! bootstrap sits between the RPC start and step 8) is kept, not dropped:
@@ -72,7 +72,7 @@ impl Signal {
 
 /// Why the daemon stops. The report matches the variant: an operator's
 /// stop is announced, and [`Self::Fatal`] is an error.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopCause {
     /// The operating system's stop trigger: a service manager's or a
     /// terminal's ordinary way to stop the daemon.
@@ -110,9 +110,9 @@ fn latch(cause: StopCause) {
 }
 
 fn latched() -> Option<StopCause> {
-    *STOP
-        .lock()
+    STOP.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// The daemon's own request: the RPC's `stop_daemon`.

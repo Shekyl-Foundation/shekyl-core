@@ -11,22 +11,25 @@
 //! or nothing connects. Nobody is served by that node, so the daemon
 //! stops on it and exits failed (rule 82).
 //!
-//! Every such task reports its end here, and the daemon waits on this one
-//! watch. The first end is the one kept: a later one is usually its
+//! [`Node::open`](crate::Node::open) calls [`start`], which is the only
+//! way to build the [`Reporter`] the node stores. Each producer has an
+//! arm there. The first end is the one kept: a later one is usually its
 //! consequence. A task that ends because it was asked to stop does not
-//! report.
+//! report. An ingest end carries the fault's own words, and the daemon's
+//! exit line quotes those words.
 
 use shekyl_chain_ingest::service::ServiceEnd;
 use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 /// The first fatal end of a task the node owns, with its cause.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeEnd {
     /// Chain sync's owner ended on its own: the node never syncs again.
     Sync(EndCause),
-    /// The ingest service stopped on a fault: the node connects no block
-    /// and posts no template.
+    /// The ingest service stopped on a fault, in the fault's own words:
+    /// the node connects no block and posts no template.
     Ingest(ServiceEnd),
 }
 
@@ -39,13 +42,14 @@ impl std::fmt::Display for NodeEnd {
     }
 }
 
-/// The sending side of the node's end watch. One per node; each producer
-/// holds a clone.
+/// The sending side of the node's end watch. One per node.
+///
+/// Built only by [`start`]. `Node::open` has no other way to fill the field.
 #[derive(Clone)]
 pub(crate) struct Reporter(watch::Sender<Option<NodeEnd>>);
 
 impl Reporter {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self(watch::Sender::new(None))
     }
 
@@ -55,7 +59,7 @@ impl Reporter {
     }
 
     /// Report `end`. Kept only when it is the first.
-    pub(crate) fn report(&self, end: NodeEnd) {
+    fn report(&self, end: NodeEnd) {
         self.0.send_if_modified(|first| {
             if first.is_some() {
                 return false;
@@ -66,16 +70,36 @@ impl Reporter {
     }
 }
 
+/// Spawn one forwarder per producer on `handle` and return their watch.
+///
+/// The sync arm drops a stop the owner was asked for. The ingest arm
+/// forwards every published fault: the service publishes only when it
+/// stopped on one. A later producer is another arm here, in the change
+/// that adds the task.
+#[must_use]
+pub(crate) fn start(
+    handle: &Handle,
+    sync: watch::Receiver<Option<SyncEnded>>,
+    ingest: watch::Receiver<Option<ServiceEnd>>,
+) -> Reporter {
+    let reporter = Reporter::new();
+    handle.spawn(forward(reporter.clone(), sync, sync_end));
+    handle.spawn(forward(reporter.clone(), ingest, |end| {
+        Some(NodeEnd::Ingest(end))
+    }));
+    reporter
+}
+
 /// Report the first value of `source` that `fatal` maps to an end, then
 /// return. Returns without a report when `source` closes first: its task
 /// went without a fatal end.
-pub(crate) async fn forward<T: Copy>(
+async fn forward<T: Clone>(
     reporter: Reporter,
     mut source: watch::Receiver<Option<T>>,
     fatal: fn(T) -> Option<NodeEnd>,
 ) {
     loop {
-        let seen = *source.borrow_and_update();
+        let seen = source.borrow_and_update().as_ref().cloned();
         if let Some(end) = seen.and_then(fatal) {
             reporter.report(end);
             return;
@@ -88,7 +112,7 @@ pub(crate) async fn forward<T: Copy>(
 
 /// Chain sync's owner: a failed end is fatal, a stop it was asked for is
 /// not.
-pub(crate) const fn sync_end(ended: SyncEnded) -> Option<NodeEnd> {
+const fn sync_end(ended: SyncEnded) -> Option<NodeEnd> {
     match ended {
         SyncEnded::Failed(cause) => Some(NodeEnd::Sync(cause)),
         SyncEnded::Stopped => None,
@@ -105,24 +129,31 @@ mod tests {
             .expect("a runtime")
     }
 
-    /// The ingest service's fault reaches the node's watch with its cause.
-    /// Red edit: drop the ingest forwarder in `Node::open`'s wiring, which
-    /// this test mirrors, and the watch stays `None`.
+    fn reported(ended: &watch::Receiver<Option<NodeEnd>>) -> Option<NodeEnd> {
+        ended.borrow().as_ref().cloned()
+    }
+
+    /// The ingest arm of [`start`] — what [`crate::Node::open`] calls, and
+    /// the only constructor of the reporter it stores — puts the fault's
+    /// words on the node's watch.
+    ///
+    /// Red edit: drop the ingest `spawn` in [`start`], and the watch stays
+    /// `None`. Drop the [`start`] call in `Node::open` and the crate does
+    /// not compile: [`Reporter::new`] is private.
     #[test]
     fn an_ingest_fault_is_the_nodes_end() {
-        runtime().block_on(async {
-            let reporter = Reporter::new();
+        let rt = runtime();
+        let handle = rt.handle().clone();
+        rt.block_on(async {
+            let (_sync_tx, sync_rx) = watch::channel(None);
+            let (ingest_tx, ingest_rx) = watch::channel(None);
+            let reporter = start(&handle, sync_rx, ingest_rx);
             let mut ended = reporter.subscribe();
-            let (service, source) = watch::channel(None);
-            let task = tokio::spawn(forward(reporter, source, |end| Some(NodeEnd::Ingest(end))));
-            assert_eq!(*ended.borrow(), None);
-            service.send_replace(Some(ServiceEnd::Connector));
+            assert!(reported(&ended).is_none());
+            let cause = ServiceEnd::words("the tip follower ended");
+            ingest_tx.send_replace(Some(cause.clone()));
             ended.changed().await.expect("the node's watch is open");
-            assert_eq!(
-                *ended.borrow(),
-                Some(NodeEnd::Ingest(ServiceEnd::Connector))
-            );
-            task.await.expect("the forwarder returns after its report");
+            assert_eq!(reported(&ended), Some(NodeEnd::Ingest(cause)));
         });
     }
 
@@ -136,10 +167,10 @@ mod tests {
             let (owner, source) = watch::channel(Some(SyncEnded::Stopped));
             let task = tokio::spawn(forward(reporter.clone(), source, sync_end));
             tokio::task::yield_now().await;
-            assert_eq!(*ended.borrow(), None, "a stop is not reported");
+            assert!(reported(&ended).is_none(), "a stop is not reported");
             owner.send_replace(Some(SyncEnded::Failed(EndCause::PortClosed)));
             task.await.expect("the forwarder returns after its report");
-            assert_eq!(*ended.borrow(), Some(NodeEnd::Sync(EndCause::PortClosed)));
+            assert_eq!(reported(&ended), Some(NodeEnd::Sync(EndCause::PortClosed)));
         });
     }
 
@@ -148,9 +179,10 @@ mod tests {
     fn the_first_end_is_the_one_kept() {
         let reporter = Reporter::new();
         let ended = reporter.subscribe();
-        reporter.report(NodeEnd::Ingest(ServiceEnd::Store));
+        let ingest = NodeEnd::Ingest(ServiceEnd::words("a store read failed"));
+        reporter.report(ingest.clone());
         reporter.report(NodeEnd::Sync(EndCause::TipWatchClosed));
-        assert_eq!(*ended.borrow(), Some(NodeEnd::Ingest(ServiceEnd::Store)));
+        assert_eq!(reported(&ended), Some(ingest));
     }
 
     /// A source that closes without a fatal end reports nothing.
@@ -162,7 +194,7 @@ mod tests {
             let (service, source) = watch::channel::<Option<ServiceEnd>>(None);
             drop(service);
             forward(reporter, source, |end| Some(NodeEnd::Ingest(end))).await;
-            assert_eq!(*ended.borrow(), None);
+            assert!(reported(&ended).is_none());
         });
     }
 }

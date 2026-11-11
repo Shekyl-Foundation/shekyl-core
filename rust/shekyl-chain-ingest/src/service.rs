@@ -538,76 +538,42 @@ pub enum ServiceFault<F> {
     },
 }
 
-impl<F> ServiceFault<F> {
-    /// Which fault this is, without what it carries: the cause the node's
-    /// end watch publishes. The whole fault is in the error line
-    /// [`Shared::fail`] writes when it records it.
+impl<F: core::fmt::Debug> ServiceFault<F> {
+    /// This fault's own words. The error line and [`Service::ended`] both
+    /// carry them, so a new variant reaches the daemon's exit line through
+    /// its `thiserror` text and nowhere else.
     #[must_use]
-    pub const fn end(&self) -> ServiceEnd {
-        match self {
-            Self::Connector(_) => ServiceEnd::Connector,
-            Self::Mailbox => ServiceEnd::Mailbox,
-            Self::Store(_) => ServiceEnd::Store,
-            Self::Substrate(_) => ServiceEnd::Substrate,
-            Self::Corrupt { .. } => ServiceEnd::Corrupt,
-            Self::Pool(_) => ServiceEnd::Pool,
-            Self::FollowerEnded => ServiceEnd::FollowerEnded,
-            Self::SeedNotInWindow { .. } => ServiceEnd::SeedNotInWindow,
-            Self::PreparedSeedAbsent { .. } => ServiceEnd::PreparedSeedAbsent,
-            Self::DemotionRefused { .. } => ServiceEnd::DemotionRefused,
+    pub fn end(&self) -> ServiceEnd {
+        ServiceEnd {
+            cause: self.to_string(),
         }
     }
 }
 
 /// Why the service ended on its own ([`Service::ended`]): the
-/// [`ServiceFault`] it stopped on, without the fault's payload, so the
-/// value is copied to whoever stops the process.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ServiceEnd {
-    /// [`ServiceFault::Connector`].
-    Connector,
-    /// [`ServiceFault::Mailbox`].
-    Mailbox,
-    /// [`ServiceFault::Store`].
-    Store,
-    /// [`ServiceFault::Substrate`].
-    Substrate,
-    /// [`ServiceFault::Corrupt`].
-    Corrupt,
-    /// [`ServiceFault::Pool`].
-    Pool,
-    /// [`ServiceFault::FollowerEnded`].
-    FollowerEnded,
-    /// [`ServiceFault::SeedNotInWindow`].
-    SeedNotInWindow,
-    /// [`ServiceFault::PreparedSeedAbsent`].
-    PreparedSeedAbsent,
-    /// [`ServiceFault::DemotionRefused`].
-    DemotionRefused,
+/// [`ServiceFault`]'s own words, owned so the process can exit with them.
+///
+/// The fault keeps its payload. This is that payload already rendered.
+/// [`ServiceFault::end`] is how a running service builds one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceEnd {
+    cause: String,
 }
 
 impl ServiceEnd {
-    /// The prose of this cause. The daemon's error line quotes it.
+    /// `cause` as a fault already said it. The stop-line tests name a
+    /// sentence; a running service goes through [`ServiceFault::end`].
     #[must_use]
-    pub const fn text(self) -> &'static str {
-        match self {
-            Self::Connector => "the connector faulted",
-            Self::Mailbox => "the connector is unreachable",
-            Self::Store => "a store read failed",
-            Self::Substrate => "the proof-of-work verifier faulted",
-            Self::Corrupt => "the store's headers are corrupt",
-            Self::Pool => "the pool's chain view faulted",
-            Self::FollowerEnded => "the tip follower ended",
-            Self::SeedNotInWindow => "a fork named a seed outside the window",
-            Self::PreparedSeedAbsent => "a prepared seed's cache was absent",
-            Self::DemotionRefused => "a recorded block refused its own rules",
+    pub fn words(cause: impl Into<String>) -> Self {
+        Self {
+            cause: cause.into(),
         }
     }
 }
 
 impl core::fmt::Display for ServiceEnd {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(self.text())
+        formatter.write_str(&self.cause)
     }
 }
 
@@ -625,7 +591,7 @@ pub(crate) struct Shared<S: Substrate> {
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
-    /// That fault's cause, published when it is recorded
+    /// That fault's own words, published when it is recorded
     /// ([`Service::ended`]). `None` while the service runs, and after a
     /// stop that met no fault.
     ended: tokio::sync::watch::Sender<Option<ServiceEnd>>,
@@ -865,20 +831,21 @@ where
 
     /// Record `fault` if it is the first, and stop.
     ///
-    /// The first fault is logged at `error` here, when it is recorded, and
-    /// its cause is published on [`Service::ended`]. A stopped service
-    /// leaves the process up and the RPC answering from the old tip, so
-    /// the line cannot wait for the daemon's exit (rule 82), and whoever
-    /// owns the process reads the watch to end it. A later fault is a
-    /// consequence of the first and is logged at `debug`.
+    /// The first fault is logged at `error` here, in its own words, and
+    /// those words are published on [`Service::ended`] for the daemon's
+    /// exit line. A stopped service leaves the process up and the RPC
+    /// answering from the old tip, so the line cannot wait for the
+    /// process to exit (rule 82). A later fault is a consequence of the
+    /// first and is logged at `debug`.
     pub(crate) fn fail(&self, fault: ServiceFault<S::Fault>) {
         let mut first = self
             .fault
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if first.is_none() {
-            tracing::error!("the ingest service stops on a fault: {fault}");
-            self.ended.send_replace(Some(fault.end()));
+            let cause = fault.end();
+            tracing::error!("the ingest service stops on a fault: {cause}");
+            self.ended.send_replace(Some(cause));
             *first = Some(fault);
         } else {
             tracing::debug!("the ingest service, already stopping, met: {fault}");
@@ -1545,10 +1512,9 @@ where
     }
 
     /// Why the service ended on its own, once it has: `None` while it
-    /// runs, and after a stop that met no fault. Published when the fault
-    /// is recorded, which is when the door closes and the follower leaves
-    /// its loop. The node forwards it to its own end watch, so the daemon
-    /// stops on it.
+    /// runs, and after a stop that met no fault. The value is the fault's
+    /// own words, published when the fault is recorded. The node forwards
+    /// them to its end watch, and the daemon's exit line quotes them.
     #[must_use]
     pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<ServiceEnd>> {
         self.shared.ended.subscribe()
@@ -1636,6 +1602,10 @@ pub(crate) use window::{
     divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
     PoolDivision,
 };
+
+#[cfg(test)]
+#[path = "log_capture.rs"]
+mod log_capture;
 
 #[cfg(test)]
 #[path = "service_tests.rs"]

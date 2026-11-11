@@ -543,19 +543,7 @@ impl Node {
             door: door_slot,
             store: store_slot,
         });
-        // Every long-lived task the node starts reports its end on the one
-        // watch (`ended` module docs). The forwarders end with their
-        // sources, or with the runtime.
-        let ended = ended::Reporter::new();
-        runtime.spawn(ended::forward(
-            ended.clone(),
-            sync_owner.ended(),
-            ended::sync_end,
-        ));
-        // The service publishes a cause only when it stopped on a fault.
-        runtime.spawn(ended::forward(ended.clone(), service.ended(), |end| {
-            Some(NodeEnd::Ingest(end))
-        }));
+        let ended = ended::start(runtime.handle(), sync_owner.ended(), service.ended());
         let node = Self {
             slots,
             sync,

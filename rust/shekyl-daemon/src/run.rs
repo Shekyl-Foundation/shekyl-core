@@ -266,10 +266,10 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     status
 }
 
-/// A stop was requested, or a task the node owns ended on its own. A small
-/// status: copied, never borrowed. The stop arm carries the cause, so the
-/// report is made where the wait is recorded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A stop was requested, or a task the node owns ended on its own. Owned
+/// for the report: the fatal arm holds the fault's words, and the wait
+/// moves the value out to where the report is made.
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum RunWait {
     /// [`signals::stop_requested`] resolved with this cause.
     StopRequested(signals::StopCause),
@@ -396,7 +396,7 @@ async fn node_ended(
     ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>,
 ) -> shekyl_node::NodeEnd {
     loop {
-        if let Some(end) = *ended.borrow_and_update() {
+        if let Some(end) = ended.borrow_and_update().as_ref().cloned() {
             return end;
         }
         // A watch that closed without an end never resolves. The biased
@@ -419,7 +419,7 @@ fn note_run(preserve_status: &mut bool, wait: RunWait) {
             deliver(stop_report(cause));
         }
         RunWait::NodeEnded(end) => {
-            deliver(stop_report(signals::StopCause::Fatal(end)));
+            deliver(stop_report(signals::StopCause::Fatal(end.clone())));
             signals::fatal(end);
             *preserve_status = false;
         }
@@ -728,7 +728,7 @@ mod tests {
     fn a_node_task_that_ends_on_its_own_stops_the_daemon_with_its_cause() {
         for end in [
             shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::PortClosed),
-            shekyl_node::NodeEnd::Ingest(shekyl_node::ServiceEnd::Connector),
+            shekyl_node::NodeEnd::Ingest(shekyl_node::ServiceEnd::words("connector unreachable")),
         ] {
             a_reported_end_stops_the_daemon(end);
         }
@@ -753,9 +753,9 @@ mod tests {
             .await
         });
         assert!(waited.is_err(), "a watch with no end ended the wait");
-        ended_tx.send_replace(Some(end));
+        ended_tx.send_replace(Some(end.clone()));
         let wait = rt.block_on(run_or_stop(&mut ended));
-        assert_eq!(wait, RunWait::NodeEnded(end));
+        assert_eq!(wait, RunWait::NodeEnded(end.clone()));
         let mut preserve_status = true;
         note_run(&mut preserve_status, wait);
         assert!(!preserve_status, "the exit was not made a failure");
@@ -779,7 +779,7 @@ mod tests {
             .expect("runtime");
         signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
         let end = shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::EngineClosed);
-        signals::fatal(end);
+        signals::fatal(end.clone());
         let (_ended_tx, mut ended) = watch::channel(None);
         let wait = rt.block_on(run_or_stop(&mut ended));
         assert_eq!(wait, RunWait::StopRequested(signals::StopCause::Fatal(end)));
@@ -819,10 +819,10 @@ mod tests {
         );
         assert_eq!(
             stop_report(StopCause::Fatal(shekyl_node::NodeEnd::Ingest(
-                shekyl_node::ServiceEnd::Connector
+                shekyl_node::ServiceEnd::words("connector unreachable")
             ))),
             StopReport::Error(
-                "the ingest service stopped: the connector faulted; the daemon stops".to_owned()
+                "the ingest service stopped: connector unreachable; the daemon stops".to_owned()
             )
         );
     }
