@@ -171,13 +171,16 @@ fn launches(dir: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// Whether process `pid` still runs.
+/// Whether process `pid` still runs: signal 0, which checks and sends
+/// nothing. No process is started for it: this process launches Tor, and a
+/// start outside the spawn lock could inherit Tor's control connection.
 fn alive(pid: &str) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", pid])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    let pid = pid
+        .parse::<i32>()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .expect("a recorded process id");
+    rustix::process::test_kill_process(pid).is_ok()
 }
 
 /// Each stand-in launched has exited and its data directory is gone.

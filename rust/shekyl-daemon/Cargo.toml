@@ -68,8 +68,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client", features = ["unpinned-tor-for-tests"] }
 
 [target.'cfg(unix)'.dev-dependencies]
-# The notify tests plant a descriptor without close-on-exec.
-rustix = { version = "1", features = ["fs"] }
+# The notify tests plant a descriptor without close-on-exec. The loop
+# tests ask whether a stand-in Tor still runs without starting a process
+# (`process`: a start outside the spawn lock, TOR_SUPERVISOR.md §4.7).
+rustix = { version = "1", features = ["fs", "process"] }
 # The inherited-interrupt test sets `SIGINT` between fork and exec.
 libc = "0.2"
 
