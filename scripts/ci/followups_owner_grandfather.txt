@@ -102,7 +102,6 @@ Refresh bandwidth tradeoff under α — round-trip-bound block [`docs/design/STA
 F11-S Windows-midrange-PC measurement revisit at stressnet [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 Stage 1 PR 3 engine-property test re-location (trigger: the unified `KeyEngine` / `LedgerEngine` / `DaemonEngine` `pub(crate) → pub` visibility-promotion bundle per `STAGE_1_PR_3_KEY_ENGINE.md` §7.7; pre-RC1).
 `RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`.
-`shekyl-fcmp`: resolve `useless_conversion` clippy warnings in `frost_sal.rs`.
 Full migration of remaining `SHEKYL_*` FFI constants to the JSON-authority pattern (target: post-stressnet, pre-audit-final).
 `wallet_storage`: cover loaded-wallet save-as branches in `wallet2::store_to`.
 Stage 1 performance baseline measurement before Stage 1 PRs land.

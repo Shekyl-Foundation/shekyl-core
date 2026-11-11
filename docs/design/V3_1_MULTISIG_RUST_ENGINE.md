@@ -198,8 +198,9 @@ true and incidental).
 ### Track B — engine (MS-1…MS-7, gated) → **pivots to Option E′**
 
 Round 1 still needs **F-6 CI** + **F-7** for any gated work. F-3
-DELETE of Option A fossil stands (keep `frost_sal` / `frost_dkg`
-primitives; drop `MultisigGroup.pqc_public_key`).
+DELETE of the Option A fossil stands (`MultisigGroup.pqc_public_key` is
+gone); the SAL layer is `shekyl_fcmp::frost_sal` over `modular_frost`'s
+machines (MS-2).
 
 **Product path is Option E′** (§0.5) — dealer-mode, MAX=5,
 `spend_auth_version = 0x02`, **`0x01` never issued**. Mandatory-prover
@@ -398,7 +399,7 @@ substrate, with the Option-D residue excised. **`state.rs` is DELETED** (the
 Option-D `IntentState` FSM; E′ rewrites the ceremony, it does not inherit it).
 
 **Adds:** the `FrostCeremony` FSM (four-blob / two-round-trip / pqc-last) +
-`frost_sal.rs` (kept, for S2's live rounds) + the **corrected nonce discipline** —
+the SAL layer `shekyl_fcmp::frost_sal` (MS-2) + the **corrected nonce discipline** —
 *not* "reuse unrepresentable by type" (the old F-9 framing), but two shapes: B's
 ephemeral `!Clone` nonce, and A's held nonce under containment + a `ConsumedNonce`
 persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovable).
@@ -423,8 +424,7 @@ persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovabl
 
 | | |
 | --- | --- |
-| **Open** | `output.rs:304` two-component landed, `y ≠ 0` — Apr 9 blocker dead. `frost_sal.rs` + `frost_dkg` exist (852 + 423). |
-| **Wrong** | They sit under `MultisigGroup` with **Option A** `pqc_public_key` (fixed per group). **DELETE** that wrapper; **keep** the FROST primitives. |
+| **Built** | Two-component `O` with `y ≠ 0`. The SAL leg is a FROST signature through `modular_frost`'s machines (`shekyl_fcmp::frost_sal`): the dealer split of `y_group`, the member-share loader, keys offset by `y_kem − o_blind`. 2-of-3 and 3-of-5 spends of real E′ outputs from member files verify (`rust/shekyl-fcmp/tests/frost_spend.rs`). No DKG: dealer-mode. |
 | **Missing** | `frost-sal-v4 = []` was specified in §16.7 and never built — that is **E′'s feature gate**, and building it is the first real coexistence boundary (discriminability for 0x02). |
 | **Version** | `spend_auth_version = 0x02` for E′; **`0x01` never issued.** §15.5 + MSW-4/5 make that real instead of aspirational. |
 | **Address** | After MSW-8: KEM-only per participant. E′ layout: `B` + `Y_group` + N×1216 + `spend_auth_version=0x02`. |
@@ -948,7 +948,13 @@ monomorphization cost stops being zero before V4 (which §15.5 forecloses).
 
 ### MS-2 — C++ / Rust boundary — **OPEN (lean holds; substrate corrected)**
 
-New wallet multisig logic: Rust-only. C++: LMDB + verify FFI. The former
+Everything is Rust. The FROST layer lives in a crypto crate (rule 36):
+`shekyl_fcmp::frost_sal` holds the dealer split, the member-share loader
+(`threshold_keys`, 0-based member index → 1-based `Participant` in one
+place), `SalSigningParams` and the drivers over `modular_frost`'s own
+machines (`preprocess` / `from_cache` / `sign` / `complete` / `cache`), so
+the binding factor, nonce hedging and nonce custody are the machine's.
+`shekyl-multisig` carries bytes and takes no curve dependency. The former
 `wallet2.cpp` group-create / `m_pqc_multisig_*` surface — once wrongly cited
 here as the "**correct** `shekyl_pqc_multisig_group_id`" caller — is **deleted**:
 it was a non-functional fossil (threw on every input) and group_id is retired.
@@ -966,8 +972,9 @@ Keep Cargo feature name `multisig`. Flip checklist **amended**:
 3. FA-6b disposed.
 4. Capability un-reserve in flip PR only.
 5. **Positive CI:** `cargo check/clippy/test -p shekyl-engine-core
-   -p shekyl-engine-rpc -p shekyl-ffi --features multisig` green in
-   CI (**R1-F-6** — Round 1 closure prerequisite, ✅ landed #310, not Round 3).
+   -p shekyl-fcmp -p shekyl-fcmp-proofs --features multisig`, and
+   `-p shekyl-multisig` with no feature, green in CI
+   (`.github/workflows/multisig-feature.yml`; **R1-F-6**).
 6. **Negative CI:** default/release builds do not enable `multisig`;
    no simple-mode symbols.
 7. **F-3:** Option A fossil **deleted** before flip (not shipped, not
@@ -1122,7 +1129,7 @@ not a quiet reopen of MS-8.
 | ID | Status | Notes |
 | --- | --- | --- |
 | MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
-| MS-2 | **OPEN** | Lean holds |
+| MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate), `shekyl-multisig` stays curve-free |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
 | MS-5 | **S1 LANDED** | `shekyl-multisig` crate + `FrostCeremony` FSM (four-blob/two-round-trip/pqc-last) + both nonce shapes + `ConsumedNonce` typestate; no live crypto (S2/S3); DoD gate = S5 |
@@ -1252,3 +1259,4 @@ rust/shekyl-crypto-pq/src/multisig.rs  MULTISIG_KEY_BLOB_MIN (the one floor; K13
 | 2026-07-17 | **MS-1 shape DECIDED + MS-5 S1 LANDED.** MS-1(a): multisig lives in a standalone `shekyl-multisig` crate whose dep list *is* the "no transport" ban (no tor/tokio-net/reqwest; module scope was rejected because engine-core already links Tor via SP-T2). Marker shape: per-version family `MultisigSignerV2` (not a runtime version field — one type would need a one-variant `SigningCeremony` enum now; the monomorphization cost is zero until V4 per §15.5). MS-5 S1: `state.rs` **deleted, not inherited**; format modules moved into the crate with Option-D residue excised; the `FrostCeremony` FSM (four-blob / two-round-trip / **pqc-last** — the (D) binding is the existing solo bidirectional weld, no new primitive), both nonce shapes (B ephemeral `!Clone`; A held under containment + `ConsumedNonce` persist-before-use + intent-binding — `!Serialize`/restart-forfeits dropped as unprovable/incompatible), and the `SpendRequest`/`SpendResponse` blobs. **No live crypto** (S2/S3); the clean build is the proof. |
 | 2026-07-18 | **E′ address (PR #323 merged) + group_id / Option-D deletion.** Address: `MultisigAddressPayload` carries `B_group`/`Y_group`; `spend_auth_version = 0x02`; fingerprint = `cSHAKE256(canonical, "shekyl/multisig-address-v1")` (domained, not `cn_fast_hash`); full address is file-based (bech32m can't hold ~4019 chars > 1023-char limit), the fingerprint (67 chars) is the shareable id. Deletion: `multisig_group_id` had **no consumer** under E′, computed a **per-output** container hash under a per-group name, and its one long-term caller (`wallet2::create_pqc_multisig_group`) **threw on every input** — deleted with its FFI (`shekyl_pqc_multisig_group_id`, `_verify_with_group_id`), `verify_multisig` check 9 + `expected_group_id`, the Option-D receive unit (`rotating_prover_index` + construct + validate + griefing/persisted residue), tag-0x05 unchanged (deferred), and the wallet2 C++ surface (safe: epee cache never wrote the fields). Group identity = address fingerprint. FFI code 9 retired (gap; 10/11 fixed). Consequence recorded: **no multisig output constructor exists until S2/S4 writes the E′ two-component one** (better than one building unspendable outputs). Container-lifetime ambiguity (`MultisigKeyContainer` per-output in Rust vs long-term in wallet2/KAT) filed as an S2-blocking slice. |
 | 2026-11-09 | **E′ completion Round 0 ruled; slice 1 (receive and wire) built.** Rulings (Rick, 2026-11-08/09): **R-1** a group hybrid KEM key in the address (`70 + (N+1)·1216` B); each output carries one `0x06` ciphertext to it, so the group scans as a solo wallet does. **R-2** at most one ephemeral responder per ceremony, every other signer holds its nonce (slice 3). **R-3** the leaf commits to member key hashes: committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n`, `h_i = frame(shekyl/multisig-key-hash-v1, network_id, [pk_i])`, published encrypted in the new tag `0x0D`, so `m` signers spend without the other `n − m` (with the full keys in the container, as before, every spend needed all `n`). **R-4** XChaCha20-Poly1305 with a random nonce in the ceremony blobs (slice 3). **Deletions approved:** `frost_sal`'s session/coordinator and `frost_dkg` (slice 2); `multisig_receiving.rs`, container `spend_auth_pubkeys`, tags `0x09`/`0x0A`, `InvariantId::I7` (slice 1). Slice 1: tag `0x0D` + CEN-I19's clause; container v`0x02` and `verify_multisig` with the network-bound hash check; both consensus `k` derivations over the committed form; address v`0x02`; the member file; `construct_multisig_output` and `open_multisig_entry`; the scanner's member context. The per-output cost is `≈ 1120 + 64 + 1152·n + 18` B (4.7 KB at n = 3, 7.0 KB at n = 5). |
+| 2026-11-10 | **Slice 1 merged (#1328); slice 2 (FROST correctness) built.** The SAL leg is a FROST signature through `modular_frost`'s machines (`shekyl_fcmp::frost_sal`); `FrostSalSession`, the coordinator and `frost_dkg.rs` are deleted, and `dkg-pedpop` leaves the graph. The dealer split (`dkg-dealer`'s `key_gen` over `Ed25519T`) and the member-share loader live in `shekyl-fcmp`, not `shekyl-multisig` as the brief placed the dealer (rule 36; the ceremony crate takes no curve dependency). `preprocess` / `from_cache` offset the keys by `y_kem − o_blind` and refuse keys that do not open the rerandomized output, so `SalAlgorithm`'s offset contract holds by construction. Where `modular_frost` rejects, as tested: no `y_kem` offset → `complete` finds no one to blame (`InternalError`); a stray rerandomization or a preprocess from another session → `InvalidShare` naming the signer at `complete` (not at `sign`: a one-generator preprocess carries nothing `sign` can check); `m − 1` signers → refused at `sign`. Gate: 2-of-3 and 3-of-5 spends of two slice-1 outputs from member files verify through `prove_with_sal` and `verify` (`rust/shekyl-fcmp/tests/frost_spend.rs`). The tweak-soundness question (§0.5) stays Phase 6. |

@@ -321,7 +321,6 @@ For the protocol specification of these properties, see
 
 ### Out-of-Scope
 
-- DKG ceremony (uses `dkg-pedpop`, covered by its own audit)
 - GUI components (presentation layer, no crypto)
 - Relay transport (network layer, no crypto)
 
