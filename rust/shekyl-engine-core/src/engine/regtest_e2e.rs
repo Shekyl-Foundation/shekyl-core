@@ -1849,6 +1849,10 @@ async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
     /// the harness's HTTP timeout.
     const CHUNK: u64 = 8;
     const WITHIN: Duration = Duration::from_secs(30 * 60);
+    /// How long the daemon may stay up once mining is refused without a
+    /// break. A daemon that ends itself is gone in well under a second;
+    /// the half-up node of 2026-11-02 stayed 34 minutes.
+    const UP_AFTER_REFUSAL: Duration = Duration::from_secs(120);
     const RECORDED: &str = "the ingest service stops on a fault: ";
     const STOPS: &str = "the ingest service stopped: ";
     let disk = small_disk();
@@ -1862,7 +1866,8 @@ async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
     // loaded host times one out too); the exit is.
     let deadline = std::time::Instant::now() + WITHIN;
     let mut mined = 0u64;
-    let mut refused = None;
+    // The first of an unbroken run of refused calls, and the last answer.
+    let mut refused: Option<(std::time::Instant, String)> = None;
     let status = loop {
         if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
             break status;
@@ -1874,15 +1879,27 @@ async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
         );
         assert!(
             std::time::Instant::now() < deadline,
-            "{WITHIN:?} on, the daemon is still up with {mined} blocks mined and its last \
-             mining call answered {refused:?}: a half-up node, or a disk that did not fill. \
-             Its log tail:\n{}",
+            "{WITHIN:?} on, the daemon is still up with {mined} blocks mined: the disk at {} \
+             did not fill. Its log tail:\n{}",
+            disk.display(),
             log_tail(&daemon.data_dir.join("shekyld.log"))
         );
+        if let Some((since, answer)) = &refused {
+            assert!(
+                since.elapsed() < UP_AFTER_REFUSAL,
+                "the daemon has refused to mine for {UP_AFTER_REFUSAL:?} ({answer}) after \
+                 {mined} blocks and is still up: a half-up node. Its log tail:\n{}",
+                log_tail(&daemon.data_dir.join("shekyld.log"))
+            );
+        }
         match try_generate_blocks(&daemon.rpc, CHUNK).await {
-            Ok(_) => mined += CHUNK,
+            Ok(_) => {
+                mined += CHUNK;
+                refused = None;
+            }
             Err(error) => {
-                refused = Some(format!("{error:?}"));
+                let since = refused.map_or_else(std::time::Instant::now, |(since, _)| since);
+                refused = Some((since, format!("{error:?}")));
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
