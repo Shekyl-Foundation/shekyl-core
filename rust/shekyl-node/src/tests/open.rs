@@ -127,6 +127,22 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         "the handle does not answer after the store closes"
     );
 }
+/// A stop the node was asked for is not an end: [`Node::ended`] stays
+/// `None`, so the daemon exits 0 on it. The sync owner's `Stopped` and the
+/// service's fault-free stop are what the forwarders see. This is
+/// [`Node::open`]'s watch, not a watch the test assembled.
+///
+/// Red edit: forward the sync owner's `Stopped` as an end.
+#[test]
+fn a_requested_stop_publishes_no_end() {
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_at(dir.path(), Arc::new(|| {}));
+    let ended = node.ended();
+    assert!(ended.borrow().is_none(), "a running node has not ended");
+    node.stop();
+    assert!(ended.borrow().is_none(), "a requested stop is not an end");
+}
+
 /// A `pow_hash` waiting on a hasher permit does not hold the facts
 /// lock: a chain read returns while that wait is in progress.
 ///

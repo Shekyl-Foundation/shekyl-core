@@ -3064,3 +3064,114 @@ async fn a_connect_past_the_windows_end_empties_the_second_slot() {
     service.stop().await.expect("stops");
     y.close().await;
 }
+
+/// A service fault is said when it happens, and published. On the CS-5
+/// rehearsal of 2026-11-02 a commit met `ENOSPC`, the service stopped, and
+/// the one record printed 34 minutes later at SIGTERM while the RPC kept
+/// answering from the old tip.
+///
+/// The connector is killed and a block is offered, so the service loses
+/// its connector: the follower's tip watch closes, or a span cannot reach
+/// it. The fault it records is logged at `error` then, not at `stop`, and
+/// [`Service::ended`] carries the fault's own words: what the node forwards
+/// and the daemon's exit line quotes. A commit that fails inside a live
+/// connector takes the same `Shared::fail`; a test cannot make the store
+/// fail a commit without a lever, so the dead connector stands for it.
+///
+/// [`super::log_capture::Capture`] is `!Send` and this test is
+/// `current_thread`, so the task that records the fault runs on this
+/// thread and the buffer sees its line.
+///
+/// Red edit: take the `tracing::error!` out of `Shared::fail`, move it to
+/// `debug`, or drop the `ended` publish, and the matching assertion fails.
+#[tokio::test(flavor = "current_thread")]
+async fn a_dead_connector_is_logged_when_the_fault_is_recorded_and_published() {
+    let logging = super::log_capture::Capture::open();
+    let mut y = Scenario::open("service-connector-fault-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-connector-fault",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let mut ended = service.ended();
+    assert!(ended.borrow().is_none(), "a running service has not ended");
+    service.shared.connector.kill();
+    service.shared.connector.wait_for_shutdown().await;
+    let door = service.door();
+    // The door may already be closed: the follower can meet the dead
+    // connector first. Either way the service has a connector fault.
+    if let Ok(tickets) = door.offer_span(vec![arrival(1, 1, &blocks[0])]) {
+        for ticket in tickets {
+            let _answered = ticket.reply().await;
+        }
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        ended.wait_for(Option::is_some),
+    )
+    .await
+    .expect("the fault is published without a stop")
+    .expect("the service holds the watch");
+    let published = ended.borrow().as_ref().cloned().expect("a cause");
+    // Before the stop: the record does not wait for it.
+    let at_fault = logging.lines();
+    let fault = service
+        .stop()
+        .await
+        .expect_err("the service ended on its fault");
+    assert_eq!(published, fault.end(), "the published cause is the fault's");
+    assert!(
+        matches!(
+            fault,
+            super::ServiceFault::Mailbox | super::ServiceFault::FollowerEnded
+        ),
+        "a dead connector is unreachable, or ends the follower: {fault:?}"
+    );
+    let expected = format!("the ingest service stops on a fault: {fault}");
+    assert!(
+        at_fault
+            .iter()
+            .any(|(level, line)| *level == tracing::Level::ERROR && *line == expected),
+        "no error line {expected:?} before the stop; logged: {at_fault:?}"
+    );
+    y.close().await;
+}
+
+/// A stop that met no fault says nothing at `error` and publishes no end:
+/// the daemon must not exit failed, or log a fault, for a stop it was
+/// asked for. A block connects first, so the service has worked.
+///
+/// The capture and the runtime are as in the test above, so a line a
+/// stop wrote would be seen: that test is this one's proof the buffer
+/// fills.
+///
+/// Red edit: publish a cause, or log at `error`, in `Service::stop` or
+/// `Shared::request_stop`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_clean_stop_logs_no_error_and_publishes_no_end() {
+    let logging = super::log_capture::Capture::open();
+    let mut y = Scenario::open("service-clean-stop-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-clean-stop",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let ended = service.ended();
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Reply::Connected { .. })),
+        "the block connects: {replies:?}"
+    );
+    service.stop().await.expect("a clean stop returns no fault");
+    assert!(ended.borrow().is_none(), "a clean stop publishes no end");
+    let errors = logging.lines();
+    assert!(
+        errors.is_empty(),
+        "a clean stop logged at error: {errors:?}"
+    );
+    y.close().await;
+}

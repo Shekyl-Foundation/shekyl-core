@@ -8,9 +8,9 @@
 //! Every trigger reaches one latch: the POSIX signals and every Windows
 //! console event through [`own`], which holds the operating system's
 //! streams for the process's life on the signal runtime; the RPC's
-//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a part
-//! the daemon cannot run without ending, chain sync's owner, through
-//! [`fatal`], whose stop also makes the exit a failure. A wait is
+//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a
+//! task the node owns ending on its own, through [`fatal`], whose stop also
+//! makes the exit a failure. A wait is
 //! [`stop_requested`], which answers at once when the latch is already
 //! set, so a trigger that arrives between two waits (the managed Tor's
 //! bootstrap sits between the RPC start and step 8) is kept, not dropped:
@@ -27,7 +27,7 @@
 use std::fmt;
 use std::sync::Mutex;
 
-use shekyl_node::EndCause;
+use shekyl_node::NodeEnd;
 use tokio::sync::Notify;
 
 /// A stop trigger the operating system delivers, by its platform name.
@@ -72,15 +72,15 @@ impl Signal {
 
 /// Why the daemon stops. The report matches the variant: an operator's
 /// stop is announced, and [`Self::Fatal`] is an error.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopCause {
     /// The operating system's stop trigger: a service manager's or a
     /// terminal's ordinary way to stop the daemon.
     Signal(Signal),
     /// The RPC's `stop_daemon`, which `shekyl-cli daemon stop` posts.
     Requested,
-    /// Chain sync's owner ended on its own.
-    Fatal(EndCause),
+    /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
+    Fatal(NodeEnd),
 }
 
 impl fmt::Display for StopCause {
@@ -88,7 +88,7 @@ impl fmt::Display for StopCause {
         match self {
             Self::Signal(signal) => f.write_str(signal.name()),
             Self::Requested => f.write_str("the RPC's stop_daemon"),
-            Self::Fatal(cause) => f.write_str(cause.text()),
+            Self::Fatal(end) => write!(f, "{end}"),
         }
     }
 }
@@ -110,9 +110,9 @@ fn latch(cause: StopCause) {
 }
 
 fn latched() -> Option<StopCause> {
-    *STOP
-        .lock()
+    STOP.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// The daemon's own request: the RPC's `stop_daemon`.
@@ -120,13 +120,13 @@ pub fn request_stop() {
     latch(StopCause::Requested);
 }
 
-/// Chain sync's owner ended on its own, with `cause`.
+/// A task the node owns ended on its own, as `end` says.
 ///
 /// Every waiter sees [`StopCause::Fatal`]. A stop already latched keeps
 /// its own cause. The waiter that observes a fatal cause makes the exit
-/// a failure, as does the arm that reads the owner's failed end directly.
-pub fn fatal(cause: EndCause) {
-    latch(StopCause::Fatal(cause));
+/// a failure, as does the arm that reads the node's end directly.
+pub fn fatal(end: NodeEnd) {
+    latch(StopCause::Fatal(end));
 }
 
 /// What the start can know about an inherited request to ignore the
