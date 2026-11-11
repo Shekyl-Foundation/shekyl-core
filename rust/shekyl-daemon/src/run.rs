@@ -266,16 +266,17 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     status
 }
 
-/// A stop was requested, or chain sync's owner ended on its own. A small
+/// A stop was requested, or a task the node owns ended on its own. A small
 /// status: copied, never borrowed. The stop arm carries the cause, so the
 /// report is made where the wait is recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunWait {
     /// [`signals::stop_requested`] resolved with this cause.
     StopRequested(signals::StopCause),
-    /// The node's sync owner ended on its own, with this cause: the
-    /// daemon would stay up and never sync, so it stops and exits failed.
-    SyncFailed(shekyl_node::EndCause),
+    /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]):
+    /// the daemon would stay up and never sync, or never connect a block,
+    /// so it stops and exits failed.
+    NodeEnded(shekyl_node::NodeEnd),
 }
 
 /// The run: the RPC's start, the notify driver, the managed Tor's start,
@@ -325,8 +326,8 @@ fn supervise(
     }
     let mut preserve_status = rpc.is_some();
     if rpc.is_some() {
-        let mut sync_ended = node.sync_ended();
-        let wait = pool.block_on(run_or_stop(&mut sync_ended));
+        let mut ended = node.ended();
+        let wait = pool.block_on(run_or_stop(&mut ended));
         note_run(&mut preserve_status, wait);
     }
     notify_driver.abort();
@@ -374,39 +375,39 @@ fn finish(
     }
 }
 
-/// A stop request, or chain sync's owner ending on its own.
+/// A stop request, or a task the node owns ending on its own.
 ///
-/// Only this wait reads the owner's end. Teardown asks the owner to stop
-/// before the network closes, so that end is
-/// [`shekyl_node::SyncEnded::Stopped`], and this wait is not polled while
-/// the node is dropped. A failed end is read before a stop request: the
-/// owner is stopped only in the teardown, so a stop cannot cause it.
-async fn run_or_stop(sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>) -> RunWait {
+/// Only this wait reads the node's end watch. Teardown asks chain sync's
+/// owner to stop before the network closes, and a task that was asked to
+/// stop does not report, so this wait is not polled while the node is
+/// dropped. A reported end is read before a stop request: the node's
+/// tasks are stopped only in the teardown, so a stop cannot cause one.
+async fn run_or_stop(ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>) -> RunWait {
     tokio::select! {
         biased;
-        cause = sync_failed(sync_ended) => RunWait::SyncFailed(cause),
+        end = node_ended(ended) => RunWait::NodeEnded(end),
         cause = signals::stop_requested() => RunWait::StopRequested(cause),
     }
 }
 
-/// Resolves when chain sync's owner has ended on its own, with the cause.
-/// A stop, and a watch whose owner went without a failure, never resolve.
-async fn sync_failed(
-    sync_ended: &mut watch::Receiver<Option<shekyl_node::SyncEnded>>,
-) -> shekyl_node::EndCause {
+/// Resolves when a task the node owns has ended on its own, with its end.
+/// A watch that closes without one never resolves.
+async fn node_ended(
+    ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>,
+) -> shekyl_node::NodeEnd {
     loop {
-        if let Some(shekyl_node::SyncEnded::Failed(cause)) = *sync_ended.borrow_and_update() {
-            return cause;
+        if let Some(end) = *ended.borrow_and_update() {
+            return end;
         }
-        // A stop, and a watch that closed without a failure, never resolve.
-        // The biased select then stays on the stop request.
-        if sync_ended.changed().await.is_err() {
+        // A watch that closed without an end never resolves. The biased
+        // select then stays on the stop request.
+        if ended.changed().await.is_err() {
             std::future::pending().await
         }
     }
 }
 
-/// Record what the wait returned: a stop, or a failed sync owner, which
+/// Record what the wait returned: a stop, or a node task's own end, which
 /// stops the daemon through the one stop owner and makes its exit a
 /// failure.
 fn note_run(preserve_status: &mut bool, wait: RunWait) {
@@ -417,9 +418,9 @@ fn note_run(preserve_status: &mut bool, wait: RunWait) {
             }
             deliver(stop_report(cause));
         }
-        RunWait::SyncFailed(cause) => {
-            deliver(stop_report(signals::StopCause::Fatal(cause)));
-            signals::fatal(cause);
+        RunWait::NodeEnded(end) => {
+            deliver(stop_report(signals::StopCause::Fatal(end)));
+            signals::fatal(end);
             *preserve_status = false;
         }
     }
@@ -441,9 +442,7 @@ fn stop_report(cause: signals::StopCause) -> StopReport {
         signals::StopCause::Signal(_) | signals::StopCause::Requested => {
             StopReport::Announce(format!("stop requested by {cause}"))
         }
-        signals::StopCause::Fatal(cause) => {
-            StopReport::Error(format!("chain sync stopped: {cause}; the daemon stops"))
-        }
+        signals::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
     }
 }
 
@@ -719,13 +718,23 @@ mod tests {
         assert!(Lock::take(&data).is_ok());
     }
 
-    /// **A sync owner that ends on its own stops the daemon, and the exit
-    /// is a failure** (the CS-5 tune-up). An owner that stopped on request
-    /// does not end the wait. One that failed does, with its cause: the
-    /// cause reaches the one stop owner, so every waiter sees it, and the
-    /// status the teardown returns is a failure.
+    /// **A node task that ends on its own stops the daemon, and the exit
+    /// is a failure** (the CS-5 tune-up, and the ingest fault of
+    /// 2026-11-02). A watch that reports nothing does not end the wait. A
+    /// reported end does, with its cause: the cause reaches the one stop
+    /// owner, so every waiter sees it, and the status the teardown returns
+    /// is a failure. The cases are the node's two producers.
     #[test]
-    fn a_sync_owner_that_ends_on_its_own_stops_the_daemon_with_its_cause() {
+    fn a_node_task_that_ends_on_its_own_stops_the_daemon_with_its_cause() {
+        for end in [
+            shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::PortClosed),
+            shekyl_node::NodeEnd::Ingest(shekyl_node::ServiceEnd::Connector),
+        ] {
+            a_reported_end_stops_the_daemon(end);
+        }
+    }
+
+    fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
         let _serial = SERIAL
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -736,7 +745,6 @@ mod tests {
         // Clears a stop an earlier test latched.
         signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
         let (ended_tx, mut ended) = watch::channel(None);
-        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Stopped));
         let waited = rt.block_on(async {
             tokio::time::timeout(
                 std::time::Duration::from_millis(50),
@@ -744,18 +752,16 @@ mod tests {
             )
             .await
         });
-        assert!(waited.is_err(), "a stopped owner ended the wait");
-        ended_tx.send_replace(Some(shekyl_node::SyncEnded::Failed(
-            shekyl_node::EndCause::PortClosed,
-        )));
+        assert!(waited.is_err(), "a watch with no end ended the wait");
+        ended_tx.send_replace(Some(end));
         let wait = rt.block_on(run_or_stop(&mut ended));
-        assert_eq!(wait, RunWait::SyncFailed(shekyl_node::EndCause::PortClosed));
+        assert_eq!(wait, RunWait::NodeEnded(end));
         let mut preserve_status = true;
         note_run(&mut preserve_status, wait);
         assert!(!preserve_status, "the exit was not made a failure");
         assert_eq!(
             rt.block_on(signals::stop_requested()),
-            signals::StopCause::Fatal(shekyl_node::EndCause::PortClosed)
+            signals::StopCause::Fatal(end)
         );
     }
 
@@ -772,15 +778,11 @@ mod tests {
             .build()
             .expect("runtime");
         signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
-        signals::fatal(shekyl_node::EndCause::EngineClosed);
+        let end = shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::EngineClosed);
+        signals::fatal(end);
         let (_ended_tx, mut ended) = watch::channel(None);
         let wait = rt.block_on(run_or_stop(&mut ended));
-        assert_eq!(
-            wait,
-            RunWait::StopRequested(signals::StopCause::Fatal(
-                shekyl_node::EndCause::EngineClosed
-            ))
-        );
+        assert_eq!(wait, RunWait::StopRequested(signals::StopCause::Fatal(end)));
         let mut preserve_status = true;
         note_run(&mut preserve_status, wait);
         assert!(!preserve_status, "a fatal cause kept the exit");
@@ -807,10 +809,20 @@ mod tests {
             StopReport::Announce("stop requested by shutdown".to_owned())
         );
         assert_eq!(
-            stop_report(StopCause::Fatal(shekyl_node::EndCause::PortClosed)),
+            stop_report(StopCause::Fatal(shekyl_node::NodeEnd::Sync(
+                shekyl_node::EndCause::PortClosed
+            ))),
             StopReport::Error(
                 "chain sync stopped: the session layer dropped the sync owner; the daemon stops"
                     .to_owned()
+            )
+        );
+        assert_eq!(
+            stop_report(StopCause::Fatal(shekyl_node::NodeEnd::Ingest(
+                shekyl_node::ServiceEnd::Connector
+            ))),
+            StopReport::Error(
+                "the ingest service stopped: the connector faulted; the daemon stops".to_owned()
             )
         );
     }

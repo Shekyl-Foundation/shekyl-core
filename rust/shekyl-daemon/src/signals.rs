@@ -27,7 +27,7 @@
 use std::fmt;
 use std::sync::Mutex;
 
-use shekyl_node::EndCause;
+use shekyl_node::NodeEnd;
 use tokio::sync::Notify;
 
 /// A stop trigger the operating system delivers, by its platform name.
@@ -79,8 +79,8 @@ pub enum StopCause {
     Signal(Signal),
     /// The RPC's `stop_daemon`, which `shekyl-cli daemon stop` posts.
     Requested,
-    /// Chain sync's owner ended on its own.
-    Fatal(EndCause),
+    /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
+    Fatal(NodeEnd),
 }
 
 impl fmt::Display for StopCause {
@@ -88,7 +88,7 @@ impl fmt::Display for StopCause {
         match self {
             Self::Signal(signal) => f.write_str(signal.name()),
             Self::Requested => f.write_str("the RPC's stop_daemon"),
-            Self::Fatal(cause) => f.write_str(cause.text()),
+            Self::Fatal(end) => write!(f, "{end}"),
         }
     }
 }
@@ -120,13 +120,13 @@ pub fn request_stop() {
     latch(StopCause::Requested);
 }
 
-/// Chain sync's owner ended on its own, with `cause`.
+/// A task the node owns ended on its own, as `end` says.
 ///
 /// Every waiter sees [`StopCause::Fatal`]. A stop already latched keeps
 /// its own cause. The waiter that observes a fatal cause makes the exit
-/// a failure, as does the arm that reads the owner's failed end directly.
-pub fn fatal(cause: EndCause) {
-    latch(StopCause::Fatal(cause));
+/// a failure, as does the arm that reads the node's end directly.
+pub fn fatal(end: NodeEnd) {
+    latch(StopCause::Fatal(end));
 }
 
 /// What the start can know about an inherited request to ignore the

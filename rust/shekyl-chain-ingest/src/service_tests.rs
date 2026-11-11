@@ -3007,3 +3007,119 @@ async fn a_connect_past_the_windows_end_empties_the_second_slot() {
     service.stop().await.expect("stops");
     y.close().await;
 }
+
+/// Every event's level and message, for a test that reads the log.
+#[derive(Clone, Default)]
+struct LogLines(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+impl tracing::Subscriber for LogLines {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(
+                &mut self,
+                field: &tracing::field::Field,
+                value: &dyn core::fmt::Debug,
+            ) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        self.0
+            .lock()
+            .expect("log lines")
+            .push((*event.metadata().level(), message.0));
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A service fault is said when it happens, and published. On the CS-5
+/// rehearsal of 2026-11-02 a commit met `ENOSPC`, the service stopped, and
+/// the one record printed 34 minutes later at SIGTERM while the RPC kept
+/// answering from the old tip.
+///
+/// The connector is killed and a block is offered, so the service loses
+/// its connector: the follower's tip watch closes, or a span cannot reach
+/// it. The fault it records is logged at `error` then, not at `stop`, and
+/// [`Service::ended`] carries its cause: what the node forwards and the
+/// daemon exits on. A commit that fails inside a live connector takes the
+/// same `Shared::fail`; a test cannot make the store fail a commit without
+/// a lever, so the dead connector stands for it.
+///
+/// On a current-thread runtime, so the task that records the fault runs on
+/// this thread and the thread's subscriber sees its line.
+///
+/// Red edit: take the `tracing::error!` out of `Shared::fail`, or the
+/// `ended` publish, and the matching assertion fails.
+#[tokio::test]
+async fn a_dead_connector_is_logged_when_the_fault_is_recorded_and_published() {
+    let lines = LogLines::default();
+    let _logging = tracing::subscriber::set_default(lines.clone());
+    let mut y = Scenario::open("service-connector-fault-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-connector-fault",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let mut ended = service.ended();
+    assert_eq!(*ended.borrow(), None, "a running service has not ended");
+    service.shared.connector.kill();
+    service.shared.connector.wait_for_shutdown().await;
+    let door = service.door();
+    // The door may already be closed: the follower can meet the dead
+    // connector first. Either way the service has a connector fault.
+    if let Ok(tickets) = door.offer_span(vec![arrival(1, 1, &blocks[0])]) {
+        for ticket in tickets {
+            let _answered = ticket.reply().await;
+        }
+    }
+    let published = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        ended.wait_for(Option::is_some),
+    )
+    .await
+    .expect("the fault is published without a stop")
+    .expect("the service holds the watch")
+    .expect("a cause");
+    // Before the stop: the record does not wait for it.
+    let at_fault: Vec<(tracing::Level, String)> = lines.0.lock().expect("log lines").clone();
+    let fault = service
+        .stop()
+        .await
+        .expect_err("the service ended on its fault");
+    assert_eq!(published, fault.end(), "the published cause is the fault's");
+    assert!(
+        matches!(
+            fault,
+            super::ServiceFault::Mailbox | super::ServiceFault::FollowerEnded
+        ),
+        "a dead connector is unreachable, or ends the follower: {fault:?}"
+    );
+    let expected = format!("the ingest service stops on a fault: {fault}");
+    assert!(
+        at_fault
+            .iter()
+            .any(|(level, line)| *level == tracing::Level::ERROR && *line == expected),
+        "no error line {expected:?} before the stop; logged: {at_fault:?}"
+    );
+    y.close().await;
+}

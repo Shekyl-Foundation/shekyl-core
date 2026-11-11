@@ -59,6 +59,7 @@
 
 #![deny(unsafe_code)]
 
+mod ended;
 mod facts;
 mod genesis;
 mod mining;
@@ -68,11 +69,13 @@ mod pool_door;
 mod producer;
 mod sync_owner;
 
+pub use ended::NodeEnd;
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 pub use producer::descriptors as producer_descriptors;
+pub use shekyl_chain_ingest::service::ServiceEnd;
 pub use shekyl_chain_sync::Declaration;
-pub use shekyl_chain_sync_runtime::owner::{EndCause, Ended as SyncEnded};
+pub use shekyl_chain_sync_runtime::owner::EndCause;
 pub use shekyl_p2p::{
     BanTarget, ClearnetPlan, LinkLimits, Network, NetworkPlan, PeerPlan, SupervisorFeeds, TorPlan,
 };
@@ -253,8 +256,8 @@ pub struct Node {
     /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
     /// publishes into [`Self::sync`] and reads the session layer's port.
     sync_owner: Mutex<Option<sync_owner::Held>>,
-    /// How chain sync's owner ended, once it has ([`Self::sync_ended`]).
-    sync_ended: tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>>,
+    /// The first fatal end of a task this node owns ([`Self::ended`]).
+    ended: ended::Reporter,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
     /// The hasher budget `pow_hash` acquires under. The facts-lock test
     /// holds its permits; production does not keep a second copy.
@@ -540,6 +543,19 @@ impl Node {
             door: door_slot,
             store: store_slot,
         });
+        // Every long-lived task the node starts reports its end on the one
+        // watch (`ended` module docs). The forwarders end with their
+        // sources, or with the runtime.
+        let ended = ended::Reporter::new();
+        runtime.spawn(ended::forward(
+            ended.clone(),
+            sync_owner.ended(),
+            ended::sync_end,
+        ));
+        // The service publishes a cause only when it stopped on a fault.
+        runtime.spawn(ended::forward(ended.clone(), service.ended(), |end| {
+            Some(NodeEnd::Ingest(end))
+        }));
         let node = Self {
             slots,
             sync,
@@ -551,7 +567,7 @@ impl Node {
             network,
             handles,
             service: Mutex::new(Some(service)),
-            sync_ended: sync_owner.ended(),
+            ended,
             sync_owner: Mutex::new(Some(sync_owner)),
             runtime: Mutex::new(Some(runtime)),
             #[cfg(test)]
@@ -599,16 +615,15 @@ impl Node {
         self.sync.clone()
     }
 
-    /// How chain sync's owner ended, once it has: `None` while it runs.
-    /// An owner that ends on its own ([`SyncEnded::Failed`]) leaves a
-    /// daemon that never syncs again, so the daemon stops and records
-    /// the [`EndCause`]. The watch outlives the owner and the node's
-    /// stop.
+    /// The first fatal end of a task this node owns, with its cause:
+    /// `None` while they all run. Chain sync's owner ending on its own and
+    /// the ingest service stopping on a fault are its producers. Either
+    /// leaves a node that is up and does nothing, so the daemon stops on
+    /// it and exits failed. A task stopped by [`Self::stop`] does not
+    /// report. The watch outlives the tasks and the node's stop.
     #[must_use]
-    pub fn sync_ended(
-        &self,
-    ) -> tokio::sync::watch::Receiver<Option<shekyl_chain_sync_runtime::owner::Ended>> {
-        self.sync_ended.clone()
+    pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<NodeEnd>> {
+        self.ended.subscribe()
     }
 
     /// The node's one pool, while it runs: what the composition root hands

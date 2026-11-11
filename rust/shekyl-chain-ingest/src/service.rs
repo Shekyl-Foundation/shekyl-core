@@ -538,6 +538,79 @@ pub enum ServiceFault<F> {
     },
 }
 
+impl<F> ServiceFault<F> {
+    /// Which fault this is, without what it carries: the cause the node's
+    /// end watch publishes. The whole fault is in the error line
+    /// [`Shared::fail`] writes when it records it.
+    #[must_use]
+    pub const fn end(&self) -> ServiceEnd {
+        match self {
+            Self::Connector(_) => ServiceEnd::Connector,
+            Self::Mailbox => ServiceEnd::Mailbox,
+            Self::Store(_) => ServiceEnd::Store,
+            Self::Substrate(_) => ServiceEnd::Substrate,
+            Self::Corrupt { .. } => ServiceEnd::Corrupt,
+            Self::Pool(_) => ServiceEnd::Pool,
+            Self::FollowerEnded => ServiceEnd::FollowerEnded,
+            Self::SeedNotInWindow { .. } => ServiceEnd::SeedNotInWindow,
+            Self::PreparedSeedAbsent { .. } => ServiceEnd::PreparedSeedAbsent,
+            Self::DemotionRefused { .. } => ServiceEnd::DemotionRefused,
+        }
+    }
+}
+
+/// Why the service ended on its own ([`Service::ended`]): the
+/// [`ServiceFault`] it stopped on, without the fault's payload, so the
+/// value is copied to whoever stops the process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceEnd {
+    /// [`ServiceFault::Connector`].
+    Connector,
+    /// [`ServiceFault::Mailbox`].
+    Mailbox,
+    /// [`ServiceFault::Store`].
+    Store,
+    /// [`ServiceFault::Substrate`].
+    Substrate,
+    /// [`ServiceFault::Corrupt`].
+    Corrupt,
+    /// [`ServiceFault::Pool`].
+    Pool,
+    /// [`ServiceFault::FollowerEnded`].
+    FollowerEnded,
+    /// [`ServiceFault::SeedNotInWindow`].
+    SeedNotInWindow,
+    /// [`ServiceFault::PreparedSeedAbsent`].
+    PreparedSeedAbsent,
+    /// [`ServiceFault::DemotionRefused`].
+    DemotionRefused,
+}
+
+impl ServiceEnd {
+    /// The prose of this cause. The daemon's error line quotes it.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::Connector => "the connector faulted",
+            Self::Mailbox => "the connector is unreachable",
+            Self::Store => "a store read failed",
+            Self::Substrate => "the proof-of-work verifier faulted",
+            Self::Corrupt => "the store's headers are corrupt",
+            Self::Pool => "the pool's chain view faulted",
+            Self::FollowerEnded => "the tip follower ended",
+            Self::SeedNotInWindow => "a fork named a seed outside the window",
+            Self::PreparedSeedAbsent => "a prepared seed's cache was absent",
+            Self::DemotionRefused => "a recorded block refused its own rules",
+        }
+    }
+}
+
+impl core::fmt::Display for ServiceEnd {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.text())
+    }
+}
+
 /// What every span task, and the tip attendant, shares.
 pub(crate) struct Shared<S: Substrate> {
     store: Arc<ChainStore>,
@@ -552,6 +625,10 @@ pub(crate) struct Shared<S: Substrate> {
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
+    /// That fault's cause, published when it is recorded
+    /// ([`Service::ended`]). `None` while the service runs, and after a
+    /// stop that met no fault.
+    ended: tokio::sync::watch::Sender<Option<ServiceEnd>>,
     /// Serializes cache pins. Taken after a hasher permit, never before
     /// (the install's settled check takes and drops it holding none).
     /// Holds the seed window last installed: the only seeds a later
@@ -787,12 +864,25 @@ where
     }
 
     /// Record `fault` if it is the first, and stop.
+    ///
+    /// The first fault is logged at `error` here, when it is recorded, and
+    /// its cause is published on [`Service::ended`]. A stopped service
+    /// leaves the process up and the RPC answering from the old tip, so
+    /// the line cannot wait for the daemon's exit (rule 82), and whoever
+    /// owns the process reads the watch to end it. A later fault is a
+    /// consequence of the first and is logged at `debug`.
     pub(crate) fn fail(&self, fault: ServiceFault<S::Fault>) {
         let mut first = self
             .fault
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        first.get_or_insert(fault);
+        if first.is_none() {
+            tracing::error!("the ingest service stops on a fault: {fault}");
+            self.ended.send_replace(Some(fault.end()));
+            *first = Some(fault);
+        } else {
+            tracing::debug!("the ingest service, already stopping, met: {fault}");
+        }
         drop(first);
         self.request_stop();
     }
@@ -1263,6 +1353,7 @@ where
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
+            ended: tokio::sync::watch::Sender::new(None),
             pin_lock: Arc::new(Mutex::new(None)),
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
@@ -1451,6 +1542,16 @@ where
         Alarm {
             connector: self.shared.connector.clone(),
         }
+    }
+
+    /// Why the service ended on its own, once it has: `None` while it
+    /// runs, and after a stop that met no fault. Published when the fault
+    /// is recorded, which is when the door closes and the follower leaves
+    /// its loop. The node forwards it to its own end watch, so the daemon
+    /// stops on it.
+    #[must_use]
+    pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<ServiceEnd>> {
+        self.shared.ended.subscribe()
     }
 
     /// The last `TipChanged` publication the tip follower acted on: what a
