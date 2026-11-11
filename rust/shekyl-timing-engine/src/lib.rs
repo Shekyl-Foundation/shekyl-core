@@ -20,7 +20,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Nanoseconds since the clock's origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,26 +132,91 @@ impl Clock for ManualClock {
 }
 
 /// The process origin every [`MonotonicClock`] measures from: the first
-/// instant any of them was built.
-static PROCESS_ORIGIN: OnceLock<Instant> = OnceLock::new();
+/// reading any of them took.
+static PROCESS_ORIGIN: OnceLock<awake::Reading> = OnceLock::new();
 
 /// Production clock. Every instance reads the one process origin, so two
 /// clocks built at different times give comparable ticks; the instance
 /// holds no time of its own.
 ///
-/// `Instant` on Linux is `CLOCK_MONOTONIC`. That clock does not advance
-/// while the system is suspended, so a deadline is not late by the time
-/// the machine spent suspended.
+/// It counts awake time on Linux, macOS and Windows: it does not advance while the
+/// machine is suspended, so a deadline is not late by the time the machine
+/// spent suspended, and a span it measures leaves the sleep out (Rick,
+/// 2026-11-11). On Linux it is `Instant`, which is `CLOCK_MONOTONIC`; on
+/// macOS it is `Instant`, which is `CLOCK_UPTIME_RAW`. On Windows `Instant`
+/// counts through a sleep, so the clock reads the unbiased interrupt time
+/// instead ([`awake`]).
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
-    origin: &'static Instant,
+    origin: &'static awake::Reading,
 }
 
 impl MonotonicClock {
     pub fn new() -> Self {
         Self {
-            origin: PROCESS_ORIGIN.get_or_init(Instant::now),
+            origin: PROCESS_ORIGIN.get_or_init(awake::Reading::now),
         }
+    }
+}
+
+/// The awake-time source, one per platform.
+mod awake {
+    /// A reading of the awake-time source.
+    #[cfg(not(windows))]
+    #[derive(Debug)]
+    pub(super) struct Reading(std::time::Instant);
+
+    #[cfg(not(windows))]
+    impl Reading {
+        pub(super) fn now() -> Self {
+            Self(std::time::Instant::now())
+        }
+
+        /// Nanoseconds of awake time since this reading.
+        pub(super) fn elapsed_nanos(&self) -> u64 {
+            u64::try_from(self.0.elapsed().as_nanos()).unwrap_or(u64::MAX)
+        }
+    }
+
+    /// A reading of the unbiased interrupt time: 100 ns units that leave out
+    /// time the machine spent in sleep or hibernation. The precise call
+    /// reads the timer hardware, so a short span keeps its resolution where
+    /// the plain call moves only at each clock tick (0.5 to 15.6 ms). It
+    /// needs Windows 10 or Windows Server 2016, which every Shekyl Windows
+    /// build already does: Rust's `x86_64-pc-windows-msvc` target supports
+    /// nothing older since 1.78, and the workspace pins 1.94.
+    #[cfg(windows)]
+    #[derive(Debug)]
+    pub(super) struct Reading(u64);
+
+    #[cfg(windows)]
+    impl Reading {
+        pub(super) fn now() -> Self {
+            Self(unbiased_interrupt_time())
+        }
+
+        /// Nanoseconds of awake time since this reading.
+        pub(super) fn elapsed_nanos(&self) -> u64 {
+            unbiased_interrupt_time()
+                .saturating_sub(self.0)
+                .saturating_mul(100)
+        }
+    }
+
+    /// The unbiased interrupt time, in 100 ns units.
+    #[cfg(windows)]
+    #[allow(unsafe_code)]
+    pub(super) fn unbiased_interrupt_time() -> u64 {
+        let mut units = 0u64;
+        // SAFETY: the call writes one `u64` through the pointer, which is a
+        // live, aligned local; it has no other effect and cannot fail
+        // (`QueryUnbiasedInterruptTimePrecise` returns nothing).
+        unsafe {
+            windows_sys::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTimePrecise(
+                &raw mut units,
+            );
+        }
+        units
     }
 }
 
@@ -163,8 +228,7 @@ impl Default for MonotonicClock {
 
 impl Clock for MonotonicClock {
     fn now(&self) -> Tick {
-        let nanos = self.origin.elapsed().as_nanos();
-        Tick(u64::try_from(nanos).unwrap_or(u64::MAX))
+        Tick(self.origin.elapsed_nanos())
     }
 
     fn wait_for(&self, deadline: Tick) -> Option<Duration> {
@@ -829,3 +893,6 @@ mod model;
 
 #[cfg(test)]
 mod engine_tests;
+
+#[cfg(test)]
+mod clock_tests;

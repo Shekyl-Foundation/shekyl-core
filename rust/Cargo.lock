@@ -5355,6 +5355,7 @@ dependencies = [
  "criterion",
  "proptest",
  "shekyl-thread-ledger",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
