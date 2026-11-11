@@ -42,17 +42,6 @@
 /// `SLASH_GRACE_EPOCHS · SETTLEMENT_EPOCH_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`.
 pub const SLASH_GRACE_EPOCHS: u64 = 1;
 
-/// Blocks after `H_open` before the fire beacon input `block_hash(H_seal)` is fixed.
-///
-/// **Retired-mechanism constant.** The fire-beacon challenge shape
-/// (`H_seal`/`H_fire`, gate-2 §3.4) is superseded by derived assignment
-/// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2: `assignment(h)` seeds from
-/// `block_hash(h−1)`, no seal lag). Its one reader is
-/// [`crate::challenge_seal_height`], whose callers are this crate's gate-2
-/// KAT tests; no admission path in the workspace reads it. It deletes with
-/// the format round's deletion surface.
-pub const CHALLENGE_BEACON_SEAL_BLOCKS: u64 = 1;
-
 /// W₂ — blocks after a challenge's issuing block to accept its serve-credit
 /// response. **Pinned at one twentieth of a settlement epoch
 /// ([`W2_EPOCH_DIVISOR`]) — 500 blocks, ≈16.7 h.** This constant is that

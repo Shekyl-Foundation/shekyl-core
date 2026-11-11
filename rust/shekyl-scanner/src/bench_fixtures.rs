@@ -410,7 +410,6 @@ pub fn fixture_prunable(spend_inputs: usize) -> Prunable {
         tree_depth: 0,
         fcmp_proof: vec![],
         pseudo_outs: vec![[0u8; 32]; spend_inputs],
-        serve_credit_pruned: vec![],
     }
 }
 

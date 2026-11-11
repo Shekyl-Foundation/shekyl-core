@@ -35,8 +35,7 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
-    SupportRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -230,29 +229,6 @@ impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
         floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
         archival_reads::slash_log_after(self.snapshot.txn(), persona, height, floor)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(self.snapshot.txn(), persona, shard)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(self.snapshot.txn(), persona).map_err(ReadFault::into_plain)
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(self.snapshot.txn(), persona, shard, epoch)
             .map_err(ReadFault::into_plain)
     }
 

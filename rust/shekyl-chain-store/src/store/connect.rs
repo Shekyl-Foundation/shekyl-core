@@ -21,8 +21,7 @@
 //!  2. transactions miner tx then listed → tx_indices, txs_*, tx_outputs,
 //!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1);
 //!                  then the delta's archival_bond post-images (SI-19/20)
-//!                  and archival_serve_credit bits (SI-15) —
-//!                  `archival_write.rs`, DRS-E4
+//!                  — `archival_write.rs`, DRS-E4
 //!  3. tree         the verdict's drain → curve_tree_leaves, the position
 //!                  maps, curve_tree_layers, curve_tree_meta (SI-11/12/17);
 //!                  curve_tree_leaf_counts[h + 1] every connect (SI-18) —

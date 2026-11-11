@@ -414,6 +414,11 @@ use super::{Canonical, CodecError};
 ///   and the set each pass froze was always empty. The five tables after
 ///   it move up one ordinal again (`archival_support_block` 43 through
 ///   `archival_bundle_body` 47), and `complete_tree_set.snap` is removed.
+///   `archival_serve_credit` (ordinal 16) is deleted with the serve-credit
+///   input (the switch's C7), and with it SI-15 and the reads A3–A5: every
+///   table after it moves up one ordinal, and `tables.snap` re-pins. The
+///   `ServeCredit` archival family goes too, so each later family's bit in
+///   a stored `family_set` moves down one and `family_set.snap` re-pins.
 ///   A `35` file is refused at open. Rebuild from the block corpus, as at
 ///   every bump.
 ///

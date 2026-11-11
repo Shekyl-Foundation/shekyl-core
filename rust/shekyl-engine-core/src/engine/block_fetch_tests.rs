@@ -424,7 +424,6 @@ fn full_spend_tx() -> Transaction {
     }];
     *prunable = Some(Prunable {
         // Spend fixture: no pass records (RF-D1).
-        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0; 32],
             a1: [0; 32],

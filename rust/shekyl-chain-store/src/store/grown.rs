@@ -111,53 +111,6 @@ pub(in super::super) fn body(tx: Transaction) -> Listed {
     Listed::Body(tx)
 }
 
-/// The serve credit for the persona at `slot`, for shard 0 in
-/// `settlement_epoch`: the spender persona's vin
-/// ([`Persona::serve_credit_vin`]) in the rules harness's CEN-H20 body
-/// (`fixture::serve_credit_only_with`) — the one legal listed shape with
-/// no key image and no `pqc_auths`, 3-part. The epoch is the caller's
-/// derivation: CEN-J5 admits a credit for epoch `E` only when `E ≥` the
-/// epoch the persona's join settled in `+ 1`.
-pub(in super::super) fn serve_credit(slot: u32, settlement_epoch: u64) -> Transaction {
-    fixture::serve_credit_only_with(Persona::at(slot).serve_credit_vin(0, settlement_epoch))
-}
-
-/// A serve credit **with the record it credits**: the [`Listed::Join`]
-/// that opens the `archival_bond` row of the persona at `slot` (a real
-/// spend funding the bond — 4-part, like every spend), and the credit for
-/// that persona ([`serve_credit`]). A credit for a persona with no record
-/// is refused (CEN-L7 since DRS-E4 commit 4; CEN-J4 is the row), so a
-/// credit connects only behind its join. The join spends, so it sits no
-/// lower than [`FIRST_SPEND_HEIGHT`], and the credit lists in the block
-/// **after** it:
-/// CEN-J4 reads the record off the view the block is judged against, which
-/// a join in the same block has not yet written — the C++ reads it so
-/// (`check_tx_inputs` runs before `add_block`), and a same-block pair is
-/// refused there. *Records-was:* until E6 slice 8 row 3 the pair was
-/// listed in one block, which the fold's in-block sequencing admitted
-/// (`archival/inputs.rs`, `apply_input`) and the C++ never did.
-///
-/// The credit is for settlement epoch 1, the first a persona joining in
-/// epoch 0 may serve (CEN-J5, `E ≥ join + 1`): under the genesis schedule
-/// (`GENESIS` rules) epoch 0 runs past every height a fixture chain here
-/// reaches, so a join at or above [`FIRST_SPEND_HEIGHT`] settles in epoch
-/// 0. A chain under a shorter schedule derives its own epoch and pairs
-/// [`Listed::Join`] with [`serve_credit`] itself (`prune_tests`). Which
-/// epoch a fixture chain is *in* when it lists the credit is CEN-J7's (E6
-/// slice C), not yet a Rust rule.
-///
-/// The credit is the harness's, in the **`RF-D1`** shape CEN-H20 requires:
-/// a prunable region holding one pruned pass record per serve-credit vin.
-/// Before that shape was required (`SHT-9`), a credit with no region
-/// connected and then halted the store ten heights later, on SI-7:
-/// its txid mixes the null hash where its `txs_prunable_hash` row is
-/// `keccak256("")`, so the drain's reconstruction named another
-/// transaction. `prune_tests` connects one past that age (its own
-/// `sized_credit`, the same shape with the record's length chosen).
-pub(in super::super) fn credited(slot: u32) -> (Listed, Transaction) {
-    (Listed::Join { slot }, serve_credit(slot, 1))
-}
-
 /// The first height at which a block may list a spend: the spender crate's
 /// [`first_spending_height`] under the genesis rule set. A spend needs a
 /// coinbase that has **matured** — unlocked (`mined_money_unlock_window`

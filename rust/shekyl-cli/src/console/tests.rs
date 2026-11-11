@@ -337,7 +337,6 @@ fn console_spend() -> shekyl_wire::Transaction {
                 hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
             }],
             prunable: Some(Prunable {
-                serve_credit_pruned: vec![],
                 bulletproofs: vec![BpPlus {
                     a: [0; 32],
                     a1: [0; 32],

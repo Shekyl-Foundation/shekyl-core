@@ -64,8 +64,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount,
-    RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportRow,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, RMarket,
+    ReleasedRecord, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportRow,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -550,36 +550,6 @@ pub trait ChainView<'id>: HeaderView<'id> {
         height: BlockHeight,
         floor: crate::SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
-
-    /// **A3.** The latest settlement epoch `persona` earned a pass bit in
-    /// for `shard`, or `None` for a pair that never served — the release
-    /// cooldown's anchor and its vacuous arm (CEN-J16).
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Self::Fault>;
-
-    /// **A4.** Every shard `persona` ever earned a pass bit for, each with
-    /// its latest epoch; empty for a persona that never served. The
-    /// last-served marshal in its complete-tree form (such a record stores
-    /// no shard list, so the served set is the only list there is) —
-    /// CEN-J16's cooldown over every shard. (It was also CEN-J17's
-    /// drop-arm grace tail until that row retired with `HoldingsUpdate`,
-    /// `ARW-14`; slice 8 Q1.)
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
-
-    /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
-    /// [`PassCount::ZERO`] when none. No rule reads it since `SO-D11`:
-    /// slashing and accrual read the settlement row, whose pass fact is
-    /// the issued-draw index's. The read goes with the serve-credit table
-    /// when admission re-keys or deletes it (`SO-D10c`).
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, Self::Fault>;
 
     /// **A6.** The market's co-holder count for `shard` at `epoch`, as the
     /// epoch's slash pass gathered it (`SO-D11`), or `None` for an epoch

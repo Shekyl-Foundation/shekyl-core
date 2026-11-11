@@ -9,14 +9,11 @@
 //! impl is incomplete; notably it omits `bond_spend_pk`), so the design docs +
 //! Rust impl are authority and the test is a synthetic round-trip
 //! (`read(write(x)) == x`). Layouts transcribed from
-//! `shekyl-archival-retention::{wire,bond_wire}` + GENESIS_TX_WIRE_FORMAT.md
+//! `shekyl-archival-retention::bond_wire` + GENESIS_TX_WIRE_FORMAT.md
 //! §9.10/§9.11, with `bond_spend_pk` added per §9.11.
 
 use shekyl_types::PCanonicalId;
-use shekyl_wire::transaction::{
-    ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES, BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN,
-    TAG_INPUT_SERVE_CREDIT,
-};
+use shekyl_wire::transaction::{BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN};
 use shekyl_wire::{BondPost, BondPostKind, Holdings, Input};
 
 fn round_trip(input: &Input) -> Input {
@@ -26,63 +23,6 @@ fn round_trip(input: &Input) -> Input {
     let parsed = Input::read(&mut cursor).expect("read input arm");
     assert!(cursor.is_empty(), "input arm left trailing bytes");
     parsed
-}
-
-/// A well-shaped opaque kept-half blob: the retention codec's encoding is
-/// `tag ‖ p_id(32) ‖ shard ‖ epoch ‖ ed25519(64)`; this crate only checks
-/// the tag and the ceiling, so any bytes of that shape exercise the arm.
-fn kept_blob() -> Vec<u8> {
-    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
-    b.extend_from_slice(&[0x11; 32]);
-    b.extend_from_slice(&[7, 42]);
-    b.extend_from_slice(&[0x66; 64]);
-    b
-}
-
-#[test]
-fn serve_credit_round_trips() {
-    // The KEPT half, as the opaque blob the vin carries (RF-D1). The
-    // interior is `shekyl-archival-retention::wire`'s; this
-    // arm mirrors the emission arm: tag + length + bytes.
-    let input = Input::ServeCredit {
-        canonical_bytes: kept_blob(),
-    };
-    assert_eq!(round_trip(&input), input);
-}
-
-#[test]
-fn serve_credit_blob_must_lead_with_its_tag() {
-    let mut bytes = kept_blob();
-    bytes[0] = 0x03;
-    let input = Input::ServeCredit {
-        canonical_bytes: bytes,
-    };
-    let mut out = Vec::new();
-    input
-        .write(&mut out)
-        .expect("write encodes without validating");
-    let err = Input::read(&mut &out[..]).expect_err("wrong leading tag must reject at read");
-    assert!(
-        err.to_string().contains("wire tag"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn serve_credit_blob_is_bounded() {
-    let mut bytes = kept_blob();
-    bytes.resize(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES + 1, 0);
-    let input = Input::ServeCredit {
-        canonical_bytes: bytes,
-    };
-    let mut out = Vec::new();
-    input
-        .write(&mut out)
-        .expect("write encodes without validating");
-    assert!(
-        Input::read(&mut &out[..]).is_err(),
-        "over-ceiling blob must reject at read"
-    );
 }
 
 #[test]

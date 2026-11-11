@@ -62,8 +62,7 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_fold::{self, BlockArchivalFold};
 use super::archival_reads::{
-    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportRow,
+    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -972,37 +971,6 @@ impl ReadSnapshot<'_> {
         floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
         archival_reads::slash_log_after(&self.txn, persona, height, floor)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.
-    /// `None` is never-served. SI-15 when rows exist and the persona has no
-    /// bond record.
-    pub fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(&self.txn, persona, shard)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A4.** Every shard `persona` served, each with its latest epoch.
-    /// One reverse seek per served shard. Empty when the persona never served.
-    pub fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(&self.txn, persona)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A5.** Pass bits for `(persona, shard, epoch)`. [`PassCount::ZERO`]
-    /// when none.
-    pub fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(&self.txn, persona, shard, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

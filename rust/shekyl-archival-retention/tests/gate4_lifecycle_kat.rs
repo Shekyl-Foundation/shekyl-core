@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Gate-4 §8 phase-1 lifecycle KAT (join → serve `E_first`, bonded-aggregation audit).
+//! Gate-4 §8 phase-1 lifecycle KAT: the join, its floor and its bonded
+//! aggregation, and the phase-2 emission replay.
 //!
 //! Regenerate fixture (armed — cite the decision-log entry that authorizes it):
 //! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
@@ -13,20 +14,20 @@ use std::io::Cursor;
 
 use serde_json::{json, Value};
 use shekyl_archival_retention::{
-    bond_floor, challenge_fire_height, challenge_leaf_chunk_bounds, challenge_leaf_index,
-    challenge_seal_height, challenged_leaf_bytes, challenged_leaf_offset_in_chunk,
-    hybrid_countersignature, p_canonical_id_from_hybrid_pubkey, r_market_count,
-    serve_credit_epoch_ok, settlement_epoch_last_block, settlement_epoch_open_height,
-    sigma_work_milli, verify_conservation_snapshot, verify_join_market_bond_post,
-    verify_segment_path, ArchivalBondPostVin, ArchivalServeCreditPruned,
-    ArchivalServeCreditResponse, BadInterval, BondPostError, ConservationError,
-    ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow, ShardSet,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
+    bond_floor, p_canonical_id_from_hybrid_pubkey, r_market_count, sigma_work_milli,
+    verify_conservation_snapshot, verify_join_market_bond_post, ArchivalBondPostVin, BadInterval,
+    BondPostError, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
+    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES,
+    HYBRID_PUBKEY_CANONICAL_BYTES,
 };
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
-use shekyl_types::BlockHash;
 
-const GATE2_KAT: &str = include_str!("fixtures/gate2_serve_credit_kat_v1.json");
+/// The persona's identity key: a canonical-length pattern. The KAT pins the
+/// join's wire shape and its record commit, not key validity.
+const PERSONA_KEY_BYTE: u8 = 0xA1;
+/// The shard the join holds.
+const JOIN_SHARD: u64 = 7;
+/// The settlement epoch the join connects in.
+const JOIN_EPOCH: u64 = 0;
 const GATE4_KAT: &str = include_str!("fixtures/gate4_lifecycle_kat_v1.json");
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -49,21 +50,8 @@ fn decode_hex32(s: &str) -> [u8; 32] {
     a
 }
 
-fn decode_hex128(s: &str) -> [u8; 128] {
-    let v = decode_hex(s);
-    assert_eq!(v.len(), 128);
-    let mut a = [0u8; 128];
-    a.copy_from_slice(&v);
-    a
-}
-
 fn build_gate4_document() -> Value {
-    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
-    let integration = &gate2["integration"];
-    let hybrid_pk_hex = integration["bond_hybrid_pubkey_hex"]
-        .as_str()
-        .expect("integration pk");
-    let hybrid_pk_bytes = decode_hex(hybrid_pk_hex);
+    let hybrid_pk_bytes = vec![PERSONA_KEY_BYTE; HYBRID_PUBKEY_CANONICAL_BYTES];
     let p_id = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes).to_bytes();
     // The GF-1 debit authorizer (§9.11, JoinMarket-coupled). A deterministic
     // canonical-length pattern — the KAT pins wire shape and record commit,
@@ -80,8 +68,7 @@ fn build_gate4_document() -> Value {
         [0x0Eu8; ENDPOINT_BYTES],
         HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
-                .unwrap(),
+            shard_ids: ShardSet::new(vec![JOIN_SHARD]).unwrap(),
         },
         ARCHIVAL_BOND_FLOOR_ATOMIC,
     );
@@ -89,17 +76,13 @@ fn build_gate4_document() -> Value {
 
     json!({
         "format_version": 1,
-        "description": "Gate-4 §8 phase-1: join bond-post, bonded-aggregation KAT. The serve-at-E_first leg reads gate2_serve_credit_kat_v1.json's integration section directly (single source; the embedded copy drifted).",
+        "description": "Gate-4 §8 phase-1: the join bond-post, its floor and the bonded-aggregation audit; phase-2: the consensus-state emission replay.",
         "join": {
             "wire_hex": encode_hex(&join_vin.serialize().expect("join wire")),
             "p_canonical_id_hex": encode_hex(&p_id),
             "bond_spend_pk_hex": encode_hex(&bond_spend_pk),
             "bond_credit": ARCHIVAL_BOND_FLOOR_ATOMIC,
-            "join_settlement_epoch": integration["join_settlement_epoch"].as_u64().expect("join epoch"),
-        },
-        "negative_serve_at_e_join": {
-            "settlement_epoch": 0,
-            "join_settlement_epoch": 0,
+            "join_settlement_epoch": JOIN_EPOCH,
         },
         "conservation_after_join": {
             "total_bonded_atomic": ARCHIVAL_BOND_FLOOR_ATOMIC,
@@ -121,24 +104,21 @@ fn build_gate4_document() -> Value {
                     "shard_id": 42,
                     "serve_credit": true,
                     "join_epoch": 0,
-                    "bad_intervals": [],
-                    "foundation": false
+                    "bad_intervals": []
                 },
                 {
                     "p_id_hex": "02",
                     "shard_id": 42,
                     "serve_credit": false,
                     "join_epoch": 0,
-                    "bad_intervals": [],
-                    "foundation": false
+                    "bad_intervals": []
                 },
                 {
                     "p_id_hex": "03",
                     "shard_id": 42,
                     "serve_credit": true,
                     "join_epoch": 0,
-                    "bad_intervals": [{ "start": 8, "end_exclusive": u64::MAX }],
-                    "foundation": false
+                    "bad_intervals": [{ "start": 8, "end_exclusive": u64::MAX }]
                 }
             ]
         },
@@ -227,25 +207,14 @@ fn join_wire_of_record(kat: &Value) -> Vec<u8> {
         pinned[0],
         shekyl_archival_retention::VIN_TYPE_ARCHIVAL_BOND_POST
     );
-    assert!(
-        matches!(
-            ArchivalBondPostVin::read_payload_exact(&mut Cursor::new(&pinned[1..])),
-            Err(shekyl_archival_retention::BondWireError::InvalidPostKind(0))
-        ),
-        "the pinned join is the retired keyless JoinMarket and is refused as that"
-    );
+    // The pinned join is the one the builder makes: a fixture that drifted
+    // from the constants above fails here, not in a leg that reads it.
     let rebuilt = build_gate4_document();
-    // The rebuilt join is the pinned one in everything the fixture states
-    // beside its wire bytes.
-    for field in [
-        "p_canonical_id_hex",
-        "bond_spend_pk_hex",
-        "bond_credit",
-        "join_settlement_epoch",
-    ] {
-        assert_eq!(rebuilt["join"][field], kat["join"][field], "join.{field}");
-    }
-    decode_hex(rebuilt["join"]["wire_hex"].as_str().expect("join wire"))
+    assert_eq!(
+        rebuilt["join"], kat["join"],
+        "the pinned join is the rebuilt one"
+    );
+    pinned
 }
 
 #[test]
@@ -287,129 +256,6 @@ fn gate4_lifecycle_kat_vectors() {
             &shekyl_archival_retention::ArchivalParams::SHIPPED
         ),
         join["bond_credit"].as_u64().expect("bond_credit")
-    );
-
-    let neg = &kat["negative_serve_at_e_join"];
-    assert!(!serve_credit_epoch_ok(
-        neg["settlement_epoch"].as_u64().expect("E"),
-        neg["join_settlement_epoch"].as_u64().expect("E_join"),
-    ));
-
-    // The serve-at-E_first leg reads gate-2's integration section DIRECTLY —
-    // the gate-4 fixture used to embed a wholesale copy, and the copy silently
-    // drifted on dev (no consumer failed); one source of truth, no drift
-    // channel. The join fixture above still derives from the same section, so
-    // a gate-2 re-pin that changes the pubkey fails these cross-assertions
-    // loudly until gate-4 is regenerated.
-    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
-    let serve = &gate2["integration"];
-    let join_epoch = serve["join_settlement_epoch"].as_u64().expect("join epoch");
-    let settlement_epoch = serve["settlement_epoch"]
-        .as_u64()
-        .expect("settlement epoch");
-    assert!(serve_credit_epoch_ok(settlement_epoch, join_epoch));
-    assert_eq!(settlement_epoch, join_epoch + 1);
-
-    let serve_wire = decode_hex(serve["wire_hex"].as_str().expect("serve wire"));
-    assert_eq!(serve_wire[0], VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE);
-    let mut serve_cursor = Cursor::new(&serve_wire[1..]);
-    let parsed = ArchivalServeCreditResponse::read_payload(&mut serve_cursor).expect("serve parse");
-    let int_pk = HybridPublicKey::from_canonical_bytes(&decode_hex(
-        serve["bond_hybrid_pubkey_hex"].as_str().expect("pk"),
-    ))
-    .expect("pk");
-
-    // RF-D6/RF-D8: `R_k` and the leaf index are verifier-derived, not parsed
-    // from the wire. The fixture records the verifier's values; the index is
-    // re-derived here and asserted against that record, so the fixture cannot
-    // silently carry a stale derivation.
-    let segment_leaf_count = serve["segment_leaf_count"].as_u64().expect("segment count");
-    let rk = decode_hex32(serve["segment_subroot_rk_hex"].as_str().expect("rk"));
-    let leaf_index = challenge_leaf_index(
-        &parsed.p_canonical_id,
-        parsed.shard_id,
-        parsed.settlement_epoch,
-        &BlockHash::from_bytes(decode_hex32(
-            serve["prev_block_hash_hex"]
-                .as_str()
-                .expect("prev block hash"),
-        )),
-        segment_leaf_count,
-    );
-    assert_eq!(
-        u64::from(leaf_index),
-        serve["leaf_index_in_segment"]
-            .as_u64()
-            .expect("recorded index"),
-        "fixture's recorded leaf index drifted from the derivation"
-    );
-    // The pruned half (RF-D1) and the remaining verifier-derived input
-    // (RF-D8: the challenged leaf, which the verifier reads from its chunk).
-    let pruned = ArchivalServeCreditPruned::read_exact(
-        &mut decode_hex(serve["pruned_hex"].as_str().expect("pruned")).as_slice(),
-    )
-    .expect("pruned parse");
-    let leaf_bytes = decode_hex128(serve["leaf_bytes_hex"].as_str().expect("leaf"));
-    let sig = hybrid_countersignature(&parsed, &pruned);
-    HybridEd25519MlDsa
-        .verify(
-            &int_pk,
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_SERVE_CREDIT,
-            &parsed.signature_preimage(&rk, leaf_index, &leaf_bytes, &pruned.path),
-            &sig,
-        )
-        .expect("hybrid verify");
-
-    let layer_scalars: Vec<[u8; 32]> = decode_hex(
-        serve["leaf_layer_scalars_hex"]
-            .as_str()
-            .expect("layer scalars"),
-    )
-    .chunks_exact(32)
-    .map(|c| {
-        let mut s = [0u8; 32];
-        s.copy_from_slice(c);
-        s
-    })
-    .collect();
-
-    // Offset of the challenged leaf inside the chunk: global index minus the
-    // chunk's first global position -- exactly the verifier's arithmetic.
-    let leaf_offset = challenged_leaf_offset_in_chunk(parsed.shard_id, u64::from(leaf_index))
-        .expect("derived index lies inside the segment");
-    assert_eq!(
-        challenge_leaf_chunk_bounds(parsed.shard_id, u64::from(leaf_index))
-            .expect("bounds")
-            .first_leaf_position,
-        serve["chunk_first_leaf_position"]
-            .as_u64()
-            .expect("chunk first"),
-        "fixture's chunk start drifted from the derivation"
-    );
-    assert_eq!(
-        challenged_leaf_bytes(&layer_scalars, leaf_offset),
-        Some(leaf_bytes),
-        "the leaf at the derived offset is the fixture's challenged leaf"
-    );
-    verify_segment_path(&layer_scalars, leaf_offset, &pruned.path, &rk).expect("path verify");
-
-    let h_open = settlement_epoch_open_height(settlement_epoch);
-    let h_close = settlement_epoch_last_block(settlement_epoch);
-    let seal_hash = decode_hex32(serve["block_hash_at_seal_hex"].as_str().expect("seal hash"));
-    assert_eq!(
-        challenge_seal_height(h_open),
-        serve["h_seal"].as_u64().expect("h_seal")
-    );
-    assert_eq!(
-        challenge_fire_height(
-            h_open,
-            h_close,
-            &BlockHash::from_bytes(seal_hash),
-            &parsed.p_canonical_id,
-            parsed.shard_id,
-            parsed.settlement_epoch,
-        ),
-        serve["h_fire"].as_u64().expect("h_fire")
     );
 
     let cons = &kat["conservation_after_join"];
@@ -476,11 +322,10 @@ fn gate4_conservation_rejects_aggregation_mismatch() {
 #[test]
 fn gate4_join_wire_p_id_matches_recomputed_pubkey() {
     let kat: Value = serde_json::from_str(GATE4_KAT).expect("gate4 json");
-    // Gate-2's integration section is the pubkey's single source (see
-    // gate4_lifecycle_kat_vectors); this pins the gate-4 join fixture to it.
-    let gate2: Value = serde_json::from_str(GATE2_KAT).expect("gate2 json");
-    let serve = &gate2["integration"];
-    let pk_bytes = decode_hex(serve["bond_hybrid_pubkey_hex"].as_str().expect("hybrid pk"));
+    let join_wire = join_wire_of_record(&kat);
+    let join_vin = ArchivalBondPostVin::read_payload_exact(&mut Cursor::new(&join_wire[1..]))
+        .expect("parse join bond-post");
+    let pk_bytes = join_vin.hybrid_public_key;
     let expected = decode_hex32(kat["join"]["p_canonical_id_hex"].as_str().expect("p_id"));
     assert_eq!(
         p_canonical_id_from_hybrid_pubkey(&pk_bytes).to_bytes(),

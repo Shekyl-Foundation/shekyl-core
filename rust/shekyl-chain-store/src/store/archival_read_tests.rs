@@ -30,14 +30,12 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, BondRecord, BundleReferencesBytes, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::{
-    IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
-};
+use crate::ids::{IssuedDrawKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey};
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
     ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
+    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
     ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 use shekyl_chain_rules::{BlockDrawsFloor, EpochFloor};
@@ -87,15 +85,6 @@ fn plant_bond(txn: &redb::WriteTransaction, p: &PCanonicalId, r: &BondRecord) {
         .expect("insert");
 }
 
-fn plant_pass(txn: &redb::WriteTransaction, p: &PCanonicalId, s: u64, e: u64, h: u64) {
-    let mut t = txn.open_table(ARCHIVAL_SERVE_CREDIT).expect("t");
-    t.insert(
-        ServeCreditKey::new(*p, shard(s), epoch(e), BlockHeight::from_raw(h)).key(),
-        crate::codec::Present,
-    )
-    .expect("insert");
-}
-
 fn is_si7_undecodable(err: &StoreError, key: &str) -> bool {
     matches!(
         err,
@@ -103,13 +92,6 @@ fn is_si7_undecodable(err: &StoreError, key: &str) -> bool {
             key: k,
             fault: CellFault::Undecodable(_)
         }) if *k == key
-    )
-}
-
-fn is_si15(err: &StoreError, p: &PCanonicalId) -> bool {
-    matches!(
-        err,
-        StoreError::InvariantViolated(StoreInvariant::ServeCreditWithoutBond { persona }) if persona == p
     )
 }
 
@@ -266,151 +248,6 @@ fn a2_is_the_personas_rows_strictly_above_the_height_in_log_order() {
         snap.slash_log_after(&p, BlockHeight::from_raw(300), floor)
             .unwrap(),
         vec![at_400, at_last]
-    );
-}
-
-// ---------------------------------------------------------------------------
-// A3, A4, A5 — the serve-credit walks
-// ---------------------------------------------------------------------------
-
-#[test]
-fn a3_last_served_is_the_latest_epoch_per_shard_and_none_when_never_served() {
-    let path = tmp("arch-a3");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(0xa3);
-    drop(store);
-    plant(&path, |txn| {
-        plant_bond(txn, &p, &record());
-        // shard 7: epochs 4 (two heights) and 9; shard 42: epoch 6 only.
-        plant_pass(txn, &p, 7, 4, 40_001);
-        plant_pass(txn, &p, 7, 4, 40_002);
-        plant_pass(txn, &p, 7, 9, 90_005);
-        plant_pass(txn, &p, 42, 6, 60_003);
-        // A neighbouring persona's rows must not leak into p's ranges.
-        let q = persona(0xa4);
-        plant_bond(txn, &q, &record());
-        plant_pass(txn, &q, 7, 12, 120_000);
-    });
-    let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let snap = store.begin_read().unwrap();
-    assert_eq!(
-        snap.last_served_epoch(&p, shard(7)).unwrap(),
-        Some(epoch(9))
-    );
-    assert_eq!(
-        snap.last_served_epoch(&p, shard(42)).unwrap(),
-        Some(epoch(6))
-    );
-    assert_eq!(
-        snap.last_served_epoch(&p, shard(1)).unwrap(),
-        None,
-        "never served"
-    );
-    // A stranger with no rows and no record is an answer, not a fault.
-    assert_eq!(
-        snap.last_served_epoch(&persona(0xff), shard(7)).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn a4_served_shards_hops_one_seek_per_shard_and_is_empty_for_a_stranger() {
-    let path = tmp("arch-a4");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(0xa5);
-    drop(store);
-    plant(&path, |txn| {
-        plant_bond(txn, &p, &record());
-        // Three shards, several rows each, out of insertion order.
-        plant_pass(txn, &p, 300, 2, 20_000);
-        plant_pass(txn, &p, 5, 8, 80_000);
-        plant_pass(txn, &p, 5, 3, 30_000);
-        plant_pass(txn, &p, 5, 3, 30_001);
-        plant_pass(txn, &p, 77, 1, 10_000);
-        plant_pass(txn, &p, 77, 11, 110_000);
-        plant_pass(txn, &p, 300, 4, 40_000);
-        // And the neighbour again.
-        let q = persona(0xa6);
-        plant_bond(txn, &q, &record());
-        plant_pass(txn, &q, 1, 1, 10_000);
-    });
-    let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let snap = store.begin_read().unwrap();
-    let served = snap.served_shards(&p).unwrap();
-    assert_eq!(
-        served,
-        vec![
-            ServedShard {
-                shard: shard(5),
-                last_served: epoch(8)
-            },
-            ServedShard {
-                shard: shard(77),
-                last_served: epoch(11)
-            },
-            ServedShard {
-                shard: shard(300),
-                last_served: epoch(4)
-            },
-        ],
-        "shard order is the key's, each with its latest epoch"
-    );
-    assert!(snap.served_shards(&persona(0xfe)).unwrap().is_empty());
-}
-
-#[test]
-fn a5_pass_count_counts_the_pair_epoch_prefix_only() {
-    let path = tmp("arch-a5");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(0xa7);
-    drop(store);
-    plant(&path, |txn| {
-        plant_bond(txn, &p, &record());
-        plant_pass(txn, &p, 7, 4, 40_001);
-        plant_pass(txn, &p, 7, 4, 40_002);
-        plant_pass(txn, &p, 7, 4, 40_003);
-        plant_pass(txn, &p, 7, 5, 50_000);
-        plant_pass(txn, &p, 8, 4, 40_004);
-    });
-    let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let snap = store.begin_read().unwrap();
-    assert_eq!(snap.pass_count(&p, shard(7), epoch(4)).unwrap().to_raw(), 3);
-    assert_eq!(snap.pass_count(&p, shard(7), epoch(5)).unwrap().to_raw(), 1);
-    assert_eq!(snap.pass_count(&p, shard(8), epoch(4)).unwrap().to_raw(), 1);
-    assert_eq!(
-        snap.pass_count(&p, shard(7), epoch(6)).unwrap(),
-        PassCount::ZERO
-    );
-    assert!(snap.pass_count(&p, shard(7), epoch(4)).unwrap().any());
-    assert!(!PassCount::ZERO.any());
-}
-
-#[test]
-fn si15_serve_credit_rows_for_a_persona_with_no_record_are_a_fault_on_every_walk() {
-    let path = tmp("arch-si15");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let orphan = persona(0x0f);
-    drop(store);
-    plant(&path, |txn| {
-        // Rows, no bond record: a write that bypassed the connect hook.
-        plant_pass(txn, &orphan, 7, 4, 40_001);
-    });
-    let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let snap = store.begin_read().unwrap();
-    assert!(is_si15(
-        &snap.last_served_epoch(&orphan, shard(7)).unwrap_err(),
-        &orphan
-    ));
-    assert!(is_si15(&snap.served_shards(&orphan).unwrap_err(), &orphan));
-    assert!(is_si15(
-        &snap.pass_count(&orphan, shard(7), epoch(4)).unwrap_err(),
-        &orphan
-    ));
-    // The belt asserts nothing where the walk found nothing.
-    assert_eq!(snap.last_served_epoch(&orphan, shard(9)).unwrap(), None);
-    assert_eq!(
-        snap.pass_count(&orphan, shard(7), epoch(5)).unwrap(),
-        PassCount::ZERO
     );
 }
 
@@ -1088,7 +925,7 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
 
     let path = tmp("arch-snapshot");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // An empty store is ten families of no rows — never an omitted record.
+    // An empty store is nine families of no rows — never an omitted record.
     let empty = store.begin_read().unwrap().archival_snapshot().unwrap();
     assert_eq!(empty, ArchivalSnapshot::empty());
     // Two connected blocks accrue into the open epoch: the one row the
@@ -1113,7 +950,6 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
     plant(&path, |txn| {
         plant_bond(txn, &p, &record());
         plant_bond(txn, &q, &record());
-        plant_pass(txn, &p, 7, 3, 300);
         let mut m = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
         m.insert((7u64, 2u64), RMarket::from_raw(0).encoded().as_encoded())
             .expect("insert");
@@ -1149,8 +985,6 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
     let mut want = ArchivalSnapshot::empty();
     want.push_bond(&p, &record()).unwrap();
     want.push_bond(&q, &record()).unwrap();
-    want.push_serve_credit(&p, shard(7), epoch(3), BlockHeight::from_raw(300))
-        .unwrap();
     want.push_r_market(shard(7), epoch(3), RMarket::from_raw(2))
         .unwrap();
     want.push_sigma_work(epoch(3), SigmaWorkMilli::from_raw(5))
@@ -1171,7 +1005,7 @@ fn archival_snapshot_is_every_family_as_rows_with_the_projections_applied() {
     // not a snapshot row (§3.6): the C++ close writes zeros redb's does not.
     assert_eq!(got.rows(SnapshotFamily::RMarket).len(), 1);
     assert_eq!(got.rows(SnapshotFamily::Bond).len(), 2);
-    assert_eq!(got.row_count(), 11);
+    assert_eq!(got.row_count(), 10);
 
     // The body round-trips, so what the trace carries is what the read saw.
     let back = ArchivalSnapshot::read_body(&mut got.body().as_slice()).unwrap();

@@ -15,8 +15,7 @@
 //!
 //! What can still go wrong is **which bytes** each side takes to be the
 //! prunable range, and that differs by class — a coinbase has none, a
-//! serve-credit transaction's is pass records and no proofs, a bond post's
-//! and an emission claim's follow different inputs. So the pin is per class:
+//! bond post's and an emission claim's follow different inputs. So the pin is per class:
 //!
 //! - this crate derives each body's digest and pins it in
 //!   `tests/fixtures/prunable_digest_parity_v1.json`;
@@ -25,9 +24,9 @@
 //!   the C++ serializer cut, hashed by this crate — gives the same value,
 //!   from the blob and from a fresh serialization.
 //!
-//! The bodies are not new: eight are the daemon-accepted transactions of
+//! The bodies are not new: seven are the daemon-accepted transactions of
 //! `pqc_signing_preimage_v1.json`, read from that fixture by name, and the
-//! ninth is the coinbase of `vectors/regtest_coinbase_h1.block`.
+//! eighth is the coinbase of `vectors/regtest_coinbase_h1.block`.
 //!
 //! **The pinned values have an oracle that is neither side's current code.**
 //! The signing-preimage fixture's payloads were captured from the C++
@@ -90,11 +89,6 @@ fn class_of(tx: &Transaction) -> &'static str {
         .any(|i| matches!(i, Input::ArchivalRewardEmission { .. }))
     {
         "emission"
-    } else if inputs
-        .iter()
-        .all(|i| matches!(i, Input::ServeCredit { .. }))
-    {
-        "serve-credit-only"
     } else {
         "spend"
     }
@@ -291,8 +285,7 @@ fn every_class_has_a_pinned_prunable_digest_and_it_is_the_regions() {
     }
 
     // Every class the validator partitions transactions into, and no pin
-    // that rests only on the function under test except the one shape with
-    // no signing payload to carry an oracle.
+    // that rests only on the function under test.
     //
     // *Moved 2026-10-12:* the list read `["bond-post", "coinbase", …]`. The
     // fixture's two bond-post bodies are keyless JoinMarkets, retired above;
@@ -300,13 +293,12 @@ fn every_class_has_a_pinned_prunable_digest_and_it_is_the_regions() {
     // until a capture can hold a key-carrying post.
     assert_eq!(
         classes.into_iter().collect::<Vec<_>>(),
-        ["coinbase", "emission", "serve-credit-only", "spend"]
+        ["coinbase", "emission", "spend"]
     );
     assert_eq!(retired_seen, RETIRED_KEYLESS_BOND_POSTS.len());
     assert_eq!(
         held_to_an_oracle,
-        subjects.len() - 1 - RETIRED_KEYLESS_BOND_POSTS.len(),
-        "all but the serve-credit form, which has no signing payload, and the two retired \
-         keyless bond posts (was: all but the serve-credit form)"
+        subjects.len() - RETIRED_KEYLESS_BOND_POSTS.len(),
+        "all but the two retired keyless bond posts"
     );
 }

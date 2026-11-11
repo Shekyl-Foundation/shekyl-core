@@ -27,14 +27,14 @@
 //!
 //! A compact join needs a closed shard (CEN-J15), so the chain fills one
 //! under the levered schedule (`scenario_shard`); the claim needs a
-//! settled epoch the persona served, so the credit lands in the join's
-//! epoch for the epoch after it (CEN-J5) and the chain mines through that
+//! settled epoch the persona served, so the persona's admitted draws in
+//! the epoch after the join's are served and the chain mines through that
 //! epoch's close; and the claim's inputs are the persona's own outputs —
 //! the backing and the fee — paid by the funding spend, which is why the
 //! spend pays a [`Recipient`] and the tree [`Spender::own`]s what it
 //! paid. The reward is the close's own arithmetic re-run over the rows
 //! the test knows it fed: `epoch_close_compute` over the one bond, the
-//! one shard and the one credit pair must equal the close the fold wrote,
+//! one shard and the one Served pair must equal the close the fold wrote,
 //! and `claimant_reward_share` over the persisted `Σwork` and budget is
 //! the amount the claim names. A reward of zero would stop the test
 //! before the claim: a claim for nothing is not what the row admits.
@@ -132,7 +132,8 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     };
     assert_eq!(closed.shard.to_raw(), 0);
 
-    // The join and the credit after it sit in one epoch, neither a close.
+    // The join and the twin's funding after it sit in one epoch, neither a
+    // close.
     let join_height = inside_one_epoch_of(
         settled_schedule(),
         first_admissible_compact_join(&rules, *closed),
@@ -171,11 +172,10 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     );
     mined.push(block);
     let join_epoch = settled_schedule().epoch_at(join_height);
-    // The first epoch a persona joining in `join_epoch` may serve (CEN-J5).
+    // The first epoch a persona joining in `join_epoch` is drawn in.
     let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
-    // Beside the credit, a second funding spend — coinbase 1 to the same
-    // persona, no post — for the twin claim G9 refuses below. Its own
-    // block: the spender's output keys are drawn from the connecting
+    // A second funding spend — coinbase 1 to the same persona, no post —
+    // for the twin claim G9 refuses below. Its own block: the spender's output keys are drawn from the connecting
     // height, so two spends to one recipient at one height would pay the
     // same keys, and the twin's fee would be the claim's.
     let twin_height = join_height + BlockCount::ONE;
@@ -191,9 +191,9 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     assert_ne!(twin_fee_key, fee_key, "the twin's fee is its own output");
     spender.own(twin_fee_key);
     let block = scenario
-        .mine_listing(vec![persona.serve_credit(0, served.to_raw()), twin_funding])
+        .mine_listing(vec![twin_funding])
         .await
-        .unwrap_or_else(|outcome| panic!("the credit and the twin's funding connect: {outcome}"));
+        .unwrap_or_else(|outcome| panic!("the twin's funding connects: {outcome}"));
     assert_eq!(block.height, twin_height);
     mined.push(block);
 

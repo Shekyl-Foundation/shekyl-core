@@ -313,7 +313,8 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     ));
     // Reader: a row the snapshot refuses — a second row of a singleton
     // family — is the snapshot's fault, carried.
-    let mut two_watermarks = good[..snapshot_at + 1 + 8 + 9 * 8].to_vec();
+    // Every family's empty count but the last, the watermark's.
+    let mut two_watermarks = good[..snapshot_at + 1 + 8 + EMPTY_BODY_LEN - 8].to_vec();
     two_watermarks.extend_from_slice(&2u64.to_le_bytes());
     for epoch in [1u64, 2] {
         two_watermarks.extend_from_slice(&8u32.to_le_bytes());

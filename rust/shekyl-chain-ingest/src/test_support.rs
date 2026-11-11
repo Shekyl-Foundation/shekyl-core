@@ -227,16 +227,6 @@ pub fn at(height: u64) -> usize {
     usize::try_from(height).expect("a fixture height fits usize")
 }
 
-/// A **fixture** body `tx` anchored for a block at `height` on the chain
-/// whose block hashes so far are `hashes`: the harness's
-/// [`fixture::anchored_at`] — the newest reference CEN-I11 admits. For the
-/// archival bodies (a join, a serve credit, which is left as it is); a
-/// real spend carries its reference inside its proof and is never passed
-/// here — rewriting it would be the forged-reference shape, not an anchor.
-pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-    fixture::anchored_at(hashes, height, tx)
-}
-
 /// A block at `height` on `previous`, listing `listed`, with `nonce`, whose
 /// header carries `root` — the tree state going into `height`
 /// ([`GrownTree::root_going_into`]; CEN-B5) — and whose coinbase pays

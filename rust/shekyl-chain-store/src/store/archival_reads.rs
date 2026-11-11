@@ -14,11 +14,6 @@
 //! - **A2** [`slash_log_after`] — every slash logged against `p` at a height
 //!   strictly above `h`: the history half of the as-of-height holdings
 //!   question, whose fold is `shekyl-archival-retention::holds_shard_at`.
-//! - **A3** [`last_served_epoch`] — the latest epoch with a pass bit for
-//!   `(p, shard)`, one reverse seek.
-//! - **A4** [`served_shards`] — every shard `p` ever served, each with its
-//!   latest epoch: the persona-prefix hop scan.
-//! - **A5** [`pass_count`] — rows under the pair-epoch prefix (`PC-D5`).
 //! - **A6–A8** [`r_market`], [`sigma_work`], [`budget`] — the three
 //!   close-row scalars, `Option` where the C++ returned `0` for "no row"
 //!   (SAR-8).
@@ -64,9 +59,6 @@
 //! - **"No bond record" is a case**, not a `false`: every caller branches
 //!   on it (a bond post that finds a record is an update; one that finds
 //!   none is a join). [`Option`].
-//! - **"Never served" is a case** (A3 `None`, A4 empty): the release
-//!   cooldown's vacuous arm. The C++ marshal *omitted* never-served shards
-//!   from a positional vector (SAR-3); here the absence is typed per shard.
 //! - **"No close row" is a case the C++ conflated with zero** (A6, A7): a
 //!   closed epoch with zero co-holders is a written `RMarket(0)`; an epoch
 //!   that never closed is `None`. The read stops erasing the distinction;
@@ -100,16 +92,6 @@
 //! as A2 does for the slash log. The store compares; the floor is the
 //! consensus side's expression.
 //!
-//! # SI-15 is armed here
-//!
-//! Every serve-credit row names a persona with a bond record (the connect
-//! hook refuses a pass bit for an unknown persona, CEN-L7). A3–A5 have the
-//! persona in hand and walk its rows; a walk that finds rows for a persona
-//! with no record is [`StoreInvariant::ServeCreditWithoutBond`]. The check
-//! runs only when rows were found — an empty walk asserts nothing, so a
-//! never-served persona with no record (a query about a stranger) is an
-//! answer, not a fault.
-//!
 //! # What is not here
 //!
 //! No fold. `good_through` and `holds_shard_at` are
@@ -117,7 +99,7 @@
 //! takes A2's rows beside A1's record (CEN-L16: the as-of-height holdings
 //! question is a fold over recorded state, not a read the store composes).
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
-//! A1 + A5 + A7 + A8 composes them at its call site.
+//! A1, A7 and A8 composes them at its call site.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,8 +110,8 @@ use shekyl_chain_rules::{
 };
 use shekyl_store_codec::{BlobKind, CodecError};
 pub use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, LoggedSlash, PassCount,
-    ReleasedRecord, ServedShard, SettlementRow, SupportIssued, SupportRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, LoggedSlash, ReleasedRecord,
+    SettlementRow, SupportIssued, SupportRow,
 };
 use shekyl_types::archival::{BundleReferences, SettlementOutcome};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -138,15 +120,14 @@ use shekyl_units::AtomicUnits;
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{BondRecord, BundleReferencesBytes, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{
-    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
-    SupportIssuedKey,
+    IssuedDrawKey, ReleaseJournalKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
 };
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
     ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
-    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
-    ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
+    ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -334,121 +315,6 @@ pub(super) fn release_journal_after<T: ReadTables>(
         });
     }
     Ok(out)
-}
-
-/// Whether `persona` has a bond record — SI-15's precondition, read without
-/// decoding the row.
-fn has_bond<T: ReadTables>(txn: &T, persona: &PCanonicalId) -> Result<bool, ReadFault> {
-    Ok(txn
-        .table(ARCHIVAL_BOND)?
-        .get(*persona.as_bytes())?
-        .is_some())
-}
-
-/// SI-15: rows were found under `persona`'s prefix; the persona must have a
-/// record. Called only after a walk found at least one row.
-fn serve_credit_rows_have_a_bond<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-) -> Result<(), ReadFault> {
-    if has_bond(txn, persona)? {
-        Ok(())
-    } else {
-        Err(ReadFault::Invariant(
-            StoreInvariant::ServeCreditWithoutBond { persona: *persona },
-        ))
-    }
-}
-
-/// **A3.** The latest settlement epoch with a pass bit for `(persona,
-/// shard)` — the last key of the `(P, s)` prefix, one reverse seek
-/// (`db_lmdb.cpp:6464`'s ceiling probe as a range's last element). `None`
-/// is never-served, the cooldown's vacuous arm.
-pub(super) fn last_served_epoch<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-    shard: ShardId,
-) -> Result<Option<SettlementEpoch>, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let mut range = table.range(ServeCreditKey::shard_range(*persona, shard))?;
-    let Some(last) = range.next_back() else {
-        return Ok(None);
-    };
-    let (key, _present) = last?;
-    serve_credit_rows_have_a_bond(txn, persona)?;
-    Ok(Some(ServeCreditKey::from_key(key.value()).epoch()))
-}
-
-/// **A4.** Every shard `persona` ever earned a pass bit for, each with its
-/// latest epoch — the `P`-prefix hop scan (`db_lmdb.cpp:6546`): seek to the
-/// persona's first row, take its shard, jump to that shard's last row, step
-/// past it; one reverse seek per served shard, never a walk of every row.
-/// Empty for a persona that never served. The complete-tree form of the
-/// last-served marshal: such a record stores no shard list, so the served
-/// set is the only list there is.
-pub(super) fn served_shards<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-) -> Result<Vec<ServedShard>, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let persona_hi = *ServeCreditKey::persona_range(*persona).end();
-    let mut out = Vec::new();
-    // Seek to the persona's first row; then, per shard found, take that
-    // shard's last row and seek to the first key of the next shard. A gap
-    // between shard ids is one `range.next()`, not a walk of the gap.
-    let mut from = *ServeCreditKey::persona_range(*persona).start();
-    loop {
-        let Some(row) = table.range(from..=persona_hi)?.next() else {
-            break;
-        };
-        let shard = ServeCreditKey::from_key(row?.0.value()).shard();
-        let last = table
-            .range(ServeCreditKey::shard_range(*persona, shard))?
-            .next_back()
-            .expect("the shard's first row is inside its own range")?;
-        out.push(ServedShard {
-            shard,
-            last_served: ServeCreditKey::from_key(last.0.value()).epoch(),
-        });
-        // No successor shard id: this shard is the persona's last possible.
-        let Some(next_shard) = shard.to_raw().checked_add(1) else {
-            break;
-        };
-        from = ServeCreditKey::new(
-            *persona,
-            ShardId::from_raw(next_shard),
-            SettlementEpoch::ZERO,
-            BlockHeight::ZERO,
-        )
-        .key();
-    }
-    if !out.is_empty() {
-        serve_credit_rows_have_a_bond(txn, persona)?;
-    }
-    Ok(out)
-}
-
-/// **A5.** Pass bits recorded for `(persona, shard, epoch)` — the rows under
-/// the pair-epoch prefix, counted (`db_lmdb.cpp:4695`). [`PassCount::ZERO`]
-/// when none.
-pub(super) fn pass_count<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-    shard: ShardId,
-    epoch: SettlementEpoch,
-) -> Result<PassCount, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let mut count: u32 = 0;
-    for row in table.range(ServeCreditKey::pair_epoch_range(*persona, shard, epoch))? {
-        row?;
-        count = count
-            .checked_add(1)
-            .expect("PC-D5 bounds pass bits per pair-epoch far below u32::MAX");
-    }
-    if count > 0 {
-        serve_credit_rows_have_a_bond(txn, persona)?;
-    }
-    Ok(PassCount::from_raw(count))
 }
 
 /// **A6.** `archival_r_market[(shard, epoch)]`. `None` is an epoch that never
@@ -835,13 +701,6 @@ pub(super) fn snapshot_rows<T: ReadTables>(txn: &T) -> Result<ArchivalSnapshot, 
             .map_err(|cause| undecodable(BOND, cause))?;
         snapshot
             .push_bond(&PCanonicalId::from_bytes(key.value()), &record)
-            .map_err(|f| refused(&f))?;
-    }
-    for row in txn.table(ARCHIVAL_SERVE_CREDIT)?.iter()? {
-        let (key, _present) = row?;
-        let key = ServeCreditKey::from_key(key.value());
-        snapshot
-            .push_serve_credit(key.persona(), key.shard(), key.epoch(), key.height())
             .map_err(|f| refused(&f))?;
     }
     for row in txn.table(ARCHIVAL_R_MARKET)?.iter()? {

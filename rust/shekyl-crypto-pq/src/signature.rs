@@ -100,8 +100,6 @@ pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multi
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).
 pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-backing-scheme-v1";
-/// Serve-credit response (surface F).
-pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
 /// A serve receipt, under scheme 3: `P`'s signature over the 113-byte
 /// delivery transcript with its **receipt key**
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6).

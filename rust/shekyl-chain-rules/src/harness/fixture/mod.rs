@@ -39,8 +39,7 @@ use crate::rules::tx_emission::J19;
 
 mod archival;
 pub use archival::{
-    claimant, emission_vin, emission_vin_for, join_market, persona, serve_credit_only,
-    serve_credit_only_with, serve_credit_vin, FixturePersona, BOND_FLOOR, PRUNED_PASS_RECORD,
+    claimant, emission_vin, emission_vin_for, join_market, persona, FixturePersona, BOND_FLOOR,
 };
 
 /// The well-formed **transaction** shapes this module builds, as a
@@ -58,16 +57,13 @@ pub enum TxShape {
     Listed,
     /// [`join_market`] — the bond post that creates a persona's record.
     JoinMarket,
-    /// [`serve_credit_only`].
-    ServeCreditOnly,
 }
 
 impl TxShape {
     /// Where the chain starts.
     pub const FIRST: Self = Self::Coinbase;
 
-    /// The persona the archival shapes share: the join posts its record,
-    /// the serve credit names it.
+    /// The persona the archival shape names: the join posts its record.
     pub const PERSONA: [u8; 32] = [0x77; 32];
 
     /// The shape after this one; `None` closes the chain. A variant
@@ -77,8 +73,7 @@ impl TxShape {
         match self {
             Self::Coinbase => Some(Self::Listed),
             Self::Listed => Some(Self::JoinMarket),
-            Self::JoinMarket => Some(Self::ServeCreditOnly),
-            Self::ServeCreditOnly => None,
+            Self::JoinMarket => None,
         }
     }
 
@@ -88,7 +83,6 @@ impl TxShape {
             Self::Coinbase => coinbase(1),
             Self::Listed => listed(point(9)),
             Self::JoinMarket => join_market(point(10), Self::PERSONA),
-            Self::ServeCreditOnly => serve_credit_only(Self::PERSONA),
         }
     }
 
@@ -99,25 +93,13 @@ impl TxShape {
     /// No listed shape is judged valid through `validate` on a `MockChain`,
     /// and none can be: the spend carries a named key image and no
     /// membership proof (CEN-I13/I15 refuse it on any view; slice 6 row 6),
-    /// the join's funding spend is that same fixture, and the serve credit
-    /// reads a persona record the mock holds none of by policy
-    /// (`harness.rs`, `archival_reads!(empty)`; DRS-E4 §5.2). Each shape's
+    /// and the join's funding spend is that same fixture. Each shape's
     /// `validate` witness is a driven chain in `shekyl-chain-ingest`, the
     /// one place the thing it needs can honestly exist.
-    ///
-    /// *Records-was:* until slice 6 row 6 a `reads_bond_state()` singled
-    /// the serve credit out as the one `tx_form`-only shape; before E6
-    /// slice 8 row 3 that was `precedents()`, which listed the persona's
-    /// [`join_market`] in the **same block** ahead of the credit — a
-    /// premise the rule refuted: the C++ reads the record before the block
-    /// (`check_tx_inputs` before `add_block`), so a same-block join opens
-    /// nothing the credit can be judged against, and J4 says so.
     pub const fn valid_at(self) -> &'static [TxSlot] {
         match self {
             Self::Coinbase => &[TxSlot::Miner],
-            Self::Listed | Self::JoinMarket | Self::ServeCreditOnly => {
-                &[TxSlot::Lone, TxSlot::Listed(0)]
-            }
+            Self::Listed | Self::JoinMarket => &[TxSlot::Lone, TxSlot::Listed(0)],
         }
     }
 
@@ -388,7 +370,6 @@ pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
         tree_depth: 0,
         fcmp_proof: vec![0xF0],
         pseudo_outs: vec![multiple_of_g(mask_scalar_sum(outputs))],
-        serve_credit_pruned: Vec::new(),
     });
     Transaction {
         prefix: TxPrefix {
@@ -424,7 +405,7 @@ pub fn spend(key_image: [u8; 32], outputs: usize) -> Transaction {
 }
 
 /// [`spend`] with **two** outputs — the fewest CEN-I1 admits of a
-/// non-serve-credit transaction (slice 6 commit 2; one output until
+/// non-coinbase transaction (slice 6 commit 2; one output until
 /// then, which every 4.H row accepted and I1 refuses). The shape most
 /// call sites mean by "a listed transaction".
 pub fn listed(key_image: [u8; 32]) -> Transaction {
@@ -442,7 +423,7 @@ pub fn listed(key_image: [u8; 32]) -> Transaction {
 ///
 /// # Panics
 ///
-/// On a body with no prunable region (a serve credit; nothing to balance).
+/// On a body with no prunable region (nothing to balance).
 pub fn paying_fee(mut tx: Transaction, fee: u64) -> Transaction {
     let outputs = tx.prefix.outputs.len();
     let Ct::Fcmp {
@@ -506,11 +487,8 @@ pub fn referencing(mut tx: Transaction, reference: BlockHash) -> Transaction {
 ///
 /// CEN-I10/I11 read it on a regular spend (a [`Input::ToKey`]). CEN-J21
 /// reads it on an emission even when that emission has no fee input: the
-/// reference is the membership anchor of the emission vin.
-/// A serve-credit's [`Ct::Fcmp`] carries the field and no row reads it, so
-/// the decision is not "any `Fcmp`" — that would put the spend window on a
-/// shape that may be listed at any height. A coinbase is [`Ct::Null`] and
-/// has no reference.
+/// reference is the membership anchor of the emission vin. A coinbase is
+/// [`Ct::Null`] and has no reference.
 fn judges_a_reference(tx: &Transaction) -> bool {
     tx.prefix.inputs.iter().any(|input| {
         matches!(
@@ -525,9 +503,8 @@ fn judges_a_reference(tx: &Transaction) -> bool {
 /// [`newest_admissible_reference`]. The one anchoring body for every
 /// crate's chain builder — the store's `connect_chain`, the ingest's
 /// `chain_listing` — so no fixture anchors a reference differently from
-/// the crate that judges it. A serve credit or a coinbase — shapes whose
-/// reference no row reads — is returned unchanged and may be listed at
-/// any height. Panics when a judged reference is listed on a chain too
+/// the crate that judges it. A coinbase, whose reference no row reads, is
+/// returned unchanged and may be listed at any height. Panics when a judged reference is listed on a chain too
 /// young to hold one: the fixture asked for a shape CEN-I11 refuses.
 #[must_use]
 pub fn anchored_at(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
@@ -755,8 +732,7 @@ const FIXTURE_OUTPUT_INDEX: u64 = 0;
 /// for that. An **emission** claim signs with the identity seed of the
 /// persona whose key its vin names as `p_pubkey` (CEN-J20: the slot's key
 /// derives the vin's `P_canonical_id`), found the same way; a vin that does
-/// not parse (CEN-J19's refusal) or names no persona signs by position. A
-/// constant per position for the serve credit, which carries no auth.
+/// not parse (CEN-J19's refusal) or names no persona signs by position.
 fn fixture_signing_seed(index: usize, input: &Input) -> [u8; 64] {
     let mut seed = [0u8; 64];
     match input {
@@ -852,7 +828,7 @@ pub fn chain_of(len: u64) -> MockChain {
 /// A per-input PQC authentication in **CEN-I16's shape** — version 1,
 /// solo scheme, no flags, a key blob of exactly
 /// [`PQC_HYBRID_SINGLE_KEY_LEN`] — with filler bytes in the blobs:
-/// what the wire needs to round-trip a non-serve-credit `Fcmp`
+/// what the wire needs to round-trip an `Fcmp`
 /// transaction (`pqc_auths.len() == nvin`), what I16's structure
 /// admits, and nothing CEN-I18 would accept. The **unanchored** slot:
 /// every body that reaches `tx_against` goes through [`anchored_at`],
@@ -1162,10 +1138,9 @@ mod anchor_tests {
     use super::*;
 
     /// CEN-J21's shape: an emission with no fee input still carries a
-    /// reference the row will read. A serve credit carries the field and
-    /// no row reads it, including at height 0.
+    /// reference the row will read.
     #[test]
-    fn an_emission_with_no_fee_input_is_anchored_and_a_serve_credit_is_not() {
+    fn an_emission_with_no_fee_input_is_anchored() {
         let chain = chain_of(crate::rules::tx_against::REFERENCE_BLOCK_MIN_AGE.to_raw());
         let hashes: Vec<BlockHash> = chain
             .recorded
@@ -1188,13 +1163,6 @@ mod anchor_tests {
         assert_eq!(
             reference_block, hashes[0],
             "the newest admissible reference is genesis"
-        );
-
-        let credit = serve_credit_only([0x77; 32]);
-        let left = anchored_at(&hashes, 0, credit.clone());
-        assert_eq!(
-            left.ct, credit.ct,
-            "a serve credit is not put in the spend window"
         );
     }
 }

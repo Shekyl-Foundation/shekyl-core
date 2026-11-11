@@ -135,7 +135,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F18,
             CenRow::F20,
             // Slice 7 commit 7: G1 before the slot loop
-            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G7/G9/G10 below, after it.
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G9/G10 below, after it.
             CenRow::G1,
             // Slice 7 commit 6: the body's pairing, a `FormRule`
             // (`CHAIN_RULES_SLICE_7.md` §5 row 6).
@@ -144,7 +144,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,
             CenRow::G6b,
-            CenRow::G7,
             CenRow::G9,
             CenRow::G10,
             CenRow::G11,
@@ -167,7 +166,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // H19 (2026-10-15): the layout half in `tx_form`, the verification
             // half the block fold that records it (`rules::range_proof`).
             CenRow::H19,
-            CenRow::H20,
             CenRow::H21,
             CenRow::H22,
             // Slice 6 commit 2: the stateless 4.I rows (`CHAIN_RULES_SLICE_6.md`
@@ -192,13 +190,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I18,
             CenRow::I19,
             CenRow::I20,
-            // `SHT-9`'s conformance correction (2026-10-03): the serve
-            // credit's pass records against its vins.
-            CenRow::J2,
-            // Slice 8 row 3: the bond-state rows on a serve-credit vin.
-            CenRow::J4,
-            CenRow::J5,
-            CenRow::J6,
             // Slice 8 row 4: the bond post's key and hint, its JoinMarket
             // coupling, and the key its kind selects.
             CenRow::J11,
@@ -367,6 +358,27 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
          chain (M6) or in the pool (M7); b3: the engine's seam (M9); b4: eviction (M10)"
     );
+    // SO-D12g: the rows retired by ruling at the switch's C7. Their
+    // successors are compile-pinned enforced rows of this registry
+    // (`census_pin!`); this is the list.
+    let retired: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::Retired)
+        .collect();
+    assert_eq!(
+        retired,
+        [
+            CenRow::J1,
+            CenRow::J2,
+            CenRow::J3,
+            CenRow::J7,
+            CenRow::J8,
+            CenRow::J9,
+            CenRow::J10
+        ],
+        "the serve-credit vin's rows, retired to the bundle rows that carry their subjects"
+    );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a
     // matching status list.
@@ -445,7 +457,12 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 160 → 159 on 2026-11-09: CEN-B4 (the header root against the
     // sidecar) went to bucket 3 with the switch's C3 and left this
     // registry — its successors CEN-J29–J37 judge the bundle section.
-    assert_eq!(CenRow::ALL.len(), 159);
+    // 159 → 154 on 2026-11-10: the switch's C7 deleted the carrier class.
+    // CEN-G7, H20 and J4–J6, the rows that judged only that class, went to
+    // bucket 3 and left this registry. J1–J3 and J7–J10 stay as entries
+    // retired by ruling (`SO-D12g`), each naming the bundle rows that carry
+    // its subject.
+    assert_eq!(CenRow::ALL.len(), 154);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

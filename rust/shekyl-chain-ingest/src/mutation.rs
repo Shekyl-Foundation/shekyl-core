@@ -235,11 +235,6 @@ pub enum Mutation {
     /// The candidate's own first body listed a second time. CEN-G1's
     /// intra-block arm, at the second slot — before L1 can see the double.
     DoubledListing,
-    /// A second serve-credit body carrying a `(P, shard, E)` the block
-    /// already carries: the first serve-credit body cloned with its
-    /// `unlock_time` moved (a different transaction, the same key).
-    /// CEN-G7, at the second vin.
-    DuplicateServeCredit,
     /// A second bond post for a `P` the block already posts for, the same
     /// way. CEN-G10, at the second vin.
     ///
@@ -317,7 +312,7 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 20] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
@@ -331,7 +326,6 @@ impl Mutation {
         Self::SubstitutedBody,
         Self::RelistedTransaction,
         Self::DoubledListing,
-        Self::DuplicateServeCredit,
         Self::DuplicateBondPost,
         Self::OverweightBlock,
         Self::DoubleSpend,
@@ -356,7 +350,6 @@ impl Mutation {
             Self::WrongReward => CenRow::F18,
             Self::ReorderedBodies | Self::MissingBody | Self::SubstitutedBody => CenRow::G2,
             Self::RelistedTransaction | Self::DoubledListing => CenRow::G1,
-            Self::DuplicateServeCredit => CenRow::G7,
             Self::DuplicateBondPost => CenRow::G10,
             Self::OverweightBlock => CenRow::F14,
             Self::DoubleSpend => CenRow::I7,
@@ -387,7 +380,6 @@ impl Mutation {
             // The three archival passes name the second occurrence's vin.
             Self::DoubleSpend
             | Self::ForgedSignature
-            | Self::DuplicateServeCredit
             | Self::DuplicateBondPost => ExpectedPlace::Input,
             // I10/I11 name the transaction; so does CEN-G2's index arm (slice
             // 7 Q8: the first mismatching index — `Listed(0)` for both G2
@@ -527,29 +519,8 @@ impl Mutation {
                 candidate.transactions.push(first);
                 relist(&mut candidate);
             }
-            Self::DuplicateServeCredit => {
-                // A serve-credit body carries no `pqc_auths` (CEN-H20), so
-                // its twin is the same body with its `unlock_time` moved: a
-                // different transaction, the same `(P, shard, E)`.
-                let mut twin = candidate
-                    .transactions
-                    .iter()
-                    .find(|tx| {
-                        tx.prefix
-                            .inputs
-                            .iter()
-                            .any(|input| ArchivalKind::ServeCredit.carried_by(input))
-                    })
-                    .cloned()
-                    .ok_or(Unmutable::NoArchivalBodyToDuplicate {
-                        kind: ArchivalKind::ServeCredit,
-                    })?;
-                move_unlock_time(&mut twin)?;
-                candidate.transactions.push(twin);
-                relist(&mut candidate);
-            }
             Self::DuplicateBondPost => {
-                Self::list_supplied_twin(&mut candidate, env, ArchivalKind::BondPost)?;
+                Self::list_supplied_twin(&mut candidate, env)?;
             }
             Self::OverweightBlock => {
                 let supply = env.overweight.as_ref().ok_or(Unmutable::NoBodySupply)?;
@@ -674,30 +645,15 @@ impl Mutation {
     }
 }
 
-/// Which archival body a `Duplicate*` mutation clones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArchivalKind {
-    /// A parseable serve-credit vin (`ArchivalServeCreditResponse`).
-    ServeCredit,
-    /// A bond post.
-    BondPost,
+/// Whether `input` is a parseable bond post — the rule's own parse
+/// (`ArchivalKey::of`), so the family and the validator agree on what has a
+/// key.
+fn carries_a_bond_post(input: &Input) -> bool {
+    matches!(ArchivalKey::of(input), Some(ArchivalKey::BondPost { .. }))
 }
 
-impl ArchivalKind {
-    /// Whether `input` carries a key this kind duplicates — the rule's own
-    /// parse (`ArchivalKey::of`), so the family and the validator agree on
-    /// what has a key; an unparseable vin is another row's and has none.
-    fn carried_by(self, input: &Input) -> bool {
-        matches!(
-            (self, ArchivalKey::of(input)),
-            (Self::ServeCredit, Some(ArchivalKey::ServeCredit { .. }))
-                | (Self::BondPost, Some(ArchivalKey::BondPost { .. }))
-        )
-    }
-}
-
-/// Whether two archival keys collide under their rule: one `(P, shard, E)`
-/// (G7), one `P` (G10). G9's shared-`(P, E)` rule has no mutation here
+/// Whether two archival keys collide under their rule: one `P` (G10).
+/// G9's shared-`(P, E)` rule has no mutation here
 /// (`DuplicateBondPost` docs), so a claim key collides only with itself.
 fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
     match (a, b) {
@@ -708,24 +664,23 @@ fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
 
 impl Mutation {
     /// List a body from the environment's twins that collides, under
-    /// `kind`'s rule, with a key the candidate already carries. A bond-post
+    /// G10's rule, with a bond post the candidate already carries. A bond-post
     /// body is signed over its content (its `pqc_auths` slot, CEN-I18), so
     /// a second valid body with the same key cannot be made from the first
     /// — the caller supplies one it built with the keys.
     fn list_supplied_twin(
         candidate: &mut Candidate,
         env: &Environment<'_>,
-        kind: ArchivalKind,
     ) -> Result<(), Unmutable> {
         let keys: Vec<ArchivalKey> = candidate
             .transactions
             .iter()
             .flat_map(|tx| tx.prefix.inputs.iter())
-            .filter(|input| kind.carried_by(input))
+            .filter(|input| carries_a_bond_post(input))
             .filter_map(ArchivalKey::of)
             .collect();
         if keys.is_empty() {
-            return Err(Unmutable::NoArchivalBodyToDuplicate { kind });
+            return Err(Unmutable::NoBondPostToDuplicate);
         }
         let listed: Vec<_> = candidate.block.transaction_hashes.clone();
         let twin = env
@@ -741,7 +696,7 @@ impl Mutation {
                         .any(|theirs| keys.iter().any(|ours| collides(ours, &theirs)))
             })
             .cloned()
-            .ok_or(Unmutable::NoTwinSupplied { kind })?;
+            .ok_or(Unmutable::NoTwinSupplied)?;
         candidate.transactions.push(twin);
         relist(candidate);
         Ok(())
@@ -815,8 +770,8 @@ pub struct Environment<'a> {
     /// Twins for [`Mutation::DuplicateBondPost`]: bodies valid at the
     /// mutated height whose archival key collides with one the block
     /// already carries. A bond-post body is signed over its content, so
-    /// the family cannot forge a second from the first; a serve-credit body
-    /// carries no signature slot and needs none. Empty for a corpus chain.
+    /// the family cannot forge a second from the first. Empty for a corpus
+    /// chain.
     pub twins: &'a [Transaction],
     /// Wallet-made bodies for the three spend mutations whose in-place
     /// edit became CEN-I18's on 2026-10-16 (the signature sequence runs in
@@ -939,19 +894,16 @@ pub enum Unmutable {
         listed: usize,
     },
     /// A body whose `unlock_time` is `u64::MAX`; moving it by one does not
-    /// fit (`SubstitutedBody`, the `Duplicate*` twins).
+    /// fit (`SubstitutedBody`).
     #[error("the body's unlock_time is u64::MAX; nothing to move it to")]
     UnlockTimeSaturated,
     /// [`Mutation::RelistedTransaction`] with no block below listing a body.
     #[error("no block below this height listed a transaction; nothing to re-list")]
     NothingListedBefore,
-    /// A `Duplicate*` mutation on a block carrying no parseable body of its
-    /// kind.
-    #[error("the candidate carries no parseable {kind:?} body to duplicate")]
-    NoArchivalBodyToDuplicate {
-        /// The kind sought.
-        kind: ArchivalKind,
-    },
+    /// [`Mutation::DuplicateBondPost`] on a block carrying no parseable bond
+    /// post.
+    #[error("the candidate carries no parseable bond post to duplicate")]
+    NoBondPostToDuplicate,
     /// [`Mutation::OverweightBlock`] without an [`Environment::overweight`].
     #[error("OverweightBlock needs the environment's body supply and bound")]
     NoBodySupply,
@@ -969,13 +921,10 @@ pub enum Unmutable {
     /// other than the one the mutation names.
     #[error("the supplied body does not name the reference the mutation names")]
     ReferenceNotAsNamed,
-    /// A `Duplicate*` mutation whose twin must be supplied
-    /// ([`Environment::twins`]) found none colliding with the block's keys.
-    #[error("no supplied twin collides with the block's {kind:?} key")]
-    NoTwinSupplied {
-        /// The kind sought.
-        kind: ArchivalKind,
-    },
+    /// [`Mutation::DuplicateBondPost`], whose twin must be supplied
+    /// ([`Environment::twins`]), found none colliding with the block's posts.
+    #[error("no supplied twin collides with the block's bond post")]
+    NoTwinSupplied,
     /// The supply ran out before the block passed the bound.
     #[error("the body supply ran out at {reached} bytes, under the bound {bound}")]
     BodySupplyExhausted {

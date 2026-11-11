@@ -13,10 +13,9 @@
 //!
 //! **The store persists; it does not compute** (C2-R8 principle 3). Every
 //! row written here is a part of the verdict's [`ArchivalDelta`] — the
-//! record post-images, the credit keys, the slash entries and what each
-//! burned, the accruing total, the close's frozen facts. What the store
-//! adds is the belts: SI-15 (a credit names a persona with a record),
-//! SI-19 (a join inserts once), SI-20 (an update replaces a present
+//! record post-images, the slash entries and what each burned, the
+//! accruing total, the close's frozen facts. What the store adds is the
+//! belts: SI-19 (a join inserts once), SI-20 (an update replaces a present
 //! persona), SI-21 (an epoch closes whole, once), SI-22 (the slash log is
 //! dense per height, and an applied key is written once), SI-23 (the
 //! accruing table holds the open epoch's row and no other), and SI-8 for
@@ -25,7 +24,6 @@
 //!
 //! ```text
 //!  2.  records   archival_bond[p] = post-image — Insert (SI-19) / Replace (SI-20)
-//!      credits   archival_serve_credit[(p, s, E, h)] = Present      (SI-15)
 //!  5.  refs      archival_bundle_references[h] = section, non-empty only
 //!  8.  burn      total_burned += emission burn + Σ slash burns       (SI-8)
 //!  9a. accrual   archival_budget_accruing[E] = total — or, at E's close,
@@ -59,14 +57,7 @@
 //! provenance says which family it is missing. The one Rust-only table,
 //! `archival_budget_accruing`, has no C++ family of its own and is
 //! governed by the family whose per-height rows it replaced,
-//! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`). The belts that read across
-//! families — SI-15 reads `archival_bond` for a credit — run only when
-//! both families apply: a stubbed `Bond` leaves no records, and a credit
-//! written against that absence is the stub, not a fault. Since E6 slice
-//! 8 row 3 that arm is a belt with nothing above it to let through: CEN-J4
-//! reads the record off the view before the block, so a `Bond`-stubbed
-//! session's credits are refused at `validate` and never reach this
-//! writer (`archival_write_tests`, ARW-9).
+//! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`).
 //!
 //! # What the slash burns into (`ARW-6`)
 //!
@@ -99,16 +90,14 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, BundleReferencesBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{ReleaseJournalKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
     ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
     ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_RELEASE_JOURNAL,
-    ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
-    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
-    ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
 };
 
-use super::archival_reads;
 use super::error::{
     AccrualFault, DigestFault, EngineError, SettlementFault, SlashFault, StoreError, StoreInvariant,
 };
@@ -125,13 +114,9 @@ impl<'id> WriteBatch<'_, 'id> {
         valid: &ChainValid<'id, V>,
     ) -> Result<(), StoreError> {
         let delta = valid.block().archival();
-        let bonds_apply = self.apply_policy().applies(ArchivalFamily::Bond);
-        if bonds_apply {
+        if self.apply_policy().applies(ArchivalFamily::Bond) {
             self.write_bond_records(delta)?;
             self.write_release_journal(BlockHeight::from_raw(height), delta)?;
-        }
-        if self.apply_policy().applies(ArchivalFamily::ServeCredit) {
-            self.write_serve_credits(height, delta, bonds_apply)?;
         }
         Ok(())
     }
@@ -199,40 +184,6 @@ impl<'id> WriteBatch<'_, 'id> {
                 ReleaseJournalKey::new(height, *release.persona()).key(),
                 release.record().encoded().as_encoded(),
             )?;
-        }
-        Ok(())
-    }
-
-    /// `archival_serve_credit[(p, s, E, h)] = Present` for every credit the
-    /// block earns. Upserted: the bit is a set membership, and the C++
-    /// `set_archival_serve_credit_bit` is idempotent on it. `check_bonds`
-    /// arms SI-15's write side — a credit for a persona with no record.
-    fn write_serve_credits(
-        &self,
-        height: u64,
-        delta: &ArchivalDelta,
-        check_bonds: bool,
-    ) -> Result<(), StoreError> {
-        let credits = delta.serve_credits();
-        if credits.is_empty() {
-            return Ok(());
-        }
-        if check_bonds {
-            for credit in credits {
-                let record = archival_reads::bond_record(self.txn(), &credit.persona)
-                    .map_err(|f| self.arm_read_fault(f))?;
-                if record.is_none() {
-                    return Err(self.poison().arm(StoreInvariant::ServeCreditWithoutBond {
-                        persona: credit.persona,
-                    }));
-                }
-            }
-        }
-        let mut table = self.open_upsert_table(ARCHIVAL_SERVE_CREDIT)?;
-        let height = BlockHeight::from_raw(height);
-        for credit in credits {
-            let key = ServeCreditKey::new(credit.persona, credit.shard, credit.epoch, height);
-            table.upsert(key.key(), Present)?;
         }
         Ok(())
     }

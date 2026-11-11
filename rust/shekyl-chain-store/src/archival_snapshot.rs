@@ -29,7 +29,6 @@
 //! | Family | Row (`key ‖ value`) | Projection |
 //! |---|---|---|
 //! | [`Bond`](SnapshotFamily::Bond) | `p[32] ‖ Canonical(BondRecord)` | — |
-//! | [`ServeCredit`](SnapshotFamily::ServeCredit) | `p[32] ‖ shard ‖ epoch ‖ height` | set table, no value |
 //! | [`RMarket`](SnapshotFamily::RMarket) | `shard ‖ epoch ‖ r` | `r = 0` rows are **not emitted** (§3.6) |
 //! | [`SigmaWork`](SnapshotFamily::SigmaWork) | `E ‖ Σwork_milli` | — |
 //! | [`Budget`](SnapshotFamily::Budget) | `E ‖ budget` | — |
@@ -77,8 +76,6 @@ use crate::codec::{
 pub enum SnapshotFamily {
     /// `archival_bond`.
     Bond,
-    /// `archival_serve_credit`.
-    ServeCredit,
     /// `archival_r_market`, non-zero rows.
     RMarket,
     /// `archival_sigma_work`.
@@ -123,9 +120,8 @@ const _: () = assert!(MAX_ROW_BYTES <= u32::MAX as usize);
 
 impl SnapshotFamily {
     /// Every family, in record order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 9] = [
         Self::Bond,
-        Self::ServeCredit,
         Self::RMarket,
         Self::SigmaWork,
         Self::Budget,
@@ -141,7 +137,6 @@ impl SnapshotFamily {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Bond => "archival_bond",
-            Self::ServeCredit => "archival_serve_credit",
             Self::RMarket => "archival_r_market",
             Self::SigmaWork => "archival_sigma_work",
             Self::Budget => "archival_budget",
@@ -159,7 +154,6 @@ impl SnapshotFamily {
     pub const fn key_len(self) -> usize {
         match self {
             Self::Bond => 32,
-            Self::ServeCredit => 32 + 8 + 8 + 8,
             Self::SlashApplied => 32 + 8 + 8,
             Self::RMarket => 8 + 8,
             Self::SlashLog => 8 + 4,
@@ -177,7 +171,7 @@ impl SnapshotFamily {
     pub const fn value_len(self) -> Option<usize> {
         match self {
             Self::Bond | Self::BundleReferences | Self::SlashLog => None,
-            Self::ServeCredit | Self::SlashApplied | Self::LastSlashEpoch => Some(0),
+            Self::SlashApplied | Self::LastSlashEpoch => Some(0),
             Self::RMarket | Self::SigmaWork | Self::Budget | Self::BudgetAccruing => Some(8),
         }
     }
@@ -224,7 +218,6 @@ pub enum Disposition {
 pub const fn disposition(family: ArchivalFamily) -> Disposition {
     match family {
         ArchivalFamily::Bond => Disposition::Rows(SnapshotFamily::Bond),
-        ArchivalFamily::ServeCredit => Disposition::Rows(SnapshotFamily::ServeCredit),
         ArchivalFamily::RMarket => Disposition::Rows(SnapshotFamily::RMarket),
         ArchivalFamily::SigmaWork => Disposition::Rows(SnapshotFamily::SigmaWork),
         ArchivalFamily::Budget => Disposition::Rows(SnapshotFamily::Budget),
@@ -480,26 +473,6 @@ impl ArchivalSnapshot {
             persona.as_bytes().to_vec(),
             record.encode(),
         )
-    }
-
-    /// One `archival_serve_credit` pass bit.
-    ///
-    /// # Errors
-    ///
-    /// [`Self::insert`]'s.
-    pub fn push_serve_credit(
-        &mut self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-        height: BlockHeight,
-    ) -> Result<(), SnapshotFault> {
-        let mut key = Vec::with_capacity(SnapshotFamily::ServeCredit.key_len());
-        key.extend_from_slice(persona.as_bytes());
-        key.extend_from_slice(&shard.to_raw().to_le_bytes());
-        key.extend_from_slice(&epoch.to_raw().to_le_bytes());
-        key.extend_from_slice(&height.to_raw().to_le_bytes());
-        self.insert(SnapshotFamily::ServeCredit, key, Vec::new())
     }
 
     /// `archival_r_market[(shard, epoch)]`. **A zero count is not a row**
@@ -876,7 +849,7 @@ mod tests {
             .collect();
         // Nine from the X-macro plus the properties cell.
         assert_eq!(carried.len() + 1, FAMILY_COUNT);
-        assert_eq!(FAMILY_COUNT, 10);
+        assert_eq!(FAMILY_COUNT, 9);
         for (i, f) in SnapshotFamily::ALL.iter().enumerate() {
             assert_eq!(*f as usize, i, "positional discriminant");
             assert_eq!(SnapshotFamily::at(i), Some(*f));
@@ -885,7 +858,7 @@ mod tests {
         for f in carried {
             assert!(SnapshotFamily::ALL.contains(&f));
         }
-        assert_eq!(EMPTY_BODY_LEN, 80);
+        assert_eq!(EMPTY_BODY_LEN, 72);
     }
 
     #[test]
@@ -903,13 +876,6 @@ mod tests {
     fn rows_round_trip_through_the_body_and_the_reader_stops_at_its_end() {
         let mut s = ArchivalSnapshot::empty();
         s.push_bond(&persona(1), &bond(7)).unwrap();
-        s.push_serve_credit(
-            &persona(1),
-            ShardId::from_raw(7),
-            SettlementEpoch::from_raw(3),
-            BlockHeight::from_raw(1000),
-        )
-        .unwrap();
         s.push_r_market(
             ShardId::from_raw(7),
             SettlementEpoch::from_raw(2),
@@ -946,7 +912,7 @@ mod tests {
             .unwrap();
         s.set_last_slash_epoch(SettlementEpoch::from_raw(3))
             .unwrap();
-        assert_eq!(s.row_count(), 10);
+        assert_eq!(s.row_count(), 9);
 
         let mut bytes = s.body();
         bytes.extend_from_slice(b"tail");

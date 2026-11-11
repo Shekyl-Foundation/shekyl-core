@@ -198,17 +198,6 @@ pub enum StoreInvariant {
     /// root beneath the seal's row is a corrupt roots table that CEN-B5
     /// would otherwise judge the honest next header against).
     SummaryRootDiverged,
-    /// **SI-15** — every `archival_serve_credit` row belongs to a persona
-    /// with a bond record. The connect hook that writes a pass bit refuses
-    /// one for an unknown persona (CEN-L7's fatal backstop), so a row whose
-    /// `PCanonicalId` prefix has no `archival_bond` row is a write that
-    /// bypassed the writer. Observed by the serve-credit reads (A3, A4,
-    /// A5), which have the persona in hand; the read that found it names
-    /// it.
-    ServeCreditWithoutBond {
-        /// The persona the orphaned rows name.
-        persona: shekyl_types::PCanonicalId,
-    },
     /// **SI-16** — a pool entry is one entry: `pool_meta[h]` exists iff
     /// `pool_blob[h]` exists. `insert` writes both, `remove` deletes both,
     /// `update` touches only the meta row, and no other writer exists; a
@@ -794,7 +783,6 @@ impl StoreInvariant {
             Self::FoldOverflow { .. } => 8,
             Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
-            Self::ServeCreditWithoutBond { .. } => 15,
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
@@ -912,11 +900,6 @@ impl core::fmt::Display for StoreInvariant {
             Self::SummaryRootDiverged => f.write_str(
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
                  the summary and the recorded root disagree, rebuild from the block corpus",
-            ),
-            Self::ServeCreditWithoutBond { persona } => write!(
-                f,
-                "archival_serve_credit holds rows for persona {persona} but archival_bond has no \
-                 record for it; a pass bit was written past the connect hook's refusal"
             ),
             Self::PoolEntryUnpaired { txid } => write!(
                 f,
@@ -1191,7 +1174,6 @@ impl core::error::Error for StoreInvariant {
             | Self::SummaryRootDiverged
             | Self::RightEdgeDiverged { .. }
             | Self::DemotedBlockRefused { .. }
-            | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
             | Self::LeafCountNotAdvanced { .. }

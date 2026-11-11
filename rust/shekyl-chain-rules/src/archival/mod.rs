@@ -138,7 +138,7 @@ pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
+    RecordWriteKind, ReleasePreImage, Settlement, Slash, SupportSettlement,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
@@ -282,7 +282,6 @@ struct Transition {
     /// Each Release's pre-image, in block order: what the Release journal
     /// keeps of it.
     releases: Vec<ReleasePreImage>,
-    serve_credits: Vec<ServeCreditKey>,
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
     settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
@@ -307,7 +306,6 @@ impl Transition {
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
             releases: Vec::new(),
-            serve_credits: Vec::new(),
             settled: BTreeMap::new(),
             support_settled: BTreeMap::new(),
             gathers: Vec::new(),
@@ -467,7 +465,6 @@ impl Transition {
         ArchivalDelta {
             records,
             releases: self.releases,
-            serve_credits: self.serve_credits,
             settlements,
             support_settlements,
             gathers: self.gathers,

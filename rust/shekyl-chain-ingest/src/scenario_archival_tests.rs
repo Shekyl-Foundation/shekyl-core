@@ -17,18 +17,12 @@
 //! judge the block in hand over a view that holds no bond — a join (the
 //! record it inserts), the refusals of a post for a persona with no
 //! record. **Multi-block arms** read a record a previous block wrote — a
-//! release, a reinstate, a second join, a credit for a persona who joined
-//! earlier. Commit 4 witnessed the first kind and pinned the second as
+//! release, a reinstate, a second join. Commit 4 witnessed the first kind and pinned the second as
 //! unreachable (nothing wrote a record); commit 5's writer turned that
 //! pin, and `scenario_join_tests`'s
 //! `a_join_is_written_and_the_blocks_after_it_read_the_record`
-//! is the same test with the two assertions inverted: the record is `Some`
-//! after the join, and the next block's credit for it connects. (*Was*,
-//! until E6 slice 8 row 3: "a serve credit for a persona whose join is in
-//! the same block" stood among the single-block arms. It is no arm at all
-//! — CEN-J4 reads the record off the view before the block, so that
-//! credit is refused on the record's absence; the credit's one witness is
-//! multi-block.) The multi-block
+//! is the same test with the assertion inverted: the record is `Some`
+//! after the join. The multi-block
 //! arms follow on the same chain: a release of the persisted record (its
 //! post-image read back), a release whose debit is not that record's total
 //! refused at CEN-J16 before the valid one connects, a second join for a
@@ -81,10 +75,8 @@
 //!
 //! # What is fixture here
 //!
-//! The serve credit's Ed25519 countersignature (no Rust countersigner
-//! exists; CEN-J1/J10 pending). That is not what L7 judges. Everything L7
-//! reads — the post's fields, the persona's standing, the block's own
-//! posts — is the production object over the production view. (*Was*,
+//! Nothing L7 judges: everything it reads — the post's fields, the
+//! persona's standing, the block's own posts — is the production object over the production view. (*Was*,
 //! until slice 6 row 6 on 2026-10-08: the funding spend's FCMP proof was
 //! fixture too, the consensus-side verify pending on this class. It is
 //! CEN-J27's now — the bond post's funding half, the reference context and
@@ -93,8 +85,8 @@
 //! pass, the same join with one proof byte flipped its refusal.)
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use shekyl_chain_rules::{CenRow, Locus, RuleSet, TxSlot};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch};
+use shekyl_chain_rules::{CenRow, Locus, TxSlot};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount};
 use shekyl_wire::transaction::{BondPostKind, Holdings as WireHoldings};
 use shekyl_wire::Transaction;
 
@@ -102,12 +94,6 @@ use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::scenario::Scenario;
 use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use shekyl_harness_spender::Spender;
-
-/// The settlement epoch open at `height` under the genesis rule set — the
-/// epoch a join at `height` records and a credit at `height` is keyed by.
-fn epoch_at(height: BlockHeight) -> SettlementEpoch {
-    RuleSet::GENESIS.settlement_schedule().epoch_at(height)
-}
 
 /// The refusals a view with no bonds produces, each through the production
 /// stack: a post is assembled and signed as a wallet would (so CEN-H21 and
@@ -118,10 +104,7 @@ fn epoch_at(height: BlockHeight) -> SettlementEpoch {
 /// slice 8 row 5), the unnamed kind at L7 in the sequence itself — the
 /// same row and locus the fold refuses, whose arm stays the belt. The
 /// join-and-release pair is
-/// J16's too, not G10's (module docs). The serve credit is **CEN-J4**'s
-/// (E6 slice 8 row 3): the one bond-state read the transaction pass makes,
-/// ahead of the fold — *was* L7's until row 3 landed, the pin slice 8's
-/// row 2 held. The funding half is **CEN-J27**'s (slice 6 row 6): the
+/// J16's too, not G10's (module docs). The funding half is **CEN-J27**'s (slice 6 row 6): the
 /// honest join records it, and the same join with one byte of its funding
 /// proof flipped is refused on it at the transaction — after the post rows,
 /// which read nothing the flip changed, and before the signatures, whose
@@ -135,7 +118,6 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
         .await;
     let spender = Spender::over(&mined);
     let persona = Persona::at(3);
-    let epoch = epoch_at(connecting);
     let at_post = Locus::Input {
         slot: TxSlot::Listed(0),
         input: 1,
@@ -180,18 +162,6 @@ async fn posts_for_a_persona_with_no_record_are_refused_on_the_store() {
     // none, and the shard shape is not its subject.
     let honest = riding(persona.join(complete_tree(), ENDPOINT));
 
-    // A serve credit for a persona with no record: J4 at the credit's own
-    // input, before the fold's L7 is reached.
-    refused_at(
-        scenario
-            .mine_listing(vec![persona.serve_credit(7, epoch.to_raw() + 1)])
-            .await,
-        CenRow::J4,
-        Locus::Input {
-            slot: TxSlot::Listed(0),
-            input: 0,
-        },
-    );
     refused_at(
         scenario.mine_listing(vec![release]).await,
         CenRow::J16,

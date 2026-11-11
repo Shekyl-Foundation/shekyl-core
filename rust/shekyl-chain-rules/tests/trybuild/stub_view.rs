@@ -37,7 +37,7 @@ use shekyl_chain_rules::{
 use shekyl_types::archival::{
     BlockDraws, BondRecord, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest,
     SupportRow,
-    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
+    LoggedSlash, RMarket, ReleasedRecord, SettlementRow, SigmaWorkMilli,
     SlashLogEntry,
 };
 use shekyl_types::{
@@ -185,24 +185,6 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Infallible> {
         Ok(Vec::new())
-    }
-    fn last_served_epoch(
-        &self,
-        _: &PCanonicalId,
-        _: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Infallible> {
-        Ok(None)
-    }
-    fn served_shards(&self, _: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
-        Ok(Vec::new())
-    }
-    fn pass_count(
-        &self,
-        _: &PCanonicalId,
-        _: ShardId,
-        _: SettlementEpoch,
-    ) -> Result<PassCount, Infallible> {
-        Ok(PassCount::ZERO)
     }
     fn r_market(
         &self,

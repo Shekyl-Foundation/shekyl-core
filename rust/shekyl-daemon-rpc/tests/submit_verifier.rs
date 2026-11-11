@@ -60,7 +60,7 @@ use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
-use submit_fixtures::{hexify, serve_credit_tx, MockShim};
+use submit_fixtures::{hexify, MockShim};
 
 /// Coinbase lock window: the genesis coinbase drains into the tree at
 /// reference heights `>= COINBASE_LOCK_WINDOW + 1` (fcmp_spend_e2e's
@@ -1049,42 +1049,6 @@ fn pqc_header_statics_reject_unknown_versions_flags_and_schemes() {
             "{label} must be Malformed"
         );
     }
-}
-
-// ─── Reachability honesty: the non-Spend arms ───────────────────────────
-
-#[test]
-fn non_spend_kinds_refuse_loudly() {
-    // The serve-credit arm is unreachable through the engine today (the
-    // SP-T4a fee-floor contradiction rejects it in Phase C before the
-    // verifier), but the seam is public: the unimplemented battery must
-    // refuse as Malformed, never pass or panic (rule 21 reopening criteria
-    // live in the verifier's module docs).
-    let parsed =
-        parse_submission(&hexify(&serve_credit_tx(0))).expect("serve-credit clears Phase A");
-    assert_eq!(parsed.kind, SubmitTxKind::ServeCreditOnly);
-    let facts = SubmitFacts {
-        in_pool: false,
-        in_pool_broadcast: false,
-        in_chain: None,
-        key_image_conflicts: Vec::new(),
-        reference: None,
-        fee_floor_window: Some(vec![1]),
-        pool_refuses_for_room: None,
-        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
-        chain_height: ChainCount::from_raw(200),
-        bond_record_exists: None,
-        bond_record_bonded_total: None,
-        release: None,
-        emission: None,
-        emission_claim_conflict: None,
-        origin_publication: None,
-    };
-    assert_eq!(
-        verify(&parsed, &facts),
-        Err(VerifyFailure::Malformed),
-        "the unimplemented serve-credit battery must refuse loudly"
-    );
 }
 
 // ─── The bond-post battery (§8.7.1 BP rows + funding-arm K) ─────────────

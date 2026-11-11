@@ -31,7 +31,6 @@ use shekyl_units::AtomicUnits;
 /// let delta = shekyl_chain_rules::ArchivalDelta {
 ///     records: Vec::new(),
 ///     releases: Vec::new(),
-///     serve_credits: Vec::new(),
 ///     settlements: Vec::new(),
 ///     support_settlements: Vec::new(),
 ///     gathers: Vec::new(),
@@ -51,7 +50,6 @@ use shekyl_units::AtomicUnits;
 pub struct ArchivalDelta {
     pub(super) records: Vec<RecordWrite>,
     pub(super) releases: Vec<ReleasePreImage>,
-    pub(super) serve_credits: Vec<ServeCreditKey>,
     pub(super) settlements: Vec<Settlement>,
     /// One support row per complete tree per epoch. Not keyed by shard.
     pub(super) support_settlements: Vec<SupportSettlement>,
@@ -87,13 +85,6 @@ impl ArchivalDelta {
     #[must_use]
     pub fn releases(&self) -> &[ReleasePreImage] {
         &self.releases
-    }
-
-    /// The serve-credit keys this block's transactions earn, in block
-    /// order (§3.2 phase 2: each becomes a `Present` under its key).
-    #[must_use]
-    pub fn serve_credits(&self) -> &[ServeCreditKey] {
-        &self.serve_credits
     }
 
     /// The settlement rows this block's slash pass derives, by epoch, then
@@ -269,17 +260,6 @@ pub enum RecordWriteKind {
     /// its post-image. The store replaces a present row and journals that
     /// pre-image; an absent persona is SI-20 before any journal entry.
     Update,
-}
-
-/// A serve-credit key this block earns: `(persona, shard, epoch)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ServeCreditKey {
-    /// The serving persona.
-    pub persona: PCanonicalId,
-    /// The shard served.
-    pub shard: ShardId,
-    /// The settlement epoch credited.
-    pub epoch: SettlementEpoch,
 }
 
 /// One complete tree's support settlement for one epoch.

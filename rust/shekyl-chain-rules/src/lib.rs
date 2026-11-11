@@ -165,7 +165,7 @@ pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
     ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather, EpochIssues,
-    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportIssue,
+    RecordWrite, RecordWriteKind, ReleasePreImage, Settlement, Slash, SupportIssue,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
 pub use genesis_pin::GenesisPin;

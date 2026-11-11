@@ -106,10 +106,6 @@ const fn witness(family: ArchivalFamily) -> Witness {
         },
         // The epoch close and everything it writes: witnessed only by a
         // chain that crosses an epoch.
-        ArchivalFamily::ServeCredit => Witness::Unwitnessed {
-            rows: SnapshotFamily::ServeCredit,
-            why: EPOCH_CLOSE_UNWITNESSED,
-        },
         ArchivalFamily::RMarket => Witness::Unwitnessed {
             rows: SnapshotFamily::RMarket,
             why: EPOCH_CLOSE_UNWITNESSED,

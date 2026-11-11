@@ -55,7 +55,7 @@ const CENSUS: &str = include_str!("../../../docs/design/CONSENSUS_RULE_CENSUS.md
 /// raise is a new hole and needs a ruling.
 const INPUT_RAW_EXPECTED: usize = 5;
 const UNFRAMED_EXPECTED: usize = 2;
-const PENDING_EXPECTED: usize = 7;
+const PENDING_EXPECTED: usize = 5;
 
 /// The two rows that derive the bindings themselves (§2.4): `name_id` from
 /// the name, and the network id from the genesis hash.

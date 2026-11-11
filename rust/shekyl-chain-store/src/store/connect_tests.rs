@@ -21,10 +21,9 @@ use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    batch_root_going_into, body, candidate, candidate_over, connect_chain, connect_chain_burning,
-    connect_genesis, connect_genesis_judged, connect_with_image_planted_under_the_token, credited,
-    judge, key_images, prefix_to, priced_on, spend, spend_paying, spendable_prefix,
-    FIRST_SPEND_HEIGHT,
+    batch_root_going_into, candidate, candidate_over, connect_chain, connect_chain_burning,
+    connect_genesis, connect_genesis_judged, connect_with_image_planted_under_the_token, judge,
+    key_images, prefix_to, priced_on, spend, spend_paying, spendable_prefix, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{production_horizons, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -802,20 +801,13 @@ fn a_key_image_recorded_under_a_judged_token_is_si1() {
 fn the_same_transaction_in_two_blocks_is_si3() {
     let path = tmp("connect-txhash");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // A spend with a fresh key image each time but the SAME body cannot be
-    // built (the key image is in the body). The one legal listed shape with
-    // no key image is a serve-credit-only transaction: the same hash twice,
-    // nothing for SI-1 to see. (A coinbase-shaped body served here until
-    // E6 slice 5 landed CEN-H5, which refuses `gen` outside the miner slot
-    // — the fixture was the input the row exists to refuse.) The credit
-    // connects only behind the join that opens its record (CEN-L7 /
-    // CEN-J4, read off the view before the block), and the join spends —
-    // so the join sits at the first spend height, as the SI-1 belt's
-    // block does, and the credit one above it.
-    let (join, dup) = credited(9);
-    let mut grown = connect_chain(&store, &spendable_prefix(vec![vec![join]]));
-    let dup_hash = dup.hash();
-    let b1 = grown.next(&store, &[body(dup)]);
+    // Any body the block lists will do: the row is planted under the
+    // body's hash after the block is judged, so the chain never records
+    // it and CEN-G1 has nothing to see. A real spend, at the first spend
+    // height.
+    let mut grown = connect_chain(&store, &spendable_prefix(vec![]));
+    let b1 = grown.next(&store, &[spend()]);
+    let dup_hash = b1.transactions[0].hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let judged = judge(&view, b1)?;

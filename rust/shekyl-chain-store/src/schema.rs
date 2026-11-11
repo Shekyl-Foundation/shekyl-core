@@ -618,15 +618,6 @@ tables! {
     /// `block_burn` — INTEGERKEY; height → units burned, present only when non-zero.
     pub const BLOCK_BURN: TableDefinition<u64, Coded<AtomicUnits>> = TableDefinition::new("block_burn");
 
-    /// `archival_serve_credit` — default flags in LMDB over the 56-byte
-    /// packed key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(height)`; here the
-    /// tuple `([u8; 32], u64, u64, u64)`, which redb orders component-wise —
-    /// exactly the packed key's lexicographic order — with nothing to pin
-    /// (`ServeCreditKey`, `SCU-Q3`'s precedent). A row is a pass bit:
-    /// `Present`. S-ARCH (E4 writes; A3–A5 read).
-    pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<([u8; 32], u64, u64, u64), Present> =
-        TableDefinition::new("archival_serve_credit");
-
     /// `archival_settlement` — default flags in LMDB over the packed
     /// `P_id ‖ BE64(shard) ‖ BE64(epoch)` (`ARCHIVAL_SETTLEMENT_WRITER.md`
     /// `SO-D2`); here the tuple `([u8; 32], u64, u64)`, the same order and
@@ -865,7 +856,7 @@ tables! {
     /// connected; a pop removes the row, and with it the carry it left.
     /// Admission checks a row is one step of the carry (SI-43). Retired
     /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
-    /// Ordinal 43.
+    /// Ordinal 42.
     pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportRow>> =
         TableDefinition::new("archival_support_block");
 
@@ -873,14 +864,14 @@ tables! {
     /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
     /// shard the draw selected and whether a pass was admitted
     /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
-    /// is one range in `(height, draw)` order. Ordinal 44.
+    /// is one range in `(height, draw)` order. Ordinal 43.
     pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
         TableDefinition::new("archival_support_issued");
 
     /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
     /// epoch. One row per tree, not per shard. Written by the slash pass
-    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 45.
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Ordinal 44.
     pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
         TableDefinition::new("archival_support_settlement");
 
@@ -891,7 +882,7 @@ tables! {
     /// entry per `h`, the first valid one; at most `W₂` entries, since an
     /// entry leaves when its window closes. Not chain state: written
     /// outside any pop recording, as `alt_blocks` is. Its body is in
-    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 46).
+    /// [`ARCHIVAL_BUNDLE_BODY`] (SI-41). Appended last but one (ordinal 45).
     pub const ARCHIVAL_BUNDLE_QUEUE: TableDefinition<u64, Coded<QueuedBundle>> =
         TableDefinition::new("archival_bundle_queue");
 
@@ -900,7 +891,7 @@ tables! {
     /// by the hash its reference names (§7.5). Every body has a holder
     /// (SI-41): in 4c the queue; an alternative block and a main-chain
     /// block not past `D_max` are 4b's holders. Not chain state, as the
-    /// queue is not. Appended last (ordinal 47).
+    /// queue is not. Appended last (ordinal 46).
     pub const ARCHIVAL_BUNDLE_BODY: TableDefinition<[u8; 32], Coded<QueuedBody>> =
         TableDefinition::new("archival_bundle_body");
 }
@@ -968,34 +959,37 @@ mod tests {
             // (22), the four revert logs (25–28), `archival_epoch_close_log`
             // (31), `archival_budget_accrual` (32) — and `archival_budget_accruing`
             // born at 27, so everything from `output_to_leaf` moved up by six.
-            ("archival_slash_applied", 20),
-            ("archival_slash_log", 21),
-            ("archival_budget_accruing", 25),
-            ("output_to_leaf", 26),
-            ("curve_tree_roots", 31),
-            ("curve_tree_leaf_counts", 32),
-            ("undo_log", 33),
-            ("txs_pqc_auth_hash", 34),
-            ("txs_archival_len", 35),
+            // Layout 36 (the switch's C7): `archival_serve_credit` (16) left
+            // with the carrier class, so everything after `block_burn` moved
+            // up by one.
+            ("archival_slash_applied", 19),
+            ("archival_slash_log", 20),
+            ("archival_budget_accruing", 24),
+            ("output_to_leaf", 25),
+            ("curve_tree_roots", 30),
+            ("curve_tree_leaf_counts", 31),
+            ("undo_log", 32),
+            ("txs_pqc_auth_hash", 33),
+            ("txs_archival_len", 34),
             // Layout 22 (`SO-D10`) and layout 23 (`SO-D12`): four
             // Rust-only tables appended, two at a time.
-            ("archival_issued_draw", 36),
-            ("archival_issued_digest", 37),
-            ("archival_block_draws", 38),
-            ("archival_drawable_digest", 39),
+            ("archival_issued_draw", 35),
+            ("archival_issued_digest", 36),
+            ("archival_block_draws", 37),
+            ("archival_drawable_digest", 38),
             // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
-            ("block_pow", 40),
+            ("block_pow", 39),
             // Layout 27 (DRS-E5 PR-b): an alternative block's bodies.
-            ("alt_block_bodies", 41),
+            ("alt_block_bodies", 40),
             // Layout 28 (`SO-D12` increment 2): the Release journal.
-            ("archival_release_journal", 42),
-            ("archival_support_block", 43),
-            ("archival_support_issued", 44),
-            ("archival_support_settlement", 45),
+            ("archival_release_journal", 41),
+            ("archival_support_block", 42),
+            ("archival_support_issued", 43),
+            ("archival_support_settlement", 44),
             // Layout 33 (`SO-D12` increment 4c): the bundle queue and the
             // body store.
-            ("archival_bundle_queue", 46),
-            ("archival_bundle_body", 47),
+            ("archival_bundle_queue", 45),
+            ("archival_bundle_body", 46),
         ];
         for &(name, index) in pinned {
             assert_eq!(

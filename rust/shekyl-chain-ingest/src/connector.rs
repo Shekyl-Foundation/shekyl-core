@@ -124,7 +124,7 @@ pub struct Applied {
     /// `coins_generated` and `burned` at that height.
     pub emission: Vec<(BlockHeight, PaidEmission)>,
     /// Each connected block's archival transition — what the verdict says
-    /// the block does to the bond records, the serve credits, the slash log
+    /// the block does to the bond records, the slash log
     /// and the epoch state (`ValidatedBlock::archival`, DRS-E4 commit 4) —
     /// one per entry of `connected`. The scenario driver reads it for the
     /// blocks it mines and compares it with what the store wrote from it

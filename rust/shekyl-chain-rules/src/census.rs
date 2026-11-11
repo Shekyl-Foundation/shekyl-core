@@ -57,7 +57,8 @@ pub enum Flag {
 
 /// How a row is held: not yet, by a rule type `validate` runs, by a rule
 /// type this crate enforces at another site, by construction, or by a Rust
-/// crate below the validator.
+/// crate below the validator — or not at all, because it is retired by
+/// ruling and its successors hold its subject.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
@@ -143,6 +144,19 @@ pub enum RowStatus {
     /// as both are (per-block completeness is what `validate` evaluates),
     /// and **counted as enforced** by the gate, printed as its own figure.
     HeldByStore,
+    /// A row **retired by ruling** (`SO-D12g`): its check left with the
+    /// carrier class at the switch (`SO-D12` 4b), and other rows carry its
+    /// subject. The entry names them — `retired_by(J29, J32)` — and each is
+    /// compile-pinned as a variant of the same registry whose status is
+    /// neither pending nor retired, so a successor that is not enforced, or
+    /// is itself retired, does not build.
+    ///
+    /// The row stays in the registry so its id stays a refused name (rule
+    /// 23), not a free one. Nothing runs it: excluded from
+    /// [`RuleSet::enforced`](crate::RuleSet::enforced), never implemented,
+    /// and printed by the gate as its own subtraction from the per-block
+    /// denominator, which itself does not move.
+    Retired,
 }
 
 mod sealed {
@@ -172,8 +186,8 @@ pub trait Row:
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
 /// `implemented(path)`, `enforced_at(path, "test")`,
-/// `by_construction(path, "falsifier")` or `held_by_store("crate", "test")`
-/// is a macro error at the entry.
+/// `by_construction(path, "falsifier")`, `held_by_store("crate", "test")` or
+/// `retired_by(Row, …)` is a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
@@ -189,6 +203,9 @@ macro_rules! census_status {
     };
     (held_by_store($krate:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByStore
+    };
+    (retired_by($($successor:ident),+)) => {
+        $crate::census::RowStatus::Retired
     };
 }
 
@@ -210,6 +227,25 @@ macro_rules! census_pin {
     // does not import (DRS-D12 (i)). The gate asserts the named `#[test]`
     // is defined in that crate (rule 47).
     (held_by_store($krate:literal, $test:literal), $name:ident, $var:ident) => {};
+    // Each successor is a row of this registry that is enforced: a typo,
+    // a pending row or another retired row does not build.
+    (retired_by($($successor:ident),+), $name:ident, $var:ident) => {
+        $(
+            const _: () = assert!(
+                !matches!(
+                    $name::$successor.status(),
+                    $crate::census::RowStatus::Pending | $crate::census::RowStatus::Retired
+                ),
+                concat!(
+                    "shekyl-chain-rules: ",
+                    stringify!($var),
+                    " is retired to ",
+                    stringify!($successor),
+                    ", which is not enforced (SO-D12g)"
+                )
+            );
+        )+
+    };
     // The same two pins as `implemented`: the site exists and is bound to
     // this row. The test is the gate's to assert (a `#[test]` in this crate).
     (enforced_at($path:path, $test:literal), $name:ident, $var:ident) => {
@@ -239,8 +275,9 @@ macro_rules! census_pin {
 ///
 /// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
 /// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")`,
-/// `by_construction(rust::path::to::Property, "falsifier_test")` or
-/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")`.
+/// `by_construction(rust::path::to::Property, "falsifier_test")`,
+/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")` or
+/// `retired_by(SuccessorVariant, …)`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
 /// id without its `CEN-` prefix (`CEN-D1b` → `D1b`).
@@ -453,7 +490,9 @@ census_rows! {
         G5 by_construction(shekyl_wire::Transaction, "g5_the_storage_pruned_spend_is_refused_before_any_block_rule_sees_it"),
         G6 implemented(crate::rules::block_weight::G6),
         G6b implemented(crate::rules::block_weight::G6b),
-        G7 implemented(crate::rules::body::G7),
+        // G7 left this registry with the carrier class (the switch's C7,
+        // `SO-D12` 4b, 2026-11-10): no input carries a serve credit, so no
+        // block can repeat one. One bundle per `h` is CEN-J29's and J31's.
         G9 implemented(crate::rules::body::G9),
         G10 implemented(crate::rules::body::G10),
         G11 implemented(crate::rules::reward::G11),
@@ -479,7 +518,8 @@ census_rows! {
         H17 implemented(crate::rules::tx::H17),
         H18 implemented(crate::rules::tx::H18),
         H19 implemented(crate::rules::tx::H19),
-        H20 implemented(crate::rules::tx::H20),
+        // H20, the serve-credit-only shape, left with its class (the
+        // switch's C7): no transaction has that shape to judge.
         H21 implemented(crate::rules::tx::H21),
         H22 implemented(crate::rules::tx::H22),
         H23 by_construction(shekyl_wire::Transaction, "doctest:tx_form"),
@@ -526,16 +566,23 @@ census_rows! {
         I19 implemented(crate::rules::tx_extra::I19),
         I20 implemented(crate::rules::tx_extra::I20),
         // 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)
-        J1 pending,
-        J2 implemented(crate::rules::tx_inputs::J2),
-        J3 pending,
-        J4 implemented(crate::rules::tx_bond::J4),
-        J5 implemented(crate::rules::tx_bond::J5),
-        J6 implemented(crate::rules::tx_bond::J6),
-        J7 pending,
-        J8 pending,
-        J9 pending,
-        J10 pending,
+        // J1–J3 and J7–J10 are retired by ruling (`SO-D12g`; the switch's
+        // C7, `SO-D12` 4b): the serve-credit vin they judged is gone, and
+        // the bundle rows carry each one's subject — the reference that
+        // parses (J1 → J29), the count of records (J2 → J32), one bundle per
+        // `h` in its window (J3, J7 → J31), the pair drawn at `h` from the
+        // `h_open` snapshot (J8 → J37), the draw's derivation from the
+        // committed seed (J9 → J33, J37), and the signatures (J10 → J34,
+        // J37). J4–J6 left this registry with the class they judged: the
+        // bond record, the epoch at or past `E_first` and `good_through` are
+        // the drawable set's, built at `h_open(E)` (`SO-D8` Q3).
+        J1 retired_by(J29),
+        J2 retired_by(J32),
+        J3 retired_by(J31),
+        J7 retired_by(J31),
+        J8 retired_by(J37),
+        J9 retired_by(J33, J37),
+        J10 retired_by(J34, J37),
         J11 implemented(crate::rules::tx_inputs::J11),
         J12 implemented(crate::rules::tx_inputs::J12),
         // J28 (FN-DSA increment 3, minted 2026-10-12 with its

@@ -15,8 +15,7 @@
 /// from real rows (the store's `BatchView`) writes its own methods and
 /// does not expand this.
 ///
-/// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
-///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+/// * `archival_reads!(empty)` — no bonds: `None`, empty, `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
 ///   Two reads answer the row an open with no bonds records, because the
 ///   count treats absence as a hole. `block_draws` is
 ///   `Some(BlockDraws::ZERO)`: a height that drew nothing.
@@ -95,25 +94,6 @@ macro_rules! archival_reads {
             (::std::vec::Vec<shekyl_types::archival::SlashLogEntry>);
             (persona, height, floor);
             (::std::vec::Vec::new()));
-        $crate::archival_reads!(@emit $policy; last_served_epoch;
-            (persona: &shekyl_types::PCanonicalId, shard: shekyl_types::ShardId);
-            (::core::option::Option<shekyl_types::SettlementEpoch>);
-            (persona, shard);
-            (::core::option::Option::None));
-        $crate::archival_reads!(@emit $policy; served_shards;
-            (persona: &shekyl_types::PCanonicalId);
-            (::std::vec::Vec<shekyl_types::archival::ServedShard>);
-            (persona);
-            (::std::vec::Vec::new()));
-        $crate::archival_reads!(@emit $policy; pass_count;
-            (
-                persona: &shekyl_types::PCanonicalId,
-                shard: shekyl_types::ShardId,
-                epoch: shekyl_types::SettlementEpoch
-            );
-            (shekyl_types::archival::PassCount);
-            (persona, shard, epoch);
-            (shekyl_types::archival::PassCount::ZERO));
         $crate::archival_reads!(@emit $policy; r_market;
             (
                 shard: shekyl_types::ShardId,

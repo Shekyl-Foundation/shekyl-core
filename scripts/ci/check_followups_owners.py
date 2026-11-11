@@ -103,8 +103,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # symbol rename, epee's wipeable_string, the performance tests) with the
 # three it found already resolved (DRS-W16's LMDB cursor, the PoW test
 # seam, the M1 C++ test-support seam), and two rows that had left the list
-# earlier were counted, the list's length.
-GRANDFATHER_CEILING = 275
+# earlier were counted, the list's length; 267 on 2026-11-10 when the
+# switch's C7 deleted the serve-credit input and the attestation extra
+# field with the six rows whose subject they were, the list's length.
+GRANDFATHER_CEILING = 267
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

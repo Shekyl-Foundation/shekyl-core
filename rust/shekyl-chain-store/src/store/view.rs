@@ -93,8 +93,7 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
-    SupportRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -400,27 +399,6 @@ impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
         archival_reads::slash_log_after(self.batch.txn(), persona, height, floor)
             .map_err(|f| self.arm(f))
-    }
-
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(self.batch.txn(), persona, shard).map_err(|f| self.arm(f))
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(self.batch.txn(), persona).map_err(|f| self.arm(f))
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(self.batch.txn(), persona, shard, epoch).map_err(|f| self.arm(f))
     }
 
     fn r_market(

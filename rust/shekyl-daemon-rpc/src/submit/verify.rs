@@ -46,9 +46,8 @@ pub enum VerifyFailure {
     /// rebuild against a fresh root fixes: tree depth out of range
     /// (`TreeDepthTooLarge`) or a root-table inconsistency.
     StaleRoot,
-    /// An archival claim slot is already consumed (§8.7.1 rows BP3 / SC2:
-    /// a bond record already posted for this `P`; a serve-credit already
-    /// claimed for this `(P, shard, epoch)`) — the claim-slot leg of
+    /// An archival claim slot is already consumed (§8.7.1 row BP3: a bond
+    /// record already posted for this `P`) — the claim-slot leg of
     /// `DoubleSpendConflict`.
     DoubleSpendConflict,
 }

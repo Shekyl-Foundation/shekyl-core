@@ -42,11 +42,6 @@
       "class": "emission",
       "name": "emission-to_key-to_key-emission",
       "prunable_hash_hex": "e74070650d7ab2dec2d6167963fe7d254a07e75a133fe1c4217bd1385b978620"
-    },
-    {
-      "class": "serve-credit-only",
-      "name": "serve-credit-only",
-      "prunable_hash_hex": "be5649926d540219c2c21a7864b062bbae44ca2e5e07467fb7b6cc835e019ca6"
     }
   ]
 }

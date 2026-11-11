@@ -440,7 +440,7 @@ Option<PqcAuthHash>, prunable_hash }` at `rust/shekyl-chain-rules/src/block.rs:5
 `BlockInfo.cumulative_tx_count` at `rust/shekyl-chain-store/src/codec/chain.rs:108`;
 `schemas/tables.snap` at 51 tables with `txs_pqc_auth_hash = #50` and
 `txs_prunable_hash = #7`; `SCHEMA_VERSION = 5`; `challenge_leaf_index` still
-the sixth preimage field at `rust/shekyl-archival-retention/src/wire.rs:353`;
+the sixth preimage field at `rust/shekyl-archival-retention/src/wire.rs` at `2c42b893eb`, deleted in the switch's C7;
 `CRYPTONOTE_MAX_TX_SIZE = 1000000`; `on_prune_blockchain` the only
 `pruning_seed` RPC route in `core_rpc_server.cpp` at that tree (lines 1429 to 1442 there). The
 prior stamp's checks were re-run at the same tree and are unchanged:

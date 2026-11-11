@@ -7,7 +7,7 @@
 //! `CHAIN_RULES_SLICE_7.md` §4): the rows that hold *across* a block's listed
 //! transactions after each has passed `tx_form` and `tx_against` on its
 //! own. G2 is the stateless row (`form`). G1 runs before the slot loop;
-//! G7, G9 and G10 run beside L1 after it.
+//! G9 and G10 run beside L1 after it.
 //!
 //! # CEN-G1 — no listed transaction is already on the chain (slice 7 commit 7)
 //!
@@ -37,42 +37,23 @@
 //! established, in `form`, that the two agree — so the identities are the
 //! ones the header carries and no body is hashed twice.
 //!
-//! # CEN-G7, G9, G10 — cross-transaction uniqueness of the archival keys
+//! # CEN-G9, G10 — cross-transaction uniqueness of the archival keys
 //!
-//! After the slot loop, beside L1 (`blockchain.cpp:5670–5812`, three
-//! passes over every listed body's inputs): no two serve-credit vins with
-//! one `(P, shard, E)` (**G7**, `D-SC-C`), no two emission claims naming one
-//! `(P, E)` — an emission vin claims a *list* of epochs, each a pair
-//! (**G9**), and at most one bond post per `P`, whatever its kind (**G10**).
-//! G9's and G10's decision bodies are `shekyl-archival-retention`'s, the
-//! same ones the C++ calls (`emission_block_claims_unique`,
-//! `bond_post_block_unique`): one owner, both languages. G7's is this
-//! module's own set-membership scan (`second_occurrence`) over the parsed
-//! `(P, shard, E)` triples: its retention-crate body was the D-SC-C arm of
-//! the serve-credit C++ mirror, deleted 2026-10-02 (DRS-E4 commit 10d) with
-//! the rest of that mirror — see `docs/FOLLOWUPS.md` "Serve-credit
-//! acceptance (CEN-J8–J10) has no Rust rule". The C++ keeps its own G7
-//! (`blockchain.cpp:5670`), on `ArchivalPairEpochKey`'s big-endian bytes;
-//! this scan is over the same three fields, so the two agree wherever both
-//! parse the vin. What this crate adds for all three is the **locus** —
-//! `Locus::Input { slot, input }` at the **second** occurrence, the vin the
-//! colliding key was read from. Should the scan find no second occurrence
-//! after the body refused (it cannot; both are set-membership over the same
-//! keys), the refusal falls to `Locus::Block`, never to a panic.
+//! After the slot loop, beside L1 (`blockchain.cpp:5670–5812`, passes over
+//! every listed body's inputs): no two emission claims naming one `(P, E)`
+//! — an emission vin claims a *list* of epochs, each a pair (**G9**), and
+//! at most one bond post per `P`, whatever its kind (**G10**). Their
+//! decision bodies are `shekyl-archival-retention`'s, the same ones the C++
+//! called (`emission_block_claims_unique`, `bond_post_block_unique`): one
+//! owner. What this crate adds is the **locus** — `Locus::Input { slot,
+//! input }` at the **second** occurrence, the vin the colliding key was read
+//! from. Should the scan find no second occurrence after the body refused
+//! (it cannot; both are set-membership over the same keys), the refusal
+//! falls to `Locus::Block`, never to a panic.
 //!
 //! **A vin that does not parse is not this rule's.** The parse of an
-//! emission vin is CEN-J19's row (slice 8 row 8, `tx_emission`), of a
-//! serve-credit vin CEN-J1's — a successor row scoped out of slice 8
-//! (§1.2) and still pending; until it lands, an unparseable serve-credit
-//! vin has no key to collide on and passes G7 — the gap is J1's and the
-//! family pins it there, not here. The C++ reaches these passes only after
-//! `check_tx_inputs` has parsed every vin, so it treats a failure here as an
-//! internal inconsistency; the Rust order puts the parse rows in the slot
-//! loop, before this one: J19 refuses first, and J1 will when it exists.
-//!
-//! **Deliberately not a rule (ratified 2026-07-12, `blockchain.cpp:5738`):**
-//! a serve-credit response and a Release for the same `P` in one block is
-//! benign under the settled release semantics and is not refused.
+//! emission vin is CEN-J19's row (slice 8 row 8, `tx_emission`), in the
+//! slot loop, before this one.
 //!
 //! # CEN-G2 — the declared list and the carried bodies agree
 //!
@@ -113,11 +94,9 @@
 //! `form` has as many bodies as it has, and G2 judges what it has.
 
 use std::collections::BTreeSet;
-use std::io::Cursor;
 
 use shekyl_archival_retention::{
     bond_post_block_unique, emission_block_claims_unique, p_canonical_id_from_hybrid_pubkey,
-    ArchivalServeCreditResponse,
 };
 use shekyl_types::TxHash;
 use shekyl_wire::{Input, Transaction};
@@ -205,22 +184,13 @@ impl BlockRule for G1 {
 }
 
 /// The key one archival input contributes to its block-level uniqueness
-/// pass — what G7, G9 and G10 collide on. `None` for a non-archival input
-/// and for an archival vin that does not parse (the parse is CEN-J1's and
-/// CEN-J19's refusal; a vin without a key cannot collide, module docs).
+/// pass — what G9 and G10 collide on. `None` for a non-archival input and
+/// for an emission vin that does not parse (the parse is CEN-J19's refusal;
+/// a vin without a key cannot collide, module docs).
 /// Public so the E2 mutation family can build a duplicate against the same
 /// parse the rules use, rather than a second one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArchivalKey {
-    /// A serve-credit vin's `(P, shard, E)` — CEN-G7.
-    ServeCredit {
-        /// `P_canonical_id`.
-        p: [u8; 32],
-        /// The shard served.
-        shard: u64,
-        /// The settlement epoch credited.
-        epoch: u64,
-    },
     /// An emission vin's claims — one `(P, E)` per settlement epoch — CEN-G9.
     Claims {
         /// `P_canonical_id`, derived from the vin's hybrid pubkey as the
@@ -241,16 +211,6 @@ impl ArchivalKey {
     #[must_use]
     pub fn of(input: &Input) -> Option<Self> {
         match input {
-            Input::ServeCredit { canonical_bytes } => {
-                let kept =
-                    ArchivalServeCreditResponse::read_exact(&mut Cursor::new(canonical_bytes))
-                        .ok()?;
-                Some(Self::ServeCredit {
-                    p: kept.p_canonical_id,
-                    shard: kept.shard_id,
-                    epoch: kept.settlement_epoch,
-                })
-            }
             Input::ArchivalRewardEmission { canonical_bytes } => {
                 // CEN-J19's parse — length-exact, as the FFI extractor's.
                 let vin = J19::parse(canonical_bytes)?;
@@ -272,11 +232,9 @@ impl ArchivalKey {
 /// (the pool's template selection, DRS-E5 PR-b). A block lists what its
 /// filler added, in that order, so [`Self::add`] refusing a transaction is
 /// those rows refusing the block that would list it next — by the same
-/// decision bodies: G9's and G10's from `shekyl-archival-retention`, and
-/// G7's set membership.
+/// decision bodies: G9's and G10's from `shekyl-archival-retention`.
 #[derive(Clone, Debug, Default)]
 pub struct BlockArchivalKeys {
-    serve_credits: Vec<ServeCreditKey>,
     claims: Vec<([u8; 32], u64)>,
     bond_posts: Vec<[u8; 32]>,
 }
@@ -287,7 +245,7 @@ impl BlockArchivalKeys {
     /// # Errors
     ///
     /// The row a block listing `tx` after the transactions already added
-    /// is refused on — G7, G9 or G10, in the order the stage runs them —
+    /// is refused on — G9 or G10, in the order the stage runs them —
     /// and nothing is added.
     pub fn add(&mut self, tx: &Transaction) -> Result<(), CenRow> {
         let keys: Vec<ArchivalKey> = tx
@@ -302,19 +260,12 @@ impl BlockArchivalKeys {
         let mut next = self.clone();
         for key in keys {
             match key {
-                ArchivalKey::ServeCredit { p, shard, epoch } => {
-                    next.serve_credits.push((p, shard, epoch));
-                }
                 ArchivalKey::Claims { p, epochs } => {
                     next.claims
                         .extend(epochs.into_iter().map(|epoch| (p, epoch)));
                 }
                 ArchivalKey::BondPost { p } => next.bond_posts.push(p),
             }
-        }
-        let mut seen = BTreeSet::new();
-        if !next.serve_credits.iter().all(|key| seen.insert(key)) {
-            return Err(G7::ROW);
         }
         if !emission_block_claims_unique(&next.claims) {
             return Err(G9::ROW);
@@ -358,38 +309,6 @@ fn second_occurrence<K: Ord>(keys: &[(Locus, K)]) -> Option<Locus> {
     keys.iter()
         .find(|(_, key)| !seen.insert(key))
         .map(|(locus, _)| *locus)
-}
-
-/// G7's collision key: `(P, shard, E)` — the three fields the C++'s
-/// `ArchivalPairEpochKey` encodes, as values rather than bytes.
-type ServeCreditKey = ([u8; 32], u64, u64);
-
-/// CEN-G7: no two serve-credit vins in one block carry the same
-/// `(P, shard, E)`.
-pub(crate) struct G7;
-
-impl Rule for G7 {
-    const ROW: CenRow = CenRow::G7;
-}
-
-impl BlockRule for G7 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        let triples: Vec<(Locus, ServeCreditKey)> = listed_inputs(cx)
-            .filter_map(|(locus, item)| match ArchivalKey::of(item) {
-                Some(ArchivalKey::ServeCredit { p, shard, epoch }) => {
-                    Some((locus, (p, shard, epoch)))
-                }
-                _ => None,
-            })
-            .collect();
-        Ok(match second_occurrence(&triples) {
-            None => Ok(()),
-            Some(locus) => Err(InvalidBlock::new(Self::ROW, locus)),
-        })
-    }
 }
 
 /// CEN-G9: no two emission claims in one block name the same `(P, E)`.

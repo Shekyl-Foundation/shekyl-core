@@ -58,7 +58,6 @@ pub mod bond_floor;
 pub mod bond_post;
 pub mod bond_wire;
 pub mod bundle;
-pub mod challenge;
 pub mod claimed_epochs;
 pub mod consensus_state;
 pub mod conservation;
@@ -83,7 +82,6 @@ pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod secret_draw;
 pub mod segment_freeze;
-pub mod serve_eligibility;
 pub mod settlement_select;
 pub mod shard_coverage;
 pub mod shard_view_hash;
@@ -130,11 +128,6 @@ pub use bundle::{
     BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
     BUNDLE_WITNESS_LEN,
 };
-pub use challenge::{
-    challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,
-    CHALLENGE_FIRE_CUSTOMIZATION, CHALLENGE_LEAF_CUSTOMIZATION,
-    SERVE_CREDIT_RESPONSE_CUSTOMIZATION,
-};
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,
     emission_block_claims_unique, epoch_is_claim_expired, epoch_is_not_settled, ClaimedEpochsError,
@@ -156,8 +149,8 @@ pub use constants::{
     check_settlement_epoch_override, effective_archival_reorg_depth_blocks,
     effective_settlement_epoch_blocks, parse_reorg_cap_override, parse_settlement_epoch_override,
     settlement_epoch_override_floor, settlement_epoch_override_ignored,
-    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGE_BEACON_SEAL_BLOCKS,
-    CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
+    settlement_epoch_override_present, SettlementEpochOverrideError, CHALLENGE_RESPONSE_BLOCKS,
+    SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
@@ -183,10 +176,8 @@ pub use pass_anchor::{
     PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 pub use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
-// The emission error is re-exported under a disambiguated name: the bare
-// `WireError` at this root is wire.rs's (serve-credit) type, and bond_wire's is
-// deliberately not re-exported — a crate-root import must not silently resolve
-// to the wrong module's error.
+// The emission and bond-post errors are re-exported under disambiguated names,
+// so no crate-root `WireError` resolves to the wrong module's error.
 pub use emission_wire::{
     ArchivalRewardEmissionVin, EmissionAuthMsgs, EmissionAuthRole, MembershipOnlyBacking,
     RewardCommit, ShardWorkEntry, WireError as EmissionWireError, WorkEpochClaim,
@@ -217,11 +208,7 @@ pub use secret_draw::{
     SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION, CHALLENGE_READS, DRAW_ATTEMPTS,
     DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
 };
-pub use segment_freeze::{
-    challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, LeafChunkBounds,
-    SEGMENT_LEAF_COUNT,
-};
-pub use serve_eligibility::serve_credit_epoch_ok;
+pub use segment_freeze::SEGMENT_LEAF_COUNT;
 pub use shard_coverage::{
     join_scarcity_micro, order_shard_coverage, ShardCoverageIn, ShardCoverageOut,
 };
@@ -233,9 +220,4 @@ pub use support_draw::{
     support_seated_at, support_slot, support_span, SupportSettlementKey, SupportUnissued,
     SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH, SUPPORT_DRAW_CUSTOMIZATION,
     SUPPORT_SELECT_SHARD,
-};
-pub use wire::{
-    encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,
-    ArchivalServeCreditResponse, WireError, ED25519_COUNTERSIGNATURE_LEN,
-    ML_DSA_COUNTERSIGNATURE_LEN, VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };

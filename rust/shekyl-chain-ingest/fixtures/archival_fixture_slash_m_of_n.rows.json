@@ -15,55 +15,6 @@
       ]
     },
     {
-      "family": "archival_serve_credit",
-      "rows": [
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000100000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000200000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000300000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000400000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000500000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000600000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000700000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000800000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000900000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000a00000000000000e803000000000000",
-          "value": ""
-        },
-        {
-          "key": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e07000000000000000b00000000000000e803000000000000",
-          "value": ""
-        }
-      ]
-    },
-    {
       "family": "archival_r_market",
       "rows": [
         {

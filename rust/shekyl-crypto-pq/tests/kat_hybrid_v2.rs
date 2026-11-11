@@ -56,7 +56,7 @@ use serde_json::{json, Value};
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_EMISSION_BACKING, SCHEME_DOMAIN_EMISSION_CLAIM, SCHEME_DOMAIN_PQC_AUTH_TX,
-    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, SCHEME_DOMAIN_SERVE_CREDIT,
+    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
 use std::path::{Path, PathBuf};
 
@@ -66,12 +66,11 @@ use std::path::{Path, PathBuf};
 /// pinned test counts the fixture's vectors against this table, so
 /// forgetting is loud). The domains signed under scheme 3 are not surfaces
 /// of this scheme; their table and vectors are `kat_fn_dsa_hybrid_v1.rs`.
-const SURFACES: [(&str, &[u8]); 5] = [
+const SURFACES: [(&str, &[u8]); 4] = [
     ("pqc_auth_tx", SCHEME_DOMAIN_PQC_AUTH_TX),
     ("pqc_auth_tx_multisig", SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG),
     ("emission_claim", SCHEME_DOMAIN_EMISSION_CLAIM),
     ("emission_backing", SCHEME_DOMAIN_EMISSION_BACKING),
-    ("serve_credit", SCHEME_DOMAIN_SERVE_CREDIT),
 ];
 
 /// One shared message: the cross-domain negatives below prove the *domain*

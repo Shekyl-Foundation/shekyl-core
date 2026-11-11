@@ -66,7 +66,7 @@
 //!   table keyed to the same row. Checked.
 //! - **Parse** and **invariant** arms are counted and named; nothing runs.
 //!
-//! The baseline — a coinbase, a two-output spend, a serve-credit — passes
+//! The baseline — a coinbase and a two-output spend — passes
 //! **both** the twin and the crate. That is the positive witness; every trip
 //! is one mutation of it.
 
@@ -83,7 +83,7 @@ use crate::rule_set::{AdmissionPolicy, RuleSet};
 use crate::trust::Trust;
 use crate::validate::{form, tx_form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 
 #[path = "tx_conformance_trips.rs"]
 mod trips;
@@ -331,23 +331,6 @@ const SITES: &[Site] = &[
         Face::Read,
         "an unknown discriminant has no decoding",
     ),
-    parse(
-        "serve_credit canonical_bytes length {} outside",
-        Face::Both,
-        "a transport ceiling (`ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES`); CEN-J1 says only the Rust codec parses the interior",
-    ),
-    parse(
-        "serve_credit canonical_bytes leading byte",
-        Face::Both,
-        "the tag echo, as for the emission blob",
-    ),
-    rule(
-        "serve_credit pruned record length {} outside",
-        Face::Both,
-        CenRow::J2,
-        j2_empty_pass_record,
-        "CEN-J2 names the bound: one pruned pass record per vin, each within `SERVE_CREDIT_PRUNED_MAX_BYTES`",
-    ),
     invariant(
         "BondPostKind::Other must not use the JoinMarket tag \\",
         Face::Read,
@@ -477,20 +460,6 @@ const SITES: &[Site] = &[
         "",
     ),
     rule(
-        "serve_credit must not mix with other input arms",
-        Face::Memory,
-        CenRow::H6,
-        h6_serve_credit_beside_a_spend,
-        "",
-    ),
-    rule(
-        "serve_credit tx must be fee-only",
-        Face::Memory,
-        CenRow::H20,
-        h20_serve_credit_with_an_auth,
-        "",
-    ),
-    rule(
         "at most one bond_post input per tx",
         Face::Memory,
         CenRow::H6,
@@ -617,7 +586,7 @@ const SITES: &[Site] = &[
         Arm::Rule(CenRow::I1),
         i1_one_output_bond_post,
         Outcome::RefusedOn(CenRow::H21),
-        "the bond-post face of I1 in the twin (`non-serve-credit txs`), reached only by a bond post with NO funding spend (one with a spend trips the twin's `spend has` face first). The C++ never reads that bond post's output count: `ver_non_input_consensus` runs before `check_tx_inputs` (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`) and its bond-post arm refuses `spend_input_count == 0` first — so H21, and the crate's order follows the caller's (#853 review; slice 6 commit 2 had read `check_tx_inputs` alone and placed I1 ahead). The twin's `spend has` face is I1's live trip: `i1_one_output_spend`",
+        "the bond-post face of I1 in the twin, reached only by a bond post with NO funding spend (one with a spend trips the twin's `spend has` face first). The C++ never reads that bond post's output count: `ver_non_input_consensus` runs before `check_tx_inputs` (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`) and its bond-post arm refuses `spend_input_count == 0` first — so H21, and the crate's order follows the caller's (#853 review; slice 6 commit 2 had read `check_tx_inputs` alone and placed I1 ahead). The twin's `spend has` face is I1's live trip: `i1_one_output_spend`",
     ),
     rule(
         "pqc_auths {} != input count {n_in}",
@@ -647,29 +616,24 @@ const SITES: &[Site] = &[
         i9_one_pseudo_out_for_two_inputs,
         "the trip keeps the balance (one pseudo-out of `5·G` against `2·G + 3·G`) so H18 passes and the count refuses; a cleared pseudo-out list is H18's refusal first, here and in the C++",
     ),
-    diverges(
+    rule(
         "fee-only ct (no prunable) must have no",
-        Arm::Rule(CenRow::H20),
+        Face::Memory,
+        CenRow::H21,
         pruned_form_bond_post_with_an_output,
-        Outcome::RefusedOn(CenRow::H21),
-        "the twin's fee-only arm asserts H20's shape on ANY `prunable: None` transaction. For a serve-credit the shape arm above fires first, so this one is reachable only by a `prunable: None` non-serve-credit — the storage-pruned form, which the C++ has no value for (its prunable is always a struct) and which `Option<Prunable>` admits (FOLLOWUPS: `Transaction::full/pruned`). The crate classifies by the vin and refuses the same value on its own row",
+        "the twin's no-prunable arm, reachable only by a `prunable: None` non-coinbase transaction — the storage-pruned form, which `Option<Prunable>` admits (FOLLOWUPS: `Transaction::full/pruned`). The trip is a bond post, whose region CEN-H21 requires",
     ),
-    diverges(
+    rule(
         "fee-only ct (no prunable) must carry empty",
-        Arm::Rule(CenRow::H20),
+        Face::Memory,
+        CenRow::H21,
         pruned_form_bond_post_with_an_auth,
-        Outcome::RefusedOn(CenRow::H21),
-        "as above in kind: the trip must have NO outputs to reach the twin's auth arm (its `must have no outputs` check comes first). Slice 6 commit 2 first recorded this as CEN-I1's refusal, reading `check_tx_inputs` alone (`fewer than two outputs`, blockchain.cpp:3388, is that function's first check); #853's review read the caller — `ver_non_input_consensus` runs first (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`), and its bond-post arm refuses a proof-less bond post (`fcmp_pp_proof.empty()`) before `check_tx_inputs` ever sees the output count. So H21 before I1, there and here. The twin's fee-only arm still asserts H20's shape on a non-serve-credit; the crate classifies by the vin",
+        "as above in kind: the trip must have NO outputs to reach the twin's auth arm (its `must have no outputs` check comes first). Slice 6 commit 2 first recorded this as CEN-I1's refusal, reading `check_tx_inputs` alone (`fewer than two outputs`, blockchain.cpp:3388, is that function's first check); #853's review read the caller — `ver_non_input_consensus` runs first (tx_pool.cpp:237 before :312; blockchain.cpp:2271 before the block's `check_tx_inputs`), and its bond-post arm refuses a proof-less bond post (`fcmp_pp_proof.empty()`) before `check_tx_inputs` ever sees the output count. So H21 before I1, there and here",
     ),
     invariant(
         "key-image input(s) but no prunable proof",
         Face::Memory,
         "unreachable BY ORDERING, and only by ordering: (1) `validate_context_free_pruned` runs first and its `spend has … needs >= 2` arm forces `n_out >= 2` for any key-imaged tx; (2) inside `validate`'s fee-only arm the `must have no outputs` check precedes this one, so `n_out != 0` fires it first. Insert a rule between (1) and (2), reorder the fee-only arm, or let a key-imaged shape through (1) with fewer outputs, and this arm is live and unclassified. RE-CHECKED 2026-09-25 (slice 6 commit 9), when the slice's verification rows landed: they did not land in this path. CEN-I17 (the signing hash) and CEN-I18 (the signature over it) are `tx_against`'s, run after `tx_form` — downstream of this whole function, after both orderings and between neither — and `validate`'s body is unchanged since the slice's base. I15 and H19-verify land in the same place, so the arm stays out of reach when they arrive: nothing that lands in `tx_against` can sit between (1) and (2), because all of `tx_against` runs after all of this function. Still dead, by the same two orderings; the next re-check is a lookup of this sentence, not a repeat. The proof's non-emptiness is CEN-I14's, held elsewhere",
-    ),
-    invariant(
-        "return Err(PrunedError);",
-        Face::Memory,
-        "`into_full`'s typed boundary: a serve-credit has no spend proof to promote. A conversion's failure, not a refusal",
     ),
     invariant(
         "_ => Err(PrunedError),",
@@ -783,6 +747,9 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
         RowStatus::HeldByStore => {
             panic!("{row} is held by the store; a wire arm keyed to it is a classification error")
         }
+        RowStatus::Retired => {
+            panic!("{row} is retired by ruling; a wire arm keyed to it holds nothing")
+        }
     }
 }
 
@@ -892,14 +859,16 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (17, 42, 1, 5),
+        (15, 39, 1, 4),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
          (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
          (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
          gained its parse refusal; (17, 40, 1, 5) over 63 until the pruned-segment reader; \
-         (17, 44, 1, 5) over 67 while the pruned reader repeated the version and ct-type arms)"
+         (17, 44, 1, 5) over 67 while the pruned reader repeated the version and ct-type arms; \
+         (17, 42, 1, 5) over 65 until the switch's C7 deleted the serve-credit input's two parse \
+         arms, its three rule arms and its `into_full` guard)"
     );
-    assert_eq!(parse + rule + policy + invariant, 65);
+    assert_eq!(parse + rule + policy + invariant, 59);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a
@@ -947,7 +916,7 @@ fn every_rule_arm_is_held_somewhere() {
 /// The positive witness: the baseline passes both copies.
 #[test]
 fn the_baseline_passes_the_twin_and_the_crate() {
-    for (name, tx) in [("spend2", spend2()), ("serve_credit", serve_credit_ok())] {
+    for (name, tx) in [("spend2", spend2())] {
         tx.validate()
             .unwrap_or_else(|e| panic!("the twin refuses the {name} baseline: {e}"));
         tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS)
@@ -1016,47 +985,6 @@ fn the_i19_sites_multisig_rendering_is_i19_at_both_sites() {
             CenRow::I19,
             Locus::Tx { slot },
         );
-    }
-}
-
-/// The H20 site's other clauses. The twin's serve-credit shape check is one
-/// site, keyed in [`SITES`] to one trip (a `pqc_auth`), so its other clauses
-/// were held to nothing. Two of them concern the prunable region: a body
-/// with **no region**, and one whose pass-record count is not the
-/// serve-credit vin count. The twin refused both while `tx_form` admitted
-/// them (`SHT-9`: the live C++ refuses them, and the store cannot hold the
-/// first). This holds both: the twin refuses each with the shape message,
-/// and `tx_form` refuses the first on H20 (the region is the shape) and the
-/// second on J2 (the census row that names the count), at both slots.
-#[test]
-fn the_h20_sites_other_clauses_are_refused_on_their_rows() {
-    let base = || crate::harness::fixture::serve_credit_only([0x77; 32]);
-    let mut no_region = base();
-    let mut miscounted = base();
-    if let Ct::Fcmp { prunable, .. } = &mut no_region.ct {
-        *prunable = None;
-    }
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut miscounted.ct
-    {
-        p.serve_credit_pruned.push(p.serve_credit_pruned[0].clone());
-    }
-    for (body, row) in [(&no_region, CenRow::H20), (&miscounted, CenRow::J2)] {
-        let err = body
-            .validate()
-            .expect_err("the twin refuses the serve-credit shape");
-        assert!(
-            err.to_string().contains("serve_credit tx must be fee-only"),
-            "the twin refused on another arm: {err}"
-        );
-        for slot in [TxSlot::Lone, TxSlot::Listed(0)] {
-            assert_refused(
-                tx_form(body, slot, &RuleSet::GENESIS).map(|_| ()),
-                row,
-                Locus::Tx { slot },
-            );
-        }
     }
 }
 

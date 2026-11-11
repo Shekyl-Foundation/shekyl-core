@@ -32,7 +32,5 @@ unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE 
 pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record
 pending	shekyl/archival-bundle-prunable-v1	ruled derived:, but no census rule states the body-to-reference match (it is the verifier's non-verdict BodyNotReferenced)
 pending	shekyl/archival-pass-delivery-digest-v1	ruled derived:, but CEN-B4 says the digest is verified through the signature, not recomputed
-pending	shekyl/archival-serve-credit-response-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
-pending	shekyl/archival-serve-credit-scheme-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
 pending	shekyl/rpc-static-fingerprint-v1	no binding ruled: a key-bundle fingerprint the daemon matches against its enrolment list
 pending	shekyl/noise-record-header-v1	no binding ruled: a record-layer key from a handshake whose prologue carries the id

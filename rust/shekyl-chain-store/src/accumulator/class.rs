@@ -118,7 +118,6 @@ pub const TABLE_CLASSES: &[(&str, AccumulatorClass)] = &[
     ("archival_issued_draw", AccumulatorClass::Excluded),
     ("archival_r_market", AccumulatorClass::Small),
     ("archival_release_journal", AccumulatorClass::Excluded),
-    ("archival_serve_credit", AccumulatorClass::Small),
     ("archival_settlement", AccumulatorClass::Small),
     ("archival_sigma_work", AccumulatorClass::Small),
     ("archival_slash_applied", AccumulatorClass::SetShaped),

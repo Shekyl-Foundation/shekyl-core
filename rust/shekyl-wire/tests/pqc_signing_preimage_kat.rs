@@ -79,11 +79,7 @@ const DESCRIPTION: &str = "Per-input PQC signing preimage KAT. For each transact
      payloads are the specification's output for these bytes, captured from the \
      C++ assembly (tx_pqc_verify.cpp, get_transaction_signed_payload) by the C++ \
      leg's capture mode before E6 slice 6 commit 7 made shekyl-wire the \
-     derivation of record and deleted that assembly. The serve-credit form has \
-     no preimage (empty lists) because consensus forbids it pqc_auths (CEN-H20): \
-     it is hybrid-signed over the pass record by the bond's registered key, \
-     Ed25519 leg on the vin and ML-DSA leg in the pruned record, verified by \
-     shekyl_archival_verify_serve_credit_vin (CEN-J10), not over this preimage.";
+     derivation of record and deleted that assembly.";
 
 fn hex_str(b: impl AsRef<[u8]>) -> String {
     b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
@@ -249,14 +245,6 @@ fn subjects() -> Vec<Subject> {
             bytes: SubjectBytes::CapturedChain {
                 shape: "emission-claim",
                 txid: "a7244fa4c353a496c02e7fac8d635856094761e1834cf0354f9eb04d5b0ef96a",
-            },
-        },
-        Subject {
-            name: "serve-credit-only",
-            source: "shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json (no pqc_auths by consensus, CEN-H20; signed over the pass record instead, CEN-J10: no preimage)",
-            bytes: SubjectBytes::Fixture {
-                path: "tests/fixtures/serve_credit_tx_parity_v1.json",
-                field: "tx_hex",
             },
         },
     ]
@@ -483,14 +471,5 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
             .iter()
             .any(|(name, _, _)| name.contains("-emission")),
         "an emission"
-    );
-    let serve_credit = input_counts
-        .iter()
-        .find(|(name, _, _)| name == "serve-credit-only")
-        .expect("the serve-credit form");
-    assert_eq!(
-        serve_credit.2, 0,
-        "the serve-credit form carries no pqc_auths (CEN-H20) — its countersignature is \
-         over the pass record (CEN-J10) — and so has no preimage"
     );
 }

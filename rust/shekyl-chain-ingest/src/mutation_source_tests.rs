@@ -193,7 +193,6 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             // slice 8 row 9 — `Mutation` docs.)
             (Mutation::RelistedTransaction, ExpectedPlace::Listed),
             (Mutation::DoubledListing, ExpectedPlace::Listed),
-            (Mutation::DuplicateServeCredit, ExpectedPlace::Input),
             (Mutation::DuplicateBondPost, ExpectedPlace::Input),
             (Mutation::OverweightBlock, ExpectedPlace::Block),
             (Mutation::DoubleSpend, ExpectedPlace::Input),

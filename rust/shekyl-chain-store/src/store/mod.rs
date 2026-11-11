@@ -131,7 +131,6 @@ mod write;
 pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
 pub use archival_fold::BlockArchivalFold;
-pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use bundle_queue::{QueueEntry, QueueReconciled};
 pub use bundle_view::{BundleRows, StoreBundleView};

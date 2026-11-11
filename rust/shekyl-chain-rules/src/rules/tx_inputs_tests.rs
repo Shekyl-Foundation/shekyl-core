@@ -7,12 +7,10 @@
 //! sites — the pool's `Lone` slot through `tx_form`, and a `Listed` slot
 //! through `validate`.
 
-use super::{I14, I5, J12, J2, J28};
+use super::{I14, I5, J12, J28};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{
-    coinbase, join_market, listed, persona, point, serve_credit_only, G, TWO_G,
-};
+use crate::harness::fixture::{coinbase, join_market, listed, persona, point, G, TWO_G};
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{emission, refused_listed, refused_lone, spend, with_inputs};
 use crate::rules::TxContext;
@@ -87,23 +85,15 @@ fn the_stateless_4i_rows_are_vacuous_on_the_coinbase() {
 }
 
 /// CEN-I1: two outputs are the last admitted count and one the first
-/// refused, on a spend and on a bond post; a serve-credit response has
-/// none and is exempt.
+/// refused.
 #[test]
-fn i1_fewer_than_two_outputs_is_refused_except_on_a_serve_credit() {
+fn i1_fewer_than_two_outputs_is_refused() {
     let one = crate::harness::fixture::spend(KI, 1);
     refused_lone(&one, CenRow::I1);
     refused_listed(&one, CenRow::I1);
     assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("two outputs")
         .contains(CenRow::I1));
-    assert!(tx_form(
-        &serve_credit_only([0x51; 32]),
-        TxSlot::Lone,
-        &RuleSet::GENESIS
-    )
-    .expect("a serve credit has no outputs and is exempt")
-    .contains(CenRow::I1));
 }
 
 /// CEN-I4: eight inputs are admitted (the cap is `MAX_FCMP_INPUTS`, the
@@ -201,7 +191,7 @@ fn i6_key_offsets_are_refused() {
 
 /// CEN-I8: a spend's auth count off the input count — one too few, one too
 /// many — is refused at both sites. The bond post's and emission's counts
-/// are H21's and H22's; the serve-credit's zero is H20's.
+/// are H21's and H22's.
 #[test]
 fn i8_the_auth_count_must_equal_the_input_count_on_a_spend() {
     let mut fewer = two_input_spend();
@@ -338,67 +328,6 @@ fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
     assert!(tx_form(&minimal_multisig, TxSlot::Lone, &RuleSet::GENESIS)
         .expect("a 1-of-1 blob's length is I16's floor; the parse is I18's")
         .contains(CenRow::I16));
-}
-
-/// CEN-J2: one pruned pass record per serve-credit vin, each non-empty and
-/// within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`. None, one too many and
-/// an empty record are refused on J2, alone and listed; one record per
-/// credit passes, for one credit and for two. The row is vacuous on a spend.
-///
-/// The upper bound is held on the rule itself: through `tx_form` a record
-/// past it never reaches J2, because the bound (1,053,185 B) is above
-/// `MAX_TX_SIZE` and CEN-H1 refuses the transaction first, as the C++ does.
-#[test]
-fn j2_one_bounded_record_per_serve_credit_vin() {
-    use shekyl_wire::transaction::ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES;
-    let with_records = |credits: usize, records: Vec<Vec<u8>>| {
-        let mut tx = serve_credit_only([0x77; 32]);
-        let vin = tx.prefix.inputs[0].clone();
-        tx.prefix.inputs = vec![vin; credits];
-        if let Ct::Fcmp {
-            prunable: Some(p), ..
-        } = &mut tx.ct
-        {
-            p.serve_credit_pruned = records;
-        }
-        tx
-    };
-    let record = || vec![0x01, 0x02];
-    for refused in [
-        with_records(1, Vec::new()),
-        with_records(1, vec![record(), record()]),
-        with_records(2, vec![record()]),
-        with_records(1, vec![Vec::new()]),
-    ] {
-        refused_lone(&refused, CenRow::J2);
-        refused_listed(&refused, CenRow::J2);
-    }
-    for admitted in [
-        with_records(1, vec![record()]),
-        with_records(2, vec![record(), record()]),
-    ] {
-        assert!(tx_form(&admitted, TxSlot::Lone, &RuleSet::GENESIS)
-            .expect("one bounded record per credit")
-            .contains(CenRow::J2));
-    }
-
-    let on_the_rule = |tx: &Transaction| {
-        let mut coverage = RuleCoverage::EMPTY;
-        let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage).expect("a serve credit");
-        J2::check(&cx)
-    };
-    let max = ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES;
-    let over = with_records(1, vec![vec![0x01; max + 1]]);
-    assert!(on_the_rule(&over).is_err(), "a record past the bound");
-    refused_lone(&over, CenRow::H1);
-    assert!(
-        on_the_rule(&with_records(1, vec![vec![0x01; max]])).is_ok(),
-        "a record at the bound"
-    );
-
-    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("a spend")
-        .contains(CenRow::J2));
 }
 
 // ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------

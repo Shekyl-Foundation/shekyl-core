@@ -715,7 +715,6 @@ impl core::fmt::Display for SettlementEpochBlocks {
 
 mod bond;
 mod release;
-mod serve;
 mod settlement;
 mod slash;
 mod view;
@@ -725,7 +724,6 @@ pub use bond::{
     ReceiptSignPk, SigmaWorkMilli, MAX_BOND_KEY_BYTES, RECEIPT_SIGN_PK_LEN,
 };
 pub use release::ReleasedRecord;
-pub use serve::{PassCount, ServedShard};
 pub use settlement::{
     BlockDraws, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
     SettlementOutcome, SettlementRow, SettlementRowError, SupportCarryAfter, SupportCarryError,

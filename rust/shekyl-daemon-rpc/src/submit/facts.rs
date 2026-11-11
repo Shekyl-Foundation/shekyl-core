@@ -480,14 +480,14 @@ pub struct EmissionEpochSnapshotFacts {
     pub sigma_work_milli: u64,
     /// Persisted frozen `budget(E)` atomic.
     pub budget_atomic: u64,
-    /// Claimant `P`'s index into `bonds`, `None` when `P` has no
-    /// serve-credit row in `E`.
+    /// Claimant `P`'s index into `bonds`, `None` when `P` has no Served
+    /// pair in `E`.
     pub claimant_bond_idx: Option<usize>,
     /// The frozen bond rows (`EpochCloseBond`'s owned twin).
     pub bonds: Vec<EmissionCloseBondFacts>,
     /// The frozen shard registry rows.
     pub shards: Vec<EmissionShardFacts>,
-    /// The frozen serve-credit pairs, as indices into `bonds`/`shards`.
+    /// The frozen Served pairs, as indices into `bonds`/`shards`.
     pub credit_pairs: Vec<EmissionCreditPairFacts>,
 }
 
@@ -530,7 +530,7 @@ pub struct EmissionShardFacts {
     pub close: ShardClose,
 }
 
-/// One frozen serve-credit pair (owned `CreditPair` mirror).
+/// One frozen Served pair (owned `CreditPair` mirror).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmissionCreditPairFacts {
     pub bond_idx: usize,

@@ -451,7 +451,11 @@ count_pattern() {
 # rust/shekyl-archival-retention/src/attestation_wire.rs called cshake256_32
 # under shekyl/archival-attestation-root-v1; it goes with the attestation
 # record surface, which no block carries since the switch's C3.
-MECH1_EXPECTED=75
+# The serve-credit input (SO-D12 4b C7): 75 -> 72. challenge.rs's leaf
+# index and fire height (shekyl/archival-serve-challenge-leaf-v2, -fire-v1)
+# and wire.rs's response preimage (shekyl/archival-serve-credit-response-v1)
+# go with the input they served.
+MECH1_EXPECTED=72
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

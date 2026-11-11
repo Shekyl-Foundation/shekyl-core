@@ -10,9 +10,7 @@ CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
 The leaf-era archival data-scope schema (sets A/B/C, "B + C") survives outside its owner after `PDM-Q6` re-keyed `V3_STAKER_ARCHIVAL.md` §*Archival data scope* and its two declared consumers (`PUBLIC_NARRATIVE_FAQ.md`, `FOUNDATION_ARCHIVAL_DISCLOSURE.md`; #797).
 `CEN-L8`'s settlement clause has no production caller; census home is already the slash pass.
-`SO-D9` — `ERR_EPOCH_MISMATCH` on the serve-credit admission path is a tautology; RULED (i) 2026-09-13, implementation owed.
 Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
-`get_archival_emission_claim_source` walks the entire serve-credit table per unauthenticated RPC
 `release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.
 `LmdbHashKey::from_bytes` / `Key::compare` still `expect` on redb's fixed-width promise.
 Collected-total earmark warning (§12.3 carve UX, ruled 2026-09-04 with the carve countersign).
@@ -128,7 +126,6 @@ CL-7 forward-compat audit of trait-owned value/error types [`engine/error/send.r
 `shekyl-tx-builder::SpendInput` derives plain `#[derive(Debug)]` over [`rust/shekyl-tx-builder/src/types.rs`](../rust/shekyl-tx-builder/src/types.rs)
 Migrate residual consensus-parity Keccak (`keccak256`) call sites to cSHAKE256 / [`shekyl_crypto_hash::keccak256`](../rust/shekyl-crypto-hash/src/lib.rs)
 Multisig FROST spend path needs the single-sig spend-path consensus fixes.
-Serve-credit C++ consensus decisions — Rust equivalence audit + [`REWARD_EMISSION_E3_GATING_ROUND.md`](./completed/REWARD_EMISSION_E3_GATING_ROUND.md)
 Market-bond wallet entry — `first_stake`'s genesis posture cannot earn an emission.
 Shard assignment for market staking — the `NoShardsAvailable` stub's discharge.
 F5 pruning inherits two constraints from the CompleteTree round
@@ -136,7 +133,6 @@ The wallet-RPC server parses every request into a `serde_json::Value`
 Q11 balance-exclusion KAT — blob-boundary invariant arm
 Single-sig address decode enforces the Bech32m variant
 Raw-import archival/burn bookkeeping parity
-Serve-credit decision-site flip: Rust becomes the primary decision site for `blockchain.cpp:4247`/`:4312`/`:4889–4910`
 Remove or retain the orphaned `ActivityMetric.total_staked` observable (spawned Stage-1b `stake_factor` delete, commit `7256962`, 2026-07-24).
 Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).
 Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).

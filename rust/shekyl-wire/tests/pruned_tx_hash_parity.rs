@@ -103,7 +103,6 @@ fn manifest(rel: &str) -> PathBuf {
 /// bytes (the digest's preimage) are observable to the regenerator.
 fn kat_prunable() -> Prunable {
     Prunable {
-        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0; 32],
             a1: [0; 32],

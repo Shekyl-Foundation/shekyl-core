@@ -91,7 +91,6 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::G2,
                 CenRow::G6,
                 CenRow::G6b,
-                CenRow::G7,
                 CenRow::G9,
                 CenRow::G10,
                 CenRow::G11,
@@ -114,7 +113,6 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 // H19's block fold: nothing listed, so the batch is empty and
                 // the row records vacuously (`rules::range_proof`).
                 CenRow::H19,
-                CenRow::H20,
                 CenRow::H21,
                 CenRow::H22,
                 // Slice 6 commit 2: the stateless 4.I rows, every one
@@ -147,12 +145,6 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::I18,
                 CenRow::I19,
                 CenRow::I20,
-                CenRow::J2,
-                // Slice 8 row 3: the bond-state rows on a serve-credit vin,
-                // vacuous on the coinbase (no credit vin to read for).
-                CenRow::J4,
-                CenRow::J5,
-                CenRow::J6,
                 // Slice 8 row 4: the bond post's statics and key selection,
                 // vacuous on the coinbase (no post).
                 CenRow::J11,
@@ -308,7 +300,6 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::H16,
             CenRow::H17,
             CenRow::H18,
-            CenRow::H20,
             CenRow::H21,
             CenRow::H22,
             CenRow::I1,
@@ -321,7 +312,6 @@ fn tx_entry_points_record_the_landed_rows() {
             CenRow::I16,
             CenRow::I19,
             CenRow::I20,
-            CenRow::J2,
             CenRow::J11,
             CenRow::J12,
             CenRow::J28,
@@ -365,9 +355,6 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I11,
                 CenRow::I12,
                 CenRow::I13,
-                CenRow::J4,
-                CenRow::J5,
-                CenRow::J6,
                 CenRow::J13,
                 CenRow::J14,
                 CenRow::J15,
