@@ -272,6 +272,10 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    // The launch, then its subscription. The sample is what the directory
+    // replies answer.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     let bound = socks();
     core.on(
         Input::DirectorySample {
@@ -281,6 +285,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
         },
         0,
     );
+    replied(&mut core, 0);
     for step in [1_u64, 60, 3_600, 86_400] {
         let now = step * 1_000_000_000;
         let step = core.on(
@@ -420,7 +425,17 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
         "the first stop names no code: {text}"
     );
     let due = step.deadline.expect("backoff");
-    let step = core.on_deadline(due);
+    // The reap is still in flight: the pin check is the next launch's, so
+    // it waits until that reap is answered.
+    let during = core.on_deadline(due);
+    assert!(
+        !during
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::CheckPin)),
+        "the pin waits for the reap: {during:?}"
+    );
+    let step = replied(&mut core, due);
     assert!(matches!(step.actions.first(), Some(Action::CheckPin)));
     let step = core.on(Input::PinRefused, due);
     assert!(!spawns(&step), "a refused pin is not executed");
@@ -530,6 +545,11 @@ fn a_route_waits_for_its_host_and_a_fault_withdraws_only_an_installed_one() {
         core.status().fixes.is_empty(),
         "bootstrapping offers no fix"
     );
+    // The onion's delete is still in flight. Answer it, and the add, before
+    // the endpoint asks for the route: a publish waits behind that request.
+    replied(&mut core, 1);
+    core.on(Input::OnionPublished, 1);
+    replied(&mut core, 1);
     let absent = core.on(Input::HostAbsent, 1);
     assert!(!publishes(&absent));
     let ready = core.on(Input::EndpointReady, 2);
@@ -569,7 +589,15 @@ fn a_repeated_death_names_the_last_exit_code() {
     let first = render(&core.status());
     assert!(!first.contains("exit code"), "{first}");
     let due = core.deadline().expect("backoff");
-    let step = core.on_deadline(due);
+    let during = core.on_deadline(due);
+    assert!(
+        !during
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::CheckPin)),
+        "the pin waits for the reap: {during:?}"
+    );
+    let step = replied(&mut core, due);
     assert!(matches!(step.actions.first(), Some(Action::CheckPin)));
     core.on(Input::PinAccepted, due);
     core.on(Input::Spawned, due);

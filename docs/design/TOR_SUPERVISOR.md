@@ -1154,10 +1154,15 @@ goes back to its inbox. A task holding a clone of the control actor
 the number the core gave the request (`Core::in_flight`); the loop folds
 the answer's inputs and then `Input::Replied` with that number. The core
 sends one request at a time, as when the loop awaited each one, so no
-decision changes: the queue's order is the order the awaits gave (a launch,
-then its subscription, then its first sample; `DEL_ONION`, then
-`ADD_ONION`, and no add after a refused delete). A request that no longer
-stands when its turn comes is withheld there. The reply bound is a core
+decision changes: the list is the whole decision, in the order the awaits
+gave (a launch, then its subscription, then its first sample; `DEL_ONION`,
+then `ADD_ONION`, and no add after a refused delete). A probe, a route
+publish, and a progress line ordered after a request stay behind it until
+that reply is folded
+(`a_sample_is_folded_before_the_probe_the_publish_and_the_draw_it_queues`).
+The reply's own decisions run before that tail, and a deadline that comes
+due while a request is out joins the tail. A request, or a probe, that no
+longer stands when its turn comes is withheld there. The reply bound is a core
 deadline per request in flight, `Policy::reply_bound` (30 s) after the send
 in the core's clock (awake time, restarted at a wake like every other
 window); past it is `Cause::ReplyLate`, a process fault. An answer the core

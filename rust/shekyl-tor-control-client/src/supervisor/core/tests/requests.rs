@@ -287,3 +287,145 @@ fn a_hold_while_tor_runs_reaps_it() {
     let held = core.on(Input::PinRefused, secs(1));
     assert!(held.actions.contains(&Action::Reap), "{:?}", held.actions);
 }
+
+/// Running, the onion published, nothing in flight.
+fn published_onion() -> Core {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    bring_up(&mut core);
+    // The transition into Running publishes the route and the onion. The
+    // route publish is ahead of the delete; answer the delete and the add.
+    let deleted = replied(&mut core, 0);
+    assert!(
+        deleted.actions.contains(&Action::AddOnion),
+        "the add follows the publish's delete: {deleted:?}"
+    );
+    core.on(Input::OnionPublished, 0);
+    replied(&mut core, 0);
+    assert_eq!(core.in_flight(), None, "the publish has been answered");
+    core
+}
+
+fn contains(step: &super::super::Step, action: &Action) -> bool {
+    step.actions.iter().any(|queued| queued == action)
+}
+
+/// **The sample is folded before the draw and the route publish queued
+/// behind it.** A clock jump asks for one sample and then one probe. The
+/// draw is not in that step. Folding a clock the sample names, as the
+/// driver does, runs the draw only then, and the draw schedules nothing.
+/// A route the next sample deadline owes is likewise absent until the
+/// sample's `Replied`. Fails if `route_requests` runs either before the
+/// sample is sent.
+#[test]
+fn a_sample_is_folded_before_the_probe_the_publish_and_the_draw_it_queues() {
+    let mut core = published_onion();
+    let jumped = core.on(Input::ClockJumped, secs(1));
+    assert!(
+        contains(&jumped, &Action::Sample),
+        "the jump's sample is sent: {jumped:?}"
+    );
+    assert!(
+        !contains(&jumped, &Action::ProbeAfterJump),
+        "the draw waits for the sample: {jumped:?}"
+    );
+    // As the driver folds the answer: the clock first, then `Replied`.
+    core.begin_reply_fold();
+    core.on(
+        Input::ConsensusClock {
+            valid_after: 1_793_491_200,
+            wall: 1_793_491_200 - 86_400,
+        },
+        secs(1),
+    );
+    let answered = replied(&mut core, secs(1));
+    assert!(
+        contains(&answered, &Action::ProbeAfterJump),
+        "the draw runs once the sample is folded: {answered:?}"
+    );
+    let scheduled = core.on(Input::JumpProbeDrawn { draw: 0 }, secs(1));
+    assert!(
+        !contains(&scheduled, &Action::CheckDirectories),
+        "a named clock does not schedule the probe: {scheduled:?}"
+    );
+    assert!(
+        core.probe.due().is_none(),
+        "no probe was scheduled ahead of the sample"
+    );
+
+    // Leave the route owed and answer the onion, then let the sample
+    // deadline and the liveness deadline fall together. The publish is
+    // ordered after the sample.
+    let mut core = published_onion();
+    let due = duration_ns(policy().alive_every);
+    let step = core.on_deadline(due);
+    assert!(
+        contains(&step, &Action::Sample),
+        "the liveness sample is sent: {step:?}"
+    );
+    assert!(
+        !step
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::Publish(_))),
+        "the route publish waits for the sample: {step:?}"
+    );
+    core.begin_reply_fold();
+    let answered = replied(&mut core, due);
+    assert!(
+        answered
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::Publish(_))),
+        "the publish follows the sample's reply: {answered:?}"
+    );
+}
+
+/// **A probe that comes due while a sample is out waits for that sample.**
+/// The loop is back at its inbox, so the probe's deadline can fire before
+/// the sample replies. The dial is not in that step. A sample that names
+/// the clock then drops it, and a sample inside tolerance releases the
+/// directory check the draw queued ahead of the dial. Fails if the probe
+/// deadline runs `Action::Probe` while the sample is in flight.
+#[test]
+fn a_probe_due_while_a_sample_is_out_waits_for_the_sample() {
+    let mut core = published_onion();
+    let alive = duration_ns(policy().alive_every);
+    let sent = core.on_deadline(alive);
+    assert!(
+        contains(&sent, &Action::Sample),
+        "the liveness sample is sent: {sent:?}"
+    );
+    assert!(core.in_flight().is_some(), "the sample is in flight");
+    let drawn = core.on(Input::JumpProbeDrawn { draw: 0 }, alive);
+    assert!(
+        !contains(&drawn, &Action::CheckDirectories),
+        "the draw's check waits behind the sample: {drawn:?}"
+    );
+    let probe_at = core.probe.due().expect("the draw scheduled a probe");
+    assert!(
+        probe_at < alive + bound(),
+        "the probe is due inside the reply bound"
+    );
+    let due = core.on_deadline(probe_at);
+    assert!(
+        !contains(&due, &Action::Probe),
+        "the dial waits for the sample: {due:?}"
+    );
+    core.begin_reply_fold();
+    core.on(
+        Input::ConsensusClock {
+            valid_after: 1_793_491_200,
+            wall: 1_793_491_200 - 86_400,
+        },
+        probe_at,
+    );
+    let answered = replied(&mut core, probe_at);
+    assert!(
+        !contains(&answered, &Action::Probe),
+        "a named clock drops the dial: {answered:?}"
+    );
+    assert!(
+        !contains(&answered, &Action::CheckDirectories),
+        "a named clock drops the check: {answered:?}"
+    );
+}

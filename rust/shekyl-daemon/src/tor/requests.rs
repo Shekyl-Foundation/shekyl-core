@@ -159,6 +159,10 @@ impl Drive {
         match answered {
             Some(mut inputs) => {
                 inputs.push(Input::Replied { number });
+                // The answer's own decisions lead the tail that was waiting
+                // on this request. The fold that consumes `inputs` ends
+                // with `Replied`.
+                self.core.begin_reply_fold();
                 inputs
             }
             None => Vec::new(),
@@ -589,6 +593,8 @@ impl Drive {
             }
             return Vec::new();
         }
+        // Before the fold. The answer's decisions then lead the tail.
+        self.core.begin_reply_fold();
         let mut inputs = match answer {
             Answer::Inputs(inputs) => inputs,
             Answer::Reaped(kept) => {

@@ -223,6 +223,12 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
 fn running_at(core: &mut Core, at: u64) {
     core.on(Input::PinAccepted, at);
     core.on(Input::Spawned, at);
+    // Launch, subscription, and the sample `Spawned` queued. The progress
+    // line is not said from behind a request the test has already treated
+    // as finished.
+    replied(core, at);
+    replied(core, at);
+    replied(core, at);
     core.on(
         Input::DirectorySample {
             progress: Some(100),
@@ -231,7 +237,12 @@ fn running_at(core: &mut Core, at: u64) {
         },
         at,
     );
+    replied(core, at);
     core.on(Input::BootstrapComplete, at);
+    // The onion's delete, then its add.
+    replied(core, at);
+    core.on(Input::OnionPublished, at);
+    replied(core, at);
     core.on(Input::RouteInstalled, at);
 }
 
@@ -283,12 +294,17 @@ fn a_failure_launched_before_a_wake_raises_nothing() {
     reach_usable(&mut core);
     let after = duration_ns(policy().quiet_after);
     let woke = secs(50);
-    core.on(
+    let resumed = core.on(
         Input::Resumed {
             late_by: Duration::from_secs(600),
         },
         woke,
     );
+    // The wake's sample is in flight. The quiet line waits until it is
+    // answered, so a later dial is not said from behind it.
+    if resumed.actions.contains(&Action::Sample) {
+        replied(&mut core, woke);
+    }
     core.on(dials(0, 1, Some(woke - 1)), woke + 1);
     core.on(dials(0, 2, Some(woke - 1)), woke + 2 * after);
     assert_eq!(core.status().tor_quiet, None, "launched before the wake");
@@ -393,7 +409,12 @@ fn a_blocked_link_still_respawns_when_the_control_connection_fails() {
     assert!(matches!(core.status().cause, Cause::Died { .. }));
     assert_eq!(core.status().shown, Shown::Restarting);
     let due = core.deadline().expect("the respawn wait");
-    let step = core.on_deadline(due);
+    let during = core.on_deadline(due);
+    assert!(
+        !during.actions.contains(&Action::CheckPin),
+        "the pin waits for the reap: {during:?}"
+    );
+    let step = replied(&mut core, due);
     assert!(
         step.actions.contains(&Action::CheckPin),
         "{:?}",

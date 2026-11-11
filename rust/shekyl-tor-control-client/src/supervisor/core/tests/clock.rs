@@ -706,7 +706,19 @@ fn a_jump_probe_does_not_confirm_a_republish_waiting_on_its_round() {
     core.on(Input::OnionPublished, at);
     assert!(core.republish_is_judging());
     let jumped = core.on(Input::ClockJumped, at + 1);
-    assert!(jumped.actions.contains(&Action::ProbeAfterJump));
+    assert!(
+        jumped.actions.contains(&Action::Sample),
+        "the jump's sample is sent: {jumped:?}"
+    );
+    assert!(
+        !jumped.actions.contains(&Action::ProbeAfterJump),
+        "the draw waits for the sample: {jumped:?}"
+    );
+    let drawn = replied(&mut core, at + 1);
+    assert!(
+        drawn.actions.contains(&Action::ProbeAfterJump),
+        "the draw follows the sample: {drawn:?}"
+    );
     core.on(Input::JumpProbeDrawn { draw: 0 }, at + 1);
     let (probe_at, step) = run_timed(&mut core, at + secs(20));
     assert_eq!(probes(&step), 1, "the jump probe");

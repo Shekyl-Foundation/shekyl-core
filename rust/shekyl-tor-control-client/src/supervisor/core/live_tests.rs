@@ -100,6 +100,11 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    // The launch and its subscription. The progress line is not said from
+    // behind a request this test has already left behind.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     let sample = |progress, read| Input::DirectorySample {
         progress: Some(progress),
         socks: Some(socks()),
@@ -111,6 +116,11 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let window = duration_ns(Duration::from_secs(4));
     let step = core.on_deadline(window);
     assert_eq!(says_progress(&step), 1, "the progress line is said");
+    // The same deadline's sample stays in flight. The next progress line
+    // waits until that sample is answered.
+    if step.actions.contains(&Action::Sample) {
+        replied(&mut core, window);
+    }
     assert_eq!(announces(&step), 0, "the line is not a posture warning");
     let line = core.status().bootstrap.expect("a line while bootstrapping");
     assert_eq!(line.received, Some(3_200_000));
@@ -206,6 +216,9 @@ fn the_progress_line_measures_the_span_it_names() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     let count_at = duration_ns(Duration::from_secs(1));
     core.on(
         Input::DirectorySample {

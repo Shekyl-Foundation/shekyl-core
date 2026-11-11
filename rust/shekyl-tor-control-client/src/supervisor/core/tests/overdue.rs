@@ -255,9 +255,18 @@ fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
     let jumped = uploaded_at + secs(3600);
     let step = core.on(Input::ClockJumped, jumped);
     assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
-    assert_eq!(jump_probes(&step), 1);
+    assert_eq!(jump_probes(&step), 0, "the draw waits for the sample");
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+            read: None,
+        },
+        jumped,
+    );
+    let drawn = replied(&mut core, jumped);
+    assert_eq!(jump_probes(&drawn), 1, "the draw follows the sample");
     core.on(Input::JumpProbeDrawn { draw: 0 }, jumped);
-    jump_sample_answered(&mut core, jumped);
     let (probe_at, step) = run_timed(&mut core, jumped + secs(15));
     assert_eq!(
         probes(&step),

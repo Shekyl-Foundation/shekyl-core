@@ -500,8 +500,23 @@ fn an_answer_before_the_send_is_not_evidence() {
 fn a_draw_that_arrives_while_judging_still_installs() {
     let mut core = published();
     core.on(uploaded(0), 0);
-    let step = core.on_deadline(secs(15));
-    assert_eq!(probes(&step), 1);
+    let mut step = core.on_deadline(secs(15));
+    // The directory check, then the liveness sample, then the dial.
+    if core.in_flight().is_some() {
+        step.actions.extend(replied(&mut core, secs(15)).actions);
+    }
+    if step.actions.contains(&Action::Sample) {
+        core.on(
+            Input::DirectorySample {
+                progress: Some(100),
+                socks: None,
+                read: None,
+            },
+            secs(15),
+        );
+        step.actions.extend(replied(&mut core, secs(15)).actions);
+    }
+    assert_eq!(probes(&step), 1, "the dial follows the sample: {step:?}");
     core.on(
         Input::ProbeDialed {
             minted_at: secs(15),
@@ -752,8 +767,30 @@ fn without_our_counter_the_check_counts_nothing_and_the_probe_decides() {
         0,
     );
     assert!(fetched(&drawn).is_empty(), "no fetch goes out");
-    let launched = core.on_deadline(secs(15));
-    assert_eq!(probes(&launched), 1);
+    let mut launched = core.on_deadline(secs(15));
+    if core.in_flight().is_some() {
+        launched
+            .actions
+            .extend(replied(&mut core, secs(15)).actions);
+    }
+    if launched.actions.contains(&Action::Sample) {
+        core.on(
+            Input::DirectorySample {
+                progress: Some(100),
+                socks: None,
+                read: None,
+            },
+            secs(15),
+        );
+        launched
+            .actions
+            .extend(replied(&mut core, secs(15)).actions);
+    }
+    assert_eq!(
+        probes(&launched),
+        1,
+        "the dial follows the sample: {launched:?}"
+    );
     assert!(
         fetched(&launched).is_empty(),
         "the answer windows are not waited"

@@ -12,12 +12,16 @@
 //! taken while Tor is slow to answer, which is when an operator asks.
 //!
 //! One request is in flight at a time, as when the loop awaited each one:
-//! moving the waits off the loop changes no decision. The order the awaits
-//! gave is this queue's order. The reap of an incarnation that ended goes
-//! before the next launch; a launch is followed by the event subscription
-//! and then the first sample; a republish is `DEL_ONION` and then
-//! `ADD_ONION`. A request that no longer stands when its turn comes
-//! ([`Core::action_stands`]) is withheld there, as the driver withheld it.
+//! moving the waits off the loop changes no decision. The list is that
+//! whole decision, in the order the awaits gave it. The reap of an
+//! incarnation that ended goes before the next launch; a launch is followed
+//! by the event subscription and then the first sample; a republish is
+//! `DEL_ONION` and then `ADD_ONION`. A probe, a route publish, and a
+//! progress line ordered after a request stay behind it until the reply is
+//! folded. The reply's own decisions join after that request's follower and
+//! ahead of the tail ([`Core::begin_reply_fold`]). A request, or a probe,
+//! that no longer stands when its turn comes ([`Core::action_stands`]) is
+//! withheld there.
 //!
 //! The reply bound is a deadline here, one bound after the send in the
 //! core's clock: awake time, restarted at a wake as every other window is.
@@ -32,6 +36,23 @@ use std::collections::VecDeque;
 
 use super::Action;
 use crate::control::RelayFingerprint;
+
+/// An action the loop used to run only after the request it followed.
+/// While a request is out, it joins the tail, so a dial, a route publish,
+/// or a progress line cannot start on state the reply has not folded.
+/// Speech and local bookkeeping do not: an operator hears a cause while
+/// Tor is slow.
+fn waits_for_reply(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Probe
+            | Action::ProbeAfterJump
+            | Action::Publish(_)
+            | Action::SayProgress
+            | Action::WatchState
+            | Action::CheckPin
+    )
+}
 
 /// A request the driver runs off the loop.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +137,30 @@ impl Request {
     }
 }
 
+/// One entry in the decision list.
+#[derive(Debug)]
+enum Work {
+    /// The driver runs this on the loop. It does not wait on Tor.
+    Now(Action),
+    /// The driver sends this. Nothing after it runs until the reply is folded.
+    Ask(Request),
+}
+
+impl Work {
+    /// This ask is the second half of the request in flight: the
+    /// subscription after a launch, the add after a delete.
+    fn is_follower(&self) -> bool {
+        matches!(self, Self::Ask(request) if request.follows())
+    }
+
+    fn request(&self) -> Option<&Request> {
+        match self {
+            Self::Ask(request) => Some(request),
+            Self::Now(_) => None,
+        }
+    }
+}
+
 /// The request in flight: what it is, its number, and when it was sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InFlight {
@@ -124,60 +169,101 @@ struct InFlight {
     sent_at: u64,
 }
 
-/// The queue, and the one request in flight.
+/// The decision list, and the one request in flight.
+///
+/// `queued` is what has not run. While a reply is being folded,
+/// [`Requests::reply_at`] is where that reply's decisions are inserted:
+/// after the in-flight request's follower, and ahead of the tail. Any
+/// other decision appends, so a deadline that comes due during the wait
+/// joins the tail.
 #[derive(Debug, Default)]
 pub(super) struct Requests {
-    queued: VecDeque<Request>,
+    queued: VecDeque<Work>,
     in_flight: Option<InFlight>,
     /// The number the next sent request takes.
     next: u64,
     /// The request in flight was refused (a `DEL_ONION` Tor declined):
     /// what follows it in the same decision is not sent.
     refused: bool,
+    /// Where the reply being folded inserts its decisions. `None` appends.
+    reply_at: Option<usize>,
 }
 
 impl Requests {
+    fn contains(&self, request: &Request) -> bool {
+        self.queued
+            .iter()
+            .any(|work| work.request() == Some(request))
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|flight| flight.request == *request)
+    }
+
     /// A publication (its `DEL_ONION` or its `ADD_ONION`) is queued or in
     /// flight.
     fn publishing(&self) -> bool {
         let publication =
             |request: &Request| matches!(request, Request::DeleteOnion | Request::AddOnion);
-        self.queued.iter().any(publication)
+        self.queued
+            .iter()
+            .any(|work| work.request().is_some_and(publication))
             || self
                 .in_flight
                 .as_ref()
                 .is_some_and(|flight| publication(&flight.request))
     }
 
-    pub(super) fn push(&mut self, request: Request) {
-        let waiting = self.queued.contains(&request)
-            || self
-                .in_flight
-                .as_ref()
-                .is_some_and(|flight| flight.request == request);
-        if request.repeats() && waiting {
-            return;
+    /// Join `work` to the list: into the reply being folded, or at the end.
+    fn join(&mut self, work: Work) {
+        if let Some(cursor) = self.reply_at {
+            let at = cursor.min(self.queued.len());
+            self.queued.insert(at, work);
+            self.reply_at = Some(at + 1);
+        } else {
+            self.queued.push_back(work);
         }
-        self.queued.push_back(request);
     }
 
-    /// The next request to send, when none is in flight.
-    pub(super) fn next_to_send(&mut self) -> Option<Request> {
-        if self.in_flight.is_some() {
-            return None;
+    fn push_request(&mut self, request: Request) {
+        if request.repeats() && self.contains(&request) {
+            return;
         }
+        self.join(Work::Ask(request));
+    }
+
+    fn push_now(&mut self, action: Action) {
+        self.join(Work::Now(action));
+    }
+
+    /// The driver is folding the in-flight reply. Its decisions join after
+    /// that request's follower. A second call in the same fold does nothing.
+    fn begin_reply_fold(&mut self) {
+        if self.in_flight.is_none() || self.reply_at.is_some() {
+            return;
+        }
+        let at = self
+            .queued
+            .iter()
+            .position(|work| !work.is_follower())
+            .unwrap_or(self.queued.len());
+        self.reply_at = Some(at);
+    }
+
+    /// The next entry, when the caller is ready to run the list.
+    fn pop_front(&mut self) -> Option<Work> {
         self.queued.pop_front()
     }
 
-    /// Drop a request that follows the one just withheld or refused.
-    pub(super) fn drop_follower(&mut self) {
-        if self.queued.front().is_some_and(Request::follows) {
+    /// Drop the ask that follows the one just withheld or refused.
+    fn drop_follower(&mut self) {
+        if self.queued.front().is_some_and(Work::is_follower) {
             self.queued.pop_front();
         }
     }
 
     /// `request` was sent at `now`.
-    pub(super) fn sent(&mut self, request: Request, now: u64) {
+    fn sent(&mut self, request: Request, now: u64) {
         self.refused = false;
         self.next = self.next.wrapping_add(1);
         self.in_flight = Some(InFlight {
@@ -189,7 +275,7 @@ impl Requests {
 
     /// The number of the request in flight. A reply that names another is
     /// not this core's to fold.
-    pub(super) fn in_flight(&self) -> Option<u64> {
+    fn in_flight(&self) -> Option<u64> {
         self.in_flight.as_ref().map(|flight| flight.number)
     }
 
@@ -201,12 +287,14 @@ impl Requests {
     }
 
     /// The request in flight was answered: `false` when `number` is not it.
-    /// A refused one drops what follows it.
-    pub(super) fn answered(&mut self, number: u64) -> bool {
+    /// A refused one drops what follows it. The reply fold ends either way
+    /// it matches.
+    fn answered(&mut self, number: u64) -> bool {
         if self.in_flight() != Some(number) {
             return false;
         }
         self.in_flight = None;
+        self.reply_at = None;
         if std::mem::take(&mut self.refused) {
             self.drop_follower();
         }
@@ -233,6 +321,8 @@ impl Requests {
     pub(super) fn clear(&mut self) {
         self.queued.clear();
         self.in_flight = None;
+        self.reply_at = None;
+        self.refused = false;
     }
 }
 
@@ -244,11 +334,23 @@ impl super::Core {
         self.requests.in_flight()
     }
 
-    /// Queue the decisions that are requests, then send the next one when
-    /// none is in flight. A request that no longer stands is withheld here,
-    /// with what follows it: a withheld republish puts its lifetime back.
+    /// The driver is about to fold the in-flight request's answer.
+    ///
+    /// Decisions that fold produces join after that request's follower and
+    /// ahead of every decision already waiting. [`super::Input::Replied`]
+    /// ends the fold and releases that prefix. A deadline that arrived
+    /// before this call stays in the tail.
+    pub fn begin_reply_fold(&mut self) {
+        self.requests.begin_reply_fold();
+    }
+
+    /// Queue `actions` in decision order, then run a prefix: every loop
+    /// action up to the first request, then that one request. The tail
+    /// waits until the request in flight is answered. While one is in
+    /// flight the tail is not run, so a probe or a route publish ordered
+    /// after a sample cannot start before the sample is folded.
     pub(super) fn route_requests(&mut self, now: u64, actions: Vec<Action>) -> Vec<Action> {
-        let mut out = Vec::with_capacity(actions.len());
+        let mut immediate = Vec::new();
         for action in actions {
             match Request::of(&action) {
                 // One publication at a time. The onion stays owed until the
@@ -262,29 +364,47 @@ impl super::Core {
                 Some(_) if action == Action::RepublishOnion && self.requests.publishing() => {}
                 Some(requests) => {
                     for request in requests {
-                        self.requests.push(request);
+                        self.requests.push_request(request);
                     }
                 }
-                None => out.push(action),
+                // Speech and bookkeeping run in this step. A dial, a route
+                // publish, a progress line, and a pin check keep their place
+                // in the list, behind the request they follow.
+                None if !waits_for_reply(&action) => immediate.push(action),
+                None => self.requests.push_now(action),
             }
         }
-        while let Some(request) = self.requests.next_to_send() {
-            let action = request.action();
-            if !self.action_stands(&action) {
-                match &request {
-                    Request::DeleteOnion => out.extend(self.republish_withheld()),
-                    Request::FetchFrom { hsdir } => self.directory_fetch_withheld(*hsdir),
-                    _ => {}
+        if self.requests.in_flight().is_some() {
+            return immediate;
+        }
+        let mut out = immediate;
+        while let Some(work) = self.requests.pop_front() {
+            match work {
+                Work::Now(action) => {
+                    // A probe the reply already stood down is not dialed.
+                    if self.action_stands(&action) {
+                        out.push(action);
+                    }
                 }
-                self.requests.drop_follower();
-                continue;
+                Work::Ask(request) => {
+                    let action = request.action();
+                    if !self.action_stands(&action) {
+                        match &request {
+                            Request::DeleteOnion => out.extend(self.republish_withheld()),
+                            Request::FetchFrom { hsdir } => self.directory_fetch_withheld(*hsdir),
+                            _ => {}
+                        }
+                        self.requests.drop_follower();
+                        continue;
+                    }
+                    if let Request::FetchFrom { hsdir } = &request {
+                        self.directory_fetch_sent(now, *hsdir);
+                    }
+                    self.requests.sent(request, now);
+                    out.push(action);
+                    break;
+                }
             }
-            if let Request::FetchFrom { hsdir } = &request {
-                self.directory_fetch_sent(now, *hsdir);
-            }
-            self.requests.sent(request, now);
-            out.push(action);
-            break;
         }
         out
     }
