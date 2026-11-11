@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The clearnet reconnect throttle is registered and not built, and the evidence check's forced-rebuild bound waits on it.** After `N` completed handshakes from one host within `T`, refuse that host's new inbound handshakes for a cooldown; throttle only, keyed by prefix on IPv6. `N` and `T` are measured on the Rust transport. Until it exists a host's next session is free, so the past-cap evidence check, one per session, is bounded only by running serially (`RANDOMX_CACHE_ACTOR.md` §5.9). On the mainnet launch checklist (`RELEASE_CHECKLIST.md`). Falsify by: a host that completes `N + 1` handshakes inside `T` and is refused the last.
+  - Owner: the transport layer — [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) ("Clearnet reconnect throttle", D-S1)
+  - Target: pre-genesis (trigger: before mainnet genesis)
 - **The pop round trip's boundary exemption is still per table, so it can pass a pop that keeps a rewrite the prune never made.** `shekyl-chain-ingest` `chain_drive.rs` lets every row of the 18 tables in `RETIRED_AT_A_BOUNDARY` (and five archival families) keep the connect's value after a boundary pop. A pop that wrongly kept a connect's ordinary rewrite in one of them passes: in a reorg test that is the dangerous direction. `properties` failed the other way and was made per cell in #1286 (`pop_keeps_the_floor`). The fix has the same shape: derive the allowed differences from what the boundary batch retired (the `Pruned` record `prune_at_boundary` returns, or the batch's own deletions), not from a table list. Falsify by a red edit that keeps one connect-written, unretired row of an exempted table after the pop, and the round trip failing.
   - Owner: the DRS-X pins — [`DRS_X_STORE_FLIP.md`](design/DRS_X_STORE_FLIP.md) (PR 3e, e2: the archival pop round trips)
   - Target: pre-genesis

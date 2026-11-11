@@ -1,6 +1,6 @@
 # One hashing actor owns the RandomX caches
 
-**Status:** OPEN — Round 0 RULED 2026-11-10 (Rick): HA-R1…HA-R6, §4. The design in §5 is the ruled one. Nothing is built; the PR sequence is §6.
+**Status:** OPEN — Round 0 RULED 2026-11-10 and 2026-11-11 (Rick): HA-R1…HA-R8, §4. The design in §5 is the ruled one. Nothing is built; the PR sequence is §6.
 
 **Ground:** `dev` at `cf561f79d6`, which includes #1338. Every `path:line` below was read at that revision.
 
@@ -52,7 +52,7 @@ Two readers consume the published slots, not a cache: the tip follower before a 
 - **HA-F10. The earlier "no cache store" proposal was rejected for unbounded holding** (`cache_store.rs:17–:34`; `docs/completed/RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 2, alternatives (d) and (g)): consumers managing `Arc<PreparedCache>` themselves gave no cap. That objection does not reach this design, because the cap is the actor's and no consumer holds an `Arc`. It is the bar the lending type in §5.3 has to meet.
 - **HA-F11. The evidence check has no admission rate in time.** The sync model admits one check at a time and at most one per session (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3, item 3). A candidate needs a past-cap run whose cheap checks pass and whose computed work exceeds the local chain's, and timestamps raise computed work for free. What prices the next session is the clearnet reconnect throttle, which is registered and not built (`P2P_TRANSPORT_LAYER.md`, "Clearnet reconnect throttle"). So the only bound today is that checks are serial.
 
-## 4. Rulings — RULED 2026-11-10 (Rick)
+## 4. Rulings — RULED 2026-11-10 and 2026-11-11 (Rick)
 
 - **HA-R1. A job gets a cache whenever it needs one.** The ranking decides only what stays warm. A job's seed comes from chain data the ingest has checked, and the actor builds it for the job's scope if it is not warm, inside the cap. A run is a job. One actor builds each seed once.
 - **HA-R2. Three caches in total, jobs in flight included. It is a hard cap.** The third goes to the seed of the most-work chain the body window does not cover: the header frontier while syncing, the heaviest held fork once synced. That is one rule.
@@ -60,6 +60,8 @@ Two readers consume the published slots, not a cache: the tip follower before a 
 - **HA-R4. One pure ranking function, tested in isolation.** Its inputs are the ingest window, the held forks and chain sync's header frontier. Its output is the one ranked list the actor receives. `Executor::branch` and the evidence check's own build are deleted and become jobs.
 - **HA-R5. The actor refills when its job queue is empty.** The invariant: at quiescence it holds exactly what a fresh actor would.
 - **HA-R6. The permits go behind the actor. The crate is `shekyl-hasher`. The cut is four PRs.** The crate PR's tests are the invariant tests the cutover reuses. The cutover includes the RPC's `AdmittedPow` (`read_facts.rs:127`) and the executor.
+- **HA-R7 (2026-11-11). The window's pair is never freed for a job.** Jobs outside the window share the places the window leaves.
+- **HA-R8 (2026-11-11). The queue for a place is first in, first out among outside-window jobs.** Class order applies to permits only. Otherwise `Class::Evidence`, the lowest class that builds, could wait behind header proofs through the whole of initial sync.
 
 ## 5. The design
 
@@ -82,7 +84,8 @@ The ingest computes the list on every tip move and whenever chain sync's frontie
 - **Hard cap: three caches, 768 MiB,** counting warm caches, caches a job is hashing under and a build in progress.
 - **Warm** means resident with no job in flight. At quiescence (no job queued or running, no build running) the warm set is exactly the ranked list.
 - **A job's seed is built if it is not warm.** When three caches are resident, the build first frees the lowest-ranked cache that no job is hashing under.
-- **The window's pair is not freed for a job.** A pop across the switch must find the previous seed, and every chain form uses the canonical one. So jobs outside the window share the places the window leaves: two when it names one seed, one when it names two. A job that finds every such place in use waits for one. *This is this document's reading of HA-R2 and HA-R3 together; it is stated here so it can be corrected.*
+- **The window's pair is not freed for a job (HA-R7).** A pop across the switch must find the previous seed, and every chain form uses the canonical one. So jobs outside the window share the places the window leaves: two when it names one seed, one when it names two.
+- **A job that finds every such place in use waits in one queue, first in, first out (HA-R8).** Its class does not move it in that queue. Jobs for the seed a place already holds run together; a job for another seed takes the place when the jobs ahead of it have returned. **The worst wait for a place is one job plus one build:** the job hashing under the place when the waiter reaches the head of the queue, then the waiter's own derivation (about 2.1 s on the floor device). A job is one form, one switch, or one header-proof command.
 - **Refill.** When the job queue empties, the actor frees what the list does not name and builds what it names and lacks.
 
 ### 5.3 Jobs borrow
@@ -130,7 +133,7 @@ The permits are taken inside the actor's entry points, lease first, then permit.
 
 The actor's loop only takes lists, grants and releases leases, and queues builds. It never hashes and never derives. One builder thread derives one cache at a time.
 
-- **Order:** a waiting job's seed before any refill; among jobs, by hasher class; among refills, by rank.
+- **Order:** a waiting job's seed before any refill; among jobs, the order they took their places in (§5.2); among refills, by rank. Hasher class orders permits and nothing else.
 - **The canonical seed is known 64 blocks before it is used,** because the window names a seed once its block is on the chain. It is built then, so a chain form waits for a build only at a cold start or after a reorg that replaces the seed block.
 - **A running build is not interrupted.** The worst wait for a chain form is one build in progress plus its own: two derivations, about 4.2 s on the floor device.
 
@@ -165,7 +168,8 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 - **The admission rate:** one check at a time, and at most one per session (HA-F11). There is no rate in time.
 - **What one check costs this node:** its own build, and the refill of the warm third cache it pushed out: two derivations, about 4.2 s of one core on the floor device, at `Class::Evidence`, which every class but the miner outranks.
 - **The worst case an attacker can force** is therefore one permit kept building for as long as the attacker can open sessions that pass the cheap checks. Checks are serial, so it is never more than one build at a time, and the window's pair is never touched.
-- **Reopening criterion:** when the reconnect throttle is built, its `N` sessions per `T` gives the rate, and this section states `N / T × 4.2 s`.
+- **Accepted as the bound for now (Rick, 2026-11-11).**
+- **What closes it:** the clearnet reconnect throttle, `P2P_TRANSPORT_LAYER.md` § "Clearnet reconnect throttle — REGISTERED 2026-10-09, not built" (ruling D-S1; owner: the transport layer, that document). Its `N` handshakes per `T` gives the rate, and this section then states `N / T × 4.2 s`. It is on the mainnet launch checklist (`docs/RELEASE_CHECKLIST.md`) and has a `docs/FOLLOWUPS.md` row.
 
 ## 6. The PR sequence — RULED (HA-R6)
 
@@ -197,6 +201,8 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
   - a fork whose headers were proven and whose bodies then arrive: one build (HA-F2);
   - a switch whose promoted blocks all have recorded hashes: no build (HA-F8);
   - an evidence check while the third cache is warm: the check runs, the warm cache is freed for it, and it is back at quiescence (HA-R3);
+  - an evidence check queued behind a stream of header-proof jobs for another seed: it runs after the one job ahead of it, not after the stream (HA-R8);
+  - two outside-window jobs while the window names two seeds: neither frees a window seed (HA-R7);
   - a mining job whose seed leaves the list: the job is cancelled and the cache freed;
   - `calc_pow` on a seed that is not warm: declined, nothing built.
 - **Carried over from #1338:** the 2,124-block nightly test, and the live RSS reading (shekyl-dev `infrastructure/captures/a2-randomx-cache-rss/2026-11-09/`), repeated on the new build with a fork case added.
