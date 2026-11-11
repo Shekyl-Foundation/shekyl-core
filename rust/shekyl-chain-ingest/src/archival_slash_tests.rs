@@ -141,6 +141,37 @@ impl SlashChain {
         serve_to(&mut self.drive, &self.witness, &signers, &passes, until).await;
     }
 
+    /// [`Self::serve`] up to `until`, every draw on the served shard a
+    /// pass, except through the epoch `rest`: its blocks are mined with no
+    /// bundle filed.
+    async fn serve_resting(&mut self, join: &Joined, until: BlockHeight, rest: Option<u64>) {
+        let epoch_blocks = self.schedule.blocks().get();
+        let rested = rest.map(|epoch| {
+            (
+                BlockHeight::from_raw(epoch * epoch_blocks),
+                BlockHeight::from_raw((epoch + 1) * epoch_blocks),
+            )
+        });
+        loop {
+            let h = self.height();
+            if h >= until {
+                return;
+            }
+            match rested {
+                Some((from, to)) if h >= from && h < to => {
+                    self.drive.advance_to(until.min(to)).await;
+                }
+                Some((from, _)) if h < from && from < until => {
+                    self.serve(join, u64::MAX, from).await;
+                }
+                _ => {
+                    self.serve(join, u64::MAX, until).await;
+                    return;
+                }
+            }
+        }
+    }
+
     /// The join onto shards 0 and 1 — one block early, refused on J15; at
     /// the first admissible height, connected (§5 row 6).
     async fn join_two_shards(&mut self) -> Joined {
@@ -233,10 +264,15 @@ impl SlashChain {
     /// `E_join + m` only when no epoch before it came up short. The pass of
     /// every epoch is read as it lands: no slash before the `m`-th miss,
     /// and the slash in that pass's block.
-    async fn slash_the_unserved_shard(&mut self, join: &Joined) -> Slashed {
+    ///
+    /// `rest`, when given, is an epoch in which no block is served: every
+    /// block of it is mined without a filed bundle, so neither pair is
+    /// issued its counted draws there and the epoch is no observation.
+    /// That forces the late slash a short epoch causes by chance.
+    async fn slash_the_unserved_shard(&mut self, join: &Joined, rest: Option<u64>) -> Slashed {
         let misses_to_slash = failure_window_epochs();
         let mut misses = 0u64;
-        let mut outcomes: Vec<(u64, SettlementOutcome)> = Vec::new();
+        let mut outcomes: Vec<(u64, Option<SettlementOutcome>)> = Vec::new();
         let mut epoch = join.join_epoch;
         let (slash_epoch, deadline) = loop {
             epoch += 1;
@@ -245,26 +281,29 @@ impl SlashChain {
                 "no slash in three failure windows; the unserved pair settled {outcomes:?}"
             );
             let deadline = self.schedule.slash_deadline_height(epoch);
-            self.serve(join, u64::MAX, BlockHeight::from_raw(deadline + 1))
+            self.serve_resting(join, BlockHeight::from_raw(deadline + 1), rest)
                 .await;
             let pass = &self.drive.chain[usize::try_from(deadline).expect("small")].archival;
             let outcome = pass
                 .settlements()
                 .iter()
                 .find(|s| s.epoch.to_raw() == epoch && s.shard.to_raw() == join.unserved)
-                .map(|s| s.row.outcome())
-                .expect("the pass settles the unserved pair");
+                .map(|s| s.row.outcome());
             assert_ne!(
                 outcome,
-                SettlementOutcome::Served,
+                Some(SettlementOutcome::Served),
                 "no draw on the unserved shard is passed"
             );
+            let missed = outcome == Some(SettlementOutcome::Missed);
+            if rest == Some(epoch) {
+                assert!(!missed, "a rested epoch is no observation: {outcome:?}");
+            }
             outcomes.push((epoch, outcome));
-            misses += u64::from(outcome == SettlementOutcome::Missed);
+            misses += u64::from(missed);
             let slashed = !pass.slashes().is_empty();
             assert_eq!(
                 slashed,
-                outcome == SettlementOutcome::Missed && misses == misses_to_slash,
+                missed && misses == misses_to_slash,
                 "epoch {epoch}: the slash is the pass of miss {misses_to_slash}; settled {outcomes:?}"
             );
             if slashed {
@@ -607,7 +646,7 @@ pub(crate) async fn run_slash_chain(mode: ConnectMode) -> SlashRun {
         chain.drive.round_trip_from_here().await;
     }
     let join = chain.join_two_shards().await;
-    let slashed = chain.slash_the_unserved_shard(&join).await;
+    let slashed = chain.slash_the_unserved_shard(&join, None).await;
     let reinstated = chain
         .reinstate_and_match_the_wallet_verify(&join, &slashed)
         .await;
@@ -631,4 +670,28 @@ pub(crate) async fn run_slash_chain(mode: ConnectMode) -> SlashRun {
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn the_slash_chain_judges_each_row_on_one_record() {
     run_slash_chain(ConnectMode::Straight).await;
+}
+
+/// The late slash, forced. The chain rests through the third epoch of the
+/// failure window: no bundle is filed in it, so the unserved pair is
+/// issued no counted draws there and the epoch is no observation. The
+/// slash is then not at `E_join + m`: it waits for the `m`-th miss, at
+/// least one epoch later, and lands in that epoch's pass
+/// (`slash_the_unserved_shard` reads every pass on the way). The other two
+/// slash-chain tests meet a short epoch only when the draws leave a pair
+/// short; this one always has one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
+async fn a_slash_waits_out_an_epoch_with_no_observation() {
+    let mut chain = SlashChain::open("slice-8-late-slash").await;
+    let join = chain.join_two_shards().await;
+    let rested = join.join_epoch + 3;
+    let slashed = chain.slash_the_unserved_shard(&join, Some(rested)).await;
+    assert!(
+        slashed.slash_epoch > join.join_epoch + failure_window_epochs(),
+        "the rested epoch added no miss, so the slash is late: epoch {} after a join in {}",
+        slashed.slash_epoch,
+        join.join_epoch
+    );
+    chain.drive.close().await;
 }
