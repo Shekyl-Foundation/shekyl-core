@@ -43,12 +43,36 @@ use crate::substrate::ProductionSubstrate;
 /// One miner at a time in this process (module docs).
 static MINER_LANE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Regtest at a fixed difficulty of eight: a block takes a search.
-const RULES: ChainRules = ChainRules::harness_regtest(NonZeroU128::new(8), CappedEpoch::PRODUCTION);
+/// The fixed difficulty these chains run at: above one, so a block takes a
+/// search.
+const DIFFICULTY: u128 = 8;
 
-/// How long a test waits for a block at difficulty eight before calling the
-/// search broken: generous for a debug build's light-mode hash.
-const FIND_WITHIN: Duration = Duration::from_secs(300);
+/// Regtest at [`DIFFICULTY`].
+const RULES: ChainRules =
+    ChainRules::harness_regtest(NonZeroU128::new(DIFFICULTY), CappedEpoch::PRODUCTION);
+
+/// One light-mode RandomX hash on the floor device (rule 76): about 1.25 s
+/// per core (`DRS_X_STORE_FLIP.md`, PR2-Q2). The workers hash in light
+/// mode under the cache the substrate pinned.
+const FLOOR_HASH: Duration = Duration::from_millis(1_250);
+
+/// Hashes a search tries before missing is less likely than one in a
+/// billion. Each hash wins with probability `1 / DIFFICULTY`, so a search
+/// misses after `n` with probability `(1 − 1/8)^n`, below `1e-9` from
+/// `n = 156` ([`the_search_bound_is_derived_from_the_difficulty`]).
+const SEARCH_HASHES: u32 = 156;
+
+/// How long a test waits for a block before calling the search broken:
+/// [`SEARCH_HASHES`] at [`FLOOR_HASH`] on one worker, the fewest any
+/// search here starts — 195 s. A search with two workers has twice the
+/// margin.
+///
+/// The bound is the floor device's, uncontended. The workers run at the
+/// lowest priority by design, so on a host whose cores other work holds
+/// they can be starved past it: the 2026-11-11 nightly-set run at load 12
+/// to 32 timed out once here, and the test passed three times in about
+/// 16 s each on the same host once it was quiet.
+const FIND_WITHIN: Duration = FLOOR_HASH.saturating_mul(SEARCH_HASHES);
 
 /// The harness miner's full address, encoded: the wallet every scenario
 /// template pays, so the address the miner is given decodes to exactly the
@@ -192,7 +216,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     let mut next = s.next_template(Vec::new()).await.expect("a template");
     assert_eq!(
         next.target.difficulty(),
-        Difficulty::new(8).expect("a test difficulty is non-zero")
+        Difficulty::new(DIFFICULTY).expect("a test difficulty is non-zero")
     );
     pin_job_seed(&substrate, &caches, &next);
     let first = board.publish(job_for(&next));
@@ -755,4 +779,20 @@ fn a_miner_on_a_one_permit_budget_is_refused() {
         refused,
         Err(shekyl_miner::MinerStartRefused::OnePermit)
     ));
+}
+
+/// [`SEARCH_HASHES`] is the fewest hashes after which a search at
+/// [`DIFFICULTY`] misses with probability below one in a billion. Red edit:
+/// raise the difficulty and leave the count.
+#[test]
+fn the_search_bound_is_derived_from_the_difficulty() {
+    let win = 1.0 / f64::from(u32::try_from(DIFFICULTY).expect("a small difficulty"));
+    let miss = |hashes: u32| (1.0 - win).powi(i32::try_from(hashes).expect("small"));
+    assert!(miss(SEARCH_HASHES) < 1e-9, "{}", miss(SEARCH_HASHES));
+    assert!(
+        miss(SEARCH_HASHES - 1) >= 1e-9,
+        "one hash fewer already meets it: {}",
+        miss(SEARCH_HASHES - 1)
+    );
+    assert_eq!(FIND_WITHIN, Duration::from_secs(195));
 }
