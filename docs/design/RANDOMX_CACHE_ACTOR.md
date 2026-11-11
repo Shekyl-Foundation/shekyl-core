@@ -1,10 +1,10 @@
 # One hashing actor owns the RandomX caches
 
-**Status:** OPEN — Round 0 (2026-11-10). The direction is ruled (Rick, 2026-11-10): replace the cache slots and their bookkeeping with an actor. Everything marked **PROPOSED** below is this round's answer to the design review's brief and is not ruled. No code is built on this document until HA-Q1…HA-Q8 (§9) are ruled.
+**Status:** OPEN — Round 0 RULED 2026-11-10 (Rick): HA-R1…HA-R6, §4. The design in §5 is the ruled one. Nothing is built; the PR sequence is §6. One check is still owed (§9).
 
 **Ground:** `dev` at `cf561f79d6`, which includes #1338. Every `path:line` below was read at that revision.
 
-**Identifiers:** `HA-F*` are this round's findings, `HA-Q*` its questions, `HA-R*` the rulings when they come.
+**Identifiers:** `HA-F*` are this round's findings, `HA-R*` its rulings.
 
 ## 1. The problem is a class
 
@@ -43,42 +43,49 @@ Two readers consume the published slots, not a cache: the tip follower before a 
 - **HA-F1. Chain sync holds caches the brief's delete list does not name.** The executor derives a branch seed's cache outside the store and keeps it in `Executor::branch` (`executor.rs:54`). The only write to that field is a replacement by another branch seed (`:196–:207`). The ruling it implements says the cache is "dropped when that seed epoch's headers are done" (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3). The code does not drop it. Initial sync is the branch case, so a node that synced across a seed boundary keeps that cache for the life of the process. Read from the code; not observed on a live node.
 - **HA-F2. The same seed can be built twice.** A fork's headers are proven under the executor's branch cache, then its bodies arrive as alternatives and the ingest prepares the same seed into the transient slot. The two paths share no cache.
 - **HA-F3. Today's ceiling is five caches, not three.** The canonical slot, the transient slot, one evicted cache a branch form still holds (`service.rs:563–:568`), the executor's branch cache, and one evidence cache while a check runs. That is 1,280 MiB. The miner and `calc_pow` can each also keep an evicted cache alive until their hash returns.
-- **HA-F4. `needed_seeds` cannot be a function of the store alone.** A header run's earned seed (65 headers proven on the run's own branch) lives in the sync model's run state. The fork's blocks are not stored rows until their bodies arrive. The evidence check's seed is likewise the sync model's. So the facts come from two places: the ingest (the store) and chain sync (its runs).
+- **HA-F4. `needed_seeds` cannot be a function of the store alone.** A header run's earned seed (65 headers proven on the run's own branch) lives in the sync model's run state. The fork's blocks are not stored rows until their bodies arrive. The evidence check's seed is likewise the sync model's. So the facts come from two places: the ingest (the store) and chain sync (its runs). HA-R4 makes them inputs of one ranking function.
 - **HA-F5. Honest operation wants three seeds through the whole of initial sync, not only near a switch.** The ingest connects bodies under its window (one seed, two for 784 blocks after each switch) while header sync runs ahead under the frontier's seed.
-- **HA-F6. The evidence check has a ruled cache of its own** (Rick, 2026-10-19; `DRS_X_STORE_FLIP.md` DX-Q2 item 6). With the brief's "two main seeds plus one fork seat" it is a fourth.
+- **HA-F6. The evidence check has a ruled cache of its own** (Rick, 2026-10-19; `DRS_X_STORE_FLIP.md` DX-Q2 item 6). Kept beside three others it would be a fourth; HA-R3 makes it a job inside the cap.
 - **HA-F7. Three caches leave PB-R1 about 100 MiB; four exceed it.** PB-R1 is 2 GiB with mining off (`DAEMON_REDB_STORE.md` §1.3a): a 1 GiB store cache, a 64 MiB pool cache, "about 256 MiB" of RandomX and the process. The process outside the caches read about 90 MiB on regtest (RssAnon 354,624 kB with one cache, 2026-11-09). Three caches make 1,024 + 64 + 768 + 90 = 1,946 MiB. Four make 2,202 MiB. This is arithmetic from the budget row and one regtest reading, not a floor-device run at design load.
 - **HA-F8. A switch prepares caches it rarely hashes under.** `prepare_all` (`span.rs:1134`) derives each branch seed a promoted run names, but the switch forms through `Recalled` (`substrate.rs:230`), which answers from the proof-of-work hash recorded when each block first arrived. Under the actor a switch asks for a cache only for a block with no recorded hash.
 - **HA-F9. A run's seeds are already in the window.** A run is at most the arrival window, 32 blocks by default (`pipeline.rs:105`), and a seed is first named 65 blocks above its block, so the block is committed before any block of the run names it. The window reaches `max(cap, 65)` above the connecting height (`cache_window.rs:51`) and names it. This holds while the arrival window is at most the seed lag (64); `ServiceConfig::room` is not held to that today, and the largest one configured is 64 (`shekyl-p2p-harness/src/sync/chain.rs:247`). **Not reconciled:** `window.rs:87–:90` says a run pins seeds the window "cannot name". By this arithmetic the window names the same two seeds with the canonical role on the other one; this round did not find a run seed outside the pair.
-- **HA-F10. The earlier "no cache store" proposal was rejected for unbounded holding** (`cache_store.rs:17–:34`; `docs/completed/RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 2, alternatives (d) and (g)): consumers managing `Arc<PreparedCache>` themselves gave no cap. That objection does not reach this design, because the cap is the actor's and no consumer holds an `Arc`. It is the bar the lending type in §4.3 has to meet.
+- **HA-F10. The earlier "no cache store" proposal was rejected for unbounded holding** (`cache_store.rs:17–:34`; `docs/completed/RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 2, alternatives (d) and (g)): consumers managing `Arc<PreparedCache>` themselves gave no cap. That objection does not reach this design, because the cap is the actor's and no consumer holds an `Arc`. It is the bar the lending type in §5.3 has to meet.
+- **HA-F11. The evidence check has no admission rate in time.** The sync model admits one check at a time and at most one per session (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3, item 3). A candidate needs a past-cap run whose cheap checks pass and whose computed work exceeds the local chain's, and timestamps raise computed work for free. What prices the next session is the clearnet reconnect throttle, which is registered and not built (`P2P_TRANSPORT_LAYER.md`, "Clearnet reconnect throttle"). So the only bound today is that checks are serial.
 
-## 4. The design — PROPOSED
+## 4. Rulings — RULED 2026-11-10 (Rick)
+
+- **HA-R1. A job gets a cache whenever it needs one.** The ranking decides only what stays warm. A job's seed comes from chain data the ingest has checked, and the actor builds it for the job's scope if it is not warm, inside the cap. A run is a job. One actor builds each seed once.
+- **HA-R2. Three caches in total, jobs in flight included. It is a hard cap.** The third goes to the seed of the most-work chain the body window does not cover: the header frontier while syncing, the heaviest held fork once synced. That is one rule.
+- **HA-R3. The evidence check is a job.** Jobs come before warm residency, so a check pushes out the warm third cache and cannot be starved.
+- **HA-R4. One pure ranking function, tested in isolation.** Its inputs are the ingest window, the held forks and chain sync's header frontier. Its output is the one ranked list the actor receives. `Executor::branch` and the evidence check's own build are deleted and become jobs.
+- **HA-R5. The actor refills when its job queue is empty.** The invariant: at quiescence it holds exactly what a fresh actor would.
+- **HA-R6. The permits go behind the actor. The crate is `shekyl-hasher`. The cut is four PRs.** The crate PR's tests are the invariant tests the cutover reuses. The cutover includes the RPC's `AdmittedPow` (`read_facts.rs:127`) and the executor.
+
+## 5. The design
 
 One actor owns every `PreparedCache` in the process. Nothing else builds, holds or frees one.
 
-### 4.1 Needs
+### 5.1 The ranked list
 
-The actor's input is a fact: the seeds the node needs. Each source sends its whole list whenever it changes, and a new list replaces that source's previous one.
+`ranked_seeds` is a pure function in `cache_window.rs`, beside `seeds_for` and `seeds_on`. It has no clock, no actor and no I/O beyond the snapshot it is handed.
 
-- **The chain's needs** come from the ingest, computed by `needed_seeds` in `cache_window.rs` beside `seeds_for` and `seeds_on`. It is a pure function of a store snapshot and the rules:
-  - the window's pair, canonical first, as `seeds_on` returns it today;
-  - for each held branch tip inside the cap (`ChainStore::alt_blocks`), the seed its children would hash under, when that seed is the branch's own block, with the tip's cumulative work.
-- **Chain sync's needs** come from the sync owner: the earned branch seed of each run it is proving, with the run's proven work, and the evidence check's seed while a check runs (HA-F4).
+- **Inputs:** the ingest window's pair on a store snapshot; the held branch tips inside the cap with their cumulative work (`ChainStore::alt_blocks`); chain sync's header frontier, with its seed and proven work, when a run is ahead of the body window.
+- **Output:** at most three seeds, in order:
+  1. the connecting height's seed;
+  2. the window's other seed, when it names one;
+  3. the seed of the most-work chain the body window does not cover, when that seed is not already listed.
 
-The actor knows nothing about chains. It sees seeds, each with a rank and the hasher class its build is paid under.
+The ingest computes the list on every tip move and whenever chain sync's frontier moves, and sends it whole. The actor knows nothing about chains.
 
-### 4.2 What is resident
+### 5.2 What is resident
 
-Residency is a pure function of the two lists and the jobs in flight:
+- **Hard cap: three caches, 768 MiB,** counting warm caches, caches a job is hashing under and a build in progress.
+- **Warm** means resident with no job in flight. At quiescence (no job queued or running, no build running) the warm set is exactly the ranked list.
+- **A job's seed is built if it is not warm.** When three caches are resident, the build first frees the lowest-ranked cache that no job is hashing under.
+- **The window's pair is not freed for a job.** A pop across the switch must find the previous seed, and every chain form uses the canonical one. So jobs outside the window share the places the window leaves: two when it names one seed, one when it names two. A job that finds every such place in use waits for one. *This is this document's reading of HA-R2 and HA-R3 together; it is stated here so it can be corrected.*
+- **Refill.** When the job queue empties, the actor frees what the list does not name and builds what it names and lacks.
 
-1. **The main pair** (at most two). Always resident once built. Nothing evicts it.
-2. **One off-main seat.** It holds the seed of the off-main job in flight, when there is one. Otherwise it holds the off-main claim with the most work. Off-main jobs for different seeds run one at a time, which replaces the branch gate (`service.rs:568`).
-3. **Nothing else.** A cache that is in neither place and has no job in flight is freed.
-
-So the bound is three caches, 768 MiB. A cache that has left both lists while a job still hashes under it is *draining*: it is freed when that job returns or is cancelled, and it is counted and exported separately (§7). A drain lasts one hash for a form and one hash at nice 19 for the miner.
-
-Whether the evidence check takes the seat or has a fourth, job-scoped cache as ruled on 2026-10-19 is HA-Q2.
-
-### 4.3 Jobs borrow
+### 5.3 Jobs borrow
 
 Work reaches a cache only through a job. The crate's public surface has no `PreparedCache` and no `Arc` in any signature:
 
@@ -92,64 +99,54 @@ impl Lent<'_> {
 }
 
 impl Hasher {
-    /// Run `job` under the named seeds and one permit of `class`.
+    /// Run `job` under the named seeds and one permit of `class`, building
+    /// a seed that is not warm. `None` when `stop` was set first.
     pub fn run<R>(
         &self,
         class: Class,
         seeds: &[Seedhash],
         stop: &AtomicBool,
         job: impl for<'job> FnOnce(&Lent<'job>) -> R,
-    ) -> Result<R, Refused>;
+    ) -> Option<R>;
 }
 ```
 
 - `Lent` hands out hashes, never the cache, so there is nothing to clone.
 - The `for<'job>` bound means `R` cannot name the job's lifetime, so a `Lent` cannot be returned or stored.
-- `run` blocks its caller: it waits for the seeds to be resident (a build in progress is waited for), then for the permit, then calls `job` on the caller's thread. Callers already wait for permits on blocking threads (`span.rs:418`), so the node's thread count (`shekyl-node/src/lib.rs`, "Blocking threads") stands.
-- **How a form gets its hash (the brief's Q2).** The ingest's substrate becomes a struct over a `&Lent` and the clock. `Substrate::longhash` stays synchronous and calls `lent.hash`. `form_on_branch` (`span.rs:977`), `spawn_form` (`:294`) and `form_switch` (`:1163`) each become one `run` whose closure builds that substrate and calls `form` or `form_plan`. `Branch` (`substrate.rs:308`) and the executor's `HeldSubstrate` (`executor.rs:313`) go: both exist to carry a held `Arc`. `Recalled` stays.
-- **The miner** uses a second entry point, `mine`, that lends for the posted job's life and takes one `Class::Miner` permit per hash inside `Lent::hash`, as `miner.rs:327` does now. Its closure receives a cancel flag the actor sets when the job's seed leaves the lists.
+- `run` blocks its caller: it takes the lease (waiting for a build or a place), then the permit, then calls `job` on the caller's thread. Callers already wait for permits on blocking threads (`span.rs:418`), so the node's thread count (`shekyl-node/src/lib.rs`, "Blocking threads") stands.
+- **How a form gets its hash.** The ingest's substrate becomes a struct over a `&Lent` and the clock. `Substrate::longhash` stays synchronous and calls `lent.hash`. `form_on_branch` (`span.rs:977`), `spawn_form` (`:294`) and `form_switch` (`:1163`) each become one `run` whose closure builds that substrate and calls `form` or `form_plan`. This fits both paths as they are: each already runs `form` inside one blocking closure that holds the permit.
+- **Jobs that build:** a run's forms, an alternative's form, a switch's forms for a block with no recorded hash (HA-F8), chain sync's header proofs on any seed, and the evidence check. Each names a seed the ingest or the sync model took from checked chain data.
+- **Jobs that do not build:** the miner and `calc_pow`. An RPC caller names `calc_pow`'s seed, so it hashes only under a warm cache (ruled 2026-10-17, `read_facts.rs:108–:112`); the miner's seed is the template's, which the follower posts only when it is warm. Their entry points return "not warm" and build nothing. The miner's lends for the posted job's life, takes one `Class::Miner` permit per hash as `miner.rs:327` does now, and carries a cancel flag the actor sets when the seed leaves the list.
 
-### 4.4 Refusals
+### 5.4 Permits
 
-```rust
-pub enum Refused {
-    /// No list names the seed. The caller did not send the need first.
-    NotNeeded { seed: Seedhash },
-    /// A list names it, and the off-main seat is held by a claim with more work.
-    NotSeated { seed: Seedhash },
-    /// The caller's stop flag was set before the job began.
-    Stopped,
-}
-```
+The permits are taken inside the actor's entry points, lease first, then permit. `Budget` keeps its type and its class rules; no consumer holds one.
 
-The refusal is typed and quiet in the actor. What it means is the caller's: the ingest faults on `NotNeeded` (its own defect, as `SeedNotInWindow` is today), `calc_pow` answers `PowDecline::SeedNotHeld` (an RPC caller names the seed, so this is ordinary), the miner leaves the job, and chain sync drops the run (`Proved::NotHeld`).
+- A caller that held a permit while waiting for a cache would wait on a build that needs a permit. On a one-permit budget that never ends. Today the order "gate, permit, `pin_lock`" is a comment each call site obeys (`service.rs:555–:568`).
+- A refill has no caller thread, so the actor takes that build's permit itself, at `Class::Chain` for the window's pair and at the class of the chain it serves for the third.
+- The branch gate (`service.rs:568`) goes: it bounded live caches to three, and the cap does that now.
 
-### 4.5 Builds and the order
+### 5.5 Builds and the order
 
-The actor's loop only takes lists, grants and releases leases, and queues builds. It never hashes and never derives. One builder thread derives one cache at a time, taking one permit of the class the need carries.
+The actor's loop only takes lists, grants and releases leases, and queues builds. It never hashes and never derives. One builder thread derives one cache at a time.
 
-- **Order:** the canonical seed, then the other main seed, then the seat.
-- **The canonical seed is known 64 blocks before it is used**, because the window names a seed once its block is on the chain. It is built then, so a canonical job waits for a build only at a cold start or after a reorg that replaces the seed block.
-- **A running build is not interrupted.** The worst wait for a canonical job is therefore one build in progress plus its own: two derivations, about 4.2 s on the floor device (§5 Q1).
-- **A build never evicts a main cache**, and the seat's build starts only after the cache it replaces has no job in flight.
+- **Order:** a waiting job's seed before any refill; among jobs, by hasher class; among refills, by rank.
+- **The canonical seed is known 64 blocks before it is used,** because the window names a seed once its block is on the chain. It is built then, so a chain form waits for a build only at a cold start or after a reorg that replaces the seed block.
+- **A running build is not interrupted.** The worst wait for a chain form is one build in progress plus its own: two derivations, about 4.2 s on the floor device.
 
-### 4.6 Publication
+### 5.6 Publication
 
-The actor publishes its resident seeds on a watch. That replaces `Door::seeds`, `published_seeds`, `seed_now` and `seed_pair`: the follower builds a template when the canonical seed is resident, a span waits for it before its first hash, and the sync owner waits on it for a seed it found unseated.
+The actor publishes its resident seeds on a watch. That replaces `Door::seeds`, `published_seeds`, `seed_now` and `seed_pair`: the follower posts a template when the canonical seed is warm, and a span waits for it before its first hash. Chain sync no longer waits on a seed it found absent: its proofs are jobs, and `Proved::NotHeld` and `Command::SeedNotHeld` go.
 
-### 4.7 Stop
+### 5.7 Stop
 
-Each caller passes its own stop flag, as it passes one to `Budget::acquire_unless` today, so the node's stop order (`shekyl-node/src/lib.rs`, "Stop") is unchanged through step 6. A set flag refuses that caller's next job and wakes its waits; a hash in progress finishes. The actor is built before every consumer and stopped after the miner drains (step 7): by then no lease is out, and it frees its caches and joins its builder.
+Each caller passes its own stop flag, as it passes one to `Budget::acquire_unless` today, so the node's stop order (`shekyl-node/src/lib.rs`, "Stop") is unchanged through step 6. A set flag ends that caller's waits and refuses its next job; a hash in progress finishes. The actor is built before every consumer and stopped after the miner drains (step 7): by then no lease is out, and it frees its caches and joins its builder.
 
-## 5. Answers to the brief's questions
+### 5.8 The bound, and what a rebuild costs
 
-### Q1. The bound, and what a rebuild costs
-
-- **A fourth main seed: no.** The window is `cap + max(cap, 65)` wide, 1,440 blocks at the production cap, inside one 2,048-block epoch; a compile-time assertion holds `D_MAX` to that (`cache_window.rs:41`). A run adds none (HA-F9).
-- **A fork across two seed boundaries: the code does not exclude it.** A held fork's root is within the cap below the tip (the death rule, `alt.rs:265`), but nothing bounds how far above the tip it reaches. It would need about 1,400 blocks more than the main chain while carrying less work, which the difficulty rule makes implausible; no line of code forbids it. The design does not depend on it: a need names one seed per branch tip, and a job names its own.
-- **Three is the honest count, and it is routine** during initial sync (HA-F5).
-- **A fourth is the evidence check** as ruled (HA-F6, HA-Q2).
-- **`PreparedCache::derive` on the floor device:** about 2.1 s, below.
+- **The window names at most two seeds.** It is `cap + max(cap, 65)` wide, 1,440 blocks at the production cap, inside one 2,048-block epoch; a compile-time assertion holds `D_MAX` to that (`cache_window.rs:41`).
+- **A fork across two seed boundaries is not excluded by the code.** A held fork's root is within the cap below the tip (the death rule, `alt.rs:265`), but nothing bounds how far above the tip it reaches. The design does not depend on it: the list names one seed for the most-work chain, and a job names its own.
+- **Three is routine** through initial sync (HA-F5).
 
 **Measured 2026-11-10 on the floor device** (Pi 4, `dev` at `cf561f79d6`, the Release `cache_derive` bench, 100 samples a run, the device's resident testnet daemon running throughout at about 188 % CPU):
 
@@ -161,75 +158,61 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 
 - One forced rebuild costs about **2.1 s** of one core on the floor device, 6.1 times the 341 ms x86 figure (`rust/shekyl-pow-randomx/BENCH_RESULTS.md`).
 - The readings were taken beside a busy node, which is the condition a forced rebuild meets. They are not an idle-device figure.
-- The worst wait in §4.5, two derivations, is about 4.2 s.
-- The record is in shekyl-dev `infrastructure/captures/randomx-cache-actor/2026-11-10/`. The bench is not yet a row of the bench suite; it joins it with the crate (Q5 step 2).
+- The record is in shekyl-dev `infrastructure/captures/randomx-cache-actor/2026-11-10/`. The bench is not yet a row of the bench suite; it joins it with the crate (§6 step 2).
 
-### Q2. How a form gets its hash
+### 5.9 The evidence check's worst case
 
-§4.3. Confirmed against `form_on_branch` and the run path: both already run `form` inside one blocking closure that holds the permit, and the closure is where the lending scope goes.
+- **The admission rate:** one check at a time, and at most one per session (HA-F11). There is no rate in time.
+- **What one check costs this node:** its own build, and the refill of the warm third cache it pushed out: two derivations, about 4.2 s of one core on the floor device, at `Class::Evidence`, which every class but the miner outranks.
+- **The worst case an attacker can force** is therefore one permit kept building for as long as the attacker can open sessions that pass the cheap checks. Checks are serial, so it is never more than one build at a time, and the window's pair is never touched.
+- **Reopening criterion:** when the reconnect throttle is built, its `N` sessions per `T` gives the rate, and this section states `N / T × 4.2 s`.
 
-### Q3. Who owns scheduling
-
-The permits move behind the actor's entry points. `Budget` keeps its type and its class rules; consumers stop holding one.
-
-What breaks if they stay with the callers:
-
-- **A deadlock on a small budget.** A caller that holds a permit and then waits for a cache waits on a build, and the build needs a permit. On a one-permit budget that never ends. Today the order "gate, permit, `pin_lock`" is a comment each call site must obey (`service.rs:555–:568`). One entry point that takes the lease, then the permit, makes it the only order there is.
-- **An unpriced build.** A build started by a list has no caller thread to hold its permit, so the actor needs the budget anyway.
-- **The branch gate has no owner.** It exists to bound live caches to three. The bound is the seat now.
-
-### Q4. Where the actor lives
-
-A new crate above `shekyl-pow-randomx` and `shekyl-hash-budget`, proposed name `shekyl-hasher`. Not in `shekyl-pow-randomx`: that crate is held to isolation invariants "a scheduler has no business under" (`shekyl-hash-budget/Cargo.toml`). `PreparedCache::derive` therefore stays `pub`, and a gate holds its callers to the actor, the benches and the differential harness. The mailbox mechanism is a Round 1 detail with one constraint: the entry points are called from blocking threads and from the miner's own threads, which hold no runtime handle.
-
-### Q5. The PR sequence
+## 6. The PR sequence — RULED (HA-R6)
 
 1. **This document.**
-2. **`shekyl-hasher`, with no consumer** (rule 26: a new crate is its own PR). The actor, the lists, the seat, leases, builds, the metric, and its own tests. Built and tested; nothing calls it. The floor derive bench joins the bench suite here.
-3. **The cutover, one PR, driven by the deletion.** The cache store's slots are shared by every consumer in §2, so any split leaves two owners of caches in one process. This PR deletes the slot API and moves the ingest, chain sync's executor, the miner, `calc_pow`, the node, the replay binary, the pipeline and the test harnesses onto the actor, with `needed_seeds` and the invariant test.
-4. **Close-out.** The live RSS capture repeated with a fork case, PB-R1's cache rows restated against the ruled bound, and this document moved or made a contract (rule 95).
+2. **`shekyl-hasher`, with no consumer** (rule 26: a new crate is its own PR). The actor, the cap, leases, builds, refill and the metric. Its tests are the invariant tests of §8, written against the crate's own API so the cutover reuses them. The floor derive bench joins the bench suite here.
+3. **The cutover, one PR, driven by the deletion.** The cache store's slots are shared by every consumer in §2, so any split leaves two owners of caches in one process. This PR deletes the slot API and moves the ingest, chain sync's executor, the miner, `calc_pow` and its `AdmittedPow`, the node, the replay binary, the pipeline and the test harnesses onto the actor, with `ranked_seeds` and its tests.
+4. **Close-out.** The live RSS capture repeated with a fork case, PB-R1's cache rows restated against the cap, and this document moved or made a contract (rule 95).
 
-## 6. What it deletes
+## 7. What it deletes
 
-The brief's list stands. HA-F1 adds:
+- **In `shekyl-pow-randomx`:** the two slots and `lookup`, `lookup_or_derive`, `pin_canonical`, `set_canonical`, `release` and `slots` (`cache_store.rs:443–:651`). The derivation de-duplication moves into the actor, its only caller. `PreparedCache::derive` stays `pub`, because the actor lives above this crate (the crate is held to isolation invariants "a scheduler has no business under", `shekyl-hash-budget/Cargo.toml`); a gate holds its callers to the actor, the benches and the differential harness.
+- **In `shekyl-chain-rules`:** `pin_seed`, `release_seed`, `slots`, `prepare_seed`, `cache_absent`, `longhash_held` and `type Held` on `Substrate`.
+- **In `shekyl-chain-ingest`:** `pin_lock` and the installed-window record; `published_seeds`, `seed_now` and `seed_pair`; `install_blocking`, `install_pair`, `window_is_settled`, `with_pin_lock` and `pin_view` (`window.rs`); `pin_seeds` and both `prepare_seed` sites (`span.rs`); `SlotPair`; the branch gate; `Branch` (`substrate.rs:308–:365`); `ProductionSubstrate`'s `Arc<CacheStore>` and `SubstrateFault::CacheAbsent`.
+- **In `shekyl-chain-sync-runtime`:** `Executor::branch`, `branch_held`, `branch_cache`, `derive`, `Prepared` and `HeldSubstrate` (`executor.rs:54`, `:101–:120`, `:184–:217`, `:302–:338`), the executor's own `Budget`, and the owner's wait on the seeds watch (`owner.rs:541`, `:1321`).
+- **In `shekyl-chain-sync`:** `CachePlan`'s three-way split as a cache choice, `Proved::NotHeld` and `Command::SeedNotHeld`. Whether a seed is earned stays the model's.
+- **In `shekyl-miner`:** the `caches.lookup` at `miner.rs:308`.
+- **In `shekyl-daemon-rpc`:** `store_facts.rs:161`'s `Arc<CacheStore>` and `AdmittedPow`'s `Arc<PreparedCache>` (`read_facts.rs:127`).
+- **In `shekyl-node`:** `lib.rs:283` builds the actor; `mining.rs:207`'s `Arc<CacheStore>` goes.
+- **Tools and tests** in §2's last row take the actor, and `the_record_is_the_slots` and the `Gated` substrate's slot model go: with the slot API gone there is no second pathway to leave them on.
 
-- **In `shekyl-chain-sync-runtime`:** `Executor::branch`, `branch_held`, `branch_cache`, `derive`, `Prepared` and `HeldSubstrate` (`executor.rs:54`, `:101–:120`, `:184–:217`, `:302–:338`), and the executor's own `Budget`.
-- **In `shekyl-chain-ingest`:** `Branch` (`substrate.rs:308–:365`) and `ProductionSubstrate`'s `Arc<CacheStore>`.
-- **In `shekyl-daemon-rpc`:** `AdmittedPow`'s `Arc<PreparedCache>` (`read_facts.rs:127`).
-- **In `shekyl-node`:** `mining.rs:207`'s `Arc<CacheStore>`.
-- **Tools and tests** in §2's last row take the actor: with the slot API gone there is no second pathway to leave them on.
+## 8. Tests
 
-## 7. Tests
-
-The brief's §4 stands, with these changes:
-
-- **The invariant has two halves.** *Always:* the actor holds no cache outside what a fresh actor would hold for the same lists, except a draining one with a job in flight. That half is the class in §1 and is checked after every reply. *Once quiet:* it holds exactly that set. A build in progress makes the second half false for a moment, so it is checked when no build and no job is running.
-- **Added red tests, each failing on `dev`:**
+- **`ranked_seeds`, in isolation:** table tests over the window's one-seed and two-seed spans, a held fork past its seed point, two held forks (the heavier is listed), a header frontier ahead of the window, a frontier and a fork together (the more work is listed), and a seed already in the window (not listed twice).
+- **The invariant (HA-R5):** after any sequence of blocks, forks, reorgs, pops, header runs and evidence checks, once the actor is quiet it holds exactly the caches a fresh actor would hold for the same list. *Always*, quiet or not: no more than three caches exist. Run after every reply in the connect-path tests.
+- **Red first, each failing on `dev` at `cf561f79d6`:**
+  - a fork past its seed point whose tip then leaves the cap: its cache is gone at the next quiescence;
+  - a second span of a live fork: nothing is built;
   - a header run across a seed boundary that then ends: its cache is freed (HA-F1);
-  - a fork whose headers were proven and whose bodies then arrive: one build, not two (HA-F2);
-  - a switch whose promoted blocks all have recorded hashes: no build (HA-F8).
-- **The metric** exports resident and draining counts separately.
-- **A gate** holds `PreparedCache::derive` and `Arc<PreparedCache>` to the paths in Q4, and asserts those paths exist (rule 47).
+  - a fork whose headers were proven and whose bodies then arrive: one build (HA-F2);
+  - a switch whose promoted blocks all have recorded hashes: no build (HA-F8);
+  - an evidence check while the third cache is warm: the check runs, the warm cache is freed for it, and it is back at quiescence (HA-R3);
+  - a mining job whose seed leaves the list: the job is cancelled and the cache freed;
+  - `calc_pow` on a seed that is not warm: declined, nothing built.
+- **Carried over from #1338:** the 2,124-block nightly test, and the live RSS reading (shekyl-dev `infrastructure/captures/a2-randomx-cache-rss/2026-11-09/`), repeated on the new build with a fork case added.
+- **A metric:** the count of live caches, exported, so a node's memory can be checked against PB-R1.
+- **A gate** holds `PreparedCache::derive` and `Arc<PreparedCache>` to the paths in §7, and asserts those paths exist (rule 47).
 
-## 8. Wargame
+## 9. Wargame, and one check owed
 
-- **Forced rebuilds through the seat.** The seat goes to the most work, and an off-main job borrows it. An attacker with one held fork past its seed point (66 blocks of real work: the seed block and the 65 above it) sends a free invalid block on it while a heavier claim holds the seat. That costs this node the fork's build, and the heavier claim's rebuild when it next needs the seat. Whether the displaced claim is rebuilt at once or at its next job is HA-Q4.
-- **Evicting the main chain's previous seed.** It cannot be done: the main pair is not in the seat's order. A pop across the switch finds the previous seed resident for the whole of the window that names it.
-- **Initial sync against a cheap fork.** Early blocks are cheap, so a forged run of 65 early headers earns a seed cheaply. It ranks by proven work, below the honest frontier, and is refused `NotSeated` while the frontier holds the seat.
-- **A lent cache held too long.** §4.3's types. An `Arc<PreparedCache>` outside the crate fails the gate in §7.
-- **The actor stalling.** §4.5.
-- **Shutdown.** §4.7.
-
-## 9. Questions for ruling
-
-- **HA-Q1.** The bound: the main pair plus one off-main seat, three caches.
-- **HA-Q2.** The evidence check: take the seat (displacing a fork's or a run's cache for the check, three in all), or keep its own job-scoped cache as ruled on 2026-10-19 (four while a check runs, which HA-F7 puts past PB-R1 by arithmetic).
-- **HA-Q3.** Chain sync is a second source of needs (HA-F4), so the brief's "`needed_seeds` stays in the ingest" covers the chain's list only.
-- **HA-Q4.** After an off-main job borrows the seat from a heavier claim: rebuild the heavier claim's cache at once (the "once quiet" invariant holds; two builds per forced job) or at its next job (one build; the invariant's second half is weakened to "a subset").
-- **HA-Q5.** The permits move behind the actor's entry points (Q3).
-- **HA-Q6.** The crate: `shekyl-hasher`, above `shekyl-pow-randomx` and `shekyl-hash-budget` (Q4).
-- **HA-Q7.** The cut: four PRs, the cutover atomic (Q5).
-- **HA-Q8.** A run's seeds: either `needed_seeds` takes the seeds of the run in flight, as the brief has it, or `ServiceConfig::room` is held to at most the seed lag by a refusal at construction and HA-F9 is proven first, so the chain's list is a function of the store alone.
+- **Forced rebuilds.** A warm cache is free to hash under, so an attacker gains nothing from blocks on the most-work fork or the frontier. A block on a lighter held fork past its seed point (66 blocks of real work behind it: the seed block and the 65 above it) costs this node that fork's build and one refill, about 4.2 s on the floor device, under the arrival's class.
+- **The evidence check.** §5.9.
+- **Evicting the window's pair.** It cannot be done (§5.2).
+- **Initial sync against a cheap fork.** Early blocks are cheap, so a forged run of 65 early headers earns a seed cheaply. Its proofs are jobs and get their cache; it does not hold the warm third place, which goes to the most proven work.
+- **A lent cache held too long.** §5.3's types. An `Arc<PreparedCache>` outside the crate fails the gate in §8.
+- **The actor stalling.** §5.5.
+- **Shutdown.** §5.7.
+- **OWED: whether a run can pin a seed the window does not name** (HA-R1). `window.rs:87–:90` says a run pins seeds the window "cannot name". By the arithmetic in HA-F9 the window names the same two. The check is a run of the ingest and loopback-sync tests with an assertion at `pin_seeds`; its result deletes the comment or replaces it with a test.
 
 ## 10. What this round read, and what it did not
 
