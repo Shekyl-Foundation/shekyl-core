@@ -675,7 +675,10 @@ pub(crate) mod tests {
 
     /// The ignored live tests wait here so a published onion has a network.
     /// A hang bound in a test is not a daemon deadline: nothing in the
-    /// supervisor gives a bootstrap up.
+    /// supervisor gives a bootstrap up. Past it Tor is still connecting, and
+    /// the panic says "did not bootstrap": the live-test runner retries a
+    /// step once when that is every failure in it
+    /// (`scripts/ci/run_live_tor_tests.sh`).
     pub(crate) async fn wait_for_the_network(boot: &mut DaemonTorControl) {
         let hang = tokio::time::Instant::now() + Duration::from_secs(300);
         let mut watch = boot.watch_bootstrap();
@@ -698,7 +701,7 @@ pub(crate) mod tests {
                 BootstrapState::Connecting { .. } => {}
             }
             if tokio::time::Instant::now() >= hang {
-                panic!("the live test stopped waiting");
+                panic!("tor did not bootstrap within 300 s: still connecting");
             }
             tokio::select! {
                 changed = watch.changed() => {
