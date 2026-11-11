@@ -84,10 +84,12 @@ where
         substrate.pin_seed(&pair.canonical);
         // A seed the previous window named and this one does not is
         // released: nothing else would empty its slot before the next
-        // epoch's pin (A2). Only those. A run in flight pins the seeds of
-        // blocks it has not committed yet, and this window, read at the
-        // committed tip, cannot name them; a release by "whatever the
-        // second slot holds" evicted them under the run's forms.
+        // epoch's pin (A2). Only those. A run that begins at genesis pins
+        // block 0's id for block 1 before block 0 is stored, and this
+        // window, read at the committed tip, cannot name it
+        // (`a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name`);
+        // a release by "whatever the second slot holds" evicted it under
+        // the run's forms.
         if let Some(previous) = installed.replace(pair) {
             for seed in [Some(previous.canonical), previous.transient]
                 .into_iter()

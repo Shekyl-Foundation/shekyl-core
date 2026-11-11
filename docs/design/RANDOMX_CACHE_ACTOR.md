@@ -1,6 +1,6 @@
 # One hashing actor owns the RandomX caches
 
-**Status:** OPEN — Round 0 RULED 2026-11-10 (Rick): HA-R1…HA-R6, §4. The design in §5 is the ruled one. Nothing is built; the PR sequence is §6. One check is still owed (§9).
+**Status:** OPEN — Round 0 RULED 2026-11-10 (Rick): HA-R1…HA-R6, §4. The design in §5 is the ruled one. Nothing is built; the PR sequence is §6.
 
 **Ground:** `dev` at `cf561f79d6`, which includes #1338. Every `path:line` below was read at that revision.
 
@@ -48,7 +48,7 @@ Two readers consume the published slots, not a cache: the tip follower before a 
 - **HA-F6. The evidence check has a ruled cache of its own** (Rick, 2026-10-19; `DRS_X_STORE_FLIP.md` DX-Q2 item 6). Kept beside three others it would be a fourth; HA-R3 makes it a job inside the cap.
 - **HA-F7. Three caches leave PB-R1 about 100 MiB; four exceed it.** PB-R1 is 2 GiB with mining off (`DAEMON_REDB_STORE.md` §1.3a): a 1 GiB store cache, a 64 MiB pool cache, "about 256 MiB" of RandomX and the process. The process outside the caches read about 90 MiB on regtest (RssAnon 354,624 kB with one cache, 2026-11-09). Three caches make 1,024 + 64 + 768 + 90 = 1,946 MiB. Four make 2,202 MiB. This is arithmetic from the budget row and one regtest reading, not a floor-device run at design load.
 - **HA-F8. A switch prepares caches it rarely hashes under.** `prepare_all` (`span.rs:1134`) derives each branch seed a promoted run names, but the switch forms through `Recalled` (`substrate.rs:230`), which answers from the proof-of-work hash recorded when each block first arrived. Under the actor a switch asks for a cache only for a block with no recorded hash.
-- **HA-F9. A run's seeds are already in the window.** A run is at most the arrival window, 32 blocks by default (`pipeline.rs:105`), and a seed is first named 65 blocks above its block, so the block is committed before any block of the run names it. The window reaches `max(cap, 65)` above the connecting height (`cache_window.rs:51`) and names it. This holds while the arrival window is at most the seed lag (64); `ServiceConfig::room` is not held to that today, and the largest one configured is 64 (`shekyl-p2p-harness/src/sync/chain.rs:247`). **Not reconciled:** `window.rs:87–:90` says a run pins seeds the window "cannot name". By this arithmetic the window names the same two seeds with the canonical role on the other one; this round did not find a run seed outside the pair.
+- **HA-F9. A run names a seed outside the window in one case: a run that begins at genesis.** Heights 1 through 2,112 hash under block 0's id, with no lag after block 0 (`seedheight`, `shekyl-difficulty/src/seed_epoch.rs:45`). A span of blocks 0 and 1 on an empty store therefore pins block 0's id while the window, read at the committed tip, names only the null seed. Past genesis a seed is first named 65 blocks above its block, and a run is at most the arrival window (32 by default, 64 at most configured), so the block is committed and the window names it. **Checked 2026-11-10** by a probe at `pin_seeds`: 29 of 479 pinned seeds in the ingest service tests were outside the window, 28 of them block 0's id against a window of the null seed alone and one a test's own synthetic seed; none of 2,518 in the loopback harness. The node connects its pinned genesis before it takes a span, so no peer can cause the case. The test is `a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name`. Under HA-R1 a run is a job and the case needs no rule of its own.
 - **HA-F10. The earlier "no cache store" proposal was rejected for unbounded holding** (`cache_store.rs:17–:34`; `docs/completed/RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 2, alternatives (d) and (g)): consumers managing `Arc<PreparedCache>` themselves gave no cap. That objection does not reach this design, because the cap is the actor's and no consumer holds an `Arc`. It is the bar the lending type in §5.3 has to meet.
 - **HA-F11. The evidence check has no admission rate in time.** The sync model admits one check at a time and at most one per session (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3, item 3). A candidate needs a past-cap run whose cheap checks pass and whose computed work exceeds the local chain's, and timestamps raise computed work for free. What prices the next session is the clearnet reconnect throttle, which is registered and not built (`P2P_TRANSPORT_LAYER.md`, "Clearnet reconnect throttle"). So the only bound today is that checks are serial.
 
@@ -203,7 +203,7 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 - **A metric:** the count of live caches, exported, so a node's memory can be checked against PB-R1.
 - **A gate** holds `PreparedCache::derive` and `Arc<PreparedCache>` to the paths in §7, and asserts those paths exist (rule 47).
 
-## 9. Wargame, and one check owed
+## 9. Wargame
 
 - **Forced rebuilds.** A warm cache is free to hash under, so an attacker gains nothing from blocks on the most-work fork or the frontier. A block on a lighter held fork past its seed point (66 blocks of real work behind it: the seed block and the 65 above it) costs this node that fork's build and one refill, about 4.2 s on the floor device, under the arrival's class.
 - **The evidence check.** §5.9.
@@ -212,7 +212,6 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 - **A lent cache held too long.** §5.3's types. An `Arc<PreparedCache>` outside the crate fails the gate in §8.
 - **The actor stalling.** §5.5.
 - **Shutdown.** §5.7.
-- **OWED: whether a run can pin a seed the window does not name** (HA-R1). `window.rs:87–:90` says a run pins seeds the window "cannot name". By the arithmetic in HA-F9 the window names the same two. The check is a run of the ingest and loopback-sync tests with an assertion at `pin_seeds`; its result deletes the comment or replaces it with a test.
 
 ## 10. What this round read, and what it did not
 
