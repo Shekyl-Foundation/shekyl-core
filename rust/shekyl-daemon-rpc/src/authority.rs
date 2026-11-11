@@ -141,7 +141,9 @@ impl Authority {
             )
         };
         match row.policy {
-            Policy::Endpoint => {}
+            // A connection that reaches dispatch has authenticated, or came
+            // in on a plaintext loopback listener (RT-O33).
+            Policy::Endpoint | Policy::Authenticated => {}
             Policy::Grant(grant) => {
                 if !self.grants.holds(grant) {
                     return Err(RpcError::new(
@@ -245,6 +247,22 @@ mod tests {
         json_rpc(name)
             .or_else(|| rest_path(name))
             .unwrap_or_else(|| panic!("{name} has no row"))
+    }
+
+    /// The version read is under no grant (RW-Q6): a key that holds
+    /// `submit` alone runs the skew check, and is still refused `get_info`.
+    /// Red edit: give `get_version` the `health` grant in the table.
+    #[test]
+    fn a_submit_only_key_reads_the_version() {
+        let submit_only = Authority {
+            grants: GrantSet::of(&[Grant::Submit]),
+            host: false,
+            armed: false,
+        };
+        assert!(submit_only.admit(row("get_version")).is_ok());
+        assert!(submit_only.admit(row("/submit_transaction")).is_ok());
+        let refused = submit_only.admit(row("get_info")).expect_err("health");
+        assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
     }
 
     #[test]

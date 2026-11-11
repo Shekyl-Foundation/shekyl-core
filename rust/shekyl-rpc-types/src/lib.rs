@@ -78,6 +78,7 @@ pub mod headers;
 pub mod hex128;
 pub mod identity;
 pub mod info;
+pub mod kinds;
 pub mod method;
 pub mod methods;
 pub mod mining;

@@ -31,9 +31,9 @@ pub trait RpcMethod {
     const NAME: &'static str;
     /// Who may call it (`RPC_CHANNEL.md` §6.1).
     const POLICY: Policy;
-    /// Its `params`: a named object, or `()` for none.
+    /// Its `params`: a named object, or [`NoParams`](crate::kinds::NoParams).
     type Request: serde::Serialize + serde::de::DeserializeOwned + Schema;
-    /// Its `result`.
+    /// Its `result`; [`Done`](crate::kinds::Done) when success is all it says.
     type Reply: serde::Serialize + serde::de::DeserializeOwned + Schema;
 
     /// The words a person types for this method: its path, spaced.
@@ -77,6 +77,83 @@ impl Row {
     }
 }
 
+const fn name_ok(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    let mut i = 1;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let term_start = bytes[i - 1] == b'_';
+        let ok = if b == b'_' {
+            // No empty term: not doubled, and not last.
+            !term_start && i + 1 < bytes.len()
+        } else if term_start {
+            b.is_ascii_lowercase()
+        } else {
+            b.is_ascii_lowercase() || b.is_ascii_digit()
+        };
+        if !ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Refuse, at compile time, a name that is not a `_`-joined path of
+/// `[a-z][a-z0-9]*` terms (IG-1). `stringify!(r#type)` is `r#type`, which
+/// this refuses.
+///
+/// # Panics
+///
+/// In a const context, which fails the build.
+pub const fn assert_name(name: &str) {
+    assert!(
+        name_ok(name),
+        "a wire name is lowercase terms joined with `_` (IG-1)"
+    );
+}
+
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Refuse, at compile time, a table with a malformed name or with one name
+/// in two rows. A repeated name would otherwise be an unreachable match
+/// arm, which only warns.
+///
+/// # Panics
+///
+/// In a const context, which fails the build.
+pub const fn assert_table(rows: &[Row]) {
+    let mut i = 0;
+    while i < rows.len() {
+        assert_name(rows[i].name);
+        let mut j = i + 1;
+        while j < rows.len() {
+            assert!(
+                !same(rows[i].name, rows[j].name),
+                "one method name is in two rows of the table"
+            );
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
 /// List every method once.
 ///
 /// Each entry is `Type = "name": Request => Reply, policy;`. The macro
@@ -84,15 +161,39 @@ impl Row {
 /// with one variant for each method, and the table `$table`.
 ///
 /// ```
+/// use shekyl_rpc_types::kinds::{Integer, NoParams};
 /// use shekyl_rpc_types::method::{Policy, RpcMethod};
 /// shekyl_rpc_types::rpc_methods! {
 ///     id Id; table TABLE;
 ///     /// The version read.
-///     Version = "version": () => u32, Policy::Endpoint;
+///     Version = "version": NoParams => Integer, Policy::Authenticated;
 /// }
 /// assert_eq!(Id::of("version"), Some(Id::Version));
 /// assert_eq!(TABLE.len(), 1);
 /// assert_eq!(<Version as RpcMethod>::NAME, "version");
+/// ```
+///
+/// One name in two rows does not compile:
+///
+/// ```compile_fail
+/// use shekyl_rpc_types::kinds::{Integer, NoParams};
+/// use shekyl_rpc_types::method::Policy;
+/// shekyl_rpc_types::rpc_methods! {
+///     id Id; table TABLE;
+///     Version = "version": NoParams => Integer, Policy::Authenticated;
+///     Again = "version": NoParams => Integer, Policy::Authenticated;
+/// }
+/// ```
+///
+/// Nor does a name that is not a `_`-joined path:
+///
+/// ```compile_fail
+/// use shekyl_rpc_types::kinds::{Integer, NoParams};
+/// use shekyl_rpc_types::method::Policy;
+/// shekyl_rpc_types::rpc_methods! {
+///     id Id; table TABLE;
+///     Version = "get-version": NoParams => Integer, Policy::Authenticated;
+/// }
 /// ```
 #[macro_export]
 macro_rules! rpc_methods {
@@ -156,27 +257,30 @@ macro_rules! rpc_methods {
         pub const $table: &[$crate::method::Row] = &[
             $($crate::method::Row::of::<$ty>()),+
         ];
+
+        const _: () = $crate::method::assert_table($table);
     };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kinds::{Integer, NoParams};
     use shekyl_rpc_grants::Grant;
 
     crate::wire_object! {
         ["chain"]
         pub struct Tip {
-            pub height: u64,
+            pub height: crate::kinds::Height,
         }
     }
 
     crate::rpc_methods! {
         id Id; table TABLE;
         /// The version read.
-        Version = "version": () => u32, Policy::Grant(Grant::Health);
+        Version = "version": NoParams => Integer, Policy::Authenticated;
         /// The tip.
-        ChainHeight = "chain_height": () => Tip, Policy::Grant(Grant::Chain);
+        ChainHeight = "chain_height": NoParams => Tip, Policy::Grant(Grant::Chain);
         /// A lever.
         DevChainPop = "dev_chain_pop": Tip => Tip, Policy::Armed;
     }
@@ -195,6 +299,44 @@ mod tests {
         assert!(Id::DevChainPop.row().armed());
         assert!(!Id::Version.row().armed());
         assert_eq!(Id::of("get_height"), None);
+    }
+
+    /// The checks the macro runs at compile time, as functions. A second
+    /// row named `version`, or a name `r#type`, `Chain`, `chain__height`
+    /// or `chain_`, fails the build.
+    #[test]
+    fn a_malformed_or_repeated_name_is_refused() {
+        for good in ["version", "chain_height", "block_header_list", "p2p_stats"] {
+            assert!(name_ok(good), "{good}");
+        }
+        for bad in [
+            "",
+            "r#type",
+            "Chain",
+            "chain__height",
+            "chain_",
+            "_chain",
+            "2fa",
+            "chain_2x",
+            "get-info",
+        ] {
+            assert!(!name_ok(bad), "{bad}");
+        }
+        assert!(same("version", "version"));
+        assert!(!same("version", "versions"));
+        let twice = std::panic::catch_unwind(|| {
+            assert_table(&[Row::of::<Version>(), Row::of::<Version>()]);
+        });
+        assert!(twice.is_err());
+        assert_table(TABLE);
+    }
+
+    /// The version read is callable by every authenticated caller,
+    /// whatever its grant (RW-Q6): a `submit`-only key runs the skew
+    /// check. Red edit: give `Version` the `health` grant.
+    #[test]
+    fn the_version_read_is_under_no_grant() {
+        assert_eq!(Id::Version.row().policy, Policy::Authenticated);
     }
 
     #[test]

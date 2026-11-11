@@ -40,6 +40,12 @@ pub enum Policy {
     /// An armed test lever (RT-O9.2): the host's administrator only, and only
     /// while the daemon runs with its armed-lever switch on.
     Armed,
+    /// Every authenticated caller, whatever its grant: the version read
+    /// (`RPC_WIRE.md` RW-Q6), which a client makes before it trusts
+    /// anything else, so a key holding `submit` alone can still run the
+    /// skew check. Never served before authentication (`RPC_CHANNEL.md`
+    /// §4.3).
+    Authenticated,
     /// The JSON-RPC endpoint itself: it serves any connection, and each
     /// method on it carries its own policy.
     Endpoint,
@@ -161,7 +167,7 @@ const fn g(grant: Grant) -> Policy {
 /// The table.
 pub const METHODS: &[Method] = &[
     // JSON-RPC, served natively in Rust.
-    json("get_version", &[], g(Health)),
+    json("get_version", &[], Policy::Authenticated),
     json("get_block_count", &["getblockcount"], g(Chain)),
     json("on_get_block_hash", &["on_getblockhash"], g(Chain)),
     json(
@@ -329,9 +335,11 @@ mod tests {
                 Policy::Grant(Grant::Pool),
             ),
             (
-                &["get_version", "get_info", "/get_info", "option_show"],
+                &["get_info", "/get_info", "option_show"],
                 Policy::Grant(Grant::Health),
             ),
+            // Every grant set, and no grant of its own (RW-Q6).
+            (&["get_version"], Policy::Authenticated),
             (
                 &[
                     "get_alternate_chains",
