@@ -517,7 +517,7 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let before = self.state();
-        self.expire_waiting(now);
+        self.expire_waiting(now, out);
         let header_response = match &event {
             Event::Headers { session, .. } => Some(*session),
             _ => None,

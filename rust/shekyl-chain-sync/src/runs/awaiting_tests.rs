@@ -339,14 +339,27 @@ fn a_block_whose_bundle_body_arrives_is_offered_with_it() {
     assert!(closed(&out).is_empty());
 }
 
-/// A block whose body never comes is dropped at [`AWAITING_AGE`], not
-/// refused: a late answer finds nothing waiting, offers nothing and closes
-/// nobody. Red edit: drop the expiry — the late answer offers the block.
+/// A block whose body never comes from a session this node asked for the
+/// block (a 2014 answer) is dropped at [`AWAITING_AGE`], not refused: the
+/// session served what it held, so it is not closed, and a late answer
+/// finds nothing waiting and offers nothing. The wait is made a 2014
+/// answer's by marking its one ask. Red edits: drop the expiry — the late
+/// answer offers the block; close every silent sender — session 1 closes.
 #[test]
-fn a_block_that_waits_past_the_age_is_dropped_not_refused() {
+fn a_block_a_server_was_asked_for_expires_and_the_server_stays() {
     let mut world = World::new();
     let block = world.block_with_section(3);
     world.announce(&block);
+    for ask in world
+        .sync
+        .awaiting
+        .get_mut(&block.hash)
+        .expect("the block waits")
+        .asked
+        .values_mut()
+    {
+        ask.sender = super::Sender::Asked;
+    }
     let late = AWAITING_AGE + Duration::from_secs(1);
     let out = world.drive(
         Event::BundleBodies {
@@ -357,7 +370,65 @@ fn a_block_that_waits_past_the_age_is_dropped_not_refused() {
         late,
     );
     assert!(offered(&out).is_empty(), "the wait expired: {out:?}");
-    assert!(closed(&out).is_empty(), "an expired wait closes nobody");
+    assert!(closed(&out).is_empty(), "a server that was asked stays");
+    assert!(world.sync.awaiting.is_empty());
+}
+
+/// An announcer that is asked and sends nothing for [`AWAITING_AGE`] is
+/// closed, as one that answers with nothing is (Rick, 2026-11-10): the
+/// first event at or after the age drops the wait and closes it. Session 2
+/// announced the same block one second before the age and is not closed:
+/// its answer may be on its way. Red edit: expire the wait and close
+/// nobody — a silent announcer keeps its session.
+#[test]
+fn an_announcer_silent_for_the_age_is_closed_and_a_later_asked_one_is_not() {
+    let mut world = World::new();
+    world.open(2);
+    let block = world.block_with_section(800);
+    world.announce(&block);
+    let out = world.drive(
+        Event::Announce {
+            session: 2,
+            body: block.body.clone(),
+        },
+        AWAITING_AGE
+            .checked_sub(Duration::from_secs(1))
+            .expect("the age is over a second"),
+    );
+    assert_eq!(asked(&out), vec![(2, block.hash, 1)]);
+    assert!(closed(&out).is_empty(), "the age has not run");
+    let out = world.drive(Event::Room { seats: 4 }, AWAITING_AGE);
+    assert_eq!(
+        closed(&out),
+        vec![(1, &CloseCause::BundleBodiesWithheld)],
+        "the silent announcer is closed; the one just asked is not"
+    );
+    assert!(world.sync.awaiting.is_empty(), "the wait is dropped");
+    assert!(offered(&out).is_empty());
+}
+
+/// An announcer that sent part of what was asked is not silent: at the age
+/// the wait is dropped and the session stays. The block names one bundle,
+/// so "part" is marked on the ask. Red edit: close an announcer whatever
+/// it has sent.
+#[test]
+fn an_announcer_that_sent_a_body_is_not_closed_at_the_age() {
+    let mut world = World::new();
+    let block = world.block_with_section(900);
+    world.announce(&block);
+    for ask in world
+        .sync
+        .awaiting
+        .get_mut(&block.hash)
+        .expect("the block waits")
+        .asked
+        .values_mut()
+    {
+        ask.answered = true;
+    }
+    let out = world.drive(Event::Room { seats: 4 }, AWAITING_AGE);
+    assert!(closed(&out).is_empty(), "it answered: {out:?}");
+    assert!(world.sync.awaiting.is_empty(), "the wait is dropped");
 }
 
 /// One session holds at most [`AWAITING_PER_SESSION`] blocks waiting. The
@@ -430,7 +501,11 @@ fn the_total_bound_holds_back_a_new_block_and_evicts_no_other_wait() {
             super::Waiting {
                 asked: std::collections::BTreeMap::from([(
                     arrival.session,
-                    super::Sender::Announced,
+                    super::Ask {
+                        sender: super::Sender::Announced,
+                        at: since,
+                        answered: false,
+                    },
                 )]),
                 arrival,
                 since,

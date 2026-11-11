@@ -22,6 +22,8 @@
 //!   dropped, not refused, and asked for again like any body this node
 //!   does not hold;
 //! - in age ([`AWAITING_AGE`]); an expired wait is dropped, not refused.
+//!   The age is read when the next event arrives, so a wait ends at the
+//!   first event at or after it.
 //!
 //! Each waiting entry pins one bound block body, so the memory the set can
 //! hold is [`AWAITING_TOTAL`] block bodies.
@@ -60,8 +62,12 @@
 //! **Withholding.** A relayer serves the bodies of the blocks it relays
 //! (`SCS-P27`). A session that announced a block and answers the 2016 for
 //! its bodies with nothing is closed
-//! ([`CloseCause::BundleBodiesWithheld`]). A session asked only because it
-//! served the block in a 2014 is not: it served what it held. A miner that
+//! ([`CloseCause::BundleBodiesWithheld`]). So is one that announced a
+//! block, was asked, and has sent no body [`AWAITING_AGE`] later (Rick,
+//! 2026-11-10): silence would otherwise keep a proven block out of the
+//! body planner for the whole wait at no cost. A session asked only
+//! because it served the block in a 2014 is not closed either way: it
+//! served what it held. A miner that
 //! withholds its own bundle's body therefore never has its block offered
 //! here, so its branch is never adopted, and the bounds keep the waiting
 //! from growing.
@@ -109,9 +115,21 @@ pub(crate) struct Waiting<K> {
     pub(crate) arrival: BoundArrival<K>,
     /// When it started waiting.
     pub(crate) since: Instant,
-    /// The sessions asked for its bodies, each with whether this node had
-    /// asked it for the block (a 2014 answer) or it announced the block.
-    pub(crate) asked: BTreeMap<K, Sender>,
+    /// The sessions asked for its bodies.
+    pub(crate) asked: BTreeMap<K, Ask>,
+}
+
+/// One session's ask for a waiting block's bodies.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ask {
+    /// Whether this node had asked the session for the block (a 2014
+    /// answer) or it announced the block.
+    pub(crate) sender: Sender,
+    /// When it was asked.
+    pub(crate) at: Instant,
+    /// It has sent a body since. An empty answer is not one: that sender
+    /// leaves the wait.
+    pub(crate) answered: bool,
 }
 
 /// How a session came to send a waiting block.
@@ -193,14 +211,18 @@ where
             .values()
             .filter(|waiting| waiting.asked.contains_key(&session))
             .count();
-        let sender = Sender::of(&arrival);
+        let ask = Ask {
+            sender: Sender::of(&arrival),
+            at: now,
+            answered: false,
+        };
         if let Some(waiting) = self.awaiting.get_mut(&block) {
             // The wait may hold bodies this copy did not carry: ask for
             // what the wait still lacks.
             if waiting.asked.contains_key(&session) || of_session >= AWAITING_PER_SESSION {
                 return;
             }
-            waiting.asked.insert(session, sender);
+            waiting.asked.insert(session, ask);
             out.push(Command::RequestBundleBodies {
                 session,
                 block,
@@ -221,7 +243,7 @@ where
             Waiting {
                 arrival,
                 since: now,
-                asked: BTreeMap::from([(session, sender)]),
+                asked: BTreeMap::from([(session, ask)]),
             },
         );
     }
@@ -241,11 +263,12 @@ where
         let Some(mut waiting) = self.awaiting.remove(&block) else {
             return;
         };
-        if !waiting.asked.contains_key(&session) {
+        let Some(ask) = waiting.asked.get_mut(&session) else {
             self.awaiting.insert(block, waiting);
             return;
-        }
+        };
         let answered_nothing = bodies.is_empty();
+        ask.answered |= !answered_nothing;
         waiting.arrival.body.bundle_bodies.extend(bodies);
         if unanswered(&waiting.arrival.body).is_empty() {
             // A whole copy announced while this waited is already on its
@@ -257,8 +280,10 @@ where
             return;
         }
         if answered_nothing {
-            let sender = waiting.asked.remove(&session);
-            if sender == Some(Sender::Announced) && self.peers.contains_key(&session) {
+            let ask = waiting.asked.remove(&session);
+            if ask.is_some_and(|ask| ask.sender == Sender::Announced)
+                && self.peers.contains_key(&session)
+            {
                 self.close(session, CloseCause::BundleBodiesWithheld, out);
             }
             if !waiting.pass_to_another_sender(session) {
@@ -271,9 +296,36 @@ where
     /// Drop every block that has waited [`AWAITING_AGE`] or longer. Not a
     /// refusal: the block is asked for again like any body this node does
     /// not hold.
-    pub(crate) fn expire_waiting(&mut self, now: Instant) {
-        self.awaiting
-            .retain(|_, waiting| now.saturating_duration_since(waiting.since) < AWAITING_AGE);
+    ///
+    /// An announcer that was asked [`AWAITING_AGE`] ago and has sent no
+    /// body is closed, as one that answered with nothing is: silence
+    /// withholds as well as an empty answer does (module docs). A session
+    /// asked because it served the block in a 2014 is not closed, and
+    /// neither is an announcer asked more recently than that, whose answer
+    /// may still be on its way when the wait it joined runs out.
+    pub(crate) fn expire_waiting(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        let aged = |since: Instant| now.saturating_duration_since(since) >= AWAITING_AGE;
+        let mut silent = std::collections::BTreeSet::new();
+        self.awaiting.retain(|_, waiting| {
+            if !aged(waiting.since) {
+                return true;
+            }
+            silent.extend(
+                waiting
+                    .asked
+                    .iter()
+                    .filter(|(_, ask)| {
+                        ask.sender == Sender::Announced && !ask.answered && aged(ask.at)
+                    })
+                    .map(|(session, _)| *session),
+            );
+            false
+        });
+        for session in silent {
+            if self.peers.contains_key(&session) {
+                self.close(session, CloseCause::BundleBodiesWithheld, out);
+            }
+        }
     }
 
     /// The session is gone: a block it sent waits on for its other
@@ -291,12 +343,12 @@ impl<K: Copy + Ord> Waiting<K> {
     /// becomes another sender's, so nothing held or offered names a
     /// session that left. `false` when no sender is left.
     fn pass_to_another_sender(&mut self, gone: K) -> bool {
-        let Some((&next, &sender)) = self.asked.iter().next() else {
+        let Some((&next, ask)) = self.asked.iter().next() else {
             return false;
         };
         if self.arrival.session == gone {
             self.arrival.session = next;
-            self.arrival.solicited = sender == Sender::Asked;
+            self.arrival.solicited = ask.sender == Sender::Asked;
         }
         true
     }
