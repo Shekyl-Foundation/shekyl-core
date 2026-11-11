@@ -3080,3 +3080,41 @@ async fn a_dead_connector_is_logged_when_the_fault_is_recorded_and_published() {
     );
     y.close().await;
 }
+
+/// A stop that met no fault says nothing at `error` and publishes no end:
+/// the daemon must not exit failed, or log a fault, for a stop it was
+/// asked for. A block connects first, so the service has worked.
+///
+/// The capture and the runtime are as in the test above, so a line a
+/// stop wrote would be seen: that test is this one's proof the buffer
+/// fills.
+///
+/// Red edit: publish a cause, or log at `error`, in `Service::stop` or
+/// `Shared::request_stop`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_clean_stop_logs_no_error_and_publishes_no_end() {
+    let logging = super::log_capture::Capture::open();
+    let mut y = Scenario::open("service-clean-stop-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-clean-stop",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let ended = service.ended();
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Reply::Connected { .. })),
+        "the block connects: {replies:?}"
+    );
+    service.stop().await.expect("a clean stop returns no fault");
+    assert!(ended.borrow().is_none(), "a clean stop publishes no end");
+    let errors = logging.lines();
+    assert!(
+        errors.is_empty(),
+        "a clean stop logged at error: {errors:?}"
+    );
+    y.close().await;
+}

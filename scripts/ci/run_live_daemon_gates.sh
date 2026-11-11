@@ -291,7 +291,13 @@ ARMED_SLOW=(
 #     did not start (SHEKYL_BENCH_DAEMON_RPC); without that daemon it has
 #     nothing to do. Not a pass/fail proposition: the crash harness judges
 #     the subject, and the source only feeds it.
+#   a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit —
+#     the 2026-11-02 full-disk stop. The chain sits on a filesystem of at
+#     most 2 MiB named by SHEKYL_SMALL_DISK. No lane mounts one, and the
+#     gate has not been observed red, so it is not armed. Run by hand
+#     with that mount and SHEKYLD_BIN.
 DECIDED_DARK=(
+  engine::regtest_e2e::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit
   engine::regtest_e2e::bench_source::bench_tx_source
   engine::regtest_e2e::capture_chain_keeps_its_datadir
   engine::regtest_e2e::sync::a_node_and_an_alpha_11_node_refuse_each_other_cleanly

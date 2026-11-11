@@ -144,6 +144,10 @@ impl RegtestSchedule {
 
 pub(super) struct RegtestDaemon {
     child: Child,
+    /// The daemon's `data-dir`: [`Self::data_dir`] unless the spawn named
+    /// another ([`RegtestSpawn::with_chain_dir`]).
+    chain_dir: PathBuf,
+    /// Where the logs are, and the chain too unless the spawn moved it.
     data_dir: PathBuf,
     /// The private directory that holds this daemon's empty configuration
     /// file (`private_config_dir`). Removed with the daemon.
@@ -346,6 +350,11 @@ struct RegtestSpawn {
     /// yet bound can otherwise come back as this daemon's RPC port, its
     /// view listener, or the unanswered closed peer.
     taken: Vec<u16>,
+    /// A directory for the chain and pool files, apart from the logs. The
+    /// full-disk gate puts it on a small filesystem and keeps the daemon's
+    /// log off it, so the line that says the disk filled has somewhere to
+    /// be written.
+    chain_dir: Option<PathBuf>,
 }
 
 impl RegtestSpawn {
@@ -361,7 +370,15 @@ impl RegtestSpawn {
             keep_data: false,
             binary: None,
             taken: Vec::new(),
+            chain_dir: None,
         }
+    }
+
+    /// Keep the chain and pool files under `dir`, and the logs where every
+    /// spawn keeps them.
+    fn with_chain_dir(mut self, dir: PathBuf) -> Self {
+        self.chain_dir = Some(dir);
+        self
     }
 
     /// Ports this spawn must not draw. A later partner's p2p port,
@@ -664,6 +681,7 @@ impl RegtestDaemon {
             keep_data,
             binary,
             taken,
+            chain_dir,
         } = spec;
         install_wallet_tracing();
 
@@ -712,6 +730,10 @@ impl RegtestDaemon {
         let config_file = config_dir.join("shekyld.toml");
 
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
+        // The chain's directory is the daemon's `data-dir`. The logs stay
+        // in `data_dir` either way.
+        let chain_dir = chain_dir.unwrap_or_else(|| data_dir.clone());
+        std::fs::create_dir_all(&chain_dir).expect("create the chain's directory");
         let mut cmd = Command::new(&bin);
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
         // every spawn: regtest's default is the managed Tor, and a test
@@ -734,7 +756,7 @@ impl RegtestDaemon {
             "--rpc-admin-listen",
             &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
-            data_dir.to_str().expect("utf8 data dir"),
+            chain_dir.to_str().expect("utf8 data dir"),
             "--config-file",
             config_file.to_str().expect("utf8 config path"),
             // Under the data dir, as the old default was; the account's
@@ -828,6 +850,7 @@ impl RegtestDaemon {
 
         let mut daemon = RegtestDaemon {
             child,
+            chain_dir,
             data_dir,
             config_dir,
             rpc_port,
@@ -1473,6 +1496,12 @@ impl Drop for RegtestDaemon {
         // peer is this socket until the daemon has exited.
         drop(self.unanswered.take());
         drop(std::fs::remove_dir_all(&self.config_dir));
+        // A chain directory of its own is on a filesystem the gate was
+        // given for this run; it is emptied whatever the outcome, and the
+        // logs, which are the evidence, are not in it.
+        if self.chain_dir != self.data_dir {
+            drop(std::fs::remove_dir_all(&self.chain_dir));
+        }
         // The DX-Q8 capture asks to keep the directory (`start_keeping_data`).
         // A failing test keeps it too: the daemon's logs are the evidence
         // the failure needs, and that is decided here, in the code, not by
@@ -1661,6 +1690,59 @@ pub(super) async fn try_generate_blocks(
     .await
 }
 
+/// Send the daemon SIGTERM, the operator's stop, and wait for its exit.
+#[cfg(unix)]
+async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
+    const STOP_WITHIN: Duration = Duration::from_secs(60);
+    let pid = daemon.child.id().to_string();
+    let sent = shekyl_tor_control_client::spawn_lock::status(
+        std::process::Command::new("kill").args(["-TERM", &pid]),
+    )
+    .expect("run kill");
+    assert!(sent.success(), "SIGTERM delivered");
+    let deadline = std::time::Instant::now() + STOP_WITHIN;
+    loop {
+        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
+            return status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon did not stop within {STOP_WITHIN:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// **A stop the operator asked for is not a failure:** no line at `error`,
+/// no word that the daemon stops on a task's end, and exit 0. The other
+/// half of [`a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit`]:
+/// the node's end watch must stay silent for a task that was asked to
+/// stop. The daemon mines first, so the ingest service and the miner have
+/// worked.
+///
+/// The daemon's standard error is read, where every level is written.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_requested_stop_logs_no_error_and_exits_0() {
+    let mut daemon = RegtestDaemon::start().await;
+    let mined = daemon.generate_blocks(3).await;
+    assert!(mined.height >= 3, "the daemon mined: height {}", mined.height);
+    let status = terminate(&mut daemon).await;
+    let log = std::fs::read_to_string(daemon.data_dir.join("daemon.log")).expect("the daemon's log");
+    assert!(
+        log.contains("stop requested by SIGTERM"),
+        "the log does not hold the stop, so it cannot show the stop was clean; its tail:\n{}",
+        log_tail(&daemon.data_dir.join("daemon.log"))
+    );
+    let errors: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(" ERROR ") || line.contains("; the daemon stops"))
+        .collect();
+    assert!(errors.is_empty(), "a requested stop logged: {errors:#?}");
+    assert!(status.success(), "a requested stop exits 0: {status}");
+}
+
 /// A stop's last lines reach the log file: the daemon flushes its queued
 /// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
 /// `flush`; Rick's ruling of 2026-10-17, item 7). "the node closed in …;
@@ -1672,25 +1754,8 @@ pub(super) async fn try_generate_blocks(
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn a_stops_last_line_reaches_the_log_file() {
     const LAST_LINE: &str = "; the daemon exits";
-    const STOP_WITHIN: Duration = Duration::from_secs(60);
     let mut daemon = RegtestDaemon::start().await;
-    let pid = daemon.child.id().to_string();
-    let sent = shekyl_tor_control_client::spawn_lock::status(
-        std::process::Command::new("kill").args(["-TERM", &pid]),
-    )
-    .expect("run kill");
-    assert!(sent.success(), "SIGTERM delivered");
-    let deadline = std::time::Instant::now() + STOP_WITHIN;
-    let status = loop {
-        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
-            break status;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the daemon did not stop within {STOP_WITHIN:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    let status = terminate(&mut daemon).await;
     assert!(status.success(), "a requested stop exits 0: {status}");
     let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).expect("the log file");
     assert!(
@@ -1701,6 +1766,148 @@ async fn a_stops_last_line_reaches_the_log_file() {
         log.contains(LAST_LINE),
         "the stop's last line is in the log file; its tail:\n{}",
         log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+    );
+}
+
+/// The filesystem the full-disk gate fills: the directory `SHEKYL_SMALL_DISK`
+/// names, which must be the mount point of a filesystem no larger than
+/// [`SMALL_DISK_AT_MOST_KIB`]. The daemon reads no environment; this is
+/// the test's own input, as `SHEKYLD_BIN` is. The live-daemon lanes do not
+/// mount one, so the test is decided dark and run by hand.
+///
+/// A directory on a large disk would make the gate mine until its block
+/// bound and fail there, long after the cause, so the size is asserted
+/// first (rule 47).
+#[cfg(target_os = "linux")]
+fn small_disk() -> PathBuf {
+    let dir = PathBuf::from(std::env::var_os("SHEKYL_SMALL_DISK").expect(
+        "SHEKYL_SMALL_DISK not set. It names the mount point of a filesystem \
+         of at most 2 MiB, for a hand run of this gate",
+    ));
+    let output = shekyl_tor_control_client::spawn_lock::output(
+        std::process::Command::new("df").arg("-Pk").arg(&dir),
+    )
+    .expect("run df");
+    assert!(output.status.success(), "df {}: {output:?}", dir.display());
+    let table = String::from_utf8(output.stdout).expect("df prints utf-8");
+    let row: Vec<&str> = table
+        .lines()
+        .nth(1)
+        .unwrap_or_else(|| panic!("df printed no row: {table}"))
+        .split_whitespace()
+        .collect();
+    let size_kib: u64 = row
+        .get(1)
+        .and_then(|blocks| blocks.parse().ok())
+        .unwrap_or_else(|| panic!("df's size column: {table}"));
+    assert_eq!(
+        row.last().copied(),
+        dir.to_str(),
+        "SHEKYL_SMALL_DISK is not a filesystem's mount point: {table}"
+    );
+    assert!(
+        size_kib <= SMALL_DISK_AT_MOST_KIB,
+        "the filesystem at {} holds {size_kib} KiB, more than the {SMALL_DISK_AT_MOST_KIB} KiB \
+         the gate fills in its block bound",
+        dir.display()
+    );
+    dir
+}
+
+/// The largest filesystem the full-disk gate accepts.
+#[cfg(target_os = "linux")]
+const SMALL_DISK_AT_MOST_KIB: u64 = 2 * 1024;
+
+/// **A full disk stops the daemon, and it says so when it happens**
+/// (the CS-5 rehearsal of 2026-11-02). There a store commit met
+/// `ENOSPC`, the ingest service stopped, and the daemon stayed up: nothing
+/// was logged, `get_info` answered from the old height, and the one record
+/// printed 34 minutes later at SIGTERM.
+///
+/// The daemon's chain is on a small filesystem and its log is not. The
+/// test mines until a commit fails. It sends no signal. The daemon must
+/// then, on its own: log the fault at `error` when the service records it,
+/// log that it stops on it, and exit with a failure status.
+///
+/// No lever: the daemon is the released binary under its released options,
+/// and the disk is really full.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN and SHEKYL_SMALL_DISK; spawns a live daemon"]
+async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
+    /// More blocks than the largest accepted filesystem holds: a block
+    /// adds about 6.4 KiB to the store (measured 2026-11-11, 537 blocks).
+    const MINE_AT_MOST: u64 = 2_000;
+    /// Blocks per call. Small, so a call on a loaded host stays inside
+    /// the harness's HTTP timeout.
+    const CHUNK: u64 = 8;
+    const WITHIN: Duration = Duration::from_secs(30 * 60);
+    const RECORDED: &str = "the ingest service stops on a fault: ";
+    const STOPS: &str = "the ingest service stopped: ";
+    let disk = small_disk();
+    let serial = serial_lock().lock_owned().await;
+    let mut daemon = RegtestDaemon::spawn(
+        RegtestSpawn::new(Some(serial)).with_chain_dir(disk.join("full-disk-gate")),
+    )
+    .await;
+    // Mine until the daemon has exited. No signal is sent: the daemon
+    // ends itself. A refused or timed-out call is not the verdict (a
+    // loaded host times one out too); the exit is.
+    let deadline = std::time::Instant::now() + WITHIN;
+    let mut mined = 0u64;
+    let mut refused = None;
+    let status = loop {
+        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
+            break status;
+        }
+        assert!(
+            mined < MINE_AT_MOST,
+            "mined {mined} blocks and the disk at {} never filled",
+            disk.display()
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{WITHIN:?} on, the daemon is still up with {mined} blocks mined and its last \
+             mining call answered {refused:?}: a half-up node, or a disk that did not fill. \
+             Its log tail:\n{}",
+            log_tail(&daemon.data_dir.join("shekyld.log"))
+        );
+        match try_generate_blocks(&daemon.rpc, CHUNK).await {
+            Ok(_) => mined += CHUNK,
+            Err(error) => {
+                refused = Some(format!("{error:?}"));
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
+    let log_path = daemon.data_dir.join("shekyld.log");
+    let log = std::fs::read_to_string(&log_path).expect("the daemon's log");
+    let tail = log_tail(&log_path);
+    assert!(
+        !status.success(),
+        "the daemon exited {status} after its disk filled; a failure status was owed. Tail:\n{tail}"
+    );
+    let recorded = log
+        .lines()
+        .find(|line| line.contains(RECORDED))
+        .unwrap_or_else(|| panic!("no line records the fault ({RECORDED:?}). Tail:\n{tail}"));
+    assert!(
+        recorded.contains("ERROR"),
+        "the fault is recorded below `error`: {recorded}"
+    );
+    assert!(
+        recorded.contains("No space left on device"),
+        "the fault recorded is not the full disk: {recorded}"
+    );
+    let stops = log
+        .lines()
+        .find(|line| line.contains(STOPS))
+        .unwrap_or_else(|| {
+            panic!("no line says the daemon stops on it ({STOPS:?}). Tail:\n{tail}")
+        });
+    assert!(
+        stops.contains("ERROR") && stops.contains("; the daemon stops"),
+        "the stop line: {stops}"
     );
 }
 
