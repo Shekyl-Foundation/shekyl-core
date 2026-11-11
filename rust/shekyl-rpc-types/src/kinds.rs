@@ -114,9 +114,43 @@ text_kind! {
     /// An absolute path.
     Path = "path"
 }
-text_kind! {
-    /// Serialized bytes: base64 (RFC 4648 §4, padded).
-    Bytes = "bytes"
+/// A block's or transaction's serialized bytes. On the wire, base64
+/// (RFC 4648 §4, padded): the one encoding of the `bytes` kind (RW-Q4,
+/// IG-6). Read at the boundary, so text that is not base64 is refused
+/// there, never carried inward.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct Bytes(pub Vec<u8>);
+
+impl Bytes {
+    /// The bytes, as owned.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl Serialize for Bytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use base64::Engine as _;
+        serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Bytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use base64::Engine as _;
+        let text = String::deserialize(deserializer)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(text.as_bytes())
+            .map(Self)
+            .map_err(|e| serde::de::Error::custom(format!("not base64 (RFC 4648 §4, padded): {e}")))
+    }
+}
+
+impl Schema for Bytes {
+    fn shape() -> Shape {
+        Shape::Scalar("bytes")
+    }
 }
 
 impl Schema for crate::hash::HashHex {
