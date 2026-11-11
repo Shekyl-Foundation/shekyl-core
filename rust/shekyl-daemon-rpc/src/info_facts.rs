@@ -106,7 +106,7 @@ pub struct InfoStatusFacts {
 /// for a caller who is shown Peers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerFacts {
-    Running(shekyl_rpc_types::InfoPeers),
+    Running(shekyl_rpc_types::wire::daemon::ConnectorMap),
     Offline,
 }
 

@@ -7,8 +7,7 @@
 //! DX-Q3, Q11). `/stop_daemon` dispatches here.
 
 use shekyl_rpc_types::errors::RpcError;
-use shekyl_rpc_types::mining::StatusOnlyResponse;
-use shekyl_rpc_types::RpcStatus;
+use shekyl_rpc_types::kinds::Done;
 
 use crate::handles::StopFacts;
 
@@ -18,11 +17,9 @@ use crate::handles::StopFacts;
 /// # Errors
 ///
 /// `NotReady` when no stop latch was supplied: the request is not taken.
-pub fn stop_daemon(stop: &dyn StopFacts) -> Result<StatusOnlyResponse, RpcError> {
+pub fn daemon_stop(stop: &dyn StopFacts) -> Result<Done, RpcError> {
     stop.request_stop()?;
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    Ok(Done)
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ use shekyl_miner::{
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
-use shekyl_rpc_types::mining::MineSpeed;
+use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::watch;
@@ -504,7 +504,7 @@ impl MiningControl {
 /// A refused start, as the RPC's typed diagnostic.
 fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
     let code = match refused {
-        MiningRefused::NoAddress => codes::NO_ADDRESS,
+        MiningRefused::NoAddress => codes::ADDRESS_UNSET,
         MiningRefused::Running => codes::RUNNING,
         MiningRefused::Short { .. } => codes::BOUND_SHORT,
         MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
@@ -531,8 +531,8 @@ fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
 fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
     let code = match why {
         NoJob::Starting => codes::STARTING,
-        NoJob::NoAddress => codes::NO_ADDRESS,
-        NoJob::NotSynced(_) => codes::NOT_SYNCED,
+        NoJob::NoAddress => codes::ADDRESS_UNSET,
+        NoJob::NotSynced(_) => codes::SYNCING,
         NoJob::PoolRetired => codes::POOL_RETIRED,
         NoJob::Unbuilt(_) => codes::UNBUILT,
         NoJob::Stopped => codes::STOPPING,
@@ -661,8 +661,8 @@ fn miner_state(miner: &MinerStatus) -> MinerState {
     MinerState {
         threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
         speed: MineSpeed {
-            count: miner.rate.hashes,
-            window: miner.rate.window.as_secs(),
+            count: shekyl_rpc_types::kinds::Count(miner.rate.hashes),
+            window: shekyl_rpc_types::kinds::Duration(miner.rate.window.as_secs()),
         },
     }
 }
@@ -671,7 +671,7 @@ fn miner_state(miner: &MinerStatus) -> MinerState {
 mod rate_tests {
     use super::{miner_state, MinerStatus};
     use shekyl_miner::HashRate;
-    use shekyl_rpc_types::mining::MineSpeed;
+    use shekyl_rpc_types::wire::node::MineSpeed;
     use std::time::Duration;
 
     /// Eight hashes in ten seconds stays eight hashes over ten seconds.

@@ -429,9 +429,9 @@ impl HttpRpc {
 
 impl HttpRpc {
     async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, PostFault> {
-        // Route → Content-Type is a shared protocol invariant (which routes are
-        // EPEE-binary), so it lives once in `shekyl_rpc_client::content_type_for`.
-        let content_type = shekyl_rpc_client::content_type_for(route);
+        // Every daemon call is JSON-RPC (`RPC_WIRE.md` RW-Q2, RW-Q5: no
+        // binary method remains).
+        let content_type = "application/json";
         let request_fn = |uri| {
             Request::post(uri)
                 .header("content-type", content_type)

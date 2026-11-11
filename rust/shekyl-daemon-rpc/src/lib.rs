@@ -94,7 +94,7 @@ pub mod node_methods;
 pub mod options;
 pub mod pool_methods;
 pub mod read_facts;
-pub mod read_methods;
+pub mod reads;
 pub mod run;
 pub mod server;
 pub mod shard_view;

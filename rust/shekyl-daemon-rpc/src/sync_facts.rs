@@ -8,7 +8,7 @@
 //! row. The node fills it from the sync owner's published view; this crate
 //! does not depend on chain sync.
 
-use shekyl_rpc_types::{ChainSyncState, SyncMode};
+use shekyl_rpc_types::wire::p2p::{SyncMode, SyncState};
 
 use crate::chain_facts::FactsFault;
 
@@ -16,7 +16,7 @@ use crate::chain_facts::FactsFault;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncViewFacts {
     /// The derived state.
-    pub state: ChainSyncState,
+    pub state: SyncState,
     /// Behind, with nothing moving toward the target.
     pub stalled: bool,
     /// The best verified chain's block count.

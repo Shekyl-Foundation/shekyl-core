@@ -22,7 +22,9 @@ use shekyl_daemon_config::resolve::Resolved;
 use shekyl_daemon_config::{
     apply_logging, link_limits, runtime_owner, Network, RuntimeOwner, TABLE,
 };
-use shekyl_daemon_rpc::options::{OptionsFacts, Refusal, ShowRefusal, ShownRow, VisibleRow};
+use shekyl_daemon_rpc::options::{
+    OptionSource, OptionsFacts, Refusal, ShowRefusal, ShownRow, VisibleRow,
+};
 use shekyl_node::LinkLimits;
 use shekyl_options::{Code, Diagnostic, Kind, Row, Source, Value, Visibility};
 
@@ -60,14 +62,24 @@ impl DaemonOptions {
     }
 }
 
-/// The source word on the wire (RT-O25): one of four, with no path or line.
-fn source_word(source: &Source) -> &'static str {
+/// The source on the wire (RT-O25): one of four, with no path or line.
+const fn source_of(source: &Source) -> OptionSource {
     match source {
-        Source::Cli => "cli",
-        Source::File { .. } => "file",
-        Source::Runtime => "runtime",
+        Source::Cli => OptionSource::Cli,
+        Source::File { .. } => OptionSource::File,
+        Source::Runtime => OptionSource::Runtime,
         // A machine source is a derived fact, never a row of the table.
-        Source::Default | Source::Machine => "default",
+        Source::Default | Source::Machine => OptionSource::Default,
+    }
+}
+
+/// The source word a refusal carries: the same four.
+fn source_word(source: &Source) -> &'static str {
+    match source_of(source) {
+        OptionSource::Cli => "cli",
+        OptionSource::File => "file",
+        OptionSource::Runtime => "runtime",
+        OptionSource::Default => "default",
     }
 }
 
@@ -76,9 +88,9 @@ fn source_word(source: &Source) -> &'static str {
 fn refusal(d: &Diagnostic) -> Refusal {
     Refusal {
         code: d.code.to_string(),
-        option: d.option.clone(),
+        option: d.option.clone().into(),
         source: source_word(&d.source).to_owned(),
-        params: d
+        parameter: d
             .params
             .iter()
             .map(|(k, v)| ((*k).to_owned(), v.clone()))
@@ -89,7 +101,9 @@ fn refusal(d: &Diagnostic) -> Refusal {
 
 /// One row as `option_show` prints it, from the live values.
 fn shown(row: &Row, live: &Resolved) -> ShownRow {
-    let source = live.source(row.name).map_or("default", source_word);
+    let source = live
+        .source(row.name)
+        .map_or(OptionSource::Default, source_of);
     let value = live.get(row.name);
     if matches!(row.kind, Kind::Secret) {
         ShownRow::secret(row.name, source, value.is_some())

@@ -7,7 +7,6 @@
 //! refusal carries.
 
 use super::chain::Writer;
-use super::shared::OpenMap;
 use crate::hash::HashHex;
 use crate::hex128::HexU128;
 use crate::kinds::{Count, Duration, Height, Integer, Micro, Size, Text, Time};
@@ -68,6 +67,25 @@ crate::wire_keywords! {
     }
 }
 
+impl From<Grant> for GrantName {
+    fn from(grant: Grant) -> Self {
+        match grant {
+            Grant::Health => Self::Health,
+            Grant::Status => Self::Status,
+            Grant::Chain => Self::Chain,
+            Grant::Pool => Self::Pool,
+            Grant::Peers => Self::Peers,
+            Grant::Submit => Self::Submit,
+            Grant::MiningWork => Self::MiningWork,
+            Grant::MiningControl => Self::MiningControl,
+            Grant::Bans => Self::Bans,
+            Grant::Node => Self::Node,
+            Grant::Config => Self::Config,
+            Grant::Enrol => Self::Enrol,
+        }
+    }
+}
+
 crate::wire_parted! {
     /// The daemon's state (`daemon_status`). Each part is shown whole to a
     /// caller its grant admits, and absent otherwise (RK-D23). Part E's and
@@ -123,28 +141,6 @@ crate::wire_parted! {
     }
 }
 
-crate::wire_object! {
-    /// A typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3).
-    ["diagnostic"]
-    pub struct Diagnostic {
-        /// Its stable dotted code.
-        pub code: Text,
-        /// Its named parameters.
-        pub parameter: OpenMap<Text>,
-        /// Its one English rendering.
-        pub message: Text,
-    }
-}
-
-crate::wire_object! {
-    /// A configuration refusal: a diagnostic that names the option and
-    /// where its value came from.
-    ["diagnostic"]
-    pub struct OptionRefusal {
-        pub code: Text,
-        pub option: Nullable<Text>,
-        pub source: Text,
-        pub parameter: OpenMap<Text>,
-        pub message: Text,
-    }
-}
+/// A typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3), and a
+/// reply's `cause` where a state is explained. One type: the registry's.
+pub use crate::errors::Diagnostic;

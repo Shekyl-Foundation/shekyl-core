@@ -4,52 +4,35 @@
 // BSD-3-Clause
 
 //! The pool methods (`DRS_X_STORE_FLIP.md` DX-Q3, Q10), over the node's one
-//! pool through [`PoolFacts`]. JSON-RPC and the REST pool routes dispatch
-//! here, like [`crate::mining_methods`].
+//! pool through [`PoolFacts`].
 //!
-//! Who asks decides what is listed: any caller sees the entries the node
+//! Who asks decides what the pool is: any caller sees the entries the node
 //! shows; the host's administrator also sees those in their stem phase
 //! (`RPC_CHANNEL.md` RT-O9.3). The caller says whether it is the host
-//! through [`scope_for`]; nothing here lists a stem entry to anyone else.
+//! through [`scope_for`]. To anyone else an entry not yet public is not in
+//! the pool: it is not listed, counted, removed or re-offered, and an id
+//! naming it answers `{"missing": null}`, the same as an id the pool does
+//! not hold (`INPUT_GRAMMAR.md` IG-Q89).
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use shekyl_rpc_types::errors::RpcError;
-use shekyl_rpc_types::mining::StatusOnlyResponse;
-use shekyl_rpc_types::pool::{
-    FlushTxpoolRequest, GetTransactionPoolHashesResponse, GetTransactionPoolResponse,
-    GetTransactionPoolStatsResponse, GetTxpoolBacklogResponse, PoolTxInfo, RelayTxRequest,
-    SpentKeyImageInfo, TxpoolBacklogEntry, TxpoolStats,
-};
-use shekyl_rpc_types::{HashHex, RpcStatus};
+use shekyl_rpc_types::kinds::{Count, Size};
+use shekyl_rpc_types::wire::{shared, tx};
+use shekyl_rpc_types::HashHex;
 use shekyl_types::TxHash;
+use shekyl_units::{wire::AtomicUnitsString, AtomicUnits};
 
 use crate::handles::{PoolEntryFacts, PoolFacts};
 use crate::info_facts::PoolScope;
-
-/// The pool `host` may see. Entries not yet broadcast are host-only data
-/// (`RPC_CHANNEL.md` §6.1, RT-O9.3): the host's administrator sees them,
-/// and everyone else sees the broadcast set.
-#[must_use]
-pub const fn scope_for(host: bool) -> PoolScope {
-    if host {
-        PoolScope::WithUnbroadcast
-    } else {
-        PoolScope::Broadcast
-    }
-}
+pub use crate::reads::scope_for;
 
 fn hex_of(id: TxHash) -> HashHex {
     HashHex::from_bytes(id.to_bytes())
 }
 
-/// The ids a request names; the wire has already refused one that is not
-/// 64 hexadecimal characters.
-fn ids_of(given: &[HashHex]) -> Vec<TxHash> {
-    given
-        .iter()
-        .map(|id| TxHash::from_bytes(id.to_bytes()))
-        .collect()
+fn amount(raw: u64) -> AtomicUnitsString {
+    AtomicUnitsString::from(AtomicUnits::from_raw(raw))
 }
 
 fn listed(pool: &dyn PoolFacts, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, RpcError> {
@@ -58,153 +41,138 @@ fn listed(pool: &dyn PoolFacts, scope: PoolScope) -> Result<Vec<PoolEntryFacts>,
     Ok(entries)
 }
 
-/// `/get_transaction_pool`: the entries `scope` may see, and the key
-/// images they spend.
+/// `txpool_list`: the entries the caller may see, each its id, weight and
+/// fee (IG-Q57). The body is `tx_show`'s.
 ///
 /// # Errors
 ///
-/// The handle's fault.
-pub fn get_transaction_pool(
-    pool: &dyn PoolFacts,
-    scope: PoolScope,
-) -> Result<GetTransactionPoolResponse, RpcError> {
-    let entries = listed(pool, scope)?;
-    let mut spenders: BTreeMap<[u8; 32], Vec<HashHex>> = BTreeMap::new();
-    for entry in &entries {
-        for image in &entry.key_images {
-            spenders
-                .entry(*image.as_bytes())
-                .or_default()
-                .push(hex_of(entry.id));
-        }
-    }
-    Ok(GetTransactionPoolResponse {
-        status: RpcStatus::ok(),
-        transactions: entries
-            .iter()
-            .map(|entry| PoolTxInfo {
-                id_hash: hex_of(entry.id),
-                blob_size: u64::try_from(entry.blob.len()).unwrap_or(u64::MAX),
-                weight: entry.weight,
-                fee: entry.fee,
-                relayed: entry.shown,
-                tx_blob: hex::encode(&entry.blob),
-            })
-            .collect(),
-        spent_key_images: spenders
-            .into_iter()
-            .map(|(image, txs_hashes)| SpentKeyImageInfo {
-                id_hash: HashHex::from_bytes(image),
-                txs_hashes,
-            })
-            .collect(),
-    })
-}
-
-/// `/get_transaction_pool_hashes`: the ids `scope` may see.
-///
-/// # Errors
-///
-/// The handle's fault.
-pub fn get_transaction_pool_hashes(
-    pool: &dyn PoolFacts,
-    scope: PoolScope,
-) -> Result<GetTransactionPoolHashesResponse, RpcError> {
-    Ok(GetTransactionPoolHashesResponse {
-        status: RpcStatus::ok(),
-        tx_hashes: listed(pool, scope)?
-            .iter()
-            .map(|entry| hex_of(entry.id))
-            .collect(),
-    })
-}
-
-/// `/get_transaction_pool_stats`: the figures over what `scope` may see.
-///
-/// # Errors
-///
-/// The handle's fault.
-pub fn get_transaction_pool_stats(
-    pool: &dyn PoolFacts,
-    scope: PoolScope,
-) -> Result<GetTransactionPoolStatsResponse, RpcError> {
-    let entries = listed(pool, scope)?;
-    let mut sizes: Vec<u32> = entries
+/// The handle's fault; `txpool.retired` while the pool is retired.
+pub fn txpool_list(pool: &dyn PoolFacts, scope: PoolScope) -> Result<Vec<tx::PoolEntry>, RpcError> {
+    Ok(listed(pool, scope)?
         .iter()
-        .map(|entry| u32::try_from(entry.blob.len()).unwrap_or(u32::MAX))
-        .collect();
-    sizes.sort_unstable();
-    let stats = TxpoolStats {
-        bytes_total: sizes.iter().map(|size| u64::from(*size)).sum(),
-        bytes_min: sizes.first().copied().unwrap_or(0),
-        bytes_max: sizes.last().copied().unwrap_or(0),
-        bytes_med: sizes.get(sizes.len() / 2).copied().unwrap_or(0),
-        fee_total: entries
-            .iter()
-            .map(|entry| entry.fee)
-            .fold(0, u64::saturating_add),
-        txs_total: u32::try_from(entries.len()).unwrap_or(u32::MAX),
-        num_not_relayed: u32::try_from(entries.iter().filter(|entry| !entry.shown).count())
-            .unwrap_or(u32::MAX),
-    };
-    Ok(GetTransactionPoolStatsResponse {
-        status: RpcStatus::ok(),
-        pool_stats: stats,
-    })
+        .map(|entry| tx::PoolEntry {
+            id: hex_of(entry.id),
+            weight: Size(entry.weight),
+            fee: amount(entry.fee),
+        })
+        .collect())
 }
 
-/// `get_txpool_backlog`: each entry's weight and fee.
+/// `txpool_stats`: the counts and weights over what the caller may see. The
+/// count of entries not yet public is the host's alone (RT-O9.3).
 ///
 /// # Errors
 ///
 /// The handle's fault.
-pub fn get_txpool_backlog(
+pub fn txpool_stats(pool: &dyn PoolFacts, scope: PoolScope) -> Result<tx::TxpoolStats, RpcError> {
+    let entries = listed(pool, scope)?;
+    let mut weights: Vec<u64> = entries.iter().map(|entry| entry.weight).collect();
+    weights.sort_unstable();
+    Ok(tx::TxpoolStats {
+        count: Count(u64::try_from(entries.len()).unwrap_or(u64::MAX)),
+        weight_total: Size(weights.iter().copied().fold(0, u64::saturating_add)),
+        weight_min: Size(weights.first().copied().unwrap_or(0)),
+        weight_max: Size(weights.last().copied().unwrap_or(0)),
+        weight_median: Size(weights.get(weights.len() / 2).copied().unwrap_or(0)),
+        fee_total: amount(
+            entries
+                .iter()
+                .map(|entry| entry.fee)
+                .fold(0, u64::saturating_add),
+        ),
+        private_count: match scope {
+            PoolScope::WithUnbroadcast => shekyl_rpc_types::kinds::Withheld::Shown(Count(
+                u64::try_from(entries.iter().filter(|entry| !entry.shown).count())
+                    .unwrap_or(u64::MAX),
+            )),
+            PoolScope::Broadcast => shekyl_rpc_types::kinds::Withheld::Withheld,
+        },
+    })
+}
+
+/// The named ids the caller's pool holds, and every id's slot to come: the
+/// id once acted on, `{"missing": null}` otherwise.
+fn visible(
     pool: &dyn PoolFacts,
     scope: PoolScope,
-) -> Result<GetTxpoolBacklogResponse, RpcError> {
-    Ok(GetTxpoolBacklogResponse {
-        status: RpcStatus::ok(),
-        backlog: listed(pool, scope)?
+    named: Option<&[HashHex]>,
+) -> Result<(Vec<TxHash>, Vec<TxHash>), RpcError> {
+    let seen: BTreeSet<[u8; 32]> = pool
+        .entries(scope)?
+        .iter()
+        .map(|entry| entry.id.to_bytes())
+        .collect();
+    let asked: Vec<TxHash> = match named {
+        Some(ids) => ids
             .iter()
-            .map(|entry| TxpoolBacklogEntry {
-                weight: entry.weight,
-                fee: entry.fee,
-            })
+            .map(|id| TxHash::from_bytes(id.to_bytes()))
             .collect(),
-    })
+        None => seen.iter().copied().map(TxHash::from_bytes).collect(),
+    };
+    let held = asked
+        .iter()
+        .copied()
+        .filter(|id| seen.contains(&id.to_bytes()))
+        .collect();
+    Ok((asked, held))
 }
 
-/// `flush_txpool { txids }`, host only: remove those entries, or every one
-/// when none is named. The removals are tagged flushed, not refused.
+fn slots(asked: &[TxHash], acted: &[TxHash]) -> tx::Acted {
+    let acted: BTreeSet<[u8; 32]> = acted.iter().map(|id| id.to_bytes()).collect();
+    asked
+        .iter()
+        .map(|id| {
+            if acted.contains(&id.to_bytes()) {
+                shared::Slot::Item(hex_of(*id))
+            } else {
+                shared::Slot::State(shared::SlotState::Missing(shared::Null))
+            }
+        })
+        .collect()
+}
+
+/// `txpool_flush { id }`: remove the named entries the caller may see, or
+/// every one it may see when none is named; each id's slot is the id
+/// removed or `{"missing": null}` (IG-Q89).
 ///
 /// # Errors
 ///
-/// The handle's fault: `NotReady` once the pool is retired, a store fault
-/// when the pool file faults (which retires it).
-pub async fn flush_txpool(
+/// The handle's fault: `txpool.retired` once the pool is retired, a store
+/// fault when its file faults (which retires it).
+pub async fn txpool_flush(
     pool: &dyn PoolFacts,
-    request: &FlushTxpoolRequest,
-) -> Result<StatusOnlyResponse, RpcError> {
-    pool.flush(ids_of(&request.txids)).await?;
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    request: &tx::FlushIds,
+    scope: PoolScope,
+) -> Result<tx::Acted, RpcError> {
+    let (asked, held) = visible(pool, scope, request.id.as_deref())?;
+    let removed = if held.is_empty() {
+        Vec::new()
+    } else {
+        pool.flush(held).await?
+    };
+    Ok(slots(&asked, &removed))
 }
 
-/// `relay_tx { txids }`, host only: offer the node's own entries to the
-/// relay again.
+/// `tx_relay { id }`: offer the named entries the caller may see to the
+/// relay again, through the entry a fresh local submission takes, so a
+/// re-offer enters the stem as a new submission would. Each id's slot is
+/// the id offered or `{"missing": null}` (IG-Q89).
 ///
 /// # Errors
 ///
-/// `NotReady` until the relay driver is wired (RD).
-pub fn relay_tx(
+/// The handle's fault.
+pub fn tx_relay(
     pool: &dyn PoolFacts,
-    request: &RelayTxRequest,
-) -> Result<StatusOnlyResponse, RpcError> {
-    pool.relay(&ids_of(&request.txids))?;
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    request: &tx::RelayIds,
+    scope: PoolScope,
+) -> Result<tx::Acted, RpcError> {
+    let (asked, held) = visible(pool, scope, Some(&request.id))?;
+    let offered = if held.is_empty() {
+        Vec::new()
+    } else {
+        pool.relay(&held)?
+    };
+    Ok(slots(&asked, &offered))
 }
 
 #[cfg(test)]

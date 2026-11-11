@@ -30,7 +30,7 @@
 
 use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
-use crate::handlers::{binary, json, json_rpc, submit};
+use crate::handlers::rpc;
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
@@ -40,7 +40,7 @@ use crate::submit::DaemonSubmitEngine;
 use crate::authority::Authority;
 use crate::hash_budget::HashBudget;
 use axum::http::{HeaderValue, Method, StatusCode};
-use axum::routing::{get, post, MethodRouter};
+use axum::routing::{post, MethodRouter};
 use axum::{Json, Router};
 use std::sync::Arc;
 use std::time::Instant;
@@ -138,245 +138,25 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 }
 
 // ---------------------------------------------------------------------------
-// Route table (§55 / §69 / §70)
+// The one route (RW-Q1, RW-Q2)
 //
-// ONE table. Each row names an endpoint and the path(s) it answers on. A
-// total match ([`handler_for`]) binds what runs; [`assemble`] registers every
-// row with it, and [`build_router`] is `assemble` plus the request layer that
-// stamps the connection's authority and admits each path against its row in
-// the method table (`crate::authority::stamp`) — so the gate tests build the
-// shipping router with a dummy handler and assert admission by *serving
-// requests*, not by re-reading a const.
-//
-// Two properties are structural rather than tested, because the table is keyed
-// by an enum:
-//
-//   * A route with no handler does not compile. `handler_for` matches
-//     [`Endpoint`] exhaustively with no wildcard, so adding a row without
-//     binding it is a compile error, not a `panic!` at daemon start (§70.1).
-//   * A path has exactly one policy: its one row's in the method table
-//     (`shekyl_rpc_types::methods`, RW-Q7), not membership in one of two
-//     lists that could both contain it.
-//
-// Handlers stay out of the table (and out of anything a unit test calls)
-// so a test can route the real table without an `AppState` behind it: the
-// handlers read the node handle, which a route test has no business
-// building. (Until 2026-11-05 naming a handler also pulled the C++ remnant's
-// `core_rpc_ffi_*` exports into the link set; that half is gone, the shape
-// stays.) `assemble`'s generic handler parameter is what keeps that true
-// while still letting a test route the real table.
-//
-// The tests assert against a specification written out separately (§70): an
-// oracle that iterates this table cannot fail when the table changes.
+// Every method is JSON-RPC on `/json_rpc`, dispatched by the method table
+// (`handlers::rpc`), where a table row with no handler does not compile. A
+// path that is not `/json_rpc` is not a method: it is the shared 404 body.
+// `assemble` takes the handler as a parameter so a test can route the real
+// shape without an `AppState`.
 // ---------------------------------------------------------------------------
 
-/// An endpoint the daemon RPC serves.
-///
-/// The key that makes route-to-handler totality a compile-time property.
-/// Deliberately *not* the path string: aliases (`/get_height` //
-/// `/getheight`) are one endpoint answering on two paths, and keeping them
-/// one variant is what stops an alias pair from drifting apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Endpoint {
-    JsonRpc,
-    GetHeight,
-    GetTransactions,
-    GetAltBlocksHashes,
-    IsKeyImageSpent,
-    SubmitTransaction,
-    GetTransactionPool,
-    GetTransactionPoolHashes,
-    GetTransactionPoolStats,
-    GetInfo,
-    GetBlocksByHeightBin,
-    GetOIndexesBin,
-    GetStemTallies,
-    StartMining,
-    StopMining,
-    MiningStatus,
-    GetPeerList,
-    StopDaemon,
-    GetNetStats,
-    PopBlocks,
-}
-
-/// One row of the route table.
-pub(crate) struct Route {
-    pub(crate) endpoint: Endpoint,
-    /// Paths this endpoint answers on. More than one = epee-compatibility
-    /// aliases, which share a handler by construction.
-    pub(crate) paths: &'static [&'static str],
-}
-
-/// The daemon RPC route table — the single source of *what is served where*.
-///
-/// Handler-free so tests can read it without an `AppState`.
-/// [`build_router`] registers every row; the request layer admits each path.
-pub(crate) const ROUTES: &[Route] = &[
-    Route {
-        endpoint: Endpoint::JsonRpc,
-        paths: &[shekyl_rpc_types::endpoint::JSON_RPC_PATH],
-    },
-    // JSON REST (with aliases) -- GET + POST to match epee behaviour.
-    Route {
-        endpoint: Endpoint::GetHeight,
-        paths: &["/get_height", "/getheight"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactions,
-        paths: &["/get_transactions", "/gettransactions"],
-    },
-    Route {
-        endpoint: Endpoint::GetAltBlocksHashes,
-        paths: &["/get_alt_blocks_hashes"],
-    },
-    Route {
-        endpoint: Endpoint::IsKeyImageSpent,
-        paths: &["/is_key_image_spent"],
-    },
-    // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
-    // submit surface; the legacy /send_raw_transaction proxy was deleted
-    // per §9.3. POST only.
-    Route {
-        endpoint: Endpoint::SubmitTransaction,
-        paths: &["/submit_transaction"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPool,
-        paths: &["/get_transaction_pool"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPoolHashes,
-        paths: &["/get_transaction_pool_hashes"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPoolStats,
-        paths: &["/get_transaction_pool_stats"],
-    },
-    Route {
-        endpoint: Endpoint::GetInfo,
-        paths: &["/get_info", "/getinfo"],
-    },
-    // Binary endpoints.
-    Route {
-        endpoint: Endpoint::GetBlocksByHeightBin,
-        paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
-    },
-    Route {
-        endpoint: Endpoint::GetOIndexesBin,
-        paths: &["/get_o_indexes.bin"],
-    },
-    // §55: anonymity graph — the peer set is the sensitive part.
-    Route {
-        endpoint: Endpoint::GetStemTallies,
-        paths: &["/get_stem_tallies"],
-    },
-    Route {
-        endpoint: Endpoint::StartMining,
-        paths: &["/start_mining"],
-    },
-    Route {
-        endpoint: Endpoint::StopMining,
-        paths: &["/stop_mining"],
-    },
-    Route {
-        endpoint: Endpoint::MiningStatus,
-        paths: &["/mining_status"],
-    },
-    Route {
-        endpoint: Endpoint::GetPeerList,
-        paths: &["/get_peer_list"],
-    },
-    Route {
-        endpoint: Endpoint::StopDaemon,
-        paths: &["/stop_daemon"],
-    },
-    Route {
-        endpoint: Endpoint::GetNetStats,
-        paths: &["/get_net_stats"],
-    },
-    Route {
-        endpoint: Endpoint::PopBlocks,
-        paths: &["/pop_blocks"],
-    },
-];
-
-/// Every path the router answers on, over aliases. Test-only view of
-/// [`ROUTES`]; what a connection is *admitted* to is the request layer's.
-#[cfg(test)]
-pub(crate) fn served_paths() -> impl Iterator<Item = &'static str> {
-    ROUTES.iter().flat_map(|route| route.paths.iter().copied())
-}
-
-/// Handler bound to an endpoint.
-///
-/// **Total by construction**: the match is exhaustive over [`Endpoint`] with
-/// no wildcard arm, so a route added to [`ROUTES`] without a handler fails to
-/// compile. It used to key on `&str` and fall through to `panic!`, which made
-/// the same mistake a startup abort — green CI, then a daemon that does not
-/// come up (§70.1).
-///
-/// Deliberately not called from unit tests — a real handler needs the
-/// `AppState` behind it, which is why [`assemble`] takes the binding as a
-/// parameter.
-fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
-    match endpoint {
-        Endpoint::JsonRpc => post(json_rpc::handle),
-        Endpoint::GetHeight => get(json::get_height).post(json::get_height),
-        Endpoint::GetTransactions => get(json::get_transactions).post(json::get_transactions),
-        Endpoint::GetAltBlocksHashes => {
-            get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes)
-        }
-        Endpoint::IsKeyImageSpent => get(json::is_key_image_spent).post(json::is_key_image_spent),
-        Endpoint::SubmitTransaction => post(submit::submit_transaction),
-        Endpoint::GetTransactionPool => {
-            get(json::get_transaction_pool).post(json::get_transaction_pool)
-        }
-        Endpoint::GetTransactionPoolHashes => {
-            get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes)
-        }
-        Endpoint::GetTransactionPoolStats => {
-            get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats)
-        }
-        Endpoint::GetInfo => get(json::get_info).post(json::get_info),
-        Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
-        Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
-        // Admin-only (listener selection is the method table's grant, not this
-        // match). §55: anonymity graph — the peer set is the sensitive part.
-        Endpoint::GetStemTallies => get(json::get_stem_tallies).post(json::get_stem_tallies),
-        Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
-        Endpoint::StopMining => get(json::stop_mining).post(json::stop_mining),
-        Endpoint::MiningStatus => get(json::mining_status).post(json::mining_status),
-        Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
-        Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
-        Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
-        Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
-    }
-}
-
-/// The routed-but-unlayered router for one server (every socket of a start).
-///
-/// Generic over the handler binding **so tests can build the real router**.
-/// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
-/// handler, which keeps the `AppState` out of the test while still
-/// exercising the thing that ships: `Router::route` over every row.
-/// Route selection is then asserted by *serving requests* rather than by
-/// re-reading a const — and axum's duplicate-path panic fires here as a test
-/// failure instead of at daemon start.
-fn assemble<S, F>(handler: F) -> Router<S>
+/// The routed-but-unlayered router: `/json_rpc` and the 404 fallback.
+fn assemble<S>(json_rpc: MethodRouter<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
-    F: Fn(Endpoint) -> MethodRouter<S>,
 {
-    let mut router = Router::new();
-    for route in ROUTES {
-        for path in route.paths {
-            router = router.route(path, handler(route.endpoint));
-        }
-    }
-    // A path no row serves gets the shared answer, which names
-    // `/json_rpc`, instead of an empty 404 (the wallet RPC mounts the same).
-    router.fallback(unrouted)
+    Router::new()
+        .route(shekyl_rpc_types::endpoint::JSON_RPC_PATH, json_rpc)
+        // A path no row serves gets the shared answer, which names
+        // `/json_rpc`, instead of an empty 404 (the wallet RPC mounts the same).
+        .fallback(unrouted)
 }
 
 /// The answer to a path no route serves: HTTP 404 with the shared
@@ -391,11 +171,11 @@ async fn unrouted(uri: axum::http::Uri) -> (StatusCode, Json<serde_json::Value>)
 /// Build the Axum router for one listener. `cors_origins` empty ⇒
 /// default-deny CORS.
 ///
-/// Routes come only from [`assemble`]; handlers only from [`handler_for`].
+/// The route comes only from [`assemble`], its handler from [`rpc::handle`].
 /// Every request is stamped with `authority`, which every gate reads
 /// (`crate::authority`, RT-O32).
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String], authority: Authority) -> Router {
-    gate(assemble(handler_for), authority)
+    gate(assemble(post(rpc::handle)), authority)
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         .layer(cors_layer(cors_origins))
         .with_state(state)

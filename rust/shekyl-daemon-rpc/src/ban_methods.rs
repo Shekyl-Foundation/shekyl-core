@@ -9,21 +9,19 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use shekyl_rpc_types::bans::{
-    BannedRequest, BannedResponse, GetBan, GetBansResponse, SetBansRequest,
-};
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-use shekyl_rpc_types::mining::StatusOnlyResponse;
-use shekyl_rpc_types::RpcStatus;
+use shekyl_rpc_types::kinds::{Done, Duration, Text};
+use shekyl_rpc_types::nullable::Nullable;
+use shekyl_rpc_types::wire::node;
 
 use crate::handles::{BanLeftFacts, BanTargetFacts, BansFacts};
 
 /// The ban methods' diagnostic codes.
 pub mod codes {
     /// Not a host address or an IPv4 subnet.
-    pub const BAD_HOST: &str = "ban.bad_host";
+    pub const BAD_HOST: &str = "ban.host";
     /// A deadline the clock cannot hold.
-    pub const TOO_LONG: &str = "ban.too_long";
+    pub const TOO_LONG: &str = "ban.duration-over-clock";
 }
 
 fn bad_host(text: &str) -> RpcError {
@@ -62,113 +60,95 @@ fn text_of(target: BanTargetFacts) -> String {
     }
 }
 
-const fn seconds_of(left: BanLeftFacts) -> (u64, bool) {
+fn ban_of(target: BanTargetFacts, left: BanLeftFacts) -> node::Ban {
     match left {
-        BanLeftFacts::Permanent => (0, true),
-        BanLeftFacts::Seconds(seconds) => (seconds, false),
+        BanLeftFacts::Permanent => node::Ban {
+            host: Text(text_of(target)),
+            duration: Nullable(None),
+            permanent: true,
+        },
+        BanLeftFacts::Seconds(seconds) => node::Ban {
+            host: Text(text_of(target)),
+            duration: Nullable(Some(Duration(seconds))),
+            permanent: false,
+        },
     }
 }
 
-/// `set_bans { bans }`: each entry bans or lifts a host or a subnet, in
-/// order. Every entry is read, and every deadline checked against the
-/// clock, before any is applied, so a malformed entry or a deadline the
-/// clock cannot hold changes nothing.
-///
-/// The check and the bans are two reads of the clock, not one. A deadline
-/// that fits at the check and no longer fits when its ban is applied (the
-/// clock has moved to within its length of the end) is refused there, and
-/// the entries before it stay applied. Only a ban length within seconds of
-/// the clock's range can meet that edge; the reply then names the entry,
-/// and `get_bans` shows what was applied.
+/// `ban_add { host, duration }`: ban a host or an IPv4 subnet, for
+/// `duration`, or for good when it is left out (IG-Q44).
 ///
 /// # Errors
 ///
-/// `BadParams` for a host that is not one, or a deadline the clock cannot
+/// `BadParams` for a host that is not one, or a duration the clock cannot
 /// hold; the handle's fault.
-pub fn set_bans(
-    bans: &dyn BansFacts,
-    request: &SetBansRequest,
-) -> Result<StatusOnlyResponse, RpcError> {
-    let too_long = |entry: &shekyl_rpc_types::bans::SetBan| {
+pub fn ban_add(bans: &dyn BansFacts, request: &node::BanAdd) -> Result<Done, RpcError> {
+    let target = target_of(&request.host.0)?;
+    let seconds = request.duration.map(|duration| duration.0);
+    let too_long = || {
         RpcError::new(
             ErrorClass::BadParams,
             Diagnostic::new(
                 codes::TOO_LONG,
-                format!(
-                    "a ban of {:?} seconds does not fit the clock",
-                    entry.seconds
-                ),
+                format!("a ban of {seconds:?} seconds does not fit the clock"),
             )
-            .param("host", entry.host.clone()),
+            .param("host", request.host.0.clone()),
         )
     };
-    let entries = request
-        .bans
-        .iter()
-        .map(|entry| target_of(&entry.host).map(|target| (target, entry)))
-        .collect::<Result<Vec<_>, _>>()?;
-    for (_, entry) in &entries {
-        if let (true, Some(seconds)) = (entry.ban, entry.seconds) {
-            if !bans.fits(seconds)? {
-                return Err(too_long(entry));
-            }
+    if let Some(seconds) = seconds {
+        if !bans.fits(seconds)? {
+            return Err(too_long());
         }
     }
-    for (target, entry) in entries {
-        if entry.ban {
-            if !bans.ban(target, entry.seconds)? {
-                return Err(too_long(entry));
-            }
-        } else {
-            let _lifted = bans.lift(target)?;
-        }
+    if !bans.ban(target, seconds)? {
+        return Err(too_long());
     }
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    Ok(Done)
 }
 
-/// `get_bans`: every ban in force, with its time left.
+/// `ban_remove { host }`: lift a ban. A host not banned is lifted too: the
+/// state asked for holds.
+///
+/// # Errors
+///
+/// `BadParams` for a host that is not one; the handle's fault.
+pub fn ban_remove(bans: &dyn BansFacts, request: &node::BanHost) -> Result<Done, RpcError> {
+    let _lifted = bans.lift(target_of(&request.host.0)?)?;
+    Ok(Done)
+}
+
+/// `ban_list`: every ban in force, with its time left.
 ///
 /// # Errors
 ///
 /// The handle's fault.
-pub fn get_bans(bans: &dyn BansFacts) -> Result<GetBansResponse, RpcError> {
-    Ok(GetBansResponse {
-        status: RpcStatus::ok(),
-        bans: bans
-            .list()?
-            .into_iter()
-            .map(|row| {
-                let (seconds, permanent) = seconds_of(row.left);
-                GetBan {
-                    host: text_of(row.target),
-                    seconds,
-                    permanent,
-                }
-            })
-            .collect(),
-    })
+pub fn ban_list(bans: &dyn BansFacts) -> Result<Vec<node::Ban>, RpcError> {
+    Ok(bans
+        .list()?
+        .into_iter()
+        .map(|row| ban_of(row.target, row.left))
+        .collect())
 }
 
-/// `banned { address }`: whether a host is banned, and for how long.
+/// `ban_show { host }`: one host's ban, or `null` when it is not banned
+/// (§18).
 ///
 /// # Errors
 ///
-/// `BadParams` for an address that is not one; the handle's fault.
-pub fn banned(bans: &dyn BansFacts, request: &BannedRequest) -> Result<BannedResponse, RpcError> {
+/// `BadParams` for a host that is not an address; the handle's fault.
+pub fn ban_show(
+    bans: &dyn BansFacts,
+    request: &node::BanHost,
+) -> Result<Nullable<node::Ban>, RpcError> {
     let host: IpAddr = request
-        .address
+        .host
+        .0
         .parse()
-        .map_err(|_| bad_host(&request.address))?;
-    let left = bans.remaining(host)?;
-    let (seconds, permanent) = left.map_or((0, false), seconds_of);
-    Ok(BannedResponse {
-        status: RpcStatus::ok(),
-        banned: left.is_some(),
-        seconds,
-        permanent,
-    })
+        .map_err(|_| bad_host(&request.host.0))?;
+    Ok(bans
+        .remaining(host)?
+        .map(|left| ban_of(BanTargetFacts::Host(host), left))
+        .into())
 }
 
 #[cfg(test)]

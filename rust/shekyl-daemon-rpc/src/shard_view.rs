@@ -3,7 +3,7 @@
 
 //! The shard view's facts source (`SHARD_VIEW_FETCH.md` `SV-D3`, `SV-D9`).
 //!
-//! `request_archival_shard` asks one question — *this shard's view, or the
+//! `shard_fetch` asks one question — *this shard's view, or the
 //! reason there is none* — and the answer comes through [`ShardViewFacts`],
 //! a trait with one production implementation at a time (`RK-D7`). The
 //! implementation that reads a body from a holder lives in the daemon
@@ -22,17 +22,26 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use shekyl_rpc_types::{
-    HashHex, RequestArchivalShardRequest, RequestArchivalShardResponse, RpcStatus,
-    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
-    CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
-};
+use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+use shekyl_rpc_types::kinds::{Count, Duration, Height, Integer, Size};
+use shekyl_rpc_types::wire::archival;
+use shekyl_rpc_types::HashHex;
 use shekyl_types::{ArchivalLength, ShardId, ShardView};
 
 use crate::chain_facts::FactsFault;
-use crate::methods::{RpcFault, RpcRefusal};
+use crate::methods::RpcFault;
 
-/// The answer to one `request_archival_shard`, boxed so a trait object can
+/// The shard view's diagnostic codes (`INPUT_GRAMMAR.md` IG-Q86).
+pub mod codes {
+    /// The shard is still filling, or lies past the tip.
+    pub const OPEN: &str = "shard.open";
+    /// The shard is closed and no holder served it this time.
+    pub const UNAVAILABLE: &str = "shard.unavailable";
+    /// This daemon holds no archival skeleton and serves no shard view.
+    pub const VIEW_ABSENT: &str = "shard.view-absent";
+}
+
+/// The answer to one `shard_fetch`, boxed so a trait object can
 /// return it without an `async-trait` dependency.
 pub type ShardViewFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ShardView, ShardViewRefusal>> + Send + 'a>>;
@@ -61,7 +70,7 @@ pub enum ShardViewRefusal {
     Fault(FactsFault),
 }
 
-/// What `request_archival_shard` reads (`RK-D7`: one trait, one production
+/// What `shard_fetch` reads (`RK-D7`: one trait, one production
 /// implementation, chosen by the composition root).
 pub trait ShardViewFacts: Send + Sync {
     /// The view of `shard_id`, or why there is none.
@@ -82,26 +91,7 @@ impl ShardViewFacts for SkeletonAbsent {
     }
 }
 
-/// Parse `request_archival_shard`'s params. `shard_id` is required: there
-/// is no default shard, so a null or empty params object is a wrong
-/// parameter, not a request for shard 0.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with `CORE_RPC_ERROR_CODE_WRONG_PARAM` when the
-/// params are not an object carrying exactly `shard_id`.
-pub fn request_archival_shard_request(
-    params: &serde_json::Value,
-) -> Result<RequestArchivalShardRequest, RpcFault> {
-    const EXPECTED: &str = "Wrong parameters, expected an object with shard_id (an integer)";
-    match params {
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(EXPECTED))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(EXPECTED))),
-    }
-}
-
-/// `request_archival_shard` (`SV-D3`): the view of one closed shard, read
+/// `shard_fetch` (`SV-D3`): the view of one closed shard, read
 /// through `facts`, or one of the three typed refusals.
 ///
 /// # Errors
@@ -118,11 +108,11 @@ pub fn request_archival_shard_request(
 ///   was asked about; a view of another shard is the source contradicting
 ///   itself (a cache or adapter mix-up), and it is reported as this daemon's
 ///   fault rather than projected as a fact about the request.
-pub async fn request_archival_shard(
+pub async fn shard_fetch(
     facts: &dyn ShardViewFacts,
-    request: RequestArchivalShardRequest,
-) -> Result<RequestArchivalShardResponse, RpcFault> {
-    let asked = ShardId::from_raw(request.shard_id);
+    request: archival::ShardId,
+) -> Result<archival::ShardView, RpcFault> {
+    let asked = ShardId::from_raw(request.id.0);
     match facts.view(asked).await {
         Ok(view) if view.shard_id == asked => Ok(project(&view)),
         Ok(view) => {
@@ -137,30 +127,34 @@ pub async fn request_archival_shard(
     }
 }
 
-fn project(view: &ShardView) -> RequestArchivalShardResponse {
-    RequestArchivalShardResponse {
-        status: RpcStatus::ok(),
-        shard_id: view.shard_id.to_raw(),
-        shard_hash: HashHex::from_bytes(view.shard_hash.to_bytes()),
-        archival_len: view.archival_len.to_raw(),
-        block_count: view.block_count.to_raw(),
-        tx_count: view.tx_count,
-        output_count: view.output_count,
-        coinbase_output_count: view.coinbase_output_count,
-        time_range_seconds: view.time_range_seconds,
-        close_height: view.close_height.to_raw(),
+fn project(view: &ShardView) -> archival::ShardView {
+    archival::ShardView {
+        id: Integer(view.shard_id.to_raw()),
+        hash: HashHex::from_bytes(view.shard_hash.to_bytes()),
+        size: Size(view.archival_len.to_raw()),
+        block_count: Count(view.block_count.to_raw()),
+        tx_count: Count(view.tx_count),
+        output_count: Count(view.output_count),
+        coinbase_output_count: Count(view.coinbase_output_count),
+        duration: Duration(view.time_range_seconds),
+        closing_height: Height(view.close_height.to_raw()),
     }
 }
 
 fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
+    let refused = |code: &str, message: String| {
+        RpcFault::Refused(RpcError::new(
+            ErrorClass::RefusedByMethod,
+            Diagnostic::new(code, message),
+        ))
+    };
     match refusal {
         ShardViewRefusal::Open {
             shard_id,
             open_shard,
             remaining_to_close,
-        } => RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN,
-            message: match remaining_to_close {
+        } => {
+            let message = match remaining_to_close {
                 Some(remaining) => format!(
                     "shard {} is still filling: {} archival bytes to close",
                     shard_id.to_raw(),
@@ -171,22 +165,31 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
                     shard_id.to_raw(),
                     open_shard.to_raw()
                 ),
-            },
-            data: None,
-        }),
-        ShardViewRefusal::Unavailable { shard_id, attempts } => RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
-            message: format!(
-                "could not retrieve shard {} this time ({attempts} holder(s) tried)",
-                shard_id.to_raw()
-            ),
-            data: None,
-        }),
-        ShardViewRefusal::SkeletonAbsent => RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
-            message: "this daemon holds no archival skeleton and serves no shard view".to_owned(),
-            data: None,
-        }),
+            };
+            let mut diagnostic = Diagnostic::new(codes::OPEN, message)
+                .param("id", shard_id.to_raw().to_string())
+                .param("open", open_shard.to_raw().to_string());
+            if let Some(remaining) = remaining_to_close {
+                diagnostic = diagnostic.param("remaining", remaining.to_raw().to_string());
+            }
+            RpcFault::Refused(RpcError::new(ErrorClass::RefusedByMethod, diagnostic))
+        }
+        ShardViewRefusal::Unavailable { shard_id, attempts } => RpcFault::Refused(RpcError::new(
+            ErrorClass::RefusedByMethod,
+            Diagnostic::new(
+                codes::UNAVAILABLE,
+                format!(
+                    "could not retrieve shard {} this time ({attempts} holder(s) tried)",
+                    shard_id.to_raw()
+                ),
+            )
+            .param("id", shard_id.to_raw().to_string())
+            .param("attempts", attempts.to_string()),
+        )),
+        ShardViewRefusal::SkeletonAbsent => refused(
+            codes::VIEW_ABSENT,
+            "this daemon holds no archival skeleton and serves no shard view".to_owned(),
+        ),
         ShardViewRefusal::Fault(fault) => RpcFault::Facts(*fault),
     }
 }

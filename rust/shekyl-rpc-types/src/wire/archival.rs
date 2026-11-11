@@ -28,11 +28,11 @@ crate::wire_keywords! {
 }
 
 crate::wire_object! {
-    /// An interval the bond failed, inclusive.
+    /// An interval of settlement epochs the bond failed, inclusive.
     ["bond failure"]
     pub struct Failure {
-        pub from: Height,
-        pub to: Height,
+        pub from: Integer,
+        pub to: Integer,
     }
 }
 
@@ -127,8 +127,10 @@ crate::wire_object! {
         pub leaf_count: Count,
         pub frozen_count: Count,
         pub settled_epoch: Integer,
-        pub budget: Amount,
-        pub work: Milli,
+        /// `null` before the first settlement pass.
+        pub budget: Nullable<Amount>,
+        /// `null` before the first settlement pass.
+        pub work: Nullable<Milli>,
         pub shard: Vec<CoverageShard>,
     }
 }

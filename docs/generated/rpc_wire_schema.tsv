@@ -31,7 +31,7 @@ block_header_show	field	block header	difficulty	chain	hex128
 block_header_show	field	block header	difficulty_cumulative	chain	hex128
 block_header_show	field	block header	reward	chain	amount
 block_header_show	field	block header	weight	chain	size
-block_header_show	field	block header	weight_longterm	chain	size
+block_header_show	field	block header	weight_longterm	chain	size or null
 block_header_show	field	block header	tx_count	chain	count
 block_header_show	field	block header	pow	chain	hash or null
 block_header_show	field	block header	coinbase	chain	hash
@@ -55,7 +55,7 @@ block_header_list	field	block header	difficulty	chain	hex128
 block_header_list	field	block header	difficulty_cumulative	chain	hex128
 block_header_list	field	block header	reward	chain	amount
 block_header_list	field	block header	weight	chain	size
-block_header_list	field	block header	weight_longterm	chain	size
+block_header_list	field	block header	weight_longterm	chain	size or null
 block_header_list	field	block header	tx_count	chain	count
 block_header_list	field	block header	pow	chain	hash or null
 block_header_list	field	block header	coinbase	chain	hash
@@ -83,7 +83,7 @@ block_show	field	block header	difficulty	chain	hex128
 block_show	field	block header	difficulty_cumulative	chain	hex128
 block_show	field	block header	reward	chain	amount
 block_show	field	block header	weight	chain	size
-block_show	field	block header	weight_longterm	chain	size
+block_show	field	block header	weight_longterm	chain	size or null
 block_show	field	block header	tx_count	chain	count
 block_show	field	block header	pow	chain	hash or null
 block_show	field	block header	coinbase	chain	hash
@@ -116,7 +116,7 @@ block_list	field	block header	difficulty	chain	hex128
 block_list	field	block header	difficulty_cumulative	chain	hex128
 block_list	field	block header	reward	chain	amount
 block_list	field	block header	weight	chain	size
-block_list	field	block header	weight_longterm	chain	size
+block_list	field	block header	weight_longterm	chain	size or null
 block_list	field	block header	tx_count	chain	count
 block_list	field	block header	pow	chain	hash or null
 block_list	field	block header	coinbase	chain	hash
@@ -212,8 +212,8 @@ archival_claim_show	field	epoch	bond	chain	list of object (bond)
 archival_claim_show	field	bond	joined_epoch	chain	integer
 archival_claim_show	field	bond	complete_tree	chain	switch
 archival_claim_show	field	bond	failure	chain	list of object (bond failure)
-archival_claim_show	field	bond failure	from	chain	height
-archival_claim_show	field	bond failure	to	chain	height
+archival_claim_show	field	bond failure	from	chain	integer
+archival_claim_show	field	bond failure	to	chain	integer
 archival_claim_show	field	epoch	shard	chain	list of object (shard)
 archival_claim_show	field	shard	id	chain	integer
 archival_claim_show	field	shard	freeze_height	chain	height
@@ -227,8 +227,8 @@ shard_coverage	field	shard coverage	height	chain	height
 shard_coverage	field	shard coverage	leaf_count	chain	count
 shard_coverage	field	shard coverage	frozen_count	chain	count
 shard_coverage	field	shard coverage	settled_epoch	chain	integer
-shard_coverage	field	shard coverage	budget	chain	amount
-shard_coverage	field	shard coverage	work	chain	milli
+shard_coverage	field	shard coverage	budget	chain	amount or null
+shard_coverage	field	shard coverage	work	chain	milli or null
 shard_coverage	field	shard coverage	shard	chain	list of object (shard)
 shard_coverage	field	shard	id	chain	integer
 shard_coverage	field	shard	bonded_count	chain	count

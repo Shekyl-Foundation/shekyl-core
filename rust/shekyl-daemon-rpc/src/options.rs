@@ -19,13 +19,13 @@
 use std::sync::Arc;
 
 use crate::info::Disclosure;
-use crate::methods::{RpcFault, RpcRefusal};
 
-use shekyl_rpc_types::methods::Grant;
+use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+use shekyl_rpc_types::method::Grant;
+use shekyl_rpc_types::wire::node;
 
-pub use shekyl_rpc_types::options::{
-    OptionPair, OptionSetRequest, OptionShowRequest, OptionsResponse, Refusal, ShownRow,
-};
+pub use shekyl_rpc_types::options::Refusal;
+pub use shekyl_rpc_types::wire::node::{OptionRow as ShownRow, OptionSource};
 
 /// The visibility of a row for `option_show`, as the handle reports each.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,114 +78,99 @@ impl OptionsFacts for OptionsAbsent {
 fn absent_refusal() -> Refusal {
     Refusal {
         code: "config.runtime.absent".to_owned(),
-        option: None,
+        option: shekyl_rpc_types::Nullable(None),
         source: "runtime".to_owned(),
-        params: Vec::new(),
+        parameter: std::collections::BTreeMap::new(),
         message: "this daemon serves no options: no options handle was supplied".to_owned(),
     }
 }
 
-/// The JSON-RPC code of a configuration refusal (RT-O25), whose `data`
-/// member carries the diagnostics.
-pub const CONFIG_REFUSED_CODE: i64 = shekyl_rpc_types::CORE_RPC_ERROR_CODE_CONFIG_REFUSED;
+/// Why an options method did not answer: a configuration refusal, every
+/// diagnostic the table gave (RT-O25), or the call itself refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OptionsFault {
+    /// The table refused: class `RefusedByMethod`, and `data` is the list.
+    Config(Vec<Refusal>),
+    /// The request was refused before the table was asked.
+    Refused(RpcError),
+}
 
-/// Parses `option_set`'s params. A malformed request, an empty list and a
-/// name given twice are request-shape faults, refused with the
-/// wrong-parameter code; a configuration refusal is the handle's.
-///
-/// # Errors
-/// [`RpcFault::Refused`] with the wrong-parameter code.
-pub fn option_set_request(params: &serde_json::Value) -> Result<Vec<(String, String)>, RpcFault> {
-    let request: OptionSetRequest = serde_json::from_value(params.clone())
-        .map_err(|e| RpcFault::Refused(RpcRefusal::wrong_param(&format!("option_set: {e}"))))?;
-    if request.options.is_empty() {
-        return Err(RpcFault::Refused(RpcRefusal::wrong_param(
-            "option_set: the list of options is empty",
-        )));
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for pair in &request.options {
-        if !seen.insert(pair.name.as_str()) {
-            return Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-                "option_set: `{}` is given more than once",
-                pair.name
-            ))));
+impl OptionsFault {
+    /// The error object's class, its message, and its `data`.
+    #[must_use]
+    pub fn into_parts(self) -> (ErrorClass, String, serde_json::Value) {
+        match self {
+            Self::Config(refusals) => {
+                let message = match refusals.as_slice() {
+                    [one] => one.message.clone(),
+                    many => format!(
+                        "{} configuration refusals; the first: {}",
+                        many.len(),
+                        many.first().map_or("", |r| r.message.as_str())
+                    ),
+                };
+                let data = serde_json::to_value(&refusals).unwrap_or(serde_json::Value::Null);
+                (ErrorClass::RefusedByMethod, message, data)
+            }
+            Self::Refused(error) => {
+                let data =
+                    serde_json::to_value(&error.diagnostic).unwrap_or(serde_json::Value::Null);
+                (error.class, error.diagnostic.message, data)
+            }
         }
     }
-    Ok(request
-        .options
-        .into_iter()
-        .map(|p| (p.name, p.value))
-        .collect())
 }
 
-/// Parses `option_show`'s params; absent params mean every row.
+/// `option_set { value }` (RT-O23, IG-Q42): every named row set at once,
+/// or none. A row a name cannot appear twice in: the request is a map.
 ///
 /// # Errors
-/// [`RpcFault::Refused`] with the wrong-parameter code.
-pub fn option_show_request(params: &serde_json::Value) -> Result<Option<Vec<String>>, RpcFault> {
-    if params.is_null() {
-        return Ok(None);
-    }
-    let request: OptionShowRequest = serde_json::from_value(params.clone())
-        .map_err(|e| RpcFault::Refused(RpcRefusal::wrong_param(&format!("option_show: {e}"))))?;
-    Ok(request.names)
-}
-
-/// `option_set` (RT-O23): builds every pair and applies all or none.
 ///
-/// # Errors
-/// [`RpcFault::Refused`] with [`CONFIG_REFUSED_CODE`] carrying every
-/// diagnostic in `data`.
+/// `option.value-empty` for a map with no row; the table's refusals, with
+/// nothing applied.
 pub fn option_set(
     facts: &dyn OptionsFacts,
-    pairs: &[(String, String)],
-) -> Result<OptionsResponse, RpcFault> {
-    match facts.set(pairs) {
-        Ok(options) => Ok(OptionsResponse { options }),
-        Err(refusals) => Err(RpcFault::Refused(config_refused(refusals))),
+    request: &node::OptionSet,
+) -> Result<Vec<ShownRow>, OptionsFault> {
+    if request.value.0.is_empty() {
+        return Err(OptionsFault::Refused(RpcError::new(
+            ErrorClass::BadParams,
+            Diagnostic::new("option.value-empty", "option_set names no option"),
+        )));
     }
+    let pairs: Vec<(String, String)> = request
+        .value
+        .0
+        .iter()
+        .map(|(name, value)| (name.clone(), value.0.clone()))
+        .collect();
+    facts.set(&pairs).map_err(OptionsFault::Config)
 }
 
-/// `option_show` (RT-O23): each row the caller may see, in table order. A
-/// named row the caller may not see is absent from the reply; an unknown
-/// name is refused.
+/// `option_show { name }` (RT-O23): each row the caller may see, in table
+/// order, or every such row when no name is given. A named row the caller
+/// may not see is absent; an unknown name is refused.
 ///
 /// # Errors
-/// [`RpcFault::Refused`].
+///
+/// The table's refusal.
 pub fn option_show(
     facts: &dyn OptionsFacts,
-    names: Option<&[String]>,
+    request: &node::OptionShow,
     disclosure: Disclosure,
-) -> Result<OptionsResponse, RpcFault> {
-    match facts.show(names) {
-        Ok(rows) => Ok(OptionsResponse {
-            options: rows
-                .into_iter()
-                .filter(|r| disclosure.shows(r.grant))
-                .map(|r| r.row)
-                .collect(),
-        }),
-        Err(ShowRefusal::Refused(refusal)) => Err(RpcFault::Refused(config_refused(vec![refusal]))),
-        Err(ShowRefusal::Absent) => Err(RpcFault::Refused(config_refused(vec![absent_refusal()]))),
-    }
-}
-
-/// The JSON-RPC error of a configuration refusal: one code, the first
-/// diagnostic's text as the message, every diagnostic in `data`.
-fn config_refused(refusals: Vec<Refusal>) -> RpcRefusal {
-    let message = match refusals.as_slice() {
-        [one] => one.message.clone(),
-        many => format!(
-            "{} configuration refusals; the first: {}",
-            many.len(),
-            many.first().map_or("", |r| r.message.as_str())
-        ),
-    };
-    RpcRefusal {
-        code: CONFIG_REFUSED_CODE,
-        message,
-        data: serde_json::to_value(refusals).ok(),
+) -> Result<Vec<ShownRow>, OptionsFault> {
+    let names: Option<Vec<String>> = request
+        .name
+        .as_ref()
+        .map(|names| names.iter().map(|name| name.0.clone()).collect());
+    match facts.show(names.as_deref()) {
+        Ok(rows) => Ok(rows
+            .into_iter()
+            .filter(|r| disclosure.shows(r.grant))
+            .map(|r| r.row)
+            .collect()),
+        Err(ShowRefusal::Refused(refusal)) => Err(OptionsFault::Config(vec![refusal])),
+        Err(ShowRefusal::Absent) => Err(OptionsFault::Config(vec![absent_refusal()])),
     }
 }
 

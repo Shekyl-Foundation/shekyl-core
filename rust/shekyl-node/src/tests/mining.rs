@@ -108,13 +108,13 @@ fn with_no_address_the_template_reads_say_why() {
     ] {
         let refused = refused.expect_err("no template");
         assert_eq!(refused.class, ErrorClass::NotReady);
-        assert_eq!(refused.diagnostic.code, codes::NO_ADDRESS);
+        assert_eq!(refused.diagnostic.code, codes::ADDRESS_UNSET);
     }
     let status = mining_status(&*handles.mining).expect("status");
     assert!(!status.active);
     assert_eq!(
         status.no_template.map(|why| why.code),
-        Some(codes::NO_ADDRESS.to_owned())
+        Some(codes::ADDRESS_UNSET.to_owned())
     );
     let refused = a_runtime()
         .block_on(start_mining(
@@ -123,7 +123,7 @@ fn with_no_address_the_template_reads_say_why() {
         ))
         .expect_err("no address");
     assert_eq!(refused.class, ErrorClass::RefusedByMethod);
-    assert_eq!(refused.diagnostic.code, codes::NO_ADDRESS);
+    assert_eq!(refused.diagnostic.code, codes::ADDRESS_UNSET);
     node.stop();
 }
 /// `start_mining`, `mining_status` and `stop_mining` over the node's
@@ -396,7 +396,7 @@ fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
         .expect("answered at once, not waited out")
         .expect_err("not synced");
     assert_eq!(refused.class, ErrorClass::NotReady);
-    assert_eq!(refused.diagnostic.code, codes::NOT_SYNCED);
+    assert_eq!(refused.diagnostic.code, codes::SYNCING);
     assert!(!running, "no miner left running");
 }
 /// The job withdrawn mid-wait ends `generateblocks` with the reason and
@@ -439,7 +439,7 @@ fn a_job_withdrawn_mid_wait_ends_generateblocks() {
         other => other.expect_err("withdrawn"),
     };
     assert_eq!(refused.class, ErrorClass::NotReady);
-    assert_eq!(refused.diagnostic.code, codes::NOT_SYNCED);
+    assert_eq!(refused.diagnostic.code, codes::SYNCING);
     assert!(!running, "the miner it started is stopped");
 }
 /// A `generateblocks` call dropped mid-wait stops the miner it started

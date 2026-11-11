@@ -32,7 +32,8 @@ crate::wire_object! {
         pub difficulty_cumulative: HexU128,
         pub reward: Amount,
         pub weight: Size,
-        pub weight_longterm: Size,
+        /// `null` for a block off the main chain, which has none.
+        pub weight_longterm: Nullable<Size>,
         pub tx_count: Count,
         /// The proof-of-work hash, when asked for (IG-Q56); `null` when not.
         pub pow: Nullable<HashHex>,

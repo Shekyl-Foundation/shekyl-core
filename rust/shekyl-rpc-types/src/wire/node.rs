@@ -46,6 +46,7 @@ crate::wire_object! {
 
 crate::wire_object! {
     /// Hashes counted over a window of complete seconds.
+    #[derive(Copy)]
     ["mine speed"]
     pub struct MineSpeed {
         pub count: Count,
@@ -137,6 +138,49 @@ pub enum OptionRow {
     Value(OptionValue),
     /// A secret.
     Secret(OptionSecret),
+}
+
+impl OptionSource {
+    /// The source a configuration layer names: `default`, `file`, `cli` or
+    /// `runtime`. `None` for any other word.
+    #[must_use]
+    pub fn of(word: &str) -> Option<Self> {
+        match word {
+            "default" => Some(Self::Default),
+            "file" => Some(Self::File),
+            "cli" => Some(Self::Cli),
+            "runtime" => Some(Self::Runtime),
+            _ => None,
+        }
+    }
+}
+
+impl OptionRow {
+    /// A row that is not a secret: its value as text in the grammar's
+    /// syntax, or `None` when unset.
+    #[must_use]
+    pub fn text(name: &str, source: OptionSource, runtime: bool, value: Option<String>) -> Self {
+        Self::Value(OptionValue {
+            name: Text(name.to_owned()),
+            source,
+            runtime,
+            secret: false,
+            value: value.map(Text).into(),
+        })
+    }
+
+    /// A secret row: whether it holds a value, never the value. A secret is
+    /// never a runtime row (IG-12).
+    #[must_use]
+    pub fn secret(name: &str, source: OptionSource, assigned: bool) -> Self {
+        Self::Secret(OptionSecret {
+            name: Text(name.to_owned()),
+            source,
+            runtime: false,
+            secret: true,
+            assigned,
+        })
+    }
 }
 
 impl Schema for OptionRow {

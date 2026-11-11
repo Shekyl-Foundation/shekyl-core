@@ -12,11 +12,10 @@
 //! [`Authority`], stamped on every request as a request extension
 //! ([`stamp`]), and every gate reads it:
 //!
-//! - a REST path that has a row is admitted by [`stamp`] itself, against
-//!   that row, before the handler runs; a path with no row is not a method,
-//!   and the router answers 404;
-//! - a JSON-RPC method is admitted by the `/json_rpc` handler against its
-//!   own row ([`Authority::admit`]); a name with no row is method-not-found;
+//! - every method is JSON-RPC on `/json_rpc` (RW-Q1, RW-Q2), and the handler
+//!   admits it against its own row ([`Authority::admit`]); a name with no
+//!   row is method-not-found; a path that is not `/json_rpc` is the router's
+//!   404;
 //! - a handler that shapes its reply by grant reads [`Authority::disclosure`].
 //!
 //! A refusal is the JSON-RPC error object on every surface (`RPC_WIRE.md`
@@ -27,13 +26,11 @@
 //! listener keeps its method set until RT-W12 moves its clients (RT-O33).
 
 use axum::extract::Request;
-use axum::http::StatusCode;
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::response::Response;
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-use shekyl_rpc_types::methods::{
-    admit_armed, caller_bounded, rest_path, Grant, GrantSet, Method, Policy, Preset,
+use shekyl_rpc_types::method::{
+    admit_armed, caller_bounded, Grant, GrantSet, Policy, Preset, Row as Method,
 };
 
 use crate::info::Disclosure;
@@ -42,9 +39,9 @@ use crate::types::JsonRpcResponse;
 /// The diagnostic codes a refusal carries.
 pub mod codes {
     /// The method needs a grant the connection does not hold.
-    pub const OUTSIDE_THE_GRANT: &str = "rpc.grant.outside";
+    pub const OUTSIDE_THE_GRANT: &str = "grant.outside";
     /// The method is served only to the host's administrator.
-    pub const HOST_ONLY: &str = "rpc.grant.host_only";
+    pub const HOST_ONLY: &str = "grant.host-only";
 }
 
 /// What one connection may do.
@@ -177,10 +174,16 @@ impl Authority {
     }
 }
 
-/// The JSON-RPC error object a refusal is on every surface (RW-Q3).
+/// The JSON-RPC error object a refusal is (RW-Q3): the class is the code,
+/// and `data` is the typed diagnostic.
 #[must_use]
 pub fn refusal(id: serde_json::Value, error: &RpcError) -> JsonRpcResponse {
-    crate::methods::RpcRefusal::of_error(error).to_json_rpc(id)
+    JsonRpcResponse::error_with_data(
+        id,
+        error.class.code(),
+        error.diagnostic.message.clone(),
+        serde_json::to_value(&error.diagnostic).ok(),
+    )
 }
 
 /// The message of a grant refusal, when `raw` is that envelope.
@@ -200,9 +203,7 @@ pub fn grant_refusal_message(raw: &str) -> Option<String> {
 
 /// Record that `row` was admitted, on an armed daemon only.
 ///
-/// The line is `row.name`: a REST path today, a JSON-RPC method name
-/// otherwise. The `/json_rpc` endpoint is not a method and is not
-/// recorded. Params and the body are not.
+/// The line is the method's name. Params and the body are not recorded.
 pub(crate) fn note_admitted(authority: Authority, row: &Method) {
     if !authority.armed_switch() || matches!(row.policy, Policy::Endpoint) {
         return;
@@ -210,30 +211,10 @@ pub(crate) fn note_admitted(authority: Authority, row: &Method) {
     tracing::info!(target: "global", "rpc request: {}", row.name);
 }
 
-/// The layer that stamps `authority` on a request whose path is a method,
-/// and admits that row before the handler runs.
-///
-/// A path with no row is not a method. The layer does not admit it and does
-/// not stamp an authority on it, so a handler that asks for the extension
-/// fails closed, and an unrouted path is the router's 404. The gate that
-/// every route is a row keeps a served path off that arm.
+/// The layer that stamps `authority` on every request. The `/json_rpc`
+/// handler admits each call against its method's row; no path is a method
+/// of its own (RW-Q1).
 pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Response {
-    let Some(row) = rest_path(request.uri().path()) else {
-        return next.run(request).await;
-    };
-    if let Err(error) = authority.admit(row) {
-        return (
-            StatusCode::OK,
-            Json(refusal(serde_json::Value::Null, &error)),
-        )
-            .into_response();
-    }
-    // Armed daemons (`--dev-rpc`) record the method-table row that was
-    // admitted, and not the body or the params. A REST row's name is its
-    // path today; a JSON-RPC row's name is the method. The `/json_rpc`
-    // endpoint itself is not a method, so it is not recorded here — the
-    // handler records the method it admits.
-    note_admitted(authority, row);
     request.extensions_mut().insert(authority);
     next.run(request).await
 }

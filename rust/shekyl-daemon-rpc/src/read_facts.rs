@@ -167,6 +167,9 @@ pub struct ClaimantBond {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimSource {
     pub chain_height: ChainCount,
+    /// The hash of the block the record was gathered at, the tip of the
+    /// same snapshot (IG-Q84).
+    pub tip_hash: BlockHash,
     pub current_settled_epoch: SettlementEpoch,
     pub bond: Option<ClaimantBond>,
     /// Every epoch of the claim window, ascending, as the claim verify's

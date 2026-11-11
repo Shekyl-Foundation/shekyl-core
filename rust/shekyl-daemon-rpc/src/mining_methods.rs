@@ -8,45 +8,38 @@
 //! dispatch here. Each failure is an RW-Q3 class with a typed diagnostic
 //! ([`codes`]).
 //!
-//! `get_block_template` and `get_miner_data` read the job the node posted;
-//! they build nothing (N2). The methods that wait or join are `async`:
-//! `submit_block` and `generateblocks` wait on the node, and `start_mining`,
-//! `stop_mining` and `generateblocks` run the miner's start and stop, which
-//! spawn and join threads, on a blocking thread of their own. Every other
-//! read is short.
+//! `block_template` reads the job the node posted; it builds nothing (N2),
+//! and `get_miner_data` folded into it (IG-Q46). The methods that wait or
+//! join are `async`: `block_submit` and `dev_block_generate` wait on the
+//! node, and `mine_start`, `mine_stop` and `dev_block_generate` run the
+//! miner's start and stop, which spawn and join threads, on a blocking
+//! thread of their own. Every other read is short.
 
 use std::num::NonZeroUsize;
 
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-use shekyl_rpc_types::methods::Armed;
-use shekyl_rpc_types::mining::{
-    GenerateBlocksRequest, GenerateBlocksResponse, GetBlockTemplateResponse, GetMinerDataResponse,
-    MineSpeed, MinerThreads, MiningStatusResponse, PopBlocksRequest, PopBlocksResponse,
-    StartMiningRequest, StatusOnlyResponse, SubmitBlockRequest, SubmitBlockResponse,
-    TxBacklogEntry,
-};
-use shekyl_rpc_types::{HashHex, RpcStatus};
+use shekyl_rpc_types::hex128::HexU128;
+use shekyl_rpc_types::kinds::{Address, Bytes, Count, Done, Duration, Height, Integer, Size};
+use shekyl_rpc_types::method::Armed;
+use shekyl_rpc_types::wire::{block, node};
+use shekyl_rpc_types::HashHex;
 use shekyl_types::{BlockCount, BlockHash, ChainCount};
+use shekyl_units::{wire::AtomicUnitsString, AtomicUnits};
 
 use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::handles::{DoorFacts, MiningFacts, MiningHandle};
-use crate::methods::split_128;
 use crate::mining_facts::{LocalOutcome, PopOutcome};
 
 /// The mining methods' diagnostic codes, each stated once.
 pub mod codes {
-    /// The node cannot answer yet.
-    pub const NOT_READY: &str = "node.not_ready";
-    /// The node's store faulted.
-    pub const STORE: &str = "node.store";
     /// A defect in the node.
-    pub const INTERNAL: &str = "node.internal";
+    pub const INTERNAL: &str = crate::methods::codes::DAEMON_INTERNAL;
     /// No `mine-address` row.
-    pub const NO_ADDRESS: &str = "mine.no_address";
+    pub const ADDRESS_UNSET: &str = "mine.address.unset";
     /// Chain sync does not say the node is synced.
-    pub const NOT_SYNCED: &str = "mine.not_synced";
+    pub const SYNCING: &str = "mine.syncing";
     /// The pool file faulted.
-    pub const POOL_RETIRED: &str = "mine.pool_retired";
+    pub const POOL_RETIRED: &str = crate::methods::codes::TXPOOL_RETIRED;
     /// The node is starting.
     pub const STARTING: &str = "mine.starting";
     /// The node is stopping.
@@ -57,61 +50,42 @@ pub mod codes {
     pub const RUNNING: &str = "mine.running";
     /// A miner is already running, and its bound does not search the height
     /// asked for.
-    pub const BOUND_SHORT: &str = "mine.bound_short";
+    pub const BOUND_SHORT: &str = "mine.bound-short";
     /// The miner is not running.
     pub const STOPPED: &str = "mine.stopped";
     /// A one-permit host never mines.
-    pub const ONE_PERMIT: &str = "mine.one_permit";
+    pub const ONE_PERMIT: &str = "mine.one-permit";
     /// A miner thread did not start.
     pub const THREAD: &str = "mine.thread";
     /// More threads than the host runs at once.
-    pub const TOO_MANY_THREADS: &str = "mine.too_many_threads";
+    pub const TOO_MANY_THREADS: &str = "mine.threads-over-host";
     /// The block is not hexadecimal, or does not parse.
     pub const BLOCK_MALFORMED: &str = "block.malformed";
     /// A consensus rule refused the block.
     pub const BLOCK_REFUSED: &str = "block.refused";
     /// The block lists bodies the pool does not show.
-    pub const BLOCK_MISSING_BODIES: &str = "block.missing_bodies";
+    pub const BLOCK_MISSING_BODIES: &str = "block.bodies-missing";
     /// The block's parent chain reaches no block this node holds.
     pub const BLOCK_UNLINKED: &str = "block.unlinked";
     /// This node holds the block already.
-    pub const BLOCK_HELD_ALREADY: &str = "block.held_already";
+    pub const BLOCK_HELD_ALREADY: &str = "block.held-already";
     /// Stored as an alternative block; the tip did not change.
     pub const BLOCK_HELD: &str = "block.held";
     /// The block's fork is deeper than the reorganisation cap.
-    pub const BLOCK_BEYOND_CAP: &str = "block.beyond_cap";
+    pub const BLOCK_BEYOND_CAP: &str = "block.beyond-cap";
     /// The block extends a heavier chain this node cannot follow.
-    pub const BLOCK_CANNOT_FOLLOW: &str = "block.cannot_follow";
+    pub const BLOCK_CANNOT_FOLLOW: &str = "block.heavier-unfollowed";
     /// The block is larger than any valid block near the tip.
     pub const BLOCK_OVERSIZE: &str = "block.oversize";
-    /// `generateblocks` was asked for no blocks.
-    pub const COUNT_ZERO: &str = "block.count_zero";
-    /// `generateblocks` was asked for more blocks than this chain can grow by.
-    pub const COUNT_OVERFLOW: &str = "block.count_overflow";
+    /// `dev_block_generate` was asked for no blocks.
+    pub const COUNT_ZERO: &str = "block.count-zero";
+    /// `dev_block_generate` was asked for more blocks than this chain can
+    /// grow by.
+    pub const COUNT_OVERFLOW: &str = "block.count-overflow";
+    /// `mine_start` was asked for zero threads.
+    pub const THREADS_ZERO: &str = "mine.threads-zero";
     /// A pop would remove genesis or a block the undo journal retired.
-    pub const POP_BELOW_FLOOR: &str = "chain.pop_below_floor";
-}
-
-/// The RandomX algorithm name `mining_status` reports.
-const POW_ALGORITHM: &str = "RandomX";
-
-impl From<FactsFault> for RpcError {
-    fn from(fault: FactsFault) -> Self {
-        match fault {
-            FactsFault::NotReady => Self::new(
-                ErrorClass::NotReady,
-                Diagnostic::new(codes::NOT_READY, "the node is not ready; ask again later"),
-            ),
-            FactsFault::Inconsistent | FactsFault::StoreUnreadable => Self::new(
-                ErrorClass::StoreFault,
-                Diagnostic::new(codes::STORE, "the node's store faulted while answering"),
-            ),
-            FactsFault::Internal => Self::new(
-                ErrorClass::Internal,
-                Diagnostic::new(codes::INTERNAL, "the node failed while answering"),
-            ),
-        }
-    }
+    pub const POP_BELOW_FLOOR: &str = "chain.pop-below-floor";
 }
 
 fn hash_hex(hash: BlockHash) -> HashHex {
@@ -122,59 +96,34 @@ fn not_posted(why: Diagnostic) -> RpcError {
     RpcError::new(ErrorClass::NotReady, why)
 }
 
-/// `get_block_template`: the job the node posted, and its offsets (N2).
-///
-/// # Errors
-///
-/// `NotReady` with the node's reason while no job is posted.
-pub fn get_block_template(mining: &dyn MiningFacts) -> Result<GetBlockTemplateResponse, RpcError> {
-    let posted = mining.template()?.map_err(not_posted)?;
-    let (difficulty, wide_difficulty, difficulty_top64) = split_128(posted.difficulty);
-    Ok(GetBlockTemplateResponse {
-        status: RpcStatus::ok(),
-        difficulty,
-        wide_difficulty,
-        difficulty_top64,
-        height: posted.height.to_raw(),
-        reserved_offset: posted.extra_nonce_offset,
-        nonce_offset: posted.nonce_offset,
-        expected_reward: posted.reward,
-        prev_hash: hash_hex(posted.prev_hash),
-        seed_height: posted.seed_height.to_raw(),
-        seed_hash: hash_hex(posted.seed),
-        next_seed_hash: posted
-            .next_seed
-            .map_or_else(String::new, |next| hex::encode(next.to_bytes())),
-        blocktemplate_blob: hex::encode(&posted.block),
-        blockhashing_blob: hex::encode(&posted.hashing_blob),
-    })
+fn amount(raw: u64) -> AtomicUnitsString {
+    AtomicUnitsString::from(AtomicUnits::from_raw(raw))
 }
 
-/// `get_miner_data`: the posted job's chain facts and listed bodies.
+/// `block_template`: the job the node posted, with its offsets and the
+/// chain facts `get_miner_data` carried (N2; IG-Q46). One posted job, one
+/// chain state: every field is read from it.
 ///
 /// # Errors
 ///
 /// `NotReady` with the node's reason while no job is posted.
-pub fn get_miner_data(mining: &dyn MiningFacts) -> Result<GetMinerDataResponse, RpcError> {
+pub fn block_template(mining: &dyn MiningFacts) -> Result<block::BlockTemplate, RpcError> {
     let posted = mining.template()?.map_err(not_posted)?;
-    Ok(GetMinerDataResponse {
-        status: RpcStatus::ok(),
-        major_version: posted.major_version,
-        height: posted.height.to_raw(),
-        prev_id: hash_hex(posted.prev_hash),
-        seed_hash: hash_hex(posted.seed),
-        difficulty: format!("0x{:x}", posted.difficulty),
-        median_weight: posted.median_weight,
-        already_generated_coins: posted.already_generated,
-        tx_backlog: posted
-            .backlog
-            .iter()
-            .map(|entry| TxBacklogEntry {
-                id: HashHex::from_bytes(entry.id.to_bytes()),
-                weight: entry.weight,
-                fee: entry.fee,
-            })
-            .collect(),
+    Ok(block::BlockTemplate {
+        difficulty: HexU128(posted.difficulty),
+        height: Height(posted.height.to_raw()),
+        extra_offset: Integer(posted.extra_nonce_offset),
+        nonce_offset: Integer(posted.nonce_offset),
+        reward: amount(posted.reward),
+        parent: hash_hex(posted.prev_hash),
+        seed_height: Height(posted.seed_height.to_raw()),
+        body: Bytes(posted.block),
+        hashing: Bytes(posted.hashing_blob),
+        seed: hash_hex(posted.seed),
+        seed_next: posted.next_seed.map(hash_hex).into(),
+        version_major: Integer(u64::from(posted.major_version)),
+        weight_median: Size(posted.median_weight),
+        emission: amount(posted.already_generated),
     })
 }
 
@@ -191,73 +140,83 @@ async fn on_a_blocking_thread<T: Send + 'static>(
         .map_err(RpcError::from)
 }
 
-/// `start_mining { threads }`: start the built-in miner on the node's job
-/// board (`mine start [threads|auto]`); `auto` is the host's parallelism.
+/// `mine_start { threads }`: start the built-in miner on the node's job
+/// board (`mine start [threads|auto]`); `auto` is the node's `mine-threads`.
+/// It mines to the node's `mine-address` (IG-F23).
 ///
 /// # Errors
 ///
-/// `RefusedByMethod` with the node's refusal: no address, already
-/// running, more threads than the host's parallelism, a one-permit host, a
-/// thread that did not start, a stopped node.
-pub async fn start_mining(
-    mining: &MiningHandle,
-    request: StartMiningRequest,
-) -> Result<StatusOnlyResponse, RpcError> {
+/// `BadParams` for zero threads; `RefusedByMethod` with the node's
+/// refusal: no address, already running, more threads than the host's
+/// parallelism, a one-permit host, a thread that did not start, a stopped
+/// node.
+pub async fn mine_start(mining: &MiningHandle, request: node::MineStart) -> Result<Done, RpcError> {
     let threads = match request.threads {
-        MinerThreads::Auto => None,
-        MinerThreads::Count(count) => {
-            Some(NonZeroUsize::try_from(count).map_err(|_| RpcError::from(FactsFault::Internal))?)
-        }
+        node::Threads::Auto(_) => None,
+        node::Threads::Count(count) => Some(
+            usize::try_from(count.0)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| {
+                    RpcError::new(
+                        ErrorClass::BadParams,
+                        Diagnostic::new(
+                            codes::THREADS_ZERO,
+                            "threads is a count of at least one, or auto",
+                        ),
+                    )
+                })?,
+        ),
     };
     on_a_blocking_thread(mining, move |mining| mining.start(threads))
         .await?
         .map_err(|refused| RpcError::new(ErrorClass::RefusedByMethod, refused))?;
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    Ok(Done)
 }
 
-/// `stop_mining`: stop the built-in miner. The node keeps running.
+/// `mine_stop`: stop the built-in miner. The node keeps running.
 ///
 /// # Errors
 ///
 /// `RefusedByMethod` when the miner was not running.
-pub async fn stop_mining(mining: &MiningHandle) -> Result<StatusOnlyResponse, RpcError> {
+pub async fn mine_stop(mining: &MiningHandle) -> Result<Done, RpcError> {
     if !on_a_blocking_thread(mining, |mining| mining.stop()).await? {
         return Err(RpcError::new(
             ErrorClass::RefusedByMethod,
             Diagnostic::new(codes::STOPPED, "the miner is not running"),
         ));
     }
-    Ok(StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    })
+    Ok(Done)
 }
 
-/// `mining_status`: the miner, the posted job, and why none is posted.
+/// `mine_status`: the miner, the posted job, and why none is posted
+/// (IG-Q77). The job's fields are `null` while none is posted.
 ///
 /// # Errors
 ///
 /// The handle's fault.
-pub fn mining_status(mining: &dyn MiningFacts) -> Result<MiningStatusResponse, RpcError> {
+pub fn mine_status(mining: &dyn MiningFacts) -> Result<node::MineStatus, RpcError> {
     let state = mining.status()?;
-    let (difficulty, wide_difficulty, difficulty_top64) =
-        split_128(state.posted.map_or(0, |posted| posted.difficulty));
-    Ok(MiningStatusResponse {
-        status: RpcStatus::ok(),
+    Ok(node::MineStatus {
         active: state.miner.is_some(),
-        speed: state.miner.map_or(MineSpeed::NONE, |miner| miner.speed),
-        threads_count: state.miner.map_or(0, |miner| miner.threads),
-        address: state.address.unwrap_or_default(),
-        pow_algorithm: POW_ALGORITHM.to_owned(),
-        block_target: u32::try_from(shekyl_difficulty::T_SECONDS).unwrap_or(u32::MAX),
-        block_reward: state.posted.map_or(0, |posted| posted.reward),
-        difficulty,
-        wide_difficulty,
-        difficulty_top64,
-        height: state.posted.map_or(0, |posted| posted.height.to_raw()),
-        pool_retired: state.pool_retired,
-        no_template: state.absent,
+        speed: state.miner.map_or(
+            node::MineSpeed {
+                count: Count(0),
+                window: Duration(0),
+            },
+            |miner| miner.speed,
+        ),
+        threads: Count(state.miner.map_or(0, |miner| u64::from(miner.threads))),
+        address: state.address.map(Address).into(),
+        block_spacing: Duration(shekyl_difficulty::T_SECONDS),
+        height: state
+            .posted
+            .map(|posted| Height(posted.height.to_raw()))
+            .into(),
+        reward: state.posted.map(|posted| amount(posted.reward)).into(),
+        difficulty: state.posted.map(|posted| HexU128(posted.difficulty)).into(),
+        cause: state.absent.into(),
+        txpool_retired: state.pool_retired,
     })
 }
 
@@ -330,7 +289,7 @@ fn not_joined(outcome: LocalOutcome) -> RpcError {
     }
 }
 
-/// `submit_block { body }`: a block, through the node's local-arrival
+/// `block_submit { body }`: a block, through the node's local-arrival
 /// entry (b4). Its listed bodies come from the pool. It succeeds when the
 /// block connects, or when it is the new tip after a switch.
 ///
@@ -338,25 +297,24 @@ fn not_joined(outcome: LocalOutcome) -> RpcError {
 ///
 /// `BadParams` for a body that is not a block; otherwise the outcome's
 /// class and diagnostic: `MissingBodies` names the indices.
-pub async fn submit_block(
+pub async fn block_submit(
     door: &dyn DoorFacts,
-    request: SubmitBlockRequest,
-) -> Result<SubmitBlockResponse, RpcError> {
-    let malformed = |what: String| {
+    request: block::BlockBody,
+) -> Result<block::BlockId, RpcError> {
+    let bytes = request.body.into_vec();
+    let parsed = shekyl_wire::Block::from_bytes(&bytes).map_err(|e| {
         RpcError::new(
             ErrorClass::BadParams,
-            Diagnostic::new(codes::BLOCK_MALFORMED, what),
+            Diagnostic::new(
+                codes::BLOCK_MALFORMED,
+                format!("the bytes are not a block: {e}"),
+            ),
         )
-    };
-    let bytes = hex::decode(&request.body)
-        .map_err(|e| malformed(format!("the block is not hexadecimal: {e}")))?;
-    let block = shekyl_wire::Block::from_bytes(&bytes)
-        .map_err(|e| malformed(format!("the bytes are not a block: {e}")))?;
-    let hash = block.hash();
+    })?;
+    let hash = parsed.hash();
     match door.offer_local(bytes).await? {
-        LocalOutcome::Connected { .. } | LocalOutcome::Switched { .. } => Ok(SubmitBlockResponse {
-            status: RpcStatus::ok(),
-            block_id: hash_hex(hash),
+        LocalOutcome::Connected { .. } | LocalOutcome::Switched { .. } => Ok(block::BlockId {
+            hash: hash_hex(hash),
         }),
         other => Err(not_joined(other)),
     }
@@ -398,7 +356,7 @@ impl Drop for StartedMiner {
     }
 }
 
-/// `generateblocks { count }`, an armed lever (b6): start the built-in
+/// `dev_block_generate { count }`, an armed lever (b6): start the built-in
 /// miner if it is stopped, wait until the tip is `count` blocks higher,
 /// and stop the miner if this call started it — on return, and when the
 /// call is dropped mid-wait. The blocks are the node's own template's,
@@ -429,14 +387,15 @@ impl Drop for StartedMiner {
 /// when the node stops first. A withdrawal that comes with the block
 /// reaching the target is not an error: the chain at the stop decides, so a
 /// caller that retries on an error does not mine past its count.
-pub async fn generateblocks(
+pub async fn dev_block_generate(
     mining: &MiningHandle,
     door: &dyn DoorFacts,
     chain: &dyn ChainFacts,
     _armed: Armed,
-    request: GenerateBlocksRequest,
-) -> Result<GenerateBlocksResponse, RpcError> {
-    if request.count == 0 {
+    request: block::GenerateCount,
+) -> Result<block::Generated, RpcError> {
+    let count = request.count.0;
+    if count == 0 {
         return Err(RpcError::new(
             ErrorClass::BadParams,
             Diagnostic::new(codes::COUNT_ZERO, "count must be at least one"),
@@ -448,12 +407,12 @@ pub async fn generateblocks(
         return Err(RpcError::new(ErrorClass::NotReady, why));
     }
     let start = chain.chain_tip()?.chain_height;
-    let wanted = BlockCount::from_raw(request.count);
+    let wanted = BlockCount::from_raw(count);
     let Some(target) = start.checked_add(wanted).and_then(ChainCount::tip) else {
         return Err(RpcError::new(
             ErrorClass::BadParams,
             Diagnostic::new(codes::COUNT_OVERFLOW, "count does not fit on this chain")
-                .param("count", request.count.to_string())
+                .param("count", count.to_string())
                 .param("chain_height", start.to_raw().to_string()),
         ));
     };
@@ -503,45 +462,37 @@ pub async fn generateblocks(
             blocks.push(hash_hex(hash));
         }
     }
-    Ok(GenerateBlocksResponse {
-        status: RpcStatus::ok(),
-        height: end.to_raw(),
-        blocks,
+    Ok(block::Generated {
+        height: Height(end.tip().map_or(0, shekyl_types::BlockHeight::to_raw)),
+        hash: blocks,
     })
 }
 
-/// `/pop_blocks { nblocks }`, an armed lever (DX-Q3, Q7): pop that many
-/// blocks from the tip; their transactions return to the pool.
+/// `dev_chain_pop { count }`, an armed lever (DX-Q3, Q7): pop that many
+/// blocks from the tip; their transactions return to the pool. The reply is
+/// the new tip's height (IG-Q45).
 ///
 /// # Errors
 ///
 /// `RefusedByMethod` when the pop would remove genesis or a block the undo
 /// journal retired; nothing was popped, and the node is up.
-pub async fn pop_blocks(
+pub async fn dev_chain_pop(
     door: &dyn DoorFacts,
     _armed: Armed,
-    request: PopBlocksRequest,
-) -> Result<PopBlocksResponse, RpcError> {
-    match door.pop(request.nblocks).await? {
-        PopOutcome::Popped { tip } => {
-            let height = ChainCount::with_tip(tip).ok_or_else(|| {
-                RpcError::new(
-                    ErrorClass::Internal,
-                    Diagnostic::new(codes::INTERNAL, "the tip has no chain count"),
-                )
-            })?;
-            Ok(PopBlocksResponse {
-                status: RpcStatus::ok(),
-                height: height.to_raw(),
-            })
-        }
+    request: block::PopCount,
+) -> Result<block::Popped, RpcError> {
+    let count = request.count.0;
+    match door.pop(count).await? {
+        PopOutcome::Popped { tip } => Ok(block::Popped {
+            height: Height(tip.to_raw()),
+        }),
         PopOutcome::Refused { tip, floor } => Err(RpcError::new(
             ErrorClass::RefusedByMethod,
             Diagnostic::new(
                 codes::POP_BELOW_FLOOR,
                 format!(
                     "popping {} blocks from tip {} would remove a block below the lowest poppable height, {}",
-                    request.nblocks,
+                    count,
                     tip.to_raw(),
                     floor.to_raw()
                 ),
@@ -782,7 +733,7 @@ mod tests {
             Ok(None)
         }
         fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
-            Box::pin(async { Ok(Diagnostic::new(codes::NOT_SYNCED, "the node is not synced")) })
+            Box::pin(async { Ok(Diagnostic::new(codes::SYNCING, "the node is not synced")) })
         }
     }
 

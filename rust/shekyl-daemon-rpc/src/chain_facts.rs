@@ -116,6 +116,12 @@ pub struct ChainTip {
     pub synchronized: bool,
     /// `SHEKYL_VERSION_IS_RELEASE`.
     pub release_build: bool,
+    /// Whether the chain store's writer is halted on an invariant
+    /// (`DAEMON_REDB_STORE.md` §3.6.2), read beside the tip: `None` while it
+    /// connects, else the height the halting connect or pop was working at
+    /// and the `SI-` row of the store-invariant register that caught it. A
+    /// halted writer's tip is stale (IG-Q92).
+    pub halt: Option<(BlockHeight, u32)>,
 }
 
 /// What the chain holds at one height: the block's hash, or `None` when — and
@@ -329,7 +335,7 @@ pub trait P2pFacts: Send + Sync {
     /// [`FactsFault::NotReady`] before the node is up. A node owns its
     /// network for its whole life, so once up the tallies are always there
     /// to read; an offline node's are empty.
-    fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault>;
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::wire::p2p::RelayStats, FactsFault>;
 }
 
 /// The dynamic base-fee estimate: three priced tiers.

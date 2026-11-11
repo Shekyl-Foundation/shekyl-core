@@ -482,12 +482,19 @@ impl ChainFacts for StoreFacts {
         let snap = self.snapshot()?;
         let (height, hash) = tip_of(&snap)?;
         let sync = self.node.sync()?;
+        let halt = match self.store.connect_state() {
+            shekyl_chain_store::store::ConnectState::Live => None,
+            shekyl_chain_store::store::ConnectState::Halted { at_height, row } => {
+                Some((at_height, row.row()))
+            }
+        };
         Ok(ChainTip {
             chain_height: count_at(height),
             top_hash: hash,
             target_height: sync.target,
             synchronized: sync.synchronized,
             release_build: self.identity.release_build,
+            halt,
         })
     }
 

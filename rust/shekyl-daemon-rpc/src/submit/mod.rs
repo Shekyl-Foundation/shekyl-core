@@ -62,3 +62,60 @@ pub use verify::{TxVerifier, VerifyFailure, VerifyReject};
 /// instance per daemon, installed by the node's open and shared across
 /// transport workers via `Arc` in the server's `AppState`.
 pub type DaemonSubmitEngine = SubmitEngine<RustPoolShim<StoreChain>, DaemonTxVerifier>;
+
+/// `tx_submit { body }`: the daemon's atomic verdict on one transaction
+/// (`DAEMON_SUBMIT_VERDICT.md` §2). A verdict is an answer, `rejected`
+/// included; a refusal of the call is the absence of one (Two Generals),
+/// which a client holds and resubmits.
+///
+/// The caller's tier is the Dandelion++ embargo boundary (§3.1): anyone but
+/// the host's administrator sees only what is public, so the call cannot
+/// probe a stem entry (RT-O9.3). The host keeps the F31 resubmit-as-status
+/// read.
+///
+/// F39's verification cap is the one Phase-C semaphore, taken before the
+/// blocking pool, so a queued submission parks as a cheap task and does not
+/// pin a blocking worker; one semaphore for every listener makes the cap
+/// the daemon's.
+///
+/// # Errors
+///
+/// `daemon.internal` (stage `submit`) for an engine fault or a lost task;
+/// the specifics are in the daemon's log.
+pub async fn tx_submit(
+    state: &std::sync::Arc<crate::server::AppState>,
+    host: bool,
+    tx: Vec<u8>,
+) -> Result<shekyl_rpc_types::wire::tx::Verdict, shekyl_rpc_types::errors::RpcError> {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let fault = |what: &str| {
+        RpcError::new(
+            ErrorClass::Internal,
+            Diagnostic::new(crate::methods::codes::DAEMON_INTERNAL, what).param("stage", "submit"),
+        )
+    };
+    let caller = if host {
+        SubmitCaller::Owner
+    } else {
+        SubmitCaller::Foreign
+    };
+    tracing::debug!(bytes = tx.len(), "submit received");
+    let Ok(permit) = phase_c_semaphore().acquire_owned().await else {
+        tracing::error!("phase-C semaphore closed");
+        return Err(fault("the submission gate is closed"));
+    };
+    let engine = std::sync::Arc::clone(&state.submit_engine);
+    let joined = tokio::task::spawn_blocking(move || engine.submit(&tx, caller)).await;
+    drop(permit);
+    match joined {
+        Ok(Ok(verdict)) => Ok(verdict),
+        Ok(Err(engine_fault)) => {
+            tracing::error!(%engine_fault, "submit engine internal fault");
+            Err(fault("the submission engine faulted"))
+        }
+        Err(join_error) => {
+            tracing::error!(%join_error, "submit task join failure");
+            Err(fault("the submission task did not finish"))
+        }
+    }
+}

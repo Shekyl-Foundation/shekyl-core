@@ -11,7 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use shekyl_rpc_types::errors::Diagnostic;
-use shekyl_rpc_types::mining::MineSpeed;
+use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::chain_facts::FactsFault;

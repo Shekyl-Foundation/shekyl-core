@@ -407,7 +407,9 @@ pub fn kind_of_term(term: &str) -> Option<&'static [&'static str]> {
     Some(match term {
         // A height is an ordinal and is never a count, and the reverse
         // (`HEIGHT_SEMANTICS.md`, IG-Q45).
-        "height" | "from" | "to" => &["height"],
+        "height" => &["height"],
+        // A range's ends: heights, or settlement epochs (a bond's failures).
+        "from" | "to" => &["height", "integer"],
         "count" | "blocks" | "confirmations" | "depth" | "layers" | "threads" => &["count"],
         // A Shekyl address only; a network location is an endpoint (§3).
         "address" => &["address"],

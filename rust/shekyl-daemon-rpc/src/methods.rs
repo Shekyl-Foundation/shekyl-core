@@ -3,86 +3,188 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Natively-served RPC methods (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.3).
+//! What every method shares: the fault a handler returns and its class
+//! (RW-Q3), the dotted diagnostic codes (`INPUT_GRAMMAR.md` IG-Q86), the
+//! resource bounds (`RPC_CHANNEL.md` §6.3, IG-Q79), and the network's reads.
 //!
-//! Each function is the whole method: it takes a facts trait, applies the
-//! method's rules, and returns the wire type from `shekyl-rpc-types`. No
-//! Axum, no FFI, no JSON — the transport layers (`handlers::json`,
-//! `handlers::json_rpc`, `console`) call these and only frame the result.
-//! That is what lets one unit test with an in-memory [`ChainFacts`] pin a
-//! method's behaviour for every transport at once.
+//! Each function is the whole method: facts in, its reply type from
+//! `shekyl_rpc_types::wire` out. The chain's reads are [`crate::reads`].
 
-use crate::core::{FullForm, P2pRead, TxSlot};
-use serde::Deserialize;
-use shekyl_rpc_types::{
-    ArchivedTx, GetTransactionsRequest, GetTransactionsResponse, TxEntry, TxLocation,
-};
-use shekyl_rpc_types::{
-    BlockHeader, GetBlockCountResponse, GetBlockHashParams, GetBlockHeaderByHeightRequest,
-    GetBlockHeaderByHeightResponse, GetBlockRequest, GetBlockResponse, GetHeightResponse,
-    GetVersionResponse, HashHex, RpcStatus, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM,
-};
-use shekyl_rpc_types::{
-    ConnectionInfo, GetConnectionsResponse, GetNetStatsResponse, GetPeerListRequest,
-    GetPeerListResponse, P2pReply, Peer, SyncBodyRequest, SyncHeaderRequest, SyncInfoPeer,
-    SyncInfoResponse,
-};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+use shekyl_rpc_types::kinds::{Count, Duration, Endpoint, Height, Rate, Size, Text, Time};
+use shekyl_rpc_types::wire::p2p;
+use shekyl_types::ChainCount;
 use shekyl_units::AtomicUnits;
 
-use crate::chain_facts::{BlockLookup, ChainFacts, FactsFault, P2pFacts};
-use crate::sync_facts::{SyncSessionFacts, SyncViewRead};
-use shekyl_rpc_types::{
-    BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
-    GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
-    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    CORE_RPC_ERROR_CODE_CORE_BUSY,
-};
+use crate::chain_facts::{ChainFacts, FactsFault, P2pFacts};
+use crate::core::P2pRead;
+use crate::sync_facts::{RequestTiming, SyncSessionFacts, SyncViewRead};
 
-/// Why a native method could not answer. Maps onto the transport's existing
-/// error envelopes in the handlers (REST: `status`; JSON-RPC: `-32603`), but
-/// is logged by variant so telemetry tells a core that could not supply
-/// facts apart from a transport that could not frame them.
-///
-/// Not `Copy`: [`RpcFault::Refused`] carries the message a client reads.
+/// The dotted diagnostic codes this daemon's methods refuse with
+/// (IG-Q86): the first segment names what refused, the rest the fact.
+pub mod codes {
+    /// No block at that height or with that hash.
+    pub const BLOCK_MISSING: &str = "block.missing";
+    /// A range whose start is past its end.
+    pub const BLOCK_RANGE: &str = "block.range";
+    /// The node is not synchronized, so it has no tip to report.
+    pub const CHAIN_SYNCING: &str = "chain.syncing";
+    /// The chain advanced on every attempt to read its tip.
+    pub const CHAIN_MOVING: &str = "chain.moving";
+    /// The store contradicted itself.
+    pub const CHAIN_INCONSISTENT: &str = "chain.inconsistent";
+    /// The store's data file could not be read.
+    pub const CHAIN_UNREADABLE: &str = "chain.unreadable";
+    /// The store's supply figures contradict each other.
+    pub const CHAIN_SUPPLY_INVARIANT: &str = "chain.supply-invariant";
+    /// The handle behind the read is not supplied yet, or was taken down.
+    pub const DAEMON_UNREADY: &str = "daemon.unready";
+    /// A defect in the node; the parameter `stage` says where.
+    pub const DAEMON_INTERNAL: &str = "daemon.internal";
+    /// No transaction with that id on the chain or in the pool the caller
+    /// may see.
+    pub const TX_MISSING: &str = "tx.missing";
+    /// The pool's file faulted; there is no pool until a restart.
+    pub const TXPOOL_RETIRED: &str = "txpool.retired";
+    /// No curve tree at that height.
+    pub const CURVE_MISSING: &str = "curve.missing";
+    /// A seed this node does not hold, or one above the tip.
+    pub const POW_SEED: &str = "pow.seed";
+    /// P2P is off: a read about peers has nothing to describe (IG-Q85).
+    pub const P2P_OFFLINE: &str = "p2p.offline";
+    /// Blocks one call may name (1,000).
+    pub const BOUND_BLOCK: &str = "bound.block";
+    /// Headers one range may span (1,000).
+    pub const BOUND_HEADER: &str = "bound.header";
+    /// Transactions one call may name (100).
+    pub const BOUND_TX: &str = "bound.tx";
+    /// Key images one call may name (5,000).
+    pub const BOUND_KEY_IMAGE: &str = "bound.key-image";
+    /// The size of `pow`'s hashing bytes.
+    pub const BOUND_POW_SIZE: &str = "bound.pow-size";
+    /// The shared hash budget cannot pay one hash.
+    pub const BOUND_HASH: &str = "bound.hash";
+}
+
+/// Why a method could not answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcFault {
-    /// The facts source refused (a C return code, or no core).
+    /// The facts source refused.
     Facts(FactsFault),
-    /// The facts were read and they contradict each other. Unlike
-    /// [`FactsFault::Inconsistent`], which is a bare code from a shim, this
-    /// carries what contradicted what, and the transport tells the caller.
+    /// The store's figures contradict each other, with the operands.
     Store(StoreFault),
-    /// The handler answered but the transport could not deliver it.
+    /// The method answered and the transport could not deliver it.
     Internal(InternalFault),
-    /// The method itself refused: the request was malformed, or the chain
-    /// holds no such thing. Carries the JSON-RPC code a client branches on
-    /// and the message it reads — normal traffic, not a daemon problem, so
-    /// the transport answers with it rather than a generic internal error.
-    Refused(RpcRefusal),
+    /// The method refused: its class and its diagnostic.
+    Refused(RpcError),
+}
+
+impl RpcFault {
+    /// The error object this fault is on the wire (RW-Q3): its class and its
+    /// dotted diagnostic. A fault the node caused carries no request detail.
+    #[must_use]
+    pub fn into_error(self) -> RpcError {
+        let error =
+            |class, code: &str, message: &str| RpcError::new(class, Diagnostic::new(code, message));
+        match self {
+            Self::Refused(error) => error,
+            Self::Facts(FactsFault::NotReady) => error(
+                ErrorClass::NotReady,
+                codes::DAEMON_UNREADY,
+                "this node's handle for the read is not ready",
+            ),
+            Self::Facts(FactsFault::Internal) => error(
+                ErrorClass::Internal,
+                codes::DAEMON_INTERNAL,
+                "a read failed inside the node",
+            )
+            .with_param("stage", "read"),
+            Self::Facts(FactsFault::Inconsistent) => error(
+                ErrorClass::StoreFault,
+                codes::CHAIN_INCONSISTENT,
+                "this node's chain store contradicts itself",
+            ),
+            Self::Facts(FactsFault::StoreUnreadable) => error(
+                ErrorClass::StoreFault,
+                codes::CHAIN_UNREADABLE,
+                "this node's chain store could not be read",
+            ),
+            Self::Store(store) => {
+                let StoreFault::SupplyInvariant {
+                    coins_generated,
+                    total_burned,
+                    chain_height,
+                } = store;
+                RpcError::new(
+                    ErrorClass::StoreFault,
+                    Diagnostic::new(codes::CHAIN_SUPPLY_INVARIANT, store.to_string())
+                        .param("coins_generated", coins_generated.to_raw().to_string())
+                        .param("total_burned", total_burned.to_raw().to_string())
+                        .param("chain_height", chain_height.to_raw().to_string()),
+                )
+            }
+            Self::Internal(stage) => error(
+                ErrorClass::Internal,
+                codes::DAEMON_INTERNAL,
+                "the reply could not be delivered",
+            )
+            .with_param(
+                "stage",
+                match stage {
+                    InternalFault::Serialize => "serialize",
+                    InternalFault::Join => "join",
+                },
+            ),
+        }
+    }
+}
+
+/// A builder step on [`RpcError`]'s diagnostic.
+trait WithParam {
+    fn with_param(self, key: &str, value: &str) -> Self;
+}
+
+impl WithParam for RpcError {
+    fn with_param(mut self, key: &str, value: &str) -> Self {
+        self.diagnostic = self.diagnostic.param(key, value);
+        self
+    }
+}
+
+impl From<FactsFault> for RpcFault {
+    fn from(fault: FactsFault) -> Self {
+        Self::Facts(fault)
+    }
+}
+
+impl From<FactsFault> for RpcError {
+    fn from(fault: FactsFault) -> Self {
+        RpcFault::Facts(fault).into_error()
+    }
+}
+
+impl From<RpcError> for RpcFault {
+    fn from(error: RpcError) -> Self {
+        Self::Refused(error)
+    }
 }
 
 /// The chain store's own figures contradict each other, found on this side
 /// of the facts seam and reported with its operands.
 ///
 /// **Verbose on purpose** (RK-Q9). A contradiction has a plausible-looking
-/// fallback — here, a burn percentage of zero — and a fallback reaches the
-/// caller as a fact. So the method refuses, and the refusal says which
-/// invariant broke and with what numbers. Every operand is a public chain
-/// fact a successful reply would have carried, so the error discloses
-/// nothing the reply does not.
+/// fallback, a burn of zero, and a fallback reaches the caller as a fact.
+/// So the method refuses, and says which invariant broke with what numbers.
+/// Every operand is a public chain fact a successful reply would carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreFault {
-    /// More has been burned than was ever generated. Every burned unit was
-    /// first emitted, so no conforming chain holds this pair.
+    /// More has been burned than was ever generated.
     SupplyInvariant {
         /// Gross coins emitted through the tip, in atomic units.
         coins_generated: AtomicUnits,
         /// Cumulative coins destroyed through the tip, in atomic units.
         total_burned: AtomicUnits,
-        /// The chain count of the snapshot the two were read at: the top
-        /// block's height plus one.
+        /// The snapshot's chain count: the top block's height plus one.
         chain_height: ChainCount,
     },
 }
@@ -100,7 +202,7 @@ impl std::fmt::Display for StoreFault {
                  (total_burned <= coins_generated). total_burned is {} atomic units and \
                  coins_generated is {} atomic units, at chain height {} (the top block's \
                  height plus one). Every burned unit was first emitted, so no burn \
-                 percentage can be computed from this store.",
+                 can be computed from this store.",
                 total_burned.to_raw(),
                 coins_generated.to_raw(),
                 chain_height.to_raw(),
@@ -111,1185 +213,242 @@ impl std::fmt::Display for StoreFault {
 
 impl std::error::Error for StoreFault {}
 
-/// A method-level refusal: the JSON-RPC `code` (see
-/// `shekyl_rpc_types::CORE_RPC_ERROR_CODE_*`) and its `message`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RpcRefusal {
-    pub code: i64,
-    pub message: String,
-    pub data: Option<serde_json::Value>,
-}
-
-impl RpcRefusal {
-    /// Pair `message` with the wrong-parameter code. Each method supplies
-    /// its own wording — the C++ handlers' — since the wording is what the
-    /// operator reads and it differs per method.
-    #[must_use]
-    pub fn wrong_param(message: &str) -> Self {
-        Self {
-            code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
-            message: message.to_owned(),
-            data: None,
-        }
-    }
-
-    /// The JSON-RPC refusal for [`shekyl_rpc_types::errors::RpcError`]: the
-    /// class is the code, and `data` is the typed diagnostic.
-    #[must_use]
-    pub fn of_error(error: &shekyl_rpc_types::errors::RpcError) -> Self {
-        Self {
-            code: error.class.code(),
-            message: error.diagnostic.message.clone(),
-            data: serde_json::to_value(&error.diagnostic).ok(),
-        }
-    }
-
-    /// The JSON-RPC error object every surface serializes (RW-Q3). `id`
-    /// is the request's on `/json_rpc` and null on the other surfaces.
-    #[must_use]
-    pub fn to_json_rpc(&self, id: serde_json::Value) -> crate::types::JsonRpcResponse {
-        crate::types::JsonRpcResponse::error_with_data(
-            id,
-            self.code,
-            self.message.clone(),
-            self.data.clone(),
-        )
-    }
-}
-
-/// A bounded connection asked for more than one request may
-/// (`RPC_CHANNEL.md` §6.3, RT-W10 step 2). The class is
-/// [`ErrorClass::OverResourceBound`]. The message names the bound.
-///
-/// [`ErrorClass::OverResourceBound`]: shekyl_rpc_types::errors::ErrorClass::OverResourceBound
-#[must_use]
-pub fn bound_exceeded(
-    method: &str,
-    unit: &str,
-    bound: u64,
-    asked: u64,
-) -> shekyl_rpc_types::errors::RpcError {
-    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
-    let message = format!(
-        "{method} accepts at most {bound} {unit} from a bounded connection; \
-         this request asked for {asked}"
-    );
-    RpcError::new(
-        ErrorClass::OverResourceBound,
-        Diagnostic::new("rpc.bound.exceeded", message)
-            .param("method", method)
-            .param("bound", bound.to_string())
-            .param("asked", asked.to_string()),
-    )
-}
-
-/// [`RpcFault::Refused`] for [`bound_exceeded`].
-#[must_use]
-pub fn bound_fault(method: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
-    RpcFault::Refused(RpcRefusal::of_error(&bound_exceeded(
-        method, unit, bound, asked,
-    )))
-}
-
-/// A failure on the transport's side of a native method — never a fact
-/// about the chain, and never reported as one.
+/// A failure on the transport's side of a method, never a fact about the
+/// chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InternalFault {
-    /// `serde_json` could not encode the reply (a type-level bug: every wire
-    /// type here is plain data).
+    /// `serde_json` could not encode the reply.
     Serialize,
-    /// The `spawn_blocking` task that ran the handler did not complete.
+    /// The blocking task that ran the handler did not complete.
     Join,
 }
 
-impl From<FactsFault> for RpcFault {
-    fn from(f: FactsFault) -> Self {
-        Self::Facts(f)
-    }
-}
-
-/// `/get_height` (alias `/getheight`): chain height and top block hash.
-///
-/// Mirrors `core_rpc_server::on_get_height`: `get_blockchain_top` gives the
-/// top block's height, the reply carries **chain** height (top + 1); the
-/// facts POD already carries the `+1` (`chain_height`), so no arithmetic
-/// happens here twice.
-pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault> {
-    let tip = facts.chain_tip()?;
-    Ok(GetHeightResponse {
-        status: RpcStatus::ok(),
-        height: tip.chain_height.to_raw(),
-        hash: HashHex::from_bytes(tip.top_hash.to_bytes()),
-    })
-}
-
-/// `get_version` (JSON-RPC, no params): RPC contract version, release flag,
-/// current and target heights, and the identity tuple.
-///
-/// `target_height` is the core's target, `null` when the core reports none.
-/// It says nothing about whether the node is synchronized.
-pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
-    let tip = facts.chain_tip()?;
-    // The identity axes. Two FFI reads inside one handler still produce one
-    // RPC reply from one snapshot — ruling 1's hazard is that the *answerer*
-    // changes between calls, which a restart or a proxy does and an
-    // in-process read cannot (VC-R17). Both facts are process-lifetime
-    // constants besides.
-    let identity = facts.identity()?;
-    Ok(GetVersionResponse {
-        status: RpcStatus::ok(),
-        version: shekyl_rpc_types::CORE_RPC_VERSION,
-        release: tip.release_build,
-        current_height: tip.chain_height.to_raw(),
-        target_height: tip.target_height.map(ChainCount::to_raw).into(),
-        // The rules axis is this build's own constant, read here rather than
-        // fetched over FFI: it is compiled from `config/` into this image, so
-        // asking C++ for it would give one value two sources.
-        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: identity.nettype,
-        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(identity.genesis_hash.to_bytes()),
-    })
-}
-
-/// `get_block_count` (alias `getblockcount`): the chain height as `count`.
-///
-/// Mirrors `core_rpc_server::on_getblockcount`, including that it ignores
-/// its params — the C++ request was a positional `std::list<std::string>`
-/// the handler never read.
-pub fn get_block_count(facts: &dyn ChainFacts) -> Result<GetBlockCountResponse, RpcFault> {
-    let tip = facts.chain_tip()?;
-    Ok(GetBlockCountResponse {
-        status: RpcStatus::ok(),
-        count: tip.chain_height.to_raw(),
-    })
-}
-
-/// Parse `on_get_block_hash`'s positional params: exactly one height.
-///
-/// Every shape the C++ handler refused with `WRONG_PARAM` (`req.size() != 1`)
-/// refuses here, structurally — [`GetBlockHashParams`] is `[u64; 1]`.
-///
-/// **One deliberate divergence** (`DAEMON_RPC_KV_CUTOVER.md` §2, RK-2): the
-/// C++ dispatcher hand-parsed the JSON array with `std::stoull`, so a
-/// negative height wrapped to a huge `u64` and came back as
-/// `TOO_BIG_HEIGHT`. A negative height is a wrong parameter, and that is what
-/// it is answered with; the old classification was a parser artifact, not a
-/// decision, and no client sends it.
-pub fn get_block_hash_height(params: &serde_json::Value) -> Result<u64, RpcFault> {
-    GetBlockHashParams::deserialize(params)
-        .map(|p| p.0[0])
-        .map_err(|_| {
-            RpcFault::Refused(RpcRefusal::wrong_param("Wrong parameters, expected height"))
-        })
-}
-
-/// The params of `get_block`, or the refusal an unusable value earns.
-///
-/// Same discipline as [`block_header_request`]: absent params keep epee's
-/// defaults, params that are present and unusable are refused, and the value
-/// must be an object.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
-/// `params` is present but is not a shape this method accepts.
-pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcFault> {
-    object_params(params, WRONG_BLOCK_PARAMS)
-}
-
-/// Read a JSON-RPC `params` value as this method's request object when the
-/// request has **no meaningful empty form**.
-///
-/// Absent params, a non-object, and an unusable object are all refused.
-/// The C++ value-initialised `get_block_headers_range`'s two heights to zero
-/// and answered for block 0, for both an absent `params` and an empty object.
-/// The first Rust port reproduced neither faithfully: null took `T::default()`
-/// while `{}` failed to deserialize, so the two spellings of "I gave you
-/// nothing" stopped meaning the same thing. **They mean the same thing here,
-/// and both are refused**: a range is the one request in this family where
-/// the empty form names nothing, and answering it with genesis tells a client
-/// that forgot its arguments about block 0 instead of telling it that it
-/// forgot. `GetBlockHeadersRangeRequest` is not `Default`, which is what
-/// stops this being re-routed through [`object_params`] later.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
-/// params, a non-object, or an object this method cannot read.
-pub(crate) fn required_object_params<T: serde::de::DeserializeOwned>(
-    params: &serde_json::Value,
-    expected: &str,
-) -> Result<T, RpcFault> {
-    match params {
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-    }
-}
-
-/// Read a JSON-RPC `params` value as this method's request object.
-///
-/// One shape per method: absent params are the request's own defaults, an
-/// object is deserialized, and **anything else is refused** — an array
-/// included. serde's derive would happily read a struct out of a sequence,
-/// which would give every method here a second, undesigned positional form;
-/// `on_get_block_hash` is the one method whose params are deliberately
-/// positional (`[height]`, RK-2), and it does not come through here.
-///
-/// `expected` is the refusal's wording, and it belongs to the caller rather
-/// than to this function: a message naming the wrong method's fields sends
-/// its reader looking in the wrong place, which is the whole value a refusal
-/// has over a parse error.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
-/// `params` is present but is not an object this method accepts.
-pub(crate) fn object_params<T: serde::de::DeserializeOwned + Default>(
-    params: &serde_json::Value,
-    expected: &str,
-) -> Result<T, RpcFault> {
-    match params {
-        serde_json::Value::Null => Ok(T::default()),
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-    }
-}
-
-/// The refusal an unusable `get_block` params value earns. Names this
-/// method's own shape, not `get_block_header_by_height`'s: it accepts a
-/// `hash` as well, and a refusal that omits it would send a caller looking
-/// in the wrong place.
-const WRONG_BLOCK_PARAMS: &str = "Wrong parameters, expected an object with optional \
-     hash (64 hex characters), height (non-negative integer) and \
-     fill_pow_hash (boolean)";
-
-/// `get_block` (alias `getblock`): a whole block, named by hash or by height.
-///
-/// A non-empty `hash` wins and `height` is ignored — the C++ dispatch,
-/// preserved. Each refusal keeps its code *and* its wording:
-///
-/// * an unparseable `hash` is `WRONG_PARAM`, quoting what was sent;
-/// * a height past the tip is `TOO_BIG_HEIGHT`, naming the top height;
-/// * a block that cannot be produced, or whose coinbase is not a single
-///   `txin_gen`, is `INTERNAL_ERROR` with the message the C++ gave.
-///
-/// The empty-`hash` case in the "can't get block by hash" message is
-/// inherited: reached by height, the C++ interpolated `req.hash`, which is
-/// empty, so the message ends "Hash = .". Preserved under RK-D8.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] for the four cases above; [`RpcFault::Facts`] when
-/// the facts layer itself failed.
-pub fn get_block(
-    facts: &dyn ChainFacts,
-    request: &GetBlockRequest,
-    fill_pow_hash: bool,
-) -> Result<GetBlockResponse, RpcFault> {
-    let by_hash = !request.hash.is_empty();
-    let height = BlockHeight::from_raw(request.height);
-    let lookup = if by_hash {
-        let parsed = HashHex::from_hex(&request.hash).map_err(|_| {
-            RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-                "Failed to parse hex representation of block hash. Hex = {}.",
-                request.hash
-            )))
-        })?;
-        BlockLookup::Hash(parsed.to_bytes())
-    } else {
-        BlockLookup::Height(height)
-    };
-
-    let at = match facts.block_at(lookup, fill_pow_hash) {
-        Ok(at) => at,
-        Err(FactsFault::Inconsistent) => {
-            return Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-                message: "Internal error: coinbase transaction in the block has the wrong type"
-                    .to_owned(),
-                data: None,
-            }))
-        }
-        Err(other) => return Err(RpcFault::Facts(other)),
-    };
-
-    let Some(block) = at.block else {
-        // Past the tip is the height refusal; anything else the lookup could
-        // not produce keeps the C++ "can't get block by hash" wording, whose
-        // `Hash = .` for a height lookup is inherited, not a slip.
-        if !by_hash && !at.chain_height.has_block(height) {
-            return Err(too_big_height(height, at.chain_height));
-        }
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-            message: format!(
-                "Internal error: can't get block by hash. Hash = {}.",
-                request.hash
+/// A bounded connection asked for more than one request may
+/// (`RPC_CHANNEL.md` §6.3): `OverResourceBound` with the bound's own code
+/// (IG-Q79), its limit and what was asked. The method is not a parameter:
+/// the caller knows what it called.
+#[must_use]
+pub fn bound_exceeded(code: &str, unit: &str, bound: u64, asked: u64) -> RpcFault {
+    RpcFault::Refused(RpcError::new(
+        ErrorClass::OverResourceBound,
+        Diagnostic::new(
+            code,
+            format!(
+                "a bounded connection may ask for at most {bound} {unit}; this asked for {asked}"
             ),
-            data: None,
-        }));
-    };
-
-    let header = block_header(&block.header);
-    Ok(GetBlockResponse {
-        status: RpcStatus::ok(),
-        // The wire carries this twice; duplication preserved, RK-W's to retire.
-        miner_tx_hash: header.miner_tx_hash,
-        block_header: header,
-        tx_hashes: block
-            .tx_hashes
-            .into_iter()
-            .map(|h| HashHex::from_bytes(h.to_bytes()))
-            .collect(),
-        // `hex::encode` is lowercase, which is what this wire uses; the
-        // crate is already a dependency for the submit path's decode.
-        blob: hex::encode(&block.blob),
-        json: block.json,
-    })
+        )
+        .param("bound", bound.to_string())
+        .param("asked", asked.to_string()),
+    ))
 }
 
-/// The refusal message an unusable `get_block_header_by_height` params value
-/// earns.
-///
-/// It shares `on_get_block_hash`'s **code** (`CORE_RPC_ERROR_CODE_WRONG_PARAM`
-/// — the two methods must agree on what a bad parameter *means*) but not its
-/// text: that method takes one positional height, this one an object of two
-/// optional fields, so "expected height" would misdescribe a request whose
-/// height was fine and whose `fill_pow_hash` was not. A refusal names the
-/// shape the method actually accepts.
-///
-/// "non-negative integer" rather than "number": `height` is a `u64`, so
-/// `-1` and `1.5` are JSON numbers this refuses, and a caller told the
-/// accepted type was "number" would have no idea why.
-const WRONG_HEADER_PARAMS: &str = "Wrong parameters, expected an object with optional height \
-     (non-negative integer) and fill_pow_hash (boolean)";
-
-/// The params of `get_block_header_by_height`, or the refusal an unusable
-/// params value earns.
-///
-/// Absent params (`null`, or no `params` member at all) take epee's
-/// defaults: its `KV_SERIALIZE` discarded the load's result, so a field that
-/// was not there simply stayed zero, and `{}` means height 0. Params that
-/// *are* present and do not parse are refused instead — a deliberate
-/// divergence from epee, which dropped that case on the floor too and so
-/// answered a caller's type error (`{"height": "nope"}`) with a plausible
-/// wrong answer: the genesis header. `get_block_hash_height` above already
-/// refuses its unparseable params this way, and two sibling methods must not
-/// disagree about what a bad parameter means — though not the same text, see
-/// [`WRONG_HEADER_PARAMS`]. The params must be an **object**: serde's derive
-/// reads a struct out of a sequence too, which would hand this method a
-/// positional form nobody designed.
-///
-/// Pure, so the refusal costs no worker — and so it is testable without a
-/// core.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
-/// `params` is present but is not a shape this method accepts.
-pub fn block_header_request(
-    params: &serde_json::Value,
-) -> Result<GetBlockHeaderByHeightRequest, RpcFault> {
-    object_params(params, WRONG_HEADER_PARAMS)
-}
-
-/// `on_get_block_hash` (alias `on_getblockhash`): the hash of the block at
-/// `height`, as 64 lowercase hex characters.
-///
-/// The reply is a bare JSON string — no object, no `status` — as the C++
-/// path's was. A height at or past the tip is `TOO_BIG_HEIGHT`, whose message
-/// names the top height ([`ChainCount::tip`]), read in the same call as the
-/// hash so the two cannot disagree.
-pub fn get_block_hash(facts: &dyn ChainFacts, height: u64) -> Result<HashHex, RpcFault> {
-    let height = BlockHeight::from_raw(height);
-    let at = facts.block_hash_at(height)?;
-    match at.hash {
-        Some(hash) => Ok(HashHex::from_bytes(hash.to_bytes())),
-        None => Err(too_big_height(height, at.chain_height)),
-    }
-}
-
-/// Newest existing block, or genesis on an empty chain so a handler that
-/// must remain total has a height to name. Production always has genesis.
-fn newest_block(chain: ChainCount) -> BlockHeight {
-    chain.tip().unwrap_or(BlockHeight::ZERO)
-}
-
-/// The refusal a height past the tip earns, naming the top height — one
-/// wording, since `get_block_hash` and every header method share it.
-fn too_big_height(height: BlockHeight, chain: ChainCount) -> RpcFault {
-    RpcFault::Refused(RpcRefusal {
-        code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-        message: format!(
-            "Requested block height: {} greater than current top block height: {}",
-            height.to_raw(),
-            newest_block(chain).to_raw(),
-        ),
-        data: None,
-    })
-}
-
-/// `get_block_header_by_height` (alias `getblockheaderbyheight`).
-///
-/// Mirrors `on_get_block_header_by_height` + `fill_block_header_response`:
-/// a height past the tip is `TOO_BIG_HEIGHT`; a store that reports a height
-/// it cannot produce the block for keeps the C++ contract's
-/// `INTERNAL_ERROR` and its wording (the shim has already logged the
-/// inconsistency, so the fault is not silent).
-///
-/// `fill_pow_hash` is the caller's request. It reads the hash recorded at
-/// validation; this function includes it whenever it is passed `true`.
-pub fn get_block_header_by_height(
-    facts: &dyn ChainFacts,
-    height: u64,
-    fill_pow_hash: bool,
-) -> Result<GetBlockHeaderByHeightResponse, RpcFault> {
-    let height = BlockHeight::from_raw(height);
-    let at = match facts.block_header_at(BlockLookup::Height(height), fill_pow_hash) {
-        Ok(at) => at,
-        Err(FactsFault::Inconsistent) => {
-            return Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
-                message: format!(
-                    "Internal error: can't get block by height. Height = {}.",
-                    height.to_raw()
-                ),
-                data: None,
-            }))
-        }
-        Err(other) => return Err(RpcFault::Facts(other)),
-    };
-    let Some(header) = at.header else {
-        return Err(too_big_height(height, at.chain_height));
-    };
-    Ok(GetBlockHeaderByHeightResponse {
-        status: RpcStatus::ok(),
-        block_header: block_header(&header),
-    })
-}
-
-/// The wire's three-field rendering of a 128-bit value — `store_128`'s split:
-/// the low word as a number, the whole value as `0x`-prefixed minimal
-/// lowercase hex (`cryptonote::hex`), and the high word. The masking is the
-/// point, not an accident of casting.
-pub(crate) fn split_128(value: u128) -> (u64, String, u64) {
-    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
-    let top = u64::try_from(value >> 64).expect("a u128 shifted right 64 fits in u64");
-    (low, format!("0x{value:x}"), top)
-}
-
-/// Project the facts onto the wire's header.
-fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
-    let (difficulty, wide_difficulty, difficulty_top64) = split_128(facts.difficulty);
-    let (cumulative_difficulty, wide_cumulative_difficulty, cumulative_difficulty_top64) =
-        split_128(facts.cumulative_difficulty);
-    BlockHeader {
-        major_version: facts.major_version,
-        minor_version: facts.minor_version,
-        timestamp: facts.timestamp,
-        prev_hash: HashHex::from_bytes(facts.prev_hash.to_bytes()),
-        nonce: facts.nonce,
-        orphan_status: facts.orphan_status,
-        height: facts.height.to_raw(),
-        depth: facts.depth.to_raw(),
-        hash: HashHex::from_bytes(facts.hash.to_bytes()),
-        difficulty,
-        wide_difficulty,
-        difficulty_top64,
-        cumulative_difficulty,
-        wide_cumulative_difficulty,
-        cumulative_difficulty_top64,
-        reward: facts.reward,
-        // The wire carries both, filled from one source; only `block_weight`
-        // is omitted at zero.
-        block_size: facts.block_weight,
-        block_weight: facts.block_weight,
-        num_txes: facts.num_txes,
-        pow_hash: facts.pow_hash.map(HashHex::from_bytes),
-        // The wire omits a zero long-term weight; `None` (an alt block) is
-        // that omission.
-        long_term_weight: facts.long_term_weight.unwrap_or(0),
-        miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
-        curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
-        attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
-    }
-}
-
-// ─── RK-4c: the transaction read set ─────────────────────────────────────────
-
-/// `RESTRICTED_BLOCK_COUNT` — how many hashes `get_block_header_by_hash`
-/// accepts from a bounded connection, and how many heights
-/// `/get_blocks_by_height.bin` accepts. The number is the inherited cap
-/// (`RPC_CHANNEL.md` §6.3). A bounded connection over it is
-/// `OverResourceBound`.
+/// How many blocks a bounded connection may name in one call (inherited,
+/// §6.3).
 pub const RESTRICTED_BLOCK_COUNT: usize = 1000;
-
-/// `RESTRICTED_BLOCK_HEADER_RANGE` — the span cap on
-/// `get_block_headers_range` for a bounded connection. Inherited (§6.3).
+/// How many headers one range may span for a bounded connection.
 pub const RESTRICTED_BLOCK_HEADER_RANGE: u64 = 1000;
-
-/// `RESTRICTED_TRANSACTIONS_COUNT` — how many transactions `/get_transactions`
-/// accepts from a bounded connection. Inherited (§6.3).
+/// How many transactions a bounded connection may name in one call.
 pub const RESTRICTED_TRANSACTIONS_COUNT: usize = 100;
-
-/// `RESTRICTED_SPENT_KEY_IMAGES_COUNT` — how many key images
-/// `/is_key_image_spent` accepts from a bounded connection. Inherited (§6.3).
+/// How many key images a bounded connection may name in one call.
 pub const RESTRICTED_SPENT_KEY_IMAGES_COUNT: usize = 5000;
 
-/// The two parse refusals the C++ handler distinguished, kept distinct because
-/// they tell the caller different things: the first says "that is not hex",
-/// the second says "that is hex, of the wrong length".
-pub const TX_PARSE_FAILED: &str = "Failed to parse hex representation of transaction hash";
-const SIZE_MISMATCH: &str = "Failed, size of data mismatch";
-pub const KI_PARSE_FAILED: &str = "Failed to parse hex representation of key image";
-
-/// Parse request hashes into 32-byte ids, or the status the caller gets.
-///
-/// `Err` is a *status string*, not an [`RpcFault`]: these routes answer a
-/// refusal as HTTP 200 with a non-OK `status`, which is the shape the refusal
-/// vector pins.
-pub fn parse_request_hashes(hex: &[String], parse_msg: &str) -> Result<Vec<[u8; 32]>, String> {
-    let mut out = Vec::with_capacity(hex.len());
-    for h in hex {
-        let Ok(bytes) = hex::decode(h) else {
-            return Err(parse_msg.to_owned());
-        };
-        // Length is checked after decoding, so hex-of-the-wrong-length gets the
-        // size message rather than the parse one — the C++ order.
-        let Ok(arr): Result<[u8; 32], _> = bytes.try_into() else {
-            return Err(SIZE_MISMATCH.to_owned());
-        };
-        out.push(arr);
-    }
-    Ok(out)
-}
-
-/// Project gathered slots into the reply in the request's form (`SB-Q2`;
-/// `PDM-Q10`; `IG-Q55`).
-///
-/// **Pruned form** (`prune`): every entry is its skeleton — `pruned_as_hex`
-/// is the pruned segment alone, never with `pqc_auths` appended, beside the
-/// three operands `prunable_hash`, `pqc_auth_hash` and `archival_len` that
-/// `SkeletonTx::txid` rebinds. Every node holds this at every horizon, so
-/// no slot is refused in this form.
-///
-/// **Full form** (the default): `as_hex` is the whole body. A transaction
-/// whose archival good this node discarded is answered in the `archived`
-/// list with its shard, and omitted from `txs` — a state of the slot, not
-/// a failure of the request. A transaction with no archival good (a
-/// coinbase) is never `archived`; its whole body is its skeleton.
-///
-/// **One deliberate divergence.** The C++ echoed the request's hash string
-/// back verbatim (`e.tx_hash = *txhi++`), so a caller sending upper-case hex
-/// got upper-case back. `HashHex` re-encodes canonically, so the reply is
-/// always lower-case. Echoing caller-controlled casing is not a property worth
-/// preserving, and pre-genesis there is no client depending on it (RK-D8).
+/// The refusal a read about peers earns from a daemon started offline: it
+/// has nothing to describe by configuration (IG-Q85). `offline` on
+/// `daemon_status` is the state as data.
 #[must_use]
-pub fn project_transactions(
-    request: &GetTransactionsRequest,
-    ids: &[[u8; 32]],
-    slots: &[TxSlot],
-    chain_height: u64,
-) -> GetTransactionsResponse {
-    let mut txs = Vec::new();
-    let mut missed = Vec::new();
-    let mut archived = Vec::new();
-    let mut unavailable = Vec::new();
-
-    for (id, slot) in ids.iter().zip(slots.iter()) {
-        let tx_hash = HashHex::from_bytes(*id);
-        let (body, location) = match slot {
-            TxSlot::Missed => {
-                missed.push(tx_hash);
-                continue;
-            }
-            TxSlot::PoolUnavailable => {
-                unavailable.push(tx_hash);
-                continue;
-            }
-            TxSlot::Chain {
-                body,
-                block_height,
-                block_timestamp,
-                output_indices,
-            } => (
-                body,
-                TxLocation::Mined {
-                    block_height: *block_height,
-                    // Against the tip read once for the whole gather, so two
-                    // entries cannot be counted from two different heights.
-                    confirmations: chain_height.saturating_sub(*block_height),
-                    block_timestamp: *block_timestamp,
-                    output_indices: output_indices.clone(),
-                },
-            ),
-            TxSlot::Pool {
-                body,
-                double_spend_seen: _,
-                relayed,
-                received_timestamp,
-            } => (
-                body,
-                TxLocation::Pooled {
-                    relayed: *relayed,
-                    received_timestamp: *received_timestamp,
-                },
-            ),
-        };
-        let double_spend_seen = matches!(
-            slot,
-            TxSlot::Pool {
-                double_spend_seen: true,
-                ..
-            }
-        );
-        let skeleton = &body.skeleton;
-
-        let (as_hex, pruned_as_hex) = if request.prune {
-            (String::new(), hex::encode(&skeleton.unprunable))
-        } else {
-            match body.full_form() {
-                FullForm::Whole(full) => (hex::encode(&full), String::new()),
-                FullForm::Archived { shard } => {
-                    archived.push(ArchivedTx {
-                        tx_hash,
-                        shard: shard.to_raw(),
-                    });
-                    continue;
-                }
-            }
-        };
-
-        txs.push(TxEntry {
-            tx_hash,
-            as_hex,
-            pruned_as_hex,
-            prunable_hash: HashHex::from_bytes(skeleton.prunable_hash.to_bytes()),
-            pqc_auth_hash: skeleton
-                .pqc_auth_hash
-                .map(|hash| HashHex::from_bytes(hash.to_bytes()))
-                .into(),
-            archival_len: skeleton.archival_len.to_raw(),
-            double_spend_seen,
-            location,
-        });
-    }
-
-    GetTransactionsResponse {
-        status: RpcStatus::ok(),
-        txs,
-        missed_tx: missed,
-        archived,
-        unavailable_tx: unavailable,
-    }
+pub fn p2p_offline() -> RpcFault {
+    RpcFault::Refused(RpcError::new(
+        ErrorClass::RefusedByMethod,
+        Diagnostic::new(
+            codes::P2P_OFFLINE,
+            "P2P is off on this node: it has no peers, connections or sync to describe",
+        ),
+    ))
 }
 
-// ── RK-5b: the header remainder ─────────────────────────────────────────────
-
-/// The request parsers for the four RK-5b methods.
-///
-/// Each names **its own** fields, because a caller that sent the wrong shape
-/// needs to know what this method wanted, not what the last one did.
-/// `get_last_block_header` accepts absent params — the tip is what it
-/// answers with no arguments. `get_block_headers_range` does **not**: a range has no empty form, so
-/// absent params and `{}` are refused rather than answered as genesis.
+/// `p2p_stats`: when P2P started, and what it has sent and received.
 ///
 /// # Errors
 ///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
-/// `params` is present but is not an object this method accepts.
-pub fn last_block_header_request(
-    params: &serde_json::Value,
-) -> Result<GetLastBlockHeaderRequest, RpcFault> {
-    object_params(
-        params,
-        "Wrong parameters, expected an object with optional fill_pow_hash (boolean)",
-    )
-}
-
-/// See [`last_block_header_request`].
-///
-/// # Errors
-///
-/// As [`last_block_header_request`].
-pub fn block_header_by_hash_request(
-    params: &serde_json::Value,
-) -> Result<GetBlockHeaderByHashRequest, RpcFault> {
-    object_params(
-        params,
-        "Wrong parameters, expected an object with hashes (an array of 64-character \
-         hex strings) and optional fill_pow_hash (boolean)",
-    )
-}
-
-/// See [`last_block_header_request`].
-///
-/// # Errors
-///
-/// As [`last_block_header_request`].
-pub fn block_headers_range_request(
-    params: &serde_json::Value,
-) -> Result<GetBlockHeadersRangeRequest, RpcFault> {
-    required_object_params(
-        params,
-        "Wrong parameters, expected an object with start_height and end_height \
-         (non-negative integers) and optional fill_pow_hash (boolean)",
-    )
-}
-
-/// See [`last_block_header_request`].
-///
-/// # Errors
-///
-/// As [`last_block_header_request`].
-pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimateRequest, RpcFault> {
-    object_params(
-        params,
-        "Wrong parameters, expected an object with no members (grace_blocks was \
-         deleted at 3.57)",
-    )
-}
-
-/// How many times [`get_last_block_header`] will re-read a tip that moved.
-///
-/// Small on purpose. Each attempt costs one chain-lock acquisition, and a
-/// second attempt only happens if a block arrived inside the first — which at
-/// any real block interval is rare and never twice running. A larger bound
-/// would not buy correctness, only a longer wait before the honest answer.
-const TIP_READ_ATTEMPTS: usize = 4;
-
-/// `get_last_block_header` (alias `getlastblockheader`).
-///
-/// The tip's header, or a refusal — never a header that is no longer the tip.
-///
-/// **Selecting the tip and projecting it are two lock acquisitions, and the
-/// chain can move between them.** `chain_tip` names a height; `block_header_at`
-/// then reads that height under its *own* lock and derives `depth` from the
-/// chain height it sees there (`rpc_facts_ffi.cpp`: `depth = chain_height -
-/// height - 1`). A block arriving in the gap yields the former tip with
-/// `depth == 1`, returned as the last block header with status OK.
-///
-/// The C++ had exactly this race — `get_blockchain_top` then
-/// `get_block_by_hash`, with `fill_block_header_response` computing depth
-/// from a third read — so this is inherited rather than introduced, and rule
-/// 16 says an inherited flow that contradicts the method's own contract is
-/// migrated, not carried. A method called "last block header" must not
-/// answer with a block that is not last.
-///
-/// Resolved by reading until the projection agrees with its own bound:
-/// `at.chain_height` is authoritative for the read that produced the header,
-/// so `at.chain_height.tip() == Some(header.height)` is the tip test, checked
-/// against the same snapshot rather than an earlier one. `from_next_height`
-/// is C6's exclusive-end inverse (the next block's ordinal as a count) and
-/// would name a shorter chain if applied to an existing header. It converges
-/// on the first retry at any plausible block rate; a chain that outruns
-/// [`TIP_READ_ATTEMPTS`] is answering `CORE_BUSY`, which is true of it.
-pub fn get_last_block_header(
-    facts: &dyn ChainFacts,
-    fill_pow_hash: bool,
-) -> Result<GetLastBlockHeaderResponse, RpcFault> {
-    let tip = facts.chain_tip()?;
-    // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
-    // guarded `on_get_last_block_header` alone among this slice's methods —
-    // deliberately, and the reason survives the port: this is the one method
-    // that answers "the tip", which on an unsynchronised node is the top of a
-    // partial chain presented as the top of the chain. The other header
-    // methods take an explicit height or hash, where the caller already named
-    // what it wanted and a partial chain simply does not have it.
-    //
-    // The C++ answered `status = BUSY` with a **default-constructed header**,
-    // which a client reading a header field without the status beside it
-    // took for a block of major version 0 and a zero hash. Refusing is the ruling already applied to
-    // `fill_pow_hash`: a method that declines to answer must not report
-    // success (`5b0c32f51`).
-    if !tip.synchronized {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_CORE_BUSY,
-            message: "Core is busy: this node is not synchronized, so it has \
-                      no chain tip to report."
-                .to_owned(),
-            data: None,
-        }));
-    }
-    // `chain_height` is the count; the tip's own height is one below it
-    // (`ChainCount::tip`). A chain with no blocks cannot occur (genesis is
-    // block 0); `newest_block` keeps the empty case total.
-    let mut top = newest_block(tip.chain_height);
-    for _ in 0..TIP_READ_ATTEMPTS {
-        let at = facts.block_header_at(BlockLookup::Height(top), fill_pow_hash)?;
-        let Some(header) = at.header else {
-            // The height came from a chain height, so it was below the tip
-            // when it was chosen. Absent now means either the store cannot
-            // produce a block it claims to hold, or the chain shortened under
-            // us; both are read as "try the current top", and the loop bound
-            // stops that becoming unbounded.
-            top = newest_block(at.chain_height);
-            continue;
-        };
-        // The tip test, against the snapshot that produced this header rather
-        // than the earlier one that chose its height. C6: the newest existing
-        // block's height, not `from_next_height` of this existing ordinal
-        // (that inverse names a shorter chain).
-        if at.chain_height.tip() == Some(header.height) {
-            return Ok(GetLastBlockHeaderResponse {
-                status: RpcStatus::ok(),
-                block_header: block_header(&header),
-            });
-        }
-        top = newest_block(at.chain_height);
-    }
-    Err(RpcFault::Refused(RpcRefusal {
-        code: CORE_RPC_ERROR_CODE_CORE_BUSY,
-        message: "Core is busy: the chain advanced on every attempt to read \
-                  its tip."
-            .to_owned(),
-        data: None,
-    }))
-}
-
-/// `get_block_header_by_hash` (alias `getblockheaderbyhash`).
-///
-/// **Per-element.** Each requested hash gets a slot carrying that hash and
-/// either its header or nothing. The C++ returned on the first miss and
-/// discarded every header already filled, so one unknown hash in a thousand
-/// produced zero headers and an error string was the only way to learn which.
-pub fn get_block_header_by_hash(
-    facts: &dyn ChainFacts,
-    request: &GetBlockHeaderByHashRequest,
-    bounded: bool,
-) -> Result<GetBlockHeaderByHashResponse, RpcFault> {
-    if bounded && request.hashes.len() > RESTRICTED_BLOCK_COUNT {
-        return Err(bound_fault(
-            "get_block_header_by_hash",
-            "hashes",
-            RESTRICTED_BLOCK_COUNT as u64,
-            request.hashes.len() as u64,
-        ));
-    }
-    let mut block_headers = Vec::with_capacity(request.hashes.len());
-    for hash in &request.hashes {
-        let at =
-            facts.block_header_at(BlockLookup::Hash(hash.to_bytes()), request.fill_pow_hash)?;
-        block_headers.push(BlockHeaderSlot {
-            hash: *hash,
-            block_header: at.header.as_ref().map(block_header),
-        });
-    }
-    Ok(GetBlockHeaderByHashResponse {
-        status: RpcStatus::ok(),
-        block_headers,
+/// The facts' fault.
+pub fn p2p_stats(facts: &dyn P2pFacts) -> Result<p2p::P2pStats, RpcFault> {
+    let stats = facts.net_stats()?;
+    Ok(p2p::P2pStats {
+        started: Time(stats.start_time),
+        download: Size(stats.total_bytes_in),
+        upload: Size(stats.total_bytes_out),
+        download_packets: Count(stats.total_packets_in),
+        upload_packets: Count(stats.total_packets_out),
     })
 }
 
-/// `get_block_headers_range` (alias `getblockheadersrange`).
-pub fn get_block_headers_range(
-    facts: &dyn ChainFacts,
-    request: &GetBlockHeadersRangeRequest,
-    bounded: bool,
-) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
-    // **Both endpoints are bounded against the tip before any per-height
-    // work.** The C++ refused `start > end` *and* either endpoint at or past
-    // the chain height in one O(1) test; the first port kept only the
-    // ordering check and let the tip overrun surface inside the loop, one
-    // height at a time. That is a behaviour change and a denial-of-service
-    // vector: on the unrestricted listener, where the span cap does not
-    // apply, `start_height = 0, end_height = u64::MAX` walks the whole chain
-    // — a lock acquisition and a block read per height — before refusing.
-    //
-    // The tip is read once, and it can move **either way** underneath us: a
-    // reorg onto a shorter-but-heavier chain, or an operator `pop_blocks`,
-    // lowers it. So this bound is a fast refusal for the common case, not a
-    // guarantee for the loop below — which is why the loop still has to say
-    // what a vanished height means.
-    let chain = facts.chain_tip()?.chain_height;
-    let start = BlockHeight::from_raw(request.start_height);
-    let end = BlockHeight::from_raw(request.end_height);
-    if start > end || !chain.has_block(start) || !chain.has_block(end) {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-            message: "Invalid start/end heights.".to_owned(),
-            data: None,
-        }));
-    }
-    // The span, not the endpoints, is what the cap bounds — and it is computed
-    // before any chain read so an absurd range costs nothing to refuse.
-    // Inclusive length is the ordinal difference plus one; the cap constant
-    // stays a raw count until Phase 2d.
-    let span = end.saturating_sub(start).to_raw().saturating_add(1);
-    // **The cap bounds the count, not the difference.** The C++ tested
-    // `end_height - start_height > RESTRICTED_BLOCK_HEADER_RANGE`, which
-    // permits 1001 headers against a cap of 1000 — the same off-by-one the
-    // deleted singular `hash` produced on `get_block_header_by_hash`, in the
-    // second of the two methods that carry this cap. Found by porting both.
-    if bounded && span > RESTRICTED_BLOCK_HEADER_RANGE {
-        return Err(bound_fault(
-            "get_block_headers_range",
-            "headers",
-            RESTRICTED_BLOCK_HEADER_RANGE,
-            span,
-        ));
-    }
-    let mut headers = Vec::new();
-    for raw in request.start_height..=request.end_height {
-        let height = BlockHeight::from_raw(raw);
-        let at = facts.block_header_at(BlockLookup::Height(height), request.fill_pow_hash)?;
-        let Some(header) = at.header else {
-            // **A missing header here can only mean the chain shortened.**
-            // On the height path the shim returns `found == 0` for exactly
-            // one condition — `!chain.has_block(height)` as read *inside*
-            // that call — and reports a store that cannot produce a block it
-            // claims to hold as an error, which `?` has already propagated
-            // above. So this arm is not a store contradiction and must not be
-            // reported as one: it is the tip moving down between the bound
-            // and this iteration (a reorg onto a shorter heavier chain, or a
-            // `pop_blocks`), and the caller's range was valid when it was
-            // checked. `TOO_BIG_HEIGHT` with the height that has gone is what
-            // a caller can act on; a generic internal error is not.
-            return Err(too_big_height(height, at.chain_height));
-        };
-        headers.push(block_header(&header));
-    }
-    Ok(GetBlockHeadersRangeResponse {
-        status: RpcStatus::ok(),
-        headers,
-    })
-}
+/// epee's Tor address-type id.
+const ADDRESS_TYPE_TOR: u8 = 4;
 
-/// `get_fee_estimate`: the served ladder at the tip, a function of chain
-/// state alone. The request has no members; one naming the retired
-/// `grace_blocks` is refused by [`fee_estimate_request`] (3.57, FL-R26).
-pub fn get_fee_estimate(
-    facts: &dyn ChainFacts,
-    GetFeeEstimateRequest {}: &GetFeeEstimateRequest,
-) -> Result<GetFeeEstimateResponse, RpcFault> {
-    let estimate = facts.fee_estimate()?;
-    Ok(GetFeeEstimateResponse {
-        status: RpcStatus::ok(),
-        fees: FeeTiers(estimate.fees),
-    })
-}
-
-// ── RK-5a: the p2p methods ──────────────────────────────────────────────────
-
-/// epee's ipv4 address type id. `connection_info`'s `ip` and `port` strings
-/// are filled only for this arm; every other address type carries them empty.
-const ADDRESS_TYPE_IPV4: u8 = 1;
-
-/// The unit `avg_*` and `current_*` report in.
-const BYTES_PER_KIB: u64 = 1024;
-
-/// Bytes per second as whole KiB per second, totally.
-///
-/// The C++ divided a `double` by 1024 and let the implicit conversion to
-/// `uint64_t` truncate. That conversion is **undefined** for a NaN, an
-/// infinity, a negative or a value past the integer range, and the input is a
-/// rate estimator's output. The division happens in floating point, as it did, so the
-/// answer is `trunc(bytes_per_second / 1024)` and not
-/// `trunc(bytes_per_second) / 1024`.
+/// Bytes per second, totally: a rate estimator's `f64` clamped to a `u64`,
+/// zero for a NaN, an infinity or a negative.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "the clamp above the cast is what makes it total"
 )]
-#[deny(clippy::arithmetic_side_effects)]
-fn kib_per_second(bytes_per_second: f64) -> u64 {
-    /// `u64::MAX` as the nearest `f64`. Written as a literal rather than
-    /// `u64::MAX as f64`, which is itself a lossy cast: the exact value is
-    /// 2^64, one past the range, so `>=` here is the right boundary.
+fn per_second(bytes_per_second: f64) -> Rate {
+    /// 2^64 as an `f64`: one past `u64::MAX`.
     const OUT_OF_RANGE: f64 = 18_446_744_073_709_551_616.0;
     if !bytes_per_second.is_finite() || bytes_per_second <= 0.0 {
-        return 0;
+        return Rate(0);
     }
-    let kib = (bytes_per_second / 1024.0).floor();
-    if kib >= OUT_OF_RANGE {
+    let whole = bytes_per_second.floor();
+    Rate(if whole >= OUT_OF_RANGE {
         u64::MAX
     } else {
-        kib as u64
-    }
-}
-
-/// A connection's lifetime average, in KiB/s.
-///
-/// Two truncating divisions in this order, because that is the value the wire
-/// has always carried: bytes per second, then KiB. Written with `checked_div`
-/// rather than an `if seconds == 0` guard so it is total **by construction** —
-/// a guard is a thing a later edit can move away from its division, and this
-/// is not.
-fn average_kib(total: u64, seconds: u64) -> u64 {
-    total
-        .checked_div(seconds)
-        .unwrap_or(0)
-        .checked_div(BYTES_PER_KIB)
-        .unwrap_or(0)
-}
-
-/// One connection's raw facts projected onto the wire, against the single
-/// instant the whole list was read at.
-///
-/// Every elapsed value below comes from that one `now`. The C++ read the
-/// clock twice per connection — once for the idle times, once for the
-/// averages — so a connection could report a `live_time` that disagreed with
-/// the divisor its own averages used; with one instant that is not
-/// representable.
-///
-/// The subtractions saturate. A `now` earlier than a connection's `started`
-/// means the clock moved backwards, and C++'s unsigned wrap turned that into
-/// an idle time of some hundreds of years; zero is the honest answer.
-///
-/// `session` is chain sync's row for the connection (3.68): the claim's
-/// count and the session's mode. A connection chain sync does not hold,
-/// such as one before its handshake, has neither.
-#[deny(clippy::arithmetic_side_effects)]
-fn project_connection(
-    c: &crate::core::ConnectionFacts,
-    now: u64,
-    session: Option<&SyncSessionFacts>,
-) -> ConnectionInfo {
-    let live_time = now.saturating_sub(c.started);
-    let ipv4 = c.address_type == ADDRESS_TYPE_IPV4;
-    ConnectionInfo {
-        incoming: c.incoming,
-        localhost: c.localhost,
-        local_ip: c.local_ip,
-        address: c.address.clone(),
-        host: c.host.clone(),
-        // Only the ipv4 arm carries these, and it carries the host as the ip.
-        ip: if ipv4 { c.host.clone() } else { String::new() },
-        port: if ipv4 {
-            c.port.to_string()
-        } else {
-            String::new()
-        },
-        recv_count: c.recv_count,
-        // Floored at the connection's own age: a peer that has never sent has
-        // `last_recv == 0`, and the idle time then means "as long as we have
-        // been connected", not "since 1970".
-        recv_idle_time: now.saturating_sub(c.started.max(c.last_recv)),
-        send_count: c.send_count,
-        send_idle_time: now.saturating_sub(c.started.max(c.last_send)),
-        state: session.map(|session| session.mode),
-        live_time,
-        avg_download: average_kib(c.recv_count, live_time),
-        current_download: kib_per_second(c.current_speed_down),
-        avg_upload: average_kib(c.send_count, live_time),
-        current_upload: kib_per_second(c.current_speed_up),
-        // `hex::encode` is lowercase and undashed, which is exactly what
-        // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
-        // the encoder this file already uses four times over.
-        connection_id: hex::encode(c.connection_id),
-        height: session.and_then(|session| session.claimed_height),
-        address_type: c.address_type,
-    }
-}
-
-/// `/get_net_stats`: process start plus the global throttle counters.
-pub fn get_net_stats(facts: &dyn P2pFacts) -> Result<GetNetStatsResponse, RpcFault> {
-    let stats = facts.net_stats()?;
-    Ok(GetNetStatsResponse {
-        status: RpcStatus::ok(),
-        start_time: stats.start_time,
-        total_packets_in: stats.total_packets_in,
-        total_bytes_in: stats.total_bytes_in,
-        total_packets_out: stats.total_packets_out,
-        total_bytes_out: stats.total_bytes_out,
+        whole as u64
     })
 }
 
-/// `get_connections` (JSON-RPC, admin-only): the live p2p connections.
-/// A daemon started offline answers `offline` alone (Rick,
-/// 2026-10-14): it has no connections by configuration, and an empty list
-/// would read as a running node with none.
-pub fn get_connections(
+/// A claim's count as the tip it claims: `null` before any claim.
+fn claimed_tip(count: Option<u64>) -> shekyl_rpc_types::Nullable<Height> {
+    count
+        .and_then(|count| count.checked_sub(1))
+        .map(Height)
+        .into()
+}
+
+/// One connection's facts on the wire, against the one instant the list
+/// was read at, so no two elapsed values disagree. The subtractions
+/// saturate: a clock that moved backwards answers zero.
+fn connection(
+    c: &crate::core::ConnectionFacts,
+    now: u64,
+    session: Option<&SyncSessionFacts>,
+) -> p2p::Connection {
+    let age = now.saturating_sub(c.started);
+    p2p::Connection {
+        inbound: c.incoming,
+        local: c.localhost || c.local_ip,
+        endpoint: Endpoint(c.address.clone()),
+        connector: if c.address_type == ADDRESS_TYPE_TOR {
+            p2p::Connector::Tor
+        } else {
+            p2p::Connector::Clearnet
+        },
+        download: Size(c.recv_count),
+        upload: Size(c.send_count),
+        // Floored at the connection's own age: a peer that has never sent
+        // has been idle as long as it has been connected.
+        download_idle: Duration(now.saturating_sub(c.started.max(c.last_recv))),
+        upload_idle: Duration(now.saturating_sub(c.started.max(c.last_send))),
+        mode: session.map(|session| session.mode).into(),
+        age: Duration(age),
+        download_speed_average: Rate(c.recv_count.checked_div(age).unwrap_or(0)),
+        download_speed_current: per_second(c.current_speed_down),
+        upload_speed_average: Rate(c.send_count.checked_div(age).unwrap_or(0)),
+        upload_speed_current: per_second(c.current_speed_up),
+        id: Text(hex::encode(c.connection_id)),
+        height: claimed_tip(session.and_then(|session| session.claimed_height)),
+    }
+}
+
+/// `peer_connections`: the live P2P connections.
+///
+/// # Errors
+///
+/// `p2p.offline` on a daemon started offline (IG-Q85); the facts' fault.
+pub fn peer_connections(
     facts: &dyn P2pFacts,
     view: &dyn SyncViewRead,
-) -> Result<P2pReply<GetConnectionsResponse>, RpcFault> {
+) -> Result<Vec<p2p::Connection>, RpcFault> {
     if facts.p2p_state()? == P2pRead::Offline {
-        return Ok(P2pReply::Offline);
+        return Err(p2p_offline());
     }
     let snapshot = facts.connections()?;
     let view = view.sync_view()?;
-    Ok(P2pReply::Running(GetConnectionsResponse {
-        status: RpcStatus::ok(),
-        connections: snapshot
-            .connections
-            .iter()
-            .map(|c| project_connection(c, snapshot.now, view.session(&c.connection_id)))
-            .collect(),
-    }))
+    Ok(snapshot
+        .connections
+        .iter()
+        .map(|c| connection(c, snapshot.now, view.session(&c.connection_id)))
+        .collect())
 }
 
-/// `/get_peer_list` (admin-only): the white and gray peerlists.
+/// A host and a port as one endpoint; an IPv6 host takes brackets.
+fn endpoint(host: &str, port: u16) -> Endpoint {
+    if host.contains(':') {
+        Endpoint(format!("[{host}]:{port}"))
+    } else {
+        Endpoint(format!("{host}:{port}"))
+    }
+}
+
+/// `peer_list`: one list of known peers, each naming its tier (IG-Q51).
+/// Endpoints not dialable on the public internet are included only when
+/// asked for (`local`). A banned host is `ban_list`'s, not this list's.
 ///
-/// `public_only` chose a different p2p call daemon-side; `include_blocked` is
-/// applied **here**, because it is a property of the request rather than of
-/// the peerlist, and the facts export reports each entry's blocked state
-/// without deciding what to do about it.
+/// # Errors
 ///
-/// A daemon started offline answers `offline` alone: it has no peer
-/// lists by configuration.
-pub fn get_peer_list(
-    request: &GetPeerListRequest,
+/// `p2p.offline` on a daemon started offline (IG-Q85); the facts' fault.
+pub fn peer_list(
     facts: &dyn P2pFacts,
-) -> Result<P2pReply<GetPeerListResponse>, RpcFault> {
-    let entries = match facts.peer_list(request.public_only)? {
-        P2pRead::Offline => return Ok(P2pReply::Offline),
+    request: &p2p::PeerListQuery,
+) -> Result<Vec<p2p::PeerEntry>, RpcFault> {
+    let entries = match facts.peer_list(!request.local)? {
+        P2pRead::Offline => return Err(p2p_offline()),
         P2pRead::Running(entries) => entries,
     };
-    let mut white_list = Vec::new();
-    let mut gray_list = Vec::new();
-    for e in entries {
-        if e.blocked && !request.include_blocked {
-            continue;
-        }
-        let peer = Peer {
-            host: e.host,
-            ip: e.ip,
-            port: e.port,
-        };
-        if e.white {
-            white_list.push(peer);
-        } else {
-            gray_list.push(peer);
-        }
-    }
-    Ok(P2pReply::Running(GetPeerListResponse {
-        status: RpcStatus::ok(),
-        white_list,
-        gray_list,
-    }))
+    Ok(entries
+        .into_iter()
+        .filter(|entry| !entry.blocked)
+        .map(|entry| p2p::PeerEntry {
+            endpoint: endpoint(&entry.host, entry.port),
+            tier: if entry.white {
+                p2p::Tier::White
+            } else {
+                p2p::Tier::Gray
+            },
+        })
+        .collect())
 }
 
-/// `/get_stem_tallies` (host-only): the relay's floor diagnostic and the
-/// per-successor stem counts. The value is the response body. It carries
-/// no status envelope.
-pub fn get_stem_tallies(facts: &dyn P2pFacts) -> Result<shekyl_rpc_types::StemTallies, RpcFault> {
+/// `relay_stats` (host-only, RT-O9.3): the relay's floor and stem tallies.
+///
+/// # Errors
+///
+/// The facts' fault.
+pub fn relay_stats(facts: &dyn P2pFacts) -> Result<p2p::RelayStats, RpcFault> {
     Ok(facts.stem_tallies()?)
 }
 
-/// `sync_info` (JSON-RPC, admin-only): chain sync's view (3.68). Whether
-/// the node is syncing, toward what, from whom and how fast, and whether it
-/// is stuck.
+/// A request in flight, in whole seconds: its age rounds down and its time
+/// left rounds up, so `due` is `0` exactly when the response is late
+/// (IG-Q80).
+fn timing(timing: &RequestTiming) -> (Duration, Duration) {
+    (
+        Duration(timing.age_ms / 1000),
+        Duration(timing.due_in_ms.div_ceil(1000)),
+    )
+}
+
+/// `sync_status`: chain sync's view — toward what, from whom and how fast,
+/// and whether it is stuck (IG-Q80).
 ///
-/// Three reads: the chain's tip, the sync owner's view and the board, for
-/// each session's address. They are not one snapshot: a session the view
-/// lists and the board no longer holds has closed since, and is left out.
+/// Three reads: the tip, sync's view, and the board for each session's
+/// endpoint. A session the view lists and the board no longer holds has
+/// closed since, and is left out.
 ///
-/// A daemon started offline answers `offline` alone: it syncs from no
-/// peer, so it has no sync to report.
-pub fn sync_info(
+/// # Errors
+///
+/// `p2p.offline` on a daemon started offline (IG-Q85); the facts' fault.
+pub fn sync_status(
     chain: &dyn ChainFacts,
     view: &dyn SyncViewRead,
-    p2p: &dyn P2pFacts,
-) -> Result<P2pReply<SyncInfoResponse>, RpcFault> {
-    if p2p.p2p_state()? == P2pRead::Offline {
-        return Ok(P2pReply::Offline);
+    p2p_facts: &dyn P2pFacts,
+) -> Result<p2p::SyncStatus, RpcFault> {
+    if p2p_facts.p2p_state()? == P2pRead::Offline {
+        return Err(p2p_offline());
     }
     let tip = chain.chain_tip()?;
     let view = view.sync_view()?;
-    let board = p2p.connections()?;
-    let peers = view
+    let board = p2p_facts.connections()?;
+    let session = view
         .sessions
         .iter()
         .filter_map(|session| {
@@ -1297,38 +456,47 @@ pub fn sync_info(
                 .connections
                 .iter()
                 .find(|c| c.connection_id == session.connection_id)?;
-            Some(SyncInfoPeer {
-                connection_id: hex::encode(session.connection_id),
-                address: row.address.clone(),
-                claimed_height: session.claimed_height,
+            Some(p2p::Session {
+                connection: Text(hex::encode(session.connection_id)),
+                endpoint: Endpoint(row.address.clone()),
+                height: claimed_tip(session.claimed_height),
                 mode: session.mode,
-                header_request: session.header_request.map(|timing| SyncHeaderRequest {
-                    age_ms: timing.age_ms,
-                    due_in_ms: timing.due_in_ms,
-                }),
-                body_requests: session
+                header: session
+                    .header_request
+                    .map(|request| {
+                        let (age, due) = timing(&request);
+                        p2p::HeaderRead { age, due }
+                    })
+                    .into(),
+                span: session
                     .body_requests
                     .iter()
-                    .map(|span| SyncBodyRequest {
-                        start_height: span.start_height,
-                        count: span.count,
-                        planned_bytes: span.planned_bytes,
-                        age_ms: span.timing.age_ms,
-                        due_in_ms: span.timing.due_in_ms,
+                    .map(|span| {
+                        let (age, due) = timing(&span.timing);
+                        p2p::BodySpan {
+                            from: Height(span.start_height),
+                            blocks: Count(span.count),
+                            size: Size(span.planned_bytes),
+                            age,
+                            due,
+                        }
                     })
                     .collect(),
-                rate: session.rate,
+                download_speed: session.rate.map(Rate).into(),
             })
         })
         .collect();
-    Ok(P2pReply::Running(SyncInfoResponse {
-        status: RpcStatus::ok(),
-        height: tip.chain_height.to_raw(),
-        target_height: view.target,
+    let height = tip
+        .chain_height
+        .tip()
+        .map_or(0, shekyl_types::BlockHeight::to_raw);
+    Ok(p2p::SyncStatus {
+        height: Height(height),
+        target_height: Height(view.target.saturating_sub(1)),
         state: view.state,
         stalled: view.stalled,
-        peers,
-    }))
+        session,
+    })
 }
 
 #[cfg(test)]

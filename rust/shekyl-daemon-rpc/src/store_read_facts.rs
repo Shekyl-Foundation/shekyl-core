@@ -587,7 +587,7 @@ impl ChainReadFacts for StoreFacts {
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
         let snap = self.snapshot()?;
-        let (tip, _) = tip_of(&snap)?;
+        let (tip, tip_hash) = tip_of(&snap)?;
         let view = SnapshotView::new(&snap);
         let at = connecting(tip);
         let rule_set = self.rules.in_force(at);
@@ -623,6 +623,7 @@ impl ChainReadFacts for StoreFacts {
             emission_epoch_facts(&view, &rule_set, persona, &window).map_err(derivation_fault)?;
         Ok(ClaimSource {
             chain_height: count_at(tip),
+            tip_hash: tip_hash,
             current_settled_epoch: settled,
             bond,
             epochs,
