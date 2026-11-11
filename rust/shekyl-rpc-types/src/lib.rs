@@ -88,6 +88,7 @@ pub mod p2p;
 pub mod pool;
 pub mod schema;
 pub mod transactions;
+pub mod wire;
 pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
     CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
