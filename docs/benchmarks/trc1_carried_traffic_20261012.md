@@ -1,9 +1,11 @@
 # `TRC-1` step 2: what does an ordinary operator relay carry? Registration, 2026-10-12
 
-**State of this record: REGISTERED 2026-10-12, Part A only. Collection
-started 2026-10-12 05:55Z and runs to 2026-11-10. Interim results to
-2026-10-16 17:07Z are below. Amendment 1 (2026-10-16) adds a memory cap on
-the relay and memory columns to the collector.** The four questions the draft posed were
+**State of this record: COMPLETE 2026-11-11. Registered 2026-10-12, Part
+A only. Collection ran from 2026-10-12 05:55Z to the horizon, 2026-11-10
+00:00Z. Below are the interim results to 2026-10-16 17:07Z, Amendment 1
+(2026-10-16: a memory cap on the relay and memory columns in the
+collector), the conditions that changed during the run without an
+amendment, and the final results.** The four questions the draft posed were
 ruled on 2026-10-12 and are recorded under "Ruled before registration".
 "Registered before the run" is not edited from here on; an amendment is
 dated and says what had been read. Results are added below it.
@@ -374,3 +376,226 @@ Collection started 2026-10-12 05:55Z, after this registration was pushed
 The dry run ran from 04:55Z to 05:55Z and its output was deleted: 60 rows
 at 60-second spacing, every column present and numeric, the slowest
 snapshot 526 ms, no address in the output. No figure from it was read.
+
+## Conditions that changed during the run, recorded at the end
+
+*Written 2026-11-11. None of these was amended when it happened. Each is
+stated with the reads taken by then. After Amendment 1 the collected data
+was read three times: on 2026-10-17 (health only, no figure), on
+2026-10-29 21:40Z (memory and rates per relay process and arm, the latest
+directory row, the latest heartbeat), and on 2026-11-05 19:46Z (rates and
+memory per half day, the minute rows of 2026-10-31 10:00Z to 13:40Z, the
+kernel's kill reports, the directory since 2026-10-29, the heartbeats since
+2026-10-30).*
+
+1. **The daemon froze, 2026-10-17 21:00:40Z to 2026-10-27 17:33:50Z.** The
+   alpha.10 daemon stopped answering (a deadlock in that release). Its
+   process stayed alive, so the collector saw no process change. Its
+   originated traffic is 0 from that minute. It was found on 2026-10-27.
+   Its rows carry the release label `v3.1.0-alpha.10-frozen`.
+2. **The daemon was replaced a second time, on 2026-10-27.** The
+   registration names one replacement. The frozen alpha.10 daemon was
+   stopped. alpha.11 was installed from the signed release package, its
+   configuration was converted to that release's format with the same Tor
+   wiring, and the chain data was removed. It was started at 17:36:08Z
+   and synchronized within a minute. The relay process did not change.
+   alpha.11 also carries a new dialer. This followed the reads of
+   2026-10-12, 10-14 and 10-16 and the health check of 10-17.
+3. **The host's daily package upgrade restarted the relay twice**, on
+   2026-10-21 at 06:13Z and on 2026-10-24 at 06:09Z, both times for
+   library upgrades and with a clean stop. Line 1 ends S3 and S4 there. The
+   daily upgrade was then turned off from 2026-10-27 17:44Z to the end of
+   the run, so no package was installed on the host for its last two
+   weeks. It was turned back on 2026-11-11 23:49Z.
+4. **The daemon was restarted by its service manager after a kernel kill,
+   on 2026-10-31 at 13:34:49Z** (final result 6). The binary and the
+   release label are unchanged.
+
+## Final results, to 2026-11-10 00:00Z
+
+**Read in full on 2026-11-11 to write this section.** Collection reached
+the horizon. The collector ran on past it, and no row after 2026-11-10
+00:00Z is in any figure below. The captures beside this record hold every
+row to the horizon. The interim captures are left as they were.
+
+| File | What |
+| --- | --- |
+| [`_final_obs.tsv`](trc1_carried_traffic_20261012_final_obs.tsv) | every collector row to the horizon, both versions: the process ids replaced by series, arm and daemon release, the directory weight in force, and the memory columns from version 2 on |
+| [`_final_stints.tsv`](trc1_carried_traffic_20261012_final_stints.tsv) | per series, arm and release |
+| [`_final_summary.tsv`](trc1_carried_traffic_20261012_final_summary.tsv) | per series, arm, release and weight |
+| [`_final_series.tsv`](trc1_carried_traffic_20261012_final_series.tsv) | per series, arm, release, weight and UTC hour: the registered breakdown |
+| [`_final_hours.tsv`](trc1_carried_traffic_20261012_final_hours.tsv) | per series, arm, release and UTC hour over all weights, with the number of days in each |
+| [`_final_memory.tsv`](trc1_carried_traffic_20261012_final_memory.tsv) | Amendment 1's contrast: resident memory per series, arm and release |
+| [`_final_windows.tsv`](trc1_carried_traffic_20261012_final_windows.tsv) | registered lines 2, 3 and 4 per heartbeat window |
+| [`_final_heartbeats.tsv`](trc1_carried_traffic_20261012_final_heartbeats.tsv) | Tor's heartbeat figures by series, the host's name removed |
+| [`_final_directory.tsv`](trc1_carried_traffic_20261012_final_directory.tsv) | consensus weight and flags per published consensus |
+| [`_final_kills.tsv`](trc1_carried_traffic_20261012_final_kills.tsv) | every kernel out-of-memory kill from the start of collection to 2026-11-11, each marked inside or after the horizon |
+| [`_final_notices.tsv`](trc1_carried_traffic_20261012_final_notices.tsv) | Tor's low-memory events per UTC day |
+
+The reduction is the same `shekyl-dev` script, extended to read both
+collector versions. Its labels are explicit: the six relay processes
+below are S1 to S6, and any relay process not named is X1, X2, ... in
+order of first appearance. Rates are bytes per second, carried out plus
+in and originated out plus in. The two are not in one unit and are not
+divided.
+
+### 1. Series
+
+| Series | Relay process | Rows | Ended by |
+| --- | --- | --- | --- |
+| S1 | from 2026-10-06 03:23Z | 3,712 | a kernel kill, 2026-10-14 19:47:28Z |
+| S2 | 17 minutes | 16 | a kernel kill, 20:04:42Z |
+| S3 | from 2026-10-14 20:04Z | 9,247 | the daily upgrade, 2026-10-21 06:13Z |
+| S4 | from 2026-10-21 06:13Z | 4,315 | the daily upgrade, 2026-10-24 06:09Z |
+| S5 | from 2026-10-24 06:09Z | 10,513 | a kernel kill, 2026-10-31 13:23:04Z |
+| X1–X66 | 2026-10-31 13:23Z to 23:08Z | 509 in all | each a kernel kill |
+| S6 | from 2026-10-31 23:08:51Z | 13,010 | the horizon |
+
+There was no host reboot in the run. Inside the horizon the kernel killed
+the relay 69 times and the daemon once.
+
+### 2. The lines
+
+- **Line 1:** 72 relay processes. Six are long enough to report. The 66
+  started between 2026-10-31 13:23Z and 23:08Z each lived a few minutes,
+  have no heartbeat pair and are not reported by rate.
+- **Line 2:** one window of 107 is void, the first, as at the interim. No
+  snapshot took more than 5 seconds.
+- **Line 3:** in every other window the collector's sum is 0.831 to 0.997
+  of the heartbeat's. None is undercounted.
+- **Line 4:** 34 windows have **no originated traffic**, all of them under
+  the frozen daemon (windows ending 2026-10-18 08:05Z to 2026-10-27
+  12:09Z). The daemon sent nothing through Tor then. That says nothing
+  about cover.
+
+### 3. Volume by series, arm and release
+
+| Series | Arm | Daemon | Weight | Rows | Carried p5 / median / p95 | Originated p5 / median / p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| S1 | uncapped | `v3.1.0-alpha.9` | 1–380 | 3,712 | 446,581 / 1,192,072 / 2,028,143 | 161 / 174 / 1,395 |
+| S2 | uncapped | `v3.1.0-alpha.9` | 380 | 16 | 2,563,281 / 3,625,718 / 6,148,640 | 0 / 20 / 66 |
+| S3 | uncapped | `v3.1.0-alpha.9` | 370–380 | 2,631 | 40,955 / 789,151 / 1,786,906 | 161 / 174 / 1,448 |
+| S3 | uncapped | `v3.1.0-alpha.10` | 350–370 | 138 | 820,874 / 1,116,591 / 1,948,893 | 62 / 296 / 582 |
+| S3 | capped | `v3.1.0-alpha.10` | 350 | 1,606 | 905,781 / 1,402,810 / 1,972,155 | 32 / 135 / 505 |
+| S3 | capped | `v3.1.0-alpha.10-frozen` | 260–350 | 4,872 | 859,437 / 1,225,557 / 1,877,071 | 0 / 0 / 0 |
+| S4 | capped | `v3.1.0-alpha.10-frozen` | 230–260 | 4,315 | 240,540 / 1,070,054 / 1,783,333 | 0 / 0 / 0 |
+| S5 | capped | `v3.1.0-alpha.10-frozen` | 230–250 | 5,004 | 297,393 / 628,659 / 1,248,789 | 0 / 0 / 0 |
+| S5 | capped | no daemon | 250 | 2 | 630,749 / 647,268 / 663,787 | 0 / 0 / 0 |
+| S5 | capped | `v3.1.0-alpha.11` | 240–270 | 5,507 | 418,785 / 738,852 / 1,531,560 | 314 / 1,204 / 3,343 |
+| S6 | capped | `v3.1.0-alpha.11` | 210–290 | 13,010 | 107,939 / 656,012 / 1,554,848 | 271 / 531 / 23,311 |
+
+Originated figures are never pooled across releases. alpha.11's are
+higher than alpha.9's and alpha.10's: a new dialer, and more of its peers
+reached over Tor. S6's 95th percentile comes from its start, after the daemon's own
+restart. On 2026-11-01 originated traffic ran at 10 to 14 kB/s, on
+2026-11-02 near 1.4 kB/s, and from 2026-11-03 near 320 B/s. The cause of the first day's
+level is not established.
+
+### 4. Hours of the day
+
+S5 under alpha.11 spans four days, and S6 nine. S6's median per UTC hour
+ranges from 550 to 731 kB/s, while its median per day ranges from 166 to
+818 kB/s. Day-to-day change is larger than any hour-of-day shape, as at
+the interim, so no daily shape is claimed.
+
+### 5. The directory
+
+The consensus weight was 1 until 2026-10-12 20:00Z, then 310, 380 from
+2026-10-14, 370 and 350 through 2026-10-17, 260 from 2026-10-18, 230 to
+260 from 2026-10-21, and 210 to 290 from 2026-10-28 to the horizon. The
+guard probability was 0 in every sample. The HSDir flag was absent from
+2026-10-14 20:00Z (the first consensus after S1's kill) to 2026-10-18
+21:00Z. It was absent again from 2026-10-21 07:00Z (S4's start) to
+2026-10-28 07:00Z, and held from then to the horizon, through the
+2026-10-31 kills. *The interim section dates the first loss to the
+consensus of 2026-10-15 12:00Z; its own captures show 2026-10-14 20:00Z.*
+
+Ruling 2: the run covers weights from 1 to 380, so step 2 is not
+confined to a weight of 1. It covers that range and nothing above it.
+
+Tor's denial-of-service counters rose in every series. At the horizon S6
+reported 5,235 open circuits, 27,083 circuits killed for too many cells
+and 13,103 concurrent connections from one address refused. The volume
+that began on 2026-10-11 did not end within the run.
+
+### 6. Memory: Amendment 1's contrast
+
+Resident memory in MiB (median / maximum), and the host's lowest
+available memory:
+
+| Series | Arm | Daemon | Rows | Relay | Daemon | Lowest available |
+| --- | --- | --- | --- | --- | --- | --- |
+| S3 | uncapped | `v3.1.0-alpha.10` | 62 | 1,509 / 1,548 | 328 / 328 | 1,613 |
+| S3 | capped | `v3.1.0-alpha.10` | 1,606 | 1,555 / 1,569 | 331 / 333 | 1,602 |
+| S3 | capped | `v3.1.0-alpha.10-frozen` | 4,872 | 1,565 / 1,587 | 333 / 333 | 1,470 |
+| S4 | capped | `v3.1.0-alpha.10-frozen` | 4,315 | 737 / 744 | 332 / 332 | 2,352 |
+| S5 | capped | `v3.1.0-alpha.10-frozen` | 5,004 | 710 / 735 | 332 / 332 | 2,311 |
+| S5 | capped | `v3.1.0-alpha.11` | 5,507 | 758 / 1,320 | 854 / 1,147 | 33 |
+| S6 | capped | `v3.1.0-alpha.11` | 13,010 | 1,198 / 1,257 | 1,133 / 1,411 | 837 |
+
+- **The reload did not shrink the running process.** S3 held about
+  1.5 GiB before the cap and the same for the five days after it.
+- **The relays started with the cap in place held half that**, 0.71 to
+  0.76 GiB, at carried volumes at or below S3's. Tor logged no low-memory event
+  in S4 or S5, so the cap was not killing circuits, and this is not
+  evidence that it acted. Two other differences overlap with it: the
+  directory cache for onion services is sized at a fifth of the cap
+  (about 100 MiB here, about 590 MiB unset), and the HSDir flag was absent
+  for all of S4 and S5's first four days. They are not separated.
+- **alpha.11's daemon holds two and a half to three and a half times
+  alpha.10's memory.** It stepped up by about 250 MiB on 2026-10-30, which
+  matches that release's RandomX caches growing at height 2112, an issue
+  of the release. From then the host
+  had about 1.5 GiB available.
+- **The surge of 2026-10-31.** Between 12:16Z and 12:20Z the relay's
+  inbound sockets went from 4,489 to 8,179 and its resident memory from
+  785 to 1,291 MiB. The host's uplink then sent 2 to 8 MB/s and received
+  about 1 MB/s, far above `RelayBandwidthRate`. The cause is not
+  established. Tor's memory notices later reported up to 195 MB of lzma
+  compression buffers; that is a figure from the notice, not a mechanism.
+  From 13:15Z to 13:22Z the host's available memory fell from 1.1 GB to
+  33 MB while neither process's resident memory grew. The kernel's kill
+  report does not show it as anonymous or slab memory, and it is not
+  accounted for here.
+- **The cap acted, and the kernel killed the relay anyway.** From 13:23Z
+  the kernel killed the relay, holding 0.97 to 1.18 GB of anonymous memory
+  each time, 67 times until 23:08Z. It killed the daemon once, at 13:34Z
+  with 1.12 GB. Tor's cap engaged for the first time in the run: 2,350
+  low-memory events that day, each killing hundreds of circuits, with
+  about 43,000 still open late that evening. That is the direct evidence Amendment 1 named,
+  and it did not prevent the kills.
+- **The memory did not come back.** S6 held 1.2 GiB for nine days at
+  ordinary volume (median 656 kB/s), about 2.3 times the cap. The daemon
+  held 1.1 GiB, and the host's lowest available memory was 837 MiB.
+
+On a 4 GB host with no swap, a relay at this rate beside the daemon was
+killed by the kernel both without the cap and with it. The cap bounds
+Tor's queues. The process's resident memory ran at 1.4 to 3 times it.
+
+**After the horizon** (in no figure above; marked "after" in the kill and
+notice captures): on 2026-11-11 from 12:04Z to 15:24Z the same happened
+again. There were 392 low-memory events, and the kernel killed the relay
+16 times and the daemon once. The collector stopped at about 13:46Z. It
+was not among the processes the kernel named, and the cause is not
+established.
+
+### 7. What these say, and what they do not
+
+- **Volume does not follow weight in one direction here.** The relay
+  carried as much at weight 1 as at 310, and less at 210 to 290 than at
+  350. These are observations of one relay across six processes. They are
+  not a property of weight.
+- **Ruling 3.** The volume that began on 2026-10-11 never ended, and
+  2026-10-31 added a second surge on top of it. Results are given per
+  series. Which of them describes an ordinary operator is left by ruling 3
+  to be ruled on reading. This record does not rule it.
+- **The originated share** is a few hundred to about 1,200 bytes per
+  second against 0.1 to 2 MB/s carried. That is the registered condition
+  of a quiet testnet. It is not evidence that originated cells are hidden.
+- **Distinguishability is not decided here.** The `PM-3` watermark test
+  named under "What this record does not decide" runs against this volume
+  series. Part B, the share on the process's own guard connections, was
+  never registered, and nothing here answers it.
+- **Memory is a condition of the posture, not only of this run.** A relay
+  run as `TOR_RELAY.md` describes, on a small host beside the daemon, was
+  killed by the kernel 69 times in the horizon. The cap did not stop it.

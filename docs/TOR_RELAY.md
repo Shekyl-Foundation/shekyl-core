@@ -73,13 +73,18 @@ HiddenService this same process publishes, with the virtual port peers dial
 Follow the [Tor Project's relay documentation](https://community.torproject.org/relay/)
 for the relay itself.
 
-**Set `MaxMemInQueues` by hand on a small host.** Unset, Tor sizes it at
-three quarters of physical memory and does not know `shekyld` shares the
-machine. On a 4 GB host with no swap, a relay at 1 MB/s beside the daemon
-was killed by the kernel twice in one evening, before Tor's own limit was
-reached: [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
-interim result 1. That record's Amendment 1 runs the relay at 512 MB and
-reports what the cap changed. Do not copy a torrc from this page into an exit
+**Size the host for the relay and the daemon together; `MaxMemInQueues`
+alone does not.** Unset, Tor sizes that option at three quarters of
+physical memory and does not know `shekyld` shares the machine. On a 4 GB
+host with no swap, a relay at 1 MB/s beside the daemon was killed by the
+kernel twice in one evening before Tor's own limit was reached. With
+`MaxMemInQueues 512 MBytes` it was killed 69 times in four weeks, 67 of
+them in one surge, while the cap was killing circuits: the cap bounds
+Tor's queues, and the process held 0.7 to 1.6 GiB. The daemon held up to
+1.4 GiB of its own: [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
+final result 6. That is one host's record, not a sizing rule. Set the cap
+by hand anyway, so Tor gives up circuits before the kernel takes the
+process. Do not copy a torrc from this page into an exit
 configuration. Wallet Tor stays a separate instance (PWD-E9); this page is
 the daemon overlay posture.
 
