@@ -3,874 +3,533 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FROST threshold SAL (Spend-Auth-and-Linkability) for FCMP++ multisig.
+//! The FROST spend-auth-and-linkability (SAL) leg of an Option E′ multisig
+//! spend, as a thin layer over `modular_frost`'s own signing machines.
 //!
-//! Wraps the `SalAlgorithm` from the first-party `shekyl-fcmp-proofs` to provide
-//! a session-based interface for multi-round FROST signing. The coordinator
-//! holds the spend secret `x`; only the view key `y` is threshold-shared
-//! via `ThresholdKeys<Ed25519T>`.
+//! A multisig output's key is `O = x·G + y·T` with `x = ho + b`, which every
+//! member computes, and `y = y_group + y_kem`. `y_group` is shared M-of-N
+//! by Shamir over the Ed25519 scalar field; `y_kem` is the output's public
+//! tweak, recovered by every member from the output's group KEM secret.
+//! The SAL proves knowledge of `x` and `y` for the rerandomized output
+//! `O~ = O + r_o·T`, so the FROST group key the machines sign under is
+//! `(y_group + y_kem + r_o)·T`: the member's keys offset by `y_kem − o_blind`.
 //!
-//! This is the designed FCMP++ multisig spend path, and its consumer is not
-//! built yet: `docs/FOLLOWUPS.md`, "Multisig FROST spend path needs the
-//! single-sig spend-path consensus fixes" and "Threshold signatures: one
-//! missing primitive, two named customers".
+//! Three things live here:
 //!
-//! ## Signing Protocol
+//! - [`dealer_split`] samples `y_group` and splits it for a new group;
+//!   [`threshold_keys`] turns one member's stored share back into
+//!   `ThresholdKeys<Ed25519T>`, refusing a share set that does not open the
+//!   address's `Y_group`.
+//! - [`SalSigningParams`] is what the proposer fixes for one input: the
+//!   output, its rerandomization, the transaction's `tx_signable`, and the
+//!   member-known scalars `x` and `y_kem`. Every signer builds the same
+//!   [`SalAlgorithm`] from it, so all of them share one transcript.
+//! - [`preprocess`], [`from_cache`], [`sign`], [`complete`] and [`cache`]
+//!   drive the machines. A sign machine exists only through [`preprocess`]
+//!   or [`from_cache`], both of which offset the keys and check that they
+//!   open the rerandomized output, so the `SalAlgorithm` contract ("the
+//!   keys are already offset; undefined behavior if not") is met by
+//!   construction.
 //!
-//! 1. **Session creation**: Each signer creates a `FrostSalSession` per input.
-//! 2. **Preprocess** (`preprocess`): Each signer generates random nonces,
-//!    retains the secrets, and publishes nonce commitments.
-//! 3. **Nonce aggregation** (`FrostSigningCoordinator::nonce_sums`): The
-//!    coordinator sums commitments from all M signers.
-//! 4. **Sign** (`sign_share`): Each signer produces a partial signature using
-//!    their nonce secret and the aggregated nonce sums.
-//! 5. **Aggregate** (`FrostSigningCoordinator::aggregate_input`): The
-//!    coordinator sums partial shares and verifies the resulting SAL proof.
+//! Nonce custody is the machine's: `modular_frost` hedges each nonce with
+//! the secret share and binds every signer's nonces to the whole signing
+//! set (FROST's binding factor). Nothing here sees a nonce.
+//!
+//! Signing under a public additive tweak of the group key is standard, but
+//! its soundness here is a Phase 6 review question
+//! (`docs/design/V3_1_MULTISIG_RUST_ENGINE.md` §0.5), not a settled one.
 
 use std::collections::HashMap;
 use std::fmt;
 
-use rand_core::{OsRng, SeedableRng};
-use zeroize::Zeroizing;
-
 use ciphersuite::group::{ff::PrimeField, Group, GroupEncoding};
+use ciphersuite::Ciphersuite;
 use dalek_ff_group::{EdwardsPoint, Scalar};
+use modular_frost::dkg::Interpolation;
+use modular_frost::sign::{
+    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine, PreprocessMachine,
+    SignMachine, SignatureMachine,
+};
+use rand_chacha::ChaCha20Rng;
+use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
 use transcript::{RecommendedTranscript, Transcript};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use modular_frost::{algorithm::Algorithm, Participant, ThresholdKeys, ThresholdView};
-use shekyl_types::TxSignableHash;
-
+pub use modular_frost::sign::{CachedPreprocess, Preprocess, SignatureShare};
+pub use modular_frost::{FrostError, Participant, ThresholdKeys, ThresholdParams};
 pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
 use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
-use shekyl_fcmp_proofs::{Input, Output};
+use shekyl_fcmp_proofs::Output;
+use shekyl_types::TxSignableHash;
 
-use crate::proof::ProveError;
+use shekyl_crypto_pq::multisig::MAX_MULTISIG_PARTICIPANTS;
+
+/// The SAL algorithm every signer of one input runs.
+pub type FrostSal = SalAlgorithm<ChaCha20Rng, RecommendedTranscript>;
+/// A signer after round 1 (preprocess), holding its nonces.
+pub type SalSignMachine = AlgorithmSignMachine<Ed25519T, FrostSal>;
+/// A signer after round 2 (sign), waiting for the other shares.
+pub type SalSignatureMachine = AlgorithmSignatureMachine<Ed25519T, FrostSal>;
+/// One signer's round-1 message.
+pub type SalPreprocess = Preprocess<Ed25519T, ()>;
+/// One signer's round-2 message.
+pub type SalShare = SignatureShare<Ed25519T>;
 
 // ---------------------------------------------------------------------------
-// Per-input signer session
+// Dealer split and the member-share loader
 // ---------------------------------------------------------------------------
 
-/// Opaque session state for one input's FROST SAL signing.
+/// Why a group's FROST key material cannot be built or loaded. Member
+/// indices are 0-based, as the member file and the address number them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FrostKeyError {
+    /// `n` is 0 or above [`MAX_MULTISIG_PARTICIPANTS`], or `m` is 0 or above `n`.
+    #[error("no {m}-of-{n} multisig group exists")]
+    GroupShape {
+        /// The member count.
+        n: u8,
+        /// The threshold.
+        m: u8,
+    },
+    /// The member index is not below `n`.
+    #[error("member {index} is not in a group of {n}")]
+    MemberIndex {
+        /// The index given.
+        index: u8,
+        /// The member count.
+        n: u8,
+    },
+    /// There is not one verification share per member.
+    #[error("expected {expected} verification shares, got {got}")]
+    VerificationShareCount {
+        /// `n`.
+        expected: usize,
+        /// The count given.
+        got: usize,
+    },
+    /// The member's share is not the canonical encoding of a scalar.
+    #[error("the member's share is not a canonical scalar")]
+    NonCanonicalShare,
+    /// A verification share is not the canonical encoding of a
+    /// prime-order, non-identity point.
+    #[error("member {member}'s verification share is not a valid point")]
+    VerificationShare {
+        /// Whose share it is.
+        member: u8,
+    },
+    /// The member's share times `T` is not the member's own verification
+    /// share: the share and the shares list belong to different splits, or
+    /// to different members.
+    #[error("the member's share does not match its verification share")]
+    ShareMismatch,
+    /// The first `m` verification shares interpolate to a key other than
+    /// the address's `Y_group`.
+    #[error("the verification shares do not open the address's group key")]
+    GroupKeyMismatch,
+    /// This member's verification share is not on the polynomial the
+    /// shares before it define, so any signing set that includes it would
+    /// fail and blame an honest signer.
+    #[error("member {member}'s verification share is not on the group's polynomial")]
+    OffPolynomial {
+        /// Whose share it is.
+        member: u8,
+    },
+}
+
+/// A new group's `y_group`, split M-of-N. Index `i` of each list is member
+/// `i` (0-based); the member's FROST participant is `i + 1`.
 ///
-/// The spend secret `x` is passed into `SalAlgorithm` at construction and
-/// is not retained as a separate field. When the session is dropped, the
-/// algorithm (and its internal copy of `x`) is dropped with it.
-pub struct FrostSalSession {
-    original_output: Output,
-    rerand: RerandomizedOutput,
-    input: Input,
-    algorithm: Option<SalAlgorithm<rand_chacha::ChaCha20Rng, RecommendedTranscript>>,
-    pseudo_out: [u8; 32],
-    nonce_secret: Option<Zeroizing<Scalar>>,
+/// `y_group` itself is gone by the time this exists: only its public key
+/// and the shares leave [`dealer_split`].
+pub struct DealerSplit {
+    /// `Y_group = y_group·T`, compressed: the address's `Y_group`.
+    pub y_group: [u8; 32],
+    /// Each member's share of `y_group`, canonical scalar bytes.
+    pub shares: Vec<Zeroizing<[u8; 32]>>,
+    /// `share_i·T` for every member, compressed. Every member file
+    /// carries all of them.
+    pub verification_shares: Vec<[u8; 32]>,
 }
 
-impl fmt::Debug for FrostSalSession {
+impl fmt::Debug for DealerSplit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FrostSalSession").finish_non_exhaustive()
+        f.debug_struct("DealerSplit")
+            .field("y_group", &self.y_group)
+            .field("shares", &"[REDACTED]")
+            .field("verification_shares", &self.verification_shares)
+            .finish()
     }
 }
 
-/// Per-input output data needed to initialize a FROST SAL session.
-pub struct FrostSalInput {
-    pub output_key: [u8; 32],
-    pub key_image_gen: [u8; 32],
-    pub commitment: [u8; 32],
-    pub spend_key_x: [u8; 32],
-    /// The transaction's `tx_signable`, its one network-bound message
-    /// (`shekyl_wire::tx_signable`; the signing envelope §2.2): the FROST
-    /// SAL proves over it like the single-signer SAL, so a multisig spend
-    /// commits to its network itself.
-    pub tx_signable: TxSignableHash,
+/// Sample `y_group` and split it M-of-N (Shamir over the Ed25519 scalar
+/// field at `x = 1..=n`, verification shares under `T`).
+///
+/// The split is `dkg-dealer`'s `key_gen`, whose coefficients wipe on drop.
+///
+/// # Errors
+///
+/// [`FrostKeyError::GroupShape`] for a group no address can carry.
+pub fn dealer_split(
+    n: u8,
+    m: u8,
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<DealerSplit, FrostKeyError> {
+    check_group_shape(n, m)?;
+    // `key_gen` refuses only a shape `check_group_shape` already refused.
+    // A refusal here is dkg disagreeing with that check, not a caller's group.
+    let keys = dkg_dealer::key_gen::<_, Ed25519T>(rng, u16::from(m), u16::from(n))
+        .expect("dkg-dealer splits every group check_group_shape accepts");
+    let first = &keys[&participant(0)];
+    let mut shares = Vec::with_capacity(usize::from(n));
+    let mut verification_shares = Vec::with_capacity(usize::from(n));
+    for index in 0..n {
+        let p = participant(index);
+        shares.push(Zeroizing::new(keys[&p].original_secret_share().to_repr()));
+        verification_shares.push(first.original_verification_share(p).to_bytes());
+    }
+    Ok(DealerSplit {
+        y_group: first.original_group_key().to_bytes(),
+        shares,
+        verification_shares,
+    })
 }
 
-/// Result of FROST preprocessing (round 1).
-#[derive(Clone)]
-pub struct FrostPreprocessResult {
-    /// Serialized nonce commitments: `k * G_j` for each generator.
-    /// For `SalAlgorithm`, this is one 32-byte compressed point (`k * T`).
-    pub nonce_commitments: Vec<u8>,
-    /// Serialized addendum (empty for modern SAL).
-    pub addendum: Vec<u8>,
-}
-
-/// Result of FROST partial signing (round 2).
-#[derive(Clone)]
-pub struct FrostSignShareResult {
-    pub share: [u8; 32],
-}
-
-impl FrostSalSession {
-    /// Create a new FROST SAL session for one input.
-    ///
-    /// The coordinator must hold `x` (spend secret). The FROST protocol will
-    /// threshold-share `y` across participants using `ThresholdKeys<Ed25519T>`.
-    // CLIPPY(non_snake_case): the single-uppercase locals below (`O` output,
-    // `I` key-image generator, `C` commitment, and the further FROST-SAL
-    // points) are the FCMP++ / FROST-SAL reference notation. snake_case would
-    // diverge from the spec and the cryptographic paper and hurt auditability
-    // against them; the mathematical names are the documentation.
-    #[allow(non_snake_case)]
-    pub fn new(input_data: &FrostSalInput) -> Result<Self, ProveError> {
-        let O = decompress_point(&input_data.output_key, "output_key")?;
-        let I = decompress_point(&input_data.key_image_gen, "key_image_gen")?;
-        let C = decompress_point(&input_data.commitment, "commitment")?;
-        let x = deserialize_scalar(&input_data.spend_key_x, "spend_key_x")?;
-
-        let output = Output::new(O, I, C)
-            .map_err(|e| ProveError::UpstreamError(format!("Output::new: {e:?}")))?;
-
-        let rerand = RerandomizedOutput::new(&mut OsRng, output);
-        let crate_input = rerand.input();
-        let pseudo_out = crate_input.C_tilde().to_bytes();
-
-        // This seed is the entire state of the session's nonce RNG:
-        // recovering it recovers the FROST nonces, so it is wiped like key
-        // material. Scoped so the named buffer dies immediately after
-        // `from_seed` (which takes the array by value into the ChaCha).
-        let rng = {
-            let mut seed = Zeroizing::new([0u8; 32]);
-            rand_core::RngCore::fill_bytes(&mut OsRng, seed.as_mut());
-            rand_chacha::ChaCha20Rng::from_seed(*seed)
-        };
-        // LIVE domain (Shekyl-authored, not inherited). Its bytes are derivation
-        // state: they root every FROST SAL multisig transcript, so changing the
-        // spelling re-derives every multisig challenge — a versioned breaking
-        // change, not a rename. See the SA through-line rule (SIGNATURE_ALIGNMENT.md
-        // §5) and its registry row (CRYPTO_DOMAIN_REGISTRY.tsv, mechanism 3).
-        let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
-
-        let algorithm =
-            SalAlgorithm::new(rng, transcript, input_data.tx_signable, rerand.clone(), x);
-
-        Ok(Self {
-            original_output: output,
-            input: crate_input,
-            rerand,
-            algorithm: Some(algorithm),
-            pseudo_out,
-            nonce_secret: None,
+/// One member's `ThresholdKeys<Ed25519T>` from what its member file stores.
+///
+/// `member_index` is the file's 0-based index; this is the one place it
+/// becomes dkg's 1-based [`Participant`]. `y_group` is the address's
+/// `Y_group`. Every check runs before the keys exist, so a member file that
+/// loads is one whose shares sign:
+///
+/// - the share is canonical and every verification share is a canonical,
+///   prime-order, non-identity point;
+/// - the share is the discrete log of the member's own verification share;
+/// - the first `m` verification shares interpolate to `Y_group`;
+/// - every later share lies on the same polynomial (each window of `m`
+///   consecutive shares interpolates to `Y_group`, which pins the share
+///   entering the window).
+///
+/// # Errors
+///
+/// [`FrostKeyError`], naming the first check that failed.
+pub fn threshold_keys(
+    n: u8,
+    m: u8,
+    member_index: u8,
+    share: &[u8; 32],
+    verification_shares: &[[u8; 32]],
+    y_group: &[u8; 32],
+) -> Result<ThresholdKeys<Ed25519T>, FrostKeyError> {
+    check_group_shape(n, m)?;
+    if member_index >= n {
+        return Err(FrostKeyError::MemberIndex {
+            index: member_index,
+            n,
+        });
+    }
+    if verification_shares.len() != usize::from(n) {
+        return Err(FrostKeyError::VerificationShareCount {
+            expected: usize::from(n),
+            got: verification_shares.len(),
+        });
+    }
+    let share = Zeroizing::new(
+        Option::<Scalar>::from(Scalar::from_repr(*share))
+            .ok_or(FrostKeyError::NonCanonicalShare)?,
+    );
+    let points = verification_shares
+        .iter()
+        .zip(0u8..)
+        .map(|(bytes, member)| {
+            decode_point(bytes).ok_or(FrostKeyError::VerificationShare { member })
         })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if Ed25519T::generator() * *share != points[usize::from(member_index)] {
+        return Err(FrostKeyError::ShareMismatch);
     }
-
-    /// The rerandomized commitment (pseudo-out) for this input.
-    pub fn pseudo_out(&self) -> &[u8; 32] {
-        &self.pseudo_out
+    let window = usize::from(m);
+    if interpolate_at_zero(&points, 0, window).to_bytes() != *y_group {
+        return Err(FrostKeyError::GroupKeyMismatch);
     }
-
-    /// The `Input` (rerandomized tuple) for downstream proof construction.
-    pub fn input(&self) -> &Input {
-        &self.input
-    }
-
-    /// The `RerandomizedOutput` for downstream proof construction.
-    pub fn rerandomized_output(&self) -> &RerandomizedOutput {
-        &self.rerand
-    }
-
-    /// The original (non-rerandomized) `Output` for path construction.
-    pub fn original_output(&self) -> &Output {
-        &self.original_output
-    }
-
-    /// FROST round 1: generate nonces and return commitments.
-    ///
-    /// Generates a random nonce scalar, stores it for `sign_share`, and
-    /// returns `k * G_j` for each generator in the nonce set. For
-    /// `SalAlgorithm`, this is a single 32-byte point `k * T`.
-    pub fn preprocess(
-        &mut self,
-        keys: &ThresholdKeys<Ed25519T>,
-    ) -> Result<FrostPreprocessResult, ProveError> {
-        let algo = self
-            .algorithm
-            .as_mut()
-            .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
-
-        algo.preprocess_addendum(&mut OsRng, keys);
-        let nonce_generators = algo.nonces();
-
-        let k = Zeroizing::new(Scalar::random(&mut OsRng));
-
-        let mut nonce_commitments = Vec::new();
-        for generators in &nonce_generators {
-            for g in generators {
-                let commitment = *g * *k;
-                nonce_commitments.extend_from_slice(&commitment.to_bytes());
-            }
+    for start in 1..=points.len() - window {
+        if interpolate_at_zero(&points, start, window).to_bytes() != *y_group {
+            let entering = u8::try_from(start + window - 1).expect("below n, a u8");
+            return Err(FrostKeyError::OffPolynomial { member: entering });
         }
+    }
 
-        self.nonce_secret = Some(k);
+    // Both constructors refuse only shapes and participant sets this function
+    // already checked. A refusal is dkg disagreeing with those checks.
+    let params = ThresholdParams::new(u16::from(m), u16::from(n), participant(member_index))
+        .expect("dkg accepts a member of a group check_group_shape accepts");
+    let by_participant = points
+        .into_iter()
+        .zip(0u8..)
+        .map(|(point, member)| (participant(member), point))
+        .collect::<HashMap<_, _>>();
+    Ok(
+        ThresholdKeys::new(params, Interpolation::Lagrange, share, by_participant)
+            .expect("dkg accepts one Lagrange share per participant of a checked group"),
+    )
+}
 
-        Ok(FrostPreprocessResult {
-            nonce_commitments,
-            addendum: Vec::new(),
+/// dkg's participant for a 0-based member index.
+fn participant(member_index: u8) -> Participant {
+    Participant::new(u16::from(member_index) + 1).expect("index + 1 is never zero")
+}
+
+fn check_group_shape(n: u8, m: u8) -> Result<(), FrostKeyError> {
+    if n == 0 || n > MAX_MULTISIG_PARTICIPANTS || m == 0 || m > n {
+        return Err(FrostKeyError::GroupShape { n, m });
+    }
+    Ok(())
+}
+
+/// A canonical, prime-order, non-identity point, or `None`.
+fn decode_point(bytes: &[u8; 32]) -> Option<EdwardsPoint> {
+    let point = Option::<EdwardsPoint>::from(EdwardsPoint::from_bytes(bytes))?;
+    let canonical = point.to_bytes() == *bytes;
+    (canonical && !bool::from(point.is_identity())).then_some(point)
+}
+
+/// `Σ λ_j·V_j` over the members `start..start + len` (0-based), with `λ_j`
+/// the Lagrange coefficient at zero for their participants `start + 1 ..`.
+fn interpolate_at_zero(points: &[EdwardsPoint], start: usize, len: usize) -> EdwardsPoint {
+    let xs: Vec<Scalar> = (start..start + len)
+        .map(|i| Scalar::from(u64::try_from(i + 1).expect("a small index")))
+        .collect();
+    xs.iter()
+        .zip(&points[start..start + len])
+        .map(|(x_i, point)| {
+            let (num, den) = xs
+                .iter()
+                .filter(|x_j| *x_j != x_i)
+                .fold((Scalar::ONE, Scalar::ONE), |(num, den), x_j| {
+                    (num * x_j, den * (*x_j - x_i))
+                });
+            *point * (num * Option::<Scalar>::from(den.invert()).expect("distinct participants"))
         })
-    }
-
-    /// FROST round 1 continued: process a peer's addendum.
-    ///
-    /// For modern `SalAlgorithm`, this is a no-op (addendum is `()`).
-    pub fn process_addendum(
-        &mut self,
-        view: &ThresholdView<Ed25519T>,
-        participant: Participant,
-    ) -> Result<(), ProveError> {
-        let algo = self
-            .algorithm
-            .as_mut()
-            .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
-
-        algo.process_addendum(view, participant, ())
-            .map_err(|e| ProveError::UpstreamError(format!("process_addendum: {e}")))?;
-        Ok(())
-    }
-
-    /// FROST round 2: produce a partial signature share.
-    ///
-    /// `nonce_sums`: aggregated nonce commitments from all participants.
-    /// Uses this participant's stored nonce secret from `preprocess`.
-    pub fn sign_share(
-        &mut self,
-        params: &ThresholdView<Ed25519T>,
-        nonce_sums: &[Vec<EdwardsPoint>],
-    ) -> Result<FrostSignShareResult, ProveError> {
-        let algo = self
-            .algorithm
-            .as_mut()
-            .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
-
-        let k = self.nonce_secret.take().ok_or(ProveError::UpstreamError(
-            "nonce not generated (call preprocess first)".into(),
-        ))?;
-
-        let share = algo.sign_share(params, nonce_sums, vec![k], &[]);
-        Ok(FrostSignShareResult {
-            share: share.to_repr(),
-        })
-    }
-
-    /// Aggregate M partial shares into a final `SpendAuthAndLinkability` proof.
-    ///
-    /// Consumes the session. The caller (coordinator) provides the aggregated
-    /// FROST signature scalar `sum` (sum of M partial shares).
-    pub fn aggregate(
-        mut self,
-        group_key: EdwardsPoint,
-        nonce_sums: &[Vec<EdwardsPoint>],
-        sum: Scalar,
-    ) -> Result<(Input, SpendAuthAndLinkability), ProveError> {
-        let algo = self
-            .algorithm
-            .take()
-            .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
-
-        let sal = algo
-            .verify(group_key, nonce_sums, sum)
-            .ok_or(ProveError::UpstreamError(
-                "FROST SAL verification failed".into(),
-            ))?;
-
-        Ok((self.input, sal))
-    }
+        .sum()
 }
 
 // ---------------------------------------------------------------------------
-// Signing coordinator
+// Signing parameters
 // ---------------------------------------------------------------------------
 
-/// Coordinates a multi-signer FROST SAL signing session.
+/// Why an input's signing parameters cannot be built, or why a member's keys
+/// cannot sign for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FrostSalError {
+    /// The output key is not a canonical, prime-order, non-identity point.
+    #[error("the output key is not a valid point")]
+    OutputKey,
+    /// The commitment is not a canonical, prime-order, non-identity point.
+    #[error("the output's commitment is not a valid point")]
+    Commitment,
+    /// `x = ho + b` is not the canonical encoding of a scalar.
+    #[error("the spend scalar x is not a canonical scalar")]
+    SpendScalar,
+    /// `y_kem` is not the canonical encoding of a scalar.
+    #[error("the output tweak y_kem is not a canonical scalar")]
+    OutputTweak,
+    /// The keys, offset for this output, are not the `T` part of the
+    /// rerandomized output key: `x`, `y_kem` or the keys belong to some
+    /// other output or group.
+    #[error("these keys do not open this output's rerandomized key")]
+    KeysDoNotOpenOutput,
+}
+
+/// What the proposer fixes for one input. Every signer signs from the same
+/// value, so every signer's [`SalAlgorithm`] has the same transcript.
 ///
-/// The coordinator holds per-input `FrostSalSession`s (as one of the signers)
-/// and collects nonce commitments / partial shares from M total participants.
-/// After aggregation, it produces `SpendAuthAndLinkability` proofs for each
-/// input, which can then be fed into `prove_with_sal` to build the FCMP++ proof.
-pub struct FrostSigningCoordinator {
-    num_inputs: usize,
-    /// Number of generators per nonce set. For SalAlgorithm: [1].
-    generators_per_nonce: Vec<usize>,
-    included: Vec<Participant>,
-    /// Per-participant, per-input: raw nonce commitment bytes.
-    commitments: HashMap<Participant, Vec<Vec<u8>>>,
-    /// Cached aggregated nonce sums, computed after all commitments collected.
-    nonce_sums: Option<Vec<Vec<Vec<EdwardsPoint>>>>,
-    /// Per-participant, per-input: partial share scalar.
-    shares: HashMap<Participant, Vec<Scalar>>,
+/// `x` and `y_kem` are secret to the group (every member can compute them
+/// from the output), and the rerandomization links the input to its output,
+/// so the whole value wipes on drop, its `Debug` shows only the output, and
+/// it is not `Clone`: signers share it by reference.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct SalSigningParams {
+    #[zeroize(skip)]
+    output: Output,
+    rerandomized: RerandomizedOutput,
+    #[zeroize(skip)]
+    signable: TxSignableHash,
+    x: Scalar,
+    y_kem: Scalar,
 }
 
-impl fmt::Debug for FrostSigningCoordinator {
+impl fmt::Debug for SalSigningParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FrostSigningCoordinator")
-            .field("num_inputs", &self.num_inputs)
-            .field("included", &self.included.len())
-            .field("commitments_collected", &self.commitments.len())
-            .field("shares_collected", &self.shares.len())
+        f.debug_struct("SalSigningParams")
+            .field("output", &self.output)
             .finish_non_exhaustive()
     }
 }
 
-impl FrostSigningCoordinator {
-    /// Create a new coordinator for `num_inputs` inputs with the given signing set.
+impl SalSigningParams {
+    /// The proposer's parameters for spending `output_key`/`commitment`: a
+    /// fresh rerandomization from `rng`, the transaction's `signable`, the
+    /// spend scalar `x = ho + b` (as `shekyl_crypto_pq::output::compute_output_key_image`
+    /// returns it) and the output's `y_kem` (the `y` its group secret
+    /// derives). The key-image generator is `Hp(O)`.
     ///
-    /// `generators_per_nonce` describes the nonce structure from
-    /// `Algorithm::nonces()`. For `SalAlgorithm` this is `vec![1]`
-    /// (one nonce set, one generator T per set).
-    pub fn new(
-        num_inputs: usize,
-        generators_per_nonce: Vec<usize>,
-        included: Vec<Participant>,
-    ) -> Result<Self, ProveError> {
-        if num_inputs == 0 {
-            return Err(ProveError::EmptyInputs);
-        }
-        if included.len() < 2 {
-            return Err(ProveError::UpstreamError(
-                "FROST signing requires at least 2 participants".into(),
-            ));
-        }
-        Ok(Self {
-            num_inputs,
-            generators_per_nonce,
-            included,
-            commitments: HashMap::new(),
-            nonce_sums: None,
-            shares: HashMap::new(),
-        })
-    }
-
-    /// Convenience constructor for SalAlgorithm's nonce structure.
-    pub fn new_for_sal(num_inputs: usize, included: Vec<Participant>) -> Result<Self, ProveError> {
-        Self::new(num_inputs, vec![1], included)
-    }
-
-    /// Collect nonce commitments from one participant for all inputs.
+    /// # Errors
     ///
-    /// `preprocesses`: one `FrostPreprocessResult` per input.
-    pub fn collect_preprocesses(
-        &mut self,
-        from: Participant,
-        preprocesses: Vec<FrostPreprocessResult>,
-    ) -> Result<(), ProveError> {
-        if preprocesses.len() != self.num_inputs {
-            return Err(ProveError::UpstreamError(format!(
-                "expected {} preprocesses, got {}",
-                self.num_inputs,
-                preprocesses.len()
-            )));
-        }
-        if !self.included.contains(&from) {
-            return Err(ProveError::UpstreamError(format!(
-                "participant {from:?} not in signing set"
-            )));
-        }
-        if self.commitments.contains_key(&from) {
-            return Err(ProveError::UpstreamError(format!(
-                "duplicate preprocesses from {from:?}"
-            )));
-        }
-
-        let per_input: Vec<Vec<u8>> = preprocesses
-            .into_iter()
-            .map(|p| p.nonce_commitments)
-            .collect();
-
-        self.commitments.insert(from, per_input);
-        self.nonce_sums = None;
-        Ok(())
+    /// [`FrostSalError`] for a point or scalar that does not decode.
+    pub fn propose(
+        rng: &mut (impl RngCore + CryptoRng),
+        output_key: &[u8; 32],
+        commitment: &[u8; 32],
+        signable: TxSignableHash,
+        x: &[u8; 32],
+        y_kem: &[u8; 32],
+    ) -> Result<Self, FrostSalError> {
+        let o = decode_point(output_key).ok_or(FrostSalError::OutputKey)?;
+        let c = decode_point(commitment).ok_or(FrostSalError::Commitment)?;
+        let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(*output_key));
+        let output = Output::new(o, i, c).map_err(|_| FrostSalError::OutputKey)?;
+        // The wipe-on-drop owner exists before either secret is decoded, and
+        // each decodes straight into its field: a refusal of `y_kem` drops
+        // the params, which wipes `x`.
+        let mut params = Self {
+            output,
+            rerandomized: RerandomizedOutput::new(rng, output),
+            signable,
+            x: Scalar::ZERO,
+            y_kem: Scalar::ZERO,
+        };
+        params.x =
+            Option::<Scalar>::from(Scalar::from_repr(*x)).ok_or(FrostSalError::SpendScalar)?;
+        params.y_kem =
+            Option::<Scalar>::from(Scalar::from_repr(*y_kem)).ok_or(FrostSalError::OutputTweak)?;
+        Ok(params)
     }
 
-    /// Whether all signers' nonce commitments have been collected.
-    pub fn all_preprocesses_collected(&self) -> bool {
-        self.commitments.len() == self.included.len()
+    /// The output being spent, as `prove_with_sal` takes it.
+    #[must_use]
+    pub fn output(&self) -> Output {
+        self.output
     }
 
-    /// Compute aggregated nonce sums across all signers.
-    ///
-    /// Returns `nonce_sums[input][nonce_set][generator]`.
-    pub fn nonce_sums(&mut self) -> Result<Vec<Vec<Vec<EdwardsPoint>>>, ProveError> {
-        if !self.all_preprocesses_collected() {
-            return Err(ProveError::UpstreamError(format!(
-                "need {} preprocesses, have {}",
-                self.included.len(),
-                self.commitments.len()
-            )));
-        }
-
-        if let Some(ref cached) = self.nonce_sums {
-            return Ok(cached.clone());
-        }
-
-        let points_per_input: usize = self.generators_per_nonce.iter().sum();
-        let bytes_per_input = points_per_input * 32;
-
-        let mut result: Vec<Vec<Vec<EdwardsPoint>>> = Vec::with_capacity(self.num_inputs);
-
-        for input_idx in 0..self.num_inputs {
-            let mut sums: Vec<Vec<EdwardsPoint>> =
-                Vec::with_capacity(self.generators_per_nonce.len());
-            for &count in &self.generators_per_nonce {
-                sums.push(vec![EdwardsPoint::identity(); count]);
-            }
-
-            for participant in &self.included {
-                let raw = &self.commitments[participant][input_idx];
-                if raw.len() != bytes_per_input {
-                    return Err(ProveError::UpstreamError(format!(
-                        "commitment from {participant:?} for input {input_idx}: expected {bytes_per_input} bytes, got {}",
-                        raw.len()
-                    )));
-                }
-
-                let mut offset = 0;
-                for (set_idx, &count) in self.generators_per_nonce.iter().enumerate() {
-                    for sum_pt in sums[set_idx].iter_mut().take(count) {
-                        let mut buf = [0u8; 32];
-                        buf.copy_from_slice(&raw[offset..offset + 32]);
-                        let pt = decompress_point(&buf, "nonce_commitment")?;
-                        *sum_pt += pt;
-                        offset += 32;
-                    }
-                }
-            }
-
-            result.push(sums);
-        }
-
-        self.nonce_sums = Some(result.clone());
-        Ok(result)
+    /// The input's rerandomization, as `prove_with_sal` takes it.
+    #[must_use]
+    pub fn rerandomized(&self) -> &RerandomizedOutput {
+        &self.rerandomized
     }
 
-    /// Serialize the nonce sums for distribution to signers.
-    ///
-    /// Returns one byte blob per input; each blob is the concatenation of
-    /// all compressed nonce sum points.
-    pub fn nonce_sums_bytes(&mut self) -> Result<Vec<Vec<u8>>, ProveError> {
-        let sums = self.nonce_sums()?;
-        let mut result = Vec::with_capacity(sums.len());
-        for input_sums in &sums {
-            let mut bytes = Vec::new();
-            for set in input_sums {
-                for pt in set {
-                    bytes.extend_from_slice(&pt.to_bytes());
-                }
-            }
-            result.push(bytes);
-        }
-        Ok(result)
+    /// The algorithm every signer runs for this input.
+    fn algorithm(&self) -> FrostSal {
+        // The algorithm's RNG only weights `complete`'s batch check of the
+        // aggregate signature; it never reaches a nonce.
+        let mut seed = Zeroizing::new([0u8; 32]);
+        OsRng.fill_bytes(seed.as_mut());
+        SalAlgorithm::new(
+            ChaCha20Rng::from_seed(*seed),
+            // LIVE domain (Shekyl-authored, not inherited). Its bytes root
+            // every multisig SAL transcript, so changing the spelling
+            // re-derives every multisig challenge — a versioned breaking
+            // change, not a rename (SIGNATURE_ALIGNMENT.md §5;
+            // CRYPTO_DOMAIN_REGISTRY.tsv, mechanism 3).
+            RecommendedTranscript::new(b"Shekyl FROST SAL v1"),
+            self.signable,
+            self.rerandomized.clone(),
+            self.x,
+        )
     }
 
-    /// Collect a partial signature share from one participant for all inputs.
-    ///
-    /// Borrows the shares: this only deserializes each `share` into a scalar
-    /// and stores the derived scalars, never taking ownership of the input.
-    pub fn collect_shares(
-        &mut self,
-        from: Participant,
-        input_shares: &[FrostSignShareResult],
-    ) -> Result<(), ProveError> {
-        if input_shares.len() != self.num_inputs {
-            return Err(ProveError::UpstreamError(format!(
-                "expected {} shares, got {}",
-                self.num_inputs,
-                input_shares.len()
-            )));
+    /// `keys` offset by `y_kem − o_blind`, so their group key is the `T`
+    /// part of the rerandomized output key `O~ − x·G`.
+    fn offset_keys(
+        &self,
+        keys: ThresholdKeys<Ed25519T>,
+    ) -> Result<ThresholdKeys<Ed25519T>, FrostSalError> {
+        let keys = keys.offset(self.y_kem - self.rerandomized.o_blind());
+        let t_part = self.rerandomized.input().O_tilde() - (EdwardsPoint::generator() * self.x);
+        if keys.group_key() != t_part {
+            return Err(FrostSalError::KeysDoNotOpenOutput);
         }
-        if !self.included.contains(&from) {
-            return Err(ProveError::UpstreamError(format!(
-                "participant {from:?} not in signing set"
-            )));
-        }
-        if self.shares.contains_key(&from) {
-            return Err(ProveError::UpstreamError(format!(
-                "duplicate shares from {from:?}"
-            )));
-        }
-
-        let scalars: Result<Vec<Scalar>, _> = input_shares
-            .iter()
-            .map(|s| deserialize_scalar(&s.share, "partial_share"))
-            .collect();
-
-        self.shares.insert(from, scalars?);
-        Ok(())
-    }
-
-    /// Whether all signers' partial shares have been collected.
-    pub fn all_shares_collected(&self) -> bool {
-        self.shares.len() == self.included.len()
-    }
-
-    /// Sum partial shares for one input across all signers.
-    pub fn sum_shares_for_input(&self, input_idx: usize) -> Result<Scalar, ProveError> {
-        if !self.all_shares_collected() {
-            return Err(ProveError::UpstreamError(format!(
-                "need {} shares, have {}",
-                self.included.len(),
-                self.shares.len()
-            )));
-        }
-
-        let mut sum = Scalar::ZERO;
-        for participant in &self.included {
-            sum += self.shares[participant][input_idx];
-        }
-        Ok(sum)
-    }
-
-    /// Get the nonce sums for a specific input.
-    pub fn nonce_sums_for_input(
-        &mut self,
-        input_idx: usize,
-    ) -> Result<Vec<Vec<EdwardsPoint>>, ProveError> {
-        let all = self.nonce_sums()?;
-        all.into_iter()
-            .nth(input_idx)
-            .ok_or(ProveError::UpstreamError(format!(
-                "input index {input_idx} out of range"
-            )))
-    }
-
-    /// Aggregate all inputs: consume sessions, produce (Input, SAL) pairs.
-    ///
-    /// This is the final step of the coordinator protocol. Each session is
-    /// consumed via `FrostSalSession::aggregate`, producing the SAL proof
-    /// for one input. Returns pairs ready for `prove_with_sal`.
-    pub fn aggregate_all(
-        &mut self,
-        sessions: Vec<FrostSalSession>,
-        group_key: EdwardsPoint,
-    ) -> Result<Vec<(Input, SpendAuthAndLinkability)>, ProveError> {
-        if sessions.len() != self.num_inputs {
-            return Err(ProveError::UpstreamError(format!(
-                "expected {} sessions, got {}",
-                self.num_inputs,
-                sessions.len()
-            )));
-        }
-
-        let all_nonce_sums = self.nonce_sums()?;
-        let mut results = Vec::with_capacity(self.num_inputs);
-
-        for (idx, session) in sessions.into_iter().enumerate() {
-            let sum = self.sum_shares_for_input(idx)?;
-            let (input, sal) = session.aggregate(group_key, &all_nonce_sums[idx], sum)?;
-            results.push((input, sal));
-        }
-
-        Ok(results)
+        Ok(keys)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// The machines
 // ---------------------------------------------------------------------------
 
-fn decompress_point(bytes: &[u8; 32], field: &'static str) -> Result<EdwardsPoint, ProveError> {
-    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes);
-    if bool::from(ct.is_some()) {
-        Ok(ct.unwrap())
-    } else {
-        Err(ProveError::InvalidPoint {
-            input_index: 0,
-            field,
-        })
-    }
+/// Round 1 for one input: this member's sign machine and the preprocess it
+/// sends to the other signers.
+///
+/// # Errors
+///
+/// [`FrostSalError::KeysDoNotOpenOutput`] when `keys` are not this output's
+/// group's keys.
+pub fn preprocess(
+    params: &SalSigningParams,
+    keys: ThresholdKeys<Ed25519T>,
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
+    let keys = params.offset_keys(keys)?;
+    Ok(AlgorithmMachine::new(params.algorithm(), keys).preprocess(rng))
 }
 
-fn deserialize_scalar(bytes: &[u8; 32], field: &'static str) -> Result<Scalar, ProveError> {
-    let ct = Scalar::from_repr(*bytes);
-    if bool::from(ct.is_some()) {
-        Ok(ct.unwrap())
-    } else {
-        Err(ProveError::InvalidScalar {
-            input_index: 0,
-            field,
-        })
-    }
+/// This round-1 state as a seed that [`from_cache`] rebuilds it from.
+///
+/// The seed is as secret as the member's share, and is used once: signing
+/// twice from one seed reveals the share.
+#[must_use]
+pub fn cache(machine: SalSignMachine) -> CachedPreprocess {
+    machine.cache()
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+/// Rebuild a round-1 state from [`cache`]'s seed, for the same params and
+/// keys.
+///
+/// # Errors
+///
+/// [`FrostSalError::KeysDoNotOpenOutput`], as for [`preprocess`].
+pub fn from_cache(
+    params: &SalSigningParams,
+    keys: ThresholdKeys<Ed25519T>,
+    cached: CachedPreprocess,
+) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
+    let keys = params.offset_keys(keys)?;
+    Ok(SalSignMachine::from_cache(params.algorithm(), keys, cached))
+}
+
+/// Round 2: this member's share, over every other signer's preprocess. The
+/// signers who sent one are the signing set. The SAL's message is fixed at
+/// [`SalSigningParams`]; the FROST message is empty, as `SalAlgorithm`
+/// requires.
+///
+/// # Errors
+///
+/// `modular_frost`'s refusal of the signing set (too few signers, an
+/// unknown or repeated participant, a preprocess count that is not the
+/// set's).
+pub fn sign(
+    machine: SalSignMachine,
+    preprocesses: HashMap<Participant, SalPreprocess>,
+) -> Result<(SalSignatureMachine, SalShare), FrostError> {
+    machine.sign(preprocesses, &[])
+}
+
+/// The aggregate SAL from every other signer's share. `modular_frost`
+/// checks the aggregate and, when it fails, finds the signer whose share
+/// is bad.
+///
+/// # Errors
+///
+/// [`FrostError::InvalidShare`] naming a signer whose share does not
+/// verify; [`FrostError::InternalError`] when every share verifies but the
+/// aggregate does not (the keys were not offset for this output); a
+/// share-count refusal.
+pub fn complete(
+    machine: SalSignatureMachine,
+    shares: HashMap<Participant, SalShare>,
+) -> Result<SpendAuthAndLinkability, FrostError> {
+    machine.complete(shares)
+}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use ciphersuite::Ciphersuite as _;
-
-    #[test]
-    fn frost_sal_session_rejects_identity_points() {
-        let input = FrostSalInput {
-            output_key: [0; 32],
-            key_image_gen: [0; 32],
-            commitment: [0; 32],
-            spend_key_x: [0; 32],
-            tx_signable: TxSignableHash::from_bytes([0; 32]),
-        };
-        let result = FrostSalSession::new(&input);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn frost_sal_session_creates_with_valid_points() {
-        let x = Scalar::random(&mut rand_core::OsRng);
-        let g = Ed25519T::generator();
-
-        let o = g * x;
-        let i = EdwardsPoint::random(&mut rand_core::OsRng);
-        let c = EdwardsPoint::random(&mut rand_core::OsRng);
-
-        let input = FrostSalInput {
-            output_key: o.to_bytes(),
-            key_image_gen: i.to_bytes(),
-            commitment: c.to_bytes(),
-            spend_key_x: x.to_repr(),
-            tx_signable: TxSignableHash::from_bytes([0xAB; 32]),
-        };
-
-        let session = FrostSalSession::new(&input);
-        assert!(
-            session.is_ok(),
-            "Session creation failed: {:?}",
-            session.err()
-        );
-
-        let session = session.unwrap();
-        assert_ne!(*session.pseudo_out(), [0u8; 32]);
-    }
-
-    #[test]
-    fn frost_sal_session_produces_distinct_pseudo_outs() {
-        let x = Scalar::random(&mut rand_core::OsRng);
-        let g = Ed25519T::generator();
-        let o = g * x;
-        let i = EdwardsPoint::random(&mut rand_core::OsRng);
-        let c = EdwardsPoint::random(&mut rand_core::OsRng);
-
-        let input = FrostSalInput {
-            output_key: o.to_bytes(),
-            key_image_gen: i.to_bytes(),
-            commitment: c.to_bytes(),
-            spend_key_x: x.to_repr(),
-            tx_signable: TxSignableHash::from_bytes([0xCD; 32]),
-        };
-
-        let s1 = FrostSalSession::new(&input).unwrap();
-        let s2 = FrostSalSession::new(&input).unwrap();
-
-        assert_ne!(
-            s1.pseudo_out(),
-            s2.pseudo_out(),
-            "Two sessions for same input should have different pseudo-outs"
-        );
-    }
-
-    #[test]
-    fn coordinator_rejects_empty_inputs() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let result = FrostSigningCoordinator::new_for_sal(0, vec![p1, p2]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn coordinator_rejects_single_participant() {
-        let p1 = Participant::new(1).unwrap();
-        let result = FrostSigningCoordinator::new_for_sal(1, vec![p1]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn coordinator_rejects_wrong_participant() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let p3 = Participant::new(3).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let result = coord.collect_preprocesses(
-            p3,
-            vec![FrostPreprocessResult {
-                nonce_commitments: vec![0; 32],
-                addendum: vec![],
-            }],
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn coordinator_rejects_duplicate_preprocesses() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let fake = vec![FrostPreprocessResult {
-            nonce_commitments: EdwardsPoint::generator().to_bytes().to_vec(),
-            addendum: vec![],
-        }];
-        coord.collect_preprocesses(p1, fake.clone()).unwrap();
-        let result = coord.collect_preprocesses(p1, fake);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn coordinator_rejects_wrong_preprocess_count() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(2, vec![p1, p2]).unwrap();
-
-        let fake = vec![FrostPreprocessResult {
-            nonce_commitments: EdwardsPoint::generator().to_bytes().to_vec(),
-            addendum: vec![],
-        }];
-        let result = coord.collect_preprocesses(p1, fake);
-        assert!(result.is_err(), "Should reject: 1 preprocess for 2 inputs");
-    }
-
-    #[test]
-    fn coordinator_rejects_shares_before_nonces() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let result = coord.collect_shares(p1, &[FrostSignShareResult { share: [0u8; 32] }]);
-        assert!(
-            result.is_ok(),
-            "Share collection is independent of preprocess collection"
-        );
-    }
-
-    #[test]
-    fn coordinator_rejects_duplicate_shares() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, &shares).unwrap();
-        let result = coord.collect_shares(p1, &shares);
-        assert!(result.is_err(), "Should reject duplicate shares");
-    }
-
-    #[test]
-    fn coordinator_nonce_sums_before_all_collected_fails() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let fake = vec![FrostPreprocessResult {
-            nonce_commitments: EdwardsPoint::generator().to_bytes().to_vec(),
-            addendum: vec![],
-        }];
-        coord.collect_preprocesses(p1, fake).unwrap();
-        let result = coord.nonce_sums();
-        assert!(
-            result.is_err(),
-            "Should fail: only 1 of 2 preprocesses collected"
-        );
-    }
-
-    #[test]
-    fn coordinator_nonce_sums_correct_point_addition() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let g = EdwardsPoint::generator();
-        let k1 = Scalar::random(&mut rand_core::OsRng);
-        let k2 = Scalar::random(&mut rand_core::OsRng);
-        let c1 = g * k1;
-        let c2 = g * k2;
-        let expected = c1 + c2;
-
-        coord
-            .collect_preprocesses(
-                p1,
-                vec![FrostPreprocessResult {
-                    nonce_commitments: c1.to_bytes().to_vec(),
-                    addendum: vec![],
-                }],
-            )
-            .unwrap();
-        coord
-            .collect_preprocesses(
-                p2,
-                vec![FrostPreprocessResult {
-                    nonce_commitments: c2.to_bytes().to_vec(),
-                    addendum: vec![],
-                }],
-            )
-            .unwrap();
-
-        let sums = coord.nonce_sums().unwrap();
-        assert_eq!(sums.len(), 1);
-        assert_eq!(sums[0].len(), 1);
-        assert_eq!(sums[0][0].len(), 1);
-        assert_eq!(sums[0][0][0], expected);
-    }
-
-    #[test]
-    fn coordinator_nonce_sums_bytes_roundtrip() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let g = EdwardsPoint::generator();
-        let c = g * Scalar::random(&mut rand_core::OsRng);
-
-        for p in [p1, p2] {
-            coord
-                .collect_preprocesses(
-                    p,
-                    vec![FrostPreprocessResult {
-                        nonce_commitments: c.to_bytes().to_vec(),
-                        addendum: vec![],
-                    }],
-                )
-                .unwrap();
-        }
-
-        let bytes = coord.nonce_sums_bytes().unwrap();
-        assert_eq!(bytes.len(), 1);
-        assert_eq!(bytes[0].len(), 32);
-    }
-
-    #[test]
-    fn sign_share_without_preprocess_fails() {
-        let x = Scalar::random(&mut rand_core::OsRng);
-        let g = Ed25519T::generator();
-        let o = g * x;
-        let i = EdwardsPoint::random(&mut rand_core::OsRng);
-        let c = EdwardsPoint::random(&mut rand_core::OsRng);
-
-        let input = FrostSalInput {
-            output_key: o.to_bytes(),
-            key_image_gen: i.to_bytes(),
-            commitment: c.to_bytes(),
-            spend_key_x: x.to_repr(),
-            tx_signable: TxSignableHash::from_bytes([0xEF; 32]),
-        };
-
-        let mut session = FrostSalSession::new(&input).unwrap();
-
-        let keys = crate::frost_dkg::generate_test_keys(2, 3);
-        let (_, k) = keys.iter().next().unwrap();
-        let participants: Vec<Participant> = keys.keys().copied().collect();
-        let view = k.view(participants).unwrap();
-
-        let fake_nonces = vec![vec![EdwardsPoint::generator()]];
-        let result = session.sign_share(&view, &fake_nonces);
-        assert!(result.is_err(), "Should fail: preprocess not called yet");
-    }
-
-    #[test]
-    fn coordinator_sum_shares_before_all_collected_fails() {
-        let p1 = Participant::new(1).unwrap();
-        let p2 = Participant::new(2).unwrap();
-        let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
-
-        let shares = vec![FrostSignShareResult { share: [1u8; 32] }];
-        coord.collect_shares(p1, &shares).unwrap();
-
-        let result = coord.sum_shares_for_input(0);
-        assert!(result.is_err(), "Should fail: only 1 of 2 shares collected");
-    }
-}
+#[path = "frost_sal_tests.rs"]
+mod tests;

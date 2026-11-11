@@ -14,8 +14,6 @@
 
 pub(crate) mod batch_weights;
 #[cfg(feature = "multisig")]
-pub mod frost_dkg;
-#[cfg(feature = "multisig")]
 pub mod frost_sal;
 pub mod leaf;
 pub mod proof;

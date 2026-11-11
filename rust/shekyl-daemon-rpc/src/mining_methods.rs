@@ -424,8 +424,11 @@ impl Drop for StartedMiner {
 /// # Errors
 ///
 /// `BadParams` for a count of zero; `NotReady` with the node's reason when
-/// [`MiningFacts::refusal`] is `Some`, before or during the wait; the
-/// miner's refusal; `NotReady` when the node stops first.
+/// [`MiningFacts::refusal`] is `Some`, before the wait, or during it with the
+/// tip short of the target at the stop; the miner's refusal; `NotReady`
+/// when the node stops first. A withdrawal that comes with the block
+/// reaching the target is not an error: the chain at the stop decides, so a
+/// caller that retries on an error does not mine past its count.
 pub async fn generateblocks(
     mining: &MiningHandle,
     door: &dyn DoorFacts,
@@ -484,8 +487,16 @@ pub async fn generateblocks(
         }),
     };
     started.stop().await?;
-    reached?;
     let end = chain.chain_tip()?.chain_height;
+    // The race above has two winners when the pass that connects the target
+    // block also withdraws the job, and either can be polled first. The
+    // chain says which happened (the regtest sync rig mined 102 blocks for
+    // 101 when its retry read a won race as a failure).
+    if let Err(lost) = reached {
+        if end.tip().is_none_or(|tip| tip < target) {
+            return Err(lost);
+        }
+    }
     let mut blocks = Vec::new();
     for height in start.next_height().ordinals_until(end.next_height()) {
         if let Some(hash) = chain.block_hash_at(height)?.hash {
@@ -734,6 +745,161 @@ mod tests {
         .await
         .expect("waited out, not refused");
         assert_eq!(generated.height, 1);
+    }
+
+    /// A node whose job is withdrawn for good the moment the call waits: a
+    /// refusal the call does not wait out (not synced).
+    struct WithdrawnAtOnce;
+
+    impl MiningFacts for WithdrawnAtOnce {
+        fn running(&self) -> Result<bool, FactsFault> {
+            Ok(false)
+        }
+        fn template(
+            &self,
+        ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
+            unreachable!("generateblocks reads no template")
+        }
+        fn start(
+            &self,
+            _threads: Option<NonZeroUsize>,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            unreachable!("generateblocks bounds the miner it starts")
+        }
+        fn start_until(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> Result<Result<(), Diagnostic>, FactsFault> {
+            Ok(Ok(()))
+        }
+        fn stop(&self) -> Result<bool, FactsFault> {
+            Ok(true)
+        }
+        fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
+            unreachable!("generateblocks reads no status")
+        }
+        fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
+            Ok(None)
+        }
+        fn withdrawn(&self) -> crate::mining_facts::Pending<'_, Diagnostic> {
+            Box::pin(async { Ok(Diagnostic::new(codes::NOT_SYNCED, "the node is not synced")) })
+        }
+    }
+
+    /// A door whose tip wait has not woken.
+    struct Unwoken;
+
+    impl DoorFacts for Unwoken {
+        fn room(&self) -> Result<usize, FactsFault> {
+            unreachable!("generateblocks takes no room")
+        }
+        fn offer_local(&self, _block: Vec<u8>) -> crate::mining_facts::Pending<'_, LocalOutcome> {
+            unreachable!("generateblocks offers nothing")
+        }
+        fn pop(&self, _count: u64) -> crate::mining_facts::Pending<'_, PopOutcome> {
+            unreachable!("generateblocks pops nothing")
+        }
+        fn tip_at_least(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> crate::mining_facts::Pending<'_, ()> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A chain of one block at the start's read, and `after` blocks at
+    /// every read after it: the stop's.
+    struct Grows {
+        reads: std::sync::atomic::AtomicUsize,
+        after: u64,
+    }
+
+    impl Grows {
+        fn to(after: u64) -> Self {
+            Self {
+                reads: std::sync::atomic::AtomicUsize::new(0),
+                after,
+            }
+        }
+    }
+
+    impl ChainFacts for Grows {
+        fn chain_tip(&self) -> Result<crate::chain_facts::ChainTip, FactsFault> {
+            let read = self
+                .reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(crate::chain_facts::ChainTip {
+                chain_height: ChainCount::from_raw(if read == 0 { 1 } else { self.after }),
+                top_hash: BlockHash::from_bytes([1; 32]),
+                target_height: None,
+                synchronized: true,
+                release_build: false,
+            })
+        }
+        fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
+            unreachable!("generateblocks reads no identity")
+        }
+        fn block_hash_at(
+            &self,
+            _height: shekyl_types::BlockHeight,
+        ) -> Result<crate::chain_facts::BlockHashAt, FactsFault> {
+            Ok(crate::chain_facts::BlockHashAt {
+                hash: Some(BlockHash::from_bytes([2; 32])),
+                chain_height: ChainCount::from_raw(self.after),
+            })
+        }
+        fn block_header_at(
+            &self,
+            _at: crate::chain_facts::BlockLookup,
+            _fill_pow_hash: bool,
+        ) -> Result<crate::chain_facts::BlockHeaderAt, FactsFault> {
+            unreachable!("generateblocks reads no header")
+        }
+        fn fee_estimate(&self) -> Result<crate::chain_facts::FeeEstimate, FactsFault> {
+            unreachable!("generateblocks reads no fee")
+        }
+        fn block_at(
+            &self,
+            _at: crate::chain_facts::BlockLookup,
+            _fill_pow_hash: bool,
+        ) -> Result<crate::chain_facts::BlockAt, FactsFault> {
+            unreachable!("generateblocks reads no block")
+        }
+    }
+
+    /// **The chain at the stop decides.** The job is withdrawn as the
+    /// target block connects, and the withdrawal is polled first: the block
+    /// is there, so the call succeeds with it, and a caller that retries on
+    /// an error does not mine one more (CI on #1340: the regtest sync rig's
+    /// source reached 102 blocks for 101). A withdrawal with the tip short of
+    /// the target is still refused. Red edit: return the race's error
+    /// whatever the chain reads.
+    #[tokio::test]
+    async fn generateblocks_reads_the_chain_when_a_withdrawal_wins_the_race() {
+        let mining: MiningHandle = std::sync::Arc::new(WithdrawnAtOnce);
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let armed = || shekyl_rpc_types::methods::admit_armed(row, true).expect("armed");
+        let generated = generateblocks(
+            &mining,
+            &Unwoken,
+            &Grows::to(2),
+            armed(),
+            GenerateBlocksRequest { count: 1 },
+        )
+        .await
+        .expect("the block connected");
+        assert_eq!(generated.height, 2);
+        assert_eq!(generated.blocks.len(), 1);
+        let refused = generateblocks(
+            &mining,
+            &Unwoken,
+            &Grows::to(1),
+            armed(),
+            GenerateBlocksRequest { count: 1 },
+        )
+        .await
+        .expect_err("no block connected");
+        assert_eq!(refused.class, ErrorClass::NotReady);
     }
 
     /// The miner `generateblocks` starts searches no block above the target.

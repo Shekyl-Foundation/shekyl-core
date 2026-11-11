@@ -449,15 +449,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "block-padding"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
-dependencies = [
- "generic-array 0.14.9",
-]
-
-[[package]]
 name = "borsh"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1115,24 +1106,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dkg-pedpop"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e30819c61e4650ef7b06aef4a20d3537101cba424f06b04e582b41f06833479"
-dependencies = [
- "chacha20",
- "ciphersuite",
- "dkg",
- "dleq",
- "flexible-transcript",
- "multiexp",
- "rand_core 0.6.4",
- "schnorr-signatures",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
 name = "dkg-recovery"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1141,21 +1114,6 @@ dependencies = [
  "ciphersuite",
  "dkg",
  "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "dleq"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8d3af08cb0a3253930b6b9629fd61202ea34da117940b59ab58f3e6f5e1ba6c"
-dependencies = [
- "digest",
- "ff",
- "flexible-transcript",
- "group",
- "rand_core 0.6.4",
- "rustversion",
  "zeroize",
 ]
 
@@ -2130,7 +2088,6 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
- "block-padding",
  "generic-array 0.14.9",
 ]
 
@@ -4524,7 +4481,7 @@ dependencies = [
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
- "dkg-pedpop",
+ "dkg-dealer",
  "ec-divisors",
  "flexible-transcript",
  "generalized-bulletproofs",
@@ -4536,10 +4493,12 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
+ "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
+ "shekyl-multisig",
  "shekyl-types",
  "thiserror",
  "tracing",

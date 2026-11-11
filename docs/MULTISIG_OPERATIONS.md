@@ -93,39 +93,45 @@ Move to 3-of-5 or higher when:
 
 ---
 
-## 2. Group Setup (DKG Ceremony)
+## 2. Group Setup (Dealer Mode)
 
 ### Prerequisites
 
-- All N participants have Shekyl wallets with PQC key material
-- Each participant knows the hybrid public keys of all others
-- Communication channel exists between all participants
+- One participant, the owner, runs the setup. The owner generates every
+  key and is trusted with all of them until the member files are
+  delivered (`PQC_MULTISIG.md` §5.2).
+- Every participant has a Shekyl wallet to load its member file into.
+- A private channel from the owner to each participant: a member file
+  holds that participant's secrets.
 
 ### Steps
 
-1. **Exchange public keys**: Each participant exports their hybrid public
-   key (hex) and shares it with all others.
+1. **Create group**: In the GUI, navigate to Multisig → Setup Group.
+   Enter N (total participants) and M (required signatures).
 
-2. **Create group**: In the GUI, navigate to Multisig → Setup Group.
-   Enter N (total participants), M (required signatures), and all
-   participant public keys.
+2. **Key split**: The wallet generates the group's keys, splits the
+   group's FROST key M-of-N, and writes one member file per participant
+   (`PQC_MULTISIG.md` §6.6). No key-generation round runs, so the
+   participants need not be online together.
 
-3. **DKG execution**: The wallet runs `dkg-pedpop` to establish the
-   shared group key. This requires all N participants to be online
-   simultaneously.
+3. **Deliver the files, then keep them**: The owner gives each
+   participant its own member file over the private channel. Each
+   participant stores that file before the owner deletes its extra
+   copies. The file is the backup. It holds this participant's FROST
+   share, the group scalar `b`, both KEM secrets and the transport
+   secret, and none of those can be regenerated from a wallet seed or
+   from the group descriptor (`PQC_MULTISIG.md` §6.6, §8.4).
 
-4. **Fingerprint verification**: After DKG completes, each participant
-   sees the same 3-representation fingerprint. **All participants must
-   confirm their fingerprint matches** before transacting. This is the
-   only human verification step — do not skip it.
+4. **Fingerprint verification**: Each participant loads its member file
+   and sees the group's 3-representation fingerprint. **All participants
+   must confirm their fingerprint matches** before transacting. This is
+   the only human verification step — do not skip it.
 
-5. **Loss acknowledgment**: The GUI requires explicit acknowledgment of
-   the 1/N loss limitation before the group is finalized.
-
-6. **Export group descriptor**: After setup, export the group descriptor
-   file (Settings → Group Descriptor → Export). This single JSON file
-   contains everything needed to restore the group from seeds.
-   **Store it with your wallet backup.**
+5. **The descriptor is not the backup.** The group descriptor is the
+   group's public identity: the threshold, the public keys and the
+   address fingerprint. It holds no share and no KEM secret, so a seed
+   plus the descriptor does not restore the ability to receive or spend.
+   Store the member file with the wallet backup.
 
 ### Address Format
 
@@ -144,11 +150,12 @@ data.
 
 **Setup:**
 1. Each partner creates a Shekyl wallet on their own device.
-2. Both exchange public keys (in person — do not send over email).
-3. One partner initiates group creation as 2-of-2 (both must agree) or
-   2-of-3 with a third key on a separate backup device.
+2. One partner is the owner and creates the group as 2-of-2 (both must
+   agree) or 2-of-3, with the third member file on a separate device.
+3. The owner delivers each member file in person.
 4. Both verify fingerprints match by reading them aloud to each other.
-5. Both export group descriptors and store backups separately.
+5. Each partner stores its member file with its own backup. The owner
+   deletes its extra copies only after that.
 
 **Daily operation:**
 - Either partner can propose a spend.
@@ -164,13 +171,15 @@ spending.
 
 **Setup:**
 1. Each of the 5 keyholders creates a wallet.
-2. Designate a setup coordinator (any member) who collects public keys
-   and initiates the DKG.
-3. All 5 must be online simultaneously for DKG. Schedule a 30-minute
-   window.
+2. Designate the owner (any member), who runs the setup and delivers
+   each keyholder its member file in person or over a private channel.
+3. Each keyholder loads its member file; no shared online window is
+   needed.
 4. All 5 verify fingerprints — use a group video call where each reads
    their fingerprint.
-5. All 5 export and back up their group descriptors independently.
+5. Each keyholder stores its member file with its own backup. The owner
+   deletes its extra copies only after every keyholder has confirmed
+   that.
 
 **Operations:**
 - Establish internal rules: "spending above X requires 24h delay for
@@ -297,15 +306,18 @@ outputs assigned to P as prover cannot be spent.
 - For high-value groups, consider periodic consolidation to rebalance
   prover assignments.
 
-### 6.2 Restoring a Group After Wallet Reinstall
+### 6.2 Restoring a Member After Wallet Reinstall
+
+The member file is what restores this participant. A wallet seed and
+the group descriptor do not: the descriptor is public, and the share
+and the KEM secrets are not derived from the seed (`PQC_MULTISIG.md`
+§6.6).
 
 1. Reinstall the Shekyl wallet.
-2. Restore your individual wallet from seed.
-3. Import the group descriptor file (Settings → Group Descriptor →
-   Import).
-4. The wallet rebuilds group state by scanning the chain from the
-   group's creation height.
-5. Verify the fingerprint matches your saved copy.
+2. Import the member file from the backup made at setup.
+3. The wallet rescans the chain. Receive and spend state come back
+   from the file plus the chain (`PQC_MULTISIG.md` §8.4).
+4. Verify the fingerprint matches the saved copy.
 
 ### 6.3 Suspecting a Participant's Device Is Compromised
 
@@ -498,10 +510,13 @@ support ML-DSA-65. V3.1 signing requires a full desktop or laptop.
 Hardware wallet support is a V3.2 goal. See `docs/FOLLOWUPS.md` for
 vendor outreach recommendations and technical constraints.
 
-### 9.5 All Participants Online for DKG
+### 9.5 A Trusted Owner at Setup
 
-The DKG ceremony requires all N participants to be online
-simultaneously. After DKG, daily operation is asynchronous.
+Setup is dealer mode: the owner generates every key and holds every
+member's share until the member files are delivered. Participants who
+cannot trust one owner with that wait for a key-generation ceremony
+mode, which would be a later `spend_auth_version` (`PQC_MULTISIG.md`
+§5.2). After setup, daily operation is asynchronous.
 
 ### 9.6 No Partial Key Rotation
 
