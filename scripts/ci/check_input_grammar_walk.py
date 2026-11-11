@@ -309,8 +309,8 @@ def selftest(doc: str) -> int:
          "duplicate definition"),
         ("add a cycle: `block` under `header`",
          add_row("**Terms of §3", "| block | header | a cycle |"), "cycle"),
-        ("drift: §18 gives `pace`, the walk table drops it",
-         doc.replace("`connection`, `download_speed`, `pace`,", "`connection`, `download_speed`,", 1), "drift"),
+        ("drift: §18 gives `stalled`, the walk table drops it",
+         doc.replace("`state`, `stalled`, `session` |", "`state`, `session` |", 1), "drift"),
         ("rule 47: an empty walk table",
          re.sub(r"(### 18\.1[^\n]*\n)(?:.*\n)*?(?=\n## 19\.)", r"\1", doc, count=1), "no subject"),
     ]

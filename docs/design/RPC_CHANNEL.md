@@ -1231,8 +1231,8 @@ R0 RT-7 stands: generated material only, never typed from memory.
   to an operator is presentation, not part of the wire. The daemon needs only the
   fingerprint, because the client's statics arrive in message 3.
 - **Enrolment and revocation are operator actions over the channel**:
-  `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and
-  `shekyld rpc-revoke FINGERPRINT`. No CA, no issuance key (R0 RT-4's
+  the methods `rpc_client_add`, `rpc_client_set`, `rpc_client_remove` and `rpc_client_list`, with `shekyl-cli`'s words `rpc client add <fingerprint> --ceiling <grants>` and the rest (`INPUT_GRAMMAR.md` IG-Q87; a ceiling is stored as its expanded grants, never as a preset's name).
+  `rpc_bundle_show` gives the daemon's public bundle. No CA, no issuance key (R0 RT-4's
   argument carries over).
 - **Who may enrol, and how far (RULED, RT-O9.1).** Enrolment is the `enrol`
   grant, carried by the `admin` preset only. **An enrolled ceiling can
@@ -1260,9 +1260,9 @@ R0 RT-7 stands: generated material only, never typed from memory.
 - **Enrol at install.** The step that installs the service
   enrols the installing user's client identity, so the person who opted into
   service mode is not left with a GUI that cannot reach the node it just
-  installed. Further users and devices are enrolled with `rpc-enrol`.
+  installed. Further users and devices are enrolled with `rpc client add`.
 - **Revocation takes effect immediately on live sessions.** The daemon
-  indexes open channel sessions by client fingerprint; `rpc-revoke` removes
+  indexes open channel sessions by client fingerprint; `rpc client remove` removes
   the enrolment and closes every session that fingerprint holds, and so
   does lowering a ceiling (re-connect to receive the new grant; no
   mid-session downgrade). The enrolled set is daemon state changed only
@@ -1271,7 +1271,7 @@ R0 RT-7 stands: generated material only, never typed from memory.
 - **Recovering a lost console key** (service mode). Enrolment
   runs only over the channel, so an operator who loses the console key and
   holds no other admin-ceiling key has no way back in through it. The way
-  back is offline and local: an administrator runs a reset command that
+  back is offline and local: an administrator runs `shekyld --rpc-console-key-reset` (a command-line-only switch that does this and exits, `INPUT_GRAMMAR.md` IG-Q88), which
   generates a new console key, replaces the old console enrolment with it,
   and writes the new private half under the same ACL. **It takes the data
   home's exclusive lock — the same lock the daemon takes at start and
@@ -1334,7 +1334,7 @@ network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`, `request_archival_shard` (public, closed history; moved from `node`, `INPUT_GRAMMAR.md` IG-Q91, and bounded by §6.3's shard-fetch permit); and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
 | `health` | Whether this node is usable now (`get_version` is under no grant: every authenticated caller may call it, [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q6): from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
 | `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
@@ -1343,9 +1343,9 @@ network, never a node.
 | `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
 | `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
 | `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
+| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `flush_txpool`, `flush_cache`, `relay_tx`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
 | `config` | The node's configuration: `option_show`'s default rows, every row that names no other grant, including everything that describes the host or links the operator (the onion, SOCKS endpoints, paths, notify commands, `mine-address`). A secret's value is in no grant (§6.4, RT-O24). Carried by the `admin` preset only |
-| `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
+| `enrol` | `rpc_client_add`, `rpc_client_set`, `rpc_client_remove`, `rpc_client_list`, `rpc_bundle_show` (RT-O9.1; `INPUT_GRAMMAR.md` IG-Q87). Carried by the `admin` preset only |
 
 *Two notes on `health`, both owned by the RK-5c round.*
 `has_peers` is true when the node holds at least one **handshaken** session
@@ -1597,8 +1597,8 @@ the admin listener.
   its own, and a record already started still fails after 4 seconds
   without progress. A response write that makes no progress for 4 seconds
   closes the connection, on every listener.
-- **A request over a bound is refused with the bound named**, never
-  silently truncated.
+- **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit. A cached view takes none. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The bundle producer's challenge reads take the fetch client's slots before any view flight, the host's own included, because a missed read is a missed witness duty. A node with Tor off has no client to read through and refuses with `shard.tor-off`.
+- **A request over a bound is refused with the bound named**, never silently truncated. Each bound has its own dotted code (`INPUT_GRAMMAR.md` IG-Q79).
 
 ### 6.4 Runtime options: `option_set` and `option_show` (RT-O23…RT-O27)
 
@@ -1886,7 +1886,7 @@ a demonstrated operator recovery need returns it as a ruled capability.
   named instance pointed at the default's state (§7.1), and an offline
   command racing a start.
 - **Every new surface is Rust-owned** (rule 20). The channel listener's
-  flags, the key paths, the enrolled set, and `rpc-enrol` / `rpc-revoke`
+  flags, the key paths, the enrolled set, and `rpc client add` / `rpc client remove`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added
   to C++ `rpc_args` or `core_rpc_server`; the C++ RPC bind and restricted
   flags are deleted, not extended.
