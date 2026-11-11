@@ -14,13 +14,9 @@ use crate::nullable::Nullable;
 use crate::schema::{Schema, Shape};
 use shekyl_units::wire::AtomicUnitsString as Amount;
 
-crate::wire_keywords! {
-    /// Which chain a daemon runs (§3's `network`).
-    pub enum NetworkName {
-        Mainnet = "mainnet",
-        Testnet = "testnet",
-        Stagenet = "stagenet",
-        Regtest = "regtest",
+impl Schema for shekyl_network::Network {
+    fn shape() -> Shape {
+        Shape::OneOf(&["mainnet", "testnet", "stagenet", "regtest"])
     }
 }
 
@@ -34,7 +30,7 @@ crate::wire_object! {
         pub height: Height,
         pub target_height: Nullable<Height>,
         pub consensus_digest: HashHex,
-        pub network: NetworkName,
+        pub network: shekyl_network::Network,
         pub genesis: HashHex,
     }
 }

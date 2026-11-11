@@ -28,9 +28,10 @@
 //! `docs/GENESIS_ALLOCATIONS.md` / `mining_parity`. A remint of `GENESIS_TX`
 //! updates those pins in the same change.
 
-use crate::chain::{core_rpc_version_string, GetVersionResponse, CORE_RPC_VERSION};
 use crate::consensus_digest::{Network, CONSENSUS_CONSTANTS_DIGEST_HASH};
 use crate::hash::HashHex;
+use crate::version::{core_rpc_version_string, CORE_RPC_VERSION};
+use crate::wire::chain::Version as GetVersionResponse;
 use serde::Deserialize as _;
 
 /// Which axis of the identity tuple disagreed.
@@ -127,23 +128,23 @@ impl IdentityExpectation {
     /// Rules, then network, then genesis. The wire axis is [`Self::read`]'s,
     /// which is the only caller.
     fn check_tuple(self, reply: &GetVersionResponse) -> Result<(), IdentityMismatch> {
-        if reply.consensus_constants_digest != CONSENSUS_CONSTANTS_DIGEST_HASH {
+        if reply.consensus_digest != CONSENSUS_CONSTANTS_DIGEST_HASH {
             return Err(IdentityMismatch::Rules {
                 ours: CONSENSUS_CONSTANTS_DIGEST_HASH,
-                theirs: reply.consensus_constants_digest,
+                theirs: reply.consensus_digest,
             });
         }
-        if reply.nettype != self.network {
+        if reply.network != self.network {
             return Err(IdentityMismatch::Network {
                 ours: self.network,
-                theirs: reply.nettype,
+                theirs: reply.network,
             });
         }
         let expected = genesis_hash_for(self.network);
-        if reply.genesis_hash.to_bytes() != expected {
+        if reply.genesis.to_bytes() != expected {
             return Err(IdentityMismatch::Genesis {
                 ours: HashHex::from_bytes(expected),
-                theirs: reply.genesis_hash,
+                theirs: reply.genesis,
                 network: self.network,
             });
         }
@@ -318,18 +319,16 @@ pub const fn genesis_hash_for(network: Network) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::RpcStatus;
 
     fn agreeing() -> GetVersionResponse {
         GetVersionResponse {
-            status: RpcStatus::ok(),
-            version: CORE_RPC_VERSION,
-            release: false,
-            current_height: 1,
-            target_height: crate::Nullable::NULL,
-            consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: Network::Mainnet,
-            genesis_hash: HashHex::from_bytes(genesis_hash_for(Network::Mainnet)),
+            version: crate::kinds::Integer(u64::from(CORE_RPC_VERSION)),
+            tagged: true,
+            height: crate::kinds::Height(0),
+            target_height: crate::nullable::Nullable(None),
+            consensus_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
+            network: Network::Mainnet,
+            genesis: HashHex::from_bytes(genesis_hash_for(Network::Mainnet)),
         }
     }
 
@@ -363,7 +362,13 @@ mod tests {
     /// with both sides named, in both directions.
     #[test]
     fn another_versions_reply_is_a_version_mismatch_whatever_its_shape() {
-        for theirs in [CORE_RPC_VERSION - 1, CORE_RPC_VERSION + 1, 4 << 16] {
+        // 3.70 is the last 3.x: the version a pre-rename client reads.
+        for theirs in [
+            CORE_RPC_VERSION - 1,
+            CORE_RPC_VERSION + 1,
+            (3 << 16) | 70,
+            5 << 16,
+        ] {
             for result in [
                 serde_json::json!({ "version": theirs }),
                 serde_json::json!({
@@ -427,7 +432,7 @@ mod tests {
         missing
             .as_object_mut()
             .expect("an object")
-            .remove("genesis_hash")
+            .remove("genesis")
             .expect("the member is there to remove");
 
         for result in [extra, missing] {
@@ -450,7 +455,7 @@ mod tests {
     #[test]
     fn wire_mismatch_names_both_packed_versions() {
         let mut reply = agreeing();
-        reply.version -= 1;
+        reply.version.0 -= 1;
         match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Wire { ours, theirs }) => {
                 assert_eq!(ours, CORE_RPC_VERSION);
@@ -464,7 +469,7 @@ mod tests {
     #[test]
     fn rules_mismatch_carries_both_digests_and_is_not_wire() {
         let mut reply = agreeing();
-        reply.consensus_constants_digest = HashHex::from_bytes([0x99; 32]);
+        reply.consensus_digest = HashHex::from_bytes([0x99; 32]);
         match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(m @ IdentityMismatch::Rules { .. }) => {
                 assert_eq!(m.axis(), IdentityAxis::Rules);
@@ -476,7 +481,7 @@ mod tests {
     #[test]
     fn network_mismatch_is_the_only_axis_that_sees_testnet() {
         let mut reply = agreeing();
-        reply.nettype = Network::Testnet;
+        reply.network = Network::Testnet;
         match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Network { ours, theirs }) => {
                 assert_eq!(ours, Network::Mainnet);
@@ -492,17 +497,17 @@ mod tests {
     #[test]
     fn regtest_is_refused_by_mainnet_and_taken_by_regtest() {
         let mut reply = agreeing();
-        reply.nettype = Network::Regtest;
+        reply.network = Network::Regtest;
         assert!(matches!(
             verdict(IdentityExpectation::exact(Network::Mainnet), &reply),
             Err(IdentityMismatch::Network { .. })
         ));
-        reply.genesis_hash = HashHex::from_bytes(genesis_hash_for(Network::Regtest));
+        reply.genesis = HashHex::from_bytes(genesis_hash_for(Network::Regtest));
         assert_eq!(
             verdict(IdentityExpectation::exact(Network::Regtest), &reply),
             Ok(())
         );
-        reply.genesis_hash = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
+        reply.genesis = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
         assert!(matches!(
             verdict(IdentityExpectation::exact(Network::Regtest), &reply),
             Err(IdentityMismatch::Genesis { .. })
@@ -512,7 +517,7 @@ mod tests {
     #[test]
     fn a_foreign_genesis_is_refused() {
         let mut reply = agreeing();
-        reply.genesis_hash = HashHex::from_bytes([0xff; 32]);
+        reply.genesis = HashHex::from_bytes([0xff; 32]);
         match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Genesis {
                 ours,

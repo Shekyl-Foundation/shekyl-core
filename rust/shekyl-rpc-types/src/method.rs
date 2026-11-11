@@ -22,7 +22,78 @@
 //! written once, in that invocation. No other string in the tree spells
 //! it.
 
-pub use crate::methods::Policy;
+pub use shekyl_rpc_grants::{Grant, GrantSet, Preset};
+
+/// Who may call a method (`RPC_CHANNEL.md` §6.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Policy {
+    /// A connection holding this grant.
+    Grant(Grant),
+    /// Host-only data (RT-O9.3): the host's administrator only, whatever a
+    /// key's ceiling.
+    HostOnly,
+    /// An armed test lever (RT-O9.2): the host's administrator only, and only
+    /// while the daemon runs with its armed-lever switch on.
+    Armed,
+    /// Every authenticated caller, whatever its grant: the version read
+    /// (`RPC_WIRE.md` RW-Q6), which a client makes before it trusts
+    /// anything else, so a key holding `submit` alone can still run the
+    /// skew check. Never served before authentication (`RPC_CHANNEL.md`
+    /// §4.3).
+    Authenticated,
+    /// The JSON-RPC endpoint itself: it serves any connection, and each
+    /// method on it carries its own policy.
+    Endpoint,
+}
+
+/// A bounded caller is every caller but the host's administrator (§6.3).
+///
+/// Host and bounded are one fact: the host is unbounded, and a connection
+/// whose ceiling is every grant is still bounded. Gates read this, not a
+/// second spelling of `!host`.
+#[must_use]
+pub const fn caller_bounded(host: bool) -> bool {
+    !host
+}
+
+/// Proof that an armed lever's row was checked against the node's
+/// armed-lever switch. Only [`admit_armed`] mints one, so an armed handler
+/// cannot run unchecked.
+#[derive(Debug)]
+pub struct Armed(());
+
+/// The diagnostic an armed lever carries when the switch is off.
+pub const UNARMED: &str = "grant.unarmed";
+
+/// Admit a call of `row` under the armed-lever switch.
+///
+/// A row that is not armed always passes. An armed row passes only when
+/// the node was started with the switch on. The HTTP gate and the
+/// in-process console both mint the token here; the handlers that still
+/// run in process consume it.
+///
+/// # Errors
+///
+/// [`crate::errors::ErrorClass::OutsideTheGrant`] when `row` is armed and
+/// `switch_on` is false, whatever the caller's other grants.
+pub fn admit_armed(row: &Row, switch_on: bool) -> Result<Armed, crate::errors::RpcError> {
+    use crate::errors::{Diagnostic, ErrorClass, RpcError};
+    if row.armed() && !switch_on {
+        return Err(RpcError::new(
+            ErrorClass::OutsideTheGrant,
+            Diagnostic::new(
+                UNARMED,
+                format!(
+                    "{} is an armed test lever; start the node with dev-rpc to serve it",
+                    row.name
+                ),
+            )
+            .param("method", row.name),
+        ));
+    }
+    Ok(Armed(()))
+}
+
 use crate::schema::{Schema, Shape};
 
 /// One method of the daemon's RPC.

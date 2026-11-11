@@ -67,9 +67,9 @@ mod tests {
         assert!(body["id"].is_null());
         assert_eq!(body["error"]["code"], -32_601);
         assert_eq!(body["error"]["data"]["code"], "rpc.path.unrouted");
-        let params = &body["error"]["data"]["params"];
-        assert_eq!(params[0], serde_json::json!(["path", "/"]));
-        assert_eq!(params[1], serde_json::json!(["json_rpc", "/json_rpc"]));
+        let parameter = &body["error"]["data"]["parameter"];
+        assert_eq!(parameter["path"], "/");
+        assert_eq!(parameter["json_rpc"], "/json_rpc");
         assert_eq!(
             body["error"]["message"],
             "no RPC is served at /; this server takes JSON-RPC calls at /json_rpc"

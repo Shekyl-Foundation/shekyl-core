@@ -284,10 +284,32 @@ mod tests {
             json!({"verdict": "rejected", "cause": "fee-too-low"}),
             json!({"verdict": "already_in_pool", "publication": "held"}),
             json!({"verdict": "already-in-pool"}),
-            json!({"verdict": "already-in-chain", "mined_height": 5, "row": "x"}),
         ] {
             assert!(!agree::<Verdict>(&bad), "{bad}");
         }
+    }
+
+    /// The submission's skew rules (`DAEMON_SUBMIT_VERDICT.md` §2.3): an
+    /// unknown cause reads as unrecognized; an unknown field in a known
+    /// verdict is tolerated, though a daemon never writes one (the schema
+    /// refuses it); an unknown verdict is a parse error. Red edit: make an
+    /// unknown cause key an error in `Rejection`'s reader.
+    #[test]
+    fn the_submission_keeps_its_skew_rules() {
+        use tx::{Rejection, Verdict};
+        let unknown_cause =
+            json!({"verdict": "rejected", "cause": {"a-cause-from-a-newer-daemon": 7}});
+        assert_eq!(
+            serde_json::from_value::<Verdict>(unknown_cause).unwrap(),
+            Verdict::Rejected {
+                cause: Rejection::Unrecognized
+            }
+        );
+        let extra = json!({"verdict": "already-in-chain", "mined_height": 5, "row": "x"});
+        assert!(serde_json::from_value::<Verdict>(extra.clone()).is_ok());
+        assert!(conforms(&extra, &Verdict::shape()).is_err());
+        assert!(serde_json::from_value::<Verdict>(json!({"verdict": "deferred"})).is_err());
+        assert!(serde_json::to_value(Rejection::Unrecognized).is_err());
     }
 
     fn status(extra: &[(&str, Value)]) -> Value {
