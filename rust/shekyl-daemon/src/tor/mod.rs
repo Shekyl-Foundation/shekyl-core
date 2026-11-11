@@ -25,6 +25,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
@@ -38,32 +39,30 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_consensus_valid_after, parse_event, parse_network_view,
-    parse_socks_listeners, parse_traffic_read, resume_lateness, BootstrapState, Command,
-    ControlError, ControlReply, EventSink, LogEvent, LogSeverity, Resume, ServiceId, SocksTimeout,
-    TorEvent, UploadRounds,
+    parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
+    Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
     install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Step,
+    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Status, Step,
     TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorConfig, DaemonTorControl,
-    DaemonTorStartError, IsolationPair, KeptDataDir, KeptLog, OnionPow, Retirement, SpawnError,
-    TombstoneEnd, TorDeath,
+    space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
+    IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 mod inbox;
+#[cfg(all(test, unix))]
+mod loop_tests;
 mod probe;
+mod requests;
 
-use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, StopLatch, Timer, Wanted, Woken};
-
-/// A control reply this far past due is a process fault. Not a bootstrap limit.
-const REPLY_BOUND: Duration = Duration::from_secs(30);
+use self::inbox::{inbox, Arrival, Changed, Inbox, Owner, Timer, Wanted, Woken};
 
 /// The managed Tor answers a SOCKS request it cannot attach just inside the
 /// Tor dial deadline, so the dial's class is Tor's reply, never a race with
@@ -144,6 +143,14 @@ impl Supervisor {
     /// The zone host's forward listener, once step 8 has bound it.
     pub fn note_forward(&self, forward: SocketAddr) {
         self.owner.forward(forward);
+    }
+
+    /// The supervisor's status now. The loop answers it in its next pass,
+    /// from the one place that holds the state: it never waits on Tor, so
+    /// a Tor that does not answer does not hold this (Rick, 2026-11-10).
+    /// `None` once the loop has stopped.
+    pub async fn status(&self) -> Option<Status> {
+        self.owner.ask_status()?.await.ok()
     }
 
     /// Stop Tor and wait for the directory to be torn down.
@@ -241,7 +248,16 @@ pub fn begin(
     let binary = binary.clone();
     let data_dir = data_dir.to_path_buf();
     let task = handle.spawn(async move {
-        drive(binary, clearnet_on, virtual_port, data_dir, inbox, network).await;
+        drive(
+            PinSource::Discover(binary),
+            policy(),
+            clearnet_on,
+            virtual_port,
+            data_dir,
+            inbox,
+            network,
+        )
+        .await;
     });
     Some(Supervisor { owner, task })
 }
@@ -350,81 +366,121 @@ fn sessions_input(held: PerConnector<u32>) -> Input {
     })
 }
 
+/// Where the binary a launch runs comes from.
+enum PinSource {
+    /// Discovered and checked against the pin: at the configured path, or
+    /// the bundle's.
+    Discover(Option<PathBuf>),
+    /// A binary a test names, not checked (`unpinned-tor-for-tests`).
+    #[cfg(all(test, unix))]
+    Unchecked(VerifiedTorBinary),
+}
+
 async fn drive(
-    binary: Option<PathBuf>,
+    binary: PinSource,
+    policy: Policy,
     clearnet_on: bool,
     virtual_port: u16,
     data_dir: PathBuf,
     inbox: Inbox,
     network: Network,
 ) {
-    let engine = network.engine();
-    let owner = match engine.register(OwnerClass::Housekeeping) {
-        Ok(owner) => owner,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no scheduler: {error:?}");
-            return;
-        }
-    };
-    let onion = match DaemonTorControl::mint_identity() {
-        Ok(onion) => onion,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
-            return;
-        }
-    };
-    // The probe's isolation pair, minted beside the onion and held with it
-    // for the boot (§4.5): the probe's circuits are its own.
-    let probe_pair = match IsolationPair::mint() {
-        Ok(pair) => pair,
-        Err(error) => {
-            tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
-            return;
-        }
-    };
-    let connectors = Connectors {
-        tor: TorSetting::Managed,
-        clearnet_on,
-    };
-    let clock = owner.clock().clone();
-    let poster = inbox.poster();
-    let timer = Timer::start(owner, poster.clone());
-    let started = clock.now().get();
-    let (core, step) = Core::start(policy(), connectors, started);
-    let mut drive = Drive {
-        core,
-        step,
-        clock,
+    if let Some(drive) = Drive::start(
         binary,
-        data_dir,
-        events: poster.events(),
-        poster,
-        inbox,
-        timer,
-        forward: None,
-        onion,
-        probe_pair,
+        policy,
+        clearnet_on,
         virtual_port,
+        data_dir,
+        inbox,
         network,
-        service: None,
-        rounds: None,
-        dropped_seen: 0,
-        probe: None,
-        network_view: NetworkView::default(),
-        control: None,
-        kept: None,
-        pinned: None,
-        incarnation: None,
-        generation: 0,
-    };
-    // What the network published before this loop: the relay's verdict,
-    // the tally and the sessions at start. Folded after the start's own
-    // step, so the pin check stays the first action. The tally's failures
-    // were launched before this Tor ran, and the quiet line leaves them out
-    // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
-    let first = drive.changed_inputs();
-    drive.fold_after_start(first, started).await;
-    drive.run().await;
+    ) {
+        drive.run().await;
+    }
+}
+
+impl Drive {
+    /// The driver, its core started and the network's state at start
+    /// folded; `None`, said, when the boot's secrets or a scheduler are
+    /// not to be had.
+    fn start(
+        binary: PinSource,
+        policy: Policy,
+        clearnet_on: bool,
+        virtual_port: u16,
+        data_dir: PathBuf,
+        inbox: Inbox,
+        network: Network,
+    ) -> Option<Self> {
+        let engine = network.engine();
+        let owner = match engine.register(OwnerClass::Housekeeping) {
+            Ok(owner) => owner,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no scheduler: {error:?}");
+                return None;
+            }
+        };
+        let onion = match DaemonTorControl::mint_identity() {
+            Ok(onion) => onion,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
+                return None;
+            }
+        };
+        // The probe's isolation pair, minted beside the onion and held with it
+        // for the boot (§4.5): the probe's circuits are its own.
+        let probe_pair = match IsolationPair::mint() {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
+                return None;
+            }
+        };
+        let connectors = Connectors {
+            tor: TorSetting::Managed,
+            clearnet_on,
+        };
+        let clock = owner.clock().clone();
+        let poster = inbox.poster();
+        let timer = Timer::start(owner, poster.clone());
+        let started = clock.now().get();
+        let (core, step) = Core::start(policy, connectors, started);
+        let mut drive = Drive {
+            core,
+            step,
+            clock,
+            binary,
+            data_dir,
+            events: poster.events(),
+            poster,
+            inbox,
+            timer,
+            forward: None,
+            onion: Arc::new(onion),
+            probe_pair,
+            virtual_port,
+            network,
+            service: None,
+            rounds: None,
+            dropped_seen: 0,
+            probe: None,
+            network_view: NetworkView::default(),
+            control: None,
+            kept: None,
+            pinned: None,
+            incarnation: None,
+            generation: 0,
+            held: None,
+            launch: None,
+        };
+        // What the network published before this loop: the relay's verdict,
+        // the tally and the sessions at start. Folded after the start's own
+        // step, so the pin check stays the first action. The tally's failures
+        // were launched before this Tor ran, and the quiet line leaves them out
+        // (`DIALER_OUTAGE_EVIDENCE.md` §6.1).
+        let first = drive.changed_inputs();
+        drive.fold_after_start(first, started);
+        Some(drive)
+    }
 }
 
 /// The process, the directory, and the route. The phase lives in [`Core`].
@@ -433,7 +489,7 @@ struct Drive {
     step: Step,
     /// The process clock: the network's, which the dialer's stamps are on.
     clock: MonotonicClock,
-    binary: Option<PathBuf>,
+    binary: PinSource,
     data_dir: PathBuf,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
@@ -448,15 +504,16 @@ struct Drive {
     /// The zone host's forward listener, once bound.
     forward: Option<SocketAddr>,
     /// The boot's onion identity: the keypair Tor is handed on every
-    /// publish, held until the daemon stops.
-    onion: OnionIdentity,
+    /// publish, held until the daemon stops. Shared with the publish's task,
+    /// never copied.
+    onion: Arc<OnionIdentity>,
     /// The probe's isolation pair, held beside the onion for the boot.
     probe_pair: IsolationPair,
     virtual_port: u16,
     /// The network the route, the onion and the inbound facet are
     /// published on, and the probe is minted and dialed through.
     network: Network,
-    /// The onion as last published.
+    /// The onion as last sent to Tor (`ADD_ONION`).
     service: Option<ServiceId>,
     /// That onion's descriptor upload rounds (`TSR-Q5`).
     rounds: Option<UploadRounds>,
@@ -475,14 +532,24 @@ struct Drive {
     /// folded. It moves at each spawn and each reap, so the stop's own
     /// death is not a second fault.
     generation: u64,
+    /// The last task that holds a Tor or a directory: a launch, a reap, or
+    /// the end of what a stale answer held. The next waits for it, and so
+    /// does the stop ([`Self::hold`]).
+    held: Option<JoinHandle<()>>,
+    /// The launch in flight, by its number, and the signal that abandons
+    /// its wait for Tor's first reply ([`Self::abandon_launch`]).
+    launch: Option<(u64, watch::Sender<bool>)>,
 }
 
 impl Drive {
     async fn run(mut self) {
         loop {
-            if self.perform().await {
+            if self.perform() {
                 break;
             }
+            // A launch the core gave up on, in this pass or by what was
+            // just performed, stops waiting.
+            self.abandon_launch(false);
             // Captured before the wait. The wait's lateness is this
             // interval, not how late a deadline stored during `perform`
             // looks afterwards.
@@ -492,9 +559,22 @@ impl Drive {
             let woken = self.inbox.wait().await;
             let woke = self.now();
             let lead = slept(armed, entered, woke).map(|late_by| Input::Resumed { late_by });
-            self.pass(woken, lead, woke, wanted).await;
+            self.pass(woken, lead, woke, wanted);
         }
+        // The stop. A launch still waiting for Tor stops waiting, and the
+        // work that holds a Tor or a directory ends before the supervisor
+        // does: what its answers hold is ended here, so no Tor and no
+        // directory outlives the stop.
+        self.abandon_launch(true);
         self.cancel_probe();
+        if let Some(held) = self.held.take() {
+            if let Err(error) = held.await {
+                tracing::warn!(target: "tor", "Tor's process work ended abnormally at the stop: {error}");
+            }
+        }
+        for answer in self.inbox.replies_left() {
+            answer.discard().await;
+        }
         if let Some(control) = self.control.take() {
             let teardown = control.shutdown().await;
             if let CacheSave::Failed(error) = teardown.cache {
@@ -517,7 +597,7 @@ impl Drive {
     /// Fold what the network published before the loop, after the start's
     /// own step: its actions follow the start's, and an empty batch leaves
     /// the start's deadline.
-    async fn fold_after_start(&mut self, inputs: Vec<Input>, at: u64) {
+    fn fold_after_start(&mut self, inputs: Vec<Input>, at: u64) {
         let start = std::mem::replace(
             &mut self.step,
             Step {
@@ -525,7 +605,7 @@ impl Drive {
                 deadline: None,
             },
         );
-        self.fold_at(inputs, at).await;
+        self.fold_at(inputs, at);
         let folded = std::mem::replace(&mut self.step, start);
         if !folded.actions.is_empty() || folded.deadline.is_some() {
             self.step.actions.extend(folded.actions);
@@ -536,14 +616,14 @@ impl Drive {
     /// Perform every action the last fold produced. Inputs from one action
     /// are folded in order and their actions run in that order, ahead of
     /// anything already queued. `true` means the daemon is stopping.
-    async fn perform(&mut self) -> bool {
+    fn perform(&mut self) -> bool {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            let inputs = self.act(action, &mut halt).await;
+            let inputs = self.act(&action, &mut halt);
             let mut produced = Vec::new();
             for input in inputs {
-                self.fold(input).await;
+                self.fold(input);
                 produced.append(&mut self.step.actions);
             }
             for action in produced.into_iter().rev() {
@@ -557,66 +637,42 @@ impl Drive {
     }
 
     /// Fold one observation. See [`Self::fold_many`].
-    async fn fold(&mut self, input: Input) {
-        self.fold_many(vec![input]).await;
+    fn fold(&mut self, input: Input) {
+        self.fold_many(vec![input]);
     }
 
     /// Fold `inputs` at the driver's clock. See [`Self::fold_at`].
-    async fn fold_many(&mut self, inputs: Vec<Input>) {
-        self.fold_at(inputs, self.now()).await;
+    fn fold_many(&mut self, inputs: Vec<Input>) {
+        self.fold_at(inputs, self.now());
     }
 
     /// Fold `inputs` as one step at `at`. Each transition's actions are kept,
     /// in order, and the deadline is the last transition's. An empty list
     /// leaves the step alone, so a batch that carried nothing does not
-    /// disarm a wait that is already armed.
-    ///
-    /// A process that ended is reaped here when that transition does not
-    /// withdraw a route: there is nothing to take down, and the directory
-    /// is still kept. A [`Action::TakeDown`] reaps after it withdraws, so
-    /// the route is gone before the child is. A [`Action::StopRoute`] only
-    /// withdraws: the shutdown wipe still owns the child.
-    async fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
+    /// disarm a wait that is already armed. A process that ended is reaped
+    /// by the core's [`Action::Reap`] request, off the loop.
+    fn fold_at(&mut self, inputs: Vec<Input>, at: u64) {
         if inputs.is_empty() {
             return;
         }
         let mut actions = Vec::new();
         let mut deadline = None;
         for input in inputs {
-            let ended = ends_incarnation(&input);
             let step = self.core.on(input, at);
-            let take_down = step
-                .actions
-                .iter()
-                .any(|action| matches!(action, Action::TakeDown));
             actions.extend(step.actions);
             deadline = step.deadline;
-            if ended && !take_down {
-                self.reap().await;
-            }
         }
         self.step = Step { actions, deadline };
     }
 
-    /// An action this core no longer wants. A remedial republish becomes
-    /// [`Input::RepublishWithheld`], which puts the lifetime it started
-    /// back. A probe or directory fetch already handed over is dropped.
+    /// A probe this core no longer wants is dropped. A request that no
+    /// longer stands is withheld in the core, at its turn in the queue.
     fn withheld(&self, action: &Action) -> Option<Vec<Input>> {
-        if self.core.action_stands(action) {
-            return None;
-        }
-        match action {
-            Action::RepublishOnion => Some(vec![Input::RepublishWithheld]),
-            Action::Probe
-            | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. }
-            | Action::RefetchDescriptor => Some(Vec::new()),
-            _ => None,
-        }
+        (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
-    async fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
-        if let Some(instead) = self.withheld(&action) {
+    fn act(&mut self, action: &Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(action) {
             return instead;
         }
         match action {
@@ -638,36 +694,19 @@ impl Drive {
                 Vec::new()
             }
             Action::CheckPin => vec![self.pin()],
-            Action::Spawn { fresh_directory } => {
-                let spawned = self.spawn(fresh_directory).await;
-                self.resume_before(vec![spawned])
-            }
-            Action::Sample => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.sample()).await {
-                    Ok(inputs) => self.resume_before(inputs),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
+            // A request: sent off the loop, answered as an arrival.
+            Action::Reap
+            | Action::Spawn { .. }
+            | Action::SubscribeEvents
+            | Action::Sample
+            | Action::SetConfAvoidDiskWrites
+            | Action::RepublishOnion
+            | Action::AddOnion
+            | Action::RefetchDescriptor
+            | Action::CheckDirectories
+            | Action::FetchFromDirectory { .. } => self.send(action),
             Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::SetConfAvoidDiskWrites => {
-                let latch = self.inbox.latch();
-                let Some(control) = self.control.as_ref() else {
-                    return Vec::new();
-                };
-                match race_stop(&latch, control.defer_disk_writes()).await {
-                    Err(shutdown) => vec![shutdown],
-                    Ok(Ok(())) => self.resume_before(Vec::new()),
-                    Ok(Err(error)) => {
-                        tracing::warn!(
-                            target: "global",
-                            "leaving Tor writing its state ({error})"
-                        );
-                        self.resume_before(Vec::new())
-                    }
-                }
-            }
-            Action::Publish(route) => vec![self.publish_route(route)],
+            Action::Publish(route) => vec![self.publish_route(*route)],
             Action::Probe => vec![self.probe()],
             Action::CancelProbe => {
                 self.cancel_probe();
@@ -686,28 +725,7 @@ impl Drive {
                 );
                 Vec::new()
             }
-            Action::RefetchDescriptor => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.refetch()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
             Action::ProbeAfterJump => vec![probe::jump_probe(&self.network)],
-            Action::CheckDirectories => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.directories_drawn()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
-            Action::FetchFromDirectory { hsdir } => {
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.fetch_from(hsdir)).await {
-                    Ok(input) => self.resume_before(input.into_iter().collect()),
-                    Err(shutdown) => vec![shutdown],
-                }
-            }
             Action::DirectoriesUnmatched => {
                 tracing::info!(
                     target: "tor",
@@ -723,20 +741,11 @@ impl Drive {
                 Vec::new()
             }
             Action::PublishInbound(inbound) => {
-                self.publish_inbound(inbound);
+                self.publish_inbound(*inbound);
                 Vec::new()
-            }
-            Action::RepublishOnion => {
-                tracing::info!(target: "tor", "publishing this node's onion again");
-                let latch = self.inbox.latch();
-                match race_stop(&latch, self.republish()).await {
-                    Ok(input) => self.resume_before(vec![input]),
-                    Err(shutdown) => vec![shutdown],
-                }
             }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
-                self.reap().await;
                 Vec::new()
             }
             Action::StopRoute => {
@@ -754,19 +763,19 @@ impl Drive {
     /// loop is judged on windows that start at the wake; then every cell
     /// that changed; then the arrival. A deadline is folded only when it
     /// names the generation the loop gave the deadline it waited with.
-    async fn pass(&mut self, woken: Woken, lead: Option<Input>, woke: u64, wanted: Option<Wanted>) {
+    fn pass(&mut self, woken: Woken, lead: Option<Input>, woke: u64, wanted: Option<Wanted>) {
         let changed = self.changed_inputs();
         let mut inputs = led(lead, changed);
         let arrival = match woken {
             Woken::Arrived(arrival) => arrival,
             Woken::Rang => {
-                self.fold_at(inputs, woke).await;
+                self.fold_at(inputs, woke);
                 return;
             }
         };
         match arrival {
             Arrival::Deadline { generation } => {
-                self.fold_at(inputs, woke).await;
+                self.fold_at(inputs, woke);
                 if wanted.is_some_and(|wanted| wanted.generation == generation) {
                     self.timer.spent();
                     let due = self.core.on_deadline(woke);
@@ -793,9 +802,15 @@ impl Drive {
                     arrived_at: arrival.arrived_at.get(),
                 });
             }
+            Arrival::Reply { number, answer } => inputs.extend(self.answered(number, *answer)),
+            Arrival::Status(reply) => {
+                // Answered from the one place that holds the state, at once:
+                // nothing on this loop waits on Tor.
+                drop(reply.send(self.core.status()));
+            }
             Arrival::Stop => inputs.push(Input::Shutdown),
         }
-        self.fold_at(inputs, woke).await;
+        self.fold_at(inputs, woke);
     }
 
     /// The cells' values not yet folded, as inputs: the relay's verdict,
@@ -881,23 +896,12 @@ impl Drive {
         inputs
     }
 
-    /// A control ask returned. A sleep it observed is the first input, so
-    /// the reply is judged on windows that start at the wake. A stop that
-    /// drops the ask does not come here: that ask wrote nothing.
-    fn resume_before(&mut self, mut inputs: Vec<Input>) -> Vec<Input> {
-        let Some(control) = self.control.as_ref() else {
-            return inputs;
-        };
-        if let Resume::Slept { late_by } = control.take_resume() {
-            inputs.insert(0, Input::Resumed { late_by });
-        }
-        inputs
-    }
-
     fn pin(&mut self) -> Input {
         let verified = match &self.binary {
-            Some(path) => discover_and_verify_at(path),
-            None => discover_and_verify(),
+            PinSource::Discover(Some(path)) => discover_and_verify_at(path),
+            PinSource::Discover(None) => discover_and_verify(),
+            #[cfg(all(test, unix))]
+            PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
         match verified {
             Ok(binary) => {
@@ -906,177 +910,6 @@ impl Drive {
             }
             Err(error) => classify_pin(&error).input,
         }
-    }
-
-    async fn spawn(&mut self, fresh_directory: bool) -> Input {
-        // A fault reaps before the next pin. A child still held here is kept,
-        // not dropped: dropping the control retires the directory.
-        if self.control.is_some() {
-            self.reap().await;
-        }
-        let fresh = fresh_directory || self.kept.is_none();
-        let mut swept = false;
-        if fresh_directory {
-            if let Some(old) = self.kept.take() {
-                say_retirement(&old.replace().await);
-                swept = true;
-            }
-        }
-        let Some(binary) = self.pinned.clone() else {
-            return Input::PinRefused;
-        };
-        if fresh && !swept {
-            sweep_stale_data_dirs(&self.data_dir, None);
-        }
-        if let Some(short) = self.space_short(fresh) {
-            return short;
-        }
-        let spawned = if let Some(directory) = self.kept.take() {
-            DaemonTorControl::spawn_into(
-                directory,
-                binary,
-                self.events.clone(),
-                REPLY_BOUND,
-                SOCKS_TIMEOUT,
-            )
-            .await
-            .map_err(|failure| (failure.error, Some(failure.directory)))
-        } else {
-            match DaemonTorControl::spawn_keeping(DaemonTorConfig {
-                tor_binary: binary,
-                data_dir_parent: self.data_dir.clone(),
-                events: self.events.clone(),
-                reply_deadline: REPLY_BOUND,
-                socks_timeout: SOCKS_TIMEOUT,
-            })
-            .await
-            {
-                Ok(up) => Ok(up),
-                Err(SpawnError::DataDir(error)) => Err((DaemonTorStartError::DataDir(error), None)),
-                Err(SpawnError::Launch(failure)) => Err((failure.error, Some(failure.directory))),
-            }
-        };
-        match spawned {
-            Ok(up) => {
-                self.generation = self.generation.wrapping_add(1);
-                tokio::spawn(incarnation(
-                    self.generation,
-                    up.death(),
-                    up.watch_bootstrap(),
-                    self.poster.clone(),
-                ));
-                // The child is up. The subscription is a control ask, so a
-                // stop drops it. The fork itself has already returned; the
-                // control is stored so shutdown still owns the child.
-                self.control = Some(up);
-                let latch = self.inbox.latch();
-                // Stored on the line above. The subscription borrows that
-                // child; a missing one is a broken launch, not a quiet skip.
-                let control = self
-                    .control
-                    .as_ref()
-                    .expect("the child is stored before its event subscription");
-                let subscribed = race_stop(&latch, control.ask(Command::supervisor_events())).await;
-                match subscribed {
-                    Err(shutdown) => shutdown,
-                    Ok(Err(error)) => {
-                        tracing::warn!(
-                            target: "global",
-                            "Tor events were not subscribed ({error})"
-                        );
-                        Input::Spawned
-                    }
-                    Ok(Ok(_)) => Input::Spawned,
-                }
-            }
-            Err((error, directory)) => {
-                if let Some(directory) = directory {
-                    self.kept = Some(directory);
-                }
-                match error {
-                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable {
-                        path: self.data_dir.clone(),
-                        space: None,
-                    },
-                    _ => Input::SpawnFailed,
-                }
-            }
-        }
-    }
-
-    async fn sample(&mut self) -> Vec<Input> {
-        // Read before borrowing the control: the keys and the view that is
-        // folded are the same decision.
-        let reads_network = self.core.reads_network();
-        let Some(control) = self.control.as_mut() else {
-            return vec![Input::ControlEnded];
-        };
-        let reply = match control
-            .ask(Command::GetInfo(sample_keys(reads_network)))
-            .await
-        {
-            Ok(reply) => reply,
-            Err(error) => return vec![input_of_ask(&error)],
-        };
-        let socks = parse_socks_listeners(&reply);
-        if let Some(socks) = socks {
-            control.set_socks(socks);
-        }
-        let mut inputs = vec![Input::DirectorySample {
-            progress: parse_bootstrap_progress(&reply),
-            socks,
-            read: parse_traffic_read(&reply),
-        }];
-        if reads_network {
-            let view = parse_network_view(&reply);
-            // Tor's view is what the next blocked-link run records (`TSR-Q14`):
-            // said when it changes, not with every sample.
-            if view != self.network_view {
-                tracing::info!(
-                    target: "tor",
-                    network_liveness = ?view.liveness,
-                    circuit_established = ?view.circuits,
-                    "Tor's view of its network"
-                );
-                self.network_view = view;
-            }
-            inputs.push(Input::NetworkView(view));
-        }
-        match self.consensus_clock().await {
-            Ok(Some(clock)) => inputs.push(clock),
-            Ok(None) => {}
-            Err(fault) => {
-                // The directory sample already read is still folded. The
-                // fault ends the incarnation after it.
-                inputs.push(fault);
-                return inputs;
-            }
-        }
-        inputs
-    }
-
-    /// The consensus's `valid-after` against this machine's wall time
-    /// (§4.2). The core reads it only while Bootstrapping or Running. Tor
-    /// having no consensus yet is no input. An ask that fails is a process
-    /// fault, the same as the sample's own ask: it is not "no consensus".
-    /// The wall time is read here and passed as a value: the core's own
-    /// clock is monotonic.
-    async fn consensus_clock(&mut self) -> Result<Option<Input>, Input> {
-        let Some(control) = self.control.as_mut() else {
-            return Ok(None);
-        };
-        let asked = control
-            .ask(Command::GetInfo(vec![CONSENSUS_VALID_AFTER.to_owned()]))
-            .await;
-        let parsed = match &asked {
-            Ok(reply) => Ok(parse_consensus_valid_after(reply)),
-            Err(error) => Err(error),
-        };
-        let wall = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|elapsed| elapsed.as_secs());
-        consensus_sample(parsed, wall)
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -1098,45 +931,6 @@ impl Drive {
         Input::RouteInstalled
     }
 
-    async fn republish(&mut self) -> Input {
-        let Some(control) = self.control.as_ref() else {
-            return Input::ControlEnded;
-        };
-        let Some(forward) = self.forward else {
-            return Input::ForwardAbsent;
-        };
-        match control
-            .republish(
-                &self.onion,
-                self.virtual_port,
-                forward,
-                MAX_STREAMS,
-                OnionPow::Enabled,
-            )
-            .await
-        {
-            Ok(service) => {
-                self.network
-                    .note_own_onion(service.as_str(), self.virtual_port);
-                // A publish starts the onion's rounds afresh: a round left
-                // open by the deleted service is not this one's.
-                self.rounds = Some(UploadRounds::new(service.clone()));
-                self.service = Some(service.clone());
-                tracing::info!(
-                    target: "global",
-                    "Tor is up: overlay inbound is published at {}.onion:{}, forwarded from {forward}",
-                    service.as_str(),
-                    self.virtual_port,
-                );
-                Input::OnionPublished
-            }
-            Err(error) => {
-                tracing::warn!(target: "global", "the onion was not published ({error})");
-                Input::OnionRejected
-            }
-        }
-    }
-
     fn withdraw_route(&mut self, cause: DownCause) {
         if let Some(id) = self.incarnation.take() {
             let _fell = self.network.publish_tor_down(id, cause);
@@ -1149,37 +943,6 @@ impl Drive {
     /// headroom. A disk that fills after the spawn is not this check's.
     /// A probe that cannot read the disk lets the spawn go ahead: "I cannot
     /// tell" is not "full".
-    fn space_short(&self, fresh: bool) -> Option<Input> {
-        let needed = space_needed(&self.data_dir, fresh);
-        match shekyl_node::free_bytes(&self.data_dir) {
-            Ok(available) if available < needed => Some(Input::DirectoryUnusable {
-                path: self.data_dir.clone(),
-                space: Some(Space { available, needed }),
-            }),
-            Ok(_) => None,
-            Err(error) => {
-                tracing::warn!(
-                    target: "global",
-                    path = %self.data_dir.display(),
-                    %error,
-                    "the free space for Tor's data directory could not be read; starting Tor anyway"
-                );
-                None
-            }
-        }
-    }
-
-    /// Stop the child and keep its directory. The generation moves so the
-    /// stop's own death is not a second fault.
-    async fn reap(&mut self) {
-        self.cancel_probe();
-        let Some(control) = self.control.take() else {
-            return;
-        };
-        self.generation = self.generation.wrapping_add(1);
-        self.kept = Some(control.stop_for_respawn().await);
-    }
-
     /// The bootstrap's state as the core reads it. `Ready` and `Failed`
     /// arrive once: the incarnation's producer stops after either.
     fn bootstrap_input(&mut self, state: BootstrapState) -> Input {
@@ -1262,33 +1025,33 @@ fn observed_death(death: TorDeath) -> Option<Input> {
     }
 }
 
-fn ends_incarnation(input: &Input) -> bool {
-    matches!(
-        input,
-        Input::ProcessEnded { .. } | Input::ControlEnded | Input::ReplyLate
-    )
-}
-
-/// Race a control ask against shutdown. A stop already posted, or one
-/// posted while the ask waits, wins: the ask is dropped and the caller
-/// folds [`Input::Shutdown`]. The fork inside spawn is not an ask and does
-/// not come through here.
-async fn race_stop<T>(
-    latch: &StopLatch,
-    ask: impl std::future::Future<Output = T>,
-) -> Result<T, Input> {
-    tokio::select! {
-        biased;
-        () = latch.stopped() => Err(Input::Shutdown),
-        value = ask => Ok(value),
+/// The data directory's free space against what a launch needs, read after
+/// any replacement (§5, "Data directory unusable"). An unreadable figure
+/// starts Tor anyway.
+fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
+    let needed = space_needed(data_dir, fresh);
+    match shekyl_node::free_bytes(data_dir) {
+        Ok(available) if available < needed => Some(Input::DirectoryUnusable {
+            path: data_dir.to_path_buf(),
+            space: Some(Space { available, needed }),
+        }),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(
+                target: "global",
+                path = %data_dir.display(),
+                %error,
+                "the free space for Tor's data directory could not be read; starting Tor anyway"
+            );
+            None
+        }
     }
 }
 
-fn input_of_ask(error: &DaemonTorStartError) -> Input {
-    match error {
-        DaemonTorStartError::Control(ControlError::Timeout) => Input::ReplyLate,
-        _ => Input::ControlEnded,
-    }
+fn input_of_ask(_error: &DaemonTorStartError) -> Input {
+    // The core holds the reply bound, so an ask that ends without an answer
+    // is the control connection ending: a control error or a dead actor.
+    Input::ControlEnded
 }
 
 /// A consensus ask beside the wall time it is compared with. `Ok(None)` is
@@ -1320,21 +1083,24 @@ mod tests {
         assert!(running.starts_with(&bootstrap));
     }
 
-    /// A consensus ask that fails is a process fault. Tor having no
-    /// `valid-after` yet, or no wall time to compare, is no clock input.
-    /// Fails if `consensus_sample` turns a timeout into `Ok(None)`: the
+    /// A consensus ask that fails is a process fault: the control ended
+    /// (the core holds the reply bound, so no ask here times out). Tor having
+    /// no `valid-after` yet, or no wall time to compare, is no clock input.
+    /// Fails if `consensus_sample` turns a failed ask into `Ok(None)`: the
     /// supervisor would keep a dead control connection and never name the
     /// clock.
     #[test]
     fn a_failed_consensus_ask_is_a_process_fault_and_a_missing_consensus_is_not() {
-        let timeout = DaemonTorStartError::Control(ControlError::Timeout);
-        let closed = DaemonTorStartError::Control(ControlError::ConnectionClosed);
-        assert_eq!(
-            consensus_sample(Err(&timeout), Some(1)),
-            Err(Input::ReplyLate)
+        let closed = DaemonTorStartError::Control(
+            shekyl_tor_control_client::control::ControlError::ConnectionClosed,
         );
+        let gone = DaemonTorStartError::Died(None);
         assert_eq!(
             consensus_sample(Err(&closed), Some(1)),
+            Err(Input::ControlEnded)
+        );
+        assert_eq!(
+            consensus_sample(Err(&gone), Some(1)),
             Err(Input::ControlEnded)
         );
         assert_eq!(consensus_sample(Ok(None), Some(1)), Ok(None));
@@ -1389,39 +1155,6 @@ mod tests {
             Some(Duration::from_secs(104)),
             "Tor counts a stream's age in whole seconds"
         );
-    }
-
-    /// A control ask that never answers, the wedged-Tor case, does not hold
-    /// a stop: the stop resolves the race and the driver folds `Shutdown`.
-    /// Dropping the latch's arm from [`race_stop`] makes this time out.
-    /// The production asks call that function.
-    #[tokio::test(start_paused = true)]
-    async fn a_stop_interrupts_an_ask_a_wedged_tor_never_answers() {
-        let (mut owner, waiting, _feeds) = inbox();
-        let latch = waiting.latch();
-        let raced =
-            tokio::spawn(async move { race_stop(&latch, std::future::pending::<Input>()).await });
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        owner.stop();
-        let outcome = tokio::time::timeout(Duration::from_secs(1), raced)
-            .await
-            .expect("the stop ended the ask within a second, not the 30 s bound")
-            .expect("the race task ran");
-        assert_eq!(outcome, Err(Input::Shutdown));
-    }
-
-    /// An ask that answers is unaffected, and a stop signalled before the
-    /// ask began still wins (the daemon is already stopping).
-    #[tokio::test]
-    async fn an_answer_passes_through_and_an_earlier_stop_wins() {
-        let (_owner, open, _feeds) = inbox();
-        let answered = race_stop(&open.latch(), async { Input::ReplyLate }).await;
-        assert_eq!(answered, Ok(Input::ReplyLate));
-
-        let (owner, closed, _feeds) = inbox();
-        drop(owner);
-        let raced = race_stop(&closed.latch(), std::future::pending::<Input>()).await;
-        assert_eq!(raced, Err(Input::Shutdown), "a closed inbox is the stop");
     }
 
     fn secs(seconds: u64) -> u64 {

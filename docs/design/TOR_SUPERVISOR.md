@@ -331,7 +331,7 @@ gate.
 **Runs 2026-11-08 and 2026-11-09** (§7, Windows and macOS; macOS's cases
 that need `sudo` on 2026-11-09): every case each host could stage passes,
 with two findings: `TSR-F18` (macOS, fixed by #1310) and the repeated clock
-line (Windows and macOS, the next supervisor fix). The cases neither host
+line (Windows and macOS, fixed: §4.4, §5 "Clock skew"). The cases neither host
 could stage are named in §7.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
@@ -449,7 +449,7 @@ here.
 | Input | Source | Effect |
 | --- | --- | --- |
 | child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
-| control connection EOF, desync, or a reply past the reply bound (awake time: a bound found expired more than `control::RESUMED_AFTER` late was a sleep, and starts again, §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
+| control connection EOF, desync, or a reply past the reply bound (the core's deadline for the request in flight, `Policy::reply_bound` after the send in awake time, restarted at a wake, §4.11 and §5 "Resumed from suspend") | the control actor; while Running, a liveness sample every 30 s (provisional, `Policy::alive_every`) gives the bound a question to time out on, since a wedged Tor sends no event and closes nothing | process fault (a wedged Tor is a dead Tor) |
 | `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
@@ -582,8 +582,27 @@ gives up and reaches its cap with a loud announcement, repeated once per cap
 interval and never more often (ruled). The once-per-cap limit is on repeats
 of one announcement: a state change (a death, a refused binary, a recovery)
 is a new fact and is said at once (`TSR-F11`); only its repeats wait for the
-cap. The announcement key is the shown state and the cause's kind; a change
-of detail within a kind is a repeat (Rick, 2026-10-24). A detail that would
+cap. The announcement key is the shown state, the cause's kind and the inbound
+facet's kind; a change of detail within a kind is a repeat (Rick,
+2026-10-24), including the lag the consensus check rewrites at every
+liveness sample. The clock is said once while it stands (Rick, 2026-11-10). A skew report,
+the consensus check, or the certificate count, arriving while the clock is
+already named, keeps the latest figure and records the announcement key
+without speaking, so a later say does not treat that kept figure as a new
+kind. While Tor bootstraps, a skew report or the consensus check keeps a
+bootstrap problem and an unreachable directory from naming the blocked link,
+for as long as that clock stands, and when the consensus check names the
+clock a block named before it gives way, so the line says the clock alone.
+The certificate count does the same only while its window stands; past the
+window a block is named again (§4.2). The consensus check's lower bound
+clears when `valid-after` is no longer ahead of the wall by more than the
+tolerance. Tor's own report stays until Tor reaches Running, which clears
+every cause: the check cannot tell the clock set right from a fixed
+consensus aging into the tolerance, or from a sleep, since on Linux and
+macOS supervisor time stops in a sleep and the wall does not (`TSR-M8`).
+So after a correction nothing is said until Tor is up, and that is said
+once. The macOS run
+of 2026-11-09 said the clock 18 times in four minutes (§7). A detail that would
 change the operator's fix is a different kind, so such a cause splits its
 variant rather than keying on the payload. The backoff starts again from its base after the outbound facet has
 been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
@@ -822,7 +841,10 @@ and `FAILED REASON=NOT_FOUND` when that directory does not have it.
   (`Input::DirectoriesDrawn`, one CSPRNG draw per directory). Its answer
   window is `Policy::probe_within` from the moment Tor accepts that
   `HSFETCH` (`250`, `Input::DirectoryFetchAccepted`). The send arms a
-  provisional window, so a command that is never accepted still ends. The
+  provisional window, so a command that is never accepted still ends. A
+  fetch that has come due waits its turn in the request queue (§4.11): until
+  it is sent no window runs, and nothing Tor says about that directory
+  counts. The
   window is the supervisor's wait for the `HS_DESC` line on the control
   connection. It is not the connector's dial deadline, not Tor's SOCKS
   timeout, and not the dialer's outage backoff
@@ -1114,28 +1136,109 @@ a deadline is folded before it, and so is every arrival already queued
 behind the deadline when the loop takes it. A deadline carries no fact: it
 is judged at the moment it is folded, and what is queued behind it happened
 before that moment, so a probe's nonce taken inside its bound is folded
-before the deadline that would time it out, however long a control ask held
-the loop. Only what is queued when the deadline is taken goes ahead, so a
-stream of events cannot hold it back
-(`a_deadline_goes_after_the_arrivals_already_queued_behind_it`). A control ask cannot read the queue without
-taking what is behind the stop, so closing the queue also sets a latch the
-ask races. Tor's events are bounded in the queue at `EVENT_QUEUE_EVENTS`
-not yet taken (`TSR-F2`); one past that is dropped and counted, and the
-count is the round resync's.
+before the deadline that would time it out, however long the loop took
+over the pass before. Only what is queued when the deadline is taken goes
+ahead, so a stream of events cannot hold it back
+(`a_deadline_goes_after_the_arrivals_already_queued_behind_it`). Tor's
+events are bounded in the queue at `EVENT_QUEUE_EVENTS` not yet taken
+(`TSR-F2`); one past that is dropped and counted, and the count is the
+round resync's.
+
+**The loop never waits on Tor** (Rick, 2026-11-10). Every request to Tor
+(the reap of an incarnation that ended, the launch, the event subscription,
+the sample with its consensus clock,
+`SETCONF AvoidDiskWrites`, a republish's `DEL_ONION` and `ADD_ONION`, the
+refetch, the directory check and each directory fetch) is sent and the loop
+goes back to its inbox. A task holding a clone of the control actor
+(`ControlAsker`) runs it and posts the answer as an arrival, tagged with
+the number the core gave the request (`Core::in_flight`); the loop folds
+the answer's inputs and then `Input::Replied` with that number. The core
+sends one request at a time, as when the loop awaited each one, so no
+decision changes: the list is the whole decision, in the order the awaits
+gave (a launch, then its subscription, then its first sample; `DEL_ONION`,
+then `ADD_ONION`, and no add after a refused delete). A probe, a route
+publish, and a progress line ordered after a request stay behind it until
+that reply is folded
+(`a_sample_is_folded_before_the_probe_the_publish_and_the_draw_it_queues`).
+The reply's own decisions run before that tail, and a deadline that comes
+due while a request is out joins the tail. A request, or a probe, that no
+longer stands when its turn comes is withheld there. The reply bound is a core
+deadline per request in flight, `Policy::reply_bound` (30 s) after the send
+in the core's clock (awake time, restarted at a wake like every other
+window); past it is `Cause::ReplyLate`, a process fault. An answer the core
+no longer waits on is not folded, and what it holds is ended: a Tor
+stopped, a directory retired. So
+a status ask (`Supervisor::status`) and the stop are taken in the next pass
+whatever Tor is doing, which is when an operator asks what is wrong
+(`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`). The
+one wait the loop makes is the only one classified for a sleep.
+
+Three orderings the awaiting loop gave are the queue's own. The onion's
+service and its upload rounds are set when `ADD_ONION` is sent, since Tor
+uploads as soon as it takes the service and its `HS_DESC` events can reach
+the inbox before the reply (`an_upload_before_the_add_onion_reply_is_read`).
+One publication is out at a time: the onion stays owed until the add is
+answered, and a sample deadline meanwhile asks for the one already out
+(`a_publication_spanning_a_sample_deadline_is_sent_once`). A directory fetch
+is open from its send (§4.5,
+`a_queued_fetch_is_not_open_and_its_window_runs_from_its_send`).
+
+The reap is a request like the others. A fault, or a hold, that ends an
+incarnation that had launched sends `Action::Reap` after the take-down, and
+the next launch waits behind it in the queue
+(`an_ended_tor_is_reaped_before_the_next_launch`,
+`a_late_reply_reaps_the_tor_it_was_asked_of`). The task closes the
+owning connection, waits Tor's grace (`SHUTDOWN_GRACE`, 5 s), kills what is
+still alive (the whole stop under `REAP_TIMEOUT`, 15 s), saves the directory
+cache after a clean exit, and answers with the kept directory. A frozen Tor
+that ignores the close holds the reap for the whole grace, and status asks
+and the stop are taken meanwhile
+(`a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped`). A
+reap past the reply bound is late like any request; its directory is
+retired when its answer arrives, and the next launch takes a fresh one.
+
+The launch request covers everything between the send and Tor's first
+control reply: the old directory's retirement when the launch takes a fresh
+one, the stale-directory sweep, the space check, the copy of the directory
+cache (`TSR-Q8`), the process start, and `GETINFO version`. It has no clock
+of its own: the core's reply bound holds all of it from the send, in awake
+time. The launch waits for Tor's first reply until the driver abandons it
+(`HandshakeWait::Until`), which the driver does when the core gives up on
+the request and at the stop. A Tor that has not answered is then killed and
+reaped at once, and the launch's own task retires its directory
+(`a_launch_the_core_gives_up_on_ends_its_tor`). On the floor device, a cold
+start with a fresh data directory, while the node generated its genesis
+block, reached Tor's first event (after the version reply and the event
+subscription) 1.4 s and 2.8 s after the daemon's first log line
+(2026-10-31, `ffb7259051`, runs 0 and 1; shekyl-dev
+`data/tsr-acceptance/2026-10-31-pi-floor/`). Those runs had no cache to
+copy; the copy the launch makes took at most 0.063 s on the same device
+(§10, the seeded start, 2026-10-22, not synced). So the reply bound holds a
+cold launch on the floor device with an order of magnitude to spare.
+
+Work that holds a Tor or a directory (a launch, a reap, and the end of what
+a stale answer held) runs in order, each after the one before it has
+finished. The next launch's sweep therefore never meets a directory a late
+launch still holds. The stop is taken at once: it abandons a launch still
+waiting, waits for the last of that work, and ends what any answer still
+queued holds, so no Tor and no directory outlives it. A Tor that answered
+and then froze keeps the stop for Tor's grace
+(`a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer`,
+`a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped`).
 
 One 30 s deadline (provisional, `Policy::alive_every`) does two jobs, and
 they are different actions. While Running it is `Action::Sample`: one
 `GETINFO` on the owning control connection. With the driver's 30 s reply
 bound, a wedged Tor is a process fault within about a minute. A command
-already in flight, such as `SETCONF AvoidDiskWrites=1`, holds the queue for
-its own bound before that sample starts. While bootstrapping it is
+already in flight, such as `SETCONF AvoidDiskWrites=1`, is in flight, and that
+sample waits behind it in the core's queue, each under its own bound. While bootstrapping it is
 `Action::SayProgress`, logged as news. It is not `Action::Announce`. A named
 cause keeps the cadence of its own events, and an origin-hold stays a
 posture warning. The line names the percent, how long that percent has held,
 and the bytes Tor read over a window that slides with every sample: it opens
 on the newest sample at least `alive_every` old (the oldest, until there is
 one) and runs to the moment the line is read, so its span is longer when a
-control ask held the driver. The line begins at the first progress deadline
+pass held the loop. The line begins at the first progress deadline
 and from then on is current at every directory sample (`sample_every`,
 5 s), so a client polling Status reads it to within one sample, while the
 log says it once per deadline. `traffic/read` rides the directory sample.
@@ -1175,7 +1278,8 @@ and stops the managed Tor (#1088).
 ## 5. Rule-82 states
 
 Each row is one typed cause the Status read carries (`TSR-Q12`). The cause's
-detail is typed data: the skew in seconds, the file the pin rejected,
+detail is typed data: the skew as `ReportedSkew` (`SKEW` or `MIN_SKEW`),
+the file the pin rejected,
 whether the data directory is not writable or out of space, the open-file
 limit and the count, and, when a restart repeats, the last exit. The
 "Rendered from the cause" column is the one renderer's words for that cause
@@ -1188,13 +1292,13 @@ that detail, not variants of `ManagedTorFix`.
 | --- | --- | --- | --- | --- | --- |
 | Outbound blocked | `BOOTSTRAP` warn with a `REASON` other than `CLOCK_SKEW`, `NETWORK_LIVENESS DOWN`, `CIRCUIT_NOT_ESTABLISHED`, or `Input::NetworkView` reporting `network-liveness=down` while Running (§4.2) | Degraded (outbound) | this machine cannot reach the Tor network; check this computer's date and time, then the firewall or network. The clock comes first: a wrong clock stops every handshake, Tor may name nothing more specific than the handshake (`DONE`, §7, the clock-ahead VM run of 2026-10-30), the date takes ten seconds to check, and NTP is unauthenticated, so a path attacker can move it. Bridges are `Operator`, not a managed-Tor option | none | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
-| Clock skew | `CLOCK_SKEW SKEW=±s`. A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30) | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
-| Certificates out of date | §4.2's certificate lines, three or more, and `DONE` handshake problems naming three or more distinct relays, within `Policy::clock_evidence_within` (60 s), during a bootstrap. A measured `CLOCK_SKEW` stays named in its place | Degraded (outbound) | Tor reports that this computer's date or time looks wrong, so it cannot connect; check this computer's date and time | none | wait |
+| Clock skew | `CLOCK_SKEW SKEW=±s` (`ReportedSkew::Measured`), or `MIN_SKEW=±s` (`ReportedSkew::AtLeast`). A `BOOTSTRAP` problem whose `REASON` is `CLOCK_SKEW` comes with it and names nothing else: mapped to the blocked link, it overwrote this cause at every problem (§7, the clock-behind VM run of 2026-10-30). Cleared when Tor reaches Running. The consensus check clearing does not clear it: the check cannot tell the clock set right from a fixed consensus aging, or from a sleep (`TSR-M8`). With the clock right and Tor stuck before Running for another reason, the sentence stays until Running or a respawn | Degraded (outbound) | one clock sentence (Rick, 2026-11-10): this computer's clock is [at least] N behind, or ahead of, the Tor network's, N in days and hours from Tor's figure; while "Clock behind the network" stands too, others may not be able to reach this node; check this computer's date and time | none | wait |
+| Certificates out of date | §4.2's certificate lines, three or more, and `DONE` handshake problems naming three or more distinct relays, within `Policy::clock_evidence_within` (60 s), during a bootstrap. A measured `CLOCK_SKEW` stays named in its place | Degraded (outbound) | Tor reports that this computer's date or time looks wrong, so it cannot connect; check this computer's date and time. While "Clock behind the network" stands too, its sentence is the one clock sentence, since it carries a figure | none | wait |
 | Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when); the pace beside it (§4.11) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes. With the pace: advancing, slow but normal, or stalled, with the bytes over the window | none | wait |
-| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a wait the driver was in that returned more than `control::RESUMED_AFTER` (10 s) past the deadline it was armed with: the loop's wait, whatever woke it, or `ask_timed`. At a wake the dialer's timers fire too, so a dial result can be in its cell with the late deadline; the wait is classified, not what woke it (Rick, 2026-10-31). The queue keeps the order things happened in (§4.11): a control event posted before the deadline is folded before it, and one posted after waits its turn, so events cannot hold the deadline off. Time inside a bounded ask is awake: a deadline left behind while that ask ran is overdue work, not a sleep. The driver folds `Input::Resumed` before what the wait returned (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once, and on `CLOCK_JUMPED` while Running one probe (§4.5, "Overdue"). Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch, an open round's waits and the descriptor's lifetime start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. The reply bound uses the same lateness in `control::ask_timed`: a bound found expired that late starts again, the same reply is awaited, and the lateness is reported so the driver folds `Input::Resumed` before it. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
+| Resumed from suspend | `CLOCK_JUMPED`; and, on every platform, a wait the driver was in that returned more than `control::RESUMED_AFTER` (10 s) past the deadline it was armed with: the loop's wait, whatever woke it; nothing else on the loop waits (§4.11). At a wake the dialer's timers fire too, so a dial result can be in its cell with the late deadline; the wait is classified, not what woke it (Rick, 2026-10-31). The queue keeps the order things happened in (§4.11): a control event posted before the deadline is folded before it, and one posted after waits its turn, so events cannot hold the deadline off. The driver folds `Input::Resumed` before what the wait returned (Rick, 2026-10-30) | Bootstrapping, briefly | none | none | re-evaluate now: one sample at once, and on `CLOCK_JUMPED` while Running one probe (§4.5, "Overdue"). Windows count awake time: on that late timer the bootstrap's stall window and the stranded check's byte mark, the probe's bound (a scheduled probe waits at least `probe_after_min` from the wake), the quiet stretch, an open round's waits, the descriptor's lifetime and the reply bound of the request in flight start again from the wake, and the sample and liveness cadences re-arm from it, so nothing that came due in the sleep fires. A respawn backoff and a repeated announcement are left as they are. `Instant` counts through a sleep on Windows and stops on Linux and macOS (`TSR-M8`), so a waited timer is late on Windows and not on the other two; the windows follow the timer on all three. A sleep that ends within 10 s of a deadline is not seen; it adds at most that to a window |
 | Stranded after a clock jump | `CLOCK_JUMPED` during the bootstrap, then neither the percent nor a known `traffic/read` moving for `Policy::jump_stall_after` (5 min), judged at a sample (a count Tor did not give is unknown, not a stall) | Restarting | Tor stopped making progress after this computer's clock changed, and is being started again | none | respawn into the kept directory (§4.4) |
 | Onion unreachable | two consecutive probes past their bound, the second after `HSFETCH`, or a directory check that misses twice (§4.5) | Degraded (inbound) | peers cannot reach this node through Tor right now, and its address is being published again; no fix, after the outbound cause and its fix when one stands | none | republish (`DEL_ONION`, then `ADD_ONION`) when the backoff allows; a refused republish is a process fault |
-| Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2) | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`) | none | none: no republish and no probe until it clears |
+| Clock behind the network | `consensus/valid-after` ahead of the wall time by more than `TSR-M13` (360 s), at a liveness sample, Bootstrapping or Running (§4.2). Clears when a sample is inside the tolerance, including a fixed consensus that aged there. That clear does not retire a standing "Clock skew" | Degraded (inbound) | this computer's clock is at least N behind the Tor network's; others may not be able to reach this node; check this computer's date and time (N from `Status::clock_behind`). Beside "Clock skew" it is that row's one sentence, with Tor's figure. The bootstrap's progress line is not said while it stands, since it would carry the clock again | none | none: no republish and no probe until it clears |
 | Uploads refused | a round in which more than half of the uploads ended `UPLOAD_REJECTED` (§4.2) | Degraded (inbound) | the Tor network is not accepting this node's address right now; others may not be able to reach this node | none | none: no republish and no probe until a round in which an upload succeeded is not refused |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
 | Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
@@ -1520,7 +1624,7 @@ shekyl-dev `data/tsr-acceptance/2026-11-09-macos-sudo/`, commit `862cec2`):
   `date -u`): up, a probe arrived, nothing named, as on Windows and the
   Linux VM.
 - **Clock three days behind at start:** not up in 4 min; no respawn.
-  **Finding (Windows's, again):** the line was said 18 times in 4 min, 2 to
+  **Finding (Windows's, again; fixed, §4.4):** the line was said 18 times in 4 min, 2 to
   42 s apart, as Tor's skew reports arrived with -258357, -259201 and
   -259202 s. Each carries the cause's sentence with the raw seconds beside
   "at least 2 d 23 h behind"; five also add "cannot reach the Tor
@@ -1585,7 +1689,7 @@ clearnet off; shekyl-dev `data/tsr-acceptance/2026-11-08-windows/`, commits
   some events and not others. The line also carries the cause's sentence
   with the raw signed seconds ("The clock is off by -259200 seconds. Check
   time sync.") beside the inbound facet's readable one ("at least 2 d 23 h
-  behind"). Both are the next supervisor fix.
+  behind"). Both are fixed (§4.4, §5 "Clock skew").
 - **Set back a day while Running, then set right after 5 min:** named in the
   second Tor reported the backward jump (inbound `ClockBehind`, "at least
   22 h 52 min behind"); no respawn. Set right, the name cleared in the same

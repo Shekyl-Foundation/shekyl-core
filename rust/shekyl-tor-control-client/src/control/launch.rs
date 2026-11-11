@@ -1139,6 +1139,7 @@ mod tests {
             disable_network,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
+            handshake: crate::control::HandshakeWait::Bounded,
             leak: None,
         }
     }
@@ -1545,6 +1546,7 @@ mod tests {
             disable_network: true,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
+            handshake: crate::control::HandshakeWait::Bounded,
             leak: None,
         };
         let pair = ControlPair::new().expect("control pair");
@@ -1794,7 +1796,7 @@ fn main() {
             _ = child.wait() => LaunchVerdict::Exited,
             answered = async {
                 let mut framer = super::super::framing::ReplyFramer::default();
-                super::super::actor::confirm_driveable(&mut read, &mut write, &mut framer).await
+                super::super::actor::confirm_driveable(&mut read, &mut write, &mut framer, super::super::actor::HandshakeWait::Bounded).await
             } => if answered.is_ok() {
                 LaunchVerdict::CameUp
             } else {
@@ -1841,6 +1843,7 @@ fn main() {
             disable_network: true,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
+            handshake: crate::control::HandshakeWait::Bounded,
             leak: None,
         };
         prepare_data_directory(&managed.data_dir)

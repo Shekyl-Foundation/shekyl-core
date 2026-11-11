@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::super::super::posture::{render, Cause, Shown, TorQuiet};
 use super::super::{duration_ns, Action, Core, DialTally, Input, Step, TorCensus};
-use super::{announces, managed, policy, reach_usable, socks, spawns, takes_down};
+use super::{announces, managed, policy, reach_usable, replied, socks, spawns, takes_down};
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
@@ -60,15 +60,21 @@ fn tor_says(liveness: Reported, circuits: Reported) -> Input {
 
 /// Run every deadline up to and including `until`, answering each liveness
 /// sample as a Tor that has not reported its network, so nothing but the
-/// evidence under test can move the core. Returns every step taken.
+/// evidence under test can move the core, and then with
+/// [`Input::Replied`]. Returns every step taken, the `Replied` steps among
+/// them: a request queued behind a sample is sent there.
 fn run_until(core: &mut Core, until: u64) -> Vec<Step> {
     let mut steps = Vec::new();
     while let Some(due) = core.deadline().filter(|due| *due <= until) {
         let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            steps.push(core.on(tor_says(Reported::Unknown, Reported::Unknown), due));
-        }
+        let mut sampled = step.actions.contains(&Action::Sample);
         steps.push(step);
+        while sampled {
+            steps.push(core.on(tor_says(Reported::Unknown, Reported::Unknown), due));
+            let next = replied(core, due);
+            sampled = next.actions.contains(&Action::Sample);
+            steps.push(next);
+        }
     }
     steps
 }
@@ -217,6 +223,12 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
 fn running_at(core: &mut Core, at: u64) {
     core.on(Input::PinAccepted, at);
     core.on(Input::Spawned, at);
+    // Launch, subscription, and the sample `Spawned` queued. The progress
+    // line is not said from behind a request the test has already treated
+    // as finished.
+    replied(core, at);
+    replied(core, at);
+    replied(core, at);
     core.on(
         Input::DirectorySample {
             progress: Some(100),
@@ -225,7 +237,12 @@ fn running_at(core: &mut Core, at: u64) {
         },
         at,
     );
+    replied(core, at);
     core.on(Input::BootstrapComplete, at);
+    // The onion's delete, then its add.
+    replied(core, at);
+    core.on(Input::OnionPublished, at);
+    replied(core, at);
     core.on(Input::RouteInstalled, at);
 }
 
@@ -277,12 +294,17 @@ fn a_failure_launched_before_a_wake_raises_nothing() {
     reach_usable(&mut core);
     let after = duration_ns(policy().quiet_after);
     let woke = secs(50);
-    core.on(
+    let resumed = core.on(
         Input::Resumed {
             late_by: Duration::from_secs(600),
         },
         woke,
     );
+    // The wake's sample is in flight. The quiet line waits until it is
+    // answered, so a later dial is not said from behind it.
+    if resumed.actions.contains(&Action::Sample) {
+        replied(&mut core, woke);
+    }
     core.on(dials(0, 1, Some(woke - 1)), woke + 1);
     core.on(dials(0, 2, Some(woke - 1)), woke + 2 * after);
     assert_eq!(core.status().tor_quiet, None, "launched before the wake");
@@ -387,7 +409,12 @@ fn a_blocked_link_still_respawns_when_the_control_connection_fails() {
     assert!(matches!(core.status().cause, Cause::Died { .. }));
     assert_eq!(core.status().shown, Shown::Restarting);
     let due = core.deadline().expect("the respawn wait");
-    let step = core.on_deadline(due);
+    let during = core.on_deadline(due);
+    assert!(
+        !during.actions.contains(&Action::CheckPin),
+        "the pin waits for the reap: {during:?}"
+    );
+    let step = replied(&mut core, due);
     assert!(
         step.actions.contains(&Action::CheckPin),
         "{:?}",

@@ -13,6 +13,16 @@ use crate::control::{
 };
 
 use super::core::{DirectoryAnswer, Input, RoundTally};
+use super::posture::ReportedSkew;
+
+/// Tor's `CLOCK_SKEW` value, as the supervisor stores it. The two wire
+/// forms stay two variants: a lower bound is not a measure.
+fn reported_skew(skew: crate::control::ClockSkew) -> ReportedSkew {
+    match skew {
+        crate::control::ClockSkew::Measured(seconds) => ReportedSkew::Measured(seconds),
+        crate::control::ClockSkew::AtLeast(seconds) => ReportedSkew::AtLeast(seconds),
+    }
+}
 
 /// A fetch of this node's onion, as the directory check reads it (§4.5).
 /// The caller keeps only events for its own address. `REQUESTED` names the
@@ -116,12 +126,11 @@ pub fn input_of(event: &TorEvent) -> Option<Input> {
         TorEvent::NetworkLiveness(Liveness::Up) => Some(Input::ExternalCleared),
         TorEvent::General { status, .. } => match status {
             GeneralStatus::DirAllUnreachable => Some(Input::DirectoryUnreachable),
-            GeneralStatus::ClockSkew { skew, .. } => skew.as_ref().map(|skew| Input::ClockSkew {
-                seconds: match skew {
-                    crate::control::ClockSkew::Measured(seconds)
-                    | crate::control::ClockSkew::AtLeast(seconds) => *seconds,
-                },
-            }),
+            GeneralStatus::ClockSkew { skew, .. } => {
+                skew.as_ref().copied().map(|skew| Input::ClockSkew {
+                    skew: reported_skew(skew),
+                })
+            }
             GeneralStatus::ClockJumped { .. } => Some(Input::ClockJumped),
             GeneralStatus::TooManyConnections { current } => Some(Input::TooManyFiles {
                 open: current.unwrap_or(0),
@@ -368,6 +377,41 @@ mod tests {
         assert_eq!(
             round_inputs(&[RoundMark::FirstUploaded], &mut draw),
             [Input::FirstUploaded { draw: 4 }]
+        );
+    }
+
+    /// **Tor's measure and Tor's lower bound stay apart** (Rick,
+    /// 2026-11-10): `SKEW=` is a measure and `MIN_SKEW=` a lower bound, and
+    /// the clock line says "at least" only for the second. Folding both into
+    /// one figure fails this.
+    #[test]
+    fn a_clock_skew_keeps_whether_tor_measured_it() {
+        use crate::control::{parse_event, ReplyFramer};
+        let parse = |line: &str| {
+            let mut framer = ReplyFramer::default();
+            framer.push_bytes(format!("650 {line}\r\n").as_bytes());
+            let reply = framer.next_reply().expect("frames").expect("a reply");
+            parse_event(&reply).expect("an event")
+        };
+        let measured = parse("STATUS_GENERAL WARN CLOCK_SKEW SKEW=-259201 SOURCE=OR:192.0.2.1:443");
+        assert!(
+            matches!(
+                input_of(&measured),
+                Some(Input::ClockSkew {
+                    skew: super::super::posture::ReportedSkew::Measured(-259_201)
+                })
+            ),
+            "{measured:?}"
+        );
+        let bound = parse("STATUS_GENERAL WARN CLOCK_SKEW MIN_SKEW=7200 SOURCE=CONSENSUS");
+        assert!(
+            matches!(
+                input_of(&bound),
+                Some(Input::ClockSkew {
+                    skew: super::super::posture::ReportedSkew::AtLeast(7_200)
+                })
+            ),
+            "{bound:?}"
         );
     }
 

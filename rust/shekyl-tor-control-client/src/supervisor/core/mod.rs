@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::posture::{
     fixes, own_tx, BootstrapLine, Carriage, Cause, Connectors, Inbound, OriginVerdict,
-    ProgressWindow, Sessions, Shown, Space, Status,
+    ProgressWindow, ReportedSkew, Sessions, Shown, Space, Status,
 };
 
 mod announce;
@@ -26,6 +26,7 @@ mod dials;
 mod directories;
 mod network_view;
 mod probe;
+mod requests;
 mod resume;
 mod running;
 
@@ -111,6 +112,11 @@ pub struct Policy {
     /// worst case. It doubles at each failed republish, up to
     /// [`Self::descriptor_lifetime`], and resets on a confirmed Reachable.
     pub republish_after: Duration,
+    /// How long a request to Tor may go unanswered before it is a process
+    /// fault ([`Cause::ReplyLate`]): one bound after the send, in this
+    /// core's clock, restarted at a wake. The driver never waits on it; the
+    /// request runs off the loop (Rick, 2026-11-10).
+    pub reply_bound: Duration,
 }
 
 impl Policy {
@@ -157,6 +163,10 @@ impl Policy {
             // One judgment's worst case (`TSR-M14`). Named with the waits it
             // is made of, so a later probe bound moves this with them.
             republish_after: REPUBLISH_AFTER,
+            // `TSR-M2`: a healthy Tor answered every ask well inside a
+            // second; 30 s keeps a wedge a fault within about a minute with
+            // `alive_every`.
+            reply_bound: REPLY_BOUND,
         }
     }
 }
@@ -174,6 +184,9 @@ pub const PROBE_WITHIN: Duration = Duration::from_secs(60);
 /// [`Policy::republish_after`] (`TSR-M14`): the round's wait, then a probe
 /// and the refetch's probe, each at its longest delay and its bound. A wait
 /// shorter than one judgment republishes inside the previous check.
+/// The reply bound the daemon uses ([`Policy::reply_bound`]).
+pub const REPLY_BOUND: Duration = Duration::from_secs(30);
+
 pub const REPUBLISH_AFTER: Duration = {
     let one_probe = PROBE_AFTER_MAX.saturating_add(PROBE_WITHIN);
     ROUND_WAIT
@@ -205,6 +218,11 @@ pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 pub enum Action {
     /// Discover and pin. No spawn until this accepts.
     CheckPin,
+    /// Stop and reap the incarnation that ended, keeping its data
+    /// directory for the next launch: the owning connection closes, Tor is
+    /// given its grace to exit, and is killed past it. A request: the
+    /// reply is [`Input::Replied`] alone, and the next launch waits behind it.
+    Reap,
     /// Spawn. `fresh_directory` drops the kept data directory first.
     Spawn {
         /// Take a new data directory.
@@ -215,10 +233,13 @@ pub enum Action {
     /// network view ([`Input::NetworkView`]); during a bootstrap those keys
     /// are not asked. While Running this is the liveness question: a Tor
     /// that sends nothing still has a reply to be late with.
-    /// A reply inside the driver's bound is [`Input::DirectorySample`],
-    /// then [`Input::NetworkView`] while Running.
-    /// A reply past it is [`Input::ReplyLate`].
+    /// The reply is [`Input::DirectorySample`], then [`Input::NetworkView`]
+    /// while Running, then the consensus clock. A reply past
+    /// [`Policy::reply_bound`] is [`Cause::ReplyLate`].
     Sample,
+    /// Subscribe the owning connection to the supervisor's events. Sent
+    /// after a launch and before its first sample.
+    SubscribeEvents,
     /// Look for the first `state` file.
     WatchState,
     /// `SETCONF AvoidDiskWrites=1` on the owning connection.
@@ -226,14 +247,18 @@ pub enum Action {
     /// Publish the managed route. Only the transition into `Running` builds it.
     Publish(ManagedRunning),
     /// The installed route is down because the process ended. The driver
-    /// reaps and keeps the directory.
+    /// withdraws it; [`Self::Reap`] follows.
     TakeDown,
     /// The installed route is down because this node is stopping. The
     /// driver leaves the child up; [`Self::StopChild`] wipes it.
     StopRoute,
-    /// Publish the onion from the boot's seed: `DEL_ONION`, then
-    /// `ADD_ONION`, so a Tor that still holds the service takes it again.
+    /// Publish the onion from the boot's seed, first half: `DEL_ONION`, so
+    /// a Tor that still holds the service takes it again. A delete Tor
+    /// refuses is [`Input::OnionRejected`], and no [`Self::AddOnion`] is sent.
     RepublishOnion,
+    /// The second half: `ADD_ONION`. The reply is [`Input::OnionPublished`]
+    /// or [`Input::OnionRejected`].
+    AddOnion,
     /// Dial this node's own onion with a fresh probe nonce (§4.5). The
     /// driver answers [`Input::ProbeDialed`], or [`Input::ProbeNotDialed`]
     /// when it cannot. The core holds the bound.
@@ -356,8 +381,15 @@ pub enum Input {
         /// `PROGRESS=`.
         progress: u8,
     },
-    /// A control reply missed the bound.
-    ReplyLate,
+    /// The last input of a request's reply: the actions the driver runs off
+    /// its loop (the launch, the subscription, the sample, `SETCONF`, the
+    /// republish's two halves, the refetch, the directory check and its
+    /// fetches). `number` is [`Core::in_flight`] as the request was sent. A
+    /// reply for any other number is not folded.
+    Replied {
+        /// The request this reply answers.
+        number: u64,
+    },
     /// The process ended.
     ProcessEnded {
         /// The exit code, when the reap reported one.
@@ -375,20 +407,16 @@ pub enum Input {
     OnionPublished,
     /// `ADD_ONION` failed. The process stays up.
     OnionRejected,
-    /// The driver was asked to publish the onion again and did not. A
-    /// liveness sample since the ask named a cause a republish cannot get
-    /// past (§4.5). The anchor that ask moved is put back.
-    RepublishWithheld,
     /// The zone host is up and the forward listener is bound.
     EndpointReady,
     /// Outbound to the Tor network is blocked.
     ExternalBlocked,
     /// No directory is reachable.
     DirectoryUnreachable,
-    /// A reported clock difference.
+    /// Tor reported the clock off.
     ClockSkew {
-        /// Seconds.
-        seconds: i64,
+        /// Tor's figure: `SKEW` or `MIN_SKEW`.
+        skew: ReportedSkew,
     },
     /// Tor resumed and closed its circuits.
     ClockJumped,
@@ -697,6 +725,8 @@ pub struct Core {
     clock_evidence: clock_evidence::ClockEvidence,
     /// The owed republish is a Service remedy: a refusal escalates.
     service_republish: bool,
+    /// The requests to Tor, and the one in flight.
+    requests: requests::Requests,
 }
 
 impl Core {
@@ -738,6 +768,7 @@ impl Core {
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
             service_republish: false,
+            requests: requests::Requests::default(),
         };
         let step = core.step(now, vec![Action::CheckPin]);
         (core, step)
@@ -768,7 +799,7 @@ impl Core {
                 read,
             } => self.note_sample(now, progress, socks, read),
             Input::BootstrapNoted { progress } => self.note_bootstrap(now, progress),
-            Input::ReplyLate => self.process_fault(now, Cause::ReplyLate, false),
+            Input::Replied { number } => self.replied(number),
             Input::ProcessEnded { exit_code } => {
                 self.process_fault(now, Cause::Died { exit_code }, false)
             }
@@ -803,11 +834,10 @@ impl Core {
                 arrived_at,
             } => self.probe_arrived(now, minted_at, arrived_at),
             Input::OnionRejected => self.onion_refused(now),
-            Input::RepublishWithheld => self.republish_withheld(),
             Input::EndpointReady => self.endpoint_ready(),
             Input::ExternalBlocked => self.blocked(now),
-            Input::DirectoryUnreachable => self.external(now, Cause::DirectoryUnreachable),
-            Input::ClockSkew { seconds } => self.external(now, Cause::ClockSkew { seconds }),
+            Input::DirectoryUnreachable => self.unreachable_directories(now),
+            Input::ClockSkew { skew } => self.clock_skew(now, skew),
             Input::ClockJumped => self.clock_jumped(now),
             Input::Resumed { late_by } => self.resumed(now, late_by),
             Input::CertificateOutOfDate => self.line_logged(now),
@@ -852,9 +882,11 @@ impl Core {
                     Some(directories::DirectoryHalf::AwaitingDraw)
                 )
             }
-            Action::FetchFromDirectory { .. } => {
-                matches!(self.directories, Some(directories::DirectoryHalf::Open(_)))
-                    && !self.republish_cannot_help()
+            Action::FetchFromDirectory { hsdir } => {
+                matches!(
+                    &self.directories,
+                    Some(directories::DirectoryHalf::Open(check)) if check.queued(*hsdir)
+                ) && !self.republish_cannot_help()
             }
             Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
             _ => true,
@@ -864,6 +896,11 @@ impl Core {
     /// The deadline fired. Each armed time is its own kind of work: a pin
     /// check, a sample, or another announcement.
     pub fn on_deadline(&mut self, now: u64) -> Step {
+        // A request past its bound is a process fault, whatever else is due.
+        if self.phase != Phase::Stopping && self.reply_late(now) {
+            let actions = self.process_fault(now, Cause::ReplyLate, false);
+            return self.step(now, actions);
+        }
         if self.phase == Phase::Stopping {
             self.pin_at = None;
             self.sample_at = None;
@@ -912,8 +949,9 @@ impl Core {
                     self.progress.speak(now);
                     // A named cause is said by its own events, at most once
                     // per cap. The progress line is a different action, so
-                    // it cannot say the cause again.
-                    if self.cause == Cause::None {
+                    // it cannot say the cause again; nor the clock, which
+                    // the consensus check names beside no cause.
+                    if self.cause == Cause::None && !self.clock_is_behind() {
                         actions.push(Action::SayProgress);
                     }
                     self.arm_alive(now);
@@ -993,6 +1031,7 @@ impl Core {
             self.overdue_due(),
             self.directories_due(),
             self.republish_due(),
+            self.requests.due(duration_ns(self.policy.reply_bound)),
         ]
         .into_iter()
         .flatten()
@@ -1200,6 +1239,7 @@ impl Core {
     }
 
     fn shutdown(&mut self) -> Vec<Action> {
+        self.requests.clear();
         let installed = self.route_done();
         self.phase = Phase::Stopping;
         self.pin_at = None;
@@ -1215,6 +1255,14 @@ impl Core {
     }
 
     fn process_fault(&mut self, now: u64, cause: Cause, launch_failed: bool) -> Vec<Action> {
+        // The incarnation ended: nothing queued for it is sent, and a reply
+        // still on its way is not folded. A Tor that was launched is reaped,
+        // off the loop, before the next launch.
+        self.requests.clear();
+        let launched = matches!(
+            self.phase,
+            Phase::Bootstrapping { .. } | Phase::Running { .. }
+        );
         let installed = self.route_done();
         let dropped = self.drop_probe();
         self.phase = Phase::Absent {
@@ -1239,11 +1287,22 @@ impl Core {
         if installed {
             actions.push(Action::TakeDown);
         }
+        if launched {
+            actions.push(Action::Reap);
+        }
         actions.extend(self.say(now, Cadence::Due));
         actions
     }
 
     fn hold(&mut self, now: u64, cause: Cause, duty: AbsentDuty) -> Vec<Action> {
+        self.requests.clear();
+        // A hold comes from the pin check or the launch, before a Tor runs.
+        // One that comes while a Tor runs ends it like a fault: reaped, off
+        // the loop.
+        let launched = matches!(
+            self.phase,
+            Phase::Bootstrapping { .. } | Phase::Running { .. }
+        );
         let installed = self.route_done();
         let dropped = self.drop_probe();
         self.phase = Phase::Absent { duty };
@@ -1257,6 +1316,9 @@ impl Core {
         let mut actions: Vec<Action> = dropped.into_iter().collect();
         if installed {
             actions.push(Action::TakeDown);
+        }
+        if launched {
+            actions.push(Action::Reap);
         }
         actions.extend(self.say(now, Cadence::Due));
         actions
@@ -1330,6 +1392,13 @@ impl Core {
         } else {
             Vec::new()
         }
+    }
+
+    /// The line changed and was already said. Record the key it has now,
+    /// without speaking and without moving the cap.
+    fn note_key(&mut self) {
+        let key = self.say_key();
+        self.announcements.note_key(key);
     }
 
     fn say_key(&self) -> announce::SayKey {
@@ -1505,7 +1574,8 @@ impl Core {
         }
     }
 
-    fn step(&mut self, now: u64, mut actions: Vec<Action>) -> Step {
+    fn step(&mut self, now: u64, actions: Vec<Action>) -> Step {
+        let mut actions = self.route_requests(now, actions);
         self.settle_shown(now);
         if self.inbound != self.published_inbound {
             self.published_inbound = self.inbound;

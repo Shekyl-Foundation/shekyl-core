@@ -32,13 +32,17 @@ pub(super) enum Cadence {
     Once,
 }
 
-/// The shown state, the cause's kind, and the inbound facet's cause when
-/// it is down. Detail inside one kind is not a change (§4.4).
+/// The shown state, the cause's kind, and the inbound facet's kind when it
+/// is down. Detail inside one kind is not a change (§4.4): Tor's skew
+/// seconds, and the lag the consensus check rewrites at every liveness
+/// sample. Keying on that lag made the first statement after every sample
+/// new, and the macOS run of 2026-11-09 said the clock 18 times in four
+/// minutes (§7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SayKey {
     shown: Shown,
     cause: std::mem::Discriminant<Cause>,
-    inbound: Option<InboundCause>,
+    inbound: Option<std::mem::Discriminant<InboundCause>>,
 }
 
 impl SayKey {
@@ -47,7 +51,7 @@ impl SayKey {
             shown,
             cause: std::mem::discriminant(cause),
             inbound: match inbound {
-                Inbound::Unreachable { cause, .. } => Some(cause),
+                Inbound::Unreachable { cause, .. } => Some(std::mem::discriminant(&cause)),
                 Inbound::NotOffered | Inbound::Publishing | Inbound::Reachable { .. } => None,
             },
         }
@@ -150,6 +154,13 @@ impl Announcements {
                 false
             }
         }
+    }
+
+    /// The line's key changed and it was already said. Record the key the
+    /// line has now. Do not speak, and do not move the cap: a clock that
+    /// keeps a new figure is the same line.
+    pub(super) fn note_key(&mut self, key: SayKey) {
+        self.said = Some(key);
     }
 
     /// Say `key` under `cadence`, or arm the debt the cap still owes.

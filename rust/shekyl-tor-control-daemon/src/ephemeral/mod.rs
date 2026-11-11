@@ -6,8 +6,8 @@
 //! One managed Tor incarnation (PWD-E7 piece 2).
 //!
 //! [`DaemonTorControl::spawn_keeping`] creates a data directory under the
-//! caller-named parent and returns when `GETINFO version` answers. Bootstrap
-//! is not a gate. The directory is kept across a respawn in the same boot
+//! caller-named parent and returns when `GETINFO version` answers, waiting
+//! for it as long as the caller says. Bootstrap is not a gate. The directory is kept across a respawn in the same boot
 //! (`TSR-Q1`) and retired when the daemon stops: Tor's log is kept beside it,
 //! the directory becomes a tombstone, and the tombstone is deleted off the
 //! stop path under [`TOMBSTONE_DELETE_BOUND`] (`TOR_SUPERVISOR.md` §4.7).
@@ -21,25 +21,26 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, Asked,
-    BootstrapState, Command, ControlError, ControlReply, DiskWrites, EventSink, OnionFlags,
-    OnionPort, OnionPow, Resume, ServiceId, SocksTimeout, TorControlClient, TorExit,
+    AddOnionReplyError, BootstrapState, Command, ControlError, ControlReply, EventSink, OnionPow,
+    ServiceId, SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 use crate::data_dir::{EphemeralDataDir, KeptLog};
 
+mod asker;
 mod spawn;
 
+pub use asker::ControlAsker;
 pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 
 /// Bound on the whole teardown sequence (graceful actor stop + child reap),
@@ -106,6 +107,10 @@ pub enum DaemonTorStartError {
     /// or the actor stopped). Carries the reaped exit when teardown observed
     /// it.
     Died(Option<TorExit>),
+    /// The spawn stopped waiting for Tor's first control reply: the
+    /// caller's deadline passed, or its supervisor abandoned the launch.
+    /// The child was stopped and reaped.
+    Unanswered,
 }
 
 impl std::fmt::Display for DaemonTorStartError {
@@ -114,6 +119,9 @@ impl std::fmt::Display for DaemonTorStartError {
             Self::DataDir(e) => write!(f, "ephemeral tor data directory: {e}"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died(exit) => write!(f, "tor died during start ({exit:?})"),
+            Self::Unanswered => {
+                f.write_str("tor gave no first control reply before the spawn stopped waiting")
+            }
         }
     }
 }
@@ -226,10 +234,6 @@ pub struct DaemonTorControl {
     exit_watch: watch::Receiver<Option<TorExit>>,
     socks_addr: SocketAddr,
     reply_deadline: Duration,
-    /// A sleep a control ask on this incarnation observed, until the driver
-    /// takes it. The asks are `&self`, and one driver task runs them one at
-    /// a time: the mutex is that shared borrow, not a second schedule.
-    resume: Mutex<Resume>,
     /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
     /// stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
@@ -242,6 +246,12 @@ pub struct DaemonTorControl {
     /// Bootstrap as the actor's poll reports it. The supervisor reads it;
     /// launch does not wait on it.
     ready: watch::Receiver<BootstrapState>,
+    /// Ends the actor's wait for Tor's first reply ([`HandshakeWait::Until`])
+    /// when sent on or dropped: the actor cannot be stopped while it waits,
+    /// so every stop drops this first. `None` once dropped.
+    ///
+    /// [`HandshakeWait::Until`]: shekyl_tor_control_client::control::HandshakeWait::Until
+    handshake: Option<oneshot::Sender<()>>,
     /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -271,18 +281,30 @@ impl DaemonTorControl {
         self.socks_addr = socks;
     }
 
-    /// `SETCONF AvoidDiskWrites=1` on this owning connection.
+    /// A clone of this incarnation's control actor, for a request run off
+    /// the caller's loop with no bound of its own ([`ControlAsker`]).
+    #[must_use]
+    pub fn asker(&self) -> ControlAsker {
+        ControlAsker::new(self.actor.clone())
+    }
+
+    /// `SETCONF AvoidDiskWrites=1` on this owning connection, under the
+    /// reply deadline.
+    ///
+    /// # Errors
+    /// As [`ControlAsker::defer_disk_writes`], and a reply past the deadline.
     pub async fn defer_disk_writes(&self) -> Result<(), DaemonTorStartError> {
-        self.ask_bounded(
-            Command::SetConfDiskWrites(DiskWrites::Deferred),
-            self.reply_deadline,
-        )
-        .await
-        .map(|_| ())
+        tokio::time::timeout(self.reply_deadline, self.asker().defer_disk_writes())
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     async fn stop_actor(&mut self) -> Option<TorExit> {
         self.stopping.store(true, Ordering::Release);
+        // A Tor that has not answered its first reply is killed and reaped
+        // by the actor's start, which then ends; the stop below finds it
+        // ended. One that answered is past this.
+        drop(self.handshake.take());
         let actor = self.actor.clone();
         let mut exit_watch = self.exit_watch.clone();
         let stop = async {
@@ -337,26 +359,11 @@ impl DaemonTorControl {
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let port = OnionPort::loopback(virtual_port, local_target).ok_or(
-            DaemonTorPublishError::TargetNotLoopback {
-                target: local_target,
-            },
-        )?;
-
-        let expected = identity.service_id().clone();
-        let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
-            .with_flags(OnionFlags { discard_pk: true })
-            .with_pow(pow);
-        let reply = self
-            .settle_ask(
-                ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline).await,
-            )
-            .map_err(Self::publish_error)?;
-        if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines()) {
-            return Err(refused);
-        }
-        evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
-        Ok(expected)
+        let asker = self.asker();
+        let add = asker.add_onion(identity, virtual_port, local_target, max_streams, pow);
+        tokio::time::timeout(self.reply_deadline, add)
+            .await
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))
     }
 
     /// Publish the onion for `identity` again on this running Tor
@@ -378,18 +385,9 @@ impl DaemonTorControl {
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let held = identity.service_id().clone();
-        let reply = self
-            .settle_ask(ask_timed(&self.actor, Command::DelOnion(held), self.reply_deadline).await)
-            .map_err(Self::publish_error)?;
-        match reply.status() {
-            DEL_ONION_REMOVED | DEL_ONION_UNKNOWN => {}
-            status => {
-                return Err(DaemonTorPublishError::Publish(
-                    AddOnionReplyError::Rejected { status },
-                ))
-            }
-        }
+        tokio::time::timeout(self.reply_deadline, self.asker().delete_onion(identity))
+            .await
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))?;
         self.publish(identity, virtual_port, local_target, max_streams, pow)
             .await
     }
@@ -399,61 +397,9 @@ impl DaemonTorControl {
         command: Command,
         deadline: Duration,
     ) -> Result<ControlReply, DaemonTorStartError> {
-        self.settle_ask(ask_timed(&self.actor, command, deadline).await)
-            .map_err(Self::start_error)
-    }
-
-    /// Keep the wait's sleep, whichever way the ask ended, and hand back
-    /// Tor's answer. A later ask on this handle combines with it
-    /// ([`Resume::later`]); the driver takes the one sleep after the whole
-    /// action.
-    fn settle_ask(&self, waited: Result<Asked, AskError>) -> Result<ControlReply, AskError> {
-        match waited {
-            Ok(asked) => {
-                self.note_resume(asked.resume());
-                Ok(asked.into_reply())
-            }
-            Err(error) => {
-                self.note_resume(error.resume());
-                Err(error)
-            }
-        }
-    }
-
-    fn note_resume(&self, observed: Resume) {
-        let mut slot = self.resume_slot();
-        *slot = (*slot).later(observed);
-    }
-
-    /// The sleep observed since the last take, then [`Resume::Awake`].
-    /// The driver folds it once, ahead of the reply the ask produced.
-    #[must_use]
-    pub fn take_resume(&self) -> Resume {
-        std::mem::take(&mut *self.resume_slot())
-    }
-
-    /// The slot. A poisoned lock still holds the last observation: the
-    /// supervisor would rather restart its windows than lose the sleep.
-    fn resume_slot(&self) -> std::sync::MutexGuard<'_, Resume> {
-        self.resume
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn publish_error(error: AskError) -> DaemonTorPublishError {
-        match error {
-            AskError::Timeout => DaemonTorPublishError::Control(ControlError::Timeout),
-            AskError::Control { error, .. } => DaemonTorPublishError::Control(error),
-            AskError::ActorGone { .. } => DaemonTorPublishError::Died,
-        }
-    }
-
-    fn start_error(error: AskError) -> DaemonTorStartError {
-        match error {
-            AskError::Timeout => DaemonTorStartError::Control(ControlError::Timeout),
-            AskError::Control { error, .. } => DaemonTorStartError::Control(error),
-            AskError::ActorGone { .. } => DaemonTorStartError::Died(None),
-        }
+        tokio::time::timeout(deadline, self.asker().ask(command))
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     pub async fn ask(
@@ -729,7 +675,10 @@ pub(crate) mod tests {
 
     /// The ignored live tests wait here so a published onion has a network.
     /// A hang bound in a test is not a daemon deadline: nothing in the
-    /// supervisor gives a bootstrap up.
+    /// supervisor gives a bootstrap up. Past it Tor is still connecting, and
+    /// the panic says "did not bootstrap": the live-test runner retries a
+    /// step once when that is every failure in it
+    /// (`scripts/ci/run_live_tor_tests.sh`).
     pub(crate) async fn wait_for_the_network(boot: &mut DaemonTorControl) {
         let hang = tokio::time::Instant::now() + Duration::from_secs(300);
         let mut watch = boot.watch_bootstrap();
@@ -752,7 +701,7 @@ pub(crate) mod tests {
                 BootstrapState::Connecting { .. } => {}
             }
             if tokio::time::Instant::now() >= hang {
-                panic!("the live test stopped waiting");
+                panic!("tor did not bootstrap within 300 s: still connecting");
             }
             tokio::select! {
                 changed = watch.changed() => {
@@ -813,7 +762,7 @@ pub(crate) mod tests {
             VerifiedTorBinary::unchecked_for_test(PathBuf::from("/nonexistent/tor")),
             parent.path().to_path_buf(),
         );
-        let old = match DaemonTorControl::spawn_keeping(config).await {
+        let old = match DaemonTorControl::spawn_keeping(config, std::future::pending()).await {
             Err(SpawnError::Launch(failure)) => failure.directory,
             Err(SpawnError::DataDir(error)) => panic!("the directory was not created: {error}"),
             Ok(_) => panic!("a missing binary does not come up"),

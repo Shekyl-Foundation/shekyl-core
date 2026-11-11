@@ -105,9 +105,9 @@ use shekyl_tor_control_client::control::onion::{
     AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
 };
 use shekyl_tor_control_client::control::{
-    ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    DiskWrites, EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout,
-    TorControlClient, TorControlClientConfig, TorLaunch, WaitReadyError,
+    parse_socks_listeners, wait_until_ready, BootstrapReadiness, Command, DiskWrites,
+    EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout, TorControlClient,
+    TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -262,6 +262,7 @@ impl ManagedInstance {
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: None,
+                handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
             }),
             events,
             readiness,
@@ -988,19 +989,13 @@ impl Apparatus {
         if let Some(wait) = wait.filter(|w| !w.is_zero()) {
             tokio::time::sleep(wait).await;
         }
-        let reply = ask_timed(
-            &self.client_tor.control,
-            Command::Signal(Signal::NewNym),
+        let reply = tokio::time::timeout(
             NEWNYM_ASK_TIMEOUT,
+            self.client_tor.control.ask(Command::Signal(Signal::NewNym)),
         )
         .await
-        .map_err(|e| match e {
-            AskError::Timeout => ApparatusError::NewnymUnanswered,
-            AskError::Control { error, .. } => ApparatusError::Control(error.to_string()),
-            AskError::ActorGone { .. } => {
-                ApparatusError::Control("tor control actor gone during SIGNAL NEWNYM".to_owned())
-            }
-        })?;
+        .map_err(|_| ApparatusError::NewnymUnanswered)?
+        .map_err(|e| ApparatusError::Control(format!("SIGNAL NEWNYM: {e}")))?;
         if reply.status() != 250 {
             return Err(ApparatusError::Control(format!(
                 "SIGNAL NEWNYM answered {}",
