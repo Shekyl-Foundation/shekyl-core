@@ -12,21 +12,19 @@
 //! held across the sleep was already past its bound, and a probe in flight
 //! had missed its own.
 //!
-//! The core does not decide that the machine slept. A deadline left in the
-//! past while the driver was awaiting Tor is ordinary: a control ask may
-//! take the whole reply bound, and the drive loop does not poll its other
-//! deadlines until that ask returns. The driver says so, with
-//! [`Input::Resumed`], only when a wait it was in returned more than
-//! [`crate::control::RESUMED_AFTER`] past the deadline it was armed with
-//! ([`crate::control::resume_lateness`]): its loop's wait, whatever woke
-//! it (at a wake a dial result can be ready with the late timer), or the
-//! reply bound ([`crate::control::ask_timed`]). It folds that input before
-//! what the wait returned, so that is judged on windows that start at the
-//! wake.
+//! The core does not decide that the machine slept. The driver says so,
+//! with [`Input::Resumed`], only when the one wait its loop makes returned
+//! more than [`crate::control::RESUMED_AFTER`] past the deadline it was
+//! armed with ([`crate::control::resume_lateness`]), whatever woke it (at a
+//! wake a dial result can be ready with the late timer). Nothing else on
+//! the loop waits: a request to Tor runs off it (Rick, 2026-11-10). It folds
+//! that input before what the wait returned, so that is judged on windows
+//! that start at the wake.
 //!
 //! On a resume every window starts again from the wake: the bootstrap's
 //! stall window and the stranded check's byte mark, the probe's bound, the
-//! quiet stretch, and an open round's waits. The sample and liveness
+//! quiet stretch, an open round's waits, and the reply bound of the request
+//! in flight. The sample and liveness
 //! cadences re-arm from the wake, so nothing that came due in the sleep
 //! fires, and one sample is asked at once: the §5 row's "re-evaluate now".
 //! A respawn backoff and a repeated announcement are left as they are: a
@@ -51,6 +49,7 @@ impl Core {
         self.jump.resumed(now);
         self.dials.restart(now);
         self.probe_resumed(now);
+        self.requests.restart(now);
         let mut actions = vec![Action::Resumed { late_by }];
         if matches!(
             self.phase,

@@ -199,6 +199,7 @@ async fn bring_up(
             disable_network: false,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
+            handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
         }),
         // No `SETEVENTS` is ever issued here, so the sink receives nothing;
         // `unsubscribed()` is the crate's named form of that fact, and it

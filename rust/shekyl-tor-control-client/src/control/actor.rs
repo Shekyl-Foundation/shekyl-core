@@ -176,6 +176,9 @@ pub enum ControlError {
     /// The reply stream ended cleanly (EOF / socket close); the connection can no
     /// longer be served.
     StreamClosed,
+    /// The owner of a managed tor stopped waiting for its first reply
+    /// ([`HandshakeWait::Until`]). The child was killed and reaped.
+    Abandoned,
     /// The managed tor's process exited, as the wait on it reported (`TSR-F16`). The
     /// control connection may still have been open: a leaked copy of tor's end keeps
     /// it so.
@@ -217,6 +220,7 @@ impl std::fmt::Display for ControlError {
             Self::Timeout => write!(f, "control handshake read timed out"),
             Self::Desync => write!(f, "unsolicited control reply (no command in flight)"),
             Self::StreamClosed => write!(f, "control reply stream ended"),
+            Self::Abandoned => write!(f, "managed tor abandoned before its first reply"),
             Self::ProcessExited => write!(f, "managed tor process exited"),
             Self::InvalidCommand => write!(
                 f,
@@ -804,11 +808,27 @@ pub struct ManagedTor {
     /// it). The wallet supervisor awaits it before a respawn reuses the directory; the
     /// lifecycle tests use it to assert a *real* reap rather than probing a pid.
     pub exit_observer: Option<oneshot::Sender<TorExit>>,
+    /// How long the launch waits for tor's first reply.
+    pub handshake: HandshakeWait,
     /// Test builds only: leak a copy of tor's end of the control connection into a
     /// sleeper process, the residual `TSR-F16` guards against (case C6b). Dependents
     /// never see this field.
     #[cfg(test)]
     pub(crate) leak: Option<launch::LeakTorEnd>,
+}
+
+/// How long a managed launch waits for tor's first reply (`GETINFO version`),
+/// the actor's startup. The actor cannot be stopped until its startup ends,
+/// so this wait is the owner's to end.
+#[derive(Debug)]
+pub enum HandshakeWait {
+    /// Each read up to `HANDSHAKE_READ_TIMEOUT` (30 s).
+    Bounded,
+    /// Until the owner sends on this, or drops its end: it holds the bound
+    /// itself, as the daemon's supervisor does in awake time. Tor is then
+    /// killed and reaped, and the start fails with
+    /// [`ControlError::Abandoned`].
+    Until(oneshot::Receiver<()>),
 }
 
 /// Whether tor writes `state` promptly.
@@ -1176,13 +1196,14 @@ impl Actor for TorControlClient {
         // every command after that are identical; the mode-specific steps are the
         // spawn and `on_stop`'s kill (managed only).
         let (control_addr, cookie_path) = match launch {
-            TorLaunch::Managed(managed) => {
+            TorLaunch::Managed(mut managed) => {
+                let wait = std::mem::replace(&mut managed.handshake, HandshakeWait::Bounded);
                 let (mut child, mut read, mut write) = spawn_managed_tor(managed).await?;
                 let mut framer = ReplyFramer::default();
                 // A managed child is reaped explicitly on a failed start, uniform with
                 // every other failure path; tokio prefers an explicit `wait` to
                 // `kill_on_drop`'s best-effort reap.
-                if let Err(e) = confirm_driveable(&mut read, &mut write, &mut framer).await {
+                if let Err(e) = confirm_driveable(&mut read, &mut write, &mut framer, wait).await {
                     kill_and_reap(&mut child.child).await;
                     return Err(e);
                 }
@@ -1386,8 +1407,9 @@ async fn spawn_managed_tor(
     ))
 }
 
-/// Ask the newly launched tor `GETINFO version` on its inherited connection, bounded by
-/// `HANDSHAKE_READ_TIMEOUT`, before the actor arms on it.
+/// Ask the newly launched tor `GETINFO version` on its inherited connection before
+/// the actor arms on it, waiting as `wait` says: up to `HANDSHAKE_READ_TIMEOUT`, or
+/// until the owner abandons the launch.
 ///
 /// This is the managed launch's only startup wait. A tor that exits at startup (a bad
 /// argument, a missing library, the Windows environment) closes its end, and the read
@@ -1398,9 +1420,17 @@ pub(crate) async fn confirm_driveable(
     read: &mut ControlRead,
     write: &mut ControlWrite,
     framer: &mut ReplyFramer,
+    wait: HandshakeWait,
 ) -> Result<(), ControlError> {
     write_line(write, "GETINFO version").await?;
-    expect_status(read, framer, 250).await.map(|_| ())
+    let reply = match wait {
+        HandshakeWait::Bounded => read_reply(read, framer).await?,
+        HandshakeWait::Until(abandoned) => tokio::select! {
+            reply = next_reply(read, framer) => reply?,
+            _ = abandoned => return Err(ControlError::Abandoned),
+        },
+    };
+    status_is(reply, 250).map(|_| ())
 }
 
 /// The bootstrap-readiness poll task (design §3b). Polls `GETINFO
@@ -1749,27 +1779,43 @@ async fn write_line(writer: &mut ControlWrite, line: &str) -> Result<(), Control
     Ok(())
 }
 
+/// Read one complete reply.
+async fn next_reply(
+    reader: &mut ControlRead,
+    framer: &mut ReplyFramer,
+) -> Result<ControlReply, ControlError> {
+    let mut buf = [0u8; READ_CHUNK];
+    loop {
+        if let Some(reply) = framer.next_reply().map_err(ControlError::Framing)? {
+            return Ok(reply);
+        }
+        let n = reader.read(&mut buf).await.map_err(|_| ControlError::Io)?;
+        if n == 0 {
+            return Err(ControlError::ConnectionClosed);
+        }
+        framer.push_bytes(&buf[..n]);
+    }
+}
+
 /// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT`.
 async fn read_reply(
     reader: &mut ControlRead,
     framer: &mut ReplyFramer,
 ) -> Result<ControlReply, ControlError> {
-    let read = async {
-        let mut buf = [0u8; READ_CHUNK];
-        loop {
-            if let Some(reply) = framer.next_reply().map_err(ControlError::Framing)? {
-                return Ok(reply);
-            }
-            let n = reader.read(&mut buf).await.map_err(|_| ControlError::Io)?;
-            if n == 0 {
-                return Err(ControlError::ConnectionClosed);
-            }
-            framer.push_bytes(&buf[..n]);
-        }
-    };
-    match timeout(HANDSHAKE_READ_TIMEOUT, read).await {
+    match timeout(HANDSHAKE_READ_TIMEOUT, next_reply(reader, framer)).await {
         Ok(result) => result,
         Err(_) => Err(ControlError::Timeout),
+    }
+}
+
+/// `reply` when its status is `want`, else [`ControlError::Rejected`].
+fn status_is(reply: ControlReply, want: u16) -> Result<ControlReply, ControlError> {
+    if reply.status() == want {
+        Ok(reply)
+    } else {
+        Err(ControlError::Rejected {
+            status: reply.status(),
+        })
     }
 }
 
@@ -1779,14 +1825,7 @@ async fn expect_status(
     framer: &mut ReplyFramer,
     want: u16,
 ) -> Result<ControlReply, ControlError> {
-    let reply = read_reply(reader, framer).await?;
-    if reply.status() == want {
-        Ok(reply)
-    } else {
-        Err(ControlError::Rejected {
-            status: reply.status(),
-        })
-    }
+    status_is(read_reply(reader, framer).await?, want)
 }
 
 #[cfg(test)]
@@ -2379,6 +2418,7 @@ mod live_tests {
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
@@ -2531,6 +2571,7 @@ mod live_tests {
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
@@ -2605,6 +2646,7 @@ mod live_tests {
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
@@ -2679,6 +2721,7 @@ mod live_tests {
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
@@ -2757,6 +2800,7 @@ mod live_tests {
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
@@ -2884,6 +2928,7 @@ mod live_tests {
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: Some(super::super::launch::LeakTorEnd {
                     lives: LEAK_LIVES,
                     sleeper: sleeper_tx,
@@ -3001,6 +3046,7 @@ mod live_tests {
                 disable_network: true,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: crate::control::HandshakeWait::Bounded,
                 leak: None,
             }),
             events,
