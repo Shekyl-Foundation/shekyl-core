@@ -48,6 +48,17 @@ New functionality:
   crates for all CI platforms before merge.
 - **Vendored dependencies (`shekyl-oxide`) live under `rust/` as path
   dependencies**, not git deps. See `SHEKYL_OXIDE_VENDORING.md`.
+- **A long-lived task the node starts reports its end through
+  `Node::ended()`.** The daemon waits on that one watch and exits failed
+  on the first end it carries (`shekyl-node/src/ended.rs`). `Node::open`
+  calls `ended::start`, the only constructor of that watch. A task that
+  can end on its own, by a fault or by a closed input, gets a `NodeEnd`
+  variant and an arm in `ended::start` in the PR that adds the task,
+  and it logs at `error` when it records the fault, in the fault's own
+  words, which are the words the exit line quotes. A task whose end is
+  silent leaves a node that is up and does nothing: on 2026-11-02 an
+  ingest service stopped on a full disk and the daemon answered RPC
+  from the old tip for 34 minutes.
 
 ## Decoding untrusted bytes
 

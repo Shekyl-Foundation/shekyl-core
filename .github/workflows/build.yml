@@ -261,6 +261,11 @@ jobs:
       image: ${{ matrix.container }}
       env:
         DEBIAN_FRONTEND: noninteractive
+      # A 1 MiB filesystem for the full-disk live-daemon gate
+      # (run_live_daemon_gates.sh): the daemon's chain goes on it and is
+      # mined until a commit meets ENOSPC. A container option, because a
+      # mount inside the job would need a privileged container.
+      options: --tmpfs /mnt/shekyl-small-disk:rw,size=1m
     steps:
       - name: set apt conf
         if: needs.changes.outputs.docs_only != 'true'
@@ -341,6 +346,8 @@ jobs:
         # which rejects `set -o pipefail` outright — the script dies on line
         # 1 before running anything.
         shell: bash
+        env:
+          SHEKYL_SMALL_DISK: /mnt/shekyl-small-disk
         run: scripts/ci/run_live_daemon_gates.sh
 
   build-windows-msvc:
