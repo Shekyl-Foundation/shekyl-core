@@ -1322,7 +1322,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 | `tor.state` | status | one-of `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired`. `waiting` is Restarting (held). `impaired` is §4.3's Degraded. The chain field `degraded` keeps that word | §4.3 |
 | `tor.facet` | status | `outbound`, `inbound`, or null. The facet down. Null unless `state` is `impaired` and the cause names a facet. `descriptor-limit` is `impaired` and the value is null (RK-D23) | §4.3, §5 |
 | `tor.cause` | status | null, or one object with one key, the variant below. The value is that variant's payload. A variant with no payload has `null`. No second object carries detail | §5 |
-| `tor.age` | status | duration (IG-Q54, whole seconds), from the monotonic clock: how long `state` has stood. No reading of the node's wall clock is carried: it is wrong exactly when the cause is `clock-skew` (IG-Q93) | `TSR-Q12` |
+| `tor.age` | status | duration (IG-Q54, whole seconds) of awake time: how long `state` has stood. No reading of the node's wall clock is carried: it is wrong exactly when the cause is `clock-skew` (IG-Q93, on #1344; IG-Q96) | `TSR-Q12` |
 | `tor.respawn_count` | status | integer: respawns since the daemon started | `TSR-Q12` |
 | `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent while `state` is `bootstrapping`; 0 before the first sample. Null in every other state, because 0 is a sample (RK-D23) | §4.2 |
 | `tor.flagged` | status | switch: the consensus does not recommend this Tor. Independent of `state` and of `cause`, so it stands while `state` is `usable` | §5 |
