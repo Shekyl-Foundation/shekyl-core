@@ -42,7 +42,7 @@ Two readers consume the published slots, not a cache: the tip follower before a 
 
 - **HA-F1. Chain sync holds caches the brief's delete list does not name.** The executor derives a branch seed's cache outside the store and keeps it in `Executor::branch` (`executor.rs:54`). The only write to that field is a replacement by another branch seed (`:196–:207`). The ruling it implements says the cache is "dropped when that seed epoch's headers are done" (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3). The code does not drop it. Initial sync is the branch case, so a node that synced across a seed boundary keeps that cache for the life of the process. Read from the code; not observed on a live node.
 - **HA-F2. The same seed can be built twice.** A fork's headers are proven under the executor's branch cache, then its bodies arrive as alternatives and the ingest prepares the same seed into the transient slot. The two paths share no cache.
-- **HA-F3. Today's ceiling is five caches, not three.** The canonical slot, the transient slot, one evicted cache a branch form still holds (`service.rs:563–:568`), the executor's branch cache, and one evidence cache while a check runs. That is 1,280 MiB. The miner and `calc_pow` can each also keep an evicted cache alive until their hash returns.
+- **HA-F3. Today nothing bounds the count, and five is reached by the code's own design.** The canonical slot, the transient slot, one evicted cache a branch form still holds (`service.rs:563–:568`), the executor's branch cache, and one evidence cache while a check runs: 1,280 MiB. That is a configuration, not a ceiling. A switch keeps a cache for every branch seed its promoted run names (`prepare_all`, `span.rs:1134–:1158`), the miner keeps one for its posted job's life (`miner.rs:308`), and `calc_pow` keeps one across its permit wait and its hash (`read_facts.rs:127`). Each of those can hold an evicted cache alive beside the five.
 - **HA-F4. `needed_seeds` cannot be a function of the store alone.** A header run's earned seed (65 headers proven on the run's own branch) lives in the sync model's run state. The fork's blocks are not stored rows until their bodies arrive. The evidence check's seed is likewise the sync model's. So the facts come from two places: the ingest (the store) and chain sync (its runs). HA-R4 makes them inputs of one ranking function.
 - **HA-F5. Honest operation wants three seeds through the whole of initial sync, not only near a switch.** The ingest connects bodies under its window (one seed, two for 784 blocks after each switch) while header sync runs ahead under the frontier's seed.
 - **HA-F6. The evidence check has a ruled cache of its own** (Rick, 2026-10-19; `DRS_X_STORE_FLIP.md` DX-Q2 item 6). Kept beside three others it would be a fourth; HA-R3 makes it a job inside the cap.
@@ -77,7 +77,13 @@ One actor owns every `PreparedCache` in the process. Nothing else builds, holds 
   2. the window's other seed, when it names one;
   3. the seed of the most-work chain the body window does not cover, when that seed is not already listed.
 
-The ingest computes the list on every tip move and whenever chain sync's frontier moves, and sends it whole. The actor knows nothing about chains.
+The ingest computes the list whenever one of its inputs changes, and sends it whole:
+
+- a tip move (a connect, a pop, a switch);
+- a held alternative stored or retired. Storing one does not move the tip (`switch.rs:502`, `insert_alt_block`, then `Offered::Held`), and it can change which held fork has the most work;
+- chain sync's frontier moving, or its run ending.
+
+A list computed only on tip moves would rank the forks as they stood at the last tip, and the actor would free the heaviest fork's cache at the next quiescence and rebuild it for that fork's next span. The actor knows nothing about chains.
 
 ### 5.2 What is resident
 
@@ -117,16 +123,18 @@ impl Hasher {
 - `Lent` hands out hashes, never the cache, so there is nothing to clone.
 - The `for<'job>` bound means `R` cannot name the job's lifetime, so a `Lent` cannot be returned or stored.
 - `run` blocks its caller: it takes the lease (waiting for a build or a place), then the permit, then calls `job` on the caller's thread. Callers already wait for permits on blocking threads (`span.rs:418`), so the node's thread count (`shekyl-node/src/lib.rs`, "Blocking threads") stands.
-- **How a form gets its hash.** The ingest's substrate becomes a struct over a `&Lent` and the clock. `Substrate::longhash` stays synchronous and calls `lent.hash`. `form_on_branch` (`span.rs:977`), `spawn_form` (`:294`) and `form_switch` (`:1163`) each become one `run` whose closure builds that substrate and calls `form` or `form_plan`. This fits both paths as they are: each already runs `form` inside one blocking closure that holds the permit.
+- **How a form gets its hash.** The ingest's substrate becomes a struct over a `&Lent` and the clock. `Substrate::longhash` stays synchronous and calls `lent.hash`. `form_on_branch` (`span.rs:977`) and `spawn_form` (`:294`) each become one `run` whose closure builds that substrate and calls `form`. This fits both as they are: each already runs one `form` inside one blocking closure that holds one permit.
+- **Two entry points, because permits are held two ways today.** `run` holds one permit for the job, which is one form. `lend` has `run`'s signature, holds no permit for the job, and takes one inside each `Lent::hash`, of the job's class. A job that hashes on several threads, or many times, uses `lend`: a switch, a header-proof command (`executor.rs:238`, one permit an item across the budget's lanes), the evidence check.
+- **A switch uses `lend`, not `run`.** `form_switch` (`span.rs:1163`) forms a plan on as many threads as the budget has permits, and each block takes its own permit through a callback (`plan_form.rs:179`). Wrapped in `run`, the job would hold the one permit of a one-permit budget while its workers waited for another: a deadlock. Without the callback, its workers would hash side by side under one permit. Under `lend` the callback goes and the permit is taken where the hash is, so a promoted block answered from its recorded hash (HA-F8) takes none.
 - **Jobs that build:** a run's forms, an alternative's form, a switch's forms for a block with no recorded hash (HA-F8), chain sync's header proofs on any seed, and the evidence check. Each names a seed the ingest or the sync model took from checked chain data.
-- **Jobs that do not build:** the miner and `calc_pow`. An RPC caller names `calc_pow`'s seed, so it hashes only under a warm cache (ruled 2026-10-17, `read_facts.rs:108–:112`); the miner's seed is the template's, which the follower posts only when it is warm. Their entry points return "not warm" and build nothing. The miner's lends for the posted job's life, takes one `Class::Miner` permit per hash as `miner.rs:327` does now, and carries a cancel flag the actor sets when the seed leaves the list.
+- **Jobs that do not build:** the miner and `calc_pow`. An RPC caller names `calc_pow`'s seed, so it hashes only under a warm cache (ruled 2026-10-17, `read_facts.rs:108–:112`); the miner's seed is the template's, which the follower posts only when it is warm. Their entry points return "not warm" and build nothing. The miner's is `lend` without the build: it lends for the posted job's life, takes one `Class::Miner` permit per hash as `miner.rs:327` does now, and carries a cancel flag the actor sets when the seed leaves the list.
 
 ### 5.4 Permits
 
 The permits are taken inside the actor's entry points, lease first, then permit. `Budget` keeps its type and its class rules; no consumer holds one.
 
 - A caller that held a permit while waiting for a cache would wait on a build that needs a permit. On a one-permit budget that never ends. Today the order "gate, permit, `pin_lock`" is a comment each call site obeys (`service.rs:555–:568`).
-- A refill has no caller thread, so the actor takes that build's permit itself, at `Class::Chain` for the window's pair and at the class of the chain it serves for the third.
+- A refill has no caller thread, so the actor takes that build's permit itself. **A refill is paid at the class of what caused it:** the class of the job that pushed the cache out, or, when the list changed with no job (a new tip, a new heaviest fork), `Class::Chain` for the window's pair and the class of that chain's own jobs for the third. So a low-class job cannot buy a higher-class build: the refill after an evidence check is an `Evidence` build. A job that arrives for the seed while its refill waits builds it under the job's own class.
 - The branch gate (`service.rs:568`) goes: it bounded live caches to three, and the cap does that now.
 
 ### 5.5 Builds and the order
@@ -135,7 +143,8 @@ The actor's loop only takes lists, grants and releases leases, and queues builds
 
 - **Order:** a waiting job's seed before any refill; among jobs, the order they took their places in (§5.2); among refills, by rank. Hasher class orders permits and nothing else.
 - **The canonical seed is known 64 blocks before it is used,** because the window names a seed once its block is on the chain. It is built then, so a chain form waits for a build only at a cold start or after a reorg that replaces the seed block.
-- **A running build is not interrupted.** The worst wait for a chain form is one build in progress plus its own: two derivations, about 4.2 s on the floor device.
+- **A running build is not interrupted.** The derivation work ahead of a chain form is at most one build in progress plus its own: two derivations, about 4.2 s on the floor device.
+- **That is not the whole wait.** The cap counts jobs in flight (HA-R2), so a build also waits for a place when all three are in use and none can be freed. For a chain form that needs a new canonical seed, that is a reorg that replaces the seed block while the third place has a job in flight and the old canonical cache is still hashed under. The wait is then the rest of one job: a form, one header-proof command, or one miner hash, and a miner hash at nice 19 can take about a minute on the floor device (`shekyl-hash-budget`'s module docs). The permit wait is on top, as it is today. So the bound on a chain form's wait is two derivations, one job's remainder, and its permit.
 
 ### 5.6 Publication
 
@@ -166,7 +175,7 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 ### 5.9 The evidence check's worst case
 
 - **The admission rate:** one check at a time, and at most one per session (HA-F11). There is no rate in time.
-- **What one check costs this node:** its own build, and the refill of the warm third cache it pushed out: two derivations, about 4.2 s of one core on the floor device, at `Class::Evidence`, which every class but the miner outranks.
+- **What one check costs this node:** its own build, and the refill of the warm third cache it pushed out: two derivations, about 4.2 s of one core on the floor device. Both are `Class::Evidence` builds (§5.4: a refill is paid at the class of what caused it), which every class but the miner outranks.
 - **The worst case an attacker can force** is therefore one permit kept building for as long as the attacker can open sessions that pass the cheap checks. Checks are serial, so it is never more than one build at a time, and the window's pair is never touched.
 - **Accepted as the bound for now (Rick, 2026-11-11).**
 - **What closes it:** the clearnet reconnect throttle, `P2P_TRANSPORT_LAYER.md` § "Clearnet reconnect throttle — REGISTERED 2026-10-09, not built" (ruling D-S1; owner: the transport layer, that document). Its `N` handshakes per `T` gives the rate, and this section then states `N / T × 4.2 s`. It is on the mainnet launch checklist (`docs/RELEASE_CHECKLIST.md`) and has a `docs/FOLLOWUPS.md` row.
@@ -211,12 +220,12 @@ Each caller passes its own stop flag, as it passes one to `Budget::acquire_unles
 
 ## 9. Wargame
 
-- **Forced rebuilds.** A warm cache is free to hash under, so an attacker gains nothing from blocks on the most-work fork or the frontier. A block on a lighter held fork past its seed point (66 blocks of real work behind it: the seed block and the 65 above it) costs this node that fork's build and one refill, about 4.2 s on the floor device, under the arrival's class.
+- **Forced rebuilds.** A warm cache is free to hash under, so an attacker gains nothing from blocks on the most-work fork or the frontier. A block on a lighter held fork past its seed point (66 blocks of real work behind it: the seed block and the 65 above it) costs this node that fork's build and one refill, about 4.2 s on the floor device, both under the arrival's class (§5.4).
 - **The evidence check.** §5.9.
 - **Evicting the window's pair.** It cannot be done (§5.2).
 - **Initial sync against a cheap fork.** Early blocks are cheap, so a forged run of 65 early headers earns a seed cheaply. Its proofs are jobs and get their cache; it does not hold the warm third place, which goes to the most proven work.
 - **A lent cache held too long.** §5.3's types. An `Arc<PreparedCache>` outside the crate fails the gate in §8.
-- **The actor stalling.** §5.5.
+- **The actor stalling.** §5.5: the loop itself never hashes or derives; what a job can wait for is stated there.
 - **Shutdown.** §5.7.
 
 ## 10. What this round read, and what it did not
