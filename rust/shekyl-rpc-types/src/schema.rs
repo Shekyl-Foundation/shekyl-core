@@ -42,19 +42,39 @@ pub enum Shape {
         /// Fields flattened into the object and shown together or not at
         /// all: a part the caller's grant does not show is absent whole.
         parts: Vec<Part>,
+        /// Keys of which exactly one is present: a selector (`INPUT_GRAMMAR.md`
+        /// IG-Q94). Empty when the object has none.
+        choice: Vec<Field>,
     },
     /// A list of one shape.
     List(Box<Shape>),
     /// The shape, or `null`: no answer (RK-D23).
     Nullable(Box<Shape>),
-    /// A map from a closed keyword set to one shape (IG-6's map). A key
-    /// may be absent; no key appears twice.
+    /// A map to one shape (IG-6's map). A key may be absent; no key appears
+    /// twice.
     Map {
-        /// The keys a document may carry.
-        keys: &'static [&'static str],
+        /// The keys a document may carry, when they are a fixed set. Each
+        /// is a subject, and an object value walks under the key it sits
+        /// under (a connector's counts under `clearnet`, IG-Q82). `None`
+        /// for keys from a runtime table (an option's name, a diagnostic's
+        /// parameter), whose value is a scalar.
+        keys: Option<&'static [&'static str]>,
         /// What each key holds.
         value: Box<Shape>,
     },
+    /// An object one of whose fields, the tag, names which of several
+    /// field sets the rest is (a submission's `verdict`).
+    Tagged {
+        /// The glossary path of what the object describes.
+        holder: &'static str,
+        /// The tag's field name.
+        tag: &'static str,
+        /// Each tag value and the fields that come with it.
+        variants: Vec<(&'static str, Vec<Field>)>,
+    },
+    /// A request parameter that may be left out; its default is stated by
+    /// its method. Never in a reply (RW-Q4).
+    Optional(Box<Shape>),
     /// Exactly one of several one-key objects, each a named state with its
     /// payload (`INPUT_GRAMMAR.md` IG-Q70). `None` is a state with no
     /// payload, written `null`.
@@ -160,6 +180,9 @@ pub struct WalkName {
     pub shown_to: Policy,
     /// What it holds. [`Shape::Empty`] for a method name.
     pub shape: Shape,
+    /// Whether the name is in the method's reply (or nested in it), not
+    /// its request.
+    pub in_reply: bool,
 }
 
 /// The word a policy takes in the generated schema file.
@@ -183,7 +206,19 @@ pub fn describe(shape: &Shape) -> String {
         Shape::Object { holder, .. } => format!("object ({holder})"),
         Shape::List(inner) => format!("list of {}", describe(inner)),
         Shape::Nullable(inner) => format!("{} or null", describe(inner)),
-        Shape::Map { keys, value } => format!("map {} to {}", keys.join("|"), describe(value)),
+        Shape::Map { keys, value } => match keys {
+            Some(keys) => format!("map {} to {}", keys.join("|"), describe(value)),
+            None => format!("map to {}", describe(value)),
+        },
+        Shape::Tagged {
+            holder,
+            tag,
+            variants,
+        } => {
+            let tags: Vec<&str> = variants.iter().map(|(name, _)| *name).collect();
+            format!("object ({holder}) by {tag} {}", tags.join("|"))
+        }
+        Shape::Optional(inner) => format!("{}, optional", describe(inner)),
         Shape::States(states) => {
             let keys: Vec<&str> = states.iter().map(|(key, _)| *key).collect();
             format!("state {}", keys.join("|"))
@@ -198,72 +233,106 @@ pub fn describe(shape: &Shape) -> String {
 fn scalar_kind(shape: &Shape) -> Option<&'static str> {
     match shape {
         Shape::Scalar(kind) => Some(kind),
-        Shape::List(inner) | Shape::Nullable(inner) | Shape::Hidden { inner, .. } => {
-            scalar_kind(inner)
-        }
+        Shape::List(inner)
+        | Shape::Nullable(inner)
+        | Shape::Optional(inner)
+        | Shape::Either(inner, _)
+        | Shape::Hidden { inner, .. } => scalar_kind(inner),
         _ => None,
     }
 }
 
-fn walk_fields(
+struct Walk<'a> {
     method: &'static str,
+    in_reply: bool,
+    out: &'a mut Vec<WalkName>,
+}
+
+fn walk_fields(
+    w: &mut Walk<'_>,
     kind: NameKind,
     holder: &'static str,
     shown_to: Policy,
     fields: &[Field],
-    out: &mut Vec<WalkName>,
 ) {
     for field in fields {
         let shown = match &field.shape {
             Shape::Hidden { shown_to, .. } => *shown_to,
             _ => shown_to,
         };
-        out.push(WalkName {
-            method,
+        w.out.push(WalkName {
+            method: w.method,
             kind,
             holder: field.under.unwrap_or(holder),
             name: field.name,
             shown_to: shown,
             shape: field.shape.clone(),
+            in_reply: w.in_reply,
         });
         // What a parameter holds is described like a reply's fields: only
         // the request's own keys are parameters.
-        walk(method, NameKind::Field, shown, &field.shape, out);
+        walk(w, NameKind::Field, shown, &field.shape);
     }
 }
 
-fn walk(
-    method: &'static str,
-    kind: NameKind,
-    shown_to: Policy,
-    shape: &Shape,
-    out: &mut Vec<WalkName>,
-) {
+fn walk(w: &mut Walk<'_>, kind: NameKind, shown_to: Policy, shape: &Shape) {
     match shape {
         Shape::Object {
             holder,
             fields,
             parts,
+            choice,
         } => {
-            walk_fields(method, kind, holder, shown_to, fields, out);
+            walk_fields(w, kind, holder, shown_to, fields);
+            walk_fields(w, kind, holder, shown_to, choice);
             for part in parts {
-                walk_fields(method, kind, holder, part.shown_to, &part.fields, out);
+                walk_fields(w, kind, holder, part.shown_to, &part.fields);
             }
         }
-        Shape::List(inner) | Shape::Nullable(inner) | Shape::Map { value: inner, .. } => {
-            walk(method, kind, shown_to, inner, out);
+        Shape::Map {
+            keys: Some(keys),
+            value,
+        } => match value.as_ref() {
+            // A subject-keyed map: the value's fields walk under each key.
+            Shape::Object { fields, .. } => {
+                for key in *keys {
+                    walk_fields(w, kind, key, shown_to, fields);
+                }
+            }
+            other => walk(w, kind, shown_to, other),
+        },
+        Shape::Tagged {
+            holder,
+            tag,
+            variants,
+        } => {
+            let tag_field = Field {
+                name: tag,
+                under: None,
+                shape: Shape::OneOf(&[]),
+            };
+            walk_fields(w, kind, holder, shown_to, std::slice::from_ref(&tag_field));
+            for (_, fields) in variants {
+                walk_fields(w, kind, holder, shown_to, fields);
+            }
         }
-        Shape::Hidden { shown_to, inner } => walk(method, kind, *shown_to, inner, out),
+        Shape::List(inner)
+        | Shape::Nullable(inner)
+        | Shape::Optional(inner)
+        | Shape::Map { value: inner, .. } => {
+            walk(w, kind, shown_to, inner);
+        }
+        Shape::Hidden { shown_to, inner } => walk(w, kind, *shown_to, inner),
         Shape::States(states) => {
             for (_, payload) in states {
                 if let Some(payload) = payload {
-                    walk(method, kind, shown_to, payload, out);
+                    walk(w, kind, shown_to, payload);
                 }
             }
         }
         Shape::Either(item, slot) => {
-            walk(method, kind, shown_to, item, out);
-            walk(method, kind, shown_to, slot, out);
+            walk(w, kind, shown_to, item);
+            walk(w, kind, shown_to, slot);
         }
         Shape::Scalar(_) | Shape::OneOf(_) | Shape::Empty => {}
     }
@@ -283,21 +352,25 @@ pub fn names(rows: &[crate::method::Row]) -> Vec<WalkName> {
             name: row.name,
             shown_to: row.policy,
             shape: Shape::Empty,
+            in_reply: false,
         });
+        let mut request = Walk {
+            method: row.name,
+            in_reply: false,
+            out: &mut out,
+        };
         walk(
-            row.name,
+            &mut request,
             NameKind::Parameter,
             row.policy,
             &(row.request)(),
-            &mut out,
         );
-        walk(
-            row.name,
-            NameKind::Field,
-            row.policy,
-            &(row.reply)(),
-            &mut out,
-        );
+        let mut reply = Walk {
+            method: row.name,
+            in_reply: true,
+            out: &mut out,
+        };
+        walk(&mut reply, NameKind::Field, row.policy, &(row.reply)());
     }
     out
 }
@@ -342,16 +415,31 @@ pub fn kind_of_term(term: &str) -> Option<&'static [&'static str]> {
         "time" | "started" | "adjusted" => &["time"],
         "age" | "due" | "idle" | "duration" | "spacing" | "window" => &["duration"],
         "hash" | "id" | "parent" | "root" | "seed" | "next" | "coinbase" | "genesis" | "digest"
-        | "pow" | "image" | "persona" | "fingerprint" => &["hash", "integer", "text"],
+        | "image" | "persona" | "fingerprint" => &["hash", "integer", "text"],
+        // The header's hash, and the switch that asks for it (IG-Q56).
+        "pow" => &["hash", "switch"],
         "body" | "hashing" | "bundle" => &["bytes"],
-        "size" | "free" | "weight" | "median" | "longterm" | "download" | "upload" => &["size"],
-        "speed" | "average" | "current" => &["rate", "object"],
-        "reward" | "emission" | "fee" | "budget" | "profit" | "total" | "economy" | "standard"
-        | "high" => &["amount", "object"],
-        "difficulty" | "cumulative" => &["hex128"],
+        "size" | "free" | "needed" | "weight" | "download" | "upload" => &["size", "object"],
+        "speed" => &["rate", "object"],
+        "reward" | "emission" | "fee" | "budget" | "profit" | "economy" | "standard" | "high" => {
+            &["amount", "object"]
+        }
+        "difficulty" => &["hex128"],
         _ => return None,
     })
 }
+
+/// Terms that qualify the term before them and fix no kind of their own.
+const QUALIFIERS: &[&str] = &[
+    "total",
+    "median",
+    "min",
+    "max",
+    "average",
+    "current",
+    "longterm",
+    "cumulative",
+];
 
 /// A name whose kind is not the one its last term requires.
 ///
@@ -364,7 +452,20 @@ pub fn kind_faults(rows: &[crate::method::Row]) -> Vec<String> {
         if name.kind == NameKind::Method {
             continue;
         }
-        let term = name.name.rsplit('_').next().unwrap_or(name.name);
+        if name.in_reply && matches!(name.shape, Shape::Optional(_)) {
+            faults.push(format!(
+                "{}: `{}` (under `{}`) is optional in a reply; a reply field is always present (RW-Q4)",
+                name.method, name.name, name.holder
+            ));
+            continue;
+        }
+        // A qualifier takes its kind from the term it qualifies:
+        // `weight_total` is a weight, `fee_total` an amount.
+        let term = name
+            .name
+            .rsplit('_')
+            .find(|term| !QUALIFIERS.contains(term))
+            .unwrap_or(name.name);
         let Some(allowed) = kind_of_term(term) else {
             continue;
         };
@@ -427,8 +528,9 @@ fn conforms_fields(
     for field in fields {
         seen.push(field.name);
         match (object.get(field.name), &field.shape) {
-            // A hidden field is absent to a caller it is not shown to.
-            (None, Shape::Hidden { .. }) => {}
+            // A hidden field is absent to a caller it is not shown to, and
+            // an optional parameter may be left out.
+            (None, Shape::Hidden { .. } | Shape::Optional(_)) => {}
             (None, _) => return Err(format!("`{}` is missing", field.name)),
             (Some(value), shape) => {
                 conforms(value, shape).map_err(|e| format!("`{}`: {e}", field.name))?;
@@ -454,7 +556,9 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
         (Shape::OneOf(words), Value::String(text)) if words.contains(&text.as_str()) => Ok(()),
         (Shape::OneOf(words), _) => Err(format!("{value} is not one of {}", words.join("|"))),
         (Shape::Nullable(_), Value::Null) => Ok(()),
-        (Shape::Nullable(inner) | Shape::Hidden { inner, .. }, _) => conforms(value, inner),
+        (Shape::Nullable(inner) | Shape::Hidden { inner, .. } | Shape::Optional(inner), _) => {
+            conforms(value, inner)
+        }
         (Shape::List(inner), Value::Array(items)) => {
             for (index, item) in items.iter().enumerate() {
                 conforms(item, inner).map_err(|e| format!("[{index}]: {e}"))?;
@@ -464,7 +568,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
         (Shape::Empty, Value::Object(object)) if object.is_empty() => Ok(()),
         (Shape::Map { keys, value: inner }, Value::Object(object)) => {
             for (key, item) in object {
-                if !keys.contains(&key.as_str()) {
+                if keys.is_some_and(|keys| !keys.contains(&key.as_str())) {
                     return Err(format!("`{key}` is not a key of this map"));
                 }
                 conforms(item, inner).map_err(|e| format!("`{key}`: {e}"))?;
@@ -489,12 +593,31 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
             Shape::Object {
                 fields,
                 parts,
+                choice,
                 holder: _,
             },
             Value::Object(object),
         ) => {
             let mut seen = Vec::new();
             conforms_fields(object, fields, &mut seen)?;
+            if !choice.is_empty() {
+                let named: Vec<&Field> = choice
+                    .iter()
+                    .filter(|field| object.contains_key(field.name))
+                    .collect();
+                let [one] = named.as_slice() else {
+                    let keys: Vec<&str> = choice.iter().map(|field| field.name).collect();
+                    return Err(format!(
+                        "exactly one of {} is given, not {}",
+                        keys.join(", "),
+                        named.len()
+                    ));
+                };
+                seen.push(one.name);
+                conforms(&object[one.name], &one.shape)
+                    .map_err(|e| format!("`{}`: {e}", one.name))?;
+                seen.extend(choice.iter().map(|field| field.name));
+            }
             for part in parts {
                 let present = part
                     .fields
@@ -517,6 +640,20 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
                 None => Ok(()),
             }
         }
+        (Shape::Tagged { tag, variants, .. }, Value::Object(object)) => {
+            let Some(Value::String(name)) = object.get(*tag) else {
+                return Err(format!("`{tag}` is missing or not a keyword"));
+            };
+            let Some((_, fields)) = variants.iter().find(|(variant, _)| variant == name) else {
+                return Err(format!("`{name}` is not a {tag}"));
+            };
+            let mut seen = vec![*tag];
+            conforms_fields(object, fields, &mut seen)?;
+            match object.keys().find(|key| !seen.contains(&key.as_str())) {
+                Some(key) => Err(format!("`{key}` is not a field of `{name}`")),
+                None => Ok(()),
+            }
+        }
         _ => Err(format!("{value} is not {}", describe(shape))),
     }
 }
@@ -528,6 +665,9 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
 /// may carry one bracket after its name:
 ///
 /// - `["tx"]`: the name walks under another holder (a modifier, IG-Q42);
+/// - `[optional]` or `[optional "tx"]`: a request parameter that may be
+///   left out. Its type is `Option<T>`, or `bool` with `#[serde(default)]`
+///   for a switch that defaults off. Refused in a reply ([`kind_faults`]).
 /// - `[shown POLICY]`: the field is shown only to a caller that policy
 ///   admits. Its type is [`Withheld<T>`](crate::kinds::Withheld), and it
 ///   carries `#[serde(default, skip_serializing_if =
@@ -608,6 +748,7 @@ macro_rules! wire_object {
                         },)*
                     ],
                     parts: ::std::vec::Vec::new(),
+                    choice: ::std::vec::Vec::new(),
                 }
             }
         }
@@ -615,8 +756,15 @@ macro_rules! wire_object {
     (@under) => { ::core::option::Option::None };
     (@under $under:literal) => { ::core::option::Option::Some($under) };
     (@under shown $policy:expr) => { ::core::option::Option::None };
+    (@under optional) => { ::core::option::Option::None };
+    (@under optional $under:literal) => { ::core::option::Option::Some($under) };
     (@shape $fty:ty;) => { <$fty as $crate::schema::Schema>::shape() };
     (@shape $fty:ty; $under:literal) => { <$fty as $crate::schema::Schema>::shape() };
+    (@shape $fty:ty; optional $($under:literal)?) => {
+        $crate::schema::Shape::Optional(::std::boxed::Box::new(
+            <$fty as $crate::kinds::OptionalShape>::inner_shape(),
+        ))
+    };
     (@shape $fty:ty; shown $policy:expr) => {
         $crate::schema::Shape::Hidden {
             shown_to: $policy,
@@ -809,7 +957,7 @@ mod tests {
         assert!(conforms(&json!("live"), &states).is_err());
 
         let map = Shape::Map {
-            keys: &["clearnet", "tor"],
+            keys: Some(&["clearnet", "tor"]),
             value: Box::new(Shape::Scalar("count")),
         };
         conforms(&json!({"tor": 2}), &map).unwrap();
@@ -838,6 +986,7 @@ mod tests {
                     },
                 ],
             }],
+            choice: vec![],
         };
         conforms(&json!({"height": 1}), &parted).unwrap();
         conforms(
@@ -914,5 +1063,123 @@ mod tests {
         let height = kind_faults(&[wrong(WrongHeight::shape)]);
         assert_eq!(height.len(), 1, "{height:?}");
         assert!(height[0].contains("`claimed_height`") && height[0].contains("holds count"));
+    }
+
+    fn selector() -> Shape {
+        Shape::Object {
+            holder: "block",
+            fields: vec![Field {
+                name: "pow",
+                under: Some("block header"),
+                shape: Shape::Optional(Box::new(Shape::Scalar("switch"))),
+            }],
+            parts: vec![],
+            choice: vec![
+                Field {
+                    name: "height",
+                    under: None,
+                    shape: Shape::Scalar("height"),
+                },
+                Field {
+                    name: "hash",
+                    under: None,
+                    shape: Shape::Scalar("hash"),
+                },
+                Field {
+                    name: "tip",
+                    under: None,
+                    shape: Shape::Nullable(Box::new(Shape::Empty)),
+                },
+            ],
+        }
+    }
+
+    /// A selector is exactly one key (IG-Q94): none and two are refused,
+    /// and a switch beside it may be left out. Red edit: accept an empty
+    /// choice, and the first `is_err` below fails.
+    #[test]
+    fn a_selector_is_exactly_one_key() {
+        let shape = selector();
+        conforms(&json!({"height": 7}), &shape).unwrap();
+        conforms(&json!({"height": 7, "pow": true}), &shape).unwrap();
+        conforms(&json!({"tip": null}), &shape).unwrap();
+        assert!(conforms(&json!({"pow": true}), &shape).is_err());
+        assert!(conforms(&json!({}), &shape).is_err());
+        assert!(conforms(&json!({"height": 7, "hash": "ab".repeat(32)}), &shape).is_err());
+        assert!(conforms(&json!({"height": 7, "depth": 1}), &shape).is_err());
+    }
+
+    /// An optional field is a request's; in a reply it is a fault. Red
+    /// edit: drop the `in_reply` check in `kind_faults`.
+    #[test]
+    fn an_optional_field_is_refused_in_a_reply() {
+        let row = |request: fn() -> Shape, reply: fn() -> Shape| crate::method::Row {
+            name: "block_header_show",
+            policy: Policy::Grant(Grant::Chain),
+            request,
+            reply,
+        };
+        assert!(kind_faults(&[row(selector, Header::shape)]).is_empty());
+        let faults = kind_faults(&[row(NoParams::shape, selector)]);
+        assert_eq!(faults.len(), 1, "{faults:?}");
+        assert!(faults[0].contains("optional in a reply"));
+    }
+
+    /// A subject-keyed map's object value walks under each key, and a tag
+    /// names which fields follow it.
+    #[test]
+    fn a_subject_keyed_map_walks_under_each_key_and_a_tag_selects_fields() {
+        let counts = Shape::Map {
+            keys: Some(&["clearnet", "tor"]),
+            value: Box::new(Shape::Object {
+                holder: "connector",
+                fields: vec![Field {
+                    name: "inbound_count",
+                    under: None,
+                    shape: Shape::Scalar("count"),
+                }],
+                parts: vec![],
+                choice: vec![],
+            }),
+        };
+        let mut out = Vec::new();
+        let mut w = Walk {
+            method: "daemon_status",
+            in_reply: true,
+            out: &mut out,
+        };
+        walk(
+            &mut w,
+            NameKind::Field,
+            Policy::Grant(Grant::Peers),
+            &counts,
+        );
+        let holders: Vec<&str> = out.iter().map(|name| name.holder).collect();
+        assert_eq!(holders, ["clearnet", "tor"]);
+
+        let verdict = Shape::Tagged {
+            holder: "tx",
+            tag: "verdict",
+            variants: vec![
+                ("accepted", vec![]),
+                (
+                    "already-in-chain",
+                    vec![Field {
+                        name: "mined_height",
+                        under: None,
+                        shape: Shape::Scalar("height"),
+                    }],
+                ),
+            ],
+        };
+        conforms(&json!({"verdict": "accepted"}), &verdict).unwrap();
+        conforms(
+            &json!({"verdict": "already-in-chain", "mined_height": 4}),
+            &verdict,
+        )
+        .unwrap();
+        assert!(conforms(&json!({"verdict": "accepted", "mined_height": 4}), &verdict).is_err());
+        assert!(conforms(&json!({"verdict": "already-in-chain"}), &verdict).is_err());
+        assert!(conforms(&json!({"verdict": "lost"}), &verdict).is_err());
     }
 }

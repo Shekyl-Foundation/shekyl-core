@@ -295,3 +295,24 @@ impl<T: Schema> WithheldShape for Withheld<T> {
         T::shape()
     }
 }
+
+/// The shape of an optional request parameter when given. A reply field
+/// is never optional, so neither `Option<T>` nor a defaulted `bool` has a
+/// [`Schema`] of its own: they are fields only with the `[optional]`
+/// bracket.
+pub trait OptionalShape {
+    /// The given value's shape.
+    fn inner_shape() -> Shape;
+}
+
+impl<T: Schema> OptionalShape for Option<T> {
+    fn inner_shape() -> Shape {
+        T::shape()
+    }
+}
+
+impl OptionalShape for bool {
+    fn inner_shape() -> Shape {
+        Shape::Scalar("switch")
+    }
+}
