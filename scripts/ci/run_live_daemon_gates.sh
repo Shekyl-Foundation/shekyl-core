@@ -155,6 +155,21 @@ ARMED=(
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
   engine::regtest_e2e::a_stops_last_line_reaches_the_log_file
+  # The 2026-11-02 incident itself (#1346): the chain on a 1 MiB tmpfs,
+  # mined until a commit meets ENOSPC, no signal sent. The daemon logs the
+  # fault at error, logs that it stops on it, and exits failed. Needs
+  # SHEKYL_SMALL_DISK (checked below). Observed red 2026-11-11, twice,
+  # each against a rebuilt daemon: with the fault line at warn it
+  # panicked at "the fault is recorded below `error`" (122 s); with the
+  # run loop not reading the node's end it panicked at "the daemon is
+  # still up", at the gate's 30-minute bound. Green 110 s, local debug
+  # daemon.
+  engine::regtest_e2e::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit
+  # The other half (#1346): a SIGTERM after three mined blocks logs
+  # nothing at error and exits 0. Observed red 2026-11-11 against a
+  # daemon rebuilt to log an error line in its teardown: panicked at "a
+  # requested stop logged". Green 8 s with the stop gate above.
+  engine::regtest_e2e::a_requested_stop_logs_no_error_and_exits_0
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
@@ -346,7 +361,19 @@ fi
 
 GATE_LANE="${GATE_LANE:-pr}"
 case "$GATE_LANE" in
-  pr) LANE_GATES=("${ARMED[@]}") ;;
+  pr)
+    LANE_GATES=("${ARMED[@]}")
+    # The full-disk gate fills a small filesystem. Checked here, before the
+    # first gate runs, so a lane that forgot the mount fails at once with
+    # the remedy and not twenty minutes in (rule 47). build.yml mounts it
+    # on the job container; a local run goes through with_small_disk.sh.
+    [ -n "${SHEKYL_SMALL_DISK:-}" ] && [ -d "$SHEKYL_SMALL_DISK" ] || {
+      echo "FATAL: SHEKYL_SMALL_DISK names no directory. The full-disk gate needs a 1 MiB tmpfs:" >&2
+      echo "  CI: the job container's --tmpfs option and the gate step's env (build.yml)." >&2
+      echo "  Locally: $REPO_ROOT/scripts/ci/with_small_disk.sh $REPO_ROOT/scripts/ci/run_live_daemon_gates.sh" >&2
+      exit 1
+    }
+    ;;
   slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
   *)
     echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr' or 'slow')" >&2
