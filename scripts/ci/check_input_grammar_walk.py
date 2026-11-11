@@ -21,8 +21,9 @@
 #   - a kind written only in prose: a row whose meaning carries the italic
 #     *view* / *verb* marker must carry the same kinds in its Kind cell, and
 #     each Kind pair must name one of the row's own parents;
-#   - drift: a name §17 or §18 gives that the walk table (§18.1) omits,
-#     or a method the walk table lists that §17 does not.
+#   - drift: a method §17 lists that the types do not carry, or the
+#     reverse; or a parameter or field name §17 or §18 gives that no type
+#     carries.
 #
 # How a name walks (IG-Q42). A method starts at a subject and each pair is an
 # edge; after `dev`, the rest is a reference (IG-Q49). A parameter or field
@@ -30,17 +31,20 @@
 # reference: it starts at a subject and each of its own pairs is an edge. A
 # name valid neither way is refused. Glossary edges express refinement only.
 #
-# THIS GATE IS INTERIM. Its input is §18.1, a table kept in the document,
-# because the method table RW-Q7 rules does not exist yet. The rename PR
-# (RPC_WIRE.md RW-Q8) builds that table in shekyl-rpc-types; its schema gate
-# reads every name and its holder from the request and reply types and
-# replaces this one, with §18.1. FOLLOWUPS tracks the replacement ("The input
-# grammar's walk gate reads a hand table until RW-Q7's schema gate").
+# The names come from the types (RPC_WIRE.md RW-Q7). shekyl-rpc-types renders
+# its method table to docs/generated/rpc_wire_schema.tsv, one line per
+# method, parameter and field with the holder its walk starts from, and a
+# test there holds the committed file equal to the rendering. This gate
+# walks that file. No table of names is kept by hand.
 #
-# Instance of 47-gate-subject-assertion.mdc: an empty glossary or walk table
-# is a missing subject and fails rather than passing vacuously.
+# Whether a name holds the kind its last term requires (an `address` holding
+# an endpoint, a `_height` holding a count) is the types' own test,
+# `shekyl-rpc-types` `wire::tests::every_name_holds_its_kind`.
 #
-# Usage: check_input_grammar_walk.py [--selftest] [path-to-INPUT_GRAMMAR.md]
+# Instance of 47-gate-subject-assertion.mdc: an empty glossary or schema is a
+# missing subject and fails rather than passing vacuously.
+#
+# Usage: check_input_grammar_walk.py [--selftest] [INPUT_GRAMMAR.md [schema.tsv]]
 
 from __future__ import annotations
 
@@ -50,10 +54,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DOC = os.path.join(ROOT, "docs", "design", "INPUT_GRAMMAR.md")
+SCHEMA = os.path.join(ROOT, "docs", "generated", "rpc_wire_schema.tsv")
 
 QUALIFIERS = {"max", "min"}
 # Value keywords a parameters cell names that are values, not names.
 VALUE_KEYWORDS = {"auto"}  # `tip` is a selector parameter since IG-Q94
+WALK_KINDS = ("method", "parameter", "field")
 GLOSSARY = [
     ("§3", "## 3. Glossary", "\n## 4."),
     ("§11", "## 11. Glossary", "\n## 12."),
@@ -173,22 +179,45 @@ def cycles(edges: set[tuple[str, str]]) -> list[list[str]]:
     return found
 
 
-def walk_table(doc: str, errors: list[str]):
-    """§18.1's rows: (label, holder path or None for methods, names)."""
-    sec = section(doc, "### 18.1", "\n## 19.")
-    rows = []
-    for line in sec.splitlines():
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) != 3 or cells[0] in ("Names", "") or set(cells[0]) <= {"-"}:
+def schema_rows(text: str, errors: list[str]):
+    """The schema file's names: (label, holder path or None for a method, [name]).
+
+    One row per distinct (holder, name): a name that several methods carry
+    under one holder is walked once.
+    """
+    rows, seen = [], set()
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line or line.startswith("#"):
             continue
-        label, holder, names = cells
-        obj = None if holder == "method" else TICK.fullmatch(holder).group(1).split()
-        rows.append((label, obj, TICK.findall(names)))
+        cells = line.split("\t")
+        if len(cells) != 6 or cells[1] not in WALK_KINDS:
+            errors.append(f"schema line {n} is not `method kind holder name shown-to shape`: {line!r}")
+            continue
+        method, kind, holder, name = cells[:4]
+        obj = None if kind == "method" else holder.split()
+        key = (kind == "method", holder, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append((f"{method} {kind}", obj, [name]))
     return rows
 
 
-def drift(doc: str, rows, errors: list[str]) -> None:
-    walked = {n for _, _, ns in rows for n in ns}
+def state_keys(schema: str) -> set[str]:
+    """The keys of one-key states (IG-Q70, IG-Q73), from the shape column.
+
+    A state's key is a keyword on the wire, not a walked name, but a §18
+    row that names it (`archived`) names something the types carry.
+    """
+    keys = set()
+    for shape in re.findall(r"state ([a-z0-9|-]+)", schema):
+        keys.update(shape.split("|"))
+    return keys
+
+
+def drift(doc: str, rows, errors: list[str], carried: set[str]) -> None:
+    """§17 and §18 against what the types carry."""
+    walked = {n for _, _, ns in rows for n in ns} | carried
     methods = {n for _, obj, ns in rows if obj is None for n in ns}
     s17 = section(doc, "## 17.", "\n## 18.")
     seen17 = set()
@@ -199,15 +228,15 @@ def drift(doc: str, rows, errors: list[str]) -> None:
         for m in TICK.findall(cells[1]):
             seen17.add(m)
             if m not in methods:
-                errors.append(f"drift: §17 names the method `{m}`, which §18.1 does not walk")
+                errors.append(f"drift: §17 names the method `{m}`, which the types do not carry")
         for t in TICK.findall(cells[2]):
             keys = re.findall(r'"([a-z][a-z0-9_]*)"\s*:', t) or ([t] if IDENT.fullmatch(t) else [])
             for k in keys:
                 if k not in walked and k not in methods and k not in VALUE_KEYWORDS:
-                    errors.append(f"drift: §17 names the parameter `{k}`, which §18.1 does not walk")
+                    errors.append(f"drift: §17 names the parameter `{k}`, which no type carries")
     for m in sorted(methods - seen17):
-        errors.append(f"drift: §18.1 walks the method `{m}`, which §17 does not list")
-    s18 = section(doc, "## 18.", "### 18.1")
+        errors.append(f"drift: the types carry the method `{m}`, which §17 does not list")
+    s18 = section(doc, "## 18.", "\n## 19.")
     news = set(re.findall(r"→ `([a-z][a-z0-9_]*)`", s18))
     part_c_cols: list[int] = []
     for line in s18.splitlines():
@@ -222,19 +251,19 @@ def drift(doc: str, rows, errors: list[str]) -> None:
             if i < len(cells):
                 news.update(t for t in TICK.findall(cells[i]) if IDENT.fullmatch(t))
     for n in sorted(news - walked):
-        errors.append(f"drift: §18 gives the name `{n}`, which §18.1 does not walk")
+        errors.append(f"drift: §18 gives the name `{n}`, which no type carries")
 
 
-def check(doc: str) -> list[str]:
+def check(doc: str, schema: str) -> list[str]:
     errors: list[str] = []
     edges, subjects, defined, kinds = glossary(doc, errors)
     if not edges or not defined:
         return errors + ["the glossary is empty: no subject to check (rule 47)"]
     for cyc in cycles(edges):
         errors.append("cycle: " + " -> ".join(cyc))
-    rows = walk_table(doc, errors)
+    rows = schema_rows(schema, errors)
     if not rows or not any(obj is None for _, obj, _ in rows):
-        return errors + ["§18.1 has no names, or no methods: no subject to check (rule 47)"]
+        return errors + ["the schema has no names, or no methods: no subject to check (rule 47)"]
 
     def pairs_bad(path: list[str]) -> list[tuple[str, str]]:
         return [(a, b) for a, b in zip(path, path[1:]) if b not in QUALIFIERS and (a, b) not in edges]
@@ -268,65 +297,69 @@ def check(doc: str) -> list[str]:
             if bad:
                 errors.append(f"non-edge: {where}: " + ", ".join(f"`{a}` -> `{b}`" for a, b in bad)
                               + " (and not a reference)")
-    drift(doc, rows, errors)
+    drift(doc, rows, errors, state_keys(schema))
     return errors
 
 
-def selftest(doc: str) -> int:
-    def add_name(holder_cell: str, name: str) -> str:
-        i = doc.index("### 18.1")
-        j = doc.index("\n| ", doc.index("|---", i))
-        return doc[:j] + f"\n| selftest | {holder_cell} | `{name}` |" + doc[j:]
+def selftest(doc: str, schema: str) -> int:
+    def add_name(holder: str, name: str, kind: str = "field") -> str:
+        return schema + f"selftest\t{kind}\t{holder}\t{name}\tstatus\ttext\n"
 
     def add_row(table_marker: str, row: str) -> str:
         i = doc.index(table_marker)
         j = doc.index("\n| ", doc.index("|---", i))
         return doc[:j] + "\n" + row + doc[j:]
 
-    def add_method(name: str) -> str:
-        out = add_name("method", name)
-        i = out.index("## 17.")
-        j = out.index("\n| ", out.index("|---", i))
-        return out[:j] + f"\n| selftest | `{name}` | — | chain | selftest |" + out[j:]
+    def add_method_doc(name: str) -> str:
+        i = doc.index("## 17.")
+        j = doc.index("\n| ", doc.index("|---", i))
+        return doc[:j] + f"\n| selftest | `{name}` | — | chain | selftest |" + doc[j:]
+
+    def drop(name: str) -> str:
+        return "".join(line + "\n" for line in schema.splitlines() if line.split("\t")[3:4] != [name])
 
     cases = [
-        ("add chain_coinbase as a method in §17 and §18.1", add_method("chain_coinbase"),
+        ("add chain_coinbase as a method in §17 and the types",
+         add_method_doc("chain_coinbase"), add_name("", "chain_coinbase", "method"),
          "ends in `coinbase`, which is neither a view nor a verb under `chain`"),
         ("a meaning marked *view* with no Kind cell",
-         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | |"), "kind drift"),
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | |"), schema, "kind drift"),
         ("a Kind cell that disagrees with its meaning's marker",
-         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | chain:verb |"), "kind drift"),
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | chain:verb |"), schema, "kind drift"),
         ("a Kind pair naming a parent the row does not list",
-         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | block:view |"), "does not list"),
-        ("add socks-tor: `socks_tor` under `daemon` walks socks -> tor", add_name("`daemon`", "socks_tor"), "non-edge"),
-        ("a method that starts below a subject: `socks_tor`", add_name("method", "socks_tor"), "non-edge"),
-        ("an undefined term: `bogus`", add_name("`daemon`", "bogus"), "undefined term"),
-        ("a misplaced qualifier: `weight_max_total`", add_name("`txpool`", "weight_max_total"), "misplaced qualifier"),
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | block:view |"), schema, "does not list"),
+        ("a field `socks_tor` under `daemon`: socks -> tor", doc, add_name("daemon", "socks_tor"), "non-edge"),
+        ("a method that starts below a subject: `socks_tor`",
+         add_method_doc("socks_tor"), add_name("", "socks_tor", "method"), "non-edge"),
+        ("a field `age_ms` under `sync session header`: `ms` is a unit, no term",
+         doc, add_name("sync session header", "age_ms"), "undefined term"),
+        ("an undefined term: `bogus`", doc, add_name("daemon", "bogus"), "undefined term"),
+        ("a misplaced qualifier: `weight_max_total`", doc, add_name("txpool", "weight_max_total"), "misplaced qualifier"),
         ("a duplicate definition: `height` again in §19",
-         add_row("**New terms:**", "| height | block | a duplicate |"), "duplicate definition"),
+         add_row("**New terms:**", "| height | block | a duplicate |"), schema, "duplicate definition"),
         ("a staging table outside §19 that defines `hiding` again",
          doc.replace("## 23. Part E", "| Term | Parents | Meaning |\n|---|---|---|\n| hiding | daemon | a duplicate |\n\n## 23. Part E", 1),
-         "duplicate definition"),
+         schema, "duplicate definition"),
         ("add a cycle: `block` under `header`",
-         add_row("**Terms of §3", "| block | header | a cycle |"), "cycle"),
-        ("drift: §18 gives `stalled`, the walk table drops it",
-         doc.replace("`state`, `stalled`, `session` |", "`state`, `session` |", 1), "drift"),
-        ("rule 47: an empty walk table",
-         re.sub(r"(### 18\.1[^\n]*\n)(?:.*\n)*?(?=\n## 19\.)", r"\1", doc, count=1), "no subject"),
+         add_row("**Terms of §3", "| block | header | a cycle |"), schema, "cycle"),
+        ("drift: §18 gives `stalled`, the types drop it", doc, drop("stalled"), "drift"),
+        ("drift: the types carry a method §17 does not list",
+         doc, add_name("", "chain_alt_list", "method"), "drift"),
+        ("rule 47: an empty schema", doc, "# method\tkind\tholder\tname\tshown-to\tshape\n", "no subject"),
     ]
-    base = check(doc)
+    base = check(doc, schema)
     failed = 0
     if base:
-        print("FAIL  the document as it stands must pass:\n  " + "\n  ".join(base))
+        print("FAIL  the document and schema as they stand must pass:\n  " + "\n  ".join(base))
         failed += 1
     else:
-        print("ok    the document as it stands passes")
-    for title, mutated, expect in cases:
-        if mutated == doc:
+        print("ok    the document and schema as they stand pass")
+    for title, mutated_doc, mutated_schema, expect in cases:
+        if mutated_doc == doc and mutated_schema == schema:
             print(f"FAIL  {title}: the edit did not apply")
             failed += 1
             continue
-        errs = check(mutated)
+        errs = check(mutated_doc, mutated_schema)
         if any(expect in e for e in errs):
             print(f"ok    {title}: refused ({next(e for e in errs if expect in e)})")
         else:
@@ -339,22 +372,25 @@ def selftest(doc: str) -> int:
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     path = args[0] if args else DOC
-    if not os.path.exists(path):
-        print(f"input grammar walk: {path} is missing: no subject to check (rule 47)")
-        return 1
+    schema_path = args[1] if len(args) > 1 else SCHEMA
+    for p in (path, schema_path):
+        if not os.path.exists(p):
+            print(f"input grammar walk: {p} is missing: no subject to check (rule 47)")
+            return 1
     with open(path, encoding="utf-8") as source:
         doc = source.read()
+    with open(schema_path, encoding="utf-8") as source:
+        schema = source.read()
     if "--selftest" in argv:
-        return selftest(doc)
-    errors = check(doc)
+        return selftest(doc, schema)
+    errors = check(doc, schema)
     for e in errors:
         print(e)
     if errors:
         print(f"\ninput grammar walk: {len(errors)} refusal(s)")
         return 1
-    rows = walk_table(doc, [])
-    n = sum(len(ns) for _, _, ns in rows)
-    print(f"input grammar walk: {n} names walked over the glossary, acyclic")
+    rows = schema_rows(schema, [])
+    print(f"input grammar walk: {len(rows)} names walked over the glossary, acyclic")
     return 0
 
 

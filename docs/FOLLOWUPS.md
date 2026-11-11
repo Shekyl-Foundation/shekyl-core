@@ -534,10 +534,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md) RW-Q7 (one method table; RK-D6), read by `RPC_CHANNEL.md` RT-W10
 
-- **The input grammar's walk gate reads a hand table until RW-Q7's schema gate.** `scripts/ci/check_input_grammar_walk.py` walks every RPC method, parameter and field name over the glossary (IG-3, IG-Q42), and refuses undefined terms, non-edges, misplaced qualifiers, duplicate definitions and cycles. Its input is `INPUT_GRAMMAR.md` §18.1, a table kept in the document, because the method table RW-Q7 rules does not exist yet. The rename PR (RW-Q8) builds that table in `shekyl-rpc-types`, with each request and reply type carrying its object's path; its schema gate reads every name and holder from the types, and replaces this gate and §18.1 in the same PR. Falsify by `scripts/ci/check_input_grammar_walk.py` and §18.1 being gone while a schema gate walks the generated names.
-  - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md) RW-Q7 (the schema gate) and RW-Q8 (the rename PR)
-  - Target: pre-genesis
-
 - **`shekyl-wallet-rpc` and `shekyl-cli` have no `config-verify` yet (`INPUT_GRAMMAR.md` IG-Q63, ruled 2026-10-22).** The daemon's check landed with its loader; each wallet binary gets the same switch, one name in the tree (IG-2), when its own configuration-file loader lands (IG-Q29): its `load` and the pure checks its own start runs, reported with IG-11. Falsify by a wallet binary that reads a configuration file and refuses `--config-verify`.
   - Owner: the wallet lane — [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q63, with IG-Q29's loader
   - Target: pre-genesis

@@ -115,7 +115,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 ## 3. Glossary — Part A's terms
 
-A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's. The Kind column carries IG-3's verbs and views as data: one `parent:view` or `parent:verb` pair for each parent under which the term ends a command, with `—` for a bare subject; a blank cell is a term that ends no command. The italic *view* and *verb* in a meaning are its prose, and must agree with the column (the walk gate, §18.1).
+A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's. The Kind column carries IG-3's verbs and views as data: one `parent:view` or `parent:verb` pair for each parent under which the term ends a command, with `—` for a bare subject; a blank cell is a term that ends no command. The italic *view* and *verb* in a meaning are its prose, and must agree with the column (the walk gate, `scripts/ci/check_input_grammar_walk.py`).
 
 | Term | Parents | Meaning | Kind |
 |---|---|---|---|
@@ -792,7 +792,7 @@ Words of `shekyl-cli` (§11, §13) that render part of another method's reply ha
 
 ## 18. The field census
 
-Each shape's fields today, and their names under this Part. The census from source, with each key's wire type and `file:line`, is the appendix [`INPUT_GRAMMAR_PART_C_CENSUS.md`](INPUT_GRAMMAR_PART_C_CENSUS.md). A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
+Each shape's fields today, and their names under this Part. The names the types carry, each with the holder its walk starts from and the grant that shows it, are [`docs/generated/rpc_wire_schema.tsv`](../generated/rpc_wire_schema.tsv), rendered from `shekyl-rpc-types`' method table (`wire::TABLE`, RW-Q7) and held equal to it by a test there; `scripts/ci/check_input_grammar_walk.py` walks that file over §3, §11, §14.2 and §19 and checks §17 and this section against it. The census from source, with each key's wire type and `file:line`, is the appendix [`INPUT_GRAMMAR_PART_C_CENSUS.md`](INPUT_GRAMMAR_PART_C_CENSUS.md). A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
 
 **Block header** (`block_header_show`, `block_header_list`; `header` in a block):
 
@@ -900,89 +900,6 @@ A connector's counts (`connector`'s values): `incoming_sockets` → `inbound_cou
 **Relay statistics** (`relay_stats`): `floor` → `floor`, whose element is `connector` → `connector`, `achieved_out_connections` → `outbound_count`, the inner `floor` → `outbound_min`, `below` → `below`; `tallies` → `tally`, whose element is `peer` (the connection's id) → `connection` (IG-Q83), `connector` → `connector` (`null` where it has not been observed; today's `unnamed`), `propagated`, `silent` → `propagated`, `silent`, `distinct_sources` → `sender_count`.
 
 **Armed levers**: `generateblocks` takes `count` and nothing else (IG-F23); reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
-
-### 18.1 The names the walk reads
-
-Every method, parameter and field name above, with the holder its walk starts from (IG-Q42): `method` for a method name, otherwise the path of the object that holds or is selected or modified by the name. `scripts/ci/check_input_grammar_walk.py` walks each name over §3, §11, §14.2 and §19, and refuses a name that §17 or §18 gives and this table omits. The rename PR's schema gate (RW-Q7) replaces this table and that gate.
-
-| Names | Holder | Walked |
-|---|---|---|
-| methods (§17) | method | `version`, `chain_height`, `block_header_show`, `block_header_list`, `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum`, `chain_alt`, `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch`, `daemon_status`, `sync_status`, `peer_connections`, `peer_list`, `p2p_stats`, `option_set`, `option_show`, `daemon_stop`, `txpool_list`, `txpool_stats`, `txpool_flush`, `tx_relay`, `tx_submit`, `block_template`, `block_submit`, `pow`, `mine_start`, `mine_stop`, `mine_status`, `ban_add`, `ban_remove`, `ban_list`, `ban_show`, `relay_stats`, `dev_block_generate`, `dev_chain_pop` |
-| parameters of block_header_show/list, block_show (selector) | `block` | `height`, `hash`, `tip` |
-| parameters of block_header_list (selector) | `block` | `from`, `to`, `hash` |
-| parameters of header reads, block_show (modifier: the header) | `block header` | `pow` |
-| parameters of block_list (selector) | `block` | `height` |
-| parameters of tx_show/list (selector) | `tx` | `id` |
-| parameters of tx_show/list, block_show/list (modifier: the transaction) | `tx` | `prune` |
-| parameters of chain_spent (input) | `chain spent` | `key_image` |
-| parameters of chain_coinbase_sum (input) | `chain coinbase sum` | `from`, `to` |
-| parameters of curve_show (selector) | `curve` | `height`, `tip` |
-| parameters of archival_claim_show (selector) | `archival` | `persona` |
-| parameters of shard_fetch (argument) | `shard` | `id` |
-| parameters of peer_list (input) | `peer` | `local` |
-| parameters of option_set (argument) | `option` | `value` |
-| parameters of option_show (selector) | `option` | `name` |
-| parameters of txpool_flush (argument) | `txpool` | `id` |
-| parameters of tx_relay (argument) | `tx` | `id` |
-| parameters of tx_submit (argument) | `tx` | `body` |
-| parameters of block_submit (argument) | `block` | `body` |
-| parameters of pow (input) | `pow` | `height`, `hashing`, `seed` |
-| parameters of mine_start (argument) | `mine` | `threads` |
-| parameters of ban_add/remove/show | `ban` | `host`, `duration` |
-| parameters of dev_block_generate (argument) | `block` | `count` |
-| parameters of dev_chain_pop (argument) | `chain` | `count` |
-| block header fields | `block header` | `version_major`, `version_minor`, `time`, `parent`, `nonce`, `orphan`, `height`, `depth`, `hash`, `difficulty`, `difficulty_cumulative`, `reward`, `weight`, `weight_longterm`, `tx_count`, `pow`, `coinbase`, `curve_root`, `attestation_root` |
-| block fields | `block` | `header`, `body`, `tx`, `output_index` |
-| block tx element | `tx` | `id`, `body`, `prunable_hash`, `pqc_auth_hash`, `archival_size` |
-| archived slot state (tx_show/list, block_show/list) | `tx` | `archived`, `id`, `shard` |
-| chain_height fields | `chain` | `height`, `hash`, `writer` |
-| the writer's halt (chain_height, daemon_status) | `chain writer` | `height`, `invariant` |
-| slot states (tx_show/list, block_header_list) | `tx` | `missing` |
-| tx entry fields | `tx` | `id`, `body`, `prunable_hash`, `pqc_auth_hash`, `archival_size`, `pooled`, `mined_height`, `confirmations`, `mined_time`, `output_index`, `public` |
-| fee fields | `fee` | `economy`, `standard`, `high` |
-| coinbase sum fields | `chain coinbase sum` | `emission`, `fee` |
-| alt chain element | `chain alt` | `hash`, `height`, `difficulty_cumulative`, `block`, `parent` |
-| curve fields | `curve` | `root`, `layers`, `leaf_count`, `height` |
-| claim fields | `archival claim` | `height`, `hash`, `settled_epoch`, `joined_epoch`, `holding`, `shard`, `claimed`, `bond_total`, `failure_count`, `served_epoch`, `slash_epoch`, `epoch` |
-| claim epoch element | `epoch` | `id`, `closing_height`, `work`, `budget`, `bond`, `shard`, `credit`, `claimant` |
-| claim bond element | `bond` | `joined_epoch`, `complete_tree`, `failure` |
-| bond failure element | `bond failure` | `from`, `to` |
-| claim shard element | `shard` | `id`, `freeze_height`, `segment` |
-| claim credit element | `credit` | `bond`, `shard` |
-| coverage fields | `shard coverage` | `height`, `leaf_count`, `frozen_count`, `settled_epoch`, `budget`, `work`, `shard` |
-| coverage shard element | `shard` | `id`, `bonded_count`, `served_count`, `freeze_height`, `scarcity`, `profit` |
-| shard fetch fields | `shard` | `id`, `hash`, `size`, `block_count`, `tx_count`, `output_count`, `coinbase_output_count`, `duration`, `closing_height` |
-| daemon status fields | `daemon` | `height`, `hash`, `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, `peered`, `protocol_version`, `difficulty`, `difficulty_cumulative`, `block_spacing`, `tx_count`, `block_weight_max`, `block_weight_median`, `time_adjusted`, `emission`, `emission_multiplier`, `burn`, `burn_total`, `stake_share`, `txpool_count`, `started`, `disk_free`, `data_size`, `revision`, `peer_outbound_count`, `peer_inbound_count`, `alt_count`, `rpc_connections`, `connector`, `txpool_retired`, `txpool_private_count`, `grant`, `writer` |
-| a connector's counts: clearnet | `clearnet` | `inbound_count`, `outbound_count`, `peer_white_count`, `peer_gray_count` |
-| a connector's counts: tor | `tor` | `inbound_count`, `outbound_count`, `peer_white_count`, `peer_gray_count` |
-| version (the frozen key, RW-Q6) | `daemon` | `version` |
-| version fields | `daemon` | `tagged`, `height`, `target_height`, `consensus_digest`, `network`, `genesis` |
-| connection element | `peer connection` | `inbound`, `local`, `endpoint`, `connector`, `download`, `upload`, `download_idle`, `upload_idle`, `mode`, `age`, `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current`, `id`, `height` |
-| sync status fields | `sync` | `height`, `target_height`, `state`, `stalled`, `session` |
-| session element | `sync session` | `connection`, `endpoint`, `height`, `mode`, `header`, `span`, `download_speed` |
-| a header read in flight | `sync session header` | `age`, `due` |
-| a body span in flight | `sync session span` | `from`, `blocks`, `size`, `age`, `due` |
-| peer element | `peer` | `endpoint`, `tier` |
-| p2p stats fields | `p2p` | `started`, `download`, `upload`, `download_packets`, `upload_packets` |
-| option element | `option` | `name`, `value`, `source`, `runtime`, `secret`, `assigned` |
-| refusal data (a diagnostic, IG-11) | `diagnostic` | `code`, `option`, `source`, `message`, `parameter` |
-| pool entry fields | `tx` | `id`, `weight`, `fee` |
-| pool stats fields | `txpool` | `count`, `weight_total`, `weight_min`, `weight_max`, `weight_median`, `fee_total`, `private_count` |
-| template fields | `block template` | `difficulty`, `height`, `extra_offset`, `nonce_offset`, `reward`, `parent`, `seed_height`, `body`, `hashing`, `seed`, `seed_next`, `version_major`, `weight_median`, `emission` |
-| block submit fields | `block` | `hash` |
-| tx submit fields | `tx` | `verdict`, `mined_height`, `cause`, `publication` |
-| pow reply | `block` | `pow` |
-| mine status fields | `mine` | `active`, `speed`, `threads`, `address`, `block_spacing`, `height`, `reward`, `difficulty`, `cause`, `txpool_retired` |
-| mine speed | `mine speed` | `count`, `window` |
-| ban element | `ban` | `host`, `duration`, `permanent` |
-| relay stats fields | `relay` | `floor`, `tally` |
-| floor element | `relay floor` | `connector`, `outbound_count`, `outbound_min`, `below` |
-| tally element | `relay tally` | `connection`, `connector`, `propagated`, `silent`, `sender_count` |
-| dev block generate reply | `block` | `height`, `hash` |
-| dev chain pop reply | `chain` | `height` |
-| Part E: `daemon_status`'s Tor fields (IG-Q66…IG-Q71) | `daemon` | `hiding`, `posture`, `origination`, `sync_connector`, `tor` |
-| Part E: the posture | `daemon posture` | `tor`, `clearnet` |
-| Part E: the managed Tor object | `tor` | `state`, `facet`, `cause`, `age`, `respawn_count`, `progress`, `flagged`, `fix` |
 
 ## 19. Glossary — Part C's terms
 
@@ -1358,7 +1275,7 @@ Existing terms that gain a parent. The §19 row gains the parent and states the 
 - `connector` gains `sync` on its §19 defining row, keeping "one-of `clearnet`, `tor`".
 - `count` gains `respawn` on its §19 gains row. `count` is defined in §11, so a second defining row would be a duplicate. The meaning stays "how many".
 
-§18.1 walks `hiding`, `posture`, `origination`, `sync_connector` and `tor` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `facet`, `cause`, `age`, `respawn_count`, `progress`, `flagged` and `fix`.
+These fields join the generated schema with the Tor supervisor lane's status PRs, and the walk then takes `hiding`, `posture`, `origination`, `sync_connector` and `tor` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `facet`, `cause`, `age`, `respawn_count`, `progress`, `flagged` and `fix`.
 
 `offline` is already the term "P2P is off" (IG-Q3). The origination keyword uses it with that meaning: Tor off and clearnet off.
 

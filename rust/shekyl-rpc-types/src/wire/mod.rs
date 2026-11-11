@@ -160,7 +160,40 @@ mod tests {
         assert!(walked.len() > 300, "{} names", walked.len());
     }
 
-    use crate::schema::{conforms, Schema};
+    use crate::schema::{conforms, render, Schema};
+    use std::path::PathBuf;
+
+    const SCHEMA_FILE: &str = "rpc_wire_schema.tsv";
+
+    fn generated(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/generated")
+            .join(name)
+    }
+
+    /// The committed schema is the table's rendering. The grammar's walk
+    /// gate reads that file (`scripts/ci/check_input_grammar_walk.py`), so
+    /// a type renamed without regenerating it fails here. Red edit: rename
+    /// a field of any wire type and run this without regenerating.
+    #[test]
+    fn the_committed_schema_is_the_tables() {
+        let path = generated(SCHEMA_FILE);
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()))
+            .replace("\r\n", "\n");
+        assert_eq!(
+            committed,
+            render(TABLE),
+            "{} differs from the table's rendering; regenerate it",
+            path.display()
+        );
+    }
+
+    #[test]
+    #[ignore = "writes docs/generated/; run on purpose after a wire change"]
+    fn regenerate_rpc_wire_schema() {
+        std::fs::write(generated(SCHEMA_FILE), render(TABLE)).expect("write schema");
+    }
     use serde_json::{json, Value};
 
     /// Serde reads `doc` exactly when the schema admits it, and what serde
