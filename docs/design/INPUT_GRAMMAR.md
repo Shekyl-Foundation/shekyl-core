@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, POSED 2026-11-11.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, RULED 2026-11-11 (Rick), as posed.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -750,9 +750,9 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 |---|---|---|---|---|
 | `get_version` | `version` | — | every grant | frozen (§16) |
 | `/get_height` (`/getheight`), `get_block_count` (`getblockcount`) | `chain_height` | — | chain | IG-Q45, IG-Q46 |
-| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | `{"height": n}`, `{"hash": h}` or `"tip"`; `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56; `pow` is served to a bounded caller: the hash recorded at validation, inside the header cap (IG-F24) |
+| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | exactly one of `height`, `hash` or `tip` (`{"tip": null}`; IG-Q94); `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56; `pow` is served to a bounded caller: the hash recorded at validation, inside the header cap (IG-F24) |
 | `get_block_headers_range` (`getblockheadersrange`) | `block_header_list` | `from`, `to` (inclusive heights), or `hash` (a list); `pow` (switch) | chain | RW-Q1; IG-Q53, IG-Q56 |
-| `get_block` (`getblock`) | `block_show` | the selector as `block_header_show`'s; `pow` (switch); `prune` (switch) | chain | RW-Q5's first output index is a field; IG-Q55 |
+| `get_block` (`getblock`) | `block_show` | the selector as `block_header_show`'s (IG-Q94); `pow` (switch); `prune` (switch) | chain | RW-Q5's first output index is a field; IG-Q55 |
 | `/get_blocks_by_height.bin` (`/getblocks_by_height.bin`) | `block_list` | `height` (a list); `prune` (switch) | chain | RW-Q5; bounded, `RPC_CHANNEL.md` §6.3; IG-Q55 |
 | `/get_o_indexes.bin` | — | — | — | deleted (RW-Q5) |
 | `/get_transactions` (`/gettransactions`) | `tx_show`, `tx_list` | `id`, one or a list; `prune` (switch) | chain, pool | IG-Q50, IG-Q55; unrelayed entries are host-only (RT-O9.3) |
@@ -760,7 +760,7 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `get_fee_estimate` | `fee` | — | chain | IG-Q52 |
 | `get_coinbase_tx_sum` | `chain_coinbase_sum` | `from`, `to` | chain | IG-Q44 |
 | `get_alternate_chains`, `/get_alt_blocks_hashes` | `chain_alt` | — | status | IG-Q46 |
-| `get_curve_tree_info`, `get_curve_tree_checkpoint` | `curve_show` | `{"height": n}` or `"tip"` | chain | one reply type (IG-Q47) |
+| `get_curve_tree_info`, `get_curve_tree_checkpoint` | `curve_show` | exactly one of `height` or `tip` (IG-Q94) | chain | one reply type (IG-Q47) |
 | `get_archival_emission_claim_source` | `archival_claim_show` | `{"persona": h}` | chain | the wallet's contract |
 | `get_archival_shard_coverage` | `shard_coverage` | — | chain | |
 | `request_archival_shard` | `shard_fetch` | `id` | chain | the wallet's word (§12.3); bounded by the shard-fetch permit (IG-Q90, IG-Q91) |
@@ -908,7 +908,7 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | Names | Holder | Walked |
 |---|---|---|
 | methods (§17) | method | `version`, `chain_height`, `block_header_show`, `block_header_list`, `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum`, `chain_alt`, `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch`, `daemon_status`, `sync_status`, `peer_connections`, `peer_list`, `p2p_stats`, `option_set`, `option_show`, `daemon_stop`, `txpool_list`, `txpool_stats`, `txpool_flush`, `tx_relay`, `tx_submit`, `block_template`, `block_submit`, `pow`, `mine_start`, `mine_stop`, `mine_status`, `ban_add`, `ban_remove`, `ban_list`, `ban_show`, `relay_stats`, `dev_block_generate`, `dev_chain_pop` |
-| parameters of block_header_show/list, block_show (selector) | `block` | `height`, `hash` |
+| parameters of block_header_show/list, block_show (selector) | `block` | `height`, `hash`, `tip` |
 | parameters of block_header_list (selector) | `block` | `from`, `to`, `hash` |
 | parameters of header reads, block_show (modifier: the header) | `block header` | `pow` |
 | parameters of block_list (selector) | `block` | `height` |
@@ -916,7 +916,7 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | parameters of tx_show/list, block_show/list (modifier: the transaction) | `tx` | `prune` |
 | parameters of chain_spent (input) | `chain spent` | `key_image` |
 | parameters of chain_coinbase_sum (input) | `chain coinbase sum` | `from`, `to` |
-| parameters of curve_show (selector) | `curve` | `height` |
+| parameters of curve_show (selector) | `curve` | `height`, `tip` |
 | parameters of archival_claim_show (selector) | `archival` | `persona` |
 | parameters of shard_fetch (argument) | `shard` | `id` |
 | parameters of peer_list (input) | `peer` | `local` |
@@ -1007,6 +1007,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
 | key | spent, console | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88) | |
 | image | key | a key image (a hash) | |
+| tip | block, curve | the chain's last block, as a selector; its value is `null` (IG-Q94) | |
 | prune | tx | a switch: carry the skeleton — the pruned segment with the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` (`DRS_SB_BELOW_HORIZON.md` SB-Q2) | |
 | prunable | tx | the prunable part of a transaction | |
 | pqc | tx | the transaction's `pqc_auths` region, the post-quantum authorizations; only in `pqc auth hash` | |
@@ -1174,7 +1175,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | weight | block, header, template, tx | a weight, in bytes | |
 | white | peer | the white peer list | |
 
-Value keywords added: `unspent` (spent), `tip` (a header, block or curve selector), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier); by Part F, `live`, `halted` (writer), `held`, `overdue`, `public`, `untracked` (publication), `unpeered`, `behind`, `following`, `synced` (sync state), the session modes, and the verdict and cause keywords of IG-Q86.
+Value keywords added: `unspent` (spent), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier); by Part F, `live`, `halted` (writer), `held`, `overdue`, `public`, `untracked` (publication), `unpeered`, `behind`, `following`, `synced` (sync state), the session modes, and the verdict and cause keywords of IG-Q86.
 
 Every term of §3 and §11 used as a field (`height`, `hash`, `count`, `weight`, `fee`, `address`, `size`, `depth`, `seed`, `threads`, `difficulty`, `from`, `to`, `blocks`, `download`, `upload`, `inbound`, `local`, `endpoint`, `white`, `gray`, …) gains the object that holds it as a parent and keeps its one meaning; the schema RW-Q7's table generates lists those edges for the gate. The implementing PR builds the field table from the reply types (RW-Q7) and brings any term this census missed as a row for ruling in its review.
 
@@ -1566,8 +1567,8 @@ The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coi
 
 **IG-Q93 — when the Tor state began — RULED 2026-11-10, as recommended; amends IG-Q69 and §23's `tor.since` row.** §23 rules `tor.since` a time, unix seconds: when `state` began. A reading of the node's wall clock is wrong exactly when the cause is `clock-skew`, because the node's clock is the thing that is wrong; and a client on another machine subtracts its own clock from it, so what it computes is the skew between two machines added to the age. *Question:* does `tor.since` stand? *Recommended:* it becomes `tor.age`, a `duration` in whole seconds taken from the monotonic clock: how long `state` has stood, as IG-Q80 uses `age`. An age is right under a skewed clock and needs no second clock to read. Its one cost is that it is true as of the reply, which every polled field already is. `age` gains the parent `tor`, and `since` leaves §19. The Tor supervisor lane's PR writes the field as `tor.age`.
 
-**IG-Q94 — a selector on the wire — POSED 2026-11-11; amends §17, §19 and §18.1.** §17 writes the selector of `block_header_show`, `block_show` and `curve_show` as `{"height": n}`, `{"hash": h}` or `"tip"`, beside the switches `pow` and `prune`. RW-Q2 makes `params` a named object, so a bare `"tip"` cannot stand beside a switch; and §18.1 walks `height` and `hash` as parameters of their own. *Question:* how does a call name its item? *Recommended:* `params` carries **exactly one** of the keys `height`, `hash` and `tip`, beside the method's switches: `{"height": 7, "pow": true}`, `{"hash": h}`, `{"tip": null}`. `tip` takes IG-Q70's form, a key whose value is `null` because it has no payload.
+**IG-Q94 — a selector on the wire — RULED 2026-11-11, as posed; amends §17, §19 and §18.1.** §17 writes the selector of `block_header_show`, `block_show` and `curve_show` as `{"height": n}`, `{"hash": h}` or `"tip"`, beside the switches `pow` and `prune`. RW-Q2 makes `params` a named object, so a bare `"tip"` cannot stand beside a switch; and §18.1 walks `height` and `hash` as parameters of their own. *Question:* how does a call name its item? *Recommended:* `params` carries **exactly one** of the keys `height`, `hash` and `tip`, beside the method's switches: `{"height": 7, "pow": true}`, `{"hash": h}`, `{"tip": null}`. `tip` takes IG-Q70's form, a key whose value is `null` because it has no payload.
 - **Exactly one, never zero.** A call that names no selector is refused (`BadParams`), and never means the tip: a client that dropped `height` by mistake would otherwise read the tip's header in place of block *n*, and a scan might never notice. Two selectors are refused the same way.
-- **The walk changes.** `tip` is ruled as a value keyword (§19, "a header, block or curve selector"). Under this form it is a parameter, so on ruling it leaves the value-keyword list and becomes a term under `block` and `curve`, "the chain's last block, as a selector; its value is `null`"; §18.1's selector rows gain `tip`; §17's three cells read `height`, `hash` or `tip` (exactly one).
+- **The walk changes.** `tip` was a value keyword (§19, "a header, block or curve selector"). Under this form it is a parameter, so it leaves the value-keyword list and is a term under `block` and `curve`, "the chain's last block, as a selector; its value is `null`"; §18.1's selector rows gain `tip`; §17's three cells read `height`, `hash` or `tip` (exactly one). All three are recorded in place.
 - **The alternatives are worse.** A parameter `block` holding the selector repeats the method's own subject and adds a name. `"tip"` inside `height` gives one field two encodings, which RW-Q4 refuses.
 - **Built by hand.** serde's `flatten` turns `deny_unknown_fields` off, so the request type has its own `Deserialize` and its own schema shape (one of several keys, flattened), and `conforms` refuses a call with no selector and one with two.

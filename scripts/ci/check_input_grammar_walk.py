@@ -53,7 +53,7 @@ DOC = os.path.join(ROOT, "docs", "design", "INPUT_GRAMMAR.md")
 
 QUALIFIERS = {"max", "min"}
 # Value keywords a parameters cell names that are values, not names.
-VALUE_KEYWORDS = {"tip", "auto"}
+VALUE_KEYWORDS = {"auto"}  # `tip` is a selector parameter since IG-Q94
 GLOSSARY = [
     ("§3", "## 3. Glossary", "\n## 4."),
     ("§11", "## 11. Glossary", "\n## 12."),
