@@ -1727,9 +1727,14 @@ async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
 async fn a_requested_stop_logs_no_error_and_exits_0() {
     let mut daemon = RegtestDaemon::start().await;
     let mined = daemon.generate_blocks(3).await;
-    assert!(mined.height >= 3, "the daemon mined: height {}", mined.height);
+    assert!(
+        mined.height >= 3,
+        "the daemon mined: height {}",
+        mined.height
+    );
     let status = terminate(&mut daemon).await;
-    let log = std::fs::read_to_string(daemon.data_dir.join("daemon.log")).expect("the daemon's log");
+    let log =
+        std::fs::read_to_string(daemon.data_dir.join("daemon.log")).expect("the daemon's log");
     assert!(
         log.contains("stop requested by SIGTERM"),
         "the log does not hold the stop, so it cannot show the stop was clean; its tail:\n{}",
