@@ -179,7 +179,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // The managed Tor's inbox, before the node: the network publishes into
     // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
     // starts on it once the node is open.
-    let (tor_inbox, tor_feeds) = tor::prepare(&config.tor).unzip();
+    let (tor_inbox, tor_feeds) = tor::prepare();
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
@@ -193,7 +193,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         release_build: shekyl_version::IS_RELEASE,
         request_stop: Arc::new(signals::request_stop),
         plan: network::plan(&config, network_id),
-        supervisor: tor_feeds,
+        supervisor: Some(tor_feeds),
     }) {
         Ok(node) => node,
         Err(error) => {
@@ -290,7 +290,7 @@ fn supervise(
     pool: &shekyl_runtime::Pool,
     options: OptionsHandle,
     node: shekyl_node::Node,
-    tor_inbox: Option<tor::Prepared>,
+    tor_inbox: tor::Prepared,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
     // failed start: the node is torn down the one way.
@@ -306,22 +306,20 @@ fn supervise(
     // run on the signal owner's runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
     let notify_driver = pool.spawn(notify::drive_blocks(runner, node.tips()));
-    // The managed Tor starts with the node, which does not wait for it:
+    // The supervisor starts with the node, under every `tor` setting. A
+    // managed Tor starts with it, and the node does not wait for it:
     // clearnet, the listeners and the dialer are up already, and the
     // managed connector is parked until the supervisor publishes a route.
-    let supervisor = tor_inbox.and_then(|prepared| {
-        tor::begin(
-            prepared,
-            &config.tor,
-            config.clearnet_on(),
-            config.network.ports().p2p,
-            &config.data_dir,
-            pool.handle(),
-            node.network().clone(),
-        )
-    });
-    if let (Some(supervisor), Some(forward)) = (&supervisor, node.network().listening().tor_forward)
-    {
+    let supervisor = tor::begin(
+        tor_inbox,
+        &config.tor,
+        config.clearnet_on(),
+        config.network.ports().p2p,
+        &config.data_dir,
+        pool.handle(),
+        node.network().clone(),
+    );
+    if let Some(forward) = node.network().listening().tor_forward {
         supervisor.note_forward(forward);
     }
     let mut preserve_status = rpc.is_some();
@@ -346,7 +344,7 @@ fn supervise(
 /// `a_stops_last_line_reaches_the_log_file` reads this line from the file.
 fn finish(
     pool: &shekyl_runtime::Pool,
-    supervisor: Option<tor::Supervisor>,
+    supervisor: tor::Supervisor,
     rpc: Option<shekyl_daemon_rpc::run::Running>,
     preserve_status: bool,
     node: shekyl_node::Node,
@@ -360,8 +358,9 @@ fn finish(
     let closing = std::time::Instant::now();
     drop(node);
     let closed_in = closing.elapsed();
-    if let Some(supervisor) = supervisor {
-        pool.block_on(supervisor.shutdown());
+    let managed = supervisor.managed();
+    pool.block_on(supervisor.shutdown());
+    if managed {
         tracing::info!(target: "global", "the managed Tor was torn down");
     }
     tracing::info!(
@@ -642,7 +641,7 @@ mod tests {
             &pool,
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
-            None,
+            crate::tor::prepare().0,
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");

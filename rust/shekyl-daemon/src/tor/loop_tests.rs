@@ -33,7 +33,7 @@ use shekyl_tor_control_daemon::{DaemonTorConfig, DaemonTorControl};
 use tokio::sync::watch;
 
 use super::inbox::inbox;
-use super::{drive, Drive, PinSource, Supervisor};
+use super::{drive, Drive, PinSource, Supervises, Supervisor};
 
 struct NoSync;
 
@@ -204,7 +204,7 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
     let (owner, inbox, feeds) = inbox();
     let network = network(dir, feeds);
     let task = tokio::spawn(drive(
-        PinSource::Unchecked(tor),
+        Supervises::Managed(PinSource::Unchecked(tor)),
         policy,
         true,
         18_021,
@@ -212,7 +212,11 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
         inbox,
         network,
     ));
-    Supervisor { owner, task }
+    Supervisor {
+        owner,
+        task,
+        managed: true,
+    }
 }
 
 /// Ask the status, taken within a second.
@@ -375,7 +379,7 @@ async fn an_upload_before_the_add_onion_reply_is_read() {
     let network = network(dir.path(), feeds);
     let events = inbox.poster().events();
     let mut drive = Drive::start(
-        PinSource::Unchecked(tor.clone()),
+        Supervises::Managed(PinSource::Unchecked(tor.clone())),
         super::policy(),
         true,
         18_021,
