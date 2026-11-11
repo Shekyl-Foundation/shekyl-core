@@ -16,7 +16,7 @@ use super::super::{Action, Core, Input, Policy, Step, DESCRIPTOR_LIFETIME};
 use super::probe::{
     arrival, count, not_uploaded, probes, published, republishes, run_timed, secs, uploaded,
 };
-use super::{managed, policy, takes_down};
+use super::{managed, policy, replied, takes_down};
 
 /// The policy's descriptor lifetime: three hours.
 fn lifetime() -> u64 {
@@ -38,7 +38,34 @@ fn overdue_to(core: &mut Core, at: u64) -> Vec<u64> {
     served_to(core, at).0
 }
 
-/// [`overdue_to`], with the times a republish went out beside.
+/// Answer each sample `step` sent, as the driver answers it: a full
+/// bootstrap, then [`Input::Replied`]. A request queued behind the sample
+/// is sent by that `Replied`; the returned step holds `step`'s actions and
+/// those. Any other request is left in flight for the test to answer.
+fn sample_answered(core: &mut Core, step: Step, at: u64) -> Step {
+    let mut actions = step.actions;
+    let mut sampled = actions.contains(&Action::Sample);
+    while sampled {
+        core.on(
+            Input::DirectorySample {
+                progress: Some(100),
+                socks: None,
+                read: None,
+            },
+            at,
+        );
+        let next = replied(core, at);
+        sampled = next.actions.contains(&Action::Sample);
+        actions.extend(next.actions);
+    }
+    Step {
+        actions,
+        deadline: core.deadline(),
+    }
+}
+
+/// [`overdue_to`], with the times a republish went out beside: in the
+/// deadline's step, or in the step of the sample's `Replied` that sends it.
 fn served_to(core: &mut Core, at: u64) -> (Vec<u64>, Vec<u64>) {
     let mut asked = Vec::new();
     let mut republished = Vec::new();
@@ -47,16 +74,7 @@ fn served_to(core: &mut Core, at: u64) -> (Vec<u64>, Vec<u64>) {
         assert_ne!(served, Some(due), "the deadline at {due} did not move");
         served = Some(due);
         let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            core.on(
-                Input::DirectorySample {
-                    progress: Some(100),
-                    socks: None,
-                    read: None,
-                },
-                due,
-            );
-        }
+        let step = sample_answered(core, step, due);
         if overdue(&step) > 0 {
             asked.push(due);
         }
@@ -65,6 +83,20 @@ fn served_to(core: &mut Core, at: u64) -> (Vec<u64>, Vec<u64>) {
         }
     }
     (asked, republished)
+}
+
+/// The sample a clock jump asked is answered at `at`: a full bootstrap,
+/// then `Replied`.
+fn jump_sample_answered(core: &mut Core, at: u64) {
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+            read: None,
+        },
+        at,
+    );
+    replied(core, at);
 }
 
 /// A published core whose round began at `round_at`, with its first upload
@@ -117,11 +149,15 @@ fn an_overdue_upload_republishes_once() {
     let (mut core, uploaded_at) = reached(0);
     let before = core.status().inbound;
     let due = uploaded_at + lifetime();
-    let mut asked = core.on_deadline(due);
+    // Each step's liveness sample is answered; the republish queued behind
+    // it is sent by its `Replied`.
+    let step = core.on_deadline(due);
+    let mut asked = sample_answered(&mut core, step, due);
     while overdue(&asked) == 0 {
         let next = core.deadline().expect("the overdue check is armed");
         assert!(next <= due, "nothing past the lifetime before the check");
-        asked = core.on_deadline(next);
+        let step = core.on_deadline(next);
+        asked = sample_answered(&mut core, step, next);
     }
     assert_eq!(republishes(&asked), 1);
     assert_eq!(probes(&asked), 0, "a republish, not a probe");
@@ -135,7 +171,12 @@ fn an_overdue_upload_republishes_once() {
         [],
         "none again while the republish is owed"
     );
+    // The republish's `DEL_ONION` is answered, then its `ADD_ONION`,
+    // published.
+    let deleted = replied(&mut core, due + secs(1));
+    assert!(deleted.actions.contains(&Action::AddOnion));
     core.on(Input::OnionPublished, due + secs(1));
+    replied(&mut core, due + secs(1));
     assert_eq!(overdue_to(&mut core, due + lifetime() - secs(1)), []);
     let again = due + lifetime();
     let base = secs(300);
@@ -214,7 +255,17 @@ fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
     let jumped = uploaded_at + secs(3600);
     let step = core.on(Input::ClockJumped, jumped);
     assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
-    assert_eq!(jump_probes(&step), 1);
+    assert_eq!(jump_probes(&step), 0, "the draw waits for the sample");
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+            read: None,
+        },
+        jumped,
+    );
+    let drawn = replied(&mut core, jumped);
+    assert_eq!(jump_probes(&drawn), 1, "the draw follows the sample");
     core.on(Input::JumpProbeDrawn { draw: 0 }, jumped);
     let (probe_at, step) = run_timed(&mut core, jumped + secs(15));
     assert_eq!(
@@ -231,6 +282,8 @@ fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
     );
     let again = core.on(Input::ClockJumped, probe_at + secs(1));
     assert_eq!(jump_probes(&again), 0, "the probe in flight answers it");
+    assert!(again.actions.contains(&Action::Sample), "re-evaluate now");
+    jump_sample_answered(&mut core, probe_at + secs(1));
     core.on(arrival(probe_at, probe_at + secs(5)), probe_at + secs(5));
     assert_eq!(
         overdue_to(&mut core, uploaded_at + lifetime()),

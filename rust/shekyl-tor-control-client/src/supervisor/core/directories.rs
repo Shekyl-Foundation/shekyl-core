@@ -89,8 +89,12 @@ struct Ask {
     hsdir: RelayFingerprint,
     /// The descriptor id the upload named.
     descriptor_id: String,
-    /// When to send the fetch. `None` once sent, excluded, or answered.
+    /// When the fetch comes due. `None` once due, excluded, or answered.
     due: Option<u64>,
+    /// The fetch came due and the driver sent it. Until then it waits in
+    /// the request queue: no window runs, and nothing Tor says about the
+    /// directory is this check's.
+    sent: bool,
     /// When a sent fetch with no answer counts as missing. `None` until
     /// the fetch is sent, and cleared once the directory is decided.
     answer_by: Option<u64>,
@@ -100,7 +104,12 @@ struct Ask {
 impl Ask {
     /// The fetch has been sent and the directory has not been decided.
     fn is_open(&self) -> bool {
-        self.held == Held::Pending && self.due.is_none()
+        self.held == Held::Pending && self.sent
+    }
+
+    /// The fetch came due and waits to be sent.
+    fn is_queued(&self) -> bool {
+        self.held == Held::Pending && self.due.is_none() && !self.sent
     }
 
     fn exclude(&mut self) {
@@ -163,6 +172,7 @@ impl DirectoryCheck {
                     hsdir,
                     descriptor_id,
                     due: Some(due),
+                    sent: false,
                     answer_by: None,
                     held: Held::Pending,
                 })
@@ -185,22 +195,51 @@ impl DirectoryCheck {
             .min()
     }
 
-    /// Send every fetch whose time has come, and count a sent fetch whose
-    /// answer window has elapsed as missing. `within` is the answer window
-    /// from this send. Tor accepting the command later
-    /// ([`Self::accepted`]) starts that fetch's window over from the
-    /// acceptance, so a slow command does not spend the wait.
-    pub(super) fn on_deadline(&mut self, now: u64, within: u64) -> Vec<RelayFingerprint> {
+    /// The fetches whose time has come, to be sent; and a sent fetch whose
+    /// answer window has elapsed counts as missing. A fetch's window starts
+    /// when it is sent ([`Self::dispatched`]): the request queue sends one
+    /// request at a time, so a fetch can wait behind others.
+    pub(super) fn on_deadline(&mut self, now: u64) -> Vec<RelayFingerprint> {
         self.expire(now);
         let mut fetch = Vec::new();
         for ask in &mut self.asks {
             if ask.held == Held::Pending && ask.due.is_some_and(|due| now >= due) {
                 ask.due = None;
-                ask.answer_by = Some(now.saturating_add(within));
                 fetch.push(ask.hsdir);
             }
         }
         fetch
+    }
+
+    /// A fetch of `hsdir` came due and waits to be sent.
+    pub(super) fn queued(&self, hsdir: RelayFingerprint) -> bool {
+        self.asks
+            .iter()
+            .any(|ask| ask.hsdir == hsdir && ask.is_queued())
+    }
+
+    /// The driver sent the fetch of `hsdir` at `now`. Its answer window
+    /// runs from the send; Tor accepting the command later
+    /// ([`Self::accepted`]) starts it over from the acceptance, so a slow
+    /// command does not spend the wait.
+    pub(super) fn dispatched(&mut self, hsdir: RelayFingerprint, now: u64, within: u64) {
+        for ask in &mut self.asks {
+            if ask.hsdir == hsdir && ask.is_queued() {
+                ask.sent = true;
+                ask.answer_by = Some(now.saturating_add(within));
+            }
+        }
+    }
+
+    /// The fetch of `hsdir` was withheld at its turn: it says nothing, and
+    /// the check does not wait on it.
+    pub(super) fn withheld(&mut self, hsdir: RelayFingerprint) {
+        for ask in &mut self.asks {
+            if ask.hsdir == hsdir && ask.is_queued() {
+                ask.exclude();
+            }
+        }
+        self.settle();
     }
 
     /// Tor accepted the fetch of `hsdir` (`250`). The answer window runs

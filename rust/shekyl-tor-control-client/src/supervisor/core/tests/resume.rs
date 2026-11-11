@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use super::super::super::posture::{Cause, Inbound};
 use super::super::{duration_ns, Action, Core, Input, Step};
-use super::{managed, policy, reach_usable};
+use super::{managed, policy, reach_usable, replied};
 
 const SLEEP: u64 = 600;
 
@@ -36,17 +36,26 @@ fn slept(late_by: Duration) -> Input {
 }
 
 /// Fire every deadline up to `to` on time, answering each sample with
-/// `percent` and `read`. True if Tor was started again on the way: during
-/// a bootstrap no route is installed, so a respawn takes nothing down.
+/// `percent` and `read`, then `Replied`. True if Tor was started again on
+/// the way: during a bootstrap no route is installed, so a respawn takes
+/// nothing down.
 fn run(core: &mut Core, to: u64, percent: u8, read: u64) -> bool {
     let before = core.status().respawn_count;
     while let Some(due) = core.deadline().filter(|due| *due <= to) {
         let step = core.on_deadline(due);
-        if step.actions.contains(&Action::Sample) {
-            core.on(sample(percent, read), due);
-        }
+        answer(core, &step, due, percent, read);
     }
     core.status().respawn_count > before
+}
+
+/// Answer the sample `step` sent, and any its `Replied` sends, with
+/// `percent` and `read`, each followed by `Replied`, as the driver does.
+fn answer(core: &mut Core, step: &Step, at: u64, percent: u8, read: u64) {
+    let mut sampled = step.actions.contains(&Action::Sample);
+    while sampled {
+        core.on(sample(percent, read), at);
+        sampled = replied(core, at).actions.contains(&Action::Sample);
+    }
 }
 
 fn respawns(core: &Core) -> u32 {
@@ -72,8 +81,14 @@ fn stalled_before_a_sleep() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::PinAccepted, 0);
     core.on(Input::Spawned, 0);
+    // The launch, then the subscription; its `Replied` sends the first
+    // sample, answered as every other.
+    replied(&mut core, 0);
+    let subscribed = replied(&mut core, 0);
+    answer(&mut core, &subscribed, 0, 14, 1_000);
     assert!(!run(&mut core, secs(5), 14, 1_000));
-    core.on(Input::ClockJumped, secs(5));
+    let jumped = core.on(Input::ClockJumped, secs(5));
+    answer(&mut core, &jumped, secs(5), 14, 1_000);
     assert!(!run(&mut core, secs(20), 14, 1_000));
     core
 }
@@ -91,6 +106,7 @@ fn a_sleep_in_a_bootstrap_is_not_a_stall_and_an_awake_stall_still_is() {
     assert!(resumed(&step), "{:?}", step.actions);
     assert!(step.actions.contains(&Action::Sample), "re-evaluate now");
     core.on(sample(14, 1_000), wake);
+    replied(&mut core, wake);
     assert_eq!(respawns(&core), 0, "no respawn at the wake");
     assert!(
         !run(&mut core, wake + secs(299), 14, 1_000),
