@@ -40,21 +40,58 @@ declare -A ALLOW=(
   ["/json_rpc"]="the JSON-RPC envelope itself; its methods are the surface, not this path"
 )
 
-# One entry per `paths:` line, so a route's aliases are checked as a unit: a
-# route is live if ANY of its names has a consumer. Checking each spelling
-# separately would report every alias of a live route as dead.
-mapfile -t ROUTE_PATHS < <(
-  sed -n '/^pub(crate) const ROUTES/,/^];/p' "$SERVER_RS" \
-    | grep -oE 'paths: &\[[^]]*\]' \
-    | sed -E 's/paths: &\[//; s/\]//; s/"//g; s/, */ /g'
+# `assemble` registers every path the listener serves, one `.route` per
+# path. The argument is a string literal or a `&str` constant the tree
+# defines once. An empty extraction, or a constant that does not resolve
+# to one value, fails closed (rule 47): a gate that matches nothing is
+# worse than no gate.
+mapfile -t ROUTE_EXPRS < <(
+  sed -n '/^fn assemble/,/^}/p' "$SERVER_RS" \
+    | grep -oE '\.route\([^,]+' \
+    | sed -E 's/^\.route\(//'
 )
 
-if [[ ${#ROUTE_PATHS[@]} -eq 0 ]]; then
+resolve_route() {
+  local expr="$1"
+  if [[ $expr == \"*\" ]]; then
+    local literal="${expr#\"}"
+    literal="${literal%\"}"
+    printf '%s\n' "$literal"
+    return 0
+  fi
+  local ident="${expr##*::}"
+  if [[ ! $ident =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "FAIL: route expression '$expr' is not a string and not a path constant" >&2
+    return 1
+  fi
+  local matches
+  matches=$(grep -R --include='*.rs' -h -E \
+    "const[[:space:]]+${ident}:[[:space:]]*&str[[:space:]]*=[[:space:]]*\"[^\"]+\"" \
+    rust || true)
+  local values
+  values=$(printf '%s\n' "$matches" | sed -nE 's/.*"([^"]+)".*/\1/p' | sort -u)
+  local count
+  count=$(printf '%s\n' "$values" | grep -c . || true)
+  if [[ $count -ne 1 ]]; then
+    echo "FAIL: route constant ${ident} from '$expr' resolved to ${count} values" >&2
+    printf '%s\n' "$matches" >&2
+    return 1
+  fi
+  printf '%s\n' "$values"
+}
+
+if [[ ${#ROUTE_EXPRS[@]} -eq 0 ]]; then
   echo "FAIL: extracted no routes from $SERVER_RS."
   echo "      An extraction that comes back empty is a failure, not a skip:"
   echo "      a gate that silently matches nothing is worse than no gate."
   exit 1
 fi
+
+ROUTE_PATHS=()
+for expr in "${ROUTE_EXPRS[@]}"; do
+  path=$(resolve_route "$expr") || exit 1
+  ROUTE_PATHS+=("$path")
+done
 
 echo "rpc route liveness: ${#ROUTE_PATHS[@]} routes from the Axum table"
 

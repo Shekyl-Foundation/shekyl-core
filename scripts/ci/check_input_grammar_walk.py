@@ -70,6 +70,9 @@ ROW = re.compile(r"^\| ([a-z0-9]+) \|[^\n]*$", re.M)
 KINDS = {"view", "verb"}
 TICK = re.compile(r"`([^`]+)`")
 IDENT = re.compile(r"[a-z][a-z0-9_]*")
+# A literal method name. `self.call(method, ...)` is not a name and is skipped.
+CALL = re.compile(r"self\.call\('([a-z0-9_]+)'")
+DAEMON_PY = os.path.join(ROOT, "utils", "python-rpc", "framework", "daemon.py")
 
 
 def section(doc: str, start: str, end: str) -> str:
@@ -254,6 +257,28 @@ def drift(doc: str, rows, errors: list[str], carried: set[str]) -> None:
         errors.append(f"drift: §18 gives the name `{n}`, which no type carries")
 
 
+def python_client(schema: str) -> list[str]:
+    """The Python client's literal calls are the table's method names.
+
+    The client spells each name itself (`utils/python-rpc`). This holds that
+    set equal to the method rows. A schema that does not parse is the
+    walk's failure, not this one's, so a selftest mutation is left alone.
+    The client file is a subject (rule 47): missing, it fails closed.
+    """
+    parse_errors: list[str] = []
+    rows = schema_rows(schema, parse_errors)
+    if parse_errors:
+        return []
+    methods = {name for _, holder, names in rows if holder is None for name in names}
+    if not os.path.exists(DAEMON_PY):
+        return [f"python client: {DAEMON_PY} is missing: no subject to check (rule 47)"]
+    with open(DAEMON_PY, encoding="utf-8") as source:
+        calls = set(CALL.findall(source.read()))
+    errors = [f"python client does not call `{name}`, which the types carry" for name in sorted(methods - calls)]
+    errors += [f"python client calls `{name}`, which the types do not carry" for name in sorted(calls - methods)]
+    return errors
+
+
 def check(doc: str, schema: str) -> list[str]:
     errors: list[str] = []
     edges, subjects, defined, kinds = glossary(doc, errors)
@@ -384,13 +409,17 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest(doc, schema)
     errors = check(doc, schema)
+    errors.extend(python_client(schema))
     for e in errors:
         print(e)
     if errors:
         print(f"\ninput grammar walk: {len(errors)} refusal(s)")
         return 1
     rows = schema_rows(schema, [])
-    print(f"input grammar walk: {len(rows)} names walked over the glossary, acyclic")
+    print(
+        f"input grammar walk: {len(rows)} names walked over the glossary, "
+        "acyclic; the python client matches the method table"
+    )
     return 0
 
 

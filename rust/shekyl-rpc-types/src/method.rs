@@ -19,8 +19,9 @@
 //!   name reaches dispatch only by being a row.
 //!
 //! A method's name is its glossary path joined with `_` (RW-Q9), and it is
-//! written once, in that invocation. No other string in the tree spells
-//! it.
+//! written once, in that invocation. The Python client spells the same
+//! names, and the grammar walk holds that set equal to the table. A Rust
+//! client names a method by its type.
 
 pub use shekyl_rpc_grants::{Grant, GrantSet, Preset};
 
