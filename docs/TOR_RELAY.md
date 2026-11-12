@@ -78,10 +78,12 @@ alone does not.** Unset, Tor sizes that option at three quarters of
 physical memory and does not know `shekyld` shares the machine. On a 4 GB
 host with no swap, a relay at 1 MB/s beside the daemon was killed by the
 kernel twice in one evening before Tor's own limit was reached. With
-`MaxMemInQueues 512 MBytes` it was killed 69 times in four weeks, 67 of
-them in one surge, while the cap was killing circuits: the cap bounds
-Tor's queues, and the process held 0.7 to 1.6 GiB. The daemon held up to
-1.4 GiB of its own: [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
+`MaxMemInQueues 512 MBytes` the kernel killed it 67 times inside the
+measurement, all of them in one surge, and 16 times more after the
+horizon, while the cap was killing circuits. The cap bounds Tor's
+queues. Across that capped run the process held 0.7 to 1.6 GiB, and the
+daemon held up to 1.4 GiB:
+[`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
 final result 6. That is one host's record, not a sizing rule. Set the cap
 by hand anyway, so Tor gives up circuits before the kernel takes the
 process. Do not copy a torrc from this page into an exit
