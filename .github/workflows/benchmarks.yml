@@ -107,7 +107,12 @@ jobs:
     # a manual capture), so dispatch only runs `capture-pr`.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The capture took 18 to 24 minutes before the block-path rows
+    # (2026-11-12). Those add thirteen functions whose setup replays a
+    # fixture chain under callgrind: 34 minutes on a 16-core workstation,
+    # and a release build of the ingest crate's benches. Sized for a 4-vCPU
+    # runner from that; reread from the first runs.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
         with:
@@ -401,7 +406,8 @@ jobs:
     name: update bench-baseline branch
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The same capture as `capture-pr`, and its sizing.
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:
