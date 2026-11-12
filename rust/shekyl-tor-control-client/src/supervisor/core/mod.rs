@@ -717,12 +717,8 @@ pub struct Core {
     probe_confirms: bool,
     /// More than half of the latest round's directories refused its upload.
     uploads_refused: bool,
-    /// The clock was seen to change after Tor's last skew report: Tor
-    /// reported a jump, or the consensus check cleared its lower bound.
-    /// From then on Tor's report no longer holds a block off: the block is
-    /// its own and is named, and a new skew report names the clock again
-    /// ([`Self::clock_blocks`]).
-    clock_changed_since_report: bool,
+    /// Whether Tor's standing skew report owns a bootstrap block.
+    skew_hold: clock::SkewHold,
     /// The republish backoff (§4.5).
     republish: clock::RepublishHold,
     /// A clock jump during this bootstrap, and `traffic/read`'s movement.
@@ -770,7 +766,7 @@ impl Core {
             queued_send: None,
             probe_confirms: false,
             uploads_refused: false,
-            clock_changed_since_report: false,
+            skew_hold: clock::SkewHold::Holding,
             republish: clock::RepublishHold::new(duration_ns(policy.republish_after)),
             jump: clock_jump::JumpWatch::new(now),
             clock_evidence: clock_evidence::ClockEvidence::default(),
@@ -1063,6 +1059,7 @@ impl Core {
         self.progress = ProgressWindow::start(now, self.policy.alive_every);
         self.jump = clock_jump::JumpWatch::new(now);
         self.clock_evidence = clock_evidence::ClockEvidence::default();
+        self.skew_hold = clock::SkewHold::Holding;
         self.set_cause(Cause::None);
         self.arm_sample(now);
         self.arm_alive(now);
@@ -1203,7 +1200,7 @@ impl Core {
     /// onion is still reachable meanwhile.
     fn clock_jumped(&mut self, now: u64) -> Vec<Action> {
         self.jump.jumped(now);
-        self.clock_changed_since_report = true;
+        self.note_clock_jumped(now);
         let running = match &mut self.phase {
             Phase::Running { link, .. } => {
                 *link = Link::Resumed;

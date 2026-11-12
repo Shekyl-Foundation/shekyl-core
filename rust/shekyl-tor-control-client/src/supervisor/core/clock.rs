@@ -21,12 +21,20 @@
 //! tolerance. Tor's own report that the clock is off stands until Tor
 //! reaches Running, which clears every cause: this check cannot tell the
 //! clock set right from a fixed consensus aging into the tolerance, or from
-//! a sleep (`TSR-M8`), and retiring the report on either would make Tor's
-//! next report say the fault again. What the report no longer does once the
-//! clock is seen to change after it (Tor reports a jump, or this check
-//! clears) is hold a blocked link off: a block from then on is its own and
-//! is named, and a new report names the clock again. Nothing else is done on
-//! the clear: Tor's next rebuild takes a counter above anything the
+//! a sleep, and retiring the report on either would make Tor's next report
+//! say the fault again. The clear is that event on every OS. Supervisor time
+//! counts awake time, so a sleep moves the wall and not the supervisor,
+//! whether the process clock is `CLOCK_MONOTONIC`, `CLOCK_UPTIME_RAW`, or
+//! the unbiased interrupt time (#1352). The clear does not let a block take
+//! the line.
+//!
+//! What does is Tor's `CLOCK_JUMPED` after the report ([`SkewHold`]). A
+//! repeat of that figure inside one handshake stretch
+//! ([`super::Policy::clock_evidence_within`]) is a handshake that was
+//! already open: it leaves the line where it is. A repeat after the stretch
+//! means Tor still sees the figure, which a wake does too, so the report
+//! owns a block again. A different figure owns it at once. Nothing else is
+//! done on the clear: Tor's next rebuild takes a counter above anything the
 //! directories hold, and the overdue rule covers a stalled schedule.
 //!
 //! **No republish while it cannot help:** while the clock is named, or while
@@ -48,6 +56,69 @@ use std::time::Duration;
 use super::super::posture::{Cause, Inbound, InboundCause, ReportedSkew};
 use super::announce::Cadence;
 use super::{duration_ns, Action, Core, Duty, Phase};
+
+/// Whether Tor's skew report owns a bootstrap block.
+///
+/// [`Self::Holding`] owns one, while the cause is that report.
+/// [`Self::Yielded`] is the figure a `CLOCK_JUMPED` superseded, at the
+/// supervisor time of the jump. A later report of that figure inside one
+/// handshake stretch is the handshake that was already open. A later report
+/// past the stretch, or of another figure, owns blocks again.
+///
+/// The consensus check is not a writer. Its clear is an aging consensus or
+/// a sleep on every OS, and [`Core::clock_is_behind`] already owns a block
+/// while the check trips.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SkewHold {
+    /// The standing report owns a block.
+    #[default]
+    Holding,
+    /// `CLOCK_JUMPED` at `at` yielded `skew`.
+    Yielded {
+        /// The figure the jump superseded.
+        skew: ReportedSkew,
+        /// Supervisor time of the jump.
+        at: u64,
+    },
+}
+
+impl SkewHold {
+    /// The standing skew report owns a block.
+    pub(super) fn owns(self, cause: &Cause) -> bool {
+        match (self, cause) {
+            (Self::Yielded { skew: yielded, .. }, Cause::ClockSkew { skew })
+                if yielded == *skew =>
+            {
+                false
+            }
+            (_, Cause::ClockSkew { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Tor reported `CLOCK_JUMPED`. The standing figure, when the cause is
+    /// that report, no longer owns a block. A jump with no standing report
+    /// leaves the hold: the next report is a new fact.
+    pub(super) fn note_jump(self, cause: &Cause, now: u64) -> Self {
+        match cause {
+            Cause::ClockSkew { skew } => Self::Yielded {
+                skew: *skew,
+                at: now,
+            },
+            _ => self,
+        }
+    }
+
+    /// `skew` is the yielded figure, still inside `within` of the jump.
+    fn is_tail(self, skew: ReportedSkew, now: u64, within: u64) -> bool {
+        match self {
+            Self::Yielded { skew: yielded, at } => {
+                skew == yielded && now.saturating_sub(at) <= within
+            }
+            Self::Holding => false,
+        }
+    }
+}
 
 /// The republish backoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,9 +207,6 @@ impl Core {
         if !self.clock_is_behind() {
             return Vec::new();
         }
-        // The clock changed after Tor's report: a block from here on is no
-        // longer presumed the clock's.
-        self.clock_changed_since_report = true;
         // The check no longer trips: its lower bound clears. Tor's own report
         // stands until Tor reaches Running, which clears every cause. This
         // check cannot tell the clock being set right from a fixed consensus
@@ -172,16 +240,35 @@ impl Core {
     /// or the consensus check) the figure is kept and the key is recorded
     /// without speaking: a clock three days behind for four minutes is said
     /// once (Rick, 2026-11-10). Tor reports it at every handshake and
-    /// directory fetch, seconds apart (the macOS run of 2026-11-09).
+    /// directory fetch, seconds apart (the macOS run of 2026-11-09). A
+    /// repeat of the figure a jump just yielded, inside one handshake
+    /// stretch, is that same report: it does not speak, and it does not
+    /// replace a block named since the jump.
     pub(super) fn clock_skew(&mut self, now: u64, skew: ReportedSkew) -> Vec<Action> {
+        let within = duration_ns(self.policy.clock_evidence_within);
+        // A repeat of the figure the jump yielded, inside one handshake
+        // stretch: the handshake that was already open. It does not replace
+        // a block named since the jump, and it does not speak.
+        if self.skew_hold.is_tail(skew, now, within) {
+            if self.clock_named_already() {
+                self.note_key();
+            }
+            return Vec::new();
+        }
+        self.skew_hold = SkewHold::Holding;
         let named = self.clock_named_already();
-        self.clock_changed_since_report = false;
         self.set_cause(Cause::ClockSkew { skew });
         if named {
             self.note_key();
             return Vec::new();
         }
         self.say(now, Cadence::Due)
+    }
+
+    /// Tor reported `CLOCK_JUMPED`. The standing skew report yields a block
+    /// from here ([`SkewHold::note_jump`]).
+    pub(super) fn note_clock_jumped(&mut self, now: u64) {
+        self.skew_hold = self.skew_hold.note_jump(&self.cause, now);
     }
 
     /// The clock is named: by Tor's report, the certificates, or the
