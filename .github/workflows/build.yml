@@ -742,8 +742,9 @@ jobs:
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
         # offline on regtest with a fresh data directory and a free RPC port,
-        # wait until it answers get_info, ask it to stop over RPC, and assert
-        # it exits 0 within a timeout having created its chain store
+        # wait until it answers daemon_status, ask it to stop over
+        # daemon_stop, and assert it exits 0 within a timeout having
+        # created its chain store
         # (scripts/ci/daemon_boot_stop_smoke.ps1, which asserts each of its
         # subjects: rule 47).
         #

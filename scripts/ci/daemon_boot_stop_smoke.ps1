@@ -8,11 +8,11 @@
 # added to it:
 #
 #   1. boot: the built daemon, offline on regtest with a fresh data
-#      directory and a free RPC port, answers get_info; while it runs its
-#      data directory holds `shekyld.lock`;
+#      directory and a free RPC port, answers daemon_status; while it runs
+#      its data directory holds `shekyld.lock`;
 #   2. lock: a second daemon on the same data directory is refused with
 #      exit 2, naming the lock (DC-Q15);
-#   3. stop: asked over RPC, the first daemon exits 0 within a timeout,
+#   3. stop: asked over daemon_stop, the first daemon exits 0 within a timeout,
 #      leaves its chain store, and leaves the `shekyld.network` marker
 #      naming regtest and its network id (DC-Q15);
 #   4. marker: a daemon on another network is refused that data directory
@@ -75,6 +75,18 @@ $UNADOPTED_PROCESS_EXIT = [uint32] 1
 # signals.rs latches this cause; the stop is announced on the log
 # queue whatever the level (IG-14), so a `warn` log still holds it.
 $CtrlBreakStopLine = 'stop requested by Ctrl-Break'
+# Wire 4.0 (RPC_WIRE.md). Both take no parameters: an omitted `params`
+# member is the empty object. No reply carries `status`. daemon_status's
+# result carries `height`, the tip's ordinal (0 is an empty chain).
+# daemon_stop's result is `{}` (Done): the reply is sent, then the node stops.
+$DaemonStatusMethod = 'daemon_status'
+$DaemonStopMethod = 'daemon_stop'
+# How long one probe waits on a listener that has not accepted yet, how
+# long the stop call itself may take, and how long the poll waits between
+# probes. The boot and exit budgets are the parameters above.
+$RpcProbeTimeoutSeconds = 5
+$RpcStopCallTimeoutSeconds = 10
+$RpcPollIntervalMilliseconds = 500
 if ($IsWindows) {
     # One interop surface: the console pre-flight and the process-group
     # launch. Process.Start cannot set CREATE_NEW_PROCESS_GROUP.
@@ -248,32 +260,128 @@ function Start-ShekyldInNewGroup {
     return $adopted
 }
 
-# Polls get_info on the admin listener. Keeps the last error, so a daemon
-# that listens but answers with an HTTP error is reported as that error and
-# not as a bare timeout.
-function Wait-GetInfo {
+# A member read that does not throw when the member is absent. Strict mode
+# throws on a missing property, and a JSON-RPC error has no `result`.
+function Get-JsonProperty {
+    param($Object, [string] $Name)
+    if ($null -eq $Object) { return $null }
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
+
+function Test-JsonProperty {
+    param($Object, [string] $Name)
+    return $null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]
+}
+
+# `height` is a JSON integer, the tip's ordinal. 0 is an empty chain, so a
+# truthiness check would refuse the only chain this gate boots. A bool is a
+# value type and is not a height.
+function Test-TipHeight {
+    param($Value)
+    if ($Value -is [bool]) { return $false }
+    # Newtonsoft (this host's ConvertFrom-Json) emits an Int32 or an Int64.
+    # The vector below pins whichever of those this host uses for 0.
+    if ($Value -is [int] -or $Value -is [long]) {
+        return $Value -ge 0
+    }
+    return $false
+}
+
+# daemon_status succeeded when its result carries a tip height.
+function Test-DaemonStatusReply {
+    param($Reply)
+    $result = Get-JsonProperty $Reply 'result'
+    if ($null -eq $result) { return $false }
+    return Test-TipHeight (Get-JsonProperty $result 'height')
+}
+
+# daemon_stop succeeded when its result is Done (`{}`) and it carries no
+# error. ConvertFrom-Json may surface `{}` as an empty object or as $null;
+# a missing `result` member is a refusal, and a result with a field is not
+# this answer.
+function Test-DaemonStopReply {
+    param($Reply)
+    if ((Test-JsonProperty $Reply 'error') -or -not (Test-JsonProperty $Reply 'result')) {
+        return $false
+    }
+    $done = Get-JsonProperty $Reply 'result'
+    return $null -eq $done -or @($done.PSObject.Properties).Count -eq 0
+}
+
+# The reader's own vectors, against this host's ConvertFrom-Json, which is
+# the reader Invoke-RestMethod uses. Runs before any launch: a host whose
+# empty object or whose integer 0 does not read as these answers fails here,
+# not after the boot timeout.
+function Assert-RpcReplyReading {
+    $status = '{"jsonrpc":"2.0","id":"0","result":{"height":0,"hash":"ab"}}' | ConvertFrom-Json
+    if (-not (Test-DaemonStatusReply $status)) {
+        throw 'a daemon_status result whose height is 0 was not read as a tip'
+    }
+    # A refusal carries `error` and no `result`. This is that payload; the
+    # name in the message is not a call this gate makes.
+    $refused = '{"jsonrpc":"2.0","id":"0","error":{"code":-32601,"message":"no method is named get_info"}}' | ConvertFrom-Json
+    if (Test-DaemonStatusReply $refused) {
+        throw 'a method error was read as daemon_status'
+    }
+    $noHeight = '{"jsonrpc":"2.0","id":"0","result":{"hash":"ab"}}' | ConvertFrom-Json
+    if (Test-DaemonStatusReply $noHeight) {
+        throw 'a result without a height was read as daemon_status'
+    }
+    $stopped = '{"jsonrpc":"2.0","id":"0","result":{}}' | ConvertFrom-Json
+    if (-not (Test-DaemonStopReply $stopped)) {
+        throw 'daemon_stop Done ({}) was not read as an empty success'
+    }
+    $fields = '{"jsonrpc":"2.0","id":"0","result":{"status":"OK"}}' | ConvertFrom-Json
+    if (Test-DaemonStopReply $fields) {
+        throw 'a result that carries fields was read as daemon_stop Done'
+    }
+    if (Test-DaemonStopReply $refused) {
+        throw 'a method error was read as daemon_stop'
+    }
+}
+Assert-RpcReplyReading
+
+# One call on the admin listener. No `params` member: omitting it is the
+# empty object.
+function Invoke-AdminRpc {
+    param([int] $Port, [string] $Method, [int] $TimeoutSec)
+    $body = '{"jsonrpc":"2.0","id":"0","method":"' + $Method + '"}'
+    return Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/json_rpc" -Body $body `
+        -ContentType 'application/json' -TimeoutSec $TimeoutSec -NoProxy
+}
+
+# Polls daemon_status on the admin listener. Keeps the last error, so a
+# daemon that listens but answers with a refusal is reported as that
+# refusal and not as a bare timeout.
+function Wait-DaemonStatus {
     param([System.Diagnostics.Process] $Proc, [int] $Port, [int] $TimeoutSeconds, [string] $Label)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastError = 'no answer yet'
     while ([DateTime]::UtcNow -lt $deadline) {
         if ($Proc.HasExited) {
-            throw "$Label exited with status $($Proc.ExitCode) before answering get_info"
+            throw "$Label exited with status $($Proc.ExitCode) before answering $DaemonStatusMethod"
         }
         try {
-            $body = '{"jsonrpc":"2.0","id":"0","method":"get_info"}'
-            $info = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/json_rpc" -Body $body `
-                -ContentType 'application/json' -TimeoutSec 5 -NoProxy
-            if ($info.result -and $info.result.status -eq 'OK') {
-                Write-Host "${Label}: get_info answered, height $($info.result.height)"
+            $reply = Invoke-AdminRpc -Port $Port -Method $DaemonStatusMethod -TimeoutSec $RpcProbeTimeoutSeconds
+            if (Test-DaemonStatusReply $reply) {
+                $height = Get-JsonProperty (Get-JsonProperty $reply 'result') 'height'
+                Write-Host "${Label}: $DaemonStatusMethod answered, height $height"
                 return
             }
-            $lastError = "get_info answered without status OK: $($info | ConvertTo-Json -Compress -Depth 3)"
+            $fault = Get-JsonProperty $reply 'error'
+            if ($null -ne $fault) {
+                $lastError = "$DaemonStatusMethod refused: $($fault | ConvertTo-Json -Compress -Depth 4)"
+            } else {
+                $lastError = "$DaemonStatusMethod answered without a tip height: $($reply | ConvertTo-Json -Compress -Depth 4)"
+            }
         } catch {
             $lastError = $_.Exception.Message
         }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds $RpcPollIntervalMilliseconds
     }
-    throw "$Label did not answer get_info within $TimeoutSeconds s; last error: $lastError"
+    throw "$Label did not answer $DaemonStatusMethod within $TimeoutSeconds s; last error: $lastError"
 }
 
 # Starts the daemon expecting a refusal: exit 2 within the timeout, with
@@ -297,16 +405,15 @@ function Assert-Refused {
 
 function Stop-OverRpc {
     param([System.Diagnostics.Process] $Proc, [int] $Port, [string] $Label)
-    $stop = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/stop_daemon" -Body '{}' `
-        -ContentType 'application/json' -TimeoutSec 10 -NoProxy
-    if ($stop.status -ne 'OK') {
-        throw "$Label stop_daemon answered status '$($stop.status)'"
+    $stop = Invoke-AdminRpc -Port $Port -Method $DaemonStopMethod -TimeoutSec $RpcStopCallTimeoutSeconds
+    if (-not (Test-DaemonStopReply $stop)) {
+        throw "$Label ${DaemonStopMethod} was refused: $($stop | ConvertTo-Json -Compress -Depth 4)"
     }
     if (-not $Proc.WaitForExit($StopTimeoutSeconds * 1000)) {
-        throw "$Label did not exit within $StopTimeoutSeconds s of stop_daemon"
+        throw "$Label did not exit within $StopTimeoutSeconds s of $DaemonStopMethod"
     }
     if ($Proc.ExitCode -ne 0) {
-        throw "$Label exited with status $($Proc.ExitCode) after stop_daemon"
+        throw "$Label exited with status $($Proc.ExitCode) after $DaemonStopMethod"
     }
     Write-Host "${Label}: stopped over RPC, exit 0"
 }
@@ -391,7 +498,7 @@ try {
     Write-Host "starting $Daemon (data dir $dataDir, RPC port $rpcPort)"
     $first = Start-Shekyld -Words (Get-DaemonWords -Network 'regtest' -Data $dataDir -Port $rpcPort -Log $logFile) -Label 'first'
     $running.Add($first.Proc)
-    Wait-GetInfo -Proc $first.Proc -Port $rpcPort -TimeoutSeconds $StartTimeoutSeconds -Label 'first daemon'
+    Wait-DaemonStatus -Proc $first.Proc -Port $rpcPort -TimeoutSeconds $StartTimeoutSeconds -Label 'first daemon'
     if (-not (Test-Path -LiteralPath $lockFile -PathType Leaf)) {
         throw "no lock at '$lockFile' while the daemon runs"
     }
@@ -421,7 +528,7 @@ try {
         $cfgPort = New-FreePort
         $cfgRun = Start-Shekyld -Words (Get-DaemonWords -Network 'regtest' -Data $cfgData -Port $cfgPort -Log (Join-Path $cfgData 'shekyld.log') -Extra @('--config-file', $cfgFile)) -Label 'config-accepted'
         $running.Add($cfgRun.Proc)
-        Wait-GetInfo -Proc $cfgRun.Proc -Port $cfgPort -TimeoutSeconds $StartTimeoutSeconds -Label 'daemon with a config file in a private directory'
+        Wait-DaemonStatus -Proc $cfgRun.Proc -Port $cfgPort -TimeoutSeconds $StartTimeoutSeconds -Label 'daemon with a config file in a private directory'
         Stop-OverRpc -Proc $cfgRun.Proc -Port $cfgPort -Label 'daemon with a config file'
         # Grant BUILTIN\Users write on the directory (S-1-5-32-545, by SID so
         # the runner's locale cannot rename it away).
@@ -447,7 +554,7 @@ try {
         $brkLabel = 'daemon in its own process group'
         $brk = Start-ShekyldInNewGroup -Words (Get-DaemonWords -Network 'regtest' -Data $brkData -Port $brkPort -Log $brkLog)
         $running.Add($brk)
-        Wait-GetInfo -Proc $brk -Port $brkPort -TimeoutSeconds $StartTimeoutSeconds -Label $brkLabel
+        Wait-DaemonStatus -Proc $brk -Port $brkPort -TimeoutSeconds $StartTimeoutSeconds -Label $brkLabel
         Stop-ByCtrlBreak -Proc $brk -Data $brkData -Log $brkLog -Network 'regtest' -Label $brkLabel
     } else {
         Write-Host 'Ctrl-Break case: not run (a Windows console event)'
