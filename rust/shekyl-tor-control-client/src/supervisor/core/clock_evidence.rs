@@ -119,9 +119,14 @@ impl Core {
 
     /// A skew report or the consensus check names the clock during bootstrap.
     /// A wrong clock stops every handshake, so the other problems are its.
+    /// Tor's report holds them off only until the clock is seen to change
+    /// after it (a jump, or the check clearing): past that, a block is its
+    /// own, and the operator who set the clock right is told what still
+    /// stands. A new report names the clock again.
     fn clock_blocks(&self) -> bool {
         matches!(self.phase, Phase::Bootstrapping { .. })
-            && (matches!(self.cause, Cause::ClockSkew { .. }) || self.clock_is_behind())
+            && ((matches!(self.cause, Cause::ClockSkew { .. }) && !self.clock_changed_since_report)
+                || self.clock_is_behind())
     }
 
     fn clock_stands(&self, now: u64) -> bool {

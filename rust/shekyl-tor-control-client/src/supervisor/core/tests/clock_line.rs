@@ -638,3 +638,106 @@ fn a_blocked_link_named_first_gives_way_to_the_clock() {
     assert!(!last.contains("cannot reach the Tor network"), "{last}");
     assert_eq!(last.matches("date and time").count(), 1, "{last}");
 }
+
+/// **A corrected clock gives way to a block that stands.** Three days
+/// behind, named; then the clock is set right: Tor reports the jump, and the
+/// consensus check reads the wall clock past `valid-after`. Tor then reports
+/// its link blocked, for a reason that is not the clock, and keeps it so
+/// for minutes. The line names the block, and the clock is no longer named.
+/// Fails if Tor's earlier skew report outlives the corrected clock while
+/// another cause stands, which leaves the block unnamed.
+#[test]
+fn a_corrected_clock_gives_way_to_a_block_that_stands() {
+    let mut core = bootstrapping();
+    let named = run(
+        &mut core,
+        0,
+        60 * SECOND,
+        &[(ms(2_045), Tor::Skew(-258_357))],
+        30,
+        three_days_behind,
+    );
+    assert_eq!(
+        named.naming_the_clock().len(),
+        1,
+        "said: {:#?}",
+        named.lines
+    );
+    let corrected_at = 60 * SECOND + ms(500);
+    let right = |at: u64| (VALID_AFTER, VALID_AFTER + 14 * 60 + at / SECOND - 60);
+    let blocked = run(
+        &mut core,
+        corrected_at,
+        600 * SECOND,
+        &[
+            (corrected_at, Tor::Jumped),
+            (corrected_at + 30 * SECOND, Tor::Blocked),
+        ],
+        30,
+        right,
+    );
+    let line = render(&core.status());
+    assert!(
+        line.contains("cannot reach the Tor network"),
+        "the block is not named: {line}\nsaid: {:#?}",
+        blocked.lines
+    );
+    assert!(
+        !line.contains("clock is"),
+        "the corrected clock is still named: {line}"
+    );
+}
+
+/// **A new skew report takes the line back.** After a correction a block is
+/// named; if Tor then reports the clock off again, the clock is what blocks
+/// it once more, and it is said once. Fails if a block named after a
+/// correction keeps the line against Tor's newer report.
+#[test]
+fn a_new_skew_report_takes_the_line_back_from_the_block() {
+    let mut core = bootstrapping();
+    run(
+        &mut core,
+        0,
+        60 * SECOND,
+        &[(ms(2_045), Tor::Skew(-258_357))],
+        30,
+        three_days_behind,
+    );
+    let corrected_at = 60 * SECOND + ms(500);
+    let right = |at: u64| (VALID_AFTER, VALID_AFTER + 14 * 60 + at / SECOND - 60);
+    run(
+        &mut core,
+        corrected_at,
+        120 * SECOND,
+        &[
+            (corrected_at, Tor::Jumped),
+            (corrected_at + 30 * SECOND, Tor::Blocked),
+        ],
+        30,
+        right,
+    );
+    assert!(render(&core.status()).contains("cannot reach the Tor network"));
+    let again = run(
+        &mut core,
+        120 * SECOND,
+        180 * SECOND,
+        &[
+            (121 * SECOND, Tor::Skew(-3_600)),
+            (150 * SECOND, Tor::Blocked),
+        ],
+        30,
+        right,
+    );
+    let line = render(&core.status());
+    assert!(
+        line.contains("clock is"),
+        "the clock is not named again: {line}"
+    );
+    assert!(!line.contains("cannot reach"), "{line}");
+    assert_eq!(
+        again.naming_the_clock().len(),
+        1,
+        "said: {:#?}",
+        again.lines
+    );
+}

@@ -18,13 +18,16 @@
 //! keep serving the copy they have. The inbound facet says so; outbound and
 //! `OwnTx` are untouched (outbound carried traffic throughout the VM run of
 //! 2026-11-01). The lower bound clears at the first sample inside the
-//! tolerance. Tor's own report that the clock is behind clears with it only
-//! when that sample closed the gap faster than the time since the previous
-//! one: a fixed consensus ages into the tolerance without the clock being
-//! set, and retiring the report there makes the next report say the fault
-//! again. Nothing is done on the clear besides the one recovery line: Tor's
-//! next rebuild takes a counter above anything the directories hold, and the
-//! overdue rule covers a stalled schedule.
+//! tolerance. Tor's own report that the clock is off stands until Tor
+//! reaches Running, which clears every cause: this check cannot tell the
+//! clock set right from a fixed consensus aging into the tolerance, or from
+//! a sleep (`TSR-M8`), and retiring the report on either would make Tor's
+//! next report say the fault again. What the report no longer does once the
+//! clock is seen to change after it (Tor reports a jump, or this check
+//! clears) is hold a blocked link off: a block from then on is its own and
+//! is named, and a new report names the clock again. Nothing else is done on
+//! the clear: Tor's next rebuild takes a counter above anything the
+//! directories hold, and the overdue rule covers a stalled schedule.
 //!
 //! **No republish while it cannot help:** while the clock is named, or while
 //! more than half of the latest round's directories refused its upload. A
@@ -133,6 +136,9 @@ impl Core {
         if !self.clock_is_behind() {
             return Vec::new();
         }
+        // The clock changed after Tor's report: a block from here on is no
+        // longer presumed the clock's.
+        self.clock_changed_since_report = true;
         // The check no longer trips: its lower bound clears. Tor's own report
         // stands until Tor reaches Running, which clears every cause. This
         // check cannot tell the clock being set right from a fixed consensus
@@ -169,6 +175,7 @@ impl Core {
     /// directory fetch, seconds apart (the macOS run of 2026-11-09).
     pub(super) fn clock_skew(&mut self, now: u64, skew: ReportedSkew) -> Vec<Action> {
         let named = self.clock_named_already();
+        self.clock_changed_since_report = false;
         self.set_cause(Cause::ClockSkew { skew });
         if named {
             self.note_key();

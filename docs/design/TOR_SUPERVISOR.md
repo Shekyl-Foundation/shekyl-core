@@ -600,8 +600,12 @@ tolerance. Tor's own report stays until Tor reaches Running, which clears
 every cause: the check cannot tell the clock set right from a fixed
 consensus aging into the tolerance, or from a sleep, since on Linux and
 macOS supervisor time stops in a sleep and the wall does not (`TSR-M8`).
-So after a correction nothing is said until Tor is up, and that is said
-once. The macOS run
+What the report stops doing once the clock is seen to change after it (Tor
+reports a jump, or the check clears) is hold a blocked link off: a block
+from then on is its own and is named, so an operator who set the clock
+right while something else still blocks Tor is told what that is; a new
+skew report names the clock again, once. Otherwise, after a correction
+nothing is said until Tor is up, and that is said once. The macOS run
 of 2026-11-09 said the clock 18 times in four minutes (§7). A detail that would
 change the operator's fix is a different kind, so such a cause splits its
 variant rather than keying on the payload. The backoff starts again from its base after the outbound facet has
