@@ -455,15 +455,15 @@ fn an_unknown_origination_never_reads_as_address_hiding() {
     status.origination = serde_json::from_value(serde_json::json!("mixnet")).expect("decodes");
     for tor in TorSetting::known() {
         status.posture.tor = tor;
-        assert!(!status.origination.hides_address());
         assert!(!status.own_tx_hides_address(), "{:?}", status.posture);
     }
 }
 
 /// **An unknown posture fails closed** (Rick, 2026-11-12): with
-/// `origination` address-hiding, a `posture.tor` this build does not know,
-/// or `off`, does not read as hiding. Fails if the send decision trusts the
-/// origination alone.
+/// `origination` address-hiding, a `posture.tor` or `posture.clearnet` this
+/// build does not know, or Tor `off`, does not read as hiding, and the reply
+/// renders the update sentence. Fails if the send decision trusts the
+/// origination alone, or reads either half of the posture as known.
 #[test]
 fn an_unknown_posture_never_reads_as_address_hiding() {
     let mut status = managed();
@@ -471,8 +471,16 @@ fn an_unknown_posture_never_reads_as_address_hiding() {
     assert!(status.own_tx_hides_address());
     status.posture.tor = serde_json::from_value(serde_json::json!("bridge")).expect("decodes");
     assert!(!status.own_tx_hides_address());
+    assert!(render(&status, None).contains(UNKNOWN_SENTENCE));
     status.posture.tor = TorSetting::Off;
     assert!(!status.own_tx_hides_address());
+    for tor in [TorSetting::Managed, TorSetting::Operator] {
+        status.posture.tor = tor;
+        status.posture.clearnet =
+            serde_json::from_value(serde_json::json!("relay-only")).expect("decodes");
+        assert!(!status.own_tx_hides_address(), "{:?}", status.posture);
+        assert!(render(&status, None).contains(UNKNOWN_SENTENCE));
+    }
 }
 
 /// **An operator's Tor speaks from origination alone, with no fix** (Rick,

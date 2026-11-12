@@ -10,10 +10,9 @@
 //! 2026-10-30 rendered "Tor is carrying this node's traffic. This machine
 //! cannot reach the Tor network.").
 
-use super::super::super::posture::{
-    render, Carriage, Cause, OwnTx, ReportedSkew, Shown, Space, Status,
-};
+use super::super::super::posture::{Carriage, Cause, OwnTx, ReportedSkew, Shown, Space, Status};
 use super::held_status;
+use super::said_of;
 
 /// Every cause kind, one detail each. The match below makes a new variant
 /// a compile error here until it is added.
@@ -21,12 +20,13 @@ fn every_cause() -> Vec<Cause> {
     let all = vec![
         Cause::None,
         Cause::BundleMissing,
-        Cause::PinRefused,
+        Cause::PinRefused {
+            path: std::path::PathBuf::from("/opt/shekyl/tor/tor"),
+        },
         Cause::Unavailable,
         Cause::FailedStart,
         Cause::Died { exit_code: Some(1) },
         Cause::DirectoryUnusable {
-            path: std::path::PathBuf::from("/var/lib/shekyl"),
             space: Some(Space {
                 available: 0,
                 needed: 1,
@@ -48,7 +48,7 @@ fn every_cause() -> Vec<Cause> {
         match cause {
             Cause::None
             | Cause::BundleMissing
-            | Cause::PinRefused
+            | Cause::PinRefused { .. }
             | Cause::Unavailable
             | Cause::FailedStart
             | Cause::Died { .. }
@@ -108,7 +108,7 @@ fn the_traffic_sentences_follow_the_carriage_whatever_the_cause_and_shown_state(
                         own_tx,
                         ..held_status()
                     };
-                    let text = render(&status);
+                    let text = said_of(&status);
                     rendered += 1;
                     let at = format!("{cause:?} / {shown:?} / {carriage:?} / {own_tx:?}: {text}");
                     let hiding = own_tx == OwnTx::AddressHiding;
@@ -155,7 +155,7 @@ fn a_dead_tor_carries_nothing_while_the_verdict_lags() {
     let status = core.status();
     assert_eq!(status.shown, Shown::Restarting);
     assert_eq!(status.own_tx, OwnTx::AddressHiding, "the verdict lags");
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(!text.contains("carry"), "{text}");
     assert!(text.contains("holding its own transactions"), "{text}");
 }

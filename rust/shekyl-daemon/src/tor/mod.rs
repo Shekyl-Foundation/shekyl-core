@@ -44,15 +44,15 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
-    install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Status, Step,
-    TorCensus as QuietCensus, TorSetting,
+    clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
+    Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy,
+    Sessions, Space, Status, Step, TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
+use shekyl_tor_status::{held_at_start_sentence, install_sentence, render};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -203,17 +203,23 @@ fn classify_pin(error: &TorBinaryError) -> PinClass {
             input: Input::Unavailable,
             cause: Cause::Unavailable,
         },
-        TorBinaryError::NotAFile(_)
-        | TorBinaryError::NotExecutable(_)
-        | TorBinaryError::NotTheExecutable(_)
-        | TorBinaryError::Io { .. }
-        | TorBinaryError::UnexpectedEntry { .. }
-        | TorBinaryError::UnsafeLoaderPath(_)
-        | TorBinaryError::MissingFile { .. }
-        | TorBinaryError::HashMismatch { .. } => PinClass {
-            input: Input::PinRefused,
-            cause: Cause::PinRefused,
-        },
+        TorBinaryError::NotAFile(path)
+        | TorBinaryError::NotExecutable(path)
+        | TorBinaryError::NotTheExecutable(path)
+        | TorBinaryError::UnsafeLoaderPath(path)
+        | TorBinaryError::Io { path, .. }
+        | TorBinaryError::HashMismatch { path, .. } => refused(path.clone()),
+        TorBinaryError::UnexpectedEntry { dir, name } => refused(dir.join(name)),
+        TorBinaryError::MissingFile { dir, name } => refused(dir.join(name)),
+    }
+}
+
+/// The pin refused `path`: the file it rejected, or the entry a staged
+/// directory carried or lacked (IG-F26).
+fn refused(path: PathBuf) -> PinClass {
+    PinClass {
+        input: Input::PinRefused { path: path.clone() },
+        cause: Cause::PinRefused { path },
     }
 }
 
@@ -222,7 +228,10 @@ fn classify_pin(error: &TorBinaryError) -> PinClass {
 /// paths.
 fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
     let class = classify_pin(error);
-    let sentence = install_sentence(&class.cause).expect("a pin class is an install cause");
+    let sentence = wire_cause(&class.cause)
+        .as_ref()
+        .and_then(install_sentence)
+        .expect("a pin class is an install cause");
     let consequence = held_at_start_sentence(clearnet_on);
     format!("warning: managed Tor: {sentence} ({error}) {consequence}")
 }
@@ -677,9 +686,8 @@ impl Drive {
         }
         match action {
             Action::Announce => {
-                let status = self.core.status();
-                let text = render(&status);
-                if status.health {
+                let text = self.said();
+                if self.core.status().health {
                     tracing::info!(target: "global", "{text}");
                 } else {
                     tracing::warn!(target: "global", "{text}");
@@ -689,7 +697,7 @@ impl Drive {
             // The progress line is news. The core only asks for it when no
             // cause is set, so this arm does not re-read the posture.
             Action::SayProgress => {
-                let text = render(&self.core.status());
+                let text = self.said();
                 tracing::info!(target: "global", "{text}");
                 Vec::new()
             }
@@ -958,6 +966,14 @@ impl Drive {
         }
     }
 
+    /// The status in words, as every client says it: the supervisor's
+    /// snapshot through the one renderer. The daemon's own log names its
+    /// data directory.
+    fn said(&self) -> String {
+        let data_dir = self.data_dir.display().to_string();
+        render(&self.core.view(self.now()), Some(&data_dir))
+    }
+
     fn now(&self) -> u64 {
         self.clock.now().get()
     }
@@ -1032,7 +1048,6 @@ fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
     let needed = space_needed(data_dir, fresh);
     match shekyl_node::free_bytes(data_dir) {
         Ok(available) if available < needed => Some(Input::DirectoryUnusable {
-            path: data_dir.to_path_buf(),
             space: Some(Space { available, needed }),
         }),
         Ok(_) => None,
@@ -1070,6 +1085,8 @@ fn consensus_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_tor_status::TorCause;
+
     /// A bootstrap sample does not ask Tor about its network. A Running
     /// sample does (§4.2): "no circuit" during bootstrap is not a statement.
     #[test]
@@ -1237,7 +1254,7 @@ mod tests {
         assert_eq!(class.input, Input::BundleMissing);
         assert_eq!(class.cause, Cause::BundleMissing);
         let line = pin_warning_line(&missing, false);
-        let sentence = install_sentence(&Cause::BundleMissing).expect("an install cause");
+        let sentence = install_sentence(&TorCause::Missing).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains(searched.to_str().unwrap()));
         assert!(line.contains(&held_at_start_sentence(false)));
@@ -1250,17 +1267,23 @@ mod tests {
         assert_eq!(class.input, Input::Unavailable);
         assert_eq!(class.cause, Cause::Unavailable);
         let line = pin_warning_line(&unavailable, true);
-        let sentence = install_sentence(&Cause::Unavailable).expect("an install cause");
+        let sentence = install_sentence(&TorCause::Unavailable).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("no bundle for this target"));
         assert!(line.contains(&held_at_start_sentence(true)));
 
         let refused = TorBinaryError::NotAFile(PathBuf::from("/srv/tor-dir"));
         let class = classify_pin(&refused);
-        assert_eq!(class.input, Input::PinRefused);
-        assert_eq!(class.cause, Cause::PinRefused);
+        let dir = PathBuf::from("/srv/tor-dir");
+        assert_eq!(class.input, Input::PinRefused { path: dir.clone() });
+        assert_eq!(class.cause, Cause::PinRefused { path: dir });
+        assert_eq!(
+            wire_cause(&class.cause),
+            Some(TorCause::InstallDefect("/srv/tor-dir".to_owned()))
+        );
         let line = pin_warning_line(&refused, false);
-        let sentence = install_sentence(&Cause::PinRefused).expect("an install cause");
+        let sentence =
+            install_sentence(&TorCause::InstallDefect(String::new())).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("was not started"));
         assert!(line.contains("/srv/tor-dir"));

@@ -1,7 +1,7 @@
 # The Tor status crate (`shekyl-tor-status`)
 
 **Status: OPEN** — design, round 1 (PR 2a). Rick's rulings of 2026-11-08,
-2026-11-10 and 2026-11-11; the wire is `INPUT_GRAMMAR.md` §23 as amended by
+2026-11-10, 2026-11-11 and 2026-11-12; the wire is `INPUT_GRAMMAR.md` §23 as amended by
 Part G (§27–§28, IG-Q95…IG-Q101). PR 2b (#1347) wires it onto
 `daemon_status` and the CLI.
 
@@ -30,9 +30,17 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
 - **An unknown variant decodes.** Every closed set on the wire has an
   `Unknown { tag }` arm. An older client meeting a newer daemon's keyword
   decodes the rest of the reply and renders that one value as "The node
-  reports a Tor condition this version does not know. Update it." (rule 82).
-  The decoder is written by hand for each externally tagged set, since
-  serde's `other` attribute takes no payload and keeps no tag.
+  reports a Tor condition this version does not know. Update this program."
+  once, however many values it did not know (rule 82). The keyword sets'
+  decoders come from one macro; each one-key object's decoder is written by
+  hand, since serde's `other` attribute takes no payload and keeps no tag.
+  An unknown key's payload is skipped; a second key is refused.
+- **An unknown value fails closed** (Rick, 2026-11-12). The send flow reads
+  one accessor, `TorStatus::own_tx_hides_address`, and it is true only for a
+  `tor` setting of `managed` or `operator` together with the origination
+  `address-hiding`. An unknown origination, or an unknown `tor` or `clearnet`
+  setting, is not address-hiding, so the send flow holds the transaction.
+  No other accessor answers that question.
 
 ## 3. The shape
 
@@ -57,31 +65,46 @@ this crate: it is a plain switch on the reply and nothing renders it.
 
 ## 4. The renderer
 
-`render(&TorStatus, data_dir: Option<&str>) -> String` is today's
-`posture::render` moved and made to read the wire shape. `data_dir` is the
-path `unusable` names, passed only by a caller that holds the `config` grant
-(IG-Q97); without it the sentence says "Tor's data directory".
+`render(&TorStatus, data_dir: Option<&str>) -> String` is the supervisor's
+renderer moved and made to read the wire shape. `data_dir` is the path
+`unusable` names, passed only by a caller that holds the `config` grant
+(IG-Q97); without it the sentence says "Tor's data directory". The daemon's
+log always passes it (Rick, 2026-11-12), so the supervisor's
+`Cause::DirectoryUnusable` carries no path.
+
+`install_sentence` and `held_at_start_sentence` are public beside it: the
+daemon's pin warning speaks them, from the same table.
 
 Two cases the log never had to say, because no supervisor ran there:
 
-- **An operator's Tor** (`tor` null, Tor on): the behaviour sentence comes
-  from `origination` alone. `address-hiding` says Tor carries the node's
-  traffic; `connecting` and `rebuilding` say the node holds its own
-  transactions, with what it syncs over.
+- **An operator's Tor** (`tor` null, Tor on): the first sentence comes from
+  `origination` alone (Rick, 2026-11-12). `address-hiding` says Tor carries
+  the node's traffic; `connecting` and `rebuilding` say the node holds its
+  own transactions, with what it syncs over. No managed fix is offered,
+  since there is no `tor` object to carry one.
 - **Tor off:** `clearnet-only` and `offline` say what they say today.
 
 ## 5. The snapshot
 
 `shekyl-tor-control-client` turns the core's `Status` into a `TorStatus` at
-the moment it is asked: `snapshot(&Status, posture, now) -> TorStatus`. It
-holds the clock readings (`since`, the onion's `since` and `evidence_at`) and
-subtracts them from `now`, the network's monotonic clock that the supervisor
-already runs on. One function, tested on `ManualClock`: a status read twice,
-10 s apart, reports every age 10 s larger.
+the moment it is asked: `snapshot(&Status, Connectors, now) -> TorStatus`,
+and `Core::view(now)` for the core's own. It holds the clock readings
+(`since`, the onion's `since` while publishing and while unreachable, and
+`evidence_at` while reachable) and subtracts them from `now`, on the awake
+clock the supervisor already runs on. `Inbound::Publishing` carries the time
+publishing began so that the onion's age has a start in every state.
 
-The daemon's own log line is `render(&snapshot(..))` from this PR on, so the
-log and every client say one thing, and `posture::render` is deleted with the
-move.
+`progress` is set while the bootstrap is spoken: while `state` is
+`bootstrapping`, and while a bootstrap reading stands, which happens only
+while Tor is bootstrapping, so an `impaired` bootstrap also carries its
+percent. Null otherwise.
+
+The pin's refusal keeps the file it refused (`Cause::PinRefused { path }`,
+IG-F26), which is `install-defect`'s payload.
+
+The daemon's own log line is `render(&core.view(now), Some(data_dir))`, so
+the log and every client say one thing. The supervisor's renderer is deleted
+with the move.
 
 ## 6. Tests
 
@@ -93,9 +116,18 @@ move.
    in each set, decodes, and renders the update sentence; every other field
    is intact.
 3. **The log is the renderer:** the supervisor's render tests, which pin
-   today's sentences, run through `render(&snapshot(..))` unchanged in their
-   expected text.
-4. **Ages:** the snapshot on `ManualClock`, as §5.
+   its sentences, run through `render(&core.view(..))` with their expected
+   text unchanged.
+4. **Fail closed:** a reply carrying an unknown origination keyword, and one
+   carrying an unknown `tor` or `clearnet` setting, never reads as
+   address-hiding through `own_tx_hides_address`, and renders the update
+   sentence.
+5. **An operator's Tor:** `tor` null speaks from the origination alone and
+   offers no managed fix.
+6. **The path:** `unusable` names the directory only when the caller passes
+   it.
+7. **Ages:** a status read twice, 10 s apart, reports `tor.age` and the
+   onion's age 10 s larger, the onion in each state that has an age.
 
 Each test names the edit that makes it fail.
 

@@ -12,9 +12,9 @@
 //! reply is read whole, and [`render`] says that the node reports something
 //! this version does not know.
 //!
-//! An unknown keyword never reads as the node hiding its address: the
-//! accessors a send decision reads ([`Origination::hides_address`],
-//! [`TorStatus::own_tx_hides_address`]) fail closed.
+//! An unknown keyword never reads as the node hiding its address: the one
+//! accessor a send decision reads, [`TorStatus::own_tx_hides_address`],
+//! fails closed.
 //!
 //! Every duration is whole seconds of awake time (IG-Q93, IG-Q96). No clock
 //! reading crosses.
@@ -131,16 +131,6 @@ keywords! {
         ClearnetOnly = "clearnet-only",
         /// Tor off and clearnet off.
         Offline = "offline",
-    }
-}
-
-impl Origination {
-    /// Whether the node's own transactions leave on a session that hides
-    /// its address now. An unknown keyword is not that: a send decided
-    /// from it holds (Rick, 2026-11-12).
-    #[must_use]
-    pub fn hides_address(&self) -> bool {
-        matches!(self, Self::AddressHiding)
     }
 }
 
@@ -767,13 +757,15 @@ impl TorStatus {
     }
 
     /// Whether the node's own transactions leave on a session that hides
-    /// its address now: the one read a send decision makes. It fails
-    /// closed: an unknown origination, or an unknown or Tor-less posture,
-    /// is not that, and the send holds (Rick, 2026-11-12).
+    /// its address now: the one read a send decision makes, and the only
+    /// accessor that answers it. It fails closed: an unknown origination, a
+    /// `tor` or `clearnet` setting this build does not know, or Tor off, is
+    /// not that, and the send holds (Rick, 2026-11-12).
     #[must_use]
     pub fn own_tx_hides_address(&self) -> bool {
         matches!(self.posture.tor, TorSetting::Managed | TorSetting::Operator)
-            && self.origination.hides_address()
+            && matches!(self.posture.clearnet, Clearnet::On | Clearnet::Off)
+            && matches!(self.origination, Origination::AddressHiding)
     }
 }
 

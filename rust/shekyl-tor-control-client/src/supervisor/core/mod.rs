@@ -339,8 +339,12 @@ impl ManagedRunning {
 pub enum Input {
     /// The pin accepted the binary.
     PinAccepted,
-    /// The pin refused it.
-    PinRefused,
+    /// The pin refused it: the file it rejected (`install-defect`'s path,
+    /// IG-F26).
+    PinRefused {
+        /// The rejected file.
+        path: std::path::PathBuf,
+    },
     /// No bundle was found.
     BundleMissing,
     /// This platform manages no Tor.
@@ -348,8 +352,6 @@ pub enum Input {
     /// The data directory cannot be used, or has too little free space for
     /// the spawn (the pre-spawn check).
     DirectoryUnusable {
-        /// The daemon's data directory.
-        path: std::path::PathBuf,
         /// The shortfall, when that was the reason.
         space: Option<Space>,
     },
@@ -785,14 +787,14 @@ impl Core {
     pub fn on(&mut self, input: Input, now: u64) -> Step {
         let actions = match input {
             Input::PinAccepted => self.pin_accepted(),
-            Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
+            Input::PinRefused { path } => {
+                self.hold(now, Cause::PinRefused { path }, AbsentDuty::Held)
+            }
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
-            Input::DirectoryUnusable { path, space } => self.hold(
-                now,
-                Cause::DirectoryUnusable { path, space },
-                AbsentDuty::Held,
-            ),
+            Input::DirectoryUnusable { space } => {
+                self.hold(now, Cause::DirectoryUnusable { space }, AbsentDuty::Held)
+            }
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
@@ -810,7 +812,7 @@ impl Core {
             Input::HostAbsent => self.host_absent(),
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
-            Input::OnionPublished => self.onion_published(),
+            Input::OnionPublished => self.onion_published(now),
             Input::UploadRoundStarted => self.round_started(now),
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
@@ -894,6 +896,11 @@ impl Core {
             Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
             _ => true,
         }
+    }
+
+    /// The connector settings this core runs under.
+    pub(in crate::supervisor) fn connectors(&self) -> Connectors {
+        self.connectors
     }
 
     /// The deadline fired. Each armed time is its own kind of work: a pin
@@ -1160,7 +1167,7 @@ impl Core {
     /// The onion is published: `ADD_ONION`'s reply, or a round's first
     /// upload. An onion offered for the first time is publishing. One that
     /// was unreachable stays so until a probe arrives.
-    fn onion_published(&mut self) -> Vec<Action> {
+    fn onion_published(&mut self, now: u64) -> Vec<Action> {
         if let Phase::Running { onion, .. } = &mut self.phase {
             *onion = Duty::Done;
             self.service_republish = false;
@@ -1168,7 +1175,7 @@ impl Core {
             // has nothing to put back.
             self.queued_send = None;
             if self.inbound == Inbound::NotOffered {
-                self.inbound = Inbound::Publishing;
+                self.inbound = Inbound::Publishing { since: now };
             }
         }
         Vec::new()
