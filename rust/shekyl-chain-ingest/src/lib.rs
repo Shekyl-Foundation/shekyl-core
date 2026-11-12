@@ -120,6 +120,17 @@ mod body_pairing_tests;
 /// connector's tip and the fetch path (`SO-D12` increment 4c).
 #[cfg(feature = "producer")]
 pub mod bundle_producer;
+// The block path driven on one thread, for the instruction-count benches
+// and the fixture tests that hold their corpora to the tree.
+// With the feature it also needs `harness` (the unpinned regtest rules),
+// which the bench target requires beside it and no feature here enables.
+#[cfg(all(
+    feature = "pipeline",
+    any(test, all(feature = "bench-internals", feature = "harness"))
+))]
+pub mod bench_support;
+#[cfg(all(test, feature = "pipeline"))]
+mod bench_fixture_tests;
 #[cfg(all(test, feature = "producer"))]
 mod bundle_producer_gate_tests;
 #[cfg(all(test, feature = "producer"))]

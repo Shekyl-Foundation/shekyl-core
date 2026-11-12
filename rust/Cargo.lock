@@ -3821,6 +3821,7 @@ version = "3.1.0"
 dependencies = [
  "clap",
  "curve25519-dalek",
+ "gungraun",
  "hex",
  "kameo",
  "rand 0.8.6",
@@ -5018,6 +5019,7 @@ dependencies = [
  "argon2",
  "blake2",
  "criterion",
+ "gungraun",
 ]
 
 [[package]]
