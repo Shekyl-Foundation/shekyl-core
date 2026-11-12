@@ -7,8 +7,9 @@ is the supervisor: sans-IO core, timing-engine driver, respawn, and the
 managed route published only from `Running`. `TSR-M2` is recorded
 (2026-10-22, the floor device); the driver's base stays 1 s and its cap
 stays 60 s. `TSR-M8` is recorded (Windows and macOS, §10): only Windows
-counts a sleep in `Instant`, and the supervisor counts awake time on every
-platform (§5, "Resumed from suspend").
+counts a sleep in `Instant`. The process clock does not read `Instant`
+there (`P2P_TIMING_ENGINE.md` §8), and the supervisor counts awake time
+on every platform (§5, "Resumed from suspend").
 Increment 3b is the public directory cache (`TSR-Q8`). Increment 4 is the
 probe of this node's own onion and the link's inbound facet (#1220).
 Increment 5's route publishing is absorbed into increment 3 (2026-10-22).
@@ -241,7 +242,7 @@ detector.** It also fires on NTP steps and manual changes, and misses a suspend
 on a correct clock. For the managed posture Tor says so itself: `CLOCK_JUMPED
 TIME=` is emitted when Tor "spent enough time without CPU cycles that it has
 closed all its circuits". The timing engine's clock does not advance across a
-suspend on Linux (`rust/shekyl-timing-engine/src/lib.rs:98-104`); macOS and Windows are measured (`TSR-M8`). For the operator posture
+suspend on Linux, macOS, or Windows (`MonotonicClock` in `P2P_TIMING_ENGINE.md` §8). `TSR-M8` measured Windows `Instant` counting through Modern Standby, which is why that clock does not read `Instant` there. For the operator posture
 (no control port), compare a suspend-inclusive clock with the monotonic one; a
 growing difference is suspended time.
 
