@@ -120,6 +120,20 @@ BENCHES=(
   # criterion arm signs through the production entry and reports the
   # distribution. The floor-device figures are BA-T33's T3 arm.
   "shekyl-crypto-pq:fn_dsa_hybrid:fn_dsa_hybrid_iai"
+  # BA-T2 and BA-T41: the block path. `form` (the verifier's share of
+  # PB-D1), `validate` with `connect` and the commit (the store's share,
+  # PB-D1s), pop, and three store reads, over committed blocks of four
+  # real spends at three shapes. iai-only: PB-D1's seconds are a release
+  # cut's on the two devices. The driver is behind `bench-internals` and
+  # needs `harness` for the fixture chain's unpinned regtest rules, which
+  # no feature may enable (check_test_only_features.py), so both ride the
+  # row. The blocks at the weight limit are `block_path_full_iai`: twenty
+  # minutes of callgrind a row, so not in this list.
+  "shekyl-chain-ingest::block_path_iai:bench-internals,harness"
+  # BA-T42: one header's proof-of-work verification, `compute_hash` over
+  # a cache derived outside the measured region. iai-only: the floor
+  # figure is BA-T40's and the Rust-to-C ratio BA-T27's.
+  "shekyl-pow-randomx::verify_header_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.

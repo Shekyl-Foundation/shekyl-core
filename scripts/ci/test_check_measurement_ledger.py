@@ -1017,8 +1017,84 @@ def scenario_retired(results: Results) -> None:
         )
 
 
+CAPTURE = (
+    "BENCHES=(\n"
+    '  # a comment between rows\n'
+    '  "crate-a:wall:wall_iai"\n'
+    '  "crate-b::count_iai:bench-internals,harness"\n'
+    ")\n"
+)
+
+
+def gated(bench: str, set_id: str = "hot", measured: str = '["BA-T1"]') -> str:
+    return (
+        f'[[gated_row]]\nbench = "{bench}"\nmeasured_by = {measured}\n'
+        f'path_set = "{set_id}"\n\n'
+    )
+
+
+def scenario_gated_rows(results: Results) -> None:
+    """A gated row names a row the capture script runs and a path set that exists."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        oids = init_tree(root)
+        control = constant("control", "current", oids["c1"])
+        base = document(path_set(), control)
+        results.expect(
+            root, base + gated("crate-a::wall_iai"), 2,
+            "a gated row with no capture script cannot be judged",
+            says="missing subject",
+        )
+        write(root, gate.CAPTURE_SCRIPT, CAPTURE)
+        commit(root, "the capture script")
+        results.expect(
+            root, base + gated("crate-a::wall_iai") + gated("crate-b::count_iai"), 0,
+            "two gated rows the script runs, one with a criterion arm and one "
+            "count-only with features",
+            says="2 gated rows name their path sets",
+        )
+        results.expect(
+            root, base + gated("crate-c::absent_iai"), 1,
+            "a gated row the script does not run", says="no such row in BENCHES",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai", set_id="nowhere"), 1,
+            "a gated row on an undefined path set", says="is not defined",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai", measured='["BA-T99"]'), 1,
+            "a gated row measured by an id the tracked set lacks",
+            says="not defined in the tracked-set document",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai") + gated("crate-a::wall_iai"), 1,
+            "the same bench twice", says="duplicate bench",
+        )
+        results.expect(
+            root, base + gated("crate-a:wall_iai"), 1,
+            "a bench not spelled <crate>::<target>", says="is not <crate>::<gungraun-target>",
+        )
+        # A path set only a gated row reads is referenced; with neither a
+        # constant nor a gated row it is refused, as before.
+        own = path_set("rows", '["src/cold"]')
+        results.expect(
+            root, document(path_set() + own, control) + gated("crate-a::wall_iai", set_id="rows"),
+            0, "a path set whose only reader is a gated row",
+        )
+        results.expect(
+            root, document(path_set() + own, control), 1,
+            "a path set nothing reads", says="no constant or gated row references it",
+        )
+        write(root, gate.CAPTURE_SCRIPT, "BENCHES=(\n)\n")
+        results.expect(
+            root, base + gated("crate-a::wall_iai"), 2,
+            "an empty BENCHES array is a missing subject", says="holds no row",
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_gated_rows(results)
     scenario_estimated(results)
     scenario_retired(results)
     scenario_current(results)

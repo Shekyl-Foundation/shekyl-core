@@ -533,7 +533,15 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(sourced, connecting, fee, bond, recipient, 2, Twist::default())
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            bond,
+            recipient,
+            2,
+            Twist::default(),
+        )
     }
 
     /// A spend of several blocks' coinbases in **one** transaction, listed
@@ -780,10 +788,8 @@ impl Spender {
             .map(|(od, amount)| info(od, *amount))
             .collect();
         let output_keys: Vec<[u8; 32]> = paid.iter().map(|od| od.output_key).collect();
-        let view_tags: Vec<Option<u8>> = paid
-            .iter()
-            .map(|od| Some(od.view_tag_prefilter))
-            .collect();
+        let view_tags: Vec<Option<u8>> =
+            paid.iter().map(|od| Some(od.view_tag_prefilter)).collect();
 
         // Sign, then encode through the production encoder and read back.
         let extra_inputs: Vec<shekyl_wire::Input> =

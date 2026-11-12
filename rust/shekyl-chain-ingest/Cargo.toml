@@ -93,9 +93,18 @@ harness = [
 ]
 
 # The block path's instruction counts (BENCHMARK_ALIGNMENT.md BA-T2,
-# BA-T41): form, connect with its commit, and pop, over committed blocks.
+# BA-T41): form, connect with its commit, pop and three store reads, over
+# committed blocks of four transactions. The per-PR capture.
 [[bench]]
 name = "block_path_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# The same three block rows over blocks at the weight limit: twenty
+# minutes of callgrind a row, so the `dev` capture's and not a pull
+# request's.
+[[bench]]
+name = "block_path_full_iai"
 harness = false
 required-features = ["bench-internals", "harness"]
 

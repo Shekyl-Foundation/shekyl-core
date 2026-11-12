@@ -47,6 +47,13 @@
 # revision, a `note`, and a `verdict` of `held` or `falsified` that the
 # check computes from the two and refuses when the row says otherwise.
 #
+# `[[gated_row]]` is a bench the per-PR capture runs: `bench`
+# (`<crate>::<gungraun-target>`, its row in the capture script's `BENCHES`),
+# `measured_by` and `path_set`. It carries no status and no capture: the
+# gate re-measures it on every run, which is the first class under "NOT IN
+# THIS LEDGER" below. What it records is the path set, so a change can be
+# matched to the rows it can move.
+#
 # `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
 # for the whole ledger. It is owed while any constant is current across the
 # change, because a compiler bump is on no path set's spec and moves them
@@ -1336,3 +1343,48 @@ capture = "docs/benchmarks/rt_w10_request_cost_20261102.md"
 capture_rev = "3d0bf6844c"
 rev_source = "the record's results name the build: git revision 3d0bf6844c on the floor device (docs/benchmarks/rt_w10_request_cost_20261102.md, Results). The header series' thread-CPU 99th percentile, which the hash budget charges once per hash."
 path_set = "rpc-hash-budget"
+
+# --- gated rows: the daemon's block path ------------------------------
+#
+# A gated row is a bench the per-PR capture runs
+# (`scripts/bench/capture_rust_baseline.sh`, `BENCHES`), named
+# `<crate>::<gungraun-target>`. It has no capture to go stale, because the
+# gate re-measures it on every run; it is here for its path set, the code
+# whose change can move its counts.
+
+[[path_set]]
+id = "block-path"
+spec = [
+  "rust/shekyl-chain-rules/src",
+  "rust/shekyl-chain-store/src",
+  "rust/shekyl-store-codec/src",
+  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/benches",
+  "rust/shekyl-wire/src",
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-fcmp-proofs/src",
+  "rust/shekyl-oxide/crypto/fcmps",
+  "rust/shekyl-ct-balance/src",
+  "rust/shekyl-bulletproofs/src",
+  "rust/shekyl-crypto-pq/src/signature.rs",
+  "rust/shekyl-archival-retention/src",
+  "rust/shekyl-economics/src",
+  "rust/shekyl-difficulty/src",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::block_path_iai"
+measured_by = ["BA-T2", "BA-T41"]
+path_set = "block-path"
+
+[[path_set]]
+id = "randomx-header-verify"
+spec = [
+  "rust/shekyl-pow-randomx/src",
+  "rust/shekyl-pow-randomx/benches/verify_header_iai.rs",
+]
+
+[[gated_row]]
+bench = "shekyl-pow-randomx::verify_header_iai"
+measured_by = ["BA-T42"]
+path_set = "randomx-header-verify"

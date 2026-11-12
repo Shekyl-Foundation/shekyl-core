@@ -82,8 +82,11 @@ HASH_COMMENT_SUFFIXES = {".py", ".sh", ".toml", ".yml", ".yaml"}
 
 HEADER_KEYS = {
     "tracked_set", "toolchain_file", "path_set", "constant", "toolchain",
-    "retired_estimate",
+    "retired_estimate", "gated_row",
 }
+GATED_ROW_KEYS = {"bench", "measured_by", "path_set"}
+# The capture script whose `BENCHES` array is the per-PR gate's row list.
+CAPTURE_SCRIPT = "scripts/bench/capture_rust_baseline.sh"
 PATH_SET_KEYS = {"id", "spec", "cleared", "stale_through"}
 CONSTANT_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "path_set"}
 MEASURED_KEYS = {"capture", "capture_rev", "rev_source"}
@@ -198,6 +201,19 @@ class Constant:
     estimate: Band | None = None
     basis: str | None = None
     basis_captures: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GatedRow:
+    """A bench the per-PR gate captures, and the code it counts.
+
+    It has no capture to go stale: the gate re-measures it on every run. The
+    row is here for its path set, which says which changes can move it.
+    """
+
+    bench: str
+    measured_by: tuple[str, ...]
+    path_set: str
 
 
 @dataclass(frozen=True)
@@ -581,16 +597,49 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     ), fails
 
 
-def link(path_sets: dict[str, PathSet], constants: list[Constant]) -> list[str]:
+def parse_gated_row(table: object, index: int) -> tuple[GatedRow | None, list[str]]:
+    label = f"gated_row #{index + 1}"
+    if not isinstance(table, dict):
+        return None, [f"{label}: must be a table"]
+    fails = [f"{label}: unknown key {key!r}" for key in sorted(set(table) - GATED_ROW_KEYS)]
+    bench = _require_str(table, "bench", fails, label)
+    path_set = _require_str(table, "path_set", fails, label)
+    measured = table.get("measured_by")
+    if (
+        not isinstance(measured, list)
+        or not measured
+        or not all(isinstance(item, str) and item for item in measured)
+    ):
+        fails.append(f"{label}: measured_by must be a non-empty list of BA-T ids")
+        measured = []
+    if bench and not re.fullmatch(r"[a-z0-9-]+::[a-z0-9_]+", bench):
+        fails.append(
+            f"{label}: bench {bench!r} is not <crate>::<gungraun-target>, "
+            "the two names of its row in the capture script"
+        )
+    if not bench or not path_set:
+        return None, fails
+    return GatedRow(bench, tuple(measured), path_set), fails
+
+
+def link(
+    path_sets: dict[str, PathSet],
+    constants: list[Constant],
+    gated: tuple[GatedRow, ...] = (),
+) -> list[str]:
     """Referential integrity. Acknowledgments are properties of the path set."""
     consumers: dict[str, list[Constant]] = {}
     for constant in constants:
         consumers.setdefault(constant.path_set, []).append(constant)
+    counted = {row.path_set for row in gated}
     fails: list[str] = []
+    for row in gated:
+        if row.path_set not in path_sets:
+            fails.append(f"gated row {row.bench}: path_set {row.path_set!r} is not defined")
     for path_set in path_sets.values():
         group = consumers.get(path_set.id, [])
-        if not group:
-            fails.append(f"path set {path_set.id}: no constant references it")
+        if not group and path_set.id not in counted:
+            fails.append(f"path set {path_set.id}: no constant or gated row references it")
             continue
         current = any(item.status is Status.CURRENT for item in group)
         stale = any(item.status is Status.STALE for item in group)
@@ -612,7 +661,7 @@ def link(path_sets: dict[str, PathSet], constants: list[Constant]) -> list[str]:
 
 def interpret(
     data: dict, t_rows: set[str]
-) -> tuple[dict[str, PathSet], list[Constant], list[str]]:
+) -> tuple[dict[str, PathSet], list[Constant], tuple[GatedRow, ...], list[str]]:
     """TOML tables to a typed ledger. Findings here are shape, not history."""
     fails: list[str] = []
     for key in sorted(set(data) - HEADER_KEYS):
@@ -653,8 +702,70 @@ def interpret(
                     "in the tracked-set document"
                 )
         constants.append(parsed)
-    fails.extend(link(path_sets, constants))
-    return path_sets, constants, fails
+    gated: list[GatedRow] = []
+    named: set[str] = set()
+    raw_gated = data.get("gated_row", [])
+    if not isinstance(raw_gated, list):
+        fails.append("gated_row must be a list of tables")
+        raw_gated = []
+    for index, table in enumerate(raw_gated):
+        row, row_fails = parse_gated_row(table, index)
+        fails.extend(row_fails)
+        if row is None:
+            continue
+        if row.bench in named:
+            fails.append(f"gated row {row.bench}: duplicate bench")
+            continue
+        named.add(row.bench)
+        for row_id in row.measured_by:
+            if row_id not in t_rows:
+                fails.append(
+                    f"gated row {row.bench}: measured_by {row_id} is not defined "
+                    "in the tracked-set document"
+                )
+        gated.append(row)
+    fails.extend(link(path_sets, constants, tuple(gated)))
+    return path_sets, constants, tuple(gated), fails
+
+
+def capture_rows(root: Path) -> set[str]:
+    """The rows of the capture script's `BENCHES` array, as <crate>::<gungraun-target>.
+
+    A row is `"<crate>:<criterion-target>:<gungraun-target>[:<features>]"`,
+    the criterion field empty for a count-only row. GateError when the
+    script or its array is absent: the question is then unaskable.
+    """
+    path = root / CAPTURE_SCRIPT
+    if not path.is_file():
+        raise GateError(
+            f"{CAPTURE_SCRIPT} is missing, so no gated row can be held to it "
+            "— missing subject (rule 47)"
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    block = re.search(r"^BENCHES=\(\n(.*?)^\)", text, re.M | re.S)
+    if not block:
+        raise GateError(f"{CAPTURE_SCRIPT} has no BENCHES array — missing subject (rule 47)")
+    rows: set[str] = set()
+    for line in block.group(1).splitlines():
+        entry = re.fullmatch(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*', line)
+        if entry:
+            rows.add(f"{entry.group(1)}::{entry.group(2)}")
+    if not rows:
+        raise GateError(f"{CAPTURE_SCRIPT}'s BENCHES array holds no row — missing subject (rule 47)")
+    return rows
+
+
+def audit_gated(root: Path, gated: tuple[GatedRow, ...]) -> list[str]:
+    """Each gated row is a row the capture script runs."""
+    if not gated:
+        return []
+    rows = capture_rows(root)
+    return [
+        f"gated row {row.bench}: {CAPTURE_SCRIPT} has no such row in BENCHES. "
+        "A row that is not captured is not gated"
+        for row in gated
+        if row.bench not in rows
+    ]
 
 
 def load(root: Path) -> tuple[dict, set[str]]:
@@ -1184,7 +1295,8 @@ def run(root: Path) -> int:
     try:
         require_stripper()
         data, t_rows = load(root)
-        path_sets, constants, fails = interpret(data, t_rows)
+        path_sets, constants, gated, fails = interpret(data, t_rows)
+        fails.extend(audit_gated(root, gated))
         notes: list[str] = []
         bases: dict[str, str] = {}
         spec_ok: dict[str, bool] = {}
@@ -1259,6 +1371,7 @@ def run(root: Path) -> int:
         f"measurement ledger: {len(constants)} constants tell the truth — "
         f"{counts[Status.CURRENT]} current, {counts[Status.STALE]} stale, "
         f"{counts[Status.UNMEASURED]} unmeasured, {counts[Status.ESTIMATED]} estimated"
+        + (f"; {len(gated)} gated rows name their path sets" if gated else "")
     )
     return 0
 

@@ -124,13 +124,13 @@ pub mod bundle_producer;
 // and the fixture tests that hold their corpora to the tree.
 // With the feature it also needs `harness` (the unpinned regtest rules),
 // which the bench target requires beside it and no feature here enables.
+#[cfg(all(test, feature = "pipeline"))]
+mod bench_fixture_tests;
 #[cfg(all(
     feature = "pipeline",
     any(test, all(feature = "bench-internals", feature = "harness"))
 ))]
 pub mod bench_support;
-#[cfg(all(test, feature = "pipeline"))]
-mod bench_fixture_tests;
 #[cfg(all(test, feature = "producer"))]
 mod bundle_producer_gate_tests;
 #[cfg(all(test, feature = "producer"))]
