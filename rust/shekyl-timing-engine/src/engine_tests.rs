@@ -372,7 +372,7 @@ fn the_monotonic_clock_does_not_go_backwards() {
 /// later is never earlier than one taken before it from another clock.
 /// The dialer and the Tor supervisor compare stamps from clocks they were
 /// each handed (`DIALER_OUTAGE_EVIDENCE.md` §6.1). Restoring a
-/// per-instance origin (`origin: Instant::now()` in `MonotonicClock::new`)
+/// per-instance origin (`Reading::now()` inside `MonotonicClock::new`)
 /// turns this red: the later clock would count from its own construction.
 #[test]
 fn a_stamp_from_a_later_clock_is_never_earlier_than_one_taken_before_it() {

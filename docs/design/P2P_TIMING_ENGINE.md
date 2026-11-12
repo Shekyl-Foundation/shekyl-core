@@ -243,12 +243,24 @@ so a feature-gated test clock would ship. Virtual time lets relay
 conformance and the transport timeouts run deterministically.
 
 A `Tick` is nanoseconds since the clock's origin. `ManualClock` is the
-test clock. `MonotonicClock` is the production clock: `std::time::Instant`,
-one origin for the whole process (the first instant any `MonotonicClock`
-was built). On Linux that instant is `CLOCK_MONOTONIC`, which
-does not advance while the system is suspended, so a deadline is not late
-by the time the machine spent suspended. The transport layer and the C++
-bridge use this clock. They do not keep their own.
+test clock. `MonotonicClock` is the production clock, one origin for the
+whole process (the first reading any `MonotonicClock` took). It counts
+awake time, so a deadline is not late by the time the machine spent
+suspended. On Linux the reading is `Instant` (`CLOCK_MONOTONIC`). On
+macOS the reading is `Instant` (`CLOCK_UPTIME_RAW`). On Windows `Instant`
+counts through every sleep, so the reading is
+`QueryUnbiasedInterruptTimePrecise`, which leaves out S3 sleep and
+hibernation but not Modern Standby (S0): through a standby it counts on, as
+measured on 2026-11-11 (`TOR_SUPERVISOR.md` §10, `TSR-M8`).
+The transport layer and the dialer use this clock. They do not keep their own.
+
+The engine thread sleeps on `Clock::wait_for`. It does not link tokio. A
+tokio task's timer is a different clock, and on Windows that timer counts
+through a sleep. Both Tor supervisors wait through
+`shekyl-tor-control-client`'s `awake`, which re-arms that timer until this
+clock says the deadline has passed. A production caller outside that
+client that has to wait the same way is when `awake` moves next to the
+clock. A guard expiry is a `SystemTime` and stays on tokio's timer.
 
 ### 9. Lateness is an output
 
@@ -420,7 +432,7 @@ command on that mailbox, not a side channel. The home stamps
 `polled_at` itself, at the moment it observes the wake.
 
 **Every production clock reads one origin.** The process holds one
-origin, a `static OnceLock<Instant>` set by the first
+origin, a `static OnceLock` of the platform reading set by the first
 `MonotonicClock::new`, and `now` on any `MonotonicClock` is nanoseconds
 since it. Two clocks built at different times, or a clone and its
 source, give ticks on one timeline, so a home that built its own clock
