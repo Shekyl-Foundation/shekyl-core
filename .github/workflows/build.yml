@@ -577,8 +577,11 @@ jobs:
           # daemon-config 63, daemon-rpc 180,
           # dc_q21_a_fault_ends_with_its_code 4. shekyl-cli, which took
           # daemon-rpc's console tests (R8), is covered by the Rust workspace
-          # job, not this MSVC link step.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 170; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
+          # job, not this MSVC link step. The 4.0 wire replaced that
+          # daemon-rpc suite. On MSVC at 2026-11-12 the lib passed 164: one
+          # smoke is ignored, and `a_data_file_the_process_may_not_stat_is_the_fault`
+          # is unix-only, so it is not in the binary.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber
