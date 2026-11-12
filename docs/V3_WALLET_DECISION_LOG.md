@@ -6908,3 +6908,31 @@ retired list protects data mainnet has already parsed, and there is none.
 fixture took its persona from gate-2's, so it is regenerated under this
 entry with its own persona, and its pinned join becomes the keyed
 JoinMarket. The PQC signing-preimage KAT drops its serve-credit subject.
+
+## 2026-11-11 — The shard fill is a captured chain of real spends
+
+**Decision** (Rick, the shard-fill rulings on PR #1327). The store's prune
+and slash-scan tests built their shards from padded serve credits, whose
+input the previous entry deletes. They now load a chain of real spends,
+built once and checked in at `rust/shekyl-harness-spender/vectors/shard-fill.bin`:
+
+- **Option A, the fan-out.** Each spend takes one output and pays the miner
+  two, which the chain spends once they drain into the tree, so a block
+  fills to 280 000 weight and a shard closes in about fourteen blocks. It
+  is built with the harness spender's watched-output path
+  (`Spender::own`, `owned_input`, `spend_owned`), not a second fixture.
+- **One chain, every consumer.** Each test connects the prefix it needs.
+  The two long ingest scenarios connect the prefix that closes shard 0.
+  Coinbases 0–9 are left unspent for the ingest's bond posts.
+- **Lengths, not bytes, are the recapture check.** Proving draws fresh
+  randomness, so a rebuild's bytes differ and its archival lengths do not.
+  The store's `#[ignore]`d real-spends test rebuilds the chain nightly and
+  fails if a block's lengths differ from the vector's. The vector moves
+  only under a decision cited to `capture_the_shard_fill_chain`.
+- **The exact-length properties** (a transaction starting at `k·W`, a
+  straddle) are tests of `shard_of` with any lengths. The store asserts
+  the straddle from measured lengths.
+
+**Why.** Rule 50: a test's bytes are ones every landed rule verifies.
+Proving them in every run costs minutes; verifying the captured chain
+costs seconds.
