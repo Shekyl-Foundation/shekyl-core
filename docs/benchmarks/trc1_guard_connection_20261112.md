@@ -215,7 +215,7 @@ No guard-connection byte figure had been read. What had been read by then:
 - row counts and late samples (11 of 5,551 rows more than 50 ms late at
   21:06Z);
 - the sampler's log (three guards tracked, no epoch change);
-- the send log (every attempt failed, item 5 below);
+- the send log (item 5 below);
 - two shape-only smoke runs of the new sampler version.
 
 Prompted by review of this record (PR #1356).*
@@ -272,15 +272,18 @@ Prompted by review of this record (PR #1356).*
    - Neither figure is a bound. Other daemon traffic in the window can add
      to the plaintext, and framing can add cells.
    - Guard volumes in item 2 stay in 514-byte cell equivalents.
-5. **Sends so far, and the duration.** Every send attempt since the start
-   failed before submit.
-   - **The first three** failed because the funds were not yet spendable,
-     though the wallet already reported them unlocked.
-   - **Every later one** failed in the signer, with an error that does not
-     name its cause.
-   - **A comparison.** The same build from the funding wallet, which was
-     scanned from genesis, succeeds. The sending wallet had been restored
-     from height 11640 and is being re-scanned from genesis.
+5. **Sends so far, and the duration.** Of the first six attempts:
+   - **The first three** failed before submit because the funds were not
+     yet spendable, though the wallet already reported them unlocked.
+   - **The fourth** (21:16:27Z) failed in the signer, with an error that
+     does not name its cause.
+   - **The fifth and sixth** (21:21:59Z and 21:26:25Z) were accepted.
+   - **A hand-made build** at 21:21:55Z, made without a refresh, also
+     failed in the signer. The loop's build four seconds later, after its
+     refresh, succeeded.
+   - **The sending wallet's server since 21:28Z** is a build of
+     `v3.1.0-alpha.11` that also logs the signer's underlying error and is
+     otherwise the release. It was restarted from the wallet's files.
    - **Duration.** The 48 hours now count from the first accepted own send
      under sampler version 2. The run ends at 48 hours or at the alpha.12
      changeover, whichever comes first.
