@@ -100,7 +100,7 @@ pub struct MinerConfig {
     pub bound: SearchBound,
 }
 
-/// The miner's state as `mining_status` reports it.
+/// The miner's state as `mine_status` reports it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MinerStatus {
     /// Workers are running (a stopped miner is not reported at all: it has

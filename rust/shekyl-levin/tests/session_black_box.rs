@@ -230,13 +230,13 @@ fn new_transactions(txs: Vec<Vec<u8>>) -> Vec<u8> {
     )
 }
 
-/// `get_info.synchronized`, the node's `SyncState::Synced` as the RPC
+/// `daemon_status.synchronized`, the node's `SyncState::Synced` as the RPC
 /// reports it (`shekyl-node/src/facts.rs`); the relay owner reads the
 /// same state.
 fn synchronized(daemon: &Daemon) -> Option<bool> {
     let mut s = TcpStream::connect(("127.0.0.1", daemon.rpc_port)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    let body = r#"{"jsonrpc":"2.0","id":"0","method":"get_info"}"#;
+    let body = r#"{"jsonrpc":"2.0","id":0,"method":"daemon_status"}"#;
     let req = format!(
         "POST /json_rpc HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         daemon.rpc_port,

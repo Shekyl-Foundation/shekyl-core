@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use shekyl_p_transport::{PTorClient, PTransportError, TorSocksEndpoint};
-use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
+use shekyl_rpc_client::{Rejection, Rpc, Verdict};
 use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
@@ -180,7 +180,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
     canonical_tx_id_opt(tx_bytes).expect("wallet-built tx_bytes parse as canonical shekyl-wire")
 }
 
-/// Map a daemon [`SubmitVerdict`] onto a [`TxSubmitOutcome`]
+/// Map a daemon [`Verdict`] onto a [`TxSubmitOutcome`]
 /// (`DAEMON_SUBMIT_VERDICT.md` §2.1 → wallet projection).
 ///
 /// `hash` is the **locally**-computed transaction id; the daemon reply
@@ -191,7 +191,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// A 1:1 structural mapping by design: the daemon's Rust admission
 /// engine computes the verdict atomically at commit-check time, so
 /// there is no client-side flag triage left to do (the legacy
-/// `send_raw_transaction` boolean-flag collapse this function used to
+/// `tx_submit` boolean-flag collapse this function used to
 /// perform is deleted with that endpoint). The per-cause *dispositions*
 /// (§2.5) are applied downstream via [`outcome_to_result`] and the
 /// orchestrator's finalizers, keeping mapping and policy separable.
@@ -199,23 +199,19 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// Transport-agnostic: shared by the principal `DaemonClient` and the
 /// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon verdict is
 /// interpreted the same regardless of which circuit carried it.
-pub(crate) fn submit_outcome_from_verdict(
-    verdict: &SubmitVerdict,
-    hash: TxHash,
-) -> TxSubmitOutcome {
+pub(crate) fn submit_outcome_from_verdict(verdict: &Verdict, hash: TxHash) -> TxSubmitOutcome {
     match verdict {
-        SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
-        SubmitVerdict::AlreadyInPool { relay } => TxSubmitOutcome::AlreadyInPool {
+        Verdict::Accepted => TxSubmitOutcome::Submitted { hash },
+        Verdict::AlreadyInPool { publication } => TxSubmitOutcome::AlreadyInPool {
             hash,
-            relay: *relay,
+            relay: *publication,
         },
-        SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
+        Verdict::AlreadyInChain { mined_height } => TxSubmitOutcome::AlreadyInChain {
             hash,
-            height: *height,
+            height: mined_height.0,
         },
-        SubmitVerdict::Rejected { cause, row } => TxSubmitOutcome::Rejected {
-            cause: *cause,
-            row: row.as_deref().and_then(CenRowName::parse),
+        Verdict::Rejected { cause } => TxSubmitOutcome::Rejected {
+            cause: cause.clone(),
         },
     }
 }
@@ -257,30 +253,31 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
         TxSubmitOutcome::AlreadyInChain { hash, height } => {
             Ok(SubmitSuccess::AlreadyInChain { hash, height })
         }
-        TxSubmitOutcome::Rejected { cause, row } => Err(submitter_error_from_cause(cause, row)),
+        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(&cause)),
     }
 }
 
-/// Split a [`RejectCause`] into the terminal / retryable error classes
+/// Split a [`Rejection`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submitter_error_from_cause(cause: RejectCause, row: Option<CenRowName>) -> SubmitterError {
+fn submitter_error_from_cause(cause: &Rejection) -> SubmitterError {
     let terminal = |kind| SubmitterError::RejectedTerminal { kind };
     let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
-        RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
-        // Terminal with its row. A reply that names no row, or one this
-        // wallet cannot carry whole, takes the fail-safe disposition.
-        RejectCause::ConsensusRule => match row {
+        Rejection::Malformed => terminal(TerminalErrorKind::Malformed),
+        // Terminal with its row, which rides inside the cause (IG-Q76). A
+        // row this wallet cannot carry whole takes the fail-safe
+        // disposition.
+        Rejection::ConsensusRule(row) => match CenRowName::parse(&row.0) {
             Some(row) => terminal(TerminalErrorKind::ConsensusRule { row }),
             None => terminal(TerminalErrorKind::Unrecognized),
         },
-        RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
-        RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
-        RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
-        RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
-        RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
-        RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
+        Rejection::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
+        Rejection::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
+        Rejection::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
+        Rejection::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
+        Rejection::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
+        Rejection::ReferenceUnknown => retryable(RetryableRejectCause::ReferenceNotFound),
     }
 }
 
@@ -483,7 +480,7 @@ const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
 /// `ThirdParty` variant (invariant B), so this enum states the closed set for
 /// free where a boxed `dyn` shim would pay allocation to erase it.
 /// Match-delegation is output-agnostic (§3.1 part 5): it carries through the
-/// `SubmitVerdict` reshapes unchanged, and "both submitters share the
+/// `Verdict` reshapes unchanged, and "both submitters share the
 /// mapping" is literal — one [`outcome_to_result`], two transports, one
 /// dispatch type.
 ///

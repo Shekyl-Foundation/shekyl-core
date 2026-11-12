@@ -6,7 +6,7 @@
 #
 # The budget's catch-up harness mode (DAEMON_REDB_STORE.md §1.3a, PB-D2 and
 # PB-D3; rule 7): a subject synced to a height stops, the seed advances a
-# week, the subject resumes, and the time from its first answered get_info
+# week, the subject resumes, and the time from its first answered daemon_status
 # to the seed's tip is the row. The fsync probe runs beside the whole run
 # and its window over the timed catch-up is recorded (rule 2). The artifact
 # reports the proof-of-work share of the subject's CPU over that window
@@ -178,8 +178,8 @@ def run(args):
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
-                    reached = B._rpc(session.brpc, "get_info")["result"]["height"]
-                except (OSError, ValueError):
+                    reached = B.chain_count(session.brpc)
+                except (OSError, ValueError, KeyError):
                     time.sleep(1)
                     continue
                 peak = B._peak_rss_bytes(subj.pid)
@@ -258,7 +258,7 @@ def run(args):
             "subject_cpu_s": timed["cpu_s"],
             "peak_rss_bytes": timed["peak_rss_bytes"],
             "tx_per_block": load,
-            "window": "the subject's first answered get_info after the restart to "
+            "window": "the subject's first answered daemon_status after the restart to "
                       "height == the seed's tip; EXCLUDES process start and store open",
         },
         "pow": pow_share(advanced, hash_ns_mean, timed["cpu_s"]),

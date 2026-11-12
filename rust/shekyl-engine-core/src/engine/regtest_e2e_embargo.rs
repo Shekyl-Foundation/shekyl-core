@@ -143,13 +143,7 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     let returner = TestPeer::dial(origin_p2p);
     let synced_by = Instant::now() + Duration::from_secs(60);
     loop {
-        let synchronized = origin
-            .rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
-            .await
-            .expect("origin get_info")
-            .health
-            .synchronized;
+        let synchronized = origin.status().await.synchronized;
         if synchronized && returner.live() {
             break;
         }
@@ -285,17 +279,10 @@ async fn an_origin_whose_successor_drops_re_stems_to_its_alternate_and_never_flu
     returner.fluff(&blob);
     let shown_by = Instant::now() + Duration::from_secs(30);
     loop {
-        let pool: PoolRelayResp = origin
-            .rpc
-            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
-            .await
-            .expect("origin /get_transaction_pool");
-        let wanted = hex::encode(txid.as_bytes());
-        if pool
-            .transactions
-            .iter()
-            .any(|entry| entry.id_hash == wanted && entry.relayed)
-        {
+        if matches!(
+            tx_slot(&origin.rpc, txid).await,
+            Slot::Item(entry) if entry.pooled && entry.public.0 == Some(true)
+        ) {
             break;
         }
         assert!(

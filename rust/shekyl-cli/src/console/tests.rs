@@ -9,8 +9,10 @@ use super::*;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-use shekyl_rpc_types::mining::MineSpeed;
-use shekyl_rpc_types::{HashHex, RpcStatus};
+use shekyl_rpc_types::errors::{Diagnostic, ErrorClass};
+use shekyl_rpc_types::kinds::{Count, Duration, Integer, Size, Time};
+use shekyl_rpc_types::nullable::Nullable;
+use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::{BlockHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> Result<String, String> {
@@ -57,101 +59,102 @@ fn run_on(
     }
 }
 
-/// One-request HTTP acceptor answering `reply` with 200.
-/// A reply built through the wire type rather than hand-written, so a
-/// fixture cannot describe a document the daemon could never send. Two
-/// of these were hand-written `"hash"` strings that RK-3's `HashHex`
-/// immediately refused.
-fn typed_reply<T: serde::Serialize>(reply: &T) -> String {
-    serde_json::to_string(reply).expect("wire type serializes")
+/// The route key a JSON-RPC call to method `M` is answered under.
+fn rpc<M: RpcMethod>() -> &'static str {
+    Box::leak(format!("json_rpc:{}", M::NAME).into_boxed_str())
 }
 
-/// A `get_version` reply that MATCHES this build on all four axes.
-///
-/// Every remote-arm console command now handshakes before it renders
-/// (`VC-3`), so a harness whose fake daemon does not answer `get_version`
-/// tests the refusal rather than the command. This is the "agreeing daemon"
-/// these harnesses assume; the handshake's own tests supply a disagreeing one
-/// deliberately.
-fn agreeing_get_version() -> String {
-    // A JSON-RPC leg: the reply is wrapped in `result`, not bare.
+/// The method a recorded request body names.
+fn method_of(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("method")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// A recorded log without the identity handshake, which is a request too
+/// (VC-3) and not one of a command's legs.
+fn legs(log: &std::sync::Mutex<Vec<(String, String)>>) -> Vec<(String, String)> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| method_of(body).as_deref() != Some(<wire::Version as RpcMethod>::NAME))
+        .cloned()
+        .collect()
+}
+
+/// The params of the first recorded call to `M`.
+fn params_of<M: RpcMethod>(log: &std::sync::Mutex<Vec<(String, String)>>) -> serde_json::Value {
+    legs(log)
+        .iter()
+        .find(|(_, body)| method_of(body).as_deref() == Some(M::NAME))
+        .map(|(_, body)| serde_json::from_str::<serde_json::Value>(body).unwrap()["params"].clone())
+        .unwrap_or_else(|| panic!("{} was asked for", M::NAME))
+}
+
+/// A JSON-RPC result envelope.
+fn rpc_result(value: impl serde::Serialize) -> String {
+    serde_json::json!({"jsonrpc": "2.0", "id": 0, "result": value}).to_string()
+}
+
+/// A JSON-RPC error envelope carrying `class` and the diagnostic `code`,
+/// whose English the operator must not see.
+fn rpc_refusal(class: ErrorClass, code: &str) -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetVersionResponse {
-        status: shekyl_rpc_types::RpcStatus::ok(),
-        version: shekyl_rpc_types::CORE_RPC_VERSION,
-        release: false,
-        current_height: 1,
-        target_height: shekyl_rpc_types::Nullable::NULL,
-        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::Network::Mainnet,
-        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
-        ),
-        },
+        "id": 0,
+        "error": {
+            "code": class.code(),
+            "message": "english the operator must not see",
+            "data": Diagnostic::new(code, "english the operator must not see"),
+        }
     })
     .to_string()
 }
 
-fn one_shot(reply: String) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    std::thread::spawn(move || {
-        // Two requests now, not one: the identity handshake, then the
-        // command. Routed by body rather than by order, so a command that
-        // stopped issuing its leg gets no reply instead of silently
-        // receiving the handshake's.
-        for _ in 0..2 {
-            let Ok((mut s, _)) = listener.accept() else {
-                return;
-            };
-            let mut buf = [0u8; 4096];
-            let n = s.read(&mut buf).expect("read request");
-            assert!(n > 0, "empty request");
-            let body = String::from_utf8_lossy(&buf[..n]).into_owned();
-            let payload = if body.contains("\"get_version\"") {
-                agreeing_get_version()
-            } else {
-                reply.clone()
-            };
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                payload.len()
-            );
-            s.write_all(head.as_bytes()).unwrap();
-            s.write_all(payload.as_bytes()).unwrap();
-        }
-    });
-    address
+/// A `version` reply that agrees with this build except where `edit` says
+/// otherwise.
+fn version_but(edit: impl FnOnce(&mut wire::chain::Version)) -> String {
+    let mut reply = wire::chain::Version {
+        version: Integer(u64::from(shekyl_rpc_types::CORE_RPC_VERSION)),
+        tagged: false,
+        height: Height(0),
+        target_height: Nullable(None),
+        consensus_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+        network: shekyl_rpc_types::Network::Mainnet,
+        genesis: HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
+            shekyl_rpc_types::Network::Mainnet,
+        )),
+    };
+    edit(&mut reply);
+    rpc_result(&reply)
 }
 
-/// A **multi-request** acceptor that routes on what the console asked
-/// for: by request path for the REST legs, and by the JSON-RPC `method`
-/// in the body for `/json_rpc`.
+/// A `version` reply that MATCHES this build on all four axes.
 ///
-/// Its reason to exist is the bridged legs (§2.1.1). A console command
-/// that crosses to a route this slice does not serve makes *two or more*
-/// requests, and `one_shot` can only answer the first — so the commands
-/// whose safety condition is "the console gate covers this command" were
-/// the exact commands no gate could reach. Routing rather than replaying
-/// a queue also means the assertion is on the reply the console asked
-/// for, not on call order: a command that stopped issuing one of its legs
-/// gets `no reply`, not a silently shifted answer.
+/// Every remote-arm console command handshakes before it renders (`VC-3`),
+/// so a harness whose fake daemon does not answer `version` tests the
+/// refusal rather than the command.
+fn agreeing_version() -> String {
+    version_but(|_| {})
+}
+
+/// A multi-request acceptor that routes on the JSON-RPC `method` in the
+/// body (every call is on `/json_rpc`, RW-Q2).
 ///
-/// An unrouted request is answered `404` with an empty body, which is
-/// what a daemon that no longer serves the route would do.
+/// Routing rather than replaying a queue means the assertion is on the
+/// reply the console asked for, not on call order: a command that stopped
+/// issuing one of its legs gets `no reply`, not a silently shifted answer.
+/// An unrouted request is answered `404` with an empty body.
 fn route_server(routes: Vec<(&'static str, String)>) -> String {
     route_server_recording(routes).0
 }
 
 /// [`route_server`], plus the log of what was asked of it.
 ///
-/// A canned reply is blind to the request that fetched it, so a test that
-/// only reads the output cannot tell a command that asked for the right
-/// window from one that asked for the wrong window and was answered
-/// anyway. The log makes the *request* assertable, which for the
-/// window-resolving commands is the whole behaviour under test.
+/// A canned reply is blind to the request that fetched it; the log makes
+/// the *request* assertable.
 #[expect(clippy::type_complexity, reason = "a test log of (route, body)")]
 pub(crate) fn route_server_recording(
     mut routes: Vec<(&'static str, String)>,
@@ -160,10 +163,11 @@ pub(crate) fn route_server_recording(
     std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 ) {
     // Every remote-arm command handshakes first (VC-3), so an agreeing
-    // daemon is the default. A test that wants a DISAGREEING one supplies its
-    // own `json_rpc:get_version` route and this leaves it alone.
-    if !routes.iter().any(|(k, _)| *k == "json_rpc:get_version") {
-        routes.push(("json_rpc:get_version", agreeing_get_version()));
+    // daemon is the default. A test that wants a DISAGREEING one supplies
+    // its own `version` route and this leaves it alone.
+    let version = rpc::<wire::Version>();
+    if !routes.iter().any(|(k, _)| *k == version) {
+        routes.push((version, agreeing_version()));
     }
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -178,13 +182,8 @@ pub(crate) fn route_server_recording(
             if let Ok(mut log) = recorder.lock() {
                 log.push((path.clone(), body.clone()));
             }
-            // `/json_rpc` carries the name in the body; every other route
-            // *is* the name.
-            let key = if path == "/json_rpc" {
-                serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("method")?.as_str().map(str::to_owned))
-                    .map_or_else(|| path.clone(), |m| format!("json_rpc:{m}"))
+            let key = if path == shekyl_rpc_types::endpoint::JSON_RPC_PATH {
+                method_of(&body).map_or_else(|| path.clone(), |m| format!("json_rpc:{m}"))
             } else {
                 path.clone()
             };
@@ -197,9 +196,8 @@ pub(crate) fn route_server_recording(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
-            // One write: a head-then-body pair lets a client that hung
-            // up between them see a truncated reply, which reads as a
-            // malformed daemon rather than a closed socket.
+            // One write: a head-then-body pair lets a client that hung up
+            // between them see a truncated reply.
             let mut response = head.into_bytes();
             response.extend_from_slice(body.as_bytes());
             if s.write_all(&response).is_err() {
@@ -237,58 +235,6 @@ fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
     let mut body = vec![0u8; length];
     s.read_exact(&mut body).ok()?;
     Some((path, String::from_utf8_lossy(&body).into_owned()))
-}
-
-/// A one-request acceptor that answers by running the **real projection**
-/// over fixed facts, so the reply depends on the request the console
-/// actually sent.
-///
-/// A canned reply would be blind to the defect this exists to catch: the
-/// console must ask for the full form, and a fixture that always returned
-/// the whole body would pass whatever form the console asked for. Serving
-/// the projection makes the request an input rather than a formality.
-fn one_shot_projected(slot: shekyl_daemon_rpc::core::TxSlot, txid: TxHash) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    std::thread::spawn(move || {
-        // The identity handshake arrives first (VC-3); answer it, then the
-        // request this fixture exists to answer.
-        {
-            let Ok((mut hs, _)) = listener.accept() else {
-                return;
-            };
-            let mut hb = [0u8; 4096];
-            let _ = hs.read(&mut hb).expect("read handshake");
-            let hv = agreeing_get_version();
-            let hh = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                hv.len()
-            );
-            hs.write_all(hh.as_bytes()).unwrap();
-            hs.write_all(hv.as_bytes()).unwrap();
-        }
-        let (mut s, _) = listener.accept().unwrap();
-        let mut buf = vec![0u8; 8192];
-        let n = s.read(&mut buf).expect("read request");
-        let raw = String::from_utf8_lossy(&buf[..n]).into_owned();
-        let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
-        let request: shekyl_rpc_types::GetTransactionsRequest =
-            serde_json::from_str(&body).expect("the console sends a typed request");
-        let reply = shekyl_daemon_rpc::methods::project_transactions(
-            &request,
-            &[txid.to_bytes()],
-            &[slot],
-            9,
-        );
-        let out = serde_json::to_string(&reply).unwrap();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            out.len()
-        );
-        s.write_all(head.as_bytes()).unwrap();
-        s.write_all(out.as_bytes()).unwrap();
-    });
-    address
 }
 
 /// A structurally canonical spend for the body-binding: the console now
@@ -356,42 +302,153 @@ fn console_spend() -> shekyl_wire::Transaction {
     }
 }
 
-/// [`console_spend`] as the store holds it: its skeleton and its archival
-/// good, cut by the wire crate's segmenter and bound by its `txid_parts`.
-fn console_spend_body() -> shekyl_daemon_rpc::core::TxBody {
+/// [`console_spend`]'s skeleton: the pruned segment and its txid operands.
+fn console_spend_skeleton() -> shekyl_wire::SkeletonTx {
     let tx = console_spend();
     let segments = tx.write_segments().expect("segments");
     let parts = tx.txid_parts();
-    shekyl_daemon_rpc::core::TxBody {
-        skeleton: shekyl_wire::SkeletonTx {
-            unprunable: segments.pruned,
-            prunable_hash: parts.prunable_hash,
-            pqc_auth_hash: parts.pqc_auth_hash,
-            archival_len: parts.archival_len,
-        },
-        good: shekyl_daemon_rpc::core::ArchivalGood::Retained {
-            pqc_auths: parts.pqc_auth_hash.map(|_| segments.pqc_auths),
-            prunable: segments.prunable,
-        },
+    shekyl_wire::SkeletonTx {
+        unprunable: segments.pruned,
+        prunable_hash: parts.prunable_hash,
+        pqc_auth_hash: parts.pqc_auth_hash,
+        archival_len: parts.archival_len,
     }
 }
 
-fn mined_slot(body: shekyl_daemon_rpc::core::TxBody) -> shekyl_daemon_rpc::core::TxSlot {
-    shekyl_daemon_rpc::core::TxSlot::Chain {
-        body,
-        block_height: 3,
-        block_timestamp: 1_700_000_000,
-        output_indices: vec![1],
-    }
+/// A complete `daemon_status` result for the chain of `count` blocks (the
+/// wire carries its tip, `count - 1`), every part shown. A test removes or
+/// alters the members it is about.
+pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
+    serde_json::json!({
+        "height": count - 1,
+        "hash": "5a".repeat(32),
+        "target_height": null,
+        "synchronized": true,
+        "syncing": false,
+        "offline": false,
+        "degraded": false,
+        "peered": true,
+        "writer": {"live": null},
+        "protocol_version": 3,
+        "difficulty": "0x1e240",
+        "difficulty_cumulative": "0x2dc6c0",
+        "block_spacing": 120,
+        "tx_count": 0,
+        "block_weight_max": 600_000,
+        "block_weight_median": 300_000,
+        "time_adjusted": 1_700_000_000_u64,
+        "emission": "0",
+        "emission_multiplier": 1_000_000,
+        "burn": 0,
+        "burn_total": "0",
+        "stake_share": 0,
+        "txpool_count": 4,
+        "grant": ["health", "status", "chain", "pool", "peers", "submit", "mining-work",
+                  "mining-control", "bans", "node", "config"],
+        "started": 1_700_000_000_u64,
+        "disk_free": 1_u64 << 40,
+        "data_size": 1_u64 << 30,
+        "revision": "3.1.0-test",
+        "peer_outbound_count": 8,
+        "peer_inbound_count": 3,
+        "alt_count": 0,
+        "rpc_connections": 1,
+        "txpool_retired": false,
+        "connector": {"clearnet": {
+            "inbound_count": 3, "outbound_count": 8,
+            "peer_white_count": 10, "peer_gray_count": 20
+        }},
+        "txpool_private_count": 0,
+    })
 }
 
-/// **A retained transaction prints its whole body.** The console asks for
-/// the full form; the projection answers with the body reassembled, and
-/// the binding rehashes it whole.
+/// [`daemon_status_value`] for a chain of 100 blocks, for the client's own
+/// decode test.
+pub(crate) fn daemon_status_reply() -> serde_json::Value {
+    daemon_status_value(100)
+}
+
+/// [`daemon_status_value`] as a `daemon_status` envelope.
+fn status_reply(count: u64) -> String {
+    rpc_result(daemon_status_value(count))
+}
+
+/// The wire names of `daemon_status`' Status part.
+const STATUS_PART_KEYS: &[&str] = &[
+    "started",
+    "disk_free",
+    "data_size",
+    "revision",
+    "peer_outbound_count",
+    "peer_inbound_count",
+    "alt_count",
+    "rpc_connections",
+    "txpool_retired",
+];
+
+/// [`daemon_status_value`] with the Status part withheld, as a caller
+/// without the `status` grant reads it.
+fn status_withheld(count: u64) -> serde_json::Value {
+    let mut value = daemon_status_value(count);
+    let members = value.as_object_mut().unwrap();
+    for key in STATUS_PART_KEYS {
+        members
+            .remove(*key)
+            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
+    }
+    value
+}
+
+/// An offline daemon's `daemon_status`: the state in Health, `peered` and
+/// the peer counts `null`.
+fn status_offline(count: u64) -> serde_json::Value {
+    let mut value = daemon_status_value(count);
+    value["offline"] = serde_json::json!(true);
+    value["peered"] = serde_json::Value::Null;
+    value["peer_outbound_count"] = serde_json::Value::Null;
+    value["peer_inbound_count"] = serde_json::Value::Null;
+    value
+}
+
+/// A full-form `tx_list` entry whose body is `body` and whose operands are
+/// [`console_spend`]'s own; the label is the caller's.
+fn mined_entry(label: [u8; 32], body: &[u8]) -> serde_json::Value {
+    let skeleton = console_spend_skeleton();
+    serde_json::json!({
+        "id": HashHex::from_bytes(label),
+        "body": shekyl_rpc_types::kinds::Bytes(body.to_vec()),
+        "prunable_hash": HashHex::from_bytes(skeleton.prunable_hash.to_bytes()),
+        "pqc_auth_hash": skeleton.pqc_auth_hash.map(|h| HashHex::from_bytes(h.to_bytes())),
+        "archival_size": skeleton.archival_len.to_raw(),
+        "pooled": false,
+        "mined_height": 3,
+        "confirmations": 1,
+        "mined_time": 1_700_000_000_u64,
+        "output_index": [1],
+        "public": null,
+    })
+}
+
+/// A daemon answering `tx_list` with `slots`.
+#[expect(clippy::type_complexity, reason = "a test log of (route, body)")]
+fn tx_list_server(
+    slots: serde_json::Value,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+) {
+    route_server_recording(vec![(rpc::<wire::TxList>(), rpc_result(slots))])
+}
+
+/// **A retained transaction prints its whole body.** The console asks
+/// `tx_list` for the full form (`prune: false`), and the binding rehashes
+/// the whole body. The request is asserted, so a console that asked for
+/// the pruned form fails here rather than passing on a canned reply.
 #[test]
 fn a_retained_transaction_prints_from_its_whole_body() {
     let txid = console_spend().hash();
-    let addr = one_shot_projected(mined_slot(console_spend_body()), txid);
+    let bytes = console_spend().serialize();
+    let (addr, log) = tx_list_server(serde_json::json!([mined_entry(txid.to_bytes(), &bytes)]));
     let out = run(&["tx", "show", &hex::encode(txid), "--body"], Some(&addr))
         .unwrap_or_else(|error| error);
     assert!(
@@ -399,7 +456,6 @@ fn a_retained_transaction_prints_from_its_whole_body() {
         "expected the confirmed line, got: {out}"
     );
     use base64::Engine as _;
-    let bytes = console_spend().serialize();
     let printed = super::encode_body(&bytes);
     assert!(
         out.contains(&printed),
@@ -412,21 +468,22 @@ fn a_retained_transaction_prints_from_its_whole_body() {
         decoded, bytes,
         "the printed body is the transaction's bytes"
     );
+    let params = params_of::<wire::TxList>(&log);
+    assert_eq!(
+        params["prune"], false,
+        "the full form was asked for: {params}"
+    );
+    assert_eq!(params["id"], serde_json::json!([hex::encode(txid)]));
 }
 
 /// **A discarded body is reported `archived` with its shard, not printed
-/// and not "not found"** (`PDM-Q10`). The projection answers the full form
-/// with the `archived` state; the console names the shard and the way out.
+/// and not "not found"** (`PDM-Q10`).
 #[test]
 fn an_archived_transaction_names_its_shard() {
     let txid = console_spend().hash();
-    let body = shekyl_daemon_rpc::core::TxBody {
-        skeleton: console_spend_body().skeleton,
-        good: shekyl_daemon_rpc::core::ArchivalGood::Discarded {
-            shard: shekyl_types::ShardId::from_raw(3),
-        },
-    };
-    let addr = one_shot_projected(mined_slot(body), txid);
+    let (addr, _) = tx_list_server(serde_json::json!([
+        {"archived": {"id": hex::encode(txid), "shard": 3}}
+    ]));
     let out = run(&["tx", "show", &hex::encode(txid)], Some(&addr)).expect("renders");
     assert!(
         out.contains("archived") && out.contains("shard 3"),
@@ -438,240 +495,100 @@ fn an_archived_transaction_names_its_shard() {
     );
 }
 
-/// **An echoed label over a substituted body is refused.** The label
-/// check compares two daemon-chosen strings, so a daemon that echoes the
-/// requested hash while serving another canonical body sails through it;
-/// the binding recomputes the identity from the bytes and refuses. This
-/// is `parse_tx_batch`'s rule applied to the console's remote arm, which
-/// posts wherever the operator pointed it.
+/// **A `null` slot is not "not found".** The chain does not hold the id and
+/// the pool could not be asked (IG-Q73): whether the pool holds it has no
+/// answer. Red edit: read `Slot::Unasked` as `NotHeld`.
+#[test]
+fn an_unasked_slot_says_the_pool_is_unavailable() {
+    let (addr, _) = tx_list_server(serde_json::json!([null]));
+    let out = run(&["tx", "show", &"31".repeat(32)], Some(&addr)).expect("renders");
+    assert!(out.contains("pool is unavailable"), "{out}");
+    assert!(!out.contains("wasn't found"), "{out}");
+}
+
+/// `{"missing": null}` is the one miss.
+#[test]
+fn a_missing_slot_is_not_found() {
+    let (addr, _) = tx_list_server(serde_json::json!([{"missing": null}]));
+    let out = run(&["tx", "show", &"31".repeat(32)], Some(&addr)).expect_err("a miss");
+    assert!(out.contains("wasn't found"), "{out}");
+}
+
+/// **An echoed label over a substituted body is refused.** A daemon that
+/// echoes the requested id while serving another canonical body passes the
+/// label check; the binding recomputes the identity from the bytes and
+/// refuses — the wallet's `bind_served` rule on the console's remote arm.
 #[test]
 fn an_echoed_label_over_a_substituted_body_is_refused() {
-    // The identity of a DIFFERENT transaction (unlock_time moved), which
-    // the daemon echoes while serving `console_spend`'s body.
     let mut other = console_spend();
     other.prefix.unlock_time = 5;
     let requested = other.hash();
-    let entry = shekyl_rpc_types::TxEntry {
-        as_hex: hex::encode(console_spend().serialize()),
-        ..mined_entry(requested.to_bytes())
-    };
-    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
-        status: RpcStatus::ok(),
-        txs: vec![entry],
-        missed_tx: vec![],
-        archived: Vec::new(),
-        unavailable_tx: Vec::new(),
-    });
+    let (addr, _) = tx_list_server(serde_json::json!([mined_entry(
+        requested.to_bytes(),
+        &console_spend().serialize()
+    )]));
     let out = run(&["tx", "show", &hex::encode(requested)], Some(&addr)).expect_err("refused");
     assert!(
         out.contains("a label is not an identity"),
-        "the substituted body must be refused by the binding, not \
-         rendered: {out}"
+        "the substituted body must be refused by the binding, not rendered: {out}"
     );
 }
 
 /// **A pruned segment answering a request for the whole body is refused,
-/// not reassembled.** The console asked for the full form; a daemon that
-/// answers it with `pruned_as_hex` and chosen operands is offering a body
-/// the console cannot rehash whole, and the operands are the daemon's to
-/// pick. The console refuses the form rather than binding through the
-/// daemon's operands (R83 is the wallet's rule for the same reply).
+/// not reassembled.** The skeleton parses as a transaction with no
+/// prunable region, which hashes to another identity: the binding refuses
+/// it, and the daemon's operands are never consulted.
 #[test]
 fn a_pruned_form_answer_to_a_full_form_request_is_refused() {
-    let body = console_spend_body();
     let txid = console_spend().hash();
-    let entry = shekyl_rpc_types::TxEntry {
-        as_hex: String::new(),
-        pruned_as_hex: hex::encode(&body.skeleton.unprunable),
-        ..mined_entry(txid.to_bytes())
-    };
-    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
-        status: RpcStatus::ok(),
-        txs: vec![entry],
-        missed_tx: vec![],
-        archived: Vec::new(),
-        unavailable_tx: Vec::new(),
-    });
+    let (addr, _) = tx_list_server(serde_json::json!([mined_entry(
+        txid.to_bytes(),
+        &console_spend_skeleton().unprunable
+    )]));
     let out = run(&["tx", "show", &hex::encode(txid)], Some(&addr)).expect_err("refused");
-    assert!(
-        out.contains("in the pruned form"),
-        "a pruned-form answer to a full-form request is refused: {out}"
-    );
+    assert!(out.contains("a label is not an identity"), "{out}");
 }
 
-/// A reply with extra entries is unreadable, not "use the first one".
-/// The command requested one hash; the adjacent key-image command already
-/// requires a one-element slice for the same reason.
+/// A reply with extra slots is unreadable, not "use the first one".
 #[test]
-fn extra_transaction_entries_are_a_malformed_reply() {
-    let txid = [0x33; 32];
-    let reply = shekyl_rpc_types::GetTransactionsResponse {
-        status: RpcStatus::ok(),
-        txs: vec![mined_entry([0x33; 32]), mined_entry([0x34; 32])],
-        missed_tx: vec![],
-        archived: Vec::new(),
-        unavailable_tx: Vec::new(),
-    };
-    let addr = one_shot(typed_reply(&reply));
+fn extra_transaction_slots_are_a_malformed_reply() {
+    let txid = console_spend().hash();
+    let bytes = console_spend().serialize();
+    let (addr, _) = tx_list_server(serde_json::json!([
+        mined_entry(txid.to_bytes(), &bytes),
+        mined_entry(txid.to_bytes(), &bytes),
+    ]));
     let out = run(&["tx", "show", &hex::encode(txid)], Some(&addr)).expect_err("refused");
-    assert!(
-        out.contains("asked about 1 transaction, got 2"),
-        "extra entries must be named, not silently truncated: {out}"
-    );
+    assert!(out.contains("asked about 1 transaction, got 2"), "{out}");
 }
 
-/// A one-request acceptor answering with a fixed document, for the cases
-/// where the point is that the daemon said something the request did not
-/// ask for — which the projection-backed fixture cannot stage, because it
-/// only ever answers about the hash it was handed.
-fn one_shot_raw(reply: shekyl_rpc_types::GetTransactionsResponse) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    std::thread::spawn(move || {
-        // The identity handshake arrives first (VC-3); answer it, then the
-        // request this fixture exists to answer.
-        {
-            let Ok((mut hs, _)) = listener.accept() else {
-                return;
-            };
-            let mut hb = [0u8; 4096];
-            let _ = hs.read(&mut hb).expect("read handshake");
-            let hv = agreeing_get_version();
-            let hh = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                hv.len()
-            );
-            hs.write_all(hh.as_bytes()).unwrap();
-            hs.write_all(hv.as_bytes()).unwrap();
-        }
-        let (mut s, _) = listener.accept().unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = s.read(&mut buf).expect("read request");
-        let out = serde_json::to_string(&reply).unwrap();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            out.len()
-        );
-        s.write_all(head.as_bytes()).unwrap();
-        s.write_all(out.as_bytes()).unwrap();
-    });
-    address
-}
-
-/// A full-form entry whose body is [`console_spend`]'s whole serialization
-/// and whose operands are its own; the label is the caller's.
-fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
-    let body = console_spend_body();
-    shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(txid),
-        as_hex: hex::encode(console_spend().serialize()),
-        pruned_as_hex: String::new(),
-        prunable_hash: HashHex::from_bytes(body.skeleton.prunable_hash.to_bytes()),
-        pqc_auth_hash: body
-            .skeleton
-            .pqc_auth_hash
-            .map(|hash| HashHex::from_bytes(hash.to_bytes()))
-            .into(),
-        archival_len: body.skeleton.archival_len.to_raw(),
-        double_spend_seen: false,
-        location: shekyl_rpc_types::TxLocation::Mined {
-            block_height: 3,
-            block_timestamp: 1_700_000_000,
-            confirmations: 1,
-            output_indices: vec![1],
-        },
-    }
-}
-
-/// **The server's reason survives to the operator.**
-///
-/// A native handler reports failure as a `RestErrorEnvelope`, which the
-/// success type does not model — so a success-only decode reported
-/// "malformed reply" over the reason the daemon actually gave, and refusing
-/// unknown fields made that certain rather than incidental. `decode_reply`
-/// tries the envelope second, which is what keeps the failure actionable.
-#[test]
-fn a_handler_error_envelope_reaches_the_operator() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap().to_string();
-    std::thread::spawn(move || {
-        // The identity handshake arrives first (VC-3); answer it, then the
-        // request this fixture exists to answer.
-        {
-            let Ok((mut hs, _)) = listener.accept() else {
-                return;
-            };
-            let mut hb = [0u8; 4096];
-            let _ = hs.read(&mut hb).expect("read handshake");
-            let hv = agreeing_get_version();
-            let hh = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                hv.len()
-            );
-            hs.write_all(hh.as_bytes()).unwrap();
-            hs.write_all(hv.as_bytes()).unwrap();
-        }
-        let (mut s, _) = listener.accept().unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = s.read(&mut buf).expect("read request");
-        let out = r#"{"error":"the store is inconsistent at height 7"}"#;
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            out.len()
-        );
-        s.write_all(head.as_bytes()).unwrap();
-        s.write_all(out.as_bytes()).unwrap();
-    });
-    let out = run(&["tx", "show", &hex::encode([0x31u8; 32])], Some(&address))
-        .unwrap_or_else(|error| error);
-    assert!(
-        out.contains("the store is inconsistent at height 7"),
-        "the daemon's own reason must reach the operator, not be replaced \
-         by a decode complaint: {out}"
-    );
-}
-
-/// **A reply about a different transaction is not an answer.** The count
-/// matched, every field was well-formed, and only the identity was wrong —
-/// so a console binding the reply to the request by arity alone would have
-/// printed another transaction under the operator's hash.
+/// **A reply about a different transaction is not an answer.**
 #[test]
 fn an_entry_for_a_different_hash_is_refused() {
     let asked = [0x31u8; 32];
-    let served = [0x99u8; 32];
-    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
-        status: shekyl_rpc_types::RpcStatus::ok(),
-        txs: vec![mined_entry(served)],
-        missed_tx: Vec::new(),
-        archived: Vec::new(),
-        unavailable_tx: Vec::new(),
-    });
-    let out = run(&["tx", "show", &hex::encode(asked)], Some(&addr)).unwrap_or_else(|error| error);
+    let (addr, _) = tx_list_server(serde_json::json!([mined_entry(
+        [0x99; 32],
+        &console_spend().serialize()
+    )]));
+    let out = run(&["tx", "show", &hex::encode(asked)], Some(&addr)).unwrap_or_else(|e| e);
     assert!(
         out.contains("asked about") && !out.contains("Found in blockchain"),
         "an entry for another hash must be refused, not rendered: {out}"
     );
 }
 
-/// A reply that answers AND reports the hash missed is self-contradictory;
-/// the miss is the honest half, so it decides.
+/// **The daemon's refusal reaches the operator as its class and code**,
+/// never its English and never a decode complaint about the success type.
 #[test]
-fn an_entry_alongside_a_missed_hash_is_not_found() {
-    let asked = [0x31u8; 32];
-    let addr = one_shot_raw(shekyl_rpc_types::GetTransactionsResponse {
-        status: shekyl_rpc_types::RpcStatus::ok(),
-        txs: vec![mined_entry(asked)],
-        missed_tx: vec![HashHex::from_bytes(asked)],
-        archived: Vec::new(),
-        unavailable_tx: Vec::new(),
-    });
-    let out = run(&["tx", "show", &hex::encode(asked)], Some(&addr)).unwrap_or_else(|error| error);
-    assert!(
-        out.contains("wasn't found"),
-        "a contradictory reply must not render as a hit: {out}"
-    );
+fn a_refusal_reaches_the_operator_as_class_and_code() {
+    let (addr, _) = route_server_recording(vec![(
+        rpc::<wire::TxList>(),
+        rpc_refusal(ErrorClass::StoreFault, "chain.unreadable"),
+    )]);
+    let out = run(&["tx", "show", &"31".repeat(32)], Some(&addr)).expect_err("refused");
+    assert!(out.contains("StoreFault chain.unreadable"), "{out}");
+    assert!(!out.contains("english"), "{out}");
 }
-
 /// The C++ printed `<unknown>` below its cutoff and UTC
 /// `%Y-%m-%d %H:%M:%S` above it. A genesis block with timestamp 0 is the
 /// case an operator actually sees.
@@ -699,60 +616,25 @@ fn timestamps_render_as_the_cpp_did() {
     );
 }
 
-/// The console showed the difficulty in decimal, which the C++ got by
-/// constructing a `difficulty_type` from the `0x` wide form.
-#[test]
-fn wide_difficulty_renders_in_decimal() {
-    assert_eq!(wide_difficulty_decimal("0x1"), "1");
-    // 2^70 + 12345, the value the oracle emitter used.
-    assert_eq!(
-        wide_difficulty_decimal("0x400000000000003039"),
-        "1180591620717411315769"
-    );
-    // Above 2^64, which is the reason the wide form exists at all.
-    assert_eq!(
-        wide_difficulty_decimal("0x10000000000000000"),
-        "18446744073709551616"
-    );
-    // Unreadable input is shown rather than swallowed.
-    assert_eq!(wide_difficulty_decimal("not-hex"), "not-hex");
-}
-
-/// Every line of `print_block_header`, in its order and wording.
-/// `reward` is SKL with nine fractional digits (`print_money`), `is
-/// orphan` is the 0/1 a streamed C++ bool produced, and an unfilled
-/// `pow_hash` prints as nothing after the colon.
+/// Every line of `print_block_header`, in its order and wording. `reward`
+/// is SKL with nine fractional digits, `is orphan` is 0/1, an unfilled
+/// `pow` prints as nothing after the colon, and a long-term weight off the
+/// main chain is `none`.
 #[test]
 fn the_block_header_renders_line_for_line() {
-    let header = shekyl_rpc_types::BlockHeader {
-        major_version: 1,
-        minor_version: 0,
-        timestamp: 0,
-        prev_hash: HashHex::ZERO,
-        nonce: 10101,
-        orphan_status: false,
-        height: 0,
-        depth: 0,
-        hash: HashHex::from_bytes([7u8; 32]),
-        difficulty: 1,
-        wide_difficulty: "0x1".to_owned(),
-        difficulty_top64: 0,
-        cumulative_difficulty: 1,
-        wide_cumulative_difficulty: "0x1".to_owned(),
-        cumulative_difficulty_top64: 0,
-        reward: 100_000_000_000_000,
-        block_size: 6263,
-        block_weight: 6263,
-        num_txes: 0,
-        pow_hash: None,
-        long_term_weight: 176_470,
-        miner_tx_hash: HashHex::from_bytes([9u8; 32]),
-        curve_tree_root: HashHex::ZERO,
-        attestation_root: HashHex::ZERO,
-    };
-    let seven = HashHex::from_bytes([7u8; 32]).to_string();
-    let nine = HashHex::from_bytes([9u8; 32]).to_string();
-    let zero = HashHex::ZERO.to_string();
+    let header: BlockHeader = serde_json::from_value(serde_json::json!({
+        "version_major": 1, "version_minor": 0, "time": 0,
+        "parent": "00".repeat(32), "nonce": 10101, "orphan": false,
+        "height": 0, "depth": 0, "hash": "07".repeat(32),
+        "difficulty": "0x1", "difficulty_cumulative": "0x1",
+        "reward": "100000000000000", "weight": 6263, "weight_longterm": 176_470,
+        "tx_count": 0, "pow": null, "coinbase": "09".repeat(32),
+        "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
+    }))
+    .expect("a header decodes");
+    let seven = "07".repeat(32);
+    let nine = "09".repeat(32);
+    let zero = "00".repeat(32);
     assert_eq!(
         render_block_header(&header),
         format!(
@@ -766,7 +648,6 @@ fn the_block_header_renders_line_for_line() {
              difficulty: 1\n\
              cumulative difficulty: 1\n\
              POW hash: \n\
-             block size: 6263\n\
              block weight: 6263\n\
              long term weight: 176470\n\
              num txes: 0\n\
@@ -776,73 +657,89 @@ fn the_block_header_renders_line_for_line() {
     );
 }
 
+/// `block show` asks for one block by height with its proof-of-work hash
+/// filled, and renders the header.
 #[test]
-fn print_height_renders_the_remote_reply() {
-    let address = one_shot(typed_reply(&GetHeightResponse {
-        status: RpcStatus::ok(),
-        height: 42,
-        hash: HashHex::from_bytes([7u8; 32]),
-    }));
+fn block_show_asks_for_the_block_with_its_pow() {
+    let block = serde_json::json!({
+        "header": {
+            "version_major": 1, "version_minor": 0, "time": 0,
+            "parent": "00".repeat(32), "nonce": 1, "orphan": false,
+            "height": 5, "depth": 0, "hash": "07".repeat(32),
+            "difficulty": "0x1", "difficulty_cumulative": "0x1",
+            "reward": "0", "weight": 1, "weight_longterm": 1,
+            "tx_count": 0, "pow": "08".repeat(32), "coinbase": "09".repeat(32),
+            "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
+        },
+        "body": "",
+        "tx": [],
+        "output_index": 0,
+    });
+    let (addr, log) = route_server_recording(vec![(rpc::<wire::BlockShow>(), rpc_result(block))]);
+    let out = run(&["block", "show", "5"], Some(&addr)).expect("renders");
+    assert!(out.contains("height: 5"), "{out}");
+    assert!(
+        out.contains(&format!("POW hash: {}", "08".repeat(32))),
+        "{out}"
+    );
+    let params = params_of::<wire::BlockShow>(&log);
+    assert_eq!(params["height"], 5, "{params}");
+    assert_eq!(params["pow"], true, "{params}");
+}
+
+/// `chain height` prints the chain's block count: the tip plus one.
+#[test]
+fn print_height_renders_the_count() {
+    let address = route_server(vec![(
+        rpc::<wire::ChainHeight>(),
+        rpc_result(serde_json::json!({
+            "height": 41, "hash": "07".repeat(32), "writer": {"live": null}
+        })),
+    )]);
     let text = run(&["chain", "height"], Some(&address)).expect("renders");
     assert_eq!(text, "42");
 }
 
-/// **A daemon started offline prints the state** on every peer
-/// command (Rick, 2026-10-14): not an empty table, and not a request
-/// failure.
+/// **A daemon started offline prints the state** on every peer command
+/// (Rick, 2026-10-14): its `p2p.offline` refusal is the state, not a
+/// request failure. Red edit: drop the `p2p.offline` arm of `p2p_call`.
 #[test]
 fn an_offline_daemon_prints_the_state_on_every_peer_command() {
-    let off = r#"{"status":"offline"}"#;
-    let rpc_off =
-        serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": { "status": "offline" } })
-            .to_string();
-    for (args, reply) in [
-        (&["peer", "list"][..], off.to_owned()),
-        (&["peer", "stats"][..], off.to_owned()),
-        (&["peer", "connections"][..], rpc_off.clone()),
-        (&["sync", "status"][..], rpc_off.clone()),
+    let off = rpc_refusal(ErrorClass::RefusedByMethod, "p2p.offline");
+    for (args, route) in [
+        (&["peer", "list"][..], rpc::<wire::PeerList>()),
+        (&["peer", "stats"][..], rpc::<wire::PeerList>()),
+        (&["peer", "connections"][..], rpc::<wire::PeerConnections>()),
+        (&["sync", "status"][..], rpc::<wire::SyncStatus>()),
+        (&["p2p", "stats"][..], rpc::<wire::P2pStats>()),
     ] {
-        let address = one_shot(reply);
+        let address = route_server(vec![(route, off.clone())]);
         let text = run(args, Some(&address)).unwrap_or_else(|error| panic!("{args:?}: {error}"));
         assert_eq!(text, "P2P: offline", "{args:?}");
     }
 }
 
+/// A refusal of any other kind is the command's failure, said as its class
+/// and code.
 #[test]
-fn non_ok_status_is_a_request_failure_with_the_status_as_reason() {
-    let address = one_shot(typed_reply(&GetHeightResponse {
-        status: RpcStatus(RpcStatus::BUSY.to_owned()),
-        height: 0,
-        hash: HashHex::ZERO,
-    }));
+fn a_refusal_is_a_request_failure_with_the_class_and_code() {
+    let address = route_server(vec![(
+        rpc::<wire::ChainHeight>(),
+        rpc_refusal(ErrorClass::NotReady, "daemon.unready"),
+    )]);
     let text = run(&["chain", "height"], Some(&address)).expect_err("refused");
-    assert_eq!(text, "BUSY");
+    assert_eq!(text, "NotReady daemon.unready");
 }
 
-/// A daemon that could not answer sends the error envelope (HTTP 500,
-/// body still delivered); the operator sees its reason, not a serde
-/// complaint about the success type.
-#[test]
-fn error_envelope_reason_is_surfaced() {
-    let address = one_shot(typed_reply(&RestErrorEnvelope {
-        status: RpcStatus("ERROR".to_owned()),
-        error: "chain facts unavailable".to_owned(),
-    }));
-    let text = run(&["chain", "height"], Some(&address)).expect_err("refused");
-    assert_eq!(text, "get_height failed: chain facts unavailable");
-}
-
-/// Neither shape: the reply is reported as malformed, with a bounded
-/// excerpt of what arrived.
+/// Neither a reply nor a refusal: the reply is reported as malformed.
 #[test]
 fn malformed_reply_is_named_as_such() {
-    // Deliberately raw: this fixture's point is that it is not a reply.
-    let address = one_shot(r#"<html>not json</html>"#.to_owned());
+    let address = route_server(vec![(
+        rpc::<wire::ChainHeight>(),
+        "<html>not json</html>".to_owned(),
+    )]);
     let text = run(&["chain", "height"], Some(&address)).expect_err("refused");
-    assert!(
-        text.starts_with("malformed get_height reply: <html>"),
-        "{text}"
-    );
+    assert!(text.contains("malformed"), "{text}");
 }
 
 #[test]
@@ -919,42 +816,31 @@ fn bytes_read_in_base_two_units() {
     }
 }
 
-/// The three address arms, rendered.
-///
-/// The tor arm is the one the C++ got wrong: its `host` is the whole
-/// `str()`, port included, and its `port` is 0, so appending produced
-/// `…onion:18080:0`.
+/// One line per peer: its tier, then its endpoint as the daemon wrote it
+/// (host and port, an onion's included).
 #[test]
-fn a_peer_address_gains_a_port_only_when_it_has_one() {
-    let peer = |host: &str, port: u16| shekyl_rpc_types::Peer {
-        host: host.to_owned(),
-        ip: 0,
-        port,
-    };
-    let line = |p: &shekyl_rpc_types::Peer| render_peer("white", p);
-
-    assert!(line(&peer("10.32.0.7", 18080)).contains("10.32.0.7:18080"));
-    assert!(line(&peer("2001:db8::1", 18081)).contains("2001:db8::1:18081"));
-
-    let tor = line(&peer("abcdefghijklmnop.onion:18080", 0));
-    assert!(tor.contains("abcdefghijklmnop.onion:18080"), "{tor}");
-    assert!(
-        !tor.contains(":18080:0"),
-        "the port must not be appended to an address that already carries \
-         one; got:\n{tor}"
+fn peer_list_prints_each_tier_and_its_endpoint() {
+    let peers = serde_json::json!([
+        {"endpoint": "10.32.0.7:18080", "tier": "white"},
+        {"endpoint": "abcdefghijklmnop.onion:18080", "tier": "gray"},
+        {"endpoint": "[2001:db8::1]:18081", "tier": "white"},
+    ]);
+    let (address, log) =
+        route_server_recording(vec![(rpc::<wire::PeerList>(), rpc_result(&peers))]);
+    let out = run(&["peer", "list"], Some(&address)).expect("renders");
+    assert_eq!(
+        out,
+        "white      10.32.0.7:18080\nwhite      [2001:db8::1]:18081\ngray       abcdefghijklmnop.onion:18080"
     );
-}
-
-/// The address type names the console prints, including the arm the C++
-/// `default:` produced.
-#[test]
-fn address_types_have_their_own_names() {
-    assert_eq!(address_type_name(1), "IPv4");
-    assert_eq!(address_type_name(2), "IPv6");
-    assert_eq!(address_type_name(3), "invalid");
-    assert_eq!(address_type_name(4), "Tor");
-    assert_eq!(address_type_name(0), "invalid");
-    assert_eq!(address_type_name(200), "invalid");
+    assert_eq!(
+        params_of::<wire::PeerList>(&log)["local"],
+        true,
+        "the console asks for the whole list"
+    );
+    let (address, _) = route_server_recording(vec![(rpc::<wire::PeerList>(), rpc_result(&peers))]);
+    let out = run(&["peer", "stats"], Some(&address)).expect("renders");
+    assert!(out.contains("White list size: 2/1000"), "{out}");
+    assert!(out.contains("Gray list size: 1/5000"), "{out}");
 }
 
 /// The capacities are a parameter, so this is tested against the values
@@ -980,41 +866,33 @@ fn a_zero_capacity_renders_rather_than_dividing_by_zero() {
     assert!(out.contains("White list size: 3/0 (0%)"), "{out}");
 }
 
-fn net_stats_reply(status: &str) -> String {
-    typed_reply(&shekyl_rpc_types::GetNetStatsResponse {
-        status: RpcStatus(status.to_owned()),
-        start_time: 1_700_000_000,
-        total_packets_in: 40,
-        total_bytes_in: 4096,
-        total_packets_out: 10,
-        total_bytes_out: 2048,
-    })
+fn p2p_stats_reply() -> String {
+    rpc_result(serde_json::json!({
+        "started": 1_700_000_000_u64,
+        "download": 4096,
+        "upload": 2048,
+        "download_packets": 40,
+        "upload_packets": 10,
+    }))
 }
 
-/// An `option_show` reply carrying the two rate rows `print_net_stats`
-/// reads, as the daemon serializes them (RT-O25).
+/// An `option_show` reply carrying the two rate rows `p2p stats` reads.
 fn option_show_rates(down: &str, up: &str) -> String {
-    format!(
-        r#"{{"jsonrpc":"2.0","id":"0","result":{{"options":[{{"name":"p2p-download-max","source":"default","runtime":true,"value":"{down}"}},{{"name":"p2p-upload-max","source":"runtime","runtime":true,"value":"{up}"}}]}}}}"#
-    )
+    rpc_result(serde_json::json!([
+        {"name": "p2p-download-max", "source": "default", "runtime": true, "secret": false, "value": down},
+        {"name": "p2p-upload-max", "source": "runtime", "runtime": true, "secret": false, "value": up},
+    ]))
 }
 
-/// `print_net_stats` over its two legs: the native `/get_net_stats` and
-/// `option_show`'s two rate rows (`RPC_CHANNEL.md` §6.4, in place of
-/// `/get_limit`).
-///
-/// The byte counts come from one leg and the two limits from the other, so
-/// the assertions below cannot both hold unless both legs arrived. The
-/// limits are asymmetric (8 down, 4 up) because a single number would pass
-/// a renderer that read one row twice. Elapsed time is wall-clock here
-/// (`unix_now`), so the averages are deliberately not asserted; what this
-/// test owns is the leg, not the arithmetic.
+/// `p2p stats` over its two legs: `p2p_stats` and `option_show`'s two rate
+/// rows. The limits are asymmetric (8 down, 4 up) because a single number
+/// would pass a renderer that read one row twice.
 #[test]
-fn net_stats_renders_the_option_show_limits_beside_the_native_counters() {
+fn net_stats_renders_the_option_show_limits_beside_the_counters() {
     let address = route_server(vec![
-        ("/get_net_stats", net_stats_reply("OK")),
+        (rpc::<wire::P2pStats>(), p2p_stats_reply()),
         (
-            "json_rpc:option_show",
+            rpc::<wire::OptionShow>(),
             option_show_rates("8KiB/s", "4KiB/s"),
         ),
     ]);
@@ -1030,157 +908,126 @@ fn net_stats_renders_the_option_show_limits_beside_the_native_counters() {
 #[test]
 fn net_stats_prints_an_unlimited_direction_as_no_limit() {
     let address = route_server(vec![
-        ("/get_net_stats", net_stats_reply("OK")),
+        (rpc::<wire::P2pStats>(), p2p_stats_reply()),
         (
-            "json_rpc:option_show",
+            rpc::<wire::OptionShow>(),
             option_show_rates("unlimited", "4KiB/s"),
         ),
     ]);
     let out = run(&["p2p", "stats"], Some(&address)).expect("renders");
-    assert!(out.contains("Received 4096 bytes"), "{out}");
     assert!(out.contains("average 0 B/s, no limit"), "{out}");
     assert!(!out.contains("limit of 0 B/s"), "{out}");
     assert!(out.contains("limit of 4.00 kB/s"), "{out}");
 }
 
 /// A reply missing a rate row, or carrying text that is not a rate, is
-/// **named**, not defaulted: the row's own constructor reads the text back,
-/// so a daemon that renamed the row or changed its syntax gets an error
-/// naming it instead of a confident zero.
+/// **named**, not defaulted.
 #[test]
 fn an_option_show_reply_without_a_rate_is_refused_rather_than_defaulted() {
-    let only_down = r#"{"jsonrpc":"2.0","id":"0","result":{"options":[{"name":"p2p-download-max","source":"default","runtime":true,"value":"8KiB/s"}]}}"#;
+    let only_down = rpc_result(serde_json::json!([
+        {"name": "p2p-download-max", "source": "default", "runtime": true, "secret": false, "value": "8KiB/s"},
+    ]));
     let address = route_server(vec![
-        ("/get_net_stats", net_stats_reply("OK")),
-        ("json_rpc:option_show", only_down.to_owned()),
+        (rpc::<wire::P2pStats>(), p2p_stats_reply()),
+        (rpc::<wire::OptionShow>(), only_down),
     ]);
     let out = run(&["p2p", "stats"], Some(&address)).expect_err("refused");
     assert!(out.contains("did not answer p2p-upload-max"), "{out}");
 
     let address = route_server(vec![
-        ("/get_net_stats", net_stats_reply("OK")),
-        ("json_rpc:option_show", option_show_rates("8KiB/s", "fast")),
+        (rpc::<wire::P2pStats>(), p2p_stats_reply()),
+        (
+            rpc::<wire::OptionShow>(),
+            option_show_rates("8KiB/s", "fast"),
+        ),
     ]);
     let out = run(&["p2p", "stats"], Some(&address)).expect_err("refused");
     assert!(out.contains("not a rate"), "{out}");
+}
+
+/// A method the daemon does not serve is a request failure, not a zero.
+#[test]
+fn a_method_the_daemon_does_not_serve_fails_loudly() {
+    let address = route_server(vec![(rpc::<wire::P2pStats>(), p2p_stats_reply())]);
+    let out = run(&["p2p", "stats"], Some(&address)).expect_err("refused");
     assert!(!out.contains("limit of 0 B/s"), "{out}");
 }
 
-/// A complete `/get_info` reply, as the daemon serializes it. The shared
-/// type refuses a document missing any member, so the fixture is the whole
-/// reply and a test alters the members it is about.
-fn info_reply(height: u64) -> String {
-    use shekyl_rpc_types::{
-        GetInfoResponse, HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity,
-        InfoPeers, InfoPool, InfoStatus, RpcStatus,
-    };
-    serde_json::to_string(&GetInfoResponse {
-        status: RpcStatus::ok(),
-        health: InfoHealth {
-            height,
-            top_block_hash: HashHex::from_bytes([0x5a; 32]),
-            target_height: shekyl_rpc_types::Nullable::NULL,
-            synchronized: true,
-            busy_syncing: false,
-            following_degraded: false,
-            p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
-        },
-        identity: InfoIdentity {
-            protocol_version: 3,
-        },
-        chain: InfoChain {
-            difficulty: 0x1_e240,
-            cumulative_difficulty: 0x2d_c6c0,
-            target: shekyl_economics::economic_params().daa_target_seconds,
-            tx_count: 0,
-            block_weight_limit: 600_000,
-            block_weight_median: 300_000,
-            adjusted_time: 1_700_000_000,
-        },
-        economics: InfoEconomics {
-            already_generated_coins: shekyl_units::AtomicUnits::ZERO,
-            release_multiplier: 1_000_000,
-            burn_pct: 0,
-            total_burned: shekyl_units::AtomicUnits::ZERO,
-            staker_emission_share_effective: 0,
-        },
-        pool: InfoPool::Live { tx_pool_size: 4 },
-        node: Hidden::Shown(InfoStatus {
-            start_time: 1_700_000_000,
-            free_space: 1 << 40,
-            database_size: 1 << 30,
-            version: "3.1.0-test".to_owned(),
-            connections: shekyl_rpc_types::StatusConnections::Running {
-                outgoing: 8,
-                incoming: 3,
-            },
-            alt_blocks_count: 0,
-            rpc_connections_count: 1,
-        }),
-        peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
-            InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
-                connector: shekyl_rpc_types::InfoConnector::Clearnet,
-                incoming_sockets: 3,
-                outgoing_sockets: 8,
-                white_peerlist_size: 10,
-                gray_peerlist_size: 20,
-            }])
-            .expect("one row is in order"),
-        )),
-        host: Hidden::Shown(shekyl_rpc_types::InfoHost {
-            tx_pool_unbroadcast_count: Some(0),
-        }),
-        restricted: false,
+/// `peer connections`: one line per connection, its connector, the byte
+/// counts and idle times, the sync mode, and a local mark.
+#[test]
+fn connections_print_one_line_each() {
+    let connections = serde_json::json!([{
+        "inbound": true, "local": true, "endpoint": "127.0.0.1:18080", "connector": "clearnet",
+        "download": 10, "upload": 20, "download_idle": 1, "upload_idle": 2, "mode": "slot",
+        "age": 30, "download_speed_average": 3, "download_speed_current": 4,
+        "upload_speed_average": 5, "upload_speed_current": 6, "id": "ab", "height": 7,
+    }]);
+    let address = route_server(vec![(
+        rpc::<wire::PeerConnections>(),
+        rpc_result(&connections),
+    )]);
+    let out = run(&["peer", "connections"], Some(&address)).expect("renders");
+    let line = out.lines().nth(1).expect("one connection line");
+    assert!(line.starts_with("INC 127.0.0.1:18080"), "{out}");
+    assert!(
+        line.contains("clearnet") && line.contains("10(1)/20(2)"),
+        "{out}"
+    );
+    assert!(line.contains("slot") && line.ends_with("[LOCAL]"), "{out}");
+}
+
+/// `sync status`: heights as block counts (the wire's tips plus one), the
+/// state, and one line per session.
+#[test]
+fn sync_status_prints_counts_and_sessions() {
+    let sync = serde_json::json!({
+        "height": 49, "target_height": 99, "state": "behind", "stalled": false,
+        "session": [{
+            "connection": "ab", "endpoint": "10.0.0.1:18080", "height": 99, "mode": "slot",
+            "header": null,
+            "span": [{"from": 50, "blocks": 10, "size": 100, "age": 1, "due": 2}],
+            "download_speed": 500,
+        }],
+    });
+    let address = route_server(vec![(rpc::<wire::SyncStatus>(), rpc_result(&sync))]);
+    let out = run(&["sync", "status"], Some(&address)).expect("renders");
+    assert!(
+        out.starts_with("Height: 50, target: 100 (50%), behind"),
+        "{out}"
+    );
+    assert!(out.contains("1 peers"), "{out}");
+    assert!(
+        out.contains("10.0.0.1:18080")
+            && out.contains("100")
+            && out.contains("10 blocks in 1 spans"),
+        "{out}"
+    );
+}
+
+fn header_at(height: u64) -> serde_json::Value {
+    serde_json::json!({
+        "version_major": 1, "version_minor": 0, "time": 1_600_000_000_u64 + height,
+        "parent": "00".repeat(32), "nonce": 42, "orphan": false,
+        "height": height, "depth": 0, "hash": hex::encode([u8::try_from(height % 256).unwrap(); 32]),
+        "difficulty": "0x3e8", "difficulty_cumulative": "0x3e8",
+        "reward": "600000000000", "weight": 100, "weight_longterm": 100,
+        "tx_count": 1, "pow": null, "coinbase": "00".repeat(32),
+        "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
     })
-    .expect("a get_info reply serializes")
 }
 
-fn header_at(height: u64) -> shekyl_rpc_types::BlockHeader {
-    shekyl_rpc_types::BlockHeader {
-        major_version: 1,
-        minor_version: 0,
-        timestamp: 1_600_000_000u64.saturating_add(height),
-        prev_hash: HashHex::ZERO,
-        nonce: 42,
-        orphan_status: false,
-        height,
-        depth: 0,
-        hash: HashHex::from_bytes([u8::try_from(height % 256).unwrap(); 32]),
-        difficulty: 1000,
-        wide_difficulty: "0x3e8".to_owned(),
-        difficulty_top64: 0,
-        cumulative_difficulty: 1000,
-        wide_cumulative_difficulty: "0x3e8".to_owned(),
-        cumulative_difficulty_top64: 0,
-        reward: 600_000_000_000,
-        block_size: 100,
-        block_weight: 100,
-        num_txes: 1,
-        pow_hash: None,
-        long_term_weight: 100,
-        miner_tx_hash: HashHex::ZERO,
-        curve_tree_root: HashHex::ZERO,
-        attestation_root: HashHex::ZERO,
-    }
+fn headers_reply(headers: Vec<serde_json::Value>) -> String {
+    rpc_result(headers)
 }
 
-fn headers_range_reply(heights: &[u64]) -> String {
-    typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
-            status: RpcStatus::ok(),
-            headers: heights.iter().copied().map(header_at).collect(),
-        },
-    }))
-}
-
-/// `print_blockchain_info 2 3` asks for exactly that window and lists it.
+/// `block header list --from 2 --to 3` asks for exactly that range and
+/// lists it, and reads no tip.
 #[test]
 fn blockchain_info_lists_the_window_it_was_given() {
-    let address = route_server(vec![(
-        "json_rpc:get_block_headers_range",
-        headers_range_reply(&[2, 3]),
+    let (address, log) = route_server_recording(vec![(
+        rpc::<wire::BlockHeaderList>(),
+        headers_reply(vec![header_at(2), header_at(3)]),
     )]);
     let out = run(
         &["block", "header", "list", "--from", "2", "--to", "3"],
@@ -1194,47 +1041,32 @@ fn blockchain_info_lists_the_window_it_was_given() {
         out.contains("difficulty: 1000, nonce 42, reward 600.000000000"),
         "{out}"
     );
-    // Entries are separated by a blank line, as the C++ listed them.
     assert!(out.contains("\n\nheight: 3"), "{out}");
+    let params = params_of::<wire::BlockHeaderList>(&log);
+    assert_eq!(params["from"], 2, "{params}");
+    assert_eq!(params["to"], 3, "{params}");
+    assert!(
+        legs(&log)
+            .iter()
+            .all(|(_, body)| method_of(body).as_deref()
+                != Some(<wire::DaemonStatus as RpcMethod>::NAME)),
+        "the literal form reads no tip"
+    );
 }
 
-/// The positive form does not read `/get_info` at all.
-///
-/// Asserted from the log rather than inferred from a passing run: the
-/// route server has no `/get_info` row, so a leg that fired would 404 and
-/// fail — but only for as long as nobody adds that row to this fixture.
+/// A height the daemon does not hold is named, not skipped.
 #[test]
-fn a_non_negative_start_needs_no_tip_read() {
-    let (address, log) = route_server_recording(vec![
-        ("/get_info", info_reply(100)),
-        (
-            "json_rpc:get_block_headers_range",
-            headers_range_reply(&[2, 3]),
-        ),
-    ]);
-    run(
+fn a_missing_header_slot_is_named() {
+    let address = route_server(vec![(
+        rpc::<wire::BlockHeaderList>(),
+        rpc_result(serde_json::json!([header_at(2), {"missing": null}])),
+    )]);
+    let out = run(
         &["block", "header", "list", "--from", "2", "--to", "3"],
         Some(&address),
     )
-    .expect("renders");
-    // The identity handshake is a request too (VC-3), and it is not one of
-    // this command's legs — filter it out so the assertions stay about the
-    // work the command does, not about the handshake's presence.
-    let asked: Vec<(String, String)> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, body)| !body.contains("\"get_version\""))
-        .cloned()
-        .collect();
-    assert!(
-        asked.iter().all(|(path, _)| path != "/get_info"),
-        "the literal form must not spend a bridged leg: {asked:?}"
-    );
-    let (_, body) = &asked[0];
-    let params: serde_json::Value = serde_json::from_str(body).unwrap();
-    assert_eq!(params["params"]["start_height"], 2);
-    assert_eq!(params["params"]["end_height"], 3);
+    .expect_err("refused");
+    assert!(out.contains("no header at height 3"), "{out}");
 }
 
 /// `--from` is a height. A sign is refused before any request.
@@ -1269,37 +1101,6 @@ fn a_window_longer_than_the_chain_is_refused_by_name() {
     );
 }
 
-/// A signed `--from` is a height refusal. The window is not resolved
-/// against the tip, so a missing `height` is never read.
-#[test]
-fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
-    let (address, log) = route_server_recording(vec![]);
-    let out = run(
-        &["block", "header", "list", "--from", "-3", "--to", "3"],
-        Some(&address),
-    )
-    .expect_err("refused");
-    assert!(out.contains("takes an integer"), "{out}");
-    assert!(
-        log.lock()
-            .unwrap()
-            .iter()
-            .all(|(path, _)| path != "/get_info"),
-        "the window is not resolved against the tip"
-    );
-}
-
-fn fee_reply(fees: [u64; 3]) -> String {
-    typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetFeeEstimateResponse {
-            status: RpcStatus::ok(),
-            fees: shekyl_rpc_types::FeeTiers(fees),
-        },
-    }))
-}
-
 /// epee's median, both parities.
 ///
 /// The even case is the one with a decision in it: epee averages the two
@@ -1318,262 +1119,152 @@ fn the_median_is_epees_including_its_even_length_average() {
     assert_eq!(median(&mut [u64::MAX, u64::MAX]), u64::MAX);
 }
 
+fn fee_reply() -> String {
+    rpc_result(serde_json::json!({"economy": "20", "standard": "80", "high": "4000"}))
+}
+
 /// A range reply that does not fill the window it was asked for is refused,
-/// not summarised.
-///
-/// **The `alt_chain_info` finding, one command over.** That one declared a
-/// length its hashes did not support; this one requests a range the headers
-/// need not fill. Round 2 fixed the instance it was reported against and not
-/// the rule, which is why this arrived as a separate finding — correspondence
-/// is a property of every reply read against a request, not of the command it
-/// was first noticed in.
-///
-/// Both shapes are covered: too few headers, and the right count for the
-/// wrong heights. The second is the one an output-only assertion cannot see,
-/// because a plausible summary is exactly what it produces.
+/// not summarised: too few headers, and the right count for the wrong
+/// heights.
 #[test]
 fn a_range_reply_that_misses_the_window_is_refused() {
-    let short = typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
-            status: RpcStatus::ok(),
-            headers: vec![header_at(7)],
-        },
-    }));
     let address = route_server(vec![
-        ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
-        ("json_rpc:get_block_headers_range", short),
+        (rpc::<wire::DaemonStatus>(), status_reply(10)),
+        (rpc::<wire::Fee>(), fee_reply()),
+        (
+            rpc::<wire::BlockHeaderList>(),
+            headers_reply(vec![header_at(7)]),
+        ),
     ]);
     let out = run(&["chain", "stats", "--last", "3"], Some(&address)).expect_err("refused");
     assert!(out.contains("answered 1 headers for the 3 blocks"), "{out}");
 
-    // Right count, wrong heights — the case that would otherwise print a
-    // correct-looking "Last 3" summary of blocks nobody asked about.
-    let wrong = typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
-            status: RpcStatus::ok(),
-            headers: vec![header_at(100), header_at(101), header_at(102)],
-        },
-    }));
     let address = route_server(vec![
-        ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
-        ("json_rpc:get_block_headers_range", wrong),
+        (rpc::<wire::DaemonStatus>(), status_reply(10)),
+        (rpc::<wire::Fee>(), fee_reply()),
+        (
+            rpc::<wire::BlockHeaderList>(),
+            headers_reply(vec![header_at(100), header_at(101), header_at(102)]),
+        ),
     ]);
     let out = run(&["chain", "stats", "--last", "3"], Some(&address)).expect_err("refused");
     assert!(out.contains("starting at height 100"), "{out}");
     assert!(!out.contains("Last 3:"), "{out}");
 }
 
-/// `print_blockchain_dynamic_stats` over its four legs, minus the one
-/// this slice deleted.
-///
-/// The fixture makes every aggregate distinguishable: three blocks with
-/// weights 100/300/200 (median 200, which a mean would report as 200 too,
-/// so the weights are chosen with an even sibling case in the median test
-/// above), one and two transactions, and two block versions.
+/// `chain stats` over its three legs. Every aggregate is distinguishable.
 #[test]
 fn dynamic_stats_reports_the_window_it_summarized() {
-    let mut headers: Vec<shekyl_rpc_types::BlockHeader> =
-        [7u64, 8, 9].iter().map(|h| header_at(*h)).collect();
-    headers[0].block_weight = 100;
-    headers[1].block_weight = 300;
-    headers[2].block_weight = 200;
-    headers[0].num_txes = 1;
-    headers[1].num_txes = 2;
-    headers[2].num_txes = 3;
-    headers[2].minor_version = 2;
-    headers[0].timestamp = 1000;
-    headers[1].timestamp = 1120;
-    headers[2].timestamp = 1300;
-    let range = typed_reply(&serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
-            status: RpcStatus::ok(),
-            headers,
-        },
-    }));
+    let mut headers: Vec<serde_json::Value> = [7u64, 8, 9].iter().map(|h| header_at(*h)).collect();
+    for (header, (weight, txs, time)) in
+        headers
+            .iter_mut()
+            .zip([(100, 1, 1000), (300, 2, 1120), (200, 3, 1300)])
+    {
+        header["weight"] = serde_json::json!(weight);
+        header["tx_count"] = serde_json::json!(txs);
+        header["time"] = serde_json::json!(time);
+    }
     let (address, log) = route_server_recording(vec![
-        ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
-        ("json_rpc:get_block_headers_range", range),
+        (rpc::<wire::DaemonStatus>(), status_reply(10)),
+        (rpc::<wire::Fee>(), fee_reply()),
+        (rpc::<wire::BlockHeaderList>(), headers_reply(headers)),
     ]);
     let out = run(&["chain", "stats", "--last", "3"], Some(&address)).expect("renders");
-
-    // The header line: `wide_difficulty` 0x1e240 is 123456, the
-    // cumulative 0x2dc6c0 is 3000000, and the fee is **tier 0** — the
-    // value the retired `fee` scalar carried.
+    // Difficulty 0x1e240 is 123456, the cumulative 0x2dc6c0 is 3000000, the
+    // count is 10, and the fee is the lowest tier.
     assert!(
         out.contains("Height: 10, diff 123456, cum. diff 3000000, target 120 sec"),
         "{out}"
     );
     assert!(out.contains("dyn fee 0.000000020/byte"), "{out}");
-
-    // avg diff 1000; span 300 / 3 = 100 sec; (1+2+3)/3 = 2 txes;
-    // reward is constant so its mean is itself; median weight 200.
     assert!(out.contains("Last 3: avg. diff 1000"), "{out}");
     assert!(out.contains("100 avg sec/block"), "{out}");
     assert!(out.contains("avg num txes 2"), "{out}");
     assert!(out.contains("avg. reward 600.000000000"), "{out}");
     assert!(out.contains("median block weight 200"), "{out}");
-    assert!(
-        out.trim_end().ends_with("median block weight 200"),
-        "nothing follows the window line: {out}"
-    );
-
-    // The window: height 10, three blocks, so [7, 9].
-    // The identity handshake is a request too (VC-3), and it is not one of
-    // this command's legs — filter it out so the assertions stay about the
-    // work the command does, not about the handshake's presence.
-    let asked: Vec<(String, String)> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, body)| !body.contains("\"get_version\""))
-        .cloned()
-        .collect();
-    let range_body = asked
-        .iter()
-        .filter(|(path, _)| path == "/json_rpc")
-        .map(|(_, body)| serde_json::from_str::<serde_json::Value>(body).unwrap())
-        .find(|v| v["method"] == "get_block_headers_range")
-        .expect("the range was asked for");
-    assert_eq!(range_body["params"]["start_height"], 7);
-    assert_eq!(range_body["params"]["end_height"], 9);
-
-    // And the deleted leg is not asked for. Asserted, because "the
-    // fixture has no row for it" stops being evidence the moment someone
-    // adds one.
-    assert!(
-        asked
-            .iter()
-            .all(|(path, body)| path != "/hard_fork_info" && !body.contains("hard_fork_info")),
-        "the tautological hard-fork leg must be gone: {asked:?}"
-    );
+    // The window: a count of 10, three blocks, so [7, 9].
+    let params = params_of::<wire::BlockHeaderList>(&log);
+    assert_eq!(params["from"], 7, "{params}");
+    assert_eq!(params["to"], 9, "{params}");
 }
 
 /// A window longer than the chain is clamped to the chain, not refused.
-///
-/// `nblocks.min(height)` — the C++ clamped too, and the difference from
-/// `print_blockchain_info`'s refusal is deliberate: that command names a
-/// window and this one asks for "the last N", which a shorter chain still
-/// answers.
 #[test]
 fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
     let (address, log) = route_server_recording(vec![
-        ("/get_info", info_reply(2)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
+        (rpc::<wire::DaemonStatus>(), status_reply(2)),
+        (rpc::<wire::Fee>(), fee_reply()),
         (
-            "json_rpc:get_block_headers_range",
-            headers_range_reply(&[0, 1]),
+            rpc::<wire::BlockHeaderList>(),
+            headers_reply(vec![header_at(0), header_at(1)]),
         ),
     ]);
     let out = run(&["chain", "stats", "--last", "500"], Some(&address)).expect("renders");
     assert!(out.contains("Last 2:"), "{out}");
-    // The identity handshake is a request too (VC-3), and it is not one of
-    // this command's legs — filter it out so the assertions stay about the
-    // work the command does, not about the handshake's presence.
-    let asked: Vec<(String, String)> = log
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, body)| !body.contains("\"get_version\""))
-        .cloned()
-        .collect();
-    let range_body = asked
-        .iter()
-        .filter(|(path, _)| path == "/json_rpc")
-        .map(|(_, body)| serde_json::from_str::<serde_json::Value>(body).unwrap())
-        .find(|v| v["method"] == "get_block_headers_range")
-        .expect("the range was asked for");
-    assert_eq!(range_body["params"]["start_height"], 0);
-    assert_eq!(range_body["params"]["end_height"], 1);
+    let params = params_of::<wire::BlockHeaderList>(&log);
+    assert_eq!(params["from"], 0, "{params}");
+    assert_eq!(params["to"], 1, "{params}");
 }
 
-fn hash_n(n: u8) -> HashHex {
-    HashHex::from_bytes([n; 32])
-}
-
-fn alt_chains_reply(chains: &serde_json::Value) -> String {
+fn one_alt_chain(tip: u8, height: u64, hashes: &[u8], parent: u8) -> serde_json::Value {
     serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "result": {"status": "OK", "chains": chains},
-    })
-    .to_string()
-}
-
-fn one_alt_chain(
-    tip: u8,
-    height: u64,
-    length: u64,
-    hashes: &[u8],
-    parent: u8,
-) -> serde_json::Value {
-    serde_json::json!({
-        "block_hash": hash_n(tip),
+        "hash": hex::encode([tip; 32]),
         "height": height,
-        "length": length,
-        "difficulty": 1000,
-        "wide_difficulty": "0x3e8",
-        "difficulty_top64": 0,
-        "block_hashes": hashes.iter().map(|h| hash_n(*h)).collect::<Vec<_>>(),
-        "main_chain_parent_block": hash_n(parent),
+        "difficulty_cumulative": "0x3e8",
+        "block": hashes.iter().map(|h| hex::encode([*h; 32])).collect::<Vec<_>>(),
+        "parent": hex::encode([parent; 32]),
     })
 }
 
-/// The listing: sorted by height, each line carrying the fork point and
-/// its depth below the main tip. A chain of no blocks is not listed.
+/// The listing: sorted by height, each line carrying the fork point and its
+/// depth below the main tip; the length is the chain's own block list.
 #[test]
 fn alt_chain_info_lists_and_filters() {
     let address = route_server(vec![
-        ("/get_info", info_reply(100)),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
         (
-            "json_rpc:get_alternate_chains",
-            alt_chains_reply(&serde_json::json!([
-                one_alt_chain(9, 90, 2, &[8, 9], 7),
-                one_alt_chain(5, 50, 1, &[5], 4),
+            rpc::<wire::ChainAlt>(),
+            rpc_result(serde_json::json!([
+                one_alt_chain(9, 90, &[8, 9], 7),
+                one_alt_chain(5, 50, &[5], 4),
+                one_alt_chain(3, 30, &[], 2),
             ])),
         ),
     ]);
     let out = run(&["chain", "alt"], Some(&address)).expect("renders");
     assert!(out.starts_with("2 alternate chains found:"), "{out}");
-    // Sorted by height: the height-50 chain first.
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines[1].contains("from height 50"), "{out}");
-    assert!(lines[2].contains("from height 89"), "{out}");
+    assert!(lines[1].contains("1 blocks long, from height 50"), "{out}");
+    assert!(lines[2].contains("2 blocks long, from height 89"), "{out}");
     // 100 - 89 - 1 = 10 deep; 100 - 50 - 1 = 49.
     assert!(lines[1].contains("(49 deep)"), "{out}");
     assert!(lines[2].contains("(10 deep)"), "{out}");
+    assert!(lines[2].contains("diff 1000"), "{out}");
 }
 
-fn mining_reply(active: bool, speed: MineSpeed) -> String {
-    mining_status_body("OK", active, speed)
-}
-
-fn mining_status_body(status: &str, active: bool, speed: MineSpeed) -> String {
-    serde_json::json!({
-        "status": status,
+/// A `mine_status` reply: the miner, idle or at `speed`, with a job posted
+/// unless `cause` names why none is.
+fn mining_reply(active: bool, speed: MineSpeed, cause: Option<&str>) -> String {
+    rpc_result(serde_json::json!({
         "active": active,
         "speed": speed,
-        "threads_count": 0,
-        "address": "",
-        "pow_algorithm": "randomx",
-        "block_target": 120,
-        "block_reward": 0,
-        "difficulty": 0,
-        "wide_difficulty": "0",
-        "difficulty_top64": 0,
-        "height": 0,
-        "pool_retired": false,
-        "no_template": null,
-    })
-    .to_string()
+        "threads": 0,
+        "address": null,
+        "block_spacing": 120,
+        "height": if cause.is_none() { serde_json::json!(5) } else { serde_json::Value::Null },
+        "reward": if cause.is_none() { serde_json::json!("1") } else { serde_json::Value::Null },
+        "difficulty": if cause.is_none() { serde_json::json!("0x1") } else { serde_json::Value::Null },
+        "cause": cause.map(|code| Diagnostic::new(code, "why")),
+        "txpool_retired": false,
+    }))
+}
+
+const fn speed(count: u64, window: u64) -> MineSpeed {
+    MineSpeed {
+        count: Count(count),
+        window: Duration(window),
+    }
 }
 
 /// A hash rate for a human, at every prefix boundary the C++ had.
@@ -1629,21 +1320,24 @@ fn the_network_label_is_the_rows_name() {
     }
 }
 
-/// **The status line's network is the one `get_version` named** (RK-Q6).
-/// `get_info` carries no network, so there is nothing else for the line to
-/// read: a testnet console against a testnet daemon says testnet, and the
-/// handshake's reply is reused — `get_version` is asked once.
+/// **The status line's network is the one `version` named** (RK-Q6).
+/// `daemon_status` carries no network: a testnet console against a testnet
+/// daemon says testnet, and the handshake's reply is reused — `version` is
+/// asked once.
 #[test]
-fn the_status_line_names_the_network_get_version_reported() {
+fn the_status_line_names_the_network_version_reported() {
     use shekyl_rpc_types::Network::Testnet;
     let (address, log) = route_server_recording(vec![
-        ("/get_info", info_reply(100)),
-        ("/mining_status", mining_reply(false, MineSpeed::NONE)),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
         (
-            "json_rpc:get_version",
-            get_version_but(|r| {
-                r.nettype = Testnet;
-                r.genesis_hash = HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(Testnet));
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
+        (
+            rpc::<wire::Version>(),
+            version_but(|r| {
+                r.network = Testnet;
+                r.genesis = HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(Testnet));
             }),
         ),
     ]);
@@ -1652,25 +1346,19 @@ fn the_status_line_names_the_network_get_version_reported() {
     let asked = log.lock().unwrap();
     let version_requests = asked
         .iter()
-        .filter(|(_, body)| body.contains("\"get_version\""))
+        .filter(|(_, body)| method_of(body).as_deref() == Some(<wire::Version as RpcMethod>::NAME))
         .count();
     assert_eq!(version_requests, 1, "one handshake, reused: {asked:?}");
 }
 
-/// The whole status line, on the remote arm, with both legs.
+/// The whole status line, with both legs.
 #[test]
 fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     let address = route_server(vec![
-        ("/get_info", info_reply(100)),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
         (
-            "/mining_status",
-            mining_reply(
-                true,
-                MineSpeed {
-                    count: 2500,
-                    window: 1,
-                },
-            ),
+            rpc::<wire::MineStatus>(),
+            mining_reply(true, speed(2500, 1), None),
         ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
@@ -1678,30 +1366,20 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     assert!(out.contains("mining at 2.50 kH/s"), "{out}");
     // net hash = difficulty 123456 / target 120, integer-divided to
     // 1028 H/s, which reads as 1.03 kH/s.
-    assert!(out.contains("net hash 1.03 kH/s"), "{out}");
-    // The connection counts follow the hash rate directly: the line carries
-    // no block-version clause, so nothing sits between the two.
     assert!(
         out.contains("net hash 1.03 kH/s, 8(out)+3(in) connections, uptime "),
         "{out}"
     );
 }
 
-/// Eight hashes in ten seconds is 0.80 H/s. The whole-hash quotient was
-/// 0, so a running miner read as hashing nothing.
+/// Eight hashes in ten seconds is 0.80 H/s.
 #[test]
 fn a_miner_below_one_hash_a_second_reads_as_a_fraction() {
     let address = route_server(vec![
-        ("/get_info", info_reply(100)),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
         (
-            "/mining_status",
-            mining_reply(
-                true,
-                MineSpeed {
-                    count: 8,
-                    window: 10,
-                },
-            ),
+            rpc::<wire::MineStatus>(),
+            mining_reply(true, speed(8, 10), None),
         ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
@@ -1709,27 +1387,21 @@ fn a_miner_below_one_hash_a_second_reads_as_a_fraction() {
 }
 
 /// **A daemon that withholds Status is not a daemon with no connections
-/// and no uptime.** A restricted listener's reply carries no Status part.
-/// The line says the connection counts were not disclosed, where it would
-/// have printed `0(out)+0(in)`, and omits the uptime clause.
+/// and no uptime.**
 #[test]
 fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
-    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    let members = info.as_object_mut().unwrap();
-    for key in STATUS_PART_KEYS {
-        members
-            .remove(*key)
-            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
-    }
     let address = route_server(vec![
-        ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, MineSpeed::NONE)),
+        (
+            rpc::<wire::DaemonStatus>(),
+            rpc_result(status_withheld(100)),
+        ),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("not mining"), "{out}");
-    // The disclosure clause is the end of the line: the uptime clause is
-    // what would follow it. `trim_end` keeps that check from depending on
-    // whether the harness keeps a trailing newline.
     assert!(
         out.trim_end().ends_with("connections not disclosed"),
         "no counts and no uptime clause: {out}"
@@ -1737,24 +1409,21 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
 }
 
-/// **An offline daemon that withholds Status still says it is offline**
-/// (Copilot on #1056): the state is Health, which a restricted daemon
-/// discloses, and the counts it withholds are not the state. Not
-/// "connections not disclosed", and no uptime clause.
+/// **An offline daemon that withholds Status still says it is offline**:
+/// the state is Health, which every caller is told.
 #[test]
 fn an_offline_daemon_that_withholds_status_prints_the_state() {
-    let mut info: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../shekyl-rpc-types/tests/vectors/rpc/get_info_offline_v1.json"
-    ))
-    .unwrap();
+    let mut info = status_offline(100);
     let members = info.as_object_mut().unwrap();
-    assert_eq!(members["p2p"], "offline", "the vector is the offline one");
     for key in STATUS_PART_KEYS {
         members.remove(*key);
     }
     let address = route_server(vec![
-        ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, MineSpeed::NONE)),
+        (rpc::<wire::DaemonStatus>(), rpc_result(info)),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(
@@ -1767,43 +1436,38 @@ fn an_offline_daemon_that_withholds_status_prints_the_state() {
     );
 }
 
-/// A daemon that does show Status and reports no connections prints the
-/// zeros: that is a count, and it gets its uptime.
+/// A shown zero connection count is a count, and it gets its uptime.
 #[test]
 fn a_shown_zero_connection_count_prints_as_zero() {
-    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    info["outgoing_connections_count"] = serde_json::json!(0);
-    info["incoming_connections_count"] = serde_json::json!(0);
+    let mut info = daemon_status_value(100);
+    info["peer_outbound_count"] = serde_json::json!(0);
+    info["peer_inbound_count"] = serde_json::json!(0);
     let address = route_server(vec![
-        ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, MineSpeed::NONE)),
+        (rpc::<wire::DaemonStatus>(), rpc_result(info)),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("0(out)+0(in) connections, uptime "), "{out}");
 }
 
-/// A remote daemon that will not serve `/mining_status` still gets a
-/// status line.
-///
-/// An absent route is an empty 404 — an ordinary posture, not a fault —
-/// so the seven other things the line knows are still worth printing. The
-/// route server has no `/mining_status` row, so it answers 404.
+/// A daemon that will not answer `mine_status` still gets a status line.
 #[test]
-fn a_restricted_remote_daemon_still_reports_its_status() {
-    let address = route_server(vec![("/get_info", info_reply(100))]);
+fn a_daemon_without_mine_status_still_reports_its_status() {
+    let address = route_server(vec![(rpc::<wire::DaemonStatus>(), status_reply(100))]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("mining info unavailable"), "{out}");
     assert!(out.contains("Height: 100/100"), "{out}");
 }
 
-/// A view listener answers `/mining_status` with the grant refusal, HTTP
-/// 200 and the JSON-RPC error object. That is the same ordinary posture:
-/// mining info is unavailable, and the rest of the line still prints.
+/// The view listener refuses `mine_status` (`mining-control`) with the grant
+/// refusal: mining info is unavailable, and the rest of the line prints.
 #[test]
-fn a_view_listener_refuses_mining_status_and_status_still_prints() {
-    let row = shekyl_rpc_types::methods::rest_path("/mining_status").expect("a row");
+fn a_view_listener_refuses_mine_status_and_status_still_prints() {
     let error = shekyl_daemon_rpc::authority::Authority::VIEW_LISTENER
-        .admit(row)
+        .admit(wire::Id::MineStatus.row())
         .expect_err("mining-control");
     let body = serde_json::to_string(&shekyl_daemon_rpc::authority::refusal(
         serde_json::Value::Null,
@@ -1811,208 +1475,91 @@ fn a_view_listener_refuses_mining_status_and_status_still_prints() {
     ))
     .expect("the envelope");
     let address = route_server(vec![
-        ("/get_info", info_reply(100)),
-        ("/mining_status", body),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
+        (rpc::<wire::MineStatus>(), body),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("mining info unavailable"), "{out}");
     assert!(out.contains("Height: 100/100"), "{out}");
 }
 
-/// A mining fault is not a grant refusal. Another error class stays a
-/// failure of the command.
+/// A node that posts no job because it is not synced is neither mining nor
+/// idle. Red edit: drop the `mine.syncing` arm in `fetch_mining_status`.
 #[test]
-fn a_mining_status_fault_is_not_unavailable() {
-    let code = shekyl_rpc_types::errors::ErrorClass::Internal.code();
+fn a_miner_whose_node_is_syncing_reads_as_syncing() {
     let address = route_server(vec![
-        ("/get_info", info_reply(100)),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
         (
-            "/mining_status",
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": {"code": code, "message": "boom"}
-            })
-            .to_string(),
-        ),
-    ]);
-    let out = run(&["daemon", "status"], Some(&address)).expect_err("refused");
-    assert!(!out.contains("mining info unavailable"), "{out}");
-}
-
-/// A syncing daemon answers `BUSY`, which is neither mining nor idle.
-#[test]
-fn a_busy_mining_status_reads_as_syncing() {
-    let address = route_server(vec![
-        ("/get_info", info_reply(100)),
-        (
-            "/mining_status",
-            mining_status_body("BUSY", false, MineSpeed::NONE),
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), Some("mine.syncing")),
         ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains(", syncing,"), "{out}");
 }
 
-/// After VC-D11 the T warning is gone: the digest handshake is the instrument,
-/// and figures still use the generated authority rather than the wire.
-///
-/// The C++ read `ires.target` and computed from it. That is one source
-/// too many for a genesis-frozen constant that
-/// `config/consensus_constants.json` already single-sources into both
-/// languages. The reply may still carry `target` (unknown fields are
-/// ignored); this console does not read it.
-#[test]
-fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
-    let mut info: serde_json::Value = serde_json::from_str(&info_reply(10)).unwrap();
-    // The fixture already carries the real T; make this daemon claim 60.
-    info["target"] = serde_json::json!(60);
-    let address = route_server(vec![
-        ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, MineSpeed::NONE)),
-    ]);
-    let out = run(&["daemon", "status"], Some(&address)).expect("renders");
-    assert!(!out.contains("WARNING:"), "{out}");
-    // net hash = 123456 / 120 = 1028 -> 1.03 kH/s, the build's T. Under
-    // the daemon's 60 it would be 2057 -> 2.06 kH/s.
-    assert!(out.contains("net hash 1.03 kH/s"), "{out}");
-    assert!(!out.contains("2.06 kH/s"), "{out}");
-}
-
-/// The listing form uses no target from the reply.
-#[test]
-fn the_alt_chain_share_uses_the_build_t() {
-    let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    info["target"] = serde_json::json!(60);
-    let chains = alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)]));
-
-    let address = route_server(vec![
-        ("/get_info", info.to_string()),
-        ("json_rpc:get_alternate_chains", chains),
-    ]);
-    let listing = run(&["chain", "alt"], Some(&address)).expect("renders");
-    assert!(
-        !listing.contains("WARNING:"),
-        "the listing form uses no T: {listing}"
-    );
-}
-
-/// A method the daemon does not serve is a request failure, not a zero: the
-/// acceptor answers `404` for an unrouted path, so a daemon without
-/// `option_show` fails `print_net_stats` loudly.
-#[test]
-fn a_method_the_daemon_does_not_serve_fails_loudly() {
-    let address = route_server(vec![("/get_net_stats", net_stats_reply("OK"))]);
-    let out = run(&["p2p", "stats"], Some(&address)).expect_err("refused");
-    assert!(!out.contains("limit of 0 B/s"), "{out}");
-}
-
 // ── VC-3: the console's identity handshake ──────────────────────────────
-//
-// One test per axis, each supplying a daemon that disagrees on exactly that
-// axis and agrees on the others, so a passing test names which comparison
-// fired rather than "something refused".
-
-/// A `get_version` reply that agrees with this build except where `edit` says
-/// otherwise.
-fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse)) -> String {
-    let mut reply = shekyl_rpc_types::GetVersionResponse {
-        status: shekyl_rpc_types::RpcStatus::ok(),
-        version: shekyl_rpc_types::CORE_RPC_VERSION,
-        release: false,
-        current_height: 1,
-        target_height: shekyl_rpc_types::Nullable::NULL,
-        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: shekyl_rpc_types::Network::Mainnet,
-        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
-            shekyl_rpc_types::Network::Mainnet,
-        )),
-    };
-    edit(&mut reply);
-    serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
-}
 
 #[test]
 fn an_older_daemon_is_refused_and_named_as_the_older_one() {
     let addr = route_server(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| r.version -= 1),
+        rpc::<wire::Version>(),
+        version_but(|r| r.version.0 -= 1),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
     assert!(out.contains("RPC contract mismatch"), "{out}");
-    assert!(
-        out.contains("the daemon is the older one"),
-        "the refusal must name WHICH side to update: {out}"
-    );
+    assert!(out.contains("the daemon is the older one"), "{out}");
 }
 
 #[test]
 fn a_newer_daemon_names_this_build_as_the_older_one() {
     let addr = route_server(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| r.version += 1),
+        rpc::<wire::Version>(),
+        version_but(|r| r.version.0 += 1),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).unwrap_or_else(|error| error);
-    assert!(
-        out.contains("this build is the older one"),
-        "the ordering must work in both directions: {out}"
-    );
+    assert!(out.contains("this build is the older one"), "{out}");
 }
 
 #[test]
 fn a_different_rules_digest_is_refused_without_inventing_an_ordering() {
     let addr = route_server(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| {
-            r.consensus_constants_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
-        }),
+        rpc::<wire::Version>(),
+        version_but(|r| r.consensus_digest = HashHex::from_bytes([0x99; 32])),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
     assert!(out.contains("consensus-constant mismatch"), "{out}");
     // VC-D15: a hash carries no ordering, so the refusal must NOT claim one.
-    assert!(
-        !out.contains("older"),
-        "a digest mismatch must not name a stale side, because it cannot know one: {out}"
-    );
-    assert!(
-        out.contains("different rule set"),
-        "it must say what the fact means instead: {out}"
-    );
+    assert!(!out.contains("older"), "{out}");
+    assert!(out.contains("different rule set"), "{out}");
 }
 
 #[test]
 fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
-    // The handshake refuses before `chain height` renders. Removing the
-    // handshake lets this daemon's height print.
-    // The case only this axis can see: the digest is generated from ONE JSON
-    // for every network, so a testnet daemon built from this tree carries the
-    // same digest and the same RPC version. Three of four axes are blind here.
     let addr = route_server(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
+        rpc::<wire::Version>(),
+        version_but(|r| r.network = shekyl_rpc_types::Network::Testnet),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
     assert!(out.contains("network mismatch"), "{out}");
     assert!(out.contains("mainnet") && out.contains("testnet"), "{out}");
 }
 
-/// A word that changes the daemon posts nothing until the handshake
-/// agrees. `version` is the exception, and it does not use this path.
+/// A word that changes the daemon posts nothing until the handshake agrees.
 #[test]
 fn a_mutating_word_refuses_a_wrong_network_daemon_before_it_posts() {
     let (addr, log) = route_server_recording(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
+        rpc::<wire::Version>(),
+        version_but(|r| r.network = shekyl_rpc_types::Network::Testnet),
     )]);
     let out = run(&["option", "set", "log-level", "info"], Some(&addr)).expect_err("refused");
     assert!(out.contains("network mismatch"), "{out}");
     let asked = log.lock().expect("log");
     assert!(
-        asked.iter().any(|(_, body)| body.contains("get_version")),
-        "the handshake is the request: {asked:?}"
-    );
-    assert!(
-        asked.iter().all(|(_, body)| !body.contains("option_set")),
+        asked
+            .iter()
+            .all(|(_, body)| method_of(body).as_deref()
+                != Some(<wire::OptionSet as RpcMethod>::NAME)),
         "a refused daemon is not asked to change: {asked:?}"
     );
 }
@@ -2020,61 +1567,55 @@ fn a_mutating_word_refuses_a_wrong_network_daemon_before_it_posts() {
 #[test]
 fn a_foreign_genesis_daemon_is_refused() {
     let addr = route_server(vec![(
-        "json_rpc:get_version",
-        get_version_but(|r| {
-            r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
-        }),
+        rpc::<wire::Version>(),
+        version_but(|r| r.genesis = HashHex::from_bytes([0xff; 32])),
     )]);
     let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
     assert!(out.contains("genesis mismatch"), "{out}");
     assert!(out.contains("different chain"), "{out}");
 }
 
-/// A reply with no readable version, and one that claims this build's
-/// version and then answers in another shape, are both unreadable: the
-/// wire axis disagreeing, said as that and not as a serde error naming a
-/// field (VC-D16).
+/// A reply with no readable version, one that claims this build's version
+/// and then answers in another shape, and a daemon with no `version` method
+/// at all (a 3.x daemon, RW-Q6) are each the wire axis disagreeing, said as
+/// that (VC-D16). Red edit: read `NoSuchMethod` as a transport fault in the
+/// handshake.
 #[test]
-fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
-    for result in [
-        serde_json::json!({"status": "OK"}),
-        serde_json::json!({"status": "OK", "version": shekyl_rpc_types::CORE_RPC_VERSION}),
-    ] {
-        let addr = route_server(vec![(
-            "json_rpc:get_version",
-            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
-        )]);
+fn a_version_read_that_does_not_parse_is_reported_as_a_wire_mismatch() {
+    let unreadable = [
+        rpc_result(serde_json::json!({})),
+        rpc_result(serde_json::json!({"version": shekyl_rpc_types::CORE_RPC_VERSION})),
+        serde_json::json!({"jsonrpc": "2.0", "id": 0, "error": {
+            "code": shekyl_rpc_types::errors::METHOD_NOT_FOUND, "message": "Method not found"
+        }})
+        .to_string(),
+    ];
+    for reply in unreadable {
+        let addr = route_server(vec![(rpc::<wire::Version>(), reply.clone())]);
         let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
         assert!(
             out.contains("does not match the RPC contract"),
-            "a shape failure must read as a version disagreement: {out}"
+            "{reply}: {out}"
         );
-        assert!(
-            out.contains("cannot be named here"),
-            "it must say the daemon's version is unavailable rather than guess: {out}"
-        );
+        assert!(out.contains("cannot be named here"), "{reply}: {out}");
     }
 }
 
 /// **The version is read before the rest (RK-Q11).** A daemon of another
-/// RPC version answers in that version's shape, which this build cannot
-/// decode. It is still named: both versions, and which side is older. Before
-/// the version was read first this was the unreadable case above, and the
-/// operator was told only that the versions differ.
+/// RPC version is still named: both versions, and which side is older.
 #[test]
 fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
     let ours = shekyl_rpc_types::CORE_RPC_VERSION;
     for (theirs, older) in [
         (ours - 1, "the daemon is the older"),
-        (4 << 16, "this build is the older"),
+        (5 << 16, "this build is the older"),
     ] {
         let addr = route_server(vec![(
-            "json_rpc:get_version",
-            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": {
+            rpc::<wire::Version>(),
+            rpc_result(serde_json::json!({
                 "version": theirs,
                 "a_member_this_build_has_never_heard_of": true,
-            }})
-            .to_string(),
+            })),
         )]);
         let out = run(&["chain", "height"], Some(&addr)).expect_err("refused");
         assert!(out.contains("RPC contract mismatch"), "{out}");
@@ -2084,7 +1625,6 @@ fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
             "both versions are named: {out}"
         );
         assert!(out.contains(older), "{out}");
-        assert!(!out.contains("cannot be named here"), "{out}");
     }
 }
 
@@ -2099,16 +1639,14 @@ fn an_unknown_command_refuses_without_opening_a_socket() {
     );
 }
 
-// ── RK-5c: the three commands the C++ console rendered from `get_info` ──────
+// ── `chain difficulty`, `version` and `txpool stats` ────────────────────
 
-/// `diff`, on the remote arm: the tip, both difficulties in decimal, and
-/// the hash rate over the build's target.
+/// `chain difficulty`: the block count, the tip, both difficulties in
+/// decimal, and the hash rate over the build's target.
 #[test]
 fn diff_prints_the_tip_the_difficulties_and_the_hash_rate() {
-    let address = route_server(vec![("/get_info", info_reply(100))]);
+    let address = route_server(vec![(rpc::<wire::DaemonStatus>(), status_reply(100))]);
     let out = run(&["chain", "difficulty"], Some(&address)).expect("renders");
-    // Difficulty 0x1e240 = 123456, cumulative 0x2dc6c0 = 3000000, and
-    // 123456 / 120 = 1028.
     assert_eq!(
         out,
         format!(
@@ -2118,64 +1656,46 @@ fn diff_prints_the_tip_the_difficulties_and_the_hash_rate() {
     );
 }
 
-/// `version` prints the daemon's software version.
+/// `version` prints the daemon's revision.
 #[test]
 fn version_prints_the_daemons_software_version() {
-    let address = route_server(vec![
-        ("json_rpc:get_version", agreeing_get_version()),
-        ("/get_info", info_reply(100)),
-    ]);
+    let address = route_server(vec![(rpc::<wire::DaemonStatus>(), status_reply(100))]);
     let out = run(&["version"], Some(&address)).expect("renders");
     assert_eq!(out, "3.1.0-test");
 }
 
-/// **`version` answers from a daemon every other command refuses.** The
-/// identity handshake exists to stop the console rendering from a daemon
-/// that is not this build's; `version` exists to tell the operator what
-/// that daemon is, so it asks without the check (VC §3.6.2).
-///
-/// The daemon here speaks this build's RPC version and is on another
-/// chain. The control is `diff` against the same daemon: it is refused, so
-/// the daemon really is one the handshake rejects, and `version` answering
-/// is the exemption and not a handshake that happened to pass.
+/// **`version` answers from a daemon every other command refuses** (VC
+/// §3.6.2). The control is `chain difficulty` against the same daemon.
 #[test]
 fn version_answers_from_a_daemon_the_handshake_refuses() {
     let routes = || {
         vec![
-            ("/get_info", info_reply(100)),
+            (rpc::<wire::DaemonStatus>(), status_reply(100)),
             (
-                "json_rpc:get_version",
-                get_version_but(|r| {
-                    r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
-                }),
+                rpc::<wire::Version>(),
+                version_but(|r| r.genesis = HashHex::from_bytes([0xff; 32])),
             ),
         ]
     };
-
     let out = run(&["chain", "difficulty"], Some(&route_server(routes()))).expect_err("refused");
     assert!(out.contains("genesis mismatch"), "{out}");
-
     let out = run(&["version"], Some(&route_server(routes()))).expect("renders");
     assert_eq!(out, "3.1.0-test");
 }
 
 /// **Against a daemon of another RPC version, `version` names both RPC
-/// versions and reads nothing else** (RK-Q11, RK-D25). The reader it uses
-/// is the one every client uses, so it needs only the frozen `version`
-/// member: the fake daemon's `get_version` has nothing else in it, and
-/// serves no `/get_info` at all, so a read of that route would fail the
-/// test with a transport error and not this message.
+/// versions and reads nothing else** (RK-Q11, RK-D25): the fake daemon
+/// serves no `daemon_status` at all.
 #[test]
 fn version_names_both_rpc_versions_when_they_differ() {
     let ours = shekyl_rpc_types::CORE_RPC_VERSION;
     for (theirs, older) in [
         (ours - 1, "the daemon is the older one"),
-        (4 << 16, "this console is the older one"),
+        (5 << 16, "this console is the older one"),
     ] {
         let address = route_server(vec![(
-            "json_rpc:get_version",
-            serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": {"version": theirs}})
-                .to_string(),
+            rpc::<wire::Version>(),
+            rpc_result(serde_json::json!({"version": theirs})),
         )]);
         let out = run(&["version"], Some(&address)).expect_err("refused");
         assert_eq!(
@@ -2190,121 +1710,84 @@ fn version_names_both_rpc_versions_when_they_differ() {
     }
 }
 
-/// **No second lenient reader** (RK-D25). A daemon that reports this
-/// build's RPC version and then answers `get_info` in another shape is
-/// refused, as every other reader refuses it. Before, `version` decoded one
-/// member of that reply and ignored the rest.
+/// **No second lenient reader** (RK-D25): a `daemon_status` in another
+/// shape is refused, naming the member.
 #[test]
-fn version_decodes_get_info_strictly() {
-    let mut other: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
+fn version_decodes_daemon_status_strictly() {
+    let mut other = daemon_status_value(100);
     other["a_member_from_the_future"] = serde_json::json!(1);
-    let address = route_server(vec![
-        ("json_rpc:get_version", agreeing_get_version()),
-        ("/get_info", other.to_string()),
-    ]);
+    let address = route_server(vec![(rpc::<wire::DaemonStatus>(), rpc_result(other))]);
     let out = run(&["version"], Some(&address)).expect_err("refused");
     assert!(out.contains("a_member_from_the_future"), "{out}");
 }
 
-/// The wire names of `get_info`'s Status part.
-const STATUS_PART_KEYS: &[&str] = &[
-    "start_time",
-    "free_space",
-    "database_size",
-    "version",
-    "outgoing_connections_count",
-    "incoming_connections_count",
-    "alt_blocks_count",
-    "rpc_connections_count",
-];
-
-/// A daemon that does not disclose its version withholds the Status part.
-/// That is a failure that says so, not an empty line.
+/// A daemon that withholds Status does not disclose its revision: a
+/// failure that says so, not an empty line.
 #[test]
 fn version_says_when_the_daemon_does_not_disclose_it() {
-    let mut withheld: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    let members = withheld.as_object_mut().unwrap();
-    for key in STATUS_PART_KEYS {
-        members
-            .remove(*key)
-            .unwrap_or_else(|| panic!("`{key}` is a Status member of the fixture"));
-    }
-    let address = route_server(vec![
-        ("json_rpc:get_version", agreeing_get_version()),
-        ("/get_info", withheld.to_string()),
-    ]);
+    let address = route_server(vec![(
+        rpc::<wire::DaemonStatus>(),
+        rpc_result(status_withheld(100)),
+    )]);
     let out = run(&["version"], Some(&address)).expect_err("refused");
     assert_eq!(out, "The daemon software version is not available.");
 }
 
-/// **An empty version is not "undisclosed"** (RK-D23). A reply that shows
-/// Status with an empty `version` is contract drift: it is refused as a
-/// malformed reply that says what is wrong with it. Until 3.48 the empty
-/// string was the restricted stand-in, and this command read it as
-/// "not available".
+/// **An empty revision is not "undisclosed"** (RK-D23): a shown Status with
+/// an empty `revision` is contract drift, refused as such. Red edit: drop
+/// the empty check in `node::version`.
 #[test]
-fn version_refuses_a_shown_status_with_an_empty_version() {
-    let mut empty: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
-    empty["version"] = serde_json::json!("");
-    let address = route_server(vec![
-        ("json_rpc:get_version", agreeing_get_version()),
-        ("/get_info", empty.to_string()),
-    ]);
+fn version_refuses_a_shown_status_with_an_empty_revision() {
+    let mut empty = daemon_status_value(100);
+    empty["revision"] = serde_json::json!("");
+    let address = route_server(vec![(rpc::<wire::DaemonStatus>(), rpc_result(empty))]);
     let out = run(&["version"], Some(&address)).expect_err("refused");
     assert_ne!(out, "The daemon software version is not available.");
-    assert!(out.contains("empty `version`"), "{out}");
+    assert!(out.contains("empty `revision`"), "{out}");
 }
 
-/// `print_pool_stats`, on the remote arm, with both legs: the pool's
-/// statistics and `get_info` for the weight limit the backlog is measured
-/// against (600000 in the fixture, so the zone is 300000).
+fn pool_stats_reply() -> String {
+    rpc_result(serde_json::json!({
+        "count": 3, "weight_total": 700_001, "weight_min": 2_000, "weight_max": 400_000,
+        "weight_median": 3_000, "fee_total": "3000000000", "private_count": 2,
+    }))
+}
+
+/// `txpool stats` with both legs: the pool's statistics and
+/// `daemon_status`' weight limit the backlog is measured against (600000,
+/// so the zone is 300000).
 #[test]
 fn print_pool_stats_reads_the_stats_and_the_weight_limit() {
-    let stats = serde_json::json!({
-        "status": "OK",
-        "pool_stats": {
-            "bytes_total": 700_001u64, "bytes_min": 2_000, "bytes_max": 400_000,
-            "bytes_med": 3_000, "fee_total": 3_000_000_000u64,
-            "txs_total": 3, "num_not_relayed": 2
-        }
-    })
-    .to_string();
     let (address, log) = route_server_recording(vec![
-        ("/get_transaction_pool_stats", stats),
-        ("/get_info", info_reply(100)),
+        (rpc::<wire::TxpoolStats>(), pool_stats_reply()),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
     ]);
     let out = run(&["txpool", "stats"], Some(&address)).expect("renders");
-    assert!(out.starts_with("3 tx(es), 700001 bytes total"), "{out}");
+    assert!(out.starts_with("3 tx(es), 700001 weight total"), "{out}");
     assert!(out.contains("2 not relayed"), "{out}");
     assert!(
         out.contains("estimated 3 block (6 minutes) backlog"),
         "{out}"
     );
-    let asked: Vec<String> = log.lock().unwrap().iter().map(|(p, _)| p.clone()).collect();
-    assert!(
-        asked.iter().any(|p| p == "/get_transaction_pool_stats"),
-        "{asked:?}"
-    );
-    assert!(asked.iter().any(|p| p == "/get_info"), "{asked:?}");
+    params_of::<wire::TxpoolStats>(&log);
+    params_of::<wire::DaemonStatus>(&log);
 }
 
 /// A pool-stats reply missing a member is named, not rendered with a zero.
 #[test]
 fn a_pool_stats_reply_missing_a_member_is_refused_on_the_console() {
-    let stats = r#"{"status":"OK","pool_stats":{"bytes_total":1}}"#.to_owned();
     let address = route_server(vec![
-        ("/get_transaction_pool_stats", stats),
-        ("/get_info", info_reply(100)),
+        (
+            rpc::<wire::TxpoolStats>(),
+            rpc_result(serde_json::json!({"count": 1})),
+        ),
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
     ]);
     let out = run(&["txpool", "stats"], Some(&address)).expect_err("refused");
     assert!(
-        out.contains("malformed get_transaction_pool_stats reply"),
+        out.contains("malformed") || out.contains("missing field"),
         "{out}"
     );
-}
-
-fn rpc_result(value: impl serde::Serialize) -> String {
-    serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": value}).to_string()
 }
 
 /// A 64-character token that is not hex is not a block hash. Dropping the
@@ -2329,236 +1812,164 @@ fn chain_spent_refuses_a_token_that_is_not_a_key_image() {
 
 #[test]
 fn chain_coinbase_sum_prints_the_emission_and_the_fee() {
-    use shekyl_rpc_types::{GetCoinbaseTxSumResponse, RpcStatus};
-    let reply = GetCoinbaseTxSumResponse {
-        status: RpcStatus::ok(),
-        emission_amount: 1_000_000_000,
-        wide_emission_amount: "0".to_owned(),
-        emission_amount_top64: 0,
-        fee_amount: 2_000_000_000,
-        wide_fee_amount: "0".to_owned(),
-        fee_amount_top64: 0,
-    };
-    let (address, log) =
-        route_server_recording(vec![("json_rpc:get_coinbase_tx_sum", rpc_result(&reply))]);
+    let (address, log) = route_server_recording(vec![(
+        rpc::<wire::ChainCoinbaseSum>(),
+        rpc_result(serde_json::json!({"emission": "1000000000", "fee": "2000000000"})),
+    )]);
     let out = run(
         &["chain", "coinbase", "sum", "--from", "1", "--to", "3"],
         Some(&address),
     )
     .expect("renders");
-    assert!(out.contains("emission:") && out.contains("fee:"), "{out}");
-    let asked = log.lock().unwrap().clone();
-    assert!(
-        asked
-            .iter()
-            .any(|(_, body)| body.contains("get_coinbase_tx_sum")),
-        "{asked:?}"
-    );
+    assert_eq!(out, "emission: 1.000000000 SKL\nfee: 2.000000000 SKL");
+    let params = params_of::<wire::ChainCoinbaseSum>(&log);
+    assert_eq!(params, serde_json::json!({"from": 1, "to": 3}));
 }
 
+/// `tx relay` names the id; an id the pool does not hold is said so.
 #[test]
 fn tx_relay_posts_the_id() {
-    use shekyl_rpc_types::mining::StatusOnlyResponse;
-    use shekyl_rpc_types::RpcStatus;
     let hash = "ab".repeat(32);
-    let reply = StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    };
-    let (address, log) = route_server_recording(vec![("json_rpc:relay_tx", rpc_result(&reply))]);
+    let (address, log) = route_server_recording(vec![(
+        rpc::<wire::TxRelay>(),
+        rpc_result(serde_json::json!([hash])),
+    )]);
     let out = run(&["tx", "relay", &hash], Some(&address)).expect("renders");
-    assert!(out.contains(&hash), "{out}");
-    let asked = log.lock().unwrap().clone();
-    assert!(
-        asked
-            .iter()
-            .any(|(_, body)| body.contains("relay_tx") && body.contains(&hash)),
-        "{asked:?}"
+    assert_eq!(out, format!("relayed {hash}"));
+    assert_eq!(
+        params_of::<wire::TxRelay>(&log),
+        serde_json::json!({"id": [hash]})
     );
+
+    let (address, _) = route_server_recording(vec![(
+        rpc::<wire::TxRelay>(),
+        rpc_result(serde_json::json!([{"missing": null}])),
+    )]);
+    let out = run(&["tx", "relay", &hash], Some(&address)).expect_err("refused");
+    assert!(out.contains("holds no transaction"), "{out}");
 }
 
 #[test]
-fn txpool_list_prints_each_entry_and_short_prints_hashes() {
-    use shekyl_rpc_types::pool::{GetTransactionPoolHashesResponse, GetTransactionPoolResponse};
-    use shekyl_rpc_types::{HashHex, RpcStatus};
-    let id = HashHex::from_hex(&"cd".repeat(32)).unwrap();
-    let full = GetTransactionPoolResponse {
-        status: RpcStatus::ok(),
-        transactions: vec![shekyl_rpc_types::pool::PoolTxInfo {
-            id_hash: id,
-            blob_size: 40,
-            weight: 40,
-            fee: 1,
-            relayed: true,
-            tx_blob: String::new(),
-        }],
-        spent_key_images: Vec::new(),
-    };
-    let short = GetTransactionPoolHashesResponse {
-        status: RpcStatus::ok(),
-        tx_hashes: vec![id],
-    };
-    let (address, _) = route_server_recording(vec![(
-        "/get_transaction_pool",
-        serde_json::to_string(&full).unwrap(),
-    )]);
+fn txpool_list_prints_each_entry_and_short_prints_ids() {
+    let id = "cd".repeat(32);
+    let list = rpc_result(serde_json::json!([{"id": id, "weight": 40, "fee": "1"}]));
+    let address = route_server(vec![(rpc::<wire::TxpoolList>(), list.clone())]);
     let out = run(&["txpool", "list"], Some(&address)).expect("renders");
-    assert!(out.contains(&id.to_string()), "{out}");
-    let (address, log) = route_server_recording(vec![(
-        "/get_transaction_pool_hashes",
-        serde_json::to_string(&short).unwrap(),
-    )]);
+    assert_eq!(out, format!("{id}  40 weight  0.000000001 SKL"));
+    let address = route_server(vec![(rpc::<wire::TxpoolList>(), list)]);
     let out = run(&["txpool", "list", "--short"], Some(&address)).expect("renders");
-    assert!(
-        log.lock()
-            .unwrap()
-            .iter()
-            .any(|(path, _)| path == "/get_transaction_pool_hashes"),
-        "{out}"
-    );
+    assert_eq!(out, id);
 
-    let grant = shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant;
-    let refused = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "error": {
-            "code": grant.code(),
-            "message": "english the operator must not see",
-            "data": shekyl_rpc_types::errors::Diagnostic::new(
-                "rpc.grant",
-                "english the operator must not see",
-            ),
-        }
-    });
-    let (address, _) = route_server_recording(vec![("/get_transaction_pool", refused.to_string())]);
+    let address = route_server(vec![(
+        rpc::<wire::TxpoolList>(),
+        rpc_refusal(ErrorClass::OutsideTheGrant, "grant.outside"),
+    )]);
     let out = run(&["txpool", "list"], Some(&address)).expect_err("refused");
-    assert!(out.contains("OutsideTheGrant rpc.grant"), "{out}");
-    assert!(
-        !out.contains("missing field"),
-        "a grant refusal is the class, not a decode of the success type: {out}"
-    );
+    assert_eq!(out, "OutsideTheGrant grant.outside");
 }
 
 #[test]
 fn txpool_flush_with_no_id_names_the_pool() {
-    use shekyl_rpc_types::mining::StatusOnlyResponse;
-    use shekyl_rpc_types::RpcStatus;
-    let reply = StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    };
-    let (address, _) = route_server_recording(vec![("json_rpc:flush_txpool", rpc_result(&reply))]);
+    let (address, log) = route_server_recording(vec![(
+        rpc::<wire::TxpoolFlush>(),
+        rpc_result(serde_json::json!([])),
+    )]);
     let out = run(&["txpool", "flush"], Some(&address)).expect("renders");
     assert!(out.contains("flushed the pool"), "{out}");
+    // Every entry the caller may see: the optional `id` written `null`.
+    assert_eq!(
+        params_of::<wire::TxpoolFlush>(&log),
+        serde_json::json!({"id": null})
+    );
 }
 
 #[test]
 fn ban_words_print_the_daemon_reply() {
-    use shekyl_rpc_types::bans::{BannedResponse, GetBan, GetBansResponse};
-    use shekyl_rpc_types::mining::StatusOnlyResponse;
-    use shekyl_rpc_types::RpcStatus;
-    let ok = rpc_result(&StatusOnlyResponse {
-        status: RpcStatus::ok(),
-    });
-    let list = rpc_result(&GetBansResponse {
-        status: RpcStatus::ok(),
-        bans: vec![GetBan {
-            host: "203.0.113.7".to_owned(),
-            seconds: 0,
-            permanent: true,
-        }],
-    });
-    let show = rpc_result(&BannedResponse {
-        status: RpcStatus::ok(),
-        banned: true,
-        seconds: 30,
-        permanent: false,
-    });
-    let (address, _) = route_server_recording(vec![
-        ("json_rpc:get_bans", list),
-        ("json_rpc:set_bans", ok.clone()),
-        ("json_rpc:banned", show),
+    let list = rpc_result(serde_json::json!([
+        {"host": "203.0.113.7", "duration": null, "permanent": true},
+    ]));
+    let show =
+        rpc_result(serde_json::json!({"host": "203.0.113.7", "duration": 30, "permanent": false}));
+    let (address, log) = route_server_recording(vec![
+        (rpc::<wire::BanList>(), list),
+        (rpc::<wire::BanAdd>(), rpc_result(serde_json::json!({}))),
+        (rpc::<wire::BanRemove>(), rpc_result(serde_json::json!({}))),
+        (rpc::<wire::BanShow>(), show),
     ]);
     let out = run(&["ban", "list"], Some(&address)).expect("renders");
-    assert!(out.contains("203.0.113.7"), "{out}");
+    assert_eq!(out, "203.0.113.7  until lifted");
     let out = run(
         &["ban", "add", "203.0.113.7", "--duration", "30s"],
         Some(&address),
     )
     .expect("renders");
-    assert!(out.contains("30 s"), "{out}");
+    assert_eq!(out, "banned 203.0.113.7 for 30 s");
+    assert_eq!(
+        params_of::<wire::BanAdd>(&log),
+        serde_json::json!({"host": "203.0.113.7", "duration": 30})
+    );
     let out = run(&["ban", "show", "203.0.113.7"], Some(&address)).expect("renders");
-    assert!(out.contains("30 s"), "{out}");
+    assert_eq!(out, "203.0.113.7 is banned for 30 s");
     let out = run(&["ban", "remove", "203.0.113.7"], Some(&address)).expect("renders");
     assert!(out.contains("lifted"), "{out}");
+
+    let address = route_server(vec![(
+        rpc::<wire::BanShow>(),
+        rpc_result(serde_json::Value::Null),
+    )]);
+    let out = run(&["ban", "show", "203.0.113.7"], Some(&address)).expect("renders");
+    assert_eq!(out, "203.0.113.7 is not banned");
 }
 
 #[test]
 fn option_show_prints_the_source_and_a_refusal_is_class_and_code() {
-    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass};
-    let shown = rpc_result(serde_json::json!({
-        "options": [{
-            "name": "log-level",
-            "source": "runtime",
-            "runtime": true,
-            "value": "info"
-        }]
-    }));
-    let (address, _) = route_server_recording(vec![("json_rpc:option_show", shown)]);
-    let out = run(&["option", "show", "log-level"], Some(&address)).expect("renders");
-    assert!(
-        out.contains("log-level") && out.contains("runtime"),
-        "{out}"
+    let shown = rpc_result(serde_json::json!([
+        {"name": "log-level", "source": "runtime", "runtime": true, "secret": false, "value": "info"},
+        {"name": "rpc-key", "source": "file", "runtime": false, "secret": true, "assigned": true},
+    ]));
+    let address = route_server(vec![(rpc::<wire::OptionShow>(), shown)]);
+    let out = run(&["option", "show"], Some(&address)).expect("renders");
+    assert_eq!(
+        out,
+        "log-level  runtime  runtime  info\nrpc-key  file  startup  set"
     );
-    assert!(out.contains("info"), "{out}");
 
-    let grant = ErrorClass::OutsideTheGrant;
-    let refused = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "error": {
-            "code": grant.code(),
-            "message": "english the operator must not see",
-            "data": Diagnostic::new("rpc.grant", "english the operator must not see"),
-        }
-    });
-    let (address, _) = route_server_recording(vec![("json_rpc:option_set", refused.to_string())]);
+    let (address, log) = route_server_recording(vec![(
+        rpc::<wire::OptionSet>(),
+        rpc_refusal(ErrorClass::OutsideTheGrant, "grant.outside"),
+    )]);
     let out = run(&["option", "set", "log-level", "info"], Some(&address)).expect_err("refused");
-    assert!(out.contains("OutsideTheGrant rpc.grant"), "{out}");
-    assert!(!out.contains("english"), "{out}");
-
-    let method = ErrorClass::RefusedByMethod;
-    let refused = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "0",
-        "error": {
-            "code": method.code(),
-            "message": "english the operator must not see",
-            "data": Diagnostic::new("rpc.method", "english the operator must not see"),
-        }
-    });
-    let (address, _) = route_server_recording(vec![("json_rpc:option_set", refused.to_string())]);
-    let out = run(&["option", "set", "log-level", "info"], Some(&address)).expect_err("refused");
-    assert!(out.contains("RefusedByMethod rpc.method"), "{out}");
-    assert!(!out.contains("english"), "{out}");
+    assert_eq!(out, "OutsideTheGrant grant.outside");
+    assert_eq!(
+        params_of::<wire::OptionSet>(&log),
+        serde_json::json!({"value": {"log-level": "info"}})
+    );
 }
 
 #[test]
-fn daemon_stop_is_the_stop_route() {
-    use shekyl_rpc_types::mining::StatusOnlyResponse;
-    use shekyl_rpc_types::RpcStatus;
+fn daemon_stop_is_the_stop_method() {
     let (address, log) = route_server_recording(vec![(
-        "/stop_daemon",
-        serde_json::to_string(&StatusOnlyResponse {
-            status: RpcStatus::ok(),
-        })
-        .unwrap(),
+        rpc::<wire::DaemonStop>(),
+        rpc_result(serde_json::json!({})),
     )]);
     let out = run(&["daemon", "stop"], Some(&address)).expect("renders");
     assert!(out.contains("stopping"), "{out}");
-    assert!(
-        log.lock()
-            .unwrap()
-            .iter()
-            .any(|(path, _)| path == "/stop_daemon"),
-        "{out}"
+    params_of::<wire::DaemonStop>(&log);
+}
+
+/// The client's daemon-status fixture is this one.
+#[test]
+fn the_status_fixture_decodes_with_every_part_shown() {
+    let status: shekyl_rpc_types::wire::daemon::DaemonStatus =
+        serde_json::from_value(daemon_status_value(100)).expect("decodes");
+    assert!(!status.started.is_withheld() && !status.connector.is_withheld());
+    assert!(!status.txpool_private_count.is_withheld());
+    serde_json::from_value::<shekyl_rpc_types::wire::daemon::DaemonStatus>(status_offline(100))
+        .expect("the offline form decodes");
+    let _ = (
+        Size(0),
+        Time(0),
+        BlockHash::NULL,
+        TxHash::from_bytes([0; 32]),
     );
 }

@@ -888,6 +888,7 @@ mod tests {
     fn bondless_source() -> crate::engine::emission_source::EmissionClaimSource {
         crate::engine::emission_source::EmissionClaimSource {
             chain_height: shekyl_types::ChainCount::from_raw(10_001),
+            tip_hash: crate::engine::test_support::test_block_hash_at(10_000),
             current_settled_epoch: shekyl_archival_retention::settlement_epoch_at_height(10_001),
             bond: None,
             epochs: Vec::new(),
@@ -905,7 +906,7 @@ mod tests {
     #[test]
     fn an_unvouchable_record_is_refused_before_it_can_read_as_no_bond() {
         use crate::engine::daemon::synced_chain_facts::{
-            CoherentChainView, SyncedChainFacts, TimelineBreak,
+            ChainAnchor, CoherentChainView, SyncedChainFacts, TimelineBreak,
         };
         use crate::engine::emission_source::{ClaimSourceFor, Vouching};
         use shekyl_types::{BlockHash, ChainCount};
@@ -950,10 +951,11 @@ mod tests {
         )
         .expect("synced");
         let view = CoherentChainView::reconcile(
-            &stale_high
-                .bracket(stale_high.top_hash())
-                .expect("bracketed"),
-            ChainCount::from_raw(10_001),
+            &stale_high,
+            ChainAnchor {
+                height: shekyl_types::BlockHeight::from_raw(10_000),
+                hash: BlockHash::from_bytes([0xCD; 32]),
+            },
         );
         assert!(view.rolled_back(), "the fixture must actually roll back");
         let fetched = ClaimSourceFor::for_test_with_vouching(
@@ -970,10 +972,11 @@ mod tests {
         // And the control: an agreeing, vouched record is admitted, so the
         // refusals above are the gate and not a helper that refuses all.
         let agreeing = CoherentChainView::reconcile(
-            &stale_high
-                .bracket(stale_high.top_hash())
-                .expect("bracketed"),
-            ChainCount::from_raw(20_001),
+            &stale_high,
+            ChainAnchor {
+                height: shekyl_types::BlockHeight::from_raw(20_000),
+                hash: BlockHash::from_bytes([0xAB; 32]),
+            },
         );
         let fetched = ClaimSourceFor::for_test_with_vouching(
             p_id,

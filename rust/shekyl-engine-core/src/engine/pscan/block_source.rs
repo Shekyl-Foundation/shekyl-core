@@ -168,10 +168,8 @@ pub(crate) trait BlockSource {
 /// itself and reconcile it (`CoherentChainView`), which is what the claim
 /// and exit lanes do. This function is for consumers that only need a clock.
 ///
-/// One `get_info` read replaces the former `get_height` read: the same
-/// response carries the height and the sync state, so the gate costs no extra
-/// round trip, and the former `usize → u64` conversion is gone with it. The
-/// value returned is **numerically unchanged** — [`ChainCount`], not
+/// One `daemon_status` read carries both the height and the sync state, so
+/// the gate costs no extra round trip. The value returned is **numerically unchanged** — [`ChainCount`], not
 /// `.tip()`. Flipping to `.tip()` would fire due one block late and skip
 /// the last pscan block.
 ///
@@ -292,7 +290,7 @@ impl BlockSource for PBlockSource {
     ) -> Result<Option<ScannableBlock>, BlockSourceError> {
         let number = block_number(height)?;
         // P-SH: exactly one height per call — the fetch issues a single
-        // `get_block` (+ its txs) for `number`. Skeletons bound to their
+        // `block_show` (+ its txs) for `number`. Skeletons bound to their
         // txids, same as `DaemonBlockSource` (`SB-Q2`): the three served
         // operands are the daemon's to choose and buy it nothing — a wrong
         // operand hashes to another identity and the body does not bind.

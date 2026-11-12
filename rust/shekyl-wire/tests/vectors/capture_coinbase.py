@@ -3,14 +3,16 @@
 
 Mines a few coinbase blocks on a throwaway regtest shekyld (to the genesis
 treasury address — no wallet needed) and, for heights 0/1/2, writes the raw
-block blob (`regtest_coinbase_h{h}.block`) plus the daemon's reported
-`block_header.hash` and `miner_tx_hash` (`regtest_coinbase_hashes.json`). The C++
+block body (`regtest_coinbase_h{h}.block`) plus the daemon's reported
+header `hash` and `coinbase` id (`regtest_coinbase_hashes.json`, under the
+vector's keys `block_hash` and `miner_tx_hash`). The C++
 daemon is the genesis hashing oracle (GENESIS_TX_WIRE_FORMAT.md §11); these feed
 the round-trip KAT (`../block.rs` analogue) and the hash KAT
 (`../coinbase_hash.rs`).
 
 Usage: python3 capture_coinbase.py   [SHEKYLD_BIN / MINING_RECIPIENTS / GENESIS_RECIPIENTS env]
 """
+import base64
 import json
 import os
 import shutil
@@ -53,7 +55,8 @@ def free_port():
 
 
 def rpc(url, method, params=None):
-    body = {"jsonrpc": "2.0", "id": "0", "method": method}
+    """One JSON-RPC 2.0 call; a refusal raises with its class and code."""
+    body = {"jsonrpc": "2.0", "id": 0, "method": method}
     if params is not None:
         body["params"] = params
     req = urllib.request.Request(
@@ -81,7 +84,7 @@ def start_daemon(workdir, addr, attempts=5):
         port = free_port()
         url = f"http://127.0.0.1:{port}/json_rpc"
         log = open(os.path.join(workdir, f"daemon.{attempt}.log"), "w")
-        # generateblocks is an armed test lever. The row is set on this
+        # dev_block_generate is an armed test lever. The row is set on this
         # spawn, and the announcement is checked once RPC is up.
         daemon = subprocess.Popen(
             [SHEKYLD, "--network", "regtest", "--clearnet", "off", "--tor", "off",
@@ -96,7 +99,7 @@ def start_daemon(workdir, addr, attempts=5):
                         "— likely a port conflict")
                 break
             try:
-                ready = rpc(url, "get_info").get("status") == "OK"
+                ready = isinstance(rpc(url, "daemon_status"), dict)
             except Exception:
                 ready = False
             if ready:
@@ -129,7 +132,7 @@ def await_posted(url, timeout_s=60):
     """Wait for the daemon's first posted template.
 
     A regtest daemon with no peers reads Synced at open and posts a template
-    once its follower has looped; a `generateblocks` sent before that is
+    once its follower has looped; a `dev_block_generate` sent before that is
     refused `mine.not_synced` (`no_view`), honestly. Ready is the first posted
     job, as in the Rust harness (`regtest_e2e.rs` `await_posted`).
     """
@@ -137,7 +140,7 @@ def await_posted(url, timeout_s=60):
     last = "no answer"
     while time.monotonic() < deadline:
         try:
-            rpc(url, "get_miner_data")
+            rpc(url, "block_template")
             return
         except Exception as e:  # refused until the first post
             last = str(e)
@@ -152,17 +155,17 @@ def main():
     daemon, url, log = start_daemon(workdir, addr)
     try:
         await_posted(url)
-        rpc(url, "generateblocks", {"count": N_BLOCKS})
+        rpc(url, "dev_block_generate", {"count": N_BLOCKS})
         hashes = {}
         for h in CAPTURE_HEIGHTS:
-            blk = rpc(url, "get_block", {"height": h})
-            blob = bytes.fromhex(blk["blob"])
+            blk = rpc(url, "block_show", {"height": h})
+            blob = base64.b64decode(blk["body"], validate=True)
             out = os.path.join(HERE, f"regtest_coinbase_h{h}.block")
             with open(out, "wb") as f:
                 f.write(blob)
             hashes[str(h)] = {
-                "block_hash": blk["block_header"]["hash"],
-                "miner_tx_hash": blk["miner_tx_hash"],
+                "block_hash": blk["header"]["hash"],
+                "miner_tx_hash": blk["header"]["coinbase"],
             }
             print(f"  h{h}: {len(blob)}B block_hash={hashes[str(h)]['block_hash'][:16]}...",
                   file=sys.stderr)

@@ -190,7 +190,7 @@ pub fn rpc_ok(rpc_port: u16) -> bool {
         return false;
     };
     drop(s.set_read_timeout(Some(Duration::from_secs(2))));
-    let body = r#"{"jsonrpc":"2.0","id":"0","method":"get_info"}"#;
+    let body = r#"{"jsonrpc":"2.0","id":0,"method":"daemon_status"}"#;
     let req = format!(
         "POST /json_rpc HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()

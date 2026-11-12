@@ -15,9 +15,11 @@
 //!
 //! # How long a read can take
 //!
-//! A read the producer has started holds one of the client's
-//! [`MAX_INFLIGHT`] slots, and the producer starts no more reads than
-//! that ([`READS_AT_ONCE`]), so a started read never waits for one. It
+//! A read the producer has started holds one of the client's slots, and
+//! the producer starts no more reads than [`READS_AT_ONCE`]. The node sizes
+//! its one client to these plus the shard view's lane, and views hold no
+//! more than their lane (IG-Q90), so a started read never waits for a
+//! slot. It
 //! first waits its start delay, below [`READ_START_SPREAD`] (one block
 //! interval), and is then at most [`NeedBudget::fetches_per_holder`]
 //! fetches of the drawn persona, each at most [`Timeouts::fetch_ceiling`]:
@@ -54,9 +56,9 @@ pub const CHALLENGE_BUDGET: NeedBudget = NeedBudget::DEFAULT;
 /// with them.
 pub const CHALLENGE_TIMEOUTS: Timeouts = Timeouts::DEFAULT;
 
-/// How many reads the producer has started at once: the client's slots.
-/// The node's producer client is the only fetch client in the process, so
-/// a started read finds a free slot.
+/// How many reads the producer has started at once. The node's one fetch
+/// client has these slots beside the shard view's lane, which views never
+/// exceed, so a started read finds a free slot.
 pub const READS_AT_ONCE: NonZeroUsize =
     NonZeroUsize::new(MAX_INFLIGHT).expect("the client has at least one slot");
 

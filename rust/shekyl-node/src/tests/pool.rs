@@ -15,12 +15,12 @@ use super::*;
 /// The retirement does not black out the chain (the landing's N1). The
 /// node goes on following the chain, so the chain's reads answer:
 ///
-/// - `get_info` answers `pool_retired` with the pool's counts `null` and
-///   the chain's members as ever;
-/// - `get_transactions` answers a chain id, and marks an id the chain
-///   does not hold as unavailable, not missed: whether the pool holds it
-///   has no answer;
-/// - `is_key_image_spent` stays failed closed: a spend the pool may hold
+/// - `daemon_status` answers with the pool's counts `null` and the
+///   chain's members as ever;
+/// - `tx_list` answers a chain id, and gives an id the chain does not
+///   hold a `null` slot, not `{"missing": null}`: whether the pool holds
+///   it has no answer;
+/// - a key image's spend stays failed closed: a spend the pool may hold
 ///   is unknowable, and "unspent" is a double spend's first step.
 ///
 /// Red edits: the bridge does not retire the pool; the surroundings do not
@@ -28,12 +28,14 @@ use super::*;
 #[test]
 fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
     use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
-    use shekyl_daemon_rpc::info::{get_info, Disclosure};
+    use shekyl_daemon_rpc::info::{daemon_status, Disclosure};
     use shekyl_daemon_rpc::info_facts::PoolScope;
-    use shekyl_daemon_rpc::pool_methods::{flush_txpool, get_transaction_pool};
-    use shekyl_daemon_rpc::read_methods::get_transactions;
+    use shekyl_daemon_rpc::pool_methods::{txpool_flush, txpool_list};
+    use shekyl_daemon_rpc::reads::tx_list;
     use shekyl_rpc_types::errors::ErrorClass;
-    use shekyl_rpc_types::{GetTransactionsRequest, HashHex, InfoPool};
+    use shekyl_rpc_types::wire::shared::{Slot, SlotState};
+    use shekyl_rpc_types::wire::tx::{FlushIds, TxListQuery};
+    use shekyl_rpc_types::HashHex;
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
     let pool = node.pool().expect("a pool");
@@ -53,18 +55,19 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         txid
     };
     let handles = node.handles();
-    let flushed = a_runtime().block_on(flush_txpool(
+    let flushed = a_runtime().block_on(txpool_flush(
         &*handles.pool,
-        &shekyl_rpc_types::pool::FlushTxpoolRequest {
-            txids: vec![shekyl_rpc_types::HashHex::from_bytes(planted.to_bytes())],
+        &FlushIds {
+            id: Some(vec![HashHex::from_bytes(planted.to_bytes())]),
         },
+        PoolScope::WithUnbroadcast,
     ));
-    let after = get_transaction_pool(&*handles.pool, PoolScope::Broadcast);
+    let after = txpool_list(&*handles.pool, PoolScope::Broadcast);
     let spent = handles
         .chain
         .key_images_spent(&[shekyl_types::KeyImage::from_bytes([7; 32])]);
     let status = handles.mining.status();
-    let info = get_info(&*handles.chain, Disclosure::FULL, 0);
+    let info = daemon_status(&*handles.chain, &*handles.chain, Disclosure::FULL, 0);
     // The genesis coinbase: an id the chain holds.
     let genesis = handles
         .chain
@@ -76,10 +79,10 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         .txid_parts()
         .hash;
     let asked = |id: &shekyl_types::TxHash| HashHex::from_bytes(id.to_bytes());
-    let txs = get_transactions(
+    let txs = tx_list(
         &*handles.chain,
-        &GetTransactionsRequest {
-            txs_hashes: vec![asked(&coinbase).to_string(), asked(&planted).to_string()],
+        &TxListQuery {
+            id: vec![asked(&coinbase), asked(&planted)],
             prune: false,
         },
         true,
@@ -98,27 +101,95 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         status.expect("status").pool_retired,
         "the service's pool is retired"
     );
-    let info = info.expect("get_info answers over a retired pool");
-    assert_eq!(info.pool, InfoPool::Retired);
+    let info = info.unwrap_or_else(|_| panic!("daemon_status answers over a retired pool"));
+    assert_eq!(info.txpool_count.0, None, "the pool's count has no answer");
     assert_eq!(
-        info.host.shown().map(|host| host.tx_pool_unbroadcast_count),
+        info.txpool_private_count.shown().map(|count| count.0),
         Some(None),
         "the host's count is shown with no answer"
     );
-    assert_eq!(
-        info.health.top_block_hash,
-        HashHex::from_bytes(genesis_hash().to_bytes())
-    );
-    let txs = txs.expect("get_transactions answers over a retired pool");
-    assert_eq!(
-        txs.txs.iter().map(|tx| tx.tx_hash).collect::<Vec<_>>(),
-        vec![asked(&coinbase)],
+    assert_eq!(info.hash, HashHex::from_bytes(genesis_hash().to_bytes()));
+    let txs = txs.unwrap_or_else(|_| panic!("tx_list answers over a retired pool"));
+    assert_eq!(txs.len(), 2);
+    assert!(
+        matches!(&txs[0], Slot::Item(entry) if entry.id == asked(&coinbase)),
         "the chain's id is answered"
     );
-    assert!(txs.missed_tx.is_empty(), "an unread pool misses nothing");
-    assert_eq!(
-        txs.unavailable_tx,
-        vec![asked(&planted)],
+    assert!(
+        !matches!(&txs[1], Slot::State(SlotState::Missing(_))),
+        "an unread pool misses nothing"
+    );
+    assert!(
+        matches!(&txs[1], Slot::Unasked),
         "the pool's id has no answer"
+    );
+}
+
+/// `tx_relay` re-offers through the stem entry a fresh local submission
+/// takes. On a node with no network (clearnet and Tor off) that entry
+/// shows the transaction at once (RX-2), so a held entry the host
+/// re-offers turns public: before the offer the broadcast listing lacks
+/// it, after it the listing holds it. A caller without the host's view
+/// is not shown the held entry and its re-offer reaches nothing (IG-Q89).
+///
+/// Red edit: `PoolBridge::relay` collects the ids without offering them.
+#[test]
+fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
+    use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
+    use shekyl_daemon_rpc::info_facts::PoolScope;
+    use shekyl_daemon_rpc::pool_methods::{tx_relay, txpool_list};
+    use shekyl_rpc_types::wire::shared::{Slot, SlotState};
+    use shekyl_rpc_types::wire::tx::RelayIds;
+    use shekyl_rpc_types::HashHex;
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_posted(dir.path(), &[]);
+    let pool = node.pool().expect("a pool");
+    let held = pool.lock().expect("the pool").plant(
+        shekyl_chain_rules::harness::fixture::paying_fee(
+            shekyl_chain_rules::harness::fixture::listed([7; 32]),
+            1,
+        ),
+        PoolRecord {
+            received: ReceivedHour::from_raw(1),
+            public: false,
+        },
+    );
+    let handles = node.handles();
+    let id = HashHex::from_bytes(held.to_bytes());
+    let public = |handles: &shekyl_daemon_rpc::handles::Handles| {
+        txpool_list(&*handles.pool, PoolScope::Broadcast)
+            .unwrap_or_else(|_| panic!("a listing"))
+            .iter()
+            .any(|entry| entry.id == id)
+    };
+    let before = public(&handles);
+    let stranger = tx_relay(
+        &*handles.pool,
+        &RelayIds { id: vec![id] },
+        PoolScope::Broadcast,
+    );
+    let after_stranger = public(&handles);
+    let host = tx_relay(
+        &*handles.pool,
+        &RelayIds { id: vec![id] },
+        PoolScope::WithUnbroadcast,
+    );
+    let after_host = public(&handles);
+    node.stop();
+    assert!(!before, "a held entry is not public");
+    assert_eq!(
+        stranger.unwrap_or_else(|_| panic!("a stranger's re-offer answers")),
+        vec![Slot::State(SlotState::Missing(
+            shekyl_rpc_types::wire::shared::Null
+        ))]
+    );
+    assert!(!after_stranger, "a stranger's re-offer reaches nothing");
+    assert_eq!(
+        host.unwrap_or_else(|_| panic!("the host's re-offer answers")),
+        vec![Slot::Item(id)]
+    );
+    assert!(
+        after_host,
+        "the stem entry shows it on a node with no network"
     );
 }

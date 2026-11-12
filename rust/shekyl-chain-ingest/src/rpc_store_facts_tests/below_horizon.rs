@@ -30,12 +30,13 @@
 use std::sync::Arc;
 
 use shekyl_chain_store::store::{ArchivalGood, AtIndex};
-use shekyl_daemon_rpc::read_methods::{get_blocks_by_height, get_transactions};
+use shekyl_daemon_rpc::reads::{block_list, tx_list};
 use shekyl_engine_core::__test_helpers::{fetch_proof_tx_for_test, verify_exhaustive_for_test};
-use shekyl_rpc_types::{
-    BlockTx, GetBlocksByHeightRequest, GetTransactionsRequest, GetTransactionsResponse, HashHex,
-    Nullable, TxLocation,
-};
+use shekyl_rpc_types::kinds::{Height, Integer, Size};
+use shekyl_rpc_types::wire::block::{BlockListQuery, BlockTx};
+use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived, Slot, SlotState};
+use shekyl_rpc_types::wire::tx::{TxList, TxListQuery};
+use shekyl_rpc_types::{HashHex, Nullable};
 use shekyl_types::{BlockHeight, ShardId, TxHash};
 use shekyl_wire::BoundTx;
 
@@ -73,18 +74,43 @@ async fn wallet_at(url: String) -> shekyl_engine_core::engine::DaemonClient {
     )
 }
 
-/// `get_transactions` for `ids` in the form `prune` names, straight
-/// through the handler.
-fn transactions(facts: &super::StoreFacts, ids: &[TxHash], prune: bool) -> GetTransactionsResponse {
-    get_transactions(
+/// `tx_list` for `ids` in the form `prune` names, straight through the
+/// handler.
+fn transactions(facts: &super::StoreFacts, ids: &[TxHash], prune: bool) -> TxList {
+    tx_list(
         facts,
-        &GetTransactionsRequest {
-            txs_hashes: ids.iter().map(|id| hex::encode(id.to_bytes())).collect(),
+        &TxListQuery {
+            id: ids
+                .iter()
+                .map(|id| HashHex::from_bytes(id.to_bytes()))
+                .collect(),
             prune,
         },
         false,
     )
-    .expect("answered")
+    .unwrap_or_else(|_| panic!("answered"))
+}
+
+/// `block_list` for one height in the form `prune` names.
+fn block_at(
+    facts: &super::StoreFacts,
+    height: BlockHeight,
+    prune: bool,
+) -> shekyl_rpc_types::wire::block::Block {
+    let listed = block_list(
+        facts,
+        facts,
+        &BlockListQuery {
+            height: vec![Height(height.to_raw())],
+            prune,
+        },
+        true,
+    )
+    .unwrap_or_else(|_| panic!("blocks"));
+    let [Slot::Item(block)] = <[_; 1]>::try_from(listed).expect("one slot") else {
+        panic!("the block is held");
+    };
+    block
 }
 
 /// The first fill block: every body it lists starts at an archival offset
@@ -236,75 +262,57 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
         .expect("a proof fetch for the discarded spend");
     assert_eq!(proof_tx.prefix, spend.prefix);
 
-    // (iv) The RPC's full form: the spend is `archived` with its shard, its
-    // id omitted from `txs`; the block's coinbase answers its whole body.
+    // (iv) The RPC's full form: the spend's slot is `archived` with its
+    // shard; the block's coinbase answers its whole body.
     let full = transactions(&facts, &[spend_id, coinbase_id], false);
-    assert!(full.status.is_ok());
+    let [archived, coinbase] = full.as_slice() else {
+        panic!("one slot for each id: {full:?}");
+    };
     assert_eq!(
-        full.archived,
-        vec![shekyl_rpc_types::ArchivedTx {
-            tx_hash: HashHex::from_bytes(spend_id.to_bytes()),
-            shard: 0,
-        }]
+        archived,
+        &Slot::State(SlotState::Archived(Archived {
+            id: HashHex::from_bytes(spend_id.to_bytes()),
+            shard: Integer(0),
+        }))
     );
-    assert_eq!(full.txs.len(), 1, "the archived id is not in `txs`");
+    let Slot::Item(coinbase) = coinbase else {
+        panic!("the coinbase is held whole: {coinbase:?}");
+    };
+    assert_eq!(coinbase.id, HashHex::from_bytes(coinbase_id.to_bytes()));
     assert_eq!(
-        full.txs[0].tx_hash,
-        HashHex::from_bytes(coinbase_id.to_bytes())
-    );
-    assert_eq!(
-        full.txs[0].as_hex,
-        hex::encode(fill.template.block.miner_transaction.serialize()),
+        coinbase.body.0,
+        fill.template.block.miner_transaction.serialize(),
         "a coinbase has no archival good and is never archived"
     );
-    assert!(full.missed_tx.is_empty());
 
     // (iv) `block_list` without `prune`: the block, with the spend as its
     // `archived` state and the request not failed.
-    let blocks = get_blocks_by_height(
-        &*facts,
-        &GetBlocksByHeightRequest {
-            heights: vec![fill.height.to_raw()],
-            prune: false,
-        },
-        true,
-    )
-    .expect("blocks");
-    assert!(blocks.status.is_ok(), "{:?}", blocks.status);
-    assert_eq!(blocks.blocks.len(), 1);
-    assert_eq!(blocks.blocks[0].block, fill.template.block.serialize());
-    assert_eq!(blocks.blocks[0].txs.len(), listed.len());
-    for (slot, id) in blocks.blocks[0].txs.iter().zip(&listed) {
+    let whole = block_at(&facts, fill.height, false);
+    assert_eq!(whole.body.0, fill.template.block.serialize());
+    assert_eq!(whole.tx.len(), listed.len());
+    for (slot, id) in whole.tx.iter().zip(&listed) {
         assert_eq!(
             *slot,
-            BlockTx::Archived {
-                tx_hash: id.to_bytes(),
-                shard: 0
-            }
+            OrArchived::Archived(ArchivedState::Archived(Archived {
+                id: HashHex::from_bytes(id.to_bytes()),
+                shard: Integer(0),
+            }))
         );
     }
     // And under `prune`, the same block's slots are skeletons that rebind.
-    let pruned = get_blocks_by_height(
-        &*facts,
-        &GetBlocksByHeightRequest {
-            heights: vec![fill.height.to_raw()],
-            prune: true,
-        },
-        true,
-    )
-    .expect("blocks");
-    assert!(pruned.status.is_ok());
-    for (slot, id) in pruned.blocks[0].txs.iter().zip(&listed) {
-        let BlockTx::Skeleton(slot) = slot else {
+    let pruned = block_at(&facts, fill.height, true);
+    for (slot, id) in pruned.tx.iter().zip(&listed) {
+        let OrArchived::Item(slot) = slot else {
             panic!("under prune every slot is a skeleton: {slot:?}");
         };
         let skeleton = shekyl_wire::SkeletonTx {
-            unprunable: slot.unprunable.clone(),
-            prunable_hash: shekyl_types::PrunableHash::from_bytes(slot.prunable_hash),
+            unprunable: slot.body.0.clone(),
+            prunable_hash: shekyl_types::PrunableHash::from_bytes(slot.prunable_hash.to_bytes()),
             pqc_auth_hash: slot
                 .pqc_auth_hash
-                .map(shekyl_types::PqcAuthHash::from_bytes),
-            archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_len),
+                .0
+                .map(|h| shekyl_types::PqcAuthHash::from_bytes(h.to_bytes())),
+            archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_size.0),
         };
         assert_eq!(skeleton.txid().expect("binds"), *id);
     }
@@ -326,62 +334,52 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
             "before the boundary the good is held"
         );
     }
-    let mut before_reply = transactions(&facts, &[spend_id], true);
-    assert_eq!(before_reply.txs.len(), 1);
-    assert_eq!(after_reply.txs.len(), 1);
-    assert!(before_reply.archived.is_empty() && after_reply.archived.is_empty());
+    let before_reply = transactions(&facts, &[spend_id], true);
+    let ([Slot::Item(before_entry)], [Slot::Item(after_entry)]) =
+        (before_reply.as_slice(), after_reply.as_slice())
+    else {
+        panic!("the spend is held, pruned, on both copies");
+    };
     // The one member that may differ is the tip-relative confirmation
     // count — a fact about where the tip is, not about the body. Pin that
     // it is the only one, then compare the wire bytes with it equalised.
-    let (
-        TxLocation::Mined {
-            confirmations: before_confirmations,
-            ..
-        },
-        TxLocation::Mined {
-            confirmations: after_confirmations,
-            ..
-        },
-    ) = (
-        &mut before_reply.txs[0].location,
-        &after_reply.txs[0].location,
-    )
-    else {
-        panic!("a mined spend is located in its block on both copies");
-    };
     assert!(
-        *after_confirmations > *before_confirmations,
+        after_entry.confirmations.0 > before_entry.confirmations.0,
         "the after copy is at a higher tip"
     );
-    *before_confirmations = *after_confirmations;
+    let mut before_entry = before_entry.clone();
+    before_entry.confirmations = after_entry.confirmations;
     assert_eq!(
-        before_reply.txs, after_reply.txs,
+        &before_entry, after_entry,
         "the skeleton is the one shape, whatever the shard's state"
     );
     assert_eq!(
-        serde_json::to_vec(&before_reply).expect("json"),
-        serde_json::to_vec(&after_reply).expect("json"),
+        serde_json::to_vec(&before_entry).expect("json"),
+        serde_json::to_vec(after_entry).expect("json"),
         "byte-identical on the wire, the tip's confirmation count aside"
-    );
-    let entry = &after_reply.txs[0];
-    assert!(
-        entry.as_hex.is_empty(),
-        "the pruned form carries no whole body"
     );
     let parts = spend.txid_parts();
     assert_eq!(
-        entry.prunable_hash,
+        after_entry.body.0,
+        spend.write_segments().expect("Vec write").pruned,
+        "the pruned form carries the pruned segment alone"
+    );
+    assert_eq!(
+        after_entry.prunable_hash,
         HashHex::from_bytes(parts.prunable_hash.to_bytes())
     );
     assert_eq!(
-        entry.pqc_auth_hash,
+        after_entry.pqc_auth_hash,
         Nullable(
             parts
                 .pqc_auth_hash
                 .map(|h| HashHex::from_bytes(h.to_bytes()))
         )
     );
-    assert_eq!(entry.archival_len, spend.archival_len().to_raw());
+    assert_eq!(
+        after_entry.archival_size,
+        Size(spend.archival_len().to_raw())
+    );
     drop(facts);
     drop(store);
 }
@@ -392,31 +390,32 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
 /// arity downgrade on the wire).
 fn lies(target: TxHash) -> Vec<(&'static str, ReplyEdit)> {
     let hex_target = HashHex::from_bytes(target.to_bytes());
-    let on_target = move |reply: &mut GetTransactionsResponse,
-                          edit: &dyn Fn(&mut shekyl_rpc_types::TxEntry)| {
-        let entry = reply
-            .txs
+    let on_target = move |block: &mut shekyl_rpc_types::wire::block::Block,
+                          edit: &dyn Fn(&mut BlockTx)| {
+        let entry = block
+            .tx
             .iter_mut()
-            .find(|e| e.tx_hash == hex_target)
+            .find_map(|slot| match slot {
+                OrArchived::Item(tx) if tx.id == hex_target => Some(tx),
+                _ => None,
+            })
             .expect("the target is served");
         edit(entry);
     };
     vec![
         (
             "a flipped byte in the pruned segment",
-            Arc::new(move |reply: &mut GetTransactionsResponse| {
-                on_target(reply, &|e| {
-                    let mut bytes = hex::decode(&e.pruned_as_hex).expect("hex");
-                    let last = bytes.len() - 1;
-                    bytes[last] ^= 0x01;
-                    e.pruned_as_hex = hex::encode(bytes);
+            Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
+                on_target(block, &|e| {
+                    let last = e.body.0.len() - 1;
+                    e.body.0[last] ^= 0x01;
                 });
             }) as ReplyEdit,
         ),
         (
             "a changed prunable hash",
-            Arc::new(move |reply: &mut GetTransactionsResponse| {
-                on_target(reply, &|e| {
+            Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
+                on_target(block, &|e| {
                     let mut h = e.prunable_hash.to_bytes();
                     h[0] ^= 0x01;
                     e.prunable_hash = HashHex::from_bytes(h);
@@ -425,16 +424,16 @@ fn lies(target: TxHash) -> Vec<(&'static str, ReplyEdit)> {
         ),
         (
             "an archival length one byte long",
-            Arc::new(move |reply: &mut GetTransactionsResponse| {
-                on_target(reply, &|e| e.archival_len += 1);
+            Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
+                on_target(block, &|e| e.archival_size.0 += 1);
             }) as ReplyEdit,
         ),
         (
             "the third operand dropped",
-            Arc::new(move |reply: &mut GetTransactionsResponse| {
-                on_target(reply, &|e| {
+            Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
+                on_target(block, &|e| {
                     assert!(e.pqc_auth_hash.0.is_some(), "a spend's prefix carries it");
-                    e.pqc_auth_hash = Nullable::NULL;
+                    e.pqc_auth_hash = Nullable(None);
                 });
             }) as ReplyEdit,
         ),

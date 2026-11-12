@@ -76,7 +76,7 @@ pub(crate) use self::claim::{
 
 /// Wall-clock interval between tip polls (rule 75: rationale + bounds).
 ///
-/// **Rationale.** The poll is one `get_info`-class read per tick; legs fire
+/// **Rationale.** The poll is one `daemon_status`-class read per tick; legs fire
 /// only on an observed height advance, so the poll rate bounds *detection
 /// latency*, not work rate. 60 s keeps worst-case leg latency within half a
 /// block target (120 s) for one cheap RPC per minute — the same figure the

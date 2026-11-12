@@ -16,21 +16,24 @@ use shekyl_types::ChainCount;
 
 use shekyl_types::BlockHash;
 
-use crate::engine::daemon::synced_chain_facts::{CoherentChainView, SyncedChainFacts};
+use crate::engine::daemon::synced_chain_facts::{ChainAnchor, CoherentChainView, SyncedChainFacts};
 use crate::engine::test_support::test_block_hash_at;
 
 /// A view both reads agree on at `tip`.
 ///
-/// Built through the real constructor rather than the private field so the
-/// `min` relation is exercised by every test here, not only the one that
-/// names it.
+/// Built through the real constructor rather than the private field, so
+/// every test here anchors the way production does: at the record's own
+/// block.
 fn view_at(tip: u64) -> AnchoredView {
     let synced =
         SyncedChainFacts::new(ChainCount::from_raw(tip + 1), true, test_block_hash_at(tip))
             .expect("synced");
     CoherentChainView::reconcile(
-        &synced.bracket(synced.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(tip + 1),
+        &synced,
+        ChainAnchor {
+            height: shekyl_types::BlockHeight::from_raw(tip),
+            hash: test_block_hash_at(tip),
+        },
     )
     .anchored()
     .expect("agreeing reads are anchored")

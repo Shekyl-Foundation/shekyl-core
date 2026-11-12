@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! `get_shard_view`: one archival shard's view as the wallet contract
-//! returns it, and the mapping from the daemon's `request_archival_shard`
-//! answer onto it (`docs/design/SHARD_VIEW_FETCH.md` §4 step 4).
+//! returns it, and the mapping from the daemon's `shard_fetch` answer onto
+//! it (`docs/design/SHARD_VIEW_FETCH.md` §4 step 4).
 //!
 //! The wallet holds no archival bytes a daemon can read, so every view —
 //! including a shard this wallet itself serves — is answered by the daemon
@@ -14,20 +14,22 @@
 //! `shard_id` and projects the answer. Nothing here renders; the renderer
 //! (`shekyl-shard-visual`) takes the aggregate fields this result carries.
 //!
-//! The daemon's three refusals keep their meaning across the hop, each on
-//! its own wallet code, so a viewer shows the state and never an empty
-//! picture (rule 82): still open (`-29534`), closed but no holder served it
-//! (`-29535`), and this daemon does not serve views at all (`-29536`). A
-//! transport failure is the daemon-unreachable code every other method
-//! uses; a malformed reply is the protocol-violation code.
+//! The daemon's refusals keep their meaning across the hop, each on its
+//! own wallet code, so a viewer shows the state and never an empty picture
+//! (rule 82): still open (`shard.open`, `-29534`), closed but no holder
+//! served it (`shard.unavailable`, `-29535`), this daemon does not serve
+//! views to this wallet at all (`shard.tor-off`, or
+//! the call outside the wallet's grant: `-29536`), and the daemon is
+//! already fetching one for a bounded caller (`bound.shard`, `-29537`).
+//! The refusal is read by its class and its dotted code, never its
+//! message. A transport failure is the
+//! daemon-unreachable code every other method uses; a malformed reply is
+//! the protocol-violation code.
 
 use serde::{Deserialize, Serialize};
-use shekyl_rpc_client::{JsonRpcRefusal, Rpc, RpcError};
-use shekyl_rpc_types::{
-    RequestArchivalShardRequest, RequestArchivalShardResponse,
-    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
-    CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_RESTRICTED,
-};
+use shekyl_rpc_client::{wire, ErrorClass, Refusal, Rpc, RpcError};
+use shekyl_rpc_types::kinds::Integer;
+use shekyl_rpc_types::wire::archival::{ShardId, ShardView};
 
 use crate::error::{from_daemon_fault, WalletRpcError};
 
@@ -43,8 +45,8 @@ pub struct GetShardViewParams {
     pub shard_id: u64,
 }
 
-/// `get_shard_view`'s result: `request_archival_shard`'s aggregate without
-/// the daemon's `status` envelope. Every field is a deterministic function
+/// `get_shard_view`'s result: `shard_fetch`'s aggregate, in the wallet
+/// contract's names. Every field is a deterministic function
 /// of the shard's body and the public skeleton (`SV-D4`); the renderer's
 /// input type is held to the same admissibility rule.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,18 +76,18 @@ pub struct ShardViewResult {
     pub close_height: u64,
 }
 
-impl From<RequestArchivalShardResponse> for ShardViewResult {
-    fn from(r: RequestArchivalShardResponse) -> Self {
+impl From<ShardView> for ShardViewResult {
+    fn from(r: ShardView) -> Self {
         Self {
-            shard_id: r.shard_id,
-            shard_hash: r.shard_hash.to_string(),
-            archival_len: r.archival_len,
-            block_count: r.block_count,
-            tx_count: r.tx_count,
-            output_count: r.output_count,
-            coinbase_output_count: r.coinbase_output_count,
-            time_range_seconds: r.time_range_seconds,
-            close_height: r.close_height,
+            shard_id: r.id.0,
+            shard_hash: r.hash.to_string(),
+            archival_len: r.size.0,
+            block_count: r.block_count.0,
+            tx_count: r.tx_count.0,
+            output_count: r.output_count.0,
+            coinbase_output_count: r.coinbase_output_count.0,
+            time_range_seconds: r.duration.0,
+            close_height: r.closing_height.0,
         }
     }
 }
@@ -94,13 +96,13 @@ impl From<RequestArchivalShardResponse> for ShardViewResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShardViewNotOfferedCause {
-    /// The method is admin-only (`SV-D6`) and the wallet reached a public
-    /// listener. The wallet's own node, on its unrestricted listener,
+    /// The call is outside the wallet's grant on this daemon (`SV-D6`).
+    /// The wallet's own node, on a connection that holds the grant,
     /// answers.
     Restricted,
-    /// The daemon holds no archival skeleton and so serves no view
-    /// (`SV-D9`): it runs on a store that cannot place a shard boundary.
-    SkeletonAbsent,
+    /// The daemon runs with Tor off and has no client to fetch a shard
+    /// through (IG-Q90).
+    TorOff,
 }
 
 impl ShardViewNotOfferedCause {
@@ -108,13 +110,10 @@ impl ShardViewNotOfferedCause {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Restricted => "restricted",
-            Self::SkeletonAbsent => "skeleton_absent",
+            Self::TorOff => "tor_off",
         }
     }
 }
-
-/// The daemon method the wallet forwards to.
-const REQUEST_ARCHIVAL_SHARD: &str = "request_archival_shard";
 
 /// Ask `daemon` for one shard's view: the whole of `get_shard_view` after
 /// parameter parsing, shared by the wallet server and an embedding wallet
@@ -127,68 +126,54 @@ pub async fn fetch_shard_view<D: Rpc>(
     daemon: &D,
     shard_id: u64,
 ) -> Result<ShardViewResult, WalletRpcError> {
-    let params = serde_json::to_value(RequestArchivalShardRequest { shard_id }).map_err(|e| {
-        WalletRpcError::InternalError(format!("encode {REQUEST_ARCHIVAL_SHARD}: {e}"))
-    })?;
     shard_view_from_daemon(
         daemon
-            .json_rpc_call_or_refusal::<RequestArchivalShardResponse>(
-                REQUEST_ARCHIVAL_SHARD,
-                Some(params),
-            )
+            .call_or_refusal::<wire::ShardFetch>(ShardId {
+                id: Integer(shard_id),
+            })
             .await,
     )
 }
 
-/// The daemon's `request_archival_shard` answer, mapped onto the contract.
+/// The daemon's `shard_fetch` answer, mapped onto the contract.
 ///
-/// `answer` is what [`shekyl_rpc_client::Rpc::json_rpc_call_or_refusal`]
-/// returns: the outer `Err` is the transport, the inner the daemon's typed
-/// refusal. A refusal code outside the method's three is the daemon
-/// breaking its contract — `-29209`, never a guess at a nearer code. So is
-/// a `result` whose `status` is not `OK`: the daemon this ships with refuses
-/// through `error`, and a `BUSY` arriving as a `result` is some other
-/// daemon's reply, whose fields are not a view and are never rendered.
+/// `answer` is what [`shekyl_rpc_client::Rpc::call_or_refusal`] returns:
+/// the outer `Err` is the transport, the inner the daemon's typed refusal.
+/// A refusal outside the method's own is the daemon breaking its contract —
+/// `-29209`, never a guess at a nearer code.
 pub fn shard_view_from_daemon(
-    answer: Result<Result<RequestArchivalShardResponse, JsonRpcRefusal>, RpcError>,
+    answer: Result<Result<ShardView, Refusal>, RpcError>,
 ) -> Result<ShardViewResult, WalletRpcError> {
     match answer {
-        Ok(Ok(response)) if response.status.is_ok() => Ok(response.into()),
-        Ok(Ok(response)) => {
-            tracing::warn!(
-                status = %response.status.0,
-                "request_archival_shard answered a result whose status is not OK"
-            );
-            Err(WalletRpcError::DaemonProtocolViolation)
-        }
-        Ok(Err(refusal)) => Err(shard_view_refusal(refusal)),
+        Ok(Ok(view)) => Ok(view.into()),
+        Ok(Err(refusal)) => Err(shard_view_refusal(&refusal)),
         Err(transport) => Err(from_daemon_fault(transport.fault(), &transport.to_string())),
     }
 }
 
-/// One daemon refusal to one wallet code.
-fn shard_view_refusal(refusal: JsonRpcRefusal) -> WalletRpcError {
-    let JsonRpcRefusal { code, message } = refusal;
-    match code {
-        CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN => {
-            WalletRpcError::ShardStillOpen { detail: message }
+/// One daemon refusal to one wallet code, by its class and dotted code.
+fn shard_view_refusal(refusal: &Refusal) -> WalletRpcError {
+    let detail = refusal.diagnostic.message.clone();
+    match (refusal.class, refusal.diagnostic.code.as_str()) {
+        (ErrorClass::RefusedByMethod, "shard.open") => WalletRpcError::ShardStillOpen { detail },
+        (ErrorClass::RefusedByMethod, "shard.unavailable") => {
+            WalletRpcError::ShardUnavailable { detail }
         }
-        CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE => {
-            WalletRpcError::ShardUnavailable { detail: message }
-        }
-        CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT => WalletRpcError::ShardViewNotOffered {
-            cause: ShardViewNotOfferedCause::SkeletonAbsent,
-            detail: message,
+        (ErrorClass::RefusedByMethod, "shard.tor-off") => WalletRpcError::ShardViewNotOffered {
+            cause: ShardViewNotOfferedCause::TorOff,
+            detail,
         },
-        CORE_RPC_ERROR_CODE_RESTRICTED => WalletRpcError::ShardViewNotOffered {
+        (ErrorClass::OverResourceBound, "bound.shard") => WalletRpcError::ShardViewBusy { detail },
+        (ErrorClass::OutsideTheGrant, _) => WalletRpcError::ShardViewNotOffered {
             cause: ShardViewNotOfferedCause::Restricted,
-            detail: message,
+            detail,
         },
-        other => {
+        (class, code) => {
             tracing::warn!(
-                code = other,
-                detail = %message,
-                "request_archival_shard refused with a code outside its contract"
+                ?class,
+                code,
+                detail = %detail,
+                "shard_fetch refused outside its contract"
             );
             WalletRpcError::DaemonProtocolViolation
         }
@@ -199,26 +184,35 @@ fn shard_view_refusal(refusal: JsonRpcRefusal) -> WalletRpcError {
 mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
-    use shekyl_rpc_types::{HashHex, RpcStatus};
+    use shekyl_rpc_client::Diagnostic;
+    use shekyl_rpc_types::hash::HashHex;
+    use shekyl_rpc_types::kinds::{Count, Duration, Height, Size};
 
-    fn response() -> RequestArchivalShardResponse {
-        RequestArchivalShardResponse {
-            status: RpcStatus::ok(),
-            shard_id: 3,
-            shard_hash: HashHex::from_hex(&"ab".repeat(32)).unwrap(),
-            archival_len: 3_000_000,
-            block_count: 41,
-            tx_count: 900,
-            output_count: 1_900,
-            coinbase_output_count: 41,
-            time_range_seconds: 4_800,
-            close_height: 12_345,
+    fn view() -> ShardView {
+        ShardView {
+            id: Integer(3),
+            hash: HashHex::from_hex(&"ab".repeat(32)).unwrap(),
+            size: Size(3_000_000),
+            block_count: Count(41),
+            tx_count: Count(900),
+            output_count: Count(1_900),
+            coinbase_output_count: Count(41),
+            duration: Duration(4_800),
+            closing_height: Height(12_345),
         }
     }
 
+    fn refused(class: ErrorClass, code: &str) -> WalletRpcError {
+        shard_view_from_daemon(Ok(Err(Refusal::new(
+            class,
+            Diagnostic::new(code, format!("daemon said {code}")),
+        ))))
+        .unwrap_err()
+    }
+
     #[test]
-    fn the_result_is_the_daemon_aggregate_without_its_status() {
-        let view = shard_view_from_daemon(Ok(Ok(response()))).unwrap();
+    fn the_result_is_the_daemon_aggregate_in_the_contracts_names() {
+        let view = shard_view_from_daemon(Ok(Ok(view()))).unwrap();
         assert_eq!(
             view,
             ShardViewResult {
@@ -233,57 +227,56 @@ mod tests {
                 close_height: 12_345,
             }
         );
-        // The wire carries no `status` member: a viewer deserializing into
-        // the renderer's aggregate type sees only shard fields.
         let json = serde_json::to_value(&view).unwrap();
         assert!(json.get("status").is_none());
         assert_eq!(json["close_height"], 12_345);
     }
 
+    /// Each refusal keeps its meaning on its own wallet code, read by class
+    /// and dotted code. Red edit: map by message, fold `shard.tor-off` into
+    /// `-29535`, or fold `bound.shard` into `-29535`.
     #[test]
     fn each_daemon_refusal_keeps_its_meaning_on_its_own_wallet_code() {
-        let refused = |code: i64| {
-            shard_view_from_daemon(Ok(Err(JsonRpcRefusal {
-                code,
-                message: format!("daemon said {code}"),
-            })))
-            .unwrap_err()
-        };
-
-        let open = refused(CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN);
+        let open = refused(ErrorClass::RefusedByMethod, "shard.open");
         assert_eq!(open.code(), WalletRpcErrorCode::ShardStillOpen);
-        assert_eq!(open.data().unwrap()["detail"], "daemon said -24");
+        assert_eq!(open.data().unwrap()["detail"], "daemon said shard.open");
 
-        let miss = refused(CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE);
+        let miss = refused(ErrorClass::RefusedByMethod, "shard.unavailable");
         assert_eq!(miss.code(), WalletRpcErrorCode::ShardUnavailable);
 
-        let absent = refused(CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT);
-        assert_eq!(absent.code(), WalletRpcErrorCode::ShardViewNotOffered);
-        assert_eq!(absent.data().unwrap()["cause"], "skeleton_absent");
+        let outside = refused(ErrorClass::OutsideTheGrant, "grant.outside");
+        assert_eq!(outside.code(), WalletRpcErrorCode::ShardViewNotOffered);
+        assert_eq!(outside.data().unwrap()["cause"], "restricted");
 
-        let public = refused(CORE_RPC_ERROR_CODE_RESTRICTED);
-        assert_eq!(public.code(), WalletRpcErrorCode::ShardViewNotOffered);
-        assert_eq!(public.data().unwrap()["cause"], "restricted");
+        let tor_off = refused(ErrorClass::RefusedByMethod, "shard.tor-off");
+        assert_eq!(tor_off.code(), WalletRpcErrorCode::ShardViewNotOffered);
+        assert_eq!(tor_off.data().unwrap()["cause"], "tor_off");
+
+        let busy = refused(ErrorClass::OverResourceBound, "bound.shard");
+        assert_eq!(busy.code(), WalletRpcErrorCode::ShardViewBusy);
+        assert_eq!(busy.data().unwrap()["detail"], "daemon said bound.shard");
+        assert_eq!(
+            refused(ErrorClass::RefusedByMethod, "bound.shard").code(),
+            WalletRpcErrorCode::DaemonProtocolViolation,
+            "a bound under another class is outside the contract"
+        );
     }
 
     #[test]
-    fn a_result_whose_status_is_not_ok_is_a_protocol_violation_not_a_view() {
-        let busy = RequestArchivalShardResponse {
-            status: RpcStatus("BUSY".to_owned()),
-            ..response()
-        };
-        let err = shard_view_from_daemon(Ok(Ok(busy))).unwrap_err();
-        assert_eq!(err.code(), WalletRpcErrorCode::DaemonProtocolViolation);
-    }
-
-    #[test]
-    fn a_code_outside_the_contract_is_a_protocol_violation_not_a_guess() {
-        let err = shard_view_from_daemon(Ok(Err(JsonRpcRefusal {
-            code: -5,
-            message: "internal".to_owned(),
-        })))
-        .unwrap_err();
-        assert_eq!(err.code(), WalletRpcErrorCode::DaemonProtocolViolation);
+    fn a_refusal_outside_the_contract_is_a_protocol_violation_not_a_guess() {
+        for (class, code) in [
+            (ErrorClass::Internal, "daemon.internal"),
+            (ErrorClass::RefusedByMethod, "shard.something-new"),
+            // No daemon writes it: the skeleton-absent refusal is deleted.
+            (ErrorClass::RefusedByMethod, "shard.view-absent"),
+            (ErrorClass::NotReady, "shard.open"),
+        ] {
+            assert_eq!(
+                refused(class, code).code(),
+                WalletRpcErrorCode::DaemonProtocolViolation,
+                "{class:?} {code}"
+            );
+        }
     }
 
     #[test]

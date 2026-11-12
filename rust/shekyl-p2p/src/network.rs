@@ -170,7 +170,7 @@ struct Inner {
     relay: RelayHandle,
     layer: Layer,
     connectors: Arc<Connectors>,
-    /// The connectors the plan starts, in declaration order. `get_info`
+    /// The connectors the plan starts, in declaration order. `daemon_status`
     /// reports one row for each and none for the others.
     running: Vec<ConnectorId>,
     tor_link: Arc<TorLink>,

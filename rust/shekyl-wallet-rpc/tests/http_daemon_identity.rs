@@ -22,9 +22,11 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_rpc_types::kinds::{Height, Integer};
+use shekyl_rpc_types::nullable::Nullable;
+use shekyl_rpc_types::wire::chain::Version;
 use shekyl_rpc_types::{
-    genesis_hash_for, GetVersionResponse, HashHex, RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH,
-    CORE_RPC_VERSION,
+    genesis_hash_for, HashHex, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
 };
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
@@ -39,18 +41,17 @@ const SERVED: Network = Network::Stagenet;
 /// A port nothing listens on: the "no answer" control.
 const SILENT_DAEMON: &str = "http://127.0.0.1:1";
 
-/// A `get_version` reply agreeing with this build on `SERVED` except where
+/// A `version` reply agreeing with this build on `SERVED` except where
 /// `edit` says otherwise.
-fn version_reply(edit: impl FnOnce(&mut GetVersionResponse)) -> String {
-    let mut reply = GetVersionResponse {
-        status: RpcStatus::ok(),
-        version: CORE_RPC_VERSION,
-        release: false,
-        current_height: 1,
-        target_height: shekyl_rpc_types::Nullable::NULL,
-        consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: SERVED,
-        genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),
+fn version_reply(edit: impl FnOnce(&mut Version)) -> String {
+    let mut reply = Version {
+        version: Integer(u64::from(CORE_RPC_VERSION)),
+        tagged: false,
+        height: Height(0),
+        target_height: Nullable(None),
+        consensus_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
+        network: SERVED,
+        genesis: HashHex::from_bytes(genesis_hash_for(SERVED)),
     };
     edit(&mut reply);
     json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
@@ -146,8 +147,8 @@ async fn refresh_error(daemon_address: String) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_daemon_on_another_network_names_both_networks() {
     let error = refresh_error(fake_daemon(version_reply(|r| {
-        r.nettype = Network::Mainnet;
-        r.genesis_hash = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
+        r.network = Network::Mainnet;
+        r.genesis = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
     })))
     .await;
     assert_eq!(error["code"], -29207, "{error}");
@@ -162,7 +163,7 @@ async fn a_daemon_on_another_network_names_both_networks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_older_daemon_is_told_to_update() {
-    let error = refresh_error(fake_daemon(version_reply(|r| r.version -= 1))).await;
+    let error = refresh_error(fake_daemon(version_reply(|r| r.version.0 -= 1))).await;
     assert_eq!(error["code"], -29205, "{error}");
     assert_eq!(error["data"]["update"], "daemon", "{error}");
     assert!(
@@ -176,7 +177,7 @@ async fn an_older_daemon_is_told_to_update() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_daemon_on_another_chain_is_not_an_outage() {
     let error = refresh_error(fake_daemon(version_reply(|r| {
-        r.genesis_hash = HashHex::from_bytes([0xab; 32]);
+        r.genesis = HashHex::from_bytes([0xab; 32]);
     })))
     .await;
     assert_eq!(error["code"], -29208, "{error}");
@@ -203,7 +204,7 @@ async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreadable_version_reply_says_the_version_cannot_be_named() {
     let error = refresh_error(fake_daemon(
-        json!({"jsonrpc": "2.0", "id": "0", "result": {"status": "OK"}}).to_string(),
+        json!({"jsonrpc": "2.0", "id": "0", "result": {}}).to_string(),
     ))
     .await;
     assert_eq!(error["code"], -29205, "{error}");

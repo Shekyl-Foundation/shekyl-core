@@ -6,7 +6,7 @@
 //! Pure-software RandomX v2 verifier for Shekyl daemon block validation.
 //!
 //! The daemon's one RandomX, light and cache-only throughout. The ingest
-//! substrate, `calc_pow`, and `shekyl-miner` hash through
+//! substrate, `pow`, and `shekyl-miner` hash through
 //! [`CacheStore::lookup`] and never derive: a derivation publishes into
 //! the transient slot and evicts the spare, and each of them runs on a
 //! seed it did not pin. [`CacheStore::pin_canonical`] is the fill an epoch

@@ -128,7 +128,7 @@ See `00-mission.mdc` for the V4 transition commitment and
 |----------|---------|
 | `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` constant. Authoritative definition (`SHEKYL_PROTOCOL_VERSION` in `src/cryptonote_config.h` was deleted with the C++ `main`, `DAEMON_CONFIG_CUTOVER.md` DC-Q20). |
 | Daemon `--version` output | Prints `Shekyl vX.Y.Z (protocol 3)`. |
-| `/get_info` RPC response | `protocol_version` field. |
+| `daemon_status` RPC reply | `protocol_version` field. |
 | P2P handshake | Network peers exchange protocol versions during connection. |
 
 ---

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "inbound": false,
+    "local": false,
+    "endpoint": "203.0.113.5:12021",
+    "connector": "clearnet",
+    "download": 1048576,
+    "upload": 524288,
+    "download_idle": 3,
+    "upload_idle": 5,
+    "mode": "past-cap",
+    "age": 3600,
+    "download_speed_average": 2048,
+    "download_speed_current": 4096,
+    "upload_speed_average": 1024,
+    "upload_speed_current": 512,
+    "height": 1203
+  }
+]

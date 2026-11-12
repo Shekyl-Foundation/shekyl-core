@@ -22,21 +22,21 @@ use std::sync::Arc;
 use shekyl_chain_rules::{AtHeight, Claimable, EpochFloor};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::info_facts::InfoFacts;
-use shekyl_daemon_rpc::methods::get_block_header_by_height;
-use shekyl_daemon_rpc::methods::{RpcFault, RpcRefusal};
+use shekyl_daemon_rpc::methods::RpcFault;
 use shekyl_daemon_rpc::read_facts::ChainReadFacts;
-use shekyl_daemon_rpc::read_methods::{
-    calc_pow, get_alt_blocks_hashes, get_alternate_chains, get_archival_emission_claim_source,
-    get_archival_shard_coverage, get_coinbase_tx_sum, get_curve_tree_checkpoint,
-    get_curve_tree_info, COINBASE_SUM_RANGE_REFUSAL, P_ID_REFUSAL,
+use shekyl_daemon_rpc::reads::{
+    archival_claim_show, block_header_show, chain_alt, chain_coinbase_sum, curve_show, pow,
+    shard_coverage,
 };
 use shekyl_harness_spender::Spender;
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
-use shekyl_rpc_types::{
-    CalcPowRequest, GetArchivalEmissionClaimSourceRequest, GetCoinbaseTxSumRequest,
-    GetCurveTreeCheckpointRequest, HashHex, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
-};
+use shekyl_rpc_types::errors::ErrorClass;
+use shekyl_rpc_types::kinds::{Bytes, Height};
+use shekyl_rpc_types::wire::archival::PersonaQuery;
+use shekyl_rpc_types::wire::block::{BlockSelect, HeaderSelect, PowInput};
+use shekyl_rpc_types::wire::chain::{CoinbaseSumRange, CurveSelect};
+use shekyl_rpc_types::wire::shared::Selector;
+use shekyl_rpc_types::HashHex;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
 
@@ -109,25 +109,25 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
             .map(|entry| hex(entry.id))
             .collect();
 
-        // Every alt block, in the table's order.
-        let hashes = get_alt_blocks_hashes(&facts).expect("alt hashes");
-        assert!(hashes.status.is_ok());
-        assert_eq!(hashes.blks_hashes, table_order);
+        // Every alt block is in a chain (IG-Q46: the hashes list folds
+        // into `chain_alt`).
+        let chains = chain_alt(&facts).unwrap_or_else(|_| panic!("alt chains"));
         let offered: BTreeSet<HashHex> = y_branch
             .iter()
             .chain(&z_branch)
             .map(|m| hex(m.hash))
             .collect();
         assert_eq!(
-            hashes.blks_hashes.iter().copied().collect::<BTreeSet<_>>(),
+            chains
+                .iter()
+                .flat_map(|c| c.block.iter().copied())
+                .collect::<BTreeSet<_>>(),
             offered,
             "the alt blocks are the three offered"
         );
 
         // The two chains, each from its tip down to where it leaves.
-        let chains = get_alternate_chains(&facts).expect("alt chains");
-        assert!(chains.status.is_ok());
-        assert_eq!(chains.chains.len(), 2, "two tips");
+        assert_eq!(chains.len(), 2, "two tips");
         let main_at = |height: BlockHeight| match snap.block_info(height).expect("info") {
             AtHeight::Recorded(info) => hex(info.hash),
             AtHeight::AboveTip => panic!("main block {height}"),
@@ -135,34 +135,26 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
         for (branch, leaves_after) in [(&y_branch, 3u64), (&z_branch, 4u64)] {
             let tip = branch.last().expect("non-empty");
             let chain = chains
-                .chains
                 .iter()
-                .find(|c| c.block_hash == hex(tip.hash))
+                .find(|c| c.hash == hex(tip.hash))
                 .unwrap_or_else(|| panic!("a chain tipped at {:?}", tip.hash));
             let expected_blocks: Vec<HashHex> = branch.iter().rev().map(|m| hex(m.hash)).collect();
-            assert_eq!(chain.block_hashes, expected_blocks, "tip first");
-            assert_eq!(chain.length, u64::try_from(branch.len()).expect("fits"));
-            assert_eq!(chain.height, tip.height.to_raw());
+            assert_eq!(chain.block, expected_blocks, "tip first");
+            let length = u64::try_from(chain.block.len()).expect("fits");
+            assert_eq!(chain.height.0, tip.height.to_raw());
             let row = snap
                 .alt_block(&tip.hash)
                 .expect("read")
                 .expect("the tip is held");
             let work = row.cumulative_difficulty().to_raw();
-            assert_eq!(
-                (u128::from(chain.difficulty_top64) << 64) | u128::from(chain.difficulty),
-                work
-            );
-            assert_eq!(chain.wide_difficulty, format!("0x{work:x}"));
+            assert_eq!(chain.difficulty_cumulative.0, work);
             // The parent the lowest block names, which here is also the
-            // main chain's block below the chain — the C++'s reading.
-            assert_eq!(chain.main_chain_parent_block, main_at(h(leaves_after)));
-            assert_eq!(
-                chain.main_chain_parent_block,
-                main_at(h(chain.height - chain.length))
-            );
+            // main chain's block below the chain.
+            assert_eq!(chain.parent, main_at(h(leaves_after)));
+            assert_eq!(chain.parent, main_at(h(chain.height.0 - length)));
         }
         // The tips are walked in the table's key order.
-        let tip_order: Vec<&HashHex> = chains.chains.iter().map(|c| &c.block_hash).collect();
+        let tip_order: Vec<&HashHex> = chains.iter().map(|c| &c.hash).collect();
         let mut by_table: Vec<&HashHex> = table_order
             .iter()
             .filter(|id| tip_order.contains(id))
@@ -202,32 +194,27 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
         ));
         let facts = facts_over(Arc::clone(&store), path, rules);
         let snap = store.begin_read().expect("read");
-        let ask = |p_id: &str| {
-            get_archival_emission_claim_source(
+        let ask = |persona: [u8; 32]| {
+            archival_claim_show(
                 &facts,
-                &GetArchivalEmissionClaimSourceRequest {
-                    p_id: p_id.to_owned(),
+                &PersonaQuery {
+                    persona: HashHex::from_bytes(persona),
                 },
             )
         };
-        let source = ask(&"11".repeat(32)).expect("a claim source");
-        assert!(source.status.is_ok());
+        let source = ask([0x11; 32]).unwrap_or_else(|_| panic!("a claim source"));
         let connecting = tip.to_raw() + 1;
-        assert_eq!(source.chain_height, connecting);
+        assert_eq!(source.height.0, tip.to_raw(), "the gather tip");
         let settled = levered_schedule().epoch_at(h(connecting)).to_raw();
-        assert_eq!(source.current_settled_epoch, settled);
-        assert!(!source.has_bond_record);
+        assert_eq!(source.settled_epoch.0, settled);
+        assert_eq!(source.joined_epoch.0, None, "no bond record");
         let window: Vec<u64> = (shekyl_archival_retention::claim_window_floor(
             settled,
             shekyl_archival_retention::archival_params(),
         )..settled)
             .collect();
         assert_eq!(
-            source
-                .epochs
-                .iter()
-                .map(|e| e.settlement_epoch)
-                .collect::<Vec<_>>(),
+            source.epoch.iter().map(|e| e.id.0).collect::<Vec<_>>(),
             window
         );
         let mut admitted = 0;
@@ -235,8 +222,8 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
         // epoch the boundary has retired is SI-32, not a missing row.
         let claimable =
             EpochFloor::<Claimable>::under(BlockHeight::from_raw(connecting), levered_schedule());
-        for epoch in &source.epochs {
-            let e = shekyl_types::SettlementEpoch::from_raw(epoch.settlement_epoch);
+        for epoch in &source.epoch {
+            let e = shekyl_types::SettlementEpoch::from_raw(epoch.id.0);
             let budget = snap
                 .budget(e, claimable)
                 .expect("read")
@@ -245,31 +232,32 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
                 .sigma_work(e, claimable)
                 .expect("read")
                 .map(shekyl_types::archival::SigmaWorkMilli::to_raw);
-            assert_eq!(epoch.budget_atomic, budget.unwrap_or(0));
-            assert_eq!(epoch.sigma_work_milli, sigma.unwrap_or(0));
+            let gathered = budget.is_some() && sigma.is_some();
             assert_eq!(
-                epoch.has_budget_row,
-                budget.is_some() && sigma.is_some(),
-                "epoch {} is gathered exactly when both rows exist",
-                epoch.settlement_epoch
+                epoch.budget.0.map(|b| b.to_atomic_units().to_raw()),
+                budget.filter(|_| gathered),
+                "epoch {} carries its budget exactly when both rows exist",
+                epoch.id.0
             );
+            assert_eq!(epoch.work.0, sigma.unwrap_or(0));
             assert_eq!(
-                epoch.close_block_height,
+                epoch.closing_height.0,
                 levered_schedule()
-                    .close_height(epoch.settlement_epoch)
+                    .close_height(epoch.id.0)
                     .expect("a window epoch closes")
             );
-            assert!(epoch.bonds.is_empty() && epoch.credit_pairs.is_empty());
-            assert_eq!(epoch.claimant_bond_idx, u64::MAX);
-            admitted += u64::from(epoch.has_budget_row);
+            assert!(epoch.bond.is_empty() && epoch.credit.is_empty());
+            assert_eq!(epoch.claimant.0, None);
+            admitted += u64::from(epoch.budget.0.is_some());
         }
         assert!(
             admitted > 0 && admitted < u64::try_from(window.len()).expect("fits"),
             "the window holds both an admitted epoch and one awaiting its pass"
         );
-        assert_eq!(
-            ask("zz"),
-            Err(RpcFault::Refused(RpcRefusal::wrong_param(P_ID_REFUSAL)))
+        // A persona that is not 32 bytes of hex is not a request: the
+        // envelope refuses it as `rpc.params` before the handler runs.
+        assert!(
+            serde_json::from_value::<PersonaQuery>(serde_json::json!({ "persona": "zz" })).is_err()
         );
         drop(snap);
         drop(facts);
@@ -314,7 +302,7 @@ async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
         .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
     mined.push(joined);
     mined.extend(s.mine(40).await);
-    let bonded = hex::encode(persona.id().to_bytes());
+    let bonded = persona.id().to_bytes();
     s.reopen(|path| {
         let store = Arc::new(open_store_under(
             path,
@@ -322,34 +310,28 @@ async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
             shekyl_chain_store::apply_policy::ApplyPolicy::Full,
         ));
         let facts = facts_over(Arc::clone(&store), path, rules);
-        let ask = |p_id: &str| {
-            get_archival_emission_claim_source(
+        let ask = |persona: [u8; 32]| {
+            archival_claim_show(
                 &facts,
-                &GetArchivalEmissionClaimSourceRequest {
-                    p_id: p_id.to_owned(),
+                &PersonaQuery {
+                    persona: HashHex::from_bytes(persona),
                 },
             )
-            .expect("a claim source")
+            .unwrap_or_else(|_| panic!("a claim source"))
         };
-        let with_bond = ask(&bonded);
-        let without = ask(&"11".repeat(32));
-        assert!(with_bond.has_bond_record, "the joined persona holds a bond");
-        assert!(!without.has_bond_record, "the stranger holds none");
-        assert!(!with_bond.epochs.is_empty(), "the window lists epochs");
-        let window = |source: &shekyl_rpc_types::GetArchivalEmissionClaimSourceResponse| {
+        let with_bond = ask(bonded);
+        let without = ask([0x11; 32]);
+        assert!(
+            with_bond.joined_epoch.0.is_some(),
+            "the joined persona holds a bond"
+        );
+        assert!(without.joined_epoch.0.is_none(), "the stranger holds none");
+        assert!(!with_bond.epoch.is_empty(), "the window lists epochs");
+        let window = |source: &shekyl_rpc_types::wire::archival::ClaimSource| {
             source
-                .epochs
+                .epoch
                 .iter()
-                .map(|e| {
-                    (
-                        e.settlement_epoch,
-                        e.budget_atomic,
-                        e.sigma_work_milli,
-                        e.has_budget_row,
-                        e.close_block_height,
-                        e.bonds.clone(),
-                    )
-                })
+                .map(|e| (e.id, e.budget, e.work, e.closing_height, e.bond.clone()))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -357,15 +339,9 @@ async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
             window(&without),
             "the window does not branch on the bond"
         );
-        assert_eq!(with_bond.chain_height, without.chain_height);
-        assert_eq!(
-            with_bond.current_settled_epoch,
-            without.current_settled_epoch
-        );
-        assert!(without
-            .epochs
-            .iter()
-            .all(|e| e.claimant_bond_idx == u64::MAX));
+        assert_eq!(with_bond.height, without.height);
+        assert_eq!(with_bond.settled_epoch, without.settled_epoch);
+        assert!(without.epoch.iter().all(|e| e.claimant.0.is_none()));
         drop(facts);
         drop(store);
     })
@@ -398,18 +374,17 @@ async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
         ));
         let facts = facts_over(Arc::clone(&store), path, rules);
         let snap = store.begin_read().expect("read");
-        let coverage = get_archival_shard_coverage(&facts).expect("coverage");
-        assert!(coverage.status.is_ok());
-        assert_eq!(coverage.as_of_height, tip.to_raw());
-        assert_eq!(coverage.frozen_count, 0);
-        assert!(coverage.shards.is_empty());
+        let coverage = shard_coverage(&facts).unwrap_or_else(|_| panic!("coverage"));
+        assert_eq!(coverage.height.0, tip.to_raw());
+        assert_eq!(coverage.frozen_count.0, 0);
+        assert!(coverage.shard.is_empty());
         let watermark = snap
             .last_settled_slash_epoch()
             .expect("read")
             .expect("the first pass has written the watermark");
         let arithmetic = schedule.last_settled_epoch_as_of_parent(tip.to_raw());
         assert_ne!(watermark.to_raw(), arithmetic);
-        assert_eq!(coverage.settled_epoch, watermark.to_raw());
+        assert_eq!(coverage.settled_epoch.0, watermark.to_raw());
         let ahead = shekyl_types::SettlementEpoch::from_raw(arithmetic);
         // The claimable floor at the next block: the watermark's rows sit
         // inside it, and an epoch with no gather stays `None` rather than
@@ -425,16 +400,15 @@ async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
             .sigma_work(watermark, claimable)
             .expect("read")
             .expect("the watermark's gather is a row");
-        assert_eq!(coverage.sigma_work_milli, sigma.to_raw());
+        assert_eq!(coverage.work.0.map(|w| w.0), Some(sigma.to_raw()));
         assert_eq!(
-            coverage.budget_atomic,
+            coverage.budget.0.map(|b| b.to_atomic_units().to_raw()),
             snap.budget(watermark, claimable)
                 .expect("read")
-                .map_or(0, shekyl_units::AtomicUnits::to_raw)
+                .map(shekyl_units::AtomicUnits::to_raw)
         );
-        assert_eq!(coverage.profit_estimate_available, sigma.to_raw() != 0);
         assert_eq!(
-            coverage.leaf_count,
+            coverage.leaf_count.0,
             snap.curve_tree().expect("summary").leaf_count.to_raw()
         );
         drop(snap);
@@ -493,20 +467,21 @@ async fn after_a_retirement_every_listed_chain_hangs_from_the_main_chain() {
         ));
         let facts = facts_over(Arc::clone(&store), path, rules);
         let snap = store.begin_read().expect("read");
-        let chains = get_alternate_chains(&facts).expect("alt chains").chains;
+        let chains = chain_alt(&facts).unwrap_or_else(|_| panic!("alt chains"));
         assert_eq!(
             chains.len(),
             1,
             "the crossed branch left whole; the one beside it stays"
         );
-        assert_eq!(chains[0].block_hash, hex(beside[0].hash));
+        assert_eq!(chains[0].hash, hex(beside[0].hash));
         for chain in &chains {
-            let parent = BlockHash::from_bytes(chain.main_chain_parent_block.to_bytes());
+            let parent = BlockHash::from_bytes(chain.parent.to_bytes());
+            let length = u64::try_from(chain.block.len()).expect("fits");
             assert_eq!(
                 snap.height_of(&parent).expect("read"),
-                Some(h(chain.height - chain.length)),
+                Some(h(chain.height.0 - length)),
                 "the parent of the chain tipped at {} is the main block below it",
-                chain.block_hash
+                chain.hash
             );
         }
         drop(snap);
@@ -522,7 +497,7 @@ async fn after_a_retirement_every_listed_chain_hangs_from_the_main_chain() {
 /// The tree after block `h` is the root the block at `h + 1` was built
 /// against (its header carries it, CEN-B5), at every height of a chain
 /// whose coinbases have matured into the tree; the tree after the tip is
-/// `get_curve_tree_info`, and the store's own summary agrees; above the
+/// `curve_show` of the tip, and the store's own summary agrees; above the
 /// tip there is no tree to report.
 #[tokio::test]
 async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
@@ -532,19 +507,18 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
+        let at = |height: BlockHeight| {
+            curve_show(
+                &facts,
+                &CurveSelect(Selector::Height(Height(height.to_raw()))),
+            )
+        };
         for pair in mined.windows(2) {
             let (below, above) = (&pair[0], &pair[1]);
-            let checkpoint = get_curve_tree_checkpoint(
-                &facts,
-                &GetCurveTreeCheckpointRequest {
-                    block_height: below.height.to_raw(),
-                },
-            )
-            .expect("through the tip");
-            assert!(checkpoint.status.is_ok());
-            assert_eq!(checkpoint.block_height, below.height.to_raw());
+            let checkpoint = at(below.height).unwrap_or_else(|_| panic!("through the tip"));
+            assert_eq!(checkpoint.height.0, below.height.to_raw());
             assert_eq!(
-                checkpoint.root,
+                checkpoint.root.to_string(),
                 hex::encode(above.template.block.header.curve_tree_root.to_bytes()),
                 "the tree after {} is the root block {} was built on",
                 below.height.to_raw(),
@@ -552,46 +526,31 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
             );
         }
 
-        let info = get_curve_tree_info(&facts).expect("info");
-        assert!(info.status.is_ok());
-        assert_eq!(info.height, tip.to_raw());
+        let info = curve_show(&facts, &CurveSelect(Selector::Tip))
+            .unwrap_or_else(|_| panic!("the tip's tree"));
+        assert_eq!(info.height.0, tip.to_raw());
         assert!(
-            info.leaf_count > 0,
+            info.leaf_count.0 > 0,
             "the coinbases matured into the tree (rule 47: the subject exists)"
         );
-        let at_tip = get_curve_tree_checkpoint(
-            &facts,
-            &GetCurveTreeCheckpointRequest {
-                block_height: tip.to_raw(),
-            },
-        )
-        .expect("the tip");
-        assert_eq!(
-            (at_tip.root.as_str(), at_tip.depth, at_tip.leaf_count),
-            (info.root.as_str(), info.depth, info.leaf_count),
-            "info is the checkpoint at the tip"
-        );
+        let at_tip = at(tip).unwrap_or_else(|_| panic!("the tip"));
+        assert_eq!(at_tip, info, "the tip's tree is the tree after the tip");
         let summary = store
             .begin_read()
             .expect("read")
             .curve_tree()
             .expect("summary");
-        assert_eq!(info.root, hex::encode(summary.root.to_bytes()));
-        assert_eq!(info.leaf_count, summary.leaf_count.to_raw());
-        assert_eq!(info.depth, summary.depth.to_raw());
+        assert_eq!(info.root.to_string(), hex::encode(summary.root.to_bytes()));
+        assert_eq!(info.leaf_count.0, summary.leaf_count.to_raw());
+        assert_eq!(info.layers.0, u64::from(summary.depth.to_raw()));
 
-        let above = tip.to_raw() + 1;
-        assert_eq!(
-            get_curve_tree_checkpoint(
-                &facts,
-                &GetCurveTreeCheckpointRequest {
-                    block_height: above
-                }
-            ),
-            Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-                "No checkpoint at height {above}"
-            ))))
-        );
+        let above = tip.saturating_add(shekyl_types::BlockCount::ONE);
+        match at(above) {
+            Err(RpcFault::Refused(refusal)) => {
+                assert_eq!(refusal.diagnostic.code, "curve.missing");
+            }
+            other => panic!("above the tip there is no tree: {other:?}"),
+        }
         drop(facts);
         drop(store);
     })
@@ -602,18 +561,18 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
 /// The coinbase sum over a chain with two listed spends: the emission is
 /// what each block's verdict paid (CEN-G12's growth of the supply), the
 /// fees are what the spends paid, and the whole chain's emission is the
-/// supply accumulator `get_info` reports. The C++'s emission figure —
+/// supply accumulator `daemon_status` reports. The C++'s emission figure —
 /// each coinbase less the block's fees — is printed beside it: on the
 /// spending block it is not what was minted.
-/// `calc_pow` hashes under a permit from the daemon's one hasher budget,
+/// `pow` hashes under a permit from the daemon's one hasher budget,
 /// in its own class (PR2-Q3): while the one permit is held, it waits, and
 /// it hashes once the permit is free.
 #[tokio::test]
-async fn calc_pow_waits_for_a_hasher_permit_in_its_class() {
+async fn pow_waits_for_a_hasher_permit_in_its_class() {
     use shekyl_hash_budget::{Budget, Class};
     let caches = Arc::new(CacheStore::new());
-    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
-    let mut s = Scenario::open_with("rpc-reads-calc-pow-permit", pow);
+    let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let mut s = Scenario::open_with("rpc-reads-calc-pow-permit", substrate);
     let mined = s.mine(2).await;
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
@@ -625,19 +584,19 @@ async fn calc_pow_waits_for_a_hasher_permit_in_its_class() {
             Arc::clone(&caches),
             budget.clone(),
         );
-        let request = CalcPowRequest {
-            height: mined[1].height.to_raw(),
-            block_blob: hex::encode(mined[1].template.block.pow_blob()),
-            seed_hash: String::new(),
+        let request = PowInput {
+            height: Height(mined[1].height.to_raw()),
+            hashing: Bytes(mined[1].template.block.pow_blob()),
+            seed: None,
         };
         let held = budget.acquire(Class::Chain);
         std::thread::scope(|scope| {
-            let asked = scope.spawn(|| calc_pow(&facts, &request, false, &hash_budget()));
+            let asked = scope.spawn(|| pow(&facts, &request, false, &hash_budget()));
             let started = std::time::Instant::now();
             while budget.waiting(Class::CalcPow) == 0 {
                 assert!(
                     started.elapsed() < std::time::Duration::from_secs(60),
-                    "calc_pow never waited for a permit"
+                    "pow never waited for a permit"
                 );
                 std::thread::yield_now();
             }
@@ -678,29 +637,29 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
         let sum = |height: BlockHeight, count: u64| {
-            get_coinbase_tx_sum(
+            chain_coinbase_sum(
                 &facts,
-                &GetCoinbaseTxSumRequest {
-                    height: height.to_raw(),
-                    count,
+                &CoinbaseSumRange {
+                    from: Height(height.to_raw()),
+                    to: Height(height.to_raw() + count - 1),
                 },
             )
-                .expect("coinbase sum")
         };
-        let amount = |low: u64, top: u64| (u128::from(top) << 64) | u128::from(low);
+        let amount = |a: &shekyl_units::wire::AtomicUnitsString| {
+            u128::from(a.to_atomic_units().to_raw())
+        };
 
         // Block by block: the verdict's paid reward, and the listed fees.
         for m in &mined {
-            let one = sum(m.height, 1);
-            assert!(one.status.is_ok());
+            let one = sum(m.height, 1).unwrap_or_else(|_| panic!("coinbase sum"));
             let listed: u128 = if m.height == h(AT) { fees } else { 0 };
             assert_eq!(
-                amount(one.emission_amount, one.emission_amount_top64),
+                amount(&one.emission),
                 u128::from(m.emission.paid.to_raw()),
                 "emission at {} is the paid reward",
                 m.height.to_raw()
             );
-            assert_eq!(amount(one.fee_amount, one.fee_amount_top64), listed);
+            assert_eq!(amount(&one.fee), listed);
             let cxx = i128::from(coinbase_total(m)) - i128::try_from(listed).expect("fits");
             if m.height == h(AT) {
                 eprintln!(
@@ -715,33 +674,40 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
         }
 
         // The whole chain: the supply accumulator, and every fee.
-        let whole = sum(BlockHeight::ZERO, chain);
+        let whole = sum(BlockHeight::ZERO, chain).unwrap_or_else(|_| panic!("coinbase sum"));
         let coins = facts.chain().expect("info chain").already_generated_coins;
-        assert_eq!(
-            amount(whole.emission_amount, whole.emission_amount_top64),
-            u128::from(coins.to_raw())
-        );
-        assert_eq!(
-            whole.wide_emission_amount,
-            format!("0x{:x}", coins.to_raw())
-        );
-        assert_eq!(amount(whole.fee_amount, whole.fee_amount_top64), fees);
+        assert_eq!(amount(&whole.emission), u128::from(coins.to_raw()));
+        assert_eq!(amount(&whole.fee), fees);
 
         // A range that starts inside and runs past the tip stops at it.
-        assert_eq!(sum(h(AT), chain), sum(h(AT), 2));
-        // An empty range is zero and OK.
-        let empty = sum(BlockHeight::ZERO, 0);
-        assert!(empty.status.is_ok());
-        assert_eq!((empty.emission_amount, empty.fee_amount), (0, 0));
-        assert_eq!(empty.wide_emission_amount, "0x0");
-        // The C++ bound: a start at the count, or a count past it.
+        assert_eq!(
+            sum(h(AT), chain).map(|s| (amount(&s.emission), amount(&s.fee))).ok(),
+            sum(h(AT), 2).map(|s| (amount(&s.emission), amount(&s.fee))).ok()
+        );
+        // A range whose start is past its end is the caller's error.
+        match chain_coinbase_sum(
+            &facts,
+            &CoinbaseSumRange {
+                from: Height(1),
+                to: Height(0),
+            },
+        ) {
+            Err(RpcFault::Refused(refusal)) => {
+                assert_eq!(refusal.class, ErrorClass::BadParams);
+                assert_eq!(refusal.diagnostic.code, "block.range");
+            }
+            other => panic!("a backwards range: {other:?}"),
+        }
+        // The bound: a start at the count, or a count past it, leaves the
+        // chain.
         for (height, count) in [(chain, 1), (0, chain + 1)] {
-            let refused = sum(h(height), count);
-            assert_eq!(refused.status.0, COINBASE_SUM_RANGE_REFUSAL);
-            assert_eq!(
-                (refused.emission_amount, refused.wide_emission_amount.as_str()),
-                (0, "")
-            );
+            match sum(h(height), count) {
+                Err(RpcFault::Refused(refusal)) => {
+                    assert_eq!(refusal.class, ErrorClass::RefusedByMethod);
+                    assert_eq!(refusal.diagnostic.code, "block.missing");
+                }
+                other => panic!("a range that leaves the chain: {other:?}"),
+            }
         }
         drop(facts);
         drop(store);
@@ -750,7 +716,7 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     s.close().await;
 }
 
-/// `calc_pow` is RandomX over the bytes as given, under a cache the
+/// `pow` is RandomX over the bytes as given, under a cache the
 /// daemon's cache store already holds. The store here is the one the
 /// connector's production substrate derived into while the chain was mined:
 /// where it still holds the seed a height names, the answer is the PoW the
@@ -760,49 +726,56 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
 /// blob that is not hex or is longer than a hashing blob, and a seed that is not
 /// 32 bytes are refused with the C++ codes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
+async fn pow_hashes_under_the_caches_the_validator_holds() {
     let caches = Arc::new(CacheStore::new());
-    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
-    let mut s = Scenario::open_with("rpc-reads-calc-pow", pow);
+    let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let mut s = Scenario::open_with("rpc-reads-calc-pow", substrate);
     let mined = s.mine(3).await;
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
-        let ask = |height: BlockHeight, blob: &str, seed: &str| {
-            calc_pow(
+        let ask = |height: BlockHeight, blob: &[u8], seed: Option<BlockHash>| {
+            outcome(pow(
                 &facts,
-                &CalcPowRequest {
-                    height: height.to_raw(),
-                    block_blob: blob.to_owned(),
-                    seed_hash: seed.to_owned(),
+                &PowInput {
+                    height: Height(height.to_raw()),
+                    hashing: Bytes(blob.to_vec()),
+                    seed: seed.map(|seed| HashHex::from_bytes(seed.to_bytes())),
                 },
                 false,
                 &hash_budget(),
-            )
+            ))
         };
         // The driver pins each connecting seed before the hash. Genesis
         // pins the null seed; the next block pins genesis's hash and
         // demotes the null seed to the transient slot. Two seeds, two
-        // slots, both held. `calc_pow` answers under either.
+        // slots, both held. `pow` answers under either.
         assert_eq!(mined[0].seed, BlockHash::NULL);
         for m in &mined {
             let held = caches
                 .lookup(&Seedhash::from_bytes(*m.seed.as_bytes()))
                 .expect("the validator holds the seed it proved this block under");
             let blob = m.template.block.pow_blob();
-            let recorded = get_block_header_by_height(&facts, m.height.to_raw(), true)
-                .expect("in range")
-                .block_header
-                .pow_hash
-                .expect("filled");
+            let recorded = block_header_show(
+                &facts,
+                &HeaderSelect(BlockSelect {
+                    select: Selector::Height(Height(m.height.to_raw())),
+                    pow: true,
+                    prune: None,
+                }),
+            )
+            .unwrap_or_else(|_| panic!("in range"))
+            .pow
+            .0
+            .expect("filled");
             assert_eq!(
-                ask(m.height, &hex::encode(&blob), ""),
+                ask(m.height, &blob, None),
                 Ok(hex::encode(compute_hash(&held, &blob))),
                 "RandomX under the held seed at {}",
                 m.height.to_raw()
             );
             assert_eq!(
-                ask(m.height, &hex::encode(&blob), ""),
+                ask(m.height, &blob, None),
                 Ok(hex::encode(recorded.to_bytes())),
                 "the PoW the node recorded at {}",
                 m.height.to_raw()
@@ -815,39 +788,29 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             .lookup(&Seedhash::from_bytes(*named.as_bytes()))
             .expect("held");
         assert_eq!(
-            ask(BlockHeight::ZERO, &hex::encode(&blob), &hex::encode(named.to_bytes())),
+            ask(BlockHeight::ZERO, &blob, Some(named)),
             Ok(hex::encode(compute_hash(&held, &blob)))
         );
         // One shared bucket. The first bounded hash spends the one hash
         // the bucket holds. The second is empty and spends nothing. The
         // host hashes from an empty bucket.
         let budget = hash_budget();
-        let priced = CalcPowRequest {
-            height: mined[2].height.to_raw(),
-            block_blob: hex::encode(&blob),
-            seed_hash: String::new(),
+        let priced = PowInput {
+            height: Height(mined[2].height.to_raw()),
+            hashing: Bytes(blob.clone()),
+            seed: None,
         };
-        assert!(calc_pow(&facts, &priced, true, &budget).is_ok());
-        match calc_pow(&facts, &priced, true, &budget) {
+        assert!(pow(&facts, &priced, true, &budget).is_ok());
+        match pow(&facts, &priced, true, &budget) {
             Err(RpcFault::Refused(refusal)) => {
-                assert_eq!(
-                    refusal.code,
-                    shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()
-                );
-                assert_eq!(
-                    refusal
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("code"))
-                        .and_then(serde_json::Value::as_str),
-                    Some("rpc.bound.budget")
-                );
+                assert_eq!(refusal.class, ErrorClass::OverResourceBound);
+                assert_eq!(refusal.diagnostic.code, "bound.hash");
             }
             other => panic!("the second hash finds an empty bucket: {other:?}"),
         }
         let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
         assert!(
-            calc_pow(&facts, &priced, false, &empty).is_ok(),
+            pow(&facts, &priced, false, &empty).is_ok(),
             "the host does not pay"
         );
         let far = 1_000_000u64;
@@ -856,33 +819,21 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             .to_raw();
         let tip = mined.last().expect("mined").height.to_raw();
         assert_eq!(
-            ask(h(far), &hex::encode(&blob), ""),
-            Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-                "No seed for height {far}: its seed height {seed_height} is above the chain's top block {tip}"
-            ))))
-        );
-        assert_eq!(
-            ask(h(1), "zz", ""),
-            Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-                message: "Wrong block blob".to_owned(),
-                data: None,
-            }))
-        );
-        let oversize = vec![0u8; shekyl_wire::block::MAX_POW_BLOB_SIZE + 1];
-        assert_eq!(
-            ask(h(1), &hex::encode(&oversize), ""),
-            Err(shekyl_daemon_rpc::methods::bound_fault(
-                "calc_pow",
-                "bytes",
-                u64::try_from(shekyl_wire::block::MAX_POW_BLOB_SIZE).unwrap(),
-                u64::try_from(oversize.len()).unwrap(),
+            ask(h(far), &blob, None),
+            Err((
+                "pow.seed".to_owned(),
+                format!(
+                    "no seed for height {far}: its seed height {seed_height} is above the tip {tip}"
+                )
             ))
         );
-        assert!(matches!(
-            ask(h(1), &hex::encode(&blob), "abcd"),
-            Err(RpcFault::Refused(RpcRefusal { code: CORE_RPC_ERROR_CODE_WRONG_PARAM, .. }))
-        ));
+        // Bytes that are not base64, and a seed that is not 32 bytes, are
+        // not requests: the envelope refuses them as `rpc.params`.
+        let oversize = vec![0u8; shekyl_wire::block::MAX_POW_BLOB_SIZE + 1];
+        assert_eq!(
+            ask(h(1), &oversize, None).map_err(|(code, _)| code),
+            Err("bound.pow-size".to_owned())
+        );
         drop(facts);
         drop(store);
     })
@@ -890,58 +841,75 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
     s.close().await;
 }
 
-/// The refusal for a seed the cache store does not hold, given or named by
-/// a height.
-fn not_held(seed: BlockHash) -> Result<String, RpcFault> {
-    Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
-        "Seed {} is not held: calc_pow hashes under held seeds only",
-        hex::encode(seed.to_bytes())
-    ))))
+/// A `pow` answer as the hash's hex, or the refusal's dotted code and
+/// message.
+fn outcome(
+    answer: Result<shekyl_rpc_types::wire::block::Pow, RpcFault>,
+) -> Result<String, (String, String)> {
+    match answer {
+        Ok(pow) => Ok(pow.pow.to_string()),
+        Err(RpcFault::Refused(refusal)) => {
+            Err((refusal.diagnostic.code, refusal.diagnostic.message))
+        }
+        Err(other) => panic!("a fault, not an answer: {other:?}"),
+    }
 }
 
-/// `calc_pow` never derives a cache (ruled 2026-10-17). Over a chain whose
+/// The refusal for a seed the cache store does not hold, given or named by
+/// a height.
+fn not_held(seed: BlockHash) -> Result<String, (String, String)> {
+    Err((
+        "pow.seed".to_owned(),
+        format!(
+            "seed {} is not held: pow hashes under held seeds only",
+            hex::encode(seed.to_bytes())
+        ),
+    ))
+}
+
+/// `pow` never derives a cache (ruled 2026-10-17). Over a chain whose
 /// facts hold an empty cache store, a seed the caller names and the seed a
 /// height names are each refused, naming the seed, and afterwards the store
 /// still holds neither: a derivation publishes the cache it made, so a seed
 /// still absent is one never derived.
 #[tokio::test]
-async fn calc_pow_never_derives_a_cache() {
+async fn pow_never_derives_a_cache() {
     let mut s = Scenario::open_with("rpc-reads-calc-pow-held", KeccakPow);
     let mined = s.mine(3).await;
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let caches = Arc::new(CacheStore::new());
         let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
-        let blob = hex::encode(mined[2].template.block.pow_blob());
+        let blob = mined[2].template.block.pow_blob();
         let fresh = BlockHash::from_bytes([7; 32]);
-        let not_held_request = CalcPowRequest {
-            height: 2,
-            block_blob: blob.clone(),
-            seed_hash: hex::encode(fresh.to_bytes()),
+        let not_held_request = PowInput {
+            height: Height(2),
+            hashing: Bytes(blob.clone()),
+            seed: Some(HashHex::from_bytes(fresh.to_bytes())),
         };
         assert_eq!(
-            calc_pow(&facts, &not_held_request, false, &hash_budget()),
+            outcome(pow(&facts, &not_held_request, false, &hash_budget())),
             not_held(fresh)
         );
         // An empty bucket and a seed that will not hash is the parameter
         // refusal, not the empty bucket. The spend sits after admission.
         let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
         assert_eq!(
-            calc_pow(&facts, &not_held_request, true, &empty),
+            outcome(pow(&facts, &not_held_request, true, &empty)),
             not_held(fresh)
         );
         let named_by_height = mined[2].seed;
         assert_eq!(
-            calc_pow(
+            outcome(pow(
                 &facts,
-                &CalcPowRequest {
-                    height: 2,
-                    block_blob: blob,
-                    seed_hash: String::new(),
+                &PowInput {
+                    height: Height(2),
+                    hashing: Bytes(blob),
+                    seed: None,
                 },
                 false,
                 &hash_budget(),
-            ),
+            )),
             not_held(named_by_height)
         );
         for seed in [fresh, named_by_height] {
@@ -949,7 +917,7 @@ async fn calc_pow_never_derives_a_cache() {
                 caches
                     .lookup(&Seedhash::from_bytes(*seed.as_bytes()))
                     .is_none(),
-                "calc_pow derived no cache for {seed:?}"
+                "pow derived no cache for {seed:?}"
             );
         }
         drop(facts);
@@ -960,7 +928,7 @@ async fn calc_pow_never_derives_a_cache() {
 }
 
 /// An empty store has no tip: every chain read is not ready, and with no
-/// cache held there is nothing `calc_pow` hashes under, even for a seed the
+/// cache held there is nothing `pow` hashes under, even for a seed the
 /// caller names.
 #[test]
 fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
@@ -980,16 +948,16 @@ fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
     );
     let seed = BlockHash::from_bytes([3; 32]);
     assert_eq!(
-        calc_pow(
+        outcome(pow(
             &facts,
-            &CalcPowRequest {
-                height: 5,
-                block_blob: "00".to_owned(),
-                seed_hash: hex::encode(seed.to_bytes()),
+            &PowInput {
+                height: Height(5),
+                hashing: Bytes(vec![0]),
+                seed: Some(HashHex::from_bytes(seed.to_bytes())),
             },
             false,
             &hash_budget(),
-        ),
+        )),
         not_held(seed)
     );
     drop(facts);

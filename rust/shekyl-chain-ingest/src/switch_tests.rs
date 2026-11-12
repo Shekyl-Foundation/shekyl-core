@@ -593,7 +593,7 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
     y.close().await;
 }
 
-/// `pop_blocks`' bound (DX-Q3, Q7; the landed defect was a store fault
+/// `dev_chain_pop`'s bound (DX-Q3, Q7; the landed defect was a store fault
 /// that stopped ingest): a count whose lowest block is below the undo
 /// floor is refused before any pop, as a reply; one whose lowest block is
 /// the floor pops; and the writer stays up either way.

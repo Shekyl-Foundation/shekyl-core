@@ -153,6 +153,7 @@ stale_through = [
   { through = "bae848ae8b", note = "Multisig slice 2 review (bae848ae8b): in this path set, frost_sal.rs panics if dkg refuses a group shape check_group_shape already accepted, and frost_sal_tests.rs corrects the spend-test path. Multisig feature only; no verify, prove, SAL, leaf or tree function the capture times reads it. Not re-measured." },
   { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): RerandomizedOutput::for_pseudo_out holds r_c = a − z. prove_with_rng and SalSigningParams::propose both call it, then the same with_commitment_blind the call sites called before. Same scalar subtraction, same rerandomization. Not re-measured; the rows stay stale." },
+  { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. No hash, derivation or verify function changed. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -458,6 +459,7 @@ stale_through = [
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-p-fetch's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the captures priced has moved." },
+  { through = "34255a8945", note = "rpc 4.0: shekyl-p-fetch's client gains PFetchClient::with_slots, so one client is sized to the producer's reads plus the view's two flights (VIEW_SLOTS, 2) instead of MAX_INFLIGHT (8). A fetch still dials, reads, hashes and checks; per-response serve work is unchanged. The composed cap can exceed 8 when both lanes run. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -733,6 +735,7 @@ stale_through = [
   { through = "c0f6274413", note = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
   { through = "623fa03dce", note = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The dial, the handshake and the gap do the same I/O, and no span constant moved. Not re-measured. The rows stay stale for the reasons already recorded." },
   { through = "63fcdd9d25", note = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes. Not measured; the rows stay stale." },
+  { through = "4943ebc7f7", note = "rpc 4.0: one module-doc line in shekyl-transport-layer's ban.rs renames set_bans to ban_add. Dial, handshake and gap I/O are unchanged. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -869,6 +872,7 @@ cleared = [
   { through = "63fcdd9d25", reason = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes." },
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-tor publish.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "1cd88d18ba", reason = "The onion keypair moves into shekyl-crypto-pq: OnionIdentity is built from a keypair and the daemon holds one for the boot instead of a seed, so an ADD_ONION no longer expands a seed first. The publish path only; no SOCKS dial, gap, shutdown wait or deadline changes, so the 2026-10-14 capture still prices this tree." },
+  { through = "4943ebc7f7", reason = "rpc 4.0: one module-doc line in shekyl-transport-layer's ban.rs renames set_bans to ban_add. Comment only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]
@@ -1107,6 +1111,7 @@ cleared = [
   { through = "ca38266f8", reason = "SV-D (PR #1015): a new binary, shekyl-shard-render, behind the `cli` feature, which calls the library's render_candidate_png on a JSON view from stdin; the crate doc is rewritten. The library's render path is untouched, and the binary is not on the shipped graph of any wallet." },
   { through = "5f857fadf", reason = "Doc comments in candidate.rs and params.rs, re-keyed off the Stage 5 framing. No code changed." },
   { through = "d6e8da7d44", reason = "Rules after the C++ removal (#1308): shekyl-shard-visual's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and the capture still prices this tree." },
+  { through = "4943ebc7f7", reason = "rpc 4.0: one doc comment in shekyl-shard-visual's render binary renames request_archival_shard to shard_fetch. The library's render path is untouched, so the capture still prices this tree." },
 ]
 
 [[constant]]
@@ -1135,6 +1140,7 @@ stale_through = [
   { through = "a395a325a1", note = "A2's fix (#1301): release_transient becomes release(seedhash), emptying the transient slot only when it holds the seed the window stopped naming. Derivation is unchanged; the row stays stale." },
   { through = "aeca4af6dd", note = "A2's record (#1338): CacheStore::slots reads which seeds the two slots hold. Derivation is unchanged; the row stays stale." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
 ]
 
 [[constant]]
@@ -1316,6 +1322,8 @@ cleared = [
   { through = "a395a325a1", reason = "A2's fix (#1301): release_transient becomes release(seedhash), which empties the transient slot only when it holds that seed; nothing on the hash path calls it, and lookup and compute_hash are unchanged." },
   { through = "aeca4af6dd", reason = "A2's record (#1338): CacheStore::slots reads the two slots' seedhashes; nothing on the hash path calls it, and lookup and compute_hash are unchanged." },
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
+  { through = "f4d64460e4", reason = "rpc 4.0: HashBudget::spend drops its method-name argument and budget_empty no longer names the method. The charge is still one HASH_CPU_NANOS, and the diagnostic code is bound.hash. The RandomX sources this row watches are unchanged, so the capture still prices this tree." },
+  { through = "4943ebc7f7", reason = "rpc 4.0: comments in hash_budget.rs rename calc_pow and fill_pow_hash to pow and a header read with pow, and one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. HASH_CPU_NANOS is unchanged and no hash path changed, so the capture still prices this tree." },
 ]
 
 [[constant]]

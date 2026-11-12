@@ -56,80 +56,49 @@ fn a_ban_through_the_node_is_on_the_node_socket_table() {
     );
     node.stop();
 }
-/// The ban methods over the node's table (DX-Q3, Q11): `set_bans` bans
-/// a host for a time, a subnet until lifted, and lifts; `get_bans` lists
-/// both with their time left; `banned` answers for a host inside the
-/// subnet; a malformed entry changes nothing. Red edit: apply entries
-/// as they are read.
+/// The ban methods over the node's table (DX-Q3, Q11): `ban_add` bans a
+/// host for a time and a subnet until lifted; `ban_list` lists both with
+/// their time left; `ban_show` answers for a host inside the subnet;
+/// `ban_remove` lifts; a malformed host changes nothing. Red edit: apply
+/// the ban before the host parses.
 #[test]
-fn set_get_and_banned_round_trip_over_the_nodes_table() {
-    use shekyl_daemon_rpc::ban_methods::{banned, codes, get_bans, set_bans};
-    use shekyl_rpc_types::bans::{BannedRequest, SetBan, SetBansRequest};
+fn add_list_show_and_remove_round_trip_over_the_nodes_table() {
+    use shekyl_daemon_rpc::ban_methods::{ban_add, ban_list, ban_remove, ban_show, codes};
+    use shekyl_rpc_types::kinds::{Duration, Text};
+    use shekyl_rpc_types::wire::node::{BanAdd, BanHost};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let bans = node.handles().bans;
-    let entry = |host: &str, ban: bool, seconds: Option<u64>| SetBan {
-        host: host.to_owned(),
-        ban,
-        seconds,
+    let add = |host: &str, seconds: Option<u64>| BanAdd {
+        host: Text(host.to_owned()),
+        duration: seconds.map(Duration),
     };
-    let refused = set_bans(
-        &*bans,
-        &SetBansRequest {
-            bans: vec![
-                entry("198.51.100.4", true, Some(600)),
-                entry("not-a-host", true, None),
-            ],
-        },
-    )
-    .expect_err("malformed");
+    let host = |host: &str| BanHost {
+        host: Text(host.to_owned()),
+    };
+    let refused = ban_add(&*bans, &add("not-a-host", None)).expect_err("malformed");
     assert_eq!(refused.diagnostic.code, codes::BAD_HOST);
     assert!(
-        get_bans(&*bans).expect("list").bans.is_empty(),
+        ban_list(&*bans).expect("list").is_empty(),
         "nothing applied"
     );
-    set_bans(
-        &*bans,
-        &SetBansRequest {
-            bans: vec![
-                entry("198.51.100.4", true, Some(600)),
-                entry("192.0.2.0/24", true, None),
-            ],
-        },
-    )
-    .expect("banned");
-    let mut listed = get_bans(&*bans).expect("list").bans;
-    listed.sort_by(|a, b| a.host.cmp(&b.host));
+    ban_add(&*bans, &add("198.51.100.4", Some(600))).expect("banned");
+    ban_add(&*bans, &add("192.0.2.0/24", None)).expect("banned");
+    let mut listed = ban_list(&*bans).expect("list");
+    listed.sort_by(|a, b| a.host.0.cmp(&b.host.0));
     assert_eq!(listed.len(), 2);
-    assert_eq!(listed[0].host, "192.0.2.0/24");
-    assert!(listed[0].permanent);
-    assert_eq!(listed[1].host, "198.51.100.4");
-    assert!(!listed[1].permanent && listed[1].seconds > 590 && listed[1].seconds <= 600);
-    let inside = banned(
-        &*bans,
-        &BannedRequest {
-            address: "192.0.2.77".to_owned(),
-        },
-    )
-    .expect("banned");
-    assert!(
-        inside.banned && inside.permanent,
-        "the subnet covers its hosts"
-    );
-    set_bans(
-        &*bans,
-        &SetBansRequest {
-            bans: vec![entry("192.0.2.0/24", false, None)],
-        },
-    )
-    .expect("lifted");
-    let lifted = banned(
-        &*bans,
-        &BannedRequest {
-            address: "192.0.2.77".to_owned(),
-        },
-    )
-    .expect("answered");
-    assert!(!lifted.banned);
+    assert_eq!(listed[0].host.0, "192.0.2.0/24");
+    assert!(listed[0].permanent && listed[0].duration.0.is_none());
+    assert_eq!(listed[1].host.0, "198.51.100.4");
+    let left = listed[1].duration.0.expect("a timed ban has time left").0;
+    assert!(!listed[1].permanent && left > 590 && left <= 600);
+    let inside = ban_show(&*bans, &host("192.0.2.77"))
+        .expect("answered")
+        .0
+        .expect("the subnet covers its hosts");
+    assert!(inside.permanent);
+    ban_remove(&*bans, &host("192.0.2.0/24")).expect("lifted");
+    let lifted = ban_show(&*bans, &host("192.0.2.77")).expect("answered");
+    assert!(lifted.0.is_none(), "not banned once lifted");
     node.stop();
 }
