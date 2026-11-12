@@ -226,14 +226,17 @@ fn a_header_carries_every_fact_in_its_wire_kind() {
     );
 }
 
-/// Without `pow` the header's `pow` is `null`, and the facts layer is
-/// never asked to compute one.
+/// Without `pow` the header carries no `pow` key at all (RW-Q4: a field
+/// the request did not select is not in the reply), and the facts layer
+/// is never asked to compute one.
 #[test]
-fn pow_is_null_and_uncomputed_when_not_asked() {
+fn pow_is_absent_and_uncomputed_when_not_asked() {
     let f = header_facts();
     let out = block_header_show(&f, &at_height(1_234_567, false)).expect("a header");
     assert!(!f.asked_pow.load(Ordering::Relaxed));
-    assert_eq!(out.pow, Nullable(None));
+    assert_eq!(out.pow, Asked::Unasked);
+    let wire = serde_json::to_value(&out).expect("a header serializes");
+    assert!(wire.get("pow").is_none(), "{wire}");
 }
 
 /// A height above the tip, and a hash this node does not hold, are
@@ -457,7 +460,7 @@ fn a_bounded_header_range_serves_the_recorded_hash() {
     assert_eq!(out.len(), 3);
     assert!(out
         .iter()
-        .all(|slot| matches!(slot, shared::Slot::Item(h) if h.pow.0.is_some())));
+        .all(|slot| matches!(slot, shared::Slot::Item(h) if matches!(h.pow, Asked::Present(_)))));
 }
 
 // ── the fee ─────────────────────────────────────────────────────────────
@@ -583,17 +586,24 @@ fn the_pruned_form_is_the_skeleton_and_the_full_form_the_whole_body() {
         "the pruned segment alone"
     );
     assert_eq!(f.body.0, whole, "pruned ‖ pqc_auths ‖ prunable");
-    for (label, e) in [("prune", p), ("full", f)] {
-        assert_eq!(e.archival_size, Size(pinned_len), "@ {label}");
-        assert_eq!(
-            e.prunable_hash,
-            hash(body.skeleton.prunable_hash.to_bytes())
-        );
-        assert_eq!(
-            e.pqc_auth_hash.0,
+    // The pruned entry is the skeleton, with the txid's operands; the
+    // full entry is `{id, body}` and carries none (IG-Q55, RW-Q4).
+    assert_eq!(p.archival_size, Asked::Present(Size(pinned_len)));
+    assert_eq!(
+        p.prunable_hash,
+        Asked::Present(hash(body.skeleton.prunable_hash.to_bytes()))
+    );
+    assert_eq!(
+        p.pqc_auth_hash,
+        Asked::Present(Nullable(
             body.skeleton.pqc_auth_hash.map(|h| hash(h.to_bytes()))
-        );
-    }
+        ))
+    );
+    assert_eq!(
+        (f.prunable_hash, f.pqc_auth_hash, f.archival_size),
+        (Asked::Unasked, Asked::Unasked, Asked::Unasked),
+        "the full form carries no operands"
+    );
 }
 
 /// **A discarded good is `{"archived": …}` in the full form, and the
@@ -638,8 +648,8 @@ fn a_body_with_no_good_answers_its_pruned_segment_in_both_forms() {
             let out = list(&read, prune, false);
             let e = item(&out[0]);
             assert_eq!(e.body.0, segment);
-            assert_eq!(e.pqc_auth_hash, Nullable(None));
-            assert_eq!(e.archival_size, Size(0));
+            assert_eq!(e.pqc_auth_hash, Asked::when(prune, || Nullable(None)));
+            assert_eq!(e.archival_size, Asked::when(prune, || Size(0)));
         }
     }
 }
@@ -673,7 +683,7 @@ fn each_slot_answers_in_its_own_state() {
     assert!(pooled.pooled);
     assert_eq!(pooled.mined_height, Nullable(None));
     assert_eq!(pooled.public, Nullable(Some(false)));
-    assert_eq!(pooled.archival_size, Size(pinned_len));
+    assert_eq!(pooled.archival_size, Asked::Present(Size(pinned_len)));
     assert_eq!(
         out[2],
         shared::Slot::State(shared::SlotState::Missing(shared::Null))
@@ -1006,6 +1016,31 @@ fn an_alt_chain_is_named_by_its_tip() {
     };
     assert_eq!(
         chain_alt(&empty),
+        Err(RpcFault::Facts(FactsFault::Inconsistent))
+    );
+}
+
+/// A header asked for `pow` carries it as a hash, and one its facts cannot
+/// supply it for is refused: the facts contradict the request, never a
+/// blank (IG-Q56, RW-Q4 at 4.1). Not asked, `pow` is not in the header.
+/// Red edit: answer an unsuppliable `pow` as unasked.
+#[test]
+fn a_header_asked_for_pow_carries_it_or_is_refused() {
+    let mut facts = crate::methods::tests::sample_header();
+    facts.pow_hash = Some([7; 32]);
+    assert_eq!(
+        header(&facts, true)
+            .unwrap_or_else(|_| panic!("the hash is held"))
+            .pow,
+        shekyl_rpc_types::kinds::Asked::Present(HashHex::from_bytes([7; 32]))
+    );
+    assert!(header(&facts, false)
+        .unwrap_or_else(|_| panic!("not asked"))
+        .pow
+        .is_unasked());
+    facts.pow_hash = None;
+    assert_eq!(
+        header(&facts, true).map(|_| ()),
         Err(RpcFault::Facts(FactsFault::Inconsistent))
     );
 }

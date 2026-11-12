@@ -33,7 +33,7 @@ block_header_show	field	block header	reward	chain	amount
 block_header_show	field	block header	weight	chain	size
 block_header_show	field	block header	weight_longterm	chain	size or null
 block_header_show	field	block header	tx_count	chain	count
-block_header_show	field	block header	pow	chain	hash or null
+block_header_show	field	block header	pow	chain	hash, when asked by pow
 block_header_show	field	block header	coinbase	chain	hash
 block_header_show	field	block header	curve_root	chain	hash
 block_header_show	field	block header	attestation_root	chain	hash
@@ -57,7 +57,7 @@ block_header_list	field	block header	reward	chain	amount
 block_header_list	field	block header	weight	chain	size
 block_header_list	field	block header	weight_longterm	chain	size or null
 block_header_list	field	block header	tx_count	chain	count
-block_header_list	field	block header	pow	chain	hash or null
+block_header_list	field	block header	pow	chain	hash, when asked by pow
 block_header_list	field	block header	coinbase	chain	hash
 block_header_list	field	block header	curve_root	chain	hash
 block_header_list	field	block header	attestation_root	chain	hash
@@ -85,7 +85,7 @@ block_show	field	block header	reward	chain	amount
 block_show	field	block header	weight	chain	size
 block_show	field	block header	weight_longterm	chain	size or null
 block_show	field	block header	tx_count	chain	count
-block_show	field	block header	pow	chain	hash or null
+block_show	field	block header	pow	chain	hash, when asked by pow
 block_show	field	block header	coinbase	chain	hash
 block_show	field	block header	curve_root	chain	hash
 block_show	field	block header	attestation_root	chain	hash
@@ -93,9 +93,9 @@ block_show	field	block	body	chain	bytes
 block_show	field	block	tx	chain	list of object (tx), or state archived
 block_show	field	tx	id	chain	hash
 block_show	field	tx	body	chain	bytes
-block_show	field	tx	prunable_hash	chain	hash
-block_show	field	tx	pqc_auth_hash	chain	hash or null
-block_show	field	tx	archival_size	chain	size
+block_show	field	tx	prunable_hash	chain	hash, when asked by prune
+block_show	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+block_show	field	tx	archival_size	chain	size, when asked by prune
 block_show	field	tx	id	chain	hash
 block_show	field	tx	shard	chain	integer
 block_show	field	block	output_index	chain	integer
@@ -118,7 +118,7 @@ block_list	field	block header	reward	chain	amount
 block_list	field	block header	weight	chain	size
 block_list	field	block header	weight_longterm	chain	size or null
 block_list	field	block header	tx_count	chain	count
-block_list	field	block header	pow	chain	hash or null
+block_list	field	block header	pow	chain	hash, when asked by pow
 block_list	field	block header	coinbase	chain	hash
 block_list	field	block header	curve_root	chain	hash
 block_list	field	block header	attestation_root	chain	hash
@@ -126,9 +126,9 @@ block_list	field	block	body	chain	bytes
 block_list	field	block	tx	chain	list of object (tx), or state archived
 block_list	field	tx	id	chain	hash
 block_list	field	tx	body	chain	bytes
-block_list	field	tx	prunable_hash	chain	hash
-block_list	field	tx	pqc_auth_hash	chain	hash or null
-block_list	field	tx	archival_size	chain	size
+block_list	field	tx	prunable_hash	chain	hash, when asked by prune
+block_list	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+block_list	field	tx	archival_size	chain	size, when asked by prune
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 block_list	field	block	output_index	chain	integer
@@ -139,9 +139,9 @@ tx_show	parameter	tx	id	chain	hash
 tx_show	parameter	tx	prune	chain	switch, optional
 tx_show	field	tx	id	chain	hash
 tx_show	field	tx	body	chain	bytes
-tx_show	field	tx	prunable_hash	chain	hash
-tx_show	field	tx	pqc_auth_hash	chain	hash or null
-tx_show	field	tx	archival_size	chain	size
+tx_show	field	tx	prunable_hash	chain	hash, when asked by prune
+tx_show	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+tx_show	field	tx	archival_size	chain	size, when asked by prune
 tx_show	field	tx	pooled	chain	switch
 tx_show	field	tx	mined_height	chain	height or null
 tx_show	field	tx	confirmations	chain	count or null
@@ -155,9 +155,9 @@ tx_list	parameter	tx	id	chain	list of hash
 tx_list	parameter	tx	prune	chain	switch, optional
 tx_list	field	tx	id	chain	hash
 tx_list	field	tx	body	chain	bytes
-tx_list	field	tx	prunable_hash	chain	hash
-tx_list	field	tx	pqc_auth_hash	chain	hash or null
-tx_list	field	tx	archival_size	chain	size
+tx_list	field	tx	prunable_hash	chain	hash, when asked by prune
+tx_list	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+tx_list	field	tx	archival_size	chain	size, when asked by prune
 tx_list	field	tx	pooled	chain	switch
 tx_list	field	tx	mined_height	chain	height or null
 tx_list	field	tx	confirmations	chain	count or null

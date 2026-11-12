@@ -36,6 +36,11 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// Its base fields are `health`'s, liveness only; the chain's facts are a
 /// part shown to `chain`, and `txpool_count` a part shown to `pool`. A
 /// caller without the grant finds the part absent, never zero (RK-D23).
+/// And a reply field a request switch selects is present exactly when the
+/// request turned the switch on (RW-Q4 as amended): `pow` selects a
+/// header's proof-of-work hash, never `null`; `prune` selects a
+/// transaction's skeleton entry, the pruned body with the txid's operands,
+/// where without it the entry is `{id, body}` (IG-Q55, IG-Q56).
 pub const CORE_RPC_VERSION_MINOR: u32 = 1;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;

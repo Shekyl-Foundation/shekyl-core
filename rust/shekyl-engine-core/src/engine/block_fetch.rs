@@ -76,7 +76,7 @@
 
 use shekyl_rpc_client::{wire, Rpc, RpcError};
 use shekyl_rpc_types::hash::HashHex;
-use shekyl_rpc_types::kinds::{Bytes, Height, Size};
+use shekyl_rpc_types::kinds::{Asked, Bytes, Height, Size};
 use shekyl_rpc_types::nullable::Nullable;
 use shekyl_rpc_types::wire::block::{BlockSelect, BlockShowSelect, BlockTx};
 use shekyl_rpc_types::wire::shared::{OrArchived, Selector};
@@ -195,27 +195,63 @@ pub(crate) struct Served<'a> {
     pub(crate) archival_size: Size,
 }
 
-impl<'a> From<&'a BlockTx> for Served<'a> {
-    fn from(tx: &'a BlockTx) -> Self {
-        Self {
-            id: &tx.id,
-            body: &tx.body,
-            prunable_hash: &tx.prunable_hash,
-            pqc_auth_hash: &tx.pqc_auth_hash,
-            archival_size: tx.archival_size,
-        }
+impl<'a> Served<'a> {
+    /// The served transaction, from its fields. Every fetch here asks for
+    /// `prune`, so the txid's operands are required: a reply without them
+    /// answered a request this client did not send (RW-Q4).
+    fn of(
+        id: &'a HashHex,
+        body: &'a Bytes,
+        prunable_hash: &'a Asked<HashHex>,
+        pqc_auth_hash: &'a Asked<Nullable<HashHex>>,
+        archival_size: Asked<Size>,
+    ) -> Result<Self, RpcError> {
+        let missing = || {
+            RpcError::InvalidNode(
+                "daemon answered a prune request without the txid's operands".to_string(),
+            )
+        };
+        let (
+            Asked::Present(prunable_hash),
+            Asked::Present(pqc_auth_hash),
+            Asked::Present(archival_size),
+        ) = (prunable_hash, pqc_auth_hash, archival_size)
+        else {
+            return Err(missing());
+        };
+        Ok(Self {
+            id,
+            body,
+            prunable_hash,
+            pqc_auth_hash,
+            archival_size,
+        })
     }
 }
 
-impl<'a> From<&'a wire::tx::TxEntry> for Served<'a> {
-    fn from(tx: &'a wire::tx::TxEntry) -> Self {
-        Self {
-            id: &tx.id,
-            body: &tx.body,
-            prunable_hash: &tx.prunable_hash,
-            pqc_auth_hash: &tx.pqc_auth_hash,
-            archival_size: tx.archival_size,
-        }
+impl<'a> TryFrom<&'a BlockTx> for Served<'a> {
+    type Error = RpcError;
+    fn try_from(tx: &'a BlockTx) -> Result<Self, RpcError> {
+        Self::of(
+            &tx.id,
+            &tx.body,
+            &tx.prunable_hash,
+            &tx.pqc_auth_hash,
+            tx.archival_size,
+        )
+    }
+}
+
+impl<'a> TryFrom<&'a wire::tx::TxEntry> for Served<'a> {
+    type Error = RpcError;
+    fn try_from(tx: &'a wire::tx::TxEntry) -> Result<Self, RpcError> {
+        Self::of(
+            &tx.id,
+            &tx.body,
+            &tx.prunable_hash,
+            &tx.pqc_auth_hash,
+            tx.archival_size,
+        )
     }
 }
 
@@ -287,7 +323,7 @@ pub(crate) fn bind_block_txs(
         .iter()
         .zip(served)
         .map(|(id, slot)| match slot {
-            OrArchived::Item(tx) => bind_served(*id, &Served::from(tx)),
+            OrArchived::Item(tx) => bind_served(*id, &Served::try_from(tx)?),
             OrArchived::Archived(_) => Err(RpcError::InvalidNode(
                 "daemon answered a prune request with an archived slot: every transaction has \
                  a skeleton, so the archive is never the pruned form's answer"
