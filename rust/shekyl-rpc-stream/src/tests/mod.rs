@@ -439,12 +439,13 @@ async fn the_opened_first_record_is_read_before_the_transport() {
     assert_eq!(got, b"firstsecondthird");
 }
 
-/// SUBMISSION_RECORDS is derived from the consensus bound: the largest
-/// admissible transaction's request body fits five records with room for
-/// a request head, and does not fit four.
+/// SUBMISSION_RECORDS is derived from the consensus bound (RT-O28): the
+/// largest admissible transaction's base64 request body fits
+/// SUBMISSION_RECORDS records with room for a request head, and does not
+/// fit one record fewer.
 #[test]
 fn the_submission_count_is_the_consensus_bound_in_records() {
-    /// Room the five records were chosen to leave for the HTTP head.
+    /// Room the records were chosen to leave for the HTTP head.
     /// A floor for the count, not a second protocol constant.
     const MIN_HEAD_ROOM: usize = 16 * 1024;
     let largest_body =
@@ -698,9 +699,9 @@ async fn a_write_after_a_pending_flush_starts_a_new_message() {
     let (_client, (got, _daemon)) = tokio::join!(write, read);
     assert_eq!(&got[..9], b"GET /info");
     assert_eq!(&got[9..], &expected[..]);
-    let five = u64::try_from(SUBMISSION_RECORDS).unwrap();
-    assert_eq!(sent.lock().unwrap().sent, [1, 0, five]);
-    assert_eq!(received.lock().unwrap().received, [1, 0, five]);
+    let records = u64::try_from(SUBMISSION_RECORDS).unwrap();
+    assert_eq!(sent.lock().unwrap().sent, [1, 0, records]);
+    assert_eq!(received.lock().unwrap().received, [1, 0, records]);
 }
 
 /// F1, the other way round: a submission's flush is pending part-way
@@ -730,8 +731,8 @@ async fn a_write_during_a_pending_submission_flush_finishes_it_first() {
     };
     let (_client, (got, _daemon)) = tokio::join!(write, read);
     assert_eq!(&got, b"submissionGET /info");
-    let five = u64::try_from(SUBMISSION_RECORDS).unwrap();
-    assert_eq!(sent.lock().unwrap().sent, [1, 0, five]);
+    let records = u64::try_from(SUBMISSION_RECORDS).unwrap();
+    assert_eq!(sent.lock().unwrap().sent, [1, 0, records]);
 }
 
 /// A submission's buffers stay within the cap and one sealed record.
@@ -803,28 +804,26 @@ async fn an_end_without_the_close_record_is_a_truncation() {
 #[tokio::test]
 async fn padding_is_accepted_only_in_the_shape_a_sender_makes() {
     let full = bytes(MAX_PAYLOAD);
-    // The shapes a sender makes: k padding records, then 5 - k payload.
-    assert!(read_records(&[
-        (2, b""),
-        (2, b""),
-        (2, b"a"),
-        (2, b"b"),
-        (2, b"c"),
-        (0, b"")
-    ])
-    .await
-    .is_ok());
-    assert!(
-        read_records(&[(2, b""), (2, b""), (2, b""), (2, b""), (2, b"x"), (0, b"")])
-            .await
-            .is_ok()
-    );
+    // The shapes a sender makes: k padding records, then
+    // SUBMISSION_RECORDS - k payload records, for every k a sender pads.
+    for padding in 1..SUBMISSION_RECORDS {
+        let mut records: Vec<(u8, &[u8])> = vec![(2, b""); padding];
+        records.extend(std::iter::repeat_n(
+            (2, &b"p"[..]),
+            SUBMISSION_RECORDS - padding,
+        ));
+        records.push((0, b""));
+        assert!(
+            read_records(&records).await.is_ok(),
+            "{padding} padding records"
+        );
+    }
     let refused = |result: io::Result<Vec<u8>>| {
         let error = result.unwrap_err();
         assert!(is::<RecordShapeRefused>(&error), "{error}");
     };
-    // Five padding records: a submission has at least one payload record.
-    refused(read_records(&[(2, b""), (2, b""), (2, b""), (2, b""), (2, b"")]).await);
+    // Every record padding: a submission has at least one payload record.
+    refused(read_records(&[(2, &b""[..]); SUBMISSION_RECORDS]).await);
     // An empty record in the middle class.
     refused(read_records(&[(1, b"")]).await);
     // (An empty record in the smallest class is the close record, so the
@@ -849,7 +848,11 @@ fn a_run_of_padding_yields() {
     let waker = std::task::Waker::noop();
     let mut cx = Context::from_waker(waker);
     let mut wire = Vec::new();
-    for payload in [&b""[..], b"", b"", b"", b"x"] {
+    // The longest run of padding a sender makes, then its one payload
+    // record.
+    let mut payloads = vec![&b""[..]; SUBMISSION_RECORDS - 1];
+    payloads.push(b"x");
+    for payload in payloads {
         wire.extend(sealer.seal(ClassId(2), payload).unwrap());
     }
     let mut feed_cx = Context::from_waker(waker);
@@ -868,13 +871,15 @@ fn a_run_of_padding_yields() {
             .is_pending(),
         "two empty records, then a yield"
     );
-    assert!(Pin::new(&mut daemon)
+    // The rest of the run yields the same way, and the payload follows.
+    let mut polls = 1;
+    while Pin::new(&mut daemon)
         .poll_read(&mut cx, &mut read)
-        .is_pending());
-    assert!(matches!(
-        Pin::new(&mut daemon).poll_read(&mut cx, &mut read),
-        Poll::Ready(Ok(()))
-    ));
+        .is_pending()
+    {
+        polls += 1;
+        assert!(polls < SUBMISSION_RECORDS, "the run ends");
+    }
     assert_eq!(read.filled(), b"x");
 }
 
