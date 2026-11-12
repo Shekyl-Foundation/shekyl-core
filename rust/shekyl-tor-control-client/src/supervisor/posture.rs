@@ -200,10 +200,7 @@ pub enum Cause {
     /// Discovery found no bundle.
     BundleMissing,
     /// The pin refused the binary. It was not executed.
-    PinRefused {
-        /// The file the pin rejected.
-        path: std::path::PathBuf,
-    },
+    PinRefused,
     /// This build has no managed Tor.
     Unavailable,
     /// A spawn that passed the pin did not come up.
@@ -516,9 +513,13 @@ pub enum TorQuiet {
     /// The dialer holds no Tor address: no peer is known yet, so there is
     /// nothing to dial.
     NoPeersKnown,
-    /// Peers are known, and none has answered through Tor for this long: a
-    /// Tor dial launched in the span failed.
-    Unanswered(std::time::Duration),
+    /// Peers are known, and none has answered through Tor since `since`, in
+    /// nanoseconds on the core's clock: a Tor dial launched in the span
+    /// failed. A reading, so the span is taken at the ask.
+    Unanswered {
+        /// When the held span began.
+        since: u64,
+    },
 }
 
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
@@ -558,8 +559,8 @@ pub struct Status {
     /// [`TorQuiet::NoPeersKnown`] is an empty census once `quiet_after` has
     /// passed. [`TorQuiet::Unanswered`] is a non-empty run whose held span
     /// has reached `quiet_after` with a Tor dial launched inside it that
-    /// failed. A neutral fact, never a cause. The duration on
-    /// [`TorQuiet::Unanswered`] is that held span.
+    /// failed. A neutral fact, never a cause. [`TorQuiet::Unanswered`]
+    /// carries when that held span began.
     pub tor_quiet: Option<TorQuiet>,
     /// Whether peers can reach this node's onion (§4.1). Its cause stands
     /// beside [`Self::cause`], never instead of it.
@@ -610,7 +611,7 @@ pub fn fixes(cause: &Cause, connectors: Connectors) -> Vec<ManagedTorFix> {
 fn install_cause(cause: &Cause) -> bool {
     matches!(
         cause,
-        Cause::BundleMissing | Cause::PinRefused { .. } | Cause::Unavailable
+        Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable
     )
 }
 

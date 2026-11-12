@@ -284,7 +284,7 @@ fn a_late_reply_reaps_the_tor_it_was_asked_of() {
 fn a_hold_while_tor_runs_reaps_it() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
-    let held = core.on(super::refused(), secs(1));
+    let held = core.on(Input::PinRefused, secs(1));
     assert!(held.actions.contains(&Action::Reap), "{:?}", held.actions);
 }
 

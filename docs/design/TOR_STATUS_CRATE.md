@@ -21,10 +21,17 @@ consumer writes a sentence of its own (`TSR-Q13`; Rick, 2026-11-08).
 - **The wire carries exactly what the renderer reads** (Part G). A fact the
   renderer does not speak from stays in the daemon's log
   (`stuck_upload_rounds`, IG-F28). A fact the renderer speaks from has a field.
-- **Time on the wire is an age.** Every duration crosses as whole seconds of
-  awake time: `tor.age`, `tor.onion.age`, the bootstrap's `unchanged` and
-  `window`, `tor_quiet`'s `failing.age` (IG-Q93, IG-Q96). No reading of any
-  clock crosses.
+- **Time on the wire is an age or a reading's figure.** Every duration
+  crosses as whole seconds of awake time, and no reading of any clock
+  crosses (IG-Q93, IG-Q96). The ages, `tor.age`, `tor.onion.age` and
+  `tor_quiet`'s `failing.age`, are taken at the ask. The bootstrap's
+  `unchanged` and `window` are not ages: with `download` they are one
+  reading, taken at the last sample, and cross as they were taken (Rick,
+  2026-11-12).
+- **No daemon-authored free text.** Every value is a keyword, a number or a
+  switch. The file a refused pin names, and its reason, stay in the
+  daemon's log (Rick, 2026-11-12; IG-F26); the data directory's path is the
+  caller's, under `config` (IG-Q97).
 - **Values, never sentences.** The daemon sends the typed status; each client
   renders it with this crate. A translation, when there is one, lives here.
 - **An unknown variant decodes.** Every closed set on the wire has an
@@ -89,18 +96,24 @@ Two cases the log never had to say, because no supervisor ran there:
 `shekyl-tor-control-client` turns the core's `Status` into a `TorStatus` at
 the moment it is asked: `snapshot(&Status, Connectors, now) -> TorStatus`,
 and `Core::view(now)` for the core's own. It holds the clock readings
-(`since`, the onion's `since` while publishing and while unreachable, and
-`evidence_at` while reachable) and subtracts them from `now`, on the awake
-clock the supervisor already runs on. `Inbound::Publishing` carries the time
-publishing began so that the onion's age has a start in every state.
+(`since`, the onion's `since` while publishing and while unreachable,
+`evidence_at` while reachable, and the quiet span's start) and subtracts
+them from `now`, on the awake clock the supervisor already runs on.
+`Inbound::Publishing` carries the time publishing began so that the onion's
+age has a start in every state, and `TorQuiet::Unanswered` carries when the
+held span began, not its length at the supervisor's last look.
 
-`progress` is set while the bootstrap is spoken: while `state` is
+`progress` is the last bootstrap percent whenever the bootstrap is spoken,
+and null otherwise (§23 as amended 2026-11-12): while `state` is
 `bootstrapping`, and while a bootstrap reading stands, which happens only
 while Tor is bootstrapping, so an `impaired` bootstrap also carries its
-percent. Null otherwise.
+percent. The snapshot is the one place that rule lives. The renderer speaks
+the bootstrap exactly when `progress` is non-null and has no rule of its
+own, so a null never prints as 0% (RK-D23).
 
-The pin's refusal keeps the file it refused (`Cause::PinRefused { path }`,
-IG-F26), which is `install-defect`'s payload.
+The pin's refusal carries no file: `install-defect` is null. The daemon
+logs the file and the reason at the start, and at every running re-check
+that refuses (`Drive::pin`).
 
 The daemon's own log line is `render(&core.view(now), Some(data_dir))`, so
 the log and every client say one thing. The supervisor's renderer is deleted
@@ -117,7 +130,8 @@ with the move.
    is intact.
 3. **The log is the renderer:** the supervisor's render tests, which pin
    its sentences, run through `render(&core.view(..))` with their expected
-   text unchanged.
+   text unchanged, except the space-shortfall test, which finds the path the
+   caller passes.
 4. **Fail closed:** a reply carrying an unknown origination keyword, and one
    carrying an unknown `tor` or `clearnet` setting, never reads as
    address-hiding through `own_tx_hides_address`, and renders the update
@@ -126,8 +140,15 @@ with the move.
    offers no managed fix.
 6. **The path:** `unusable` names the directory only when the caller passes
    it.
-7. **Ages:** a status read twice, 10 s apart, reports `tor.age` and the
-   onion's age 10 s larger, the onion in each state that has an age.
+7. **Ages:** a status read twice, 10 s apart, reports `tor.age`, the
+   onion's age and `tor_quiet`'s `failing.age` 10 s larger, the onion in
+   each state that has an age.
+8. **No percent without a sample:** a status with `state` bootstrapping
+   and `progress` null prints no percent; an `impaired` bootstrap with
+   `progress` 0 prints 0%.
+9. **The refused file is in the log:** a running re-check's refusal logs
+   one warning naming the file and the reason; the first pin's, which the
+   start announces, is not said again.
 
 Each test names the edit that makes it fail.
 

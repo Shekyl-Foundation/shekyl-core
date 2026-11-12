@@ -12,7 +12,7 @@
 
 use crate::{
     Bootstrap, Carriage, Clearnet, Connector, Fix, ManagedTor, OnionCause, OnionState, Origination,
-    Pace, Skew, TorCause, TorQuiet, TorSetting, TorState, TorStatus, Unusable,
+    Pace, Skew, TorCause, TorQuiet, TorSetting, TorStatus, Unusable,
 };
 
 /// Said once when the reply carries a keyword this build does not know
@@ -44,8 +44,11 @@ pub fn render(status: &TorStatus, data_dir: Option<&str>) -> String {
     if let Some(onion) = tor.and_then(|tor| onion_sentence(tor, &mut unknown)) {
         append(&mut text, &onion);
     }
-    if let Some(tor) = tor.filter(|tor| speaks_bootstrap(tor)) {
-        append(&mut text, &bootstrap_sentence(tor, &mut unknown));
+    // The bootstrap is spoken exactly when `progress` is on the wire: the
+    // snapshot alone decides when that is (Rick, 2026-11-12).
+    if let Some((tor, progress)) = tor.and_then(|tor| tor.progress.map(|progress| (tor, progress)))
+    {
+        append(&mut text, &bootstrap_sentence(tor, progress, &mut unknown));
     }
     if let Some(tor) = tor.filter(|tor| !tor.fix.is_empty()) {
         append(&mut text, &fixes_sentence(&tor.fix, &mut unknown));
@@ -61,12 +64,6 @@ fn append(text: &mut String, sentence: &str) {
         text.push(' ');
     }
     text.push_str(sentence);
-}
-
-/// The bootstrap is spoken of while the state is bootstrapping, and while a
-/// bootstrap reading stands (an impairment during a bootstrap).
-fn speaks_bootstrap(tor: &ManagedTor) -> bool {
-    tor.bootstrap.is_some() || tor.state == TorState::Bootstrapping
 }
 
 /// What the node does with its traffic. Under a managed Tor the carriage
@@ -150,7 +147,7 @@ pub fn held_at_start_sentence(clearnet_on: bool) -> String {
 pub fn install_sentence(cause: &TorCause) -> Option<&'static str> {
     match cause {
         TorCause::Missing => Some("No Tor was found beside the daemon."),
-        TorCause::InstallDefect(_) => {
+        TorCause::InstallDefect => {
             Some("The Tor that was found failed its check, so it was not started.")
         }
         TorCause::Unavailable => Some("This release has no Tor for this platform yet."),
@@ -168,7 +165,7 @@ fn named_cause(tor: &ManagedTor, data_dir: Option<&str>, unknown: &mut bool) -> 
     };
     Some(match cause {
         TorCause::ClockSkew(_) => return None,
-        TorCause::Missing | TorCause::InstallDefect(_) | TorCause::Unavailable => {
+        TorCause::Missing | TorCause::InstallDefect | TorCause::Unavailable => {
             install_sentence(cause)?.to_owned()
         }
         TorCause::LaunchFailed => "Tor did not start.".to_owned(),
@@ -238,7 +235,11 @@ fn quiet_sentence(status: &TorStatus, unknown: &mut bool) -> Option<String> {
     if let Some(TorQuiet::Unknown { .. }) = status.tor_quiet {
         *unknown = true;
     }
-    if status.tor.as_ref().is_some_and(speaks_bootstrap) {
+    if status
+        .tor
+        .as_ref()
+        .is_some_and(|tor| tor.progress.is_some())
+    {
         return None;
     }
     Some(match status.tor_quiet.as_ref()? {
@@ -321,9 +322,9 @@ fn onion_sentence(tor: &ManagedTor, unknown: &mut bool) -> Option<String> {
     }
 }
 
-/// The bootstrap line: the percent, and how it is going.
-fn bootstrap_sentence(tor: &ManagedTor, unknown: &mut bool) -> String {
-    let progress = tor.progress.unwrap_or(0);
+/// The bootstrap line: the percent, and how it is going. `progress` is a
+/// sample, never a stand-in for a missing one (RK-D23).
+fn bootstrap_sentence(tor: &ManagedTor, progress: u8, unknown: &mut bool) -> String {
     let fetching = format!("Tor is fetching the network directory ({progress}%)");
     let Some(Bootstrap {
         pace,

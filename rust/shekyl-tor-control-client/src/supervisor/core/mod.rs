@@ -339,12 +339,8 @@ impl ManagedRunning {
 pub enum Input {
     /// The pin accepted the binary.
     PinAccepted,
-    /// The pin refused it: the file it rejected (`install-defect`'s path,
-    /// IG-F26).
-    PinRefused {
-        /// The rejected file.
-        path: std::path::PathBuf,
-    },
+    /// The pin refused it.
+    PinRefused,
     /// No bundle was found.
     BundleMissing,
     /// This platform manages no Tor.
@@ -787,9 +783,7 @@ impl Core {
     pub fn on(&mut self, input: Input, now: u64) -> Step {
         let actions = match input {
             Input::PinAccepted => self.pin_accepted(),
-            Input::PinRefused { path } => {
-                self.hold(now, Cause::PinRefused { path }, AbsentDuty::Held)
-            }
+            Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
             Input::DirectoryUnusable { space } => {

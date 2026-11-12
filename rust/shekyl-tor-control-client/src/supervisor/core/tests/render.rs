@@ -20,9 +20,7 @@ fn every_cause() -> Vec<Cause> {
     let all = vec![
         Cause::None,
         Cause::BundleMissing,
-        Cause::PinRefused {
-            path: std::path::PathBuf::from("/opt/shekyl/tor/tor"),
-        },
+        Cause::PinRefused,
         Cause::Unavailable,
         Cause::FailedStart,
         Cause::Died { exit_code: Some(1) },
@@ -48,7 +46,7 @@ fn every_cause() -> Vec<Cause> {
         match cause {
             Cause::None
             | Cause::BundleMissing
-            | Cause::PinRefused { .. }
+            | Cause::PinRefused
             | Cause::Unavailable
             | Cause::FailedStart
             | Cause::Died { .. }

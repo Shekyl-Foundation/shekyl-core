@@ -262,11 +262,8 @@ impl Drive {
                 say_retirement(&stray.stop_for_respawn().await.retire().await);
             });
         }
-        // A launch the core sends only after the pin accepted a binary, and
-        // an accepted binary is never let go. With none held, no Tor was
-        // found to launch: it is held as a missing one, which names no file.
         let Some(binary) = self.pinned.clone() else {
-            return Some(vec![Input::BundleMissing]);
+            return Some(vec![Input::PinRefused]);
         };
         let fresh = fresh_directory || self.kept.is_none();
         let old = if fresh_directory {

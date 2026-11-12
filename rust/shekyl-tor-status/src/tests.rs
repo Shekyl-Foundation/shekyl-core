@@ -57,7 +57,7 @@ fn cause_arm(cause: &TorCause) -> u8 {
         TorCause::Exited(_) => 4,
         TorCause::Unanswered => 5,
         TorCause::LaunchFailed => 6,
-        TorCause::InstallDefect(_) => 7,
+        TorCause::InstallDefect => 7,
         TorCause::Missing => 8,
         TorCause::Unavailable => 9,
         TorCause::Unusable(_) => 10,
@@ -82,7 +82,7 @@ fn causes() -> Vec<TorCause> {
         TorCause::Exited(None),
         TorCause::Unanswered,
         TorCause::LaunchFailed,
-        TorCause::InstallDefect("/opt/shekyl/tor/tor".to_owned()),
+        TorCause::InstallDefect,
         TorCause::Missing,
         TorCause::Unavailable,
         TorCause::Unusable(None),
@@ -380,6 +380,9 @@ fn the_wire_is_the_ruled_shape() {
     );
     let certificates = serde_json::to_value(TorCause::ClockSkew(None)).expect("encodes");
     assert_eq!(certificates, serde_json::json!({"clock-skew": null}));
+    // The refused file stays in the daemon's log (Rick, 2026-11-12).
+    let defect = serde_json::to_value(TorCause::InstallDefect).expect("encodes");
+    assert_eq!(defect, serde_json::json!({"install-defect": null}));
 }
 
 /// **An unknown keyword decodes, in every set, and the rest of the reply is
@@ -512,6 +515,31 @@ fn an_operators_tor_speaks_from_origination_alone() {
     assert!(!line.contains("Restore the bundled Tor"), "{line}");
     status.origination = Origination::Rebuilding;
     assert!(render(&status, None).starts_with("This node is holding its own transactions."));
+}
+
+/// **A null percent is never printed** (Rick, 2026-11-12; RK-D23: 0 is a
+/// sample). The renderer speaks the bootstrap exactly when `progress` is on
+/// the wire, whatever the state says. Fails if the renderer keeps its own
+/// rule for when the bootstrap is spoken, or prints a missing percent as 0%.
+#[test]
+fn a_bootstrap_with_no_percent_prints_none() {
+    let status = with_tor(|tor| {
+        tor.state = TorState::Bootstrapping;
+        tor.progress = None;
+    });
+    let line = render(&status, None);
+    assert!(!line.contains('%'), "{line}");
+    assert!(!line.contains("fetching the network directory"), "{line}");
+
+    let impaired = with_tor(|tor| {
+        tor.state = TorState::Impaired;
+        tor.progress = Some(0);
+    });
+    let line = render(&impaired, None);
+    assert!(
+        line.contains("fetching the network directory (0%)"),
+        "{line}"
+    );
 }
 
 /// **The data directory is named only when the caller passes it** (Rick,

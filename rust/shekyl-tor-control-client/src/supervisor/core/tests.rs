@@ -38,18 +38,17 @@ fn policy() -> Policy {
     }
 }
 
-/// The pin refused this file.
-fn refused() -> Input {
-    Input::PinRefused {
-        path: std::path::PathBuf::from("/opt/shekyl/tor/tor"),
-    }
-}
-
 /// The status in words, as the daemon's log says it: the core's snapshot
 /// through the one renderer (`shekyl_tor_status::render`). Read late
-/// enough that no age is negative; the renderer reads no age.
+/// enough that no age is negative. The one age the renderer speaks is the
+/// quiet line's; a test that reads it asks at its own time ([`said_at`]).
 fn said(core: &Core) -> String {
-    shekyl_tor_status::render(&core.view(u64::MAX), Some("/data"))
+    said_at(core, u64::MAX)
+}
+
+/// The status in words, asked at `now`.
+fn said_at(core: &Core, now: u64) -> String {
+    shekyl_tor_status::render(&core.view(now), Some("/data"))
 }
 
 /// A hand-built status in words, under a managed Tor.
@@ -459,15 +458,11 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
     );
     let step = replied(&mut core, due);
     assert!(matches!(step.actions.first(), Some(Action::CheckPin)));
-    let step = core.on(refused(), due);
+    let step = core.on(Input::PinRefused, due);
     assert!(!spawns(&step), "a refused pin is not executed");
     let status = core.status();
     assert_eq!(status.shown, Shown::RestartingHeld);
-    assert!(
-        matches!(status.cause, Cause::PinRefused { .. }),
-        "{:?}",
-        status.cause
-    );
+    assert_eq!(status.cause, Cause::PinRefused);
     let mut step = step;
     let mut retried = false;
     for _ in 0..4 {
@@ -789,9 +784,13 @@ fn a_death_right_after_a_recovery_is_said_at_once() {
 #[test]
 fn a_new_cause_is_said_at_once_and_a_repeat_waits_for_the_cap() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    assert_eq!(announces(&core.on(refused(), 0)), 1);
+    assert_eq!(announces(&core.on(Input::PinRefused, 0)), 1);
     let second = duration_ns(Duration::from_secs(1));
-    assert_eq!(announces(&core.on(refused(), second)), 0, "a repeat waits");
+    assert_eq!(
+        announces(&core.on(Input::PinRefused, second)),
+        0,
+        "a repeat waits"
+    );
     let unusable = Input::DirectoryUnusable { space: None };
     assert_eq!(
         announces(&core.on(unusable, 2 * second)),
@@ -954,12 +953,14 @@ fn a_space_shortfall_names_the_path_and_both_sizes() {
 }
 
 /// The snapshot's ages are `now` less the clock readings it holds: a status
-/// read twice, 10 s apart, reports every age 10 s larger, the onion's in each
-/// state that has one (`TOR_STATUS_CRATE.md` §5). Fails if an age is a
-/// reading, or if the onion's age reads another state's start.
+/// read twice, 10 s apart, reports every age 10 s larger: `tor.age`, the
+/// onion's in each state that has one, and the quiet line's (Rick,
+/// 2026-11-12; `TOR_STATUS_CRATE.md` §5). Fails if an age is a reading taken
+/// before the ask, or if the onion's age reads another state's start.
 #[test]
 fn every_age_on_the_wire_grows_with_the_asking_clock() {
-    use super::super::posture::{Inbound, InboundCause};
+    use super::super::posture::{Inbound, InboundCause, TorQuiet};
+    use shekyl_tor_status::TorQuiet as WireQuiet;
     let second = duration_ns(Duration::from_secs(1));
     let ten = 10 * second;
     for inbound in [
@@ -975,11 +976,14 @@ fn every_age_on_the_wire_grows_with_the_asking_clock() {
         let status = Status {
             since: 3 * second,
             inbound,
+            tor_quiet: Some(TorQuiet::Unanswered { since: 5 * second }),
             ..held_status()
         };
         let ask = 100 * second;
         let first = super::super::snapshot(&status, managed(false), ask);
         let later = super::super::snapshot(&status, managed(false), ask + ten);
+        assert_eq!(first.tor_quiet, Some(WireQuiet::Failing { age: 95 }));
+        assert_eq!(later.tor_quiet, Some(WireQuiet::Failing { age: 105 }));
         let (first, later) = (first.tor.expect("managed"), later.tor.expect("managed"));
         assert_eq!(first.age, 97, "{inbound:?}");
         assert_eq!(later.age, first.age + 10, "{inbound:?}");
@@ -991,7 +995,7 @@ fn every_age_on_the_wire_grows_with_the_asking_clock() {
 
 fn held_status() -> Status {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(refused(), 0);
+    core.on(Input::PinRefused, 0);
     core.status()
 }
 

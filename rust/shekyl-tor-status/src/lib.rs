@@ -404,8 +404,10 @@ pub enum TorCause {
     Unanswered,
     /// A launch that passed the pin did not come up.
     LaunchFailed,
-    /// The pin refused this file; it was not executed.
-    InstallDefect(String),
+    /// The pin refused the Tor it found; it was not executed. The file and
+    /// the reason are in the daemon's log, not on the wire (Rick,
+    /// 2026-11-12: the status holds no daemon-authored free text).
+    InstallDefect,
     /// Discovery found no Tor.
     Missing,
     /// This release has no managed Tor for this platform.
@@ -431,7 +433,7 @@ impl TorCause {
     pub fn is_install(&self) -> bool {
         matches!(
             self,
-            Self::InstallDefect(_) | Self::Missing | Self::Unavailable
+            Self::InstallDefect | Self::Missing | Self::Unavailable
         )
     }
 }
@@ -446,7 +448,7 @@ impl Serialize for TorCause {
             Self::Exited(code) => one_key(serializer, "exited", code),
             Self::Unanswered => one_key(serializer, "unanswered", &()),
             Self::LaunchFailed => one_key(serializer, "launch-failed", &()),
-            Self::InstallDefect(path) => one_key(serializer, "install-defect", path),
+            Self::InstallDefect => one_key(serializer, "install-defect", &()),
             Self::Missing => one_key(serializer, "missing", &()),
             Self::Unavailable => one_key(serializer, "unavailable", &()),
             Self::Unusable(kind) => one_key(serializer, "unusable", kind),
@@ -483,7 +485,10 @@ one_key_visitor!(
                 null(map)?;
                 TorCause::LaunchFailed
             }
-            "install-defect" => TorCause::InstallDefect(map.next_value()?),
+            "install-defect" => {
+                null(map)?;
+                TorCause::InstallDefect
+            }
             "missing" => {
                 null(map)?;
                 TorCause::Missing
@@ -679,8 +684,10 @@ pub struct ManagedTor {
     pub age: u64,
     /// Respawns since the daemon started.
     pub respawn_count: u32,
-    /// The bootstrap percent while the bootstrap is spoken of; `None`
-    /// otherwise.
+    /// The last bootstrap percent whenever the bootstrap is spoken, and
+    /// `None` otherwise (§23 as amended 2026-11-12). The renderer speaks
+    /// the bootstrap exactly when this is `Some`. 0 is a sample (RK-D23), so
+    /// `None` never reads as 0%.
     pub progress: Option<u8>,
     /// The consensus does not recommend this Tor.
     pub flagged: bool,

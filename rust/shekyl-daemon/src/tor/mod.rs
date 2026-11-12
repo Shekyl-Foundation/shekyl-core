@@ -203,37 +203,47 @@ fn classify_pin(error: &TorBinaryError) -> PinClass {
             input: Input::Unavailable,
             cause: Cause::Unavailable,
         },
-        TorBinaryError::NotAFile(path)
-        | TorBinaryError::NotExecutable(path)
-        | TorBinaryError::NotTheExecutable(path)
-        | TorBinaryError::UnsafeLoaderPath(path)
-        | TorBinaryError::Io { path, .. }
-        | TorBinaryError::HashMismatch { path, .. } => refused(path.clone()),
-        TorBinaryError::UnexpectedEntry { dir, name } => refused(dir.join(name)),
-        TorBinaryError::MissingFile { dir, name } => refused(dir.join(name)),
+        TorBinaryError::NotAFile(_)
+        | TorBinaryError::NotExecutable(_)
+        | TorBinaryError::NotTheExecutable(_)
+        | TorBinaryError::Io { .. }
+        | TorBinaryError::UnexpectedEntry { .. }
+        | TorBinaryError::UnsafeLoaderPath(_)
+        | TorBinaryError::MissingFile { .. }
+        | TorBinaryError::HashMismatch { .. } => PinClass {
+            input: Input::PinRefused,
+            cause: Cause::PinRefused,
+        },
     }
 }
 
-/// The pin refused `path`: the file it rejected, or the entry a staged
-/// directory carried or lacked (IG-F26).
-fn refused(path: PathBuf) -> PinClass {
-    PinClass {
-        input: Input::PinRefused { path: path.clone() },
-        cause: Cause::PinRefused { path },
-    }
-}
-
-/// The warning text for a pin error. `error`'s display is the detail: a
-/// `NotFound` lists `searched`, and the posture cause does not carry those
-/// paths.
-fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
+/// A pin error in words: the class's install sentence, then the error,
+/// whose display is the detail. A refusal names the file and the reason; a
+/// `NotFound` lists `searched`. The status carries neither (Rick,
+/// 2026-11-12: the file stays in the daemon's log, IG-F26).
+fn pin_refusal_line(error: &TorBinaryError) -> String {
     let class = classify_pin(error);
     let sentence = wire_cause(&class.cause)
         .as_ref()
         .and_then(install_sentence)
         .expect("a pin class is an install cause");
+    format!("managed Tor: {sentence} ({error})")
+}
+
+/// The warning text for a pin error at a start or a check, with what the
+/// node will do.
+fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
     let consequence = held_at_start_sentence(clearnet_on);
-    format!("warning: managed Tor: {sentence} ({error}) {consequence}")
+    format!("warning: {} {consequence}", pin_refusal_line(error))
+}
+
+/// A running re-check's refusal, logged in full (Rick, 2026-11-12). The
+/// first pin's refusal is the start's announcement ([`pin_warning`]), so it
+/// is not said again here; every re-check after it is.
+fn say_pin_refusal(first: bool, error: &TorBinaryError) {
+    if !first {
+        tracing::warn!(target: "global", "{}", pin_refusal_line(error));
+    }
 }
 
 /// Start the supervisor on its inbox when Tor is managed. Any other
@@ -476,6 +486,7 @@ impl Drive {
             control: None,
             kept: None,
             pinned: None,
+            pin_checked: false,
             incarnation: None,
             generation: 0,
             held: None,
@@ -536,6 +547,9 @@ struct Drive {
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
+    /// A pin has run. The first is the start's; a refusal after it is a
+    /// running re-check's, and is logged in full.
+    pin_checked: bool,
     incarnation: Option<u64>,
     /// The incarnation a death or a bootstrap transition must name to be
     /// folded. It moves at each spawn and each reap, so the stop's own
@@ -911,13 +925,18 @@ impl Drive {
             #[cfg(all(test, unix))]
             PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
-        match verified {
+        let input = match verified {
             Ok(binary) => {
                 self.pinned = Some(binary);
                 Input::PinAccepted
             }
-            Err(error) => classify_pin(&error).input,
-        }
+            Err(error) => {
+                say_pin_refusal(!self.pin_checked, &error);
+                classify_pin(&error).input
+            }
+        };
+        self.pin_checked = true;
+        input
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -1274,20 +1293,33 @@ mod tests {
 
         let refused = TorBinaryError::NotAFile(PathBuf::from("/srv/tor-dir"));
         let class = classify_pin(&refused);
-        let dir = PathBuf::from("/srv/tor-dir");
-        assert_eq!(class.input, Input::PinRefused { path: dir.clone() });
-        assert_eq!(class.cause, Cause::PinRefused { path: dir });
-        assert_eq!(
-            wire_cause(&class.cause),
-            Some(TorCause::InstallDefect("/srv/tor-dir".to_owned()))
-        );
+        assert_eq!(class.input, Input::PinRefused);
+        assert_eq!(class.cause, Cause::PinRefused);
+        assert_eq!(wire_cause(&class.cause), Some(TorCause::InstallDefect));
         let line = pin_warning_line(&refused, false);
-        let sentence =
-            install_sentence(&TorCause::InstallDefect(String::new())).expect("an install cause");
+        let sentence = install_sentence(&TorCause::InstallDefect).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("was not started"));
         assert!(line.contains("/srv/tor-dir"));
         assert!(line.contains(&held_at_start_sentence(false)));
+    }
+
+    /// **A running re-check's refusal names the file and the reason** (Rick,
+    /// 2026-11-12): the status carries no path, so the log does. The first
+    /// pin's refusal is the start's announcement and is not said twice.
+    /// Fails if the re-check's error is thrown away, or the first is said
+    /// again.
+    #[test]
+    fn a_re_checks_refusal_names_the_file_and_the_reason() {
+        let refused = TorBinaryError::NotExecutable(PathBuf::from("/srv/tor/tor"));
+        let first = logged(|| say_pin_refusal(true, &refused));
+        assert!(first.is_empty(), "{first}");
+        let again = logged(|| say_pin_refusal(false, &refused));
+        assert_eq!(again.lines().count(), 1, "{again}");
+        assert!(again.contains("WARN"), "{again}");
+        assert!(again.contains("/srv/tor/tor"), "{again}");
+        assert!(again.contains("not executable"), "{again}");
+        assert!(again.contains("failed its check"), "{again}");
     }
 
     /// What `f` writes to the log, one line per event, without times.

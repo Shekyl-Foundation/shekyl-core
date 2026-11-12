@@ -1245,7 +1245,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 | `tor.cause` | status | null, or one object with one key, the variant below. The value is that variant's payload. A variant with no payload has `null`. No second object carries detail | §5 |
 | `tor.age` | status | duration (IG-Q54, whole seconds) of awake time: how long `state` has stood. No reading of the node's wall clock is carried: it is wrong exactly when the cause is `clock-skew` (IG-Q93, on #1344; IG-Q96) | `TSR-Q12` |
 | `tor.respawn_count` | status | integer: respawns since the daemon started | `TSR-Q12` |
-| `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent while `state` is `bootstrapping`; 0 before the first sample. Null in every other state, because 0 is a sample (RK-D23) | §4.2 |
+| `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent whenever the bootstrap is spoken: while `state` is `bootstrapping`, and while a bootstrap reading stands, which an `impaired` bootstrap also has; 0 before the first sample. Null otherwise, because 0 is a sample (RK-D23). A renderer speaks the bootstrap exactly when this is non-null, and never prints a null as 0% (amended 2026-11-12, Rick) | §4.2 |
 | `tor.flagged` | status | switch: the consensus does not recommend this Tor. Independent of `state` and of `cause`, so it stands while `state` is `usable` | §5 |
 | `tor.fix` | status | a list of one-of `restore-managed`, `operator`, `clearnet-on`, `clearnet-only`. Empty unless `cause` is an install variant. `clearnet-on` is offered only when the clearnet setting is off | `ManagedTorFix` |
 | `tor.onion` | status | null when no onion is offered, else `{state, age, cause}`: `state` one-of `publishing`, `reachable`, `unreachable`; `age` the awake time the state has stood (for `reachable`, since the last probe arrived); `cause` null unless `unreachable`, then one key: `probe-missed`, `uploads-refused`, `descriptor-missing` (each null), or `clock-behind` (a duration, a lower bound) (IG-Q96) | `Inbound` |
@@ -1264,7 +1264,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 | `exited` | an integer exit code, or null when the reap reported none (the process ended, or the control connection ended) | `restarting` | none |
 | `unanswered` | null. A control reply missed its bound | `restarting` | none |
 | `launch-failed` | null. A spawn that passed the pin did not come up | `restarting` | none |
-| `install-defect` | a path (IG-6): the file the pin rejected. The binary was not executed. The pin error carries that path and `PinRefused` drops it; this value is the path | `waiting` | the install list |
+| `install-defect` | null: the pin refused the Tor it found, and the binary was not executed. The file and the reason are in the daemon's log, not on the wire, so the status holds no daemon-authored free text (amended 2026-11-12, Rick; IG-F26) | `waiting` | the install list |
 | `missing` | null. Discovery found no bundle. The segment `not` is refused (IG-4), so this is not `not-installed` | `waiting` | the install list |
 | `unavailable` | null. This release has no managed Tor for this platform | `waiting` | the install list |
 | `unusable` | `{"exhausted": {"free": b, "needed": b}}` (both bytes) when the pre-spawn check found too little space; `{"unwritable": null}` when the account cannot write the directory; null for any other failure (IG-Q97). The path is `data-dir`, under the `config` grant, and is not in the payload; a renderer names it only for a caller that holds `config`. The subject `data` keeps its meaning, and `full` keeps "the whole address" | `waiting` | none |
@@ -1510,7 +1510,7 @@ The rule each row is held to: **the wire carries exactly what the renderer reads
 
 ### 27.1 Findings
 
-- **IG-F26 — the install defect's path.** `Cause::PinRefused` (`P/posture.rs:200`) carries no path, and the core's `Input::PinRefused` drops the one the pin error holds. §23's `install-defect` payload is that path. The supervisor lane's PR keeps it; no name changes.
+- **IG-F26 — the install defect's path.** `Cause::PinRefused` (`P/posture.rs:200`) carries no path, and the core's `Input::PinRefused` drops the one the pin error holds. §23's `install-defect` payload is that path. The supervisor lane's PR keeps it; no name changes. *Closed 2026-11-12 (Rick):* the path stays in the daemon's log. `install-defect`'s payload is null, and the daemon logs the file and the reason at the start and at every running re-check that refuses.
 - **IG-F27 — a dangerous version is `flagged`, not a cause.** `Cause::DangerousVersion` (`P/posture.rs:239`) projects to `flagged` true with `cause` null, as IG-Q70 ruled. No row.
 - **IG-F28 — soak telemetry stays off the wire.** `Status::stuck_upload_rounds` (`P/posture.rs:559`) is "telemetry for the soak, never a cause". The renderer does not read it, so it stays in the log.
 - **IG-F29 — the clock's lag has one home.** `Status::clock_behind` (`P/posture.rs:563`) is computed from the onion's cause and nothing else (`core/clock.rs:248-256`: `Some` exactly while `InboundCause::ClockBehind` stands). On the wire it is that cause's payload (IG-Q96), and the clock sentence's reach clause reads it there.

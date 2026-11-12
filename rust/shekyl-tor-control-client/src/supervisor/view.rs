@@ -8,10 +8,11 @@
 //!
 //! [`snapshot`] is the one place the supervisor's typed read becomes
 //! `shekyl_tor_status::TorStatus`. Its clock readings (when the state began,
-//! when the onion's state began, when the last probe came back) become ages
-//! at `now`, the moment the status is asked, on the clock the supervisor's
-//! own windows run on: awake time (IG-Q93, IG-Q96). Nothing it returns is a
-//! clock reading.
+//! when the onion's state began, when the last probe came back, when the
+//! quiet span began) become ages at `now`, the moment the status is asked,
+//! on the clock the supervisor's own windows run on: awake time (IG-Q93,
+//! IG-Q96). Nothing it returns is a clock reading. The bootstrap's figures
+//! are a reading taken at the last sample and cross as they were taken.
 
 use shekyl_tor_status::{self as wire, TorStatus};
 
@@ -49,8 +50,8 @@ pub fn snapshot(status: &Status, connectors: Connectors, now: u64) -> TorStatus 
         .collect(),
         tor_quiet: status.tor_quiet.map(|quiet| match quiet {
             TorQuiet::NoPeersKnown => wire::TorQuiet::Empty,
-            TorQuiet::Unanswered(span) => wire::TorQuiet::Failing {
-                age: span.as_secs(),
+            TorQuiet::Unanswered { since } => wire::TorQuiet::Failing {
+                age: age(since, now),
             },
         }),
         tor: (connectors.tor == TorSetting::Managed).then(|| managed(status, now)),
@@ -133,7 +134,7 @@ pub fn wire_cause(cause: &Cause) -> Option<wire::TorCause> {
     Some(match cause {
         Cause::None | Cause::DangerousVersion => return None,
         Cause::BundleMissing => wire::TorCause::Missing,
-        Cause::PinRefused { path } => wire::TorCause::InstallDefect(path.display().to_string()),
+        Cause::PinRefused => wire::TorCause::InstallDefect,
         Cause::Unavailable => wire::TorCause::Unavailable,
         Cause::FailedStart => wire::TorCause::LaunchFailed,
         Cause::Died { exit_code } => wire::TorCause::Exited(*exit_code),

@@ -12,7 +12,7 @@ use std::time::Duration;
 use super::super::super::posture::{Cause, Shown, TorQuiet};
 use super::super::{duration_ns, Action, Core, DialTally, Input, Step, TorCensus};
 use super::{announces, managed, policy, reach_usable, replied, socks, spawns, takes_down};
-use super::{said, said_of};
+use super::{said, said_at, said_of};
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
@@ -170,7 +170,7 @@ fn the_line_runs_from_the_judges_last_sign_of_life() {
         assert_eq!(says_progress(&[step]), 1, "{opened}: said once");
         assert_eq!(
             core.status().tor_quiet,
-            Some(TorQuiet::Unanswered(policy().quiet_after))
+            Some(TorQuiet::Unanswered { since: life })
         );
     }
 }
@@ -212,7 +212,7 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
     reach_usable(&mut core);
     core.on(dials(0, 1, Some(secs(1))), secs(1));
     core.on(dials(0, 2, Some(secs(70))), secs(80));
-    let text = said(&core);
+    let text = said_at(&core, secs(80));
     assert!(
         text.contains("Peers are known; none has answered through Tor for 1 min 20 s."),
         "{text}"
@@ -552,7 +552,7 @@ fn peers_learned_and_unanswered_switch_the_line_once() {
     );
     assert_eq!(
         core.status().tor_quiet,
-        Some(TorQuiet::Unanswered(policy().quiet_after)),
+        Some(TorQuiet::Unanswered { since: learned }),
         "the span is the run, not the empty stretch"
     );
     steps.push(step);
