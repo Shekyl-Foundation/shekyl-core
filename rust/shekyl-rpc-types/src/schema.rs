@@ -19,9 +19,12 @@
 //! identifier: the macro has no rename.
 //!
 //! A shape written by hand (a state, a map, a reply with grant-withheld
-//! parts) can drift from what serde writes. [`conforms`] checks a JSON
-//! value against a shape; run over every method's vectors in both
-//! directions, it makes the schema the contract and not a description.
+//! parts) can drift from what serde writes. An exclusive object — a
+//! selector, a header range — is not one of those: [`crate::wire_exclusive`]
+//! writes its reader and its shape from the one list of alternatives.
+//! [`conforms`] checks a JSON value against a shape; run over every
+//! method's vectors in both directions, it makes the schema the contract
+//! and not a description.
 
 use crate::method::Policy;
 
@@ -42,10 +45,16 @@ pub enum Shape {
         /// Fields flattened into the object and shown together or not at
         /// all: a part the caller's grant does not show is absent whole.
         parts: Vec<Part>,
-        /// Keys of which exactly one is present: a selector (`INPUT_GRAMMAR.md`
-        /// IG-Q94). Empty when the object has none.
-        choice: Vec<Field>,
+        /// Alternatives of which exactly one is wholly present. Each
+        /// alternative is the fields that arrive together: `from` and `to`,
+        /// or one selector key (`INPUT_GRAMMAR.md` IG-Q94). Empty when the
+        /// object has none.
+        choice: Vec<Vec<Field>>,
     },
+    /// JSON `null` and nothing else. A selector's `tip` (`INPUT_GRAMMAR.md`
+    /// IG-Q94). Distinct from [`Nullable`](Self::Nullable), which is this
+    /// or another shape, and from [`Empty`](Self::Empty), which is `{}`.
+    Null,
     /// A list of one shape.
     List(Box<Shape>),
     /// The shape, or `null`: no answer (RK-D23).
@@ -178,7 +187,8 @@ pub struct WalkName {
     /// Who is shown it: the method's own policy, or the narrower one of
     /// the hidden field or part that carries it.
     pub shown_to: Policy,
-    /// What it holds. [`Shape::Empty`] for a method name.
+    /// What it holds. For a method name, the reply's shape, so a list
+    /// reply's slot states are visible to the grammar's walk.
     pub shape: Shape,
     /// Whether the name is in the method's reply (or nested in it), not
     /// its request.
@@ -226,6 +236,7 @@ pub fn describe(shape: &Shape) -> String {
         Shape::Either(item, slot) => format!("{}, or {}", describe(item), describe(slot)),
         Shape::Hidden { inner, .. } => describe(inner),
         Shape::Empty => "nothing".to_owned(),
+        Shape::Null => "null".to_owned(),
     }
 }
 
@@ -284,7 +295,9 @@ fn walk(w: &mut Walk<'_>, kind: NameKind, shown_to: Policy, shape: &Shape) {
             choice,
         } => {
             walk_fields(w, kind, holder, shown_to, fields);
-            walk_fields(w, kind, holder, shown_to, choice);
+            for group in choice {
+                walk_fields(w, kind, holder, shown_to, group);
+            }
             for part in parts {
                 walk_fields(w, kind, holder, part.shown_to, &part.fields);
             }
@@ -334,7 +347,7 @@ fn walk(w: &mut Walk<'_>, kind: NameKind, shown_to: Policy, shape: &Shape) {
             walk(w, kind, shown_to, item);
             walk(w, kind, shown_to, slot);
         }
-        Shape::Scalar(_) | Shape::OneOf(_) | Shape::Empty => {}
+        Shape::Scalar(_) | Shape::OneOf(_) | Shape::Empty | Shape::Null => {}
     }
 }
 
@@ -351,7 +364,7 @@ pub fn names(rows: &[crate::method::Row]) -> Vec<WalkName> {
             holder: "",
             name: row.name,
             shown_to: row.policy,
-            shape: Shape::Empty,
+            shape: (row.reply)(),
             in_reply: false,
         });
         let mut request = Walk {
@@ -382,10 +395,11 @@ pub fn names(rows: &[crate::method::Row]) -> Vec<WalkName> {
 pub fn render(rows: &[crate::method::Row]) -> String {
     let mut text = String::from("# method\tkind\tholder\tname\tshown-to\tshape\n");
     for name in names(rows) {
-        let shape = match name.kind {
-            NameKind::Method => String::new(),
-            _ => describe(&name.shape),
-        };
+        // A method's shape is its reply. A list of slots then carries
+        // `state missing|archived`, which the grammar's walk reads back
+        // (`check_input_grammar_walk.py`, `state_keys`). The shape is the
+        // last cell, and `describe` writes no tab.
+        let shape = describe(&name.shape);
         text.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\n",
             name.method,
@@ -542,6 +556,67 @@ fn conforms_fields(
     Ok(())
 }
 
+/// How much of one alternative a document carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GroupPresence {
+    /// None of its fields.
+    Absent,
+    /// Some of its fields and not all of them.
+    Partial,
+    /// Every one of its fields.
+    Complete,
+}
+
+/// `present` fields of an alternative that has `len` fields.
+///
+/// `len` is the alternative's own field count. The caller counts how many
+/// of those fields the document carries. The reader and [`conforms`] both
+/// decide through this, so a partial range cannot be complete in one and
+/// absent in the other.
+pub(crate) fn group_presence(present: usize, len: usize) -> GroupPresence {
+    if present == len {
+        GroupPresence::Complete
+    } else if present == 0 {
+        GroupPresence::Absent
+    } else {
+        GroupPresence::Partial
+    }
+}
+
+/// The index of the one complete alternative.
+///
+/// # Errors
+///
+/// None is complete, more than one is, or any alternative is only partly
+/// present.
+pub(crate) fn exclusive_index(states: &[GroupPresence]) -> Result<usize, ()> {
+    let mut found = None;
+    for (index, state) in states.iter().enumerate() {
+        match (state, found) {
+            (GroupPresence::Absent, _) => {}
+            (GroupPresence::Complete, None) => found = Some(index),
+            (GroupPresence::Complete | GroupPresence::Partial, _) => return Err(()),
+        }
+    }
+    found.ok_or(())
+}
+
+/// `height, hash, tip` or `(from and to), hash`: how an exclusive object's
+/// alternatives are named in a refusal.
+pub(crate) fn format_alternatives(groups: &[&[&str]]) -> String {
+    groups
+        .iter()
+        .map(|group| {
+            if group.len() == 1 {
+                (*group)[0].to_owned()
+            } else {
+                format!("({})", group.join(" and "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Whether `value` is a document of `shape`.
 ///
 /// Strict in the ways the wire is: every field present unless hidden, no
@@ -557,7 +632,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
         (Shape::Scalar(kind), _) => conforms_scalar(kind, value),
         (Shape::OneOf(words), Value::String(text)) if words.contains(&text.as_str()) => Ok(()),
         (Shape::OneOf(words), _) => Err(format!("{value} is not one of {}", words.join("|"))),
-        (Shape::Nullable(_), Value::Null) => Ok(()),
+        (Shape::Null | Shape::Nullable(_), Value::Null) => Ok(()),
         (Shape::Nullable(inner) | Shape::Hidden { inner, .. } | Shape::Optional(inner), _) => {
             conforms(value, inner)
         }
@@ -603,22 +678,39 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
             let mut seen = Vec::new();
             conforms_fields(object, fields, &mut seen)?;
             if !choice.is_empty() {
-                let named: Vec<&Field> = choice
+                let states: Vec<GroupPresence> = choice
                     .iter()
-                    .filter(|field| object.contains_key(field.name))
+                    .map(|group| {
+                        let present = group
+                            .iter()
+                            .filter(|field| object.contains_key(field.name))
+                            .count();
+                        group_presence(present, group.len())
+                    })
                     .collect();
-                let [one] = named.as_slice() else {
-                    let keys: Vec<&str> = choice.iter().map(|field| field.name).collect();
+                let names: Vec<Vec<&str>> = choice
+                    .iter()
+                    .map(|group| group.iter().map(|field| field.name).collect())
+                    .collect();
+                let shown: Vec<&[&str]> = names.iter().map(Vec::as_slice).collect();
+                let Ok(index) = exclusive_index(&states) else {
                     return Err(format!(
-                        "exactly one of {} is given, not {}",
-                        keys.join(", "),
-                        named.len()
+                        "name exactly one of {}",
+                        format_alternatives(&shown)
                     ));
                 };
-                seen.push(one.name);
-                conforms(&object[one.name], &one.shape)
-                    .map_err(|e| format!("`{}`: {e}", one.name))?;
-                seen.extend(choice.iter().map(|field| field.name));
+                for field in &choice[index] {
+                    seen.push(field.name);
+                    conforms(&object[field.name], &field.shape)
+                        .map_err(|e| format!("`{}`: {e}", field.name))?;
+                }
+                for group in choice {
+                    for field in group {
+                        if !seen.contains(&field.name) {
+                            seen.push(field.name);
+                        }
+                    }
+                }
             }
             for part in parts {
                 let present = part
@@ -778,410 +870,5 @@ macro_rules! wire_object {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::kinds::{Count, Done, Endpoint, Height, NoParams, Withheld};
-    use crate::nullable::Nullable;
-    use serde_json::json;
-    use shekyl_rpc_grants::Grant;
-
-    wire_object! {
-        /// A header, as a test sees it.
-        ["block header"]
-        pub struct Header {
-            pub height: Height,
-            pub hash: crate::hash::HashHex,
-            pub pow: Nullable<crate::hash::HashHex>,
-        }
-    }
-
-    wire_object! {
-        ["block"]
-        pub struct Select {
-            pub height: Vec<Height>,
-            pub prune ["tx"]: bool,
-        }
-    }
-
-    wire_object! {
-        ["txpool"]
-        pub struct Pool {
-            pub count: Count,
-            #[serde(default, skip_serializing_if = "Withheld::is_withheld")]
-            pub private_count [shown Policy::HostOnly]: Withheld<Count>,
-        }
-    }
-
-    fn row() -> crate::method::Row {
-        crate::method::Row {
-            name: "block_header_list",
-            policy: Policy::Grant(Grant::Chain),
-            request: Select::shape,
-            reply: <Vec<Header>>::shape,
-        }
-    }
-
-    fn pool_row() -> crate::method::Row {
-        crate::method::Row {
-            name: "txpool_stats",
-            policy: Policy::Grant(Grant::Pool),
-            request: NoParams::shape,
-            reply: Pool::shape,
-        }
-    }
-
-    /// A field's name is its identifier, its holder is the object's, and a
-    /// modifier walks under the holder it names. Red edit: drop `under`
-    /// from the walk and `prune` walks under `block`.
-    #[test]
-    fn every_name_carries_the_holder_its_walk_starts_from() {
-        let walked: Vec<(NameKind, &str, &str)> = names(&[row()])
-            .into_iter()
-            .map(|name| (name.kind, name.holder, name.name))
-            .collect();
-        assert_eq!(
-            walked,
-            [
-                (NameKind::Method, "", "block_header_list"),
-                (NameKind::Parameter, "block", "height"),
-                (NameKind::Parameter, "tx", "prune"),
-                (NameKind::Field, "block header", "height"),
-                (NameKind::Field, "block header", "hash"),
-                (NameKind::Field, "block header", "pow"),
-            ]
-        );
-    }
-
-    /// The schema records who is shown each field: the method's policy,
-    /// or the hidden field's own. Red edit: walk a hidden field with the
-    /// method's policy.
-    #[test]
-    fn a_hidden_field_names_who_is_shown_it() {
-        let text = render(&[pool_row()]);
-        assert!(
-            text.contains("txpool_stats\tfield\ttxpool\tcount\tpool\tcount\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("txpool_stats\tfield\ttxpool\tprivate_count\thost-only\tcount\n"),
-            "{text}"
-        );
-    }
-
-    /// A withheld field is absent, a shown one is written, and both read
-    /// back; the shape admits both documents and refuses a `null` in the
-    /// field's place.
-    #[test]
-    fn a_withheld_field_is_absent_and_never_null() {
-        let withheld = Pool {
-            count: Count(3),
-            private_count: Withheld::Withheld,
-        };
-        let shown = Pool {
-            count: Count(3),
-            private_count: Withheld::Shown(Count(1)),
-        };
-        let withheld_doc = serde_json::to_value(&withheld).unwrap();
-        let shown_doc = serde_json::to_value(&shown).unwrap();
-        assert_eq!(withheld_doc, json!({"count": 3}));
-        assert_eq!(shown_doc, json!({"count": 3, "private_count": 1}));
-        assert_eq!(
-            serde_json::from_value::<Pool>(withheld_doc.clone()).unwrap(),
-            withheld
-        );
-        assert_eq!(
-            serde_json::from_value::<Pool>(shown_doc.clone()).unwrap(),
-            shown
-        );
-        conforms(&withheld_doc, &Pool::shape()).unwrap();
-        conforms(&shown_doc, &Pool::shape()).unwrap();
-        assert!(conforms(&json!({"count": 3, "private_count": null}), &Pool::shape()).is_err());
-    }
-
-    /// The struct the macro writes refuses an unknown key and a missing
-    /// one, and writes an unanswered field as `null`.
-    #[test]
-    fn a_wire_object_is_strict_and_writes_null_for_no_answer() {
-        let header: Header = serde_json::from_value(json!({
-            "height": 7,
-            "hash": "00".repeat(32),
-            "pow": null,
-        }))
-        .expect("a header");
-        assert_eq!(
-            serde_json::to_value(&header).unwrap()["pow"],
-            serde_json::Value::Null
-        );
-        assert!(serde_json::from_value::<Header>(json!({
-            "height": 7, "hash": "00".repeat(32), "pow": null, "extra": 1,
-        }))
-        .is_err());
-        assert!(serde_json::from_value::<Header>(json!({
-            "height": 7, "hash": "00".repeat(32),
-        }))
-        .is_err());
-    }
-
-    /// What serde writes for a wire object conforms to its shape, and the
-    /// shape refuses what serde refuses. Both directions.
-    #[test]
-    fn a_shape_and_its_serde_agree_in_both_directions() {
-        let shape = Header::shape();
-        let good = json!({"height": 7, "hash": "ab".repeat(32), "pow": null});
-        conforms(&good, &shape).unwrap();
-        assert!(serde_json::from_value::<Header>(good).is_ok());
-        for bad in [
-            json!({"height": 7, "hash": "ab".repeat(32)}),
-            json!({"height": 7, "hash": "ab".repeat(32), "pow": null, "extra": 1}),
-            json!({"height": "7", "hash": "ab".repeat(32), "pow": null}),
-            json!({"height": 7, "hash": "ab", "pow": null}),
-            json!([7]),
-            json!(null),
-        ] {
-            assert!(conforms(&bad, &shape).is_err(), "{bad}");
-            assert!(
-                serde_json::from_value::<Header>(bad.clone()).is_err(),
-                "{bad}"
-            );
-        }
-    }
-
-    /// The hand-written shapes: a state is exactly one key, a map's keys
-    /// are closed, a part is whole or absent, a slot is the item or its
-    /// stand-in.
-    #[test]
-    fn conforms_holds_states_maps_parts_and_slots() {
-        let states = Shape::States(vec![("live", None), ("halted", Some(Header::shape()))]);
-        conforms(&json!({"live": null}), &states).unwrap();
-        assert!(conforms(&json!({"live": 1}), &states).is_err());
-        assert!(conforms(&json!({"live": null, "halted": null}), &states).is_err());
-        assert!(conforms(&json!({"dead": null}), &states).is_err());
-        assert!(conforms(&json!("live"), &states).is_err());
-
-        let map = Shape::Map {
-            keys: Some(&["clearnet", "tor"]),
-            value: Box::new(Shape::Scalar("count")),
-        };
-        conforms(&json!({"tor": 2}), &map).unwrap();
-        conforms(&json!({}), &map).unwrap();
-        assert!(conforms(&json!({"i2p": 2}), &map).is_err());
-
-        let parted = Shape::Object {
-            holder: "daemon",
-            fields: vec![Field {
-                name: "height",
-                under: None,
-                shape: Shape::Scalar("height"),
-            }],
-            parts: vec![Part {
-                shown_to: Policy::Grant(Grant::Status),
-                fields: vec![
-                    Field {
-                        name: "started",
-                        under: None,
-                        shape: Shape::Scalar("time"),
-                    },
-                    Field {
-                        name: "revision",
-                        under: None,
-                        shape: Shape::Scalar("text"),
-                    },
-                ],
-            }],
-            choice: vec![],
-        };
-        conforms(&json!({"height": 1}), &parted).unwrap();
-        conforms(
-            &json!({"height": 1, "started": 5, "revision": "x"}),
-            &parted,
-        )
-        .unwrap();
-        assert!(conforms(&json!({"height": 1, "started": 5}), &parted).is_err());
-
-        let slot = Shape::Either(
-            Box::new(Shape::Scalar("hash")),
-            Box::new(Shape::Nullable(Box::new(Shape::States(vec![(
-                "missing", None,
-            )])))),
-        );
-        conforms(&json!("cd".repeat(32)), &slot).unwrap();
-        conforms(&json!({"missing": null}), &slot).unwrap();
-        conforms(&json!(null), &slot).unwrap();
-        assert!(conforms(&json!({"lost": null}), &slot).is_err());
-    }
-
-    /// No parameters is `{}`, and bare success is `{}`: never `null`,
-    /// which means no answer, never a list, never a key.
-    #[test]
-    fn no_parameters_and_bare_success_are_empty_objects() {
-        assert_eq!(serde_json::to_value(NoParams).unwrap(), json!({}));
-        assert_eq!(serde_json::to_value(Done).unwrap(), json!({}));
-        assert!(serde_json::from_value::<NoParams>(json!({})).is_ok());
-        assert!(serde_json::from_value::<Done>(json!({})).is_ok());
-        for bad in [json!(null), json!([]), json!({"a": 1}), json!(0)] {
-            assert!(
-                serde_json::from_value::<NoParams>(bad.clone()).is_err(),
-                "{bad}"
-            );
-            assert!(
-                serde_json::from_value::<Done>(bad.clone()).is_err(),
-                "{bad}"
-            );
-            assert!(conforms(&bad, &NoParams::shape()).is_err(), "{bad}");
-        }
-        assert_eq!(NoParams::from_params(None), Ok(NoParams));
-        assert_eq!(NoParams::from_params(Some(&json!({}))), Ok(NoParams));
-        assert!(NoParams::from_params(Some(&json!(null))).is_err());
-    }
-
-    wire_object! {
-        ["peer connection"]
-        pub struct WrongAddress {
-            pub address: Endpoint,
-        }
-    }
-
-    wire_object! {
-        ["sync session"]
-        pub struct WrongHeight {
-            pub claimed_height: Count,
-        }
-    }
-
-    /// A name states what it holds. The red edits the brief names: an
-    /// `address` holding an endpoint, and a `…_height` holding a count.
-    #[test]
-    fn a_name_whose_kind_is_not_its_terms_is_refused() {
-        assert!(kind_faults(&[row(), pool_row()]).is_empty());
-        let wrong = |reply: fn() -> Shape| crate::method::Row {
-            name: "peer_connections",
-            policy: Policy::Grant(Grant::Peers),
-            request: NoParams::shape,
-            reply,
-        };
-        let address = kind_faults(&[wrong(WrongAddress::shape)]);
-        assert_eq!(address.len(), 1, "{address:?}");
-        assert!(address[0].contains("`address`") && address[0].contains("endpoint"));
-        let height = kind_faults(&[wrong(WrongHeight::shape)]);
-        assert_eq!(height.len(), 1, "{height:?}");
-        assert!(height[0].contains("`claimed_height`") && height[0].contains("holds count"));
-    }
-
-    fn selector() -> Shape {
-        Shape::Object {
-            holder: "block",
-            fields: vec![Field {
-                name: "pow",
-                under: Some("block header"),
-                shape: Shape::Optional(Box::new(Shape::Scalar("switch"))),
-            }],
-            parts: vec![],
-            choice: vec![
-                Field {
-                    name: "height",
-                    under: None,
-                    shape: Shape::Scalar("height"),
-                },
-                Field {
-                    name: "hash",
-                    under: None,
-                    shape: Shape::Scalar("hash"),
-                },
-                Field {
-                    name: "tip",
-                    under: None,
-                    shape: Shape::Nullable(Box::new(Shape::Empty)),
-                },
-            ],
-        }
-    }
-
-    /// A selector is exactly one key (IG-Q94): none and two are refused,
-    /// and a switch beside it may be left out. Red edit: accept an empty
-    /// choice, and the first `is_err` below fails.
-    #[test]
-    fn a_selector_is_exactly_one_key() {
-        let shape = selector();
-        conforms(&json!({"height": 7}), &shape).unwrap();
-        conforms(&json!({"height": 7, "pow": true}), &shape).unwrap();
-        conforms(&json!({"tip": null}), &shape).unwrap();
-        assert!(conforms(&json!({"pow": true}), &shape).is_err());
-        assert!(conforms(&json!({}), &shape).is_err());
-        assert!(conforms(&json!({"height": 7, "hash": "ab".repeat(32)}), &shape).is_err());
-        assert!(conforms(&json!({"height": 7, "depth": 1}), &shape).is_err());
-    }
-
-    /// An optional field is a request's; in a reply it is a fault. Red
-    /// edit: drop the `in_reply` check in `kind_faults`.
-    #[test]
-    fn an_optional_field_is_refused_in_a_reply() {
-        let row = |request: fn() -> Shape, reply: fn() -> Shape| crate::method::Row {
-            name: "block_header_show",
-            policy: Policy::Grant(Grant::Chain),
-            request,
-            reply,
-        };
-        assert!(kind_faults(&[row(selector, Header::shape)]).is_empty());
-        let faults = kind_faults(&[row(NoParams::shape, selector)]);
-        assert_eq!(faults.len(), 1, "{faults:?}");
-        assert!(faults[0].contains("optional in a reply"));
-    }
-
-    /// A subject-keyed map's object value walks under each key, and a tag
-    /// names which fields follow it.
-    #[test]
-    fn a_subject_keyed_map_walks_under_each_key_and_a_tag_selects_fields() {
-        let counts = Shape::Map {
-            keys: Some(&["clearnet", "tor"]),
-            value: Box::new(Shape::Object {
-                holder: "connector",
-                fields: vec![Field {
-                    name: "inbound_count",
-                    under: None,
-                    shape: Shape::Scalar("count"),
-                }],
-                parts: vec![],
-                choice: vec![],
-            }),
-        };
-        let mut out = Vec::new();
-        let mut w = Walk {
-            method: "daemon_status",
-            in_reply: true,
-            out: &mut out,
-        };
-        walk(
-            &mut w,
-            NameKind::Field,
-            Policy::Grant(Grant::Peers),
-            &counts,
-        );
-        let holders: Vec<&str> = out.iter().map(|name| name.holder).collect();
-        assert_eq!(holders, ["clearnet", "tor"]);
-
-        let verdict = Shape::Tagged {
-            holder: "tx",
-            tag: "verdict",
-            variants: vec![
-                ("accepted", vec![]),
-                (
-                    "already-in-chain",
-                    vec![Field {
-                        name: "mined_height",
-                        under: None,
-                        shape: Shape::Scalar("height"),
-                    }],
-                ),
-            ],
-        };
-        conforms(&json!({"verdict": "accepted"}), &verdict).unwrap();
-        conforms(
-            &json!({"verdict": "already-in-chain", "mined_height": 4}),
-            &verdict,
-        )
-        .unwrap();
-        assert!(conforms(&json!({"verdict": "accepted", "mined_height": 4}), &verdict).is_err());
-        assert!(conforms(&json!({"verdict": "already-in-chain"}), &verdict).is_err());
-        assert!(conforms(&json!({"verdict": "lost"}), &verdict).is_err());
-    }
-}
+#[path = "schema_tests.rs"]
+mod tests;

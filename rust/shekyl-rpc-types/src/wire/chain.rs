@@ -6,7 +6,7 @@
 //! The chain's reads: the version, the tip, the fee, the coinbase sum, the
 //! alternative chains, spent key images and the curve tree.
 
-use super::shared::{Null, Selector, SelectorKeys};
+use super::shared::{Null, Selector};
 use crate::hash::HashHex;
 use crate::hex128::HexU128;
 use crate::kinds::{Count, Height, Integer};
@@ -138,23 +138,11 @@ impl serde::Serialize for CurveSelect {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for CurveSelect {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let keys = SelectorKeys::deserialize(deserializer)?;
-        Selector::one(keys.height, keys.hash, keys.tip, false)
-            .map(Self)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-impl Schema for CurveSelect {
-    fn shape() -> Shape {
-        Shape::Object {
-            holder: "curve",
-            fields: Vec::new(),
-            parts: Vec::new(),
-            choice: Selector::choice(false),
-        }
+crate::wire_exclusive! {
+    CurveSelect ["curve"] keys CurveSelectKeys {
+        [height: Height] => Selector::Height(height);
+        [tip: null] => Selector::Tip;
+        build(select) Self(select)
     }
 }
 

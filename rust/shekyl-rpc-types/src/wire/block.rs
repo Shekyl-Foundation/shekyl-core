@@ -11,7 +11,6 @@ use crate::hash::HashHex;
 use crate::hex128::HexU128;
 use crate::kinds::{Bytes, Count, Height, Integer, Size, Time};
 use crate::nullable::Nullable;
-use crate::schema::{Field, Schema, Shape};
 use shekyl_units::wire::AtomicUnitsString as Amount;
 
 crate::wire_object! {
@@ -65,34 +64,6 @@ pub struct HeaderSelect(pub BlockSelect);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockShowSelect(pub BlockSelect);
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HeaderKeys {
-    #[serde(default)]
-    height: Option<Height>,
-    #[serde(default)]
-    hash: Option<HashHex>,
-    #[serde(default, deserialize_with = "crate::wire::shared::tip_given")]
-    tip: Option<super::shared::Null>,
-    #[serde(default)]
-    pow: bool,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BlockKeys {
-    #[serde(default)]
-    height: Option<Height>,
-    #[serde(default)]
-    hash: Option<HashHex>,
-    #[serde(default, deserialize_with = "crate::wire::shared::tip_given")]
-    tip: Option<super::shared::Null>,
-    #[serde(default)]
-    pow: bool,
-    #[serde(default)]
-    prune: bool,
-}
-
 fn write_select<S: serde::Serializer>(
     select: &BlockSelect,
     serializer: S,
@@ -113,16 +84,13 @@ impl serde::Serialize for HeaderSelect {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for HeaderSelect {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let keys = HeaderKeys::deserialize(deserializer)?;
-        let select = Selector::one(keys.height, keys.hash, keys.tip, true)
-            .map_err(serde::de::Error::custom)?;
-        Ok(Self(BlockSelect {
-            select,
-            pow: keys.pow,
-            prune: None,
-        }))
+crate::wire_exclusive! {
+    HeaderSelect ["block"] keys HeaderSelectKeys {
+        [height: Height] => Selector::Height(height);
+        [hash: HashHex] => Selector::Hash(hash);
+        [tip: null] => Selector::Tip;
+        switch pow ["block header"];
+        build(select, pow) Self(BlockSelect { select, pow, prune: None })
     }
 }
 
@@ -132,46 +100,14 @@ impl serde::Serialize for BlockShowSelect {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for BlockShowSelect {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let keys = BlockKeys::deserialize(deserializer)?;
-        let select = Selector::one(keys.height, keys.hash, keys.tip, true)
-            .map_err(serde::de::Error::custom)?;
-        Ok(Self(BlockSelect {
-            select,
-            pow: keys.pow,
-            prune: Some(keys.prune),
-        }))
-    }
-}
-
-fn switch(name: &'static str, under: &'static str) -> Field {
-    Field {
-        name,
-        under: Some(under),
-        shape: Shape::Optional(Box::new(Shape::Scalar("switch"))),
-    }
-}
-
-impl Schema for HeaderSelect {
-    fn shape() -> Shape {
-        Shape::Object {
-            holder: "block",
-            fields: vec![switch("pow", "block header")],
-            parts: Vec::new(),
-            choice: Selector::choice(true),
-        }
-    }
-}
-
-impl Schema for BlockShowSelect {
-    fn shape() -> Shape {
-        Shape::Object {
-            holder: "block",
-            fields: vec![switch("pow", "block header"), switch("prune", "tx")],
-            parts: Vec::new(),
-            choice: Selector::choice(true),
-        }
+crate::wire_exclusive! {
+    BlockShowSelect ["block"] keys BlockShowSelectKeys {
+        [height: Height] => Selector::Height(height);
+        [hash: HashHex] => Selector::Hash(hash);
+        [tip: null] => Selector::Tip;
+        switch pow ["block header"];
+        switch prune ["tx"];
+        build(select, pow, prune) Self(BlockSelect { select, pow, prune: Some(prune) })
     }
 }
 
@@ -199,19 +135,6 @@ pub enum HeaderRangeSelect {
     Hash(Vec<HashHex>),
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RangeKeys {
-    #[serde(default)]
-    from: Option<Height>,
-    #[serde(default)]
-    to: Option<Height>,
-    #[serde(default)]
-    hash: Option<Vec<HashHex>>,
-    #[serde(default)]
-    pow: bool,
-}
-
 impl serde::Serialize for HeaderRange {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -228,50 +151,12 @@ impl serde::Serialize for HeaderRange {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for HeaderRange {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let keys = RangeKeys::deserialize(deserializer)?;
-        let select = match (keys.from, keys.to, keys.hash) {
-            (Some(from), Some(to), None) => HeaderRangeSelect::Range { from, to },
-            (None, None, Some(hash)) => HeaderRangeSelect::Hash(hash),
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "name either from and to, or hash; exactly one of the two",
-                ))
-            }
-        };
-        Ok(Self {
-            select,
-            pow: keys.pow,
-        })
-    }
-}
-
-impl Schema for HeaderRange {
-    fn shape() -> Shape {
-        Shape::Object {
-            holder: "block",
-            fields: vec![
-                Field {
-                    name: "from",
-                    under: None,
-                    shape: Shape::Optional(Box::new(Height::shape())),
-                },
-                Field {
-                    name: "to",
-                    under: None,
-                    shape: Shape::Optional(Box::new(Height::shape())),
-                },
-                Field {
-                    name: "hash",
-                    under: None,
-                    shape: Shape::Optional(Box::new(<Vec<HashHex>>::shape())),
-                },
-                switch("pow", "block header"),
-            ],
-            parts: Vec::new(),
-            choice: Vec::new(),
-        }
+crate::wire_exclusive! {
+    HeaderRange ["block"] keys HeaderRangeKeys {
+        [from: Height, to: Height] => HeaderRangeSelect::Range { from, to };
+        [hash: Vec<HashHex>] => HeaderRangeSelect::Hash(hash);
+        switch pow ["block header"];
+        build(select, pow) Self { select, pow }
     }
 }
 

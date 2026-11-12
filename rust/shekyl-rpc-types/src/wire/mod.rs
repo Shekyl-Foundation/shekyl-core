@@ -217,8 +217,8 @@ mod tests {
     }
 
     /// A selector is exactly one of `height`, `hash` or `tip`, beside its
-    /// switches (IG-Q94). Red edit: let `Selector::one` take the first key
-    /// given, and the two-key document is read.
+    /// switches (IG-Q94). Red edit: accept the first key and ignore the
+    /// rest, and the two-key document is read.
     #[test]
     fn a_selector_agrees_with_its_schema() {
         use block::{BlockShowSelect, HeaderSelect};
@@ -233,14 +233,56 @@ mod tests {
         for bad in [
             json!({"pow": true}),
             json!({"height": 7, "tip": null, "pow": false}),
+            json!({"tip": {}, "pow": false}),
             json!({"tip": 0, "pow": false}),
             json!({"height": 7, "prune": true, "pow": false}),
             json!(null),
         ] {
             assert!(!agree::<HeaderSelect>(&bad), "{bad}");
         }
+        assert!(!agree::<BlockShowSelect>(
+            &json!({"tip": {}, "pow": false, "prune": false})
+        ));
         assert!(!agree::<chain::CurveSelect>(&json!({"hash": hash(1)})));
+        assert!(!agree::<chain::CurveSelect>(&json!({"tip": {}})));
         assert!(agree::<chain::CurveSelect>(&json!({"height": 3})));
+        assert!(agree::<chain::CurveSelect>(&json!({"tip": null})));
+        assert!(agree::<block::HeaderRange>(
+            &json!({"from": 1, "to": 4, "pow": false})
+        ));
+        assert!(agree::<block::HeaderRange>(
+            &json!({"hash": [hash(2)], "pow": true})
+        ));
+        for bad in [
+            json!({"from": 1, "pow": false}),
+            json!({"to": 4, "pow": false}),
+            json!({"from": 1, "to": 4, "hash": [hash(2)], "pow": false}),
+            json!({"pow": false}),
+            json!({}),
+        ] {
+            assert!(!agree::<block::HeaderRange>(&bad), "{bad}");
+        }
+    }
+
+    /// A list reply's method row carries its slot states, so the grammar
+    /// walk sees `missing` and `archived`. Red edit: render a method with
+    /// an empty shape, and this assertion fails.
+    #[test]
+    fn a_list_reply_carries_its_slot_states() {
+        let text = render(TABLE);
+        for method in [
+            "block_header_list",
+            "block_list",
+            "tx_list",
+            "txpool_flush",
+            "tx_relay",
+        ] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("{method}\tmethod\t")))
+                .unwrap_or_else(|| panic!("{method} has no method row"));
+            assert!(line.contains("state missing|archived"), "{line}");
+        }
     }
 
     /// A list slot is the item, `{"missing": null}`, `{"archived": …}`, or

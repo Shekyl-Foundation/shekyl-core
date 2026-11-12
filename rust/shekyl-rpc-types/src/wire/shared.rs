@@ -6,7 +6,7 @@
 //! What several methods share: keywords, one-key states, the list slot,
 //! open maps, the selector, and the parted object `daemon_status` uses.
 
-use crate::schema::{Field, Schema, Shape};
+use crate::schema::{Schema, Shape};
 use serde::{Deserialize, Serialize};
 
 /// Refuse, at compile time, a keyword that is not lowercase segments
@@ -107,16 +107,32 @@ impl<'de> Deserialize<'de> for Null {
     }
 }
 
-/// Read a `tip` key that is present: its value must be `null`. An absent
-/// key is the field's `default`, `None`.
+/// A key whose only value is JSON `null`, and which may be left out.
 ///
-/// # Errors
-///
-/// The value is not `null`.
-pub fn tip_given<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Null>, D::Error> {
-    Null::deserialize(deserializer).map(Some)
+/// [`Default`] is absent: serde uses it when the key is missing. A present
+/// key is read only from `null` ([`Null`]). This is a selector's `tip`
+/// (`INPUT_GRAMMAR.md` IG-Q94). `Option<Null>` cannot say it, because
+/// serde reads a present `null` as `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum NullKey {
+    /// The key was not in the object.
+    #[default]
+    Absent,
+    /// The key was present and its value was `null`.
+    Present,
+}
+
+impl NullKey {
+    /// The key was in the object.
+    pub(crate) const fn is_present(self) -> bool {
+        matches!(self, Self::Present)
+    }
+}
+
+impl<'de> Deserialize<'de> for NullKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Null::deserialize(deserializer).map(|Null| Self::Present)
+    }
 }
 
 /// A state's payload shape: `None` for [`Null`].
@@ -231,47 +247,7 @@ pub enum Selector {
     Tip,
 }
 
-/// A selector's keys, read before one is chosen. Each is a key that may
-/// be absent; `tip` is present when it is `null`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SelectorKeys {
-    #[serde(default)]
-    pub height: Option<crate::kinds::Height>,
-    #[serde(default)]
-    pub hash: Option<crate::hash::HashHex>,
-    #[serde(default, deserialize_with = "crate::wire::shared::tip_given")]
-    pub tip: Option<Null>,
-}
-
 impl Selector {
-    /// The one selector `keys` name.
-    ///
-    /// # Errors
-    ///
-    /// None named, or more than one.
-    pub(crate) fn one(
-        height: Option<crate::kinds::Height>,
-        hash: Option<crate::hash::HashHex>,
-        tip: Option<Null>,
-        hash_allowed: bool,
-    ) -> Result<Self, String> {
-        let keys = if hash_allowed {
-            "height, hash or tip"
-        } else {
-            "height or tip"
-        };
-        match (height, hash, tip) {
-            (Some(height), None, None) => Ok(Self::Height(height)),
-            (None, Some(hash), None) if hash_allowed => Ok(Self::Hash(hash)),
-            (None, None, Some(Null)) => Ok(Self::Tip),
-            (None, None, None) => Err(format!("name exactly one of {keys}; none was given")),
-            _ => Err(format!(
-                "name exactly one of {keys}; more than one was given"
-            )),
-        }
-    }
-
     /// Write the selector's one key into `map`.
     pub(crate) fn write<M: serde::ser::SerializeMap>(&self, map: &mut M) -> Result<(), M::Error> {
         match self {
@@ -280,28 +256,304 @@ impl Selector {
             Self::Tip => map.serialize_entry("tip", &Null),
         }
     }
+}
 
-    /// The selector's choice fields.
-    pub(crate) fn choice(hash_allowed: bool) -> Vec<Field> {
-        let mut choice = vec![Field {
-            name: "height",
-            under: None,
-            shape: crate::kinds::Height::shape(),
-        }];
-        if hash_allowed {
-            choice.push(Field {
-                name: "hash",
-                under: None,
-                shape: crate::hash::HashHex::shape(),
-            });
+/// An object that is exactly one alternative, plus switches that may be
+/// left out. The alternatives are the reader and the [`Schema`]: one list,
+/// so a selector or a range cannot admit in one what the other refuses.
+///
+/// A key written `tip: null` is JSON null and nothing else ([`NullKey`]).
+/// Any other key is its type. Every key of the chosen alternative is
+/// present, and no key of another alternative is. A switch is a `bool`
+/// that defaults off, and the schema records it optional.
+///
+/// `build` receives the chosen alternative and then each switch, and is the
+/// value the type stores. Eight alternatives is the ceiling; a ninth does
+/// not match the reader, so the build fails.
+#[macro_export]
+macro_rules! wire_exclusive {
+    (
+        $name:ident [$holder:literal] keys $keys:ident {
+            $($body:tt)*
         }
-        choice.push(Field {
-            name: "tip",
-            under: None,
-            shape: Shape::Nullable(Box::new(Shape::Empty)),
-        });
-        choice
-    }
+    ) => {
+        $crate::wire_exclusive!(@go $name [$holder] $keys
+            typed()
+            nulls()
+            alts()
+            switches()
+            $($body)*
+        );
+    };
+
+    // One alternative. Its keys stay inside `[]`, so a repeated token tree
+    // ends on a delimiter and `Vec<HashHex>` is read as a type.
+    (@go $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        [ $($inner:tt)* ] => $build:expr;
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@alt $name [$holder] $keys
+            typed($($typed)*)
+            nulls($($nulls)*)
+            alts($($alts)*)
+            switches($($switches)*)
+            this()
+            [ $($inner)* ]
+            => $build;
+            $($rest)*
+        );
+    };
+
+    (@go $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        switch $sw:ident [$under:literal];
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@go $name [$holder] $keys
+            typed($($typed)*)
+            nulls($($nulls)*)
+            alts($($alts)*)
+            switches($($switches)* $sw [$under];)
+            $($rest)*
+        );
+    };
+
+    (@go $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        build ( $select:ident $(, $arg:ident)* ) $body:expr
+    ) => {
+        $crate::wire_exclusive!(@emit $name [$holder] $keys
+            typed($($typed)*)
+            nulls($($nulls)*)
+            alts($($alts)*)
+            switches($($switches)*)
+            build($select $(, $arg)*) $body
+        );
+    };
+
+    (@alt $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        this($($this:tt)*)
+        [ $key:ident : null, $($more:tt)* ]
+        => $build:expr;
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@alt $name [$holder] $keys
+            typed($($typed)*)
+            nulls($($nulls)* $key,)
+            alts($($alts)*)
+            switches($($switches)*)
+            this($($this)* $key : null,)
+            [ $($more)* ]
+            => $build;
+            $($rest)*
+        );
+    };
+
+    (@alt $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        this($($this:tt)*)
+        [ $key:ident : null ]
+        => $build:expr;
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@go $name [$holder] $keys
+            typed($($typed)*)
+            nulls($($nulls)* $key,)
+            alts($($alts)* alt ( $($this)* $key : null, ) => $build;)
+            switches($($switches)*)
+            $($rest)*
+        );
+    };
+
+    (@alt $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        this($($this:tt)*)
+        [ $key:ident : $ty:ty, $($more:tt)* ]
+        => $build:expr;
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@alt $name [$holder] $keys
+            typed($($typed)* $key : $ty,)
+            nulls($($nulls)*)
+            alts($($alts)*)
+            switches($($switches)*)
+            this($($this)* $key : ($ty),)
+            [ $($more)* ]
+            => $build;
+            $($rest)*
+        );
+    };
+
+    (@alt $name:ident [$holder:literal] $keys:ident
+        typed($($typed:tt)*)
+        nulls($($nulls:tt)*)
+        alts($($alts:tt)*)
+        switches($($switches:tt)*)
+        this($($this:tt)*)
+        [ $key:ident : $ty:ty ]
+        => $build:expr;
+        $($rest:tt)*
+    ) => {
+        $crate::wire_exclusive!(@go $name [$holder] $keys
+            typed($($typed)* $key : $ty,)
+            nulls($($nulls)*)
+            alts($($alts)* alt ( $($this)* $key : ($ty), ) => $build;)
+            switches($($switches)*)
+            $($rest)*
+        );
+    };
+
+    (@emit $name:ident [$holder:literal] $keys:ident
+        typed( $($tkey:ident : $tty:ty,)* )
+        nulls( $($nkey:ident,)* )
+        alts( $( alt ( $($key:ident : $kind:tt),* $(,)? ) => $build:expr ; )* )
+        switches( $( $sw:ident [$under:literal] ; )* )
+        build( $select:ident $(, $arg:ident)* ) $body:expr
+    ) => {
+        #[derive(::serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct $keys {
+            $(
+                #[serde(default)]
+                $tkey: ::core::option::Option<$tty>,
+            )*
+            $(
+                #[serde(default)]
+                $nkey: $crate::wire::shared::NullKey,
+            )*
+            $(
+                #[serde(default)]
+                $sw: bool,
+            )*
+        }
+
+        const _: () = {
+            $($crate::method::assert_name(::core::stringify!($tkey));)*
+            $($crate::method::assert_name(::core::stringify!($nkey));)*
+            $($crate::method::assert_name(::core::stringify!($sw));)*
+        };
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> ::core::result::Result<Self, D::Error> {
+                let mut keys = $keys::deserialize(deserializer)?;
+                let states = [$(
+                    {
+                        let present = [$($crate::wire_exclusive!(@flag keys.$key : $kind)),*];
+                        $crate::schema::group_presence(
+                            present.iter().filter(|flag| **flag).count(),
+                            present.len(),
+                        )
+                    },
+                )*];
+                if $crate::schema::exclusive_index(&states).is_err() {
+                    let alternatives = $crate::schema::format_alternatives(&[
+                        $( &[ $(::core::stringify!($key)),* ] ),*
+                    ]);
+                    return ::core::result::Result::Err(::serde::de::Error::custom(
+                        ::std::format!("name exactly one of {alternatives}"),
+                    ));
+                }
+                let $select = $crate::wire_exclusive!(@pick keys states
+                    [ $( alt ( $($key : $kind),* ) => $build ; )* ]
+                    0 1 2 3 4 5 6 7
+                );
+                $(let $arg = keys.$arg;)*
+                ::core::result::Result::Ok($body)
+            }
+        }
+
+        impl $crate::schema::Schema for $name {
+            fn shape() -> $crate::schema::Shape {
+                $crate::schema::Shape::Object {
+                    holder: $holder,
+                    fields: ::std::vec![$(
+                        $crate::schema::Field {
+                            name: ::core::stringify!($sw),
+                            under: ::core::option::Option::Some($under),
+                            shape: $crate::schema::Shape::Optional(::std::boxed::Box::new(
+                                <bool as $crate::schema::Schema>::shape(),
+                            )),
+                        },
+                    )*],
+                    parts: ::std::vec::Vec::new(),
+                    choice: ::std::vec![$(
+                        ::std::vec![$(
+                            $crate::wire_exclusive!(@shape $key : $kind),
+                        )*],
+                    )*],
+                }
+            }
+        }
+    };
+
+    (@flag $keys:ident . $key:ident : null) => {
+        $keys.$key.is_present()
+    };
+    (@flag $keys:ident . $key:ident : ($ty:ty)) => {
+        $keys.$key.is_some()
+    };
+
+    (@shape $key:ident : null) => {
+        $crate::schema::Field {
+            name: ::core::stringify!($key),
+            under: ::core::option::Option::None,
+            shape: $crate::schema::Shape::Null,
+        }
+    };
+    (@shape $key:ident : ($ty:ty)) => {
+        $crate::schema::Field {
+            name: ::core::stringify!($key),
+            under: ::core::option::Option::None,
+            shape: <$ty as $crate::schema::Schema>::shape(),
+        }
+    };
+
+    // Eight alternatives is the ceiling. The index tokens are peeled one
+    // literal at a time; a ninth alternative does not match.
+    (@pick $var:ident $states:ident
+        [
+            alt ( $($key:ident : $kind:tt),* $(,)? ) => $build:expr ;
+            $($more:tt)*
+        ]
+        $n:tt $($rest:tt)*
+    ) => {
+        if ::core::matches!($states[$n], $crate::schema::GroupPresence::Complete) {
+            $($crate::wire_exclusive!(@bind $var, $key : $kind);)*
+            $build
+        } else {
+            $crate::wire_exclusive!(@pick $var $states [ $($more)* ] $($rest)*)
+        }
+    };
+    (@pick $var:ident $states:ident [ ] $($rest:tt)*) => {
+        ::core::unreachable!("exclusive_index found a complete alternative")
+    };
+
+    (@bind $var:ident, $key:ident : null) => {};
+    (@bind $var:ident, $key:ident : ($ty:ty)) => {
+        let $key: $ty = $var.$key.take().expect("this alternative is complete");
+    };
 }
 
 /// An object some of whose fields are shown in parts, each whole or not at
