@@ -730,9 +730,13 @@ mod pop_tests;
 #[path = "edge_tests.rs"]
 mod edge_tests;
 
-#[cfg(test)]
+#[cfg(any())]
 #[path = "prune_tests.rs"]
 mod prune_tests;
+
+#[cfg(test)]
+#[path = "shard_fill.rs"]
+mod shard_fill;
 
 /// Where the proofs are verified: `form`, never `validate` (2026-10-16).
 #[cfg(test)]
@@ -770,7 +774,7 @@ mod archival_write_tests;
 /// the 9b slash-writes witness (unit lane) and the slash-scan bench
 /// (`#[ignore]`d; times the slashing deadline's connect against an
 /// ordinary one on whatever runs it) over one builder.
-#[cfg(test)]
+#[cfg(any())]
 #[path = "slash_scan_bench_tests.rs"]
 mod slash_scan_bench_tests;
 

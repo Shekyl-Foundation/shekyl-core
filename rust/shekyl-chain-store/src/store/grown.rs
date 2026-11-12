@@ -364,6 +364,29 @@ impl Grown {
         tx
     }
 
+    /// Watch `output_key`: when a block this chain records lists it, the
+    /// spender registers it ([`Spender::own`]) and
+    /// [`Self::spend_watched`] can spend it. Call before the block that
+    /// lists it is recorded.
+    pub(in super::super) fn watch(&mut self, output_key: [u8; 32]) {
+        self.spender.own(output_key);
+    }
+
+    /// One real spend of the watched outputs `keys` ([`Self::watch`]), all
+    /// the miner's, for the block connecting next, paying `fee` and the
+    /// rest back to the miner in two outputs ([`Spender::spend_owned`]).
+    /// Panics when a key was not listed by a recorded block.
+    pub(in super::super) fn spend_watched(&mut self, keys: &[[u8; 32]], fee: u64) -> Transaction {
+        let wallet = MinerWallet::harness();
+        let owner = shekyl_harness_spender::Owner::miner(wallet);
+        let connecting = self.height();
+        let sourced = keys
+            .iter()
+            .map(|key| self.spender.owned_input(&owner, *key, connecting))
+            .collect();
+        Spender::spend_owned(sourced, connecting, fee, wallet.recipient())
+    }
+
     /// [`Self::spend_of`] with a bond post riding the spend
     /// ([`Spender::spend_coinbase_posting`]): the post is the prefix's one
     /// extra input and its term moves the outputs — a join's bond is a

@@ -533,6 +533,23 @@ impl Spender {
         Self::spend_sourced(sourced, connecting, fee, bond, recipient, Twist::default())
     }
 
+    /// A spend of watched outputs ([`Self::own`], sourced by
+    /// [`Self::owned_input`]), every path assembled for the block
+    /// connecting at `connecting`, paying `fee` to the chain and the rest
+    /// to `recipient` in two outputs. The fan-out a fixture chain grows its
+    /// spendable outputs by: each spend of one output leaves two, which the
+    /// caller watches before the block that lists them is pushed.
+    #[must_use]
+    pub fn spend_owned(
+        sourced: Vec<Sourced>,
+        connecting: BlockHeight,
+        fee: u64,
+        recipient: &Recipient,
+    ) -> Transaction {
+        assert!(!sourced.is_empty(), "a spend has an input");
+        Self::spend_sourced(sourced, connecting, fee, None, recipient, Twist::default())
+    }
+
     /// A spend of several blocks' coinbases in **one** transaction, listed
     /// in the block connecting at `connecting`, paying `fee` and the rest
     /// back to the miner in two outputs — the multi-input shape, up to the

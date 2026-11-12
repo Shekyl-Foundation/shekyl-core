@@ -84,6 +84,11 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+# The decision-citation guard (`test_support::regen_decision_or_refuse`)
+# the shard-fill capture is written under (`store/shard_fill.rs`), the one
+# every armed regenerator in the workspace calls. Already a normal
+# dependency of shekyl-chain-rules (rule 17); test-only here.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
