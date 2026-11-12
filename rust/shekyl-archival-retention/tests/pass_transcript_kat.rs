@@ -5,8 +5,8 @@
 
 //! Byte-pinned vectors for the SF-D8 pass transcript a persona's receipt
 //! key signs (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`): the decoded request
-//! header, the transcript, the delivery digest, the constants that size
-//! them, and the anchor window's genesis boundary.
+//! header, the transcript, the delivery digest, and the constants that
+//! size them.
 //!
 //! Oracle tiers (rule 50). The header and transcript pins are
 //! **hand-computed (tier 1)**: byte concatenations checkable by eye. The

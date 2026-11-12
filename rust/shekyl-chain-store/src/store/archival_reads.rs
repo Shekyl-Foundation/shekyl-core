@@ -559,9 +559,9 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// of `epochs`, ascending per epoch.
 ///
 /// The table is keyed `(P, shard, E)` (`SO-D2`), so one pair's epochs are
-/// adjacent and `(P, E)` is not a range. This hops the persona's shards the
-/// way [`served_shards`] hops serve-credit — seek to the next shard, never
-/// walk the shard ids between — and point-reads each requested epoch. An
+/// adjacent and `(P, E)` is not a range. This hops the persona's shards —
+/// seek to the next shard, never walk the shard ids between — and
+/// point-reads each requested epoch. An
 /// epoch with no Served shard is absent from the map. Empty `epochs` reads
 /// nothing. The set names each epoch once ([`ChainView::served_at`]). Only
 /// a requested epoch is decoded; a row that does not decode is SI-7.

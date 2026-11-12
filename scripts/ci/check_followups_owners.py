@@ -105,8 +105,12 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # seam, the M1 C++ test-support seam), and two rows that had left the list
 # earlier were counted, the list's length; 267 on 2026-11-10 when the
 # switch's C7 deleted the serve-credit input and the attestation extra
-# field with the six rows whose subject they were, the list's length.
-GRANDFATHER_CEILING = 267
+# field with the six rows whose subject they were, the list's length; 266
+# on 2026-11-12 when the switch's C8 closed the LMDB serve-credit scans row
+# (its tables are gone), and 265 the same day when it closed the
+# duplicate-archival-keys row (the template leaves a later conflicting
+# transaction unselected), the list's length.
+GRANDFATHER_CEILING = 265
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

@@ -244,9 +244,8 @@ fn emit_pqc_signing_preimage_kat_inputs() {
 }
 
 /// The Rust leg: this crate's derivation reproduces every captured payload
-/// and hash, transaction by transaction, input by input; the shapes
-/// are all present; the serve-credit form yields nothing (its signature is
-/// CEN-J10's, over the pass record — see the module doc).
+/// and hash, transaction by transaction, input by input, and the shapes
+/// are all present.
 #[test]
 fn pqc_signing_preimage_matches_the_captured_specification_output() {
     let doc: Value =

@@ -1,52 +1,46 @@
-//! Archival serve-credit and credit-wire verification primitives.
-//!
-//! Consensus-facing replay of epoch challenges and Merkle openings to frozen
-//! segment sub-roots `R_k`, per
-//! [`docs/design/ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md),
-//! plus the TJ-B step 3 **credit-wire** logic core
-//! ([`docs/design/ARCHIVAL_CREDIT_WIRE.md`](../../docs/design/ARCHIVAL_CREDIT_WIRE.md)):
-//! settlement fold and admission wire (header / nonce / root / pass verify).
+//! Archival retention's consensus primitives: the bond records and their
+//! wire, the secret draw, the bundle a block carries and its admission
+//! inputs, the settlement fold, the emission claim, and the pass transcript
+//! a persona's receipt key signs (`ARCHIVAL_SERVE_CREDIT_SPEC.md`).
 //!
 //! # Crate posture
 //!
-//! - **Verify-only at genesis.** Challenge derivation, path replay, and leaf-index
-//!   checks live here; vin deserialization and LMDB bit writes land in consensus /
-//!   engine crates (gate-2 §10). Credit-wire C++ block format + FFI land in Plan B.
+//! - **Pure, verify-side.** Nothing here reads a store or writes one: the
+//!   validator (`shekyl-chain-rules`) and the store (`shekyl-chain-store`)
+//!   call these functions with the values they hold.
 //! - **Public material only.** Leaf bytes and path siblings are on-chain public
 //!   inputs; no secrets in this crate (`35-secure-memory.mdc`).
 //!
-//! # Public surface
+//! # Public surface (selected)
 //!
-//! - [`challenge`] — `challenge_leaf_index`, `challenge_fire_height`, domain labels.
 //! - [`drawable_pair`] — one drawable `(P, s)` pair. The public urn that
 //!   scheduled these pairs is deleted; the secret draw replaces it.
 //! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
 //!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
-//! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
+//! - [`wire`] — the exact-length rule the bond-post and emission readers
+//!   share.
 //! - [`secret_draw`] — the secret draw: selection, the `0x0C` commitment,
-//!   the challenge nonce, the serve-credit batch commitment, and the
-//!   count rule (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
-//! - [`bundle`] — the serve-credit bundle: the pass bitmap, the kept and
-//!   prunable parts, the reference a block carries, the bundle commitment,
-//!   the prunable hash, the header root, and the section budget
-//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7). STAGED: read by the pure
-//!   verifier in `shekyl-chain-rules`; no block path yet.
+//!   the challenge nonce, the bundle commitment, and the count rule
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4, §5.2, §7.3).
+//! - [`bundle`] — the bundle: the pass bitmap, the kept and prunable parts,
+//!   the reference a block carries, the bundle commitment, the prunable
+//!   hash, the header root, and the section budget
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7), read by bundle admission in
+//!   `shekyl-chain-rules`.
 //! - [`drawable_epoch`] — one epoch's drawable pairs and each persona's
-//!   receipt key, as one value (§9.6). STAGED with [`bundle`]. The name is
-//!   [`DrawableEpoch`], not a snapshot: `shekyl-chain-rules` already calls
-//!   its emission gather `EpochSnapshot`.
+//!   receipt key, as one value (§9.6). The name is [`DrawableEpoch`], not a
+//!   snapshot: `shekyl-chain-rules` already calls its emission gather
+//!   `EpochSnapshot`.
 //! - [`settlement_select`] — settlement's fold: three counted draws by beacon, the pair's
 //!   row, and the issued-draw digest term.
-//! - [`pass_anchor`] — SF-D8 window, the pass transcript, and the receipt
-//!   verify ([`verify_receipt_transcript`]).
+//! - [`pass_anchor`] — the pass transcript and the receipt verify
+//!   ([`verify_receipt_transcript`]).
 //! - [`shard_view_hash`] — `SV-D1`'s view hash of a `W`-byte shard: the
 //!   streaming [`ShardViewHasher`] over each in-domain transaction's prunable
 //!   region and `pqc_auths`. Not a verification digest; never a skeleton row.
 //!
-//! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
-//! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
-//! pass-transcript vectors in `tests/pass_transcript_kat.rs`.
+//! KAT: pass-transcript vectors in `tests/pass_transcript_kat.rs`.
 
 #![deny(unsafe_code)]
 

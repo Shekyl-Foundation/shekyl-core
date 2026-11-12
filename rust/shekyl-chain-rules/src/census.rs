@@ -403,8 +403,7 @@ census_rows! {
         // 2026-11-09): the header's root is the bundle section's, judged by
         // CEN-J29 through J37 (`rules::bundle_admission`), its successors
         // (`SCS-P16`, `SCS-P34`). The coinbase extra B4 also parsed is
-        // CEN-I19's, and the `0x0B` set it held empty is CEN-I20's: both
-        // in `form`, at the miner slot.
+        // CEN-I19's and CEN-I20's, in `form`, at the miner slot.
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition

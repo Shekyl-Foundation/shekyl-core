@@ -585,21 +585,20 @@ ingest deciding forks.**
      which binds the header, the miner transaction and the declared
      transaction hashes;
    - every carried transaction hashes to its declared hash (CEN-G2's
-     check, `rules/body.rs:132-160`, run by sync first; a skeleton's
+     check, `rules/body.rs:123-139`, run by sync first; a skeleton's
      txid is computed from its supplied components);
-   - the attestation witness, with the coinbase's kept headers (the
-     first `0x0B` field of its extra), rebuilds to the header's
-     `attestation_root`. The witness travels beside the block and is not
-     covered by its identity. This is CEN-B4's parse-and-root half
-     (`AttestationSet::parse` and `verify_root`,
-     `rules/attestation.rs:110-118`), which is stateless and reads no
-     view. The countersignatures stay `validate`'s. The same rule covers
-     the bundle section once SO-D12's merged increment puts it on the
-     block wire.
+   - the bundle references beside the block rebuild to the header's
+     `bundle_root`: each reference parses, the references ascend, and
+     each names a block whose window the including block is inside. The
+     references travel beside the block and are not covered by its
+     identity. This is the section's stateless half, CEN-J29 and J31's
+     (`bind_section`, `rules/bundle_admission.rs:204-217`), which reads
+     no view. The budget (J30) and the bundles themselves (J32 to J37)
+     stay `validate`'s.
    - A mismatch is the supplier's form failure: its session is closed and
      the span is requested elsewhere. **The header is not touched:** a
      peer cannot invalidate an honest header by substituting or
-     reordering its bodies, or by swapping its witness.
+     reordering its bodies, or by swapping its bundle references.
    - Implemented by `shekyl_chain_rules::bind_body` (CS-1). It returns
      the `CenRow` `validate` would name. What the session does with that
      row is CS-2's.
@@ -1828,7 +1827,7 @@ half-cut, and one cutover PR avoids it.
   - the long-run slot goes to the most verified work at equal height;
   - header PoW never derives a cache for a seed its branch has not earned
     (CS-Q2 step 3); a branch-earned cache is transient and never pinned;
-  - a substituted witness never marks its header invalid;
+  - a substituted bundle section never marks its header invalid;
   - on a mining node an evidence check runs, and the miner yields;
   - a free fake run costs at most one cache build and closes its session;
   - after the latch is set, no evidence build runs;

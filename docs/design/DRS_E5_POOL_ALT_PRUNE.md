@@ -10,17 +10,16 @@ arms, and the Slice C transport-handoff docs, §2.2/§2.3) merged
 2026-10-12. The switch PR's reorg half — a5's closure, a6's refusals,
 fixtures and Rust self-differential, a8's docs — merged 2026-10-16
 (#1082); a7's C++ capture is withdrawn
-(`E5-Q9`); the bundle legs (B10, the pre-closure body fetch, `BundleView`
-on `BatchView`, the bundle verifier inside `validate` at the switch) land
-with SO-D12's merged increment, which puts the bundle section on the block
-wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3; the wire's `Block`
-carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b (b1–b7),
+(`E5-Q9`); the bundle legs (the alt row's bundle references, B10; the
+body resolved before the closure; the bundle view on the chain view; the bundle verifier inside `validate` at the
+switch) are built by SO-D12's 4b switch (PR #1327), which puts the bundle
+section on the block wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3). PR-b (b1–b7),
 DRS-X's PR 1 (`DRS_X_STORE_FLIP.md` DX-Q7, ruled 2026-10-16), merged
 2026-10-18 (#1102): the Rust pool, staged for the DRS-X flip and wired by
 it — the door is the validator's own judgement at `TxSlot::Lone`, the pool
 record knows one relay fact (DX-F6), reorg retention is deleted (CEN-K10),
 the bundle work is SO-D12's (§2.2, §5). This file stays open for the
-bundle legs and for the residue §9 names for its owners.** Round 0 posed
+residue §9 names for its owners.** Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
@@ -669,16 +668,15 @@ state, where the read is correct and costs nothing extra. B4's second
 read is the bond's committed hybrid key (`E5-15`), which is chain state,
 so B4 is not given an alt-tier site and an as-of-fork-point bond
 reconstruction (`E5-16`) answers at admission a question promotion
-answers for free. For the record: B4 exists in Rust
-(`rules::attestation::B4`, `26bc5b994`) and runs on the main chain; an
-alt block's witness travels in `AltBlock` (SAL-13; K5b) and is judged at
-promotion by main-chain B4 over `BatchView` — the tier whose view has
-executed the chain the pass depends on. The C++ alt ladder keeps its
-`verify_block_attestation` step (`blockchain.cpp:2135`, behind PoW since
-`4932b769b`) until `DEL-009` retires the path. Its tip-snapshot read
-(`E5-6`) and its join-in-the-fork case (`E5-17`) are facts about the
-frozen path, not shapes the Rust tier inherits or corrects: under β both
-reads happen after the blocks they depend on execute.
+answers for free. B4's successors, bundle admission's CEN-J29 to J37
+(`rules::bundle_admission::admit`), run on the main chain; an alt block's
+bundle references travel in `AltBlock` (SAL-13; K5b) and are judged at
+promotion by that admission over the batch view — the tier whose view has
+executed the chain the receipts depend on. The tip-snapshot read
+(`E5-6`) and the join-in-the-fork case (`E5-17`) belong to the C++ alt
+ladder's `verify_block_attestation` step, which `DEL-009` deletes, not to
+the Rust tier: under β both reads happen after the blocks they depend on
+execute.
 
 The cheap tier is `alt_against(formed, &alt_view, &rule_set, &trust)
 -> Result<Verdict<AltValid<'id, H>>, Fault>` (`shekyl-chain-rules`
@@ -1047,11 +1045,13 @@ one undo log, so it cannot see a bad trim; SI-5 can. An empty tree has no
 chunk to rebuild; its top is `CurveTreeRoot::EMPTY`, which the two stored
 roots can agree on not being.
 
-**Bundles at the switch land with SO-D12's merged increment (ruled
-2026-10-15).** Until then the alt row keeps the attestation witness and
-CEN-B4 runs at promotion through the full `validate` (`E5-Q4` β).
-**`BundleView` has one implementation, on `BatchView`:** the switch's batch
-view is the store's batch view, so this section and
+**Bundles at the switch are built by SO-D12's 4b switch (ruled
+2026-10-15).** The alt row carries the block's bundle references, and
+bundle admission (CEN-J29 to J37) runs at promotion through the full
+`validate` (`E5-Q4` β).
+**The bundle view is the chain view's** (`ChainView::bundles`; the
+store's is `StoreBundleView`): the switch's batch view is the store's
+batch view, so this section and
 `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 describe the same impl, built once,
 with that increment. What it brings to the switch: an alt block stores
 bundle *references* `(h, kept bytes, prunable hash)` in place of the
@@ -1082,7 +1082,7 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K3 | an alt block already stored is refused | by construction — AL1 `AlreadyHeld` (the belt E1 landed) | store `alt.rs` (landed) | the existing AL1 test. UPDATE 2026-10-11 (a4 census arms): the census arm flips to `held_by_store("shekyl-chain-store", "insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals")`, not `by_construction` (`E5-18`: the construction is the store's) |
 | CEN-K4 | alt blocks stored after version, timestamp, checkpoint, PoW | rule — `alt_against` is the tier; what it holds is the row; no attestation step (`E5-Q4` β — B4's bond read is chain state, promotion's; the C++ ladder's step is frozen, `DEL-009`) | rules `alt_against` (slice 9) | each sub-check mutated once; the order pinned. UPDATE 2026-10-11 (a4 census arms): `rules::alt::K4` is a marker rule with no predicate, recorded by `alt_against` after the last header predicate (an `AltValid` carries it iff every step ran); registry `enforced_at(crate::rules::alt::K4, "the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else")` — the row-set pin is the test, `the_fork_is_judged_before_the_header_ladder` the order's |
 | CEN-K5 | promotion re-validates every block through the full validator | sequencing — step 4 of §2.3 is `validate` + `connect`, nothing else connects | `shekyl-chain-ingest` switch (slice 9) | an alt chain carrying a body `validate` refuses leaves the store at the pre-switch digest Built (switch PR): `switch.rs` `switch`; held by `shekyl-chain-ingest`, test `a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix`. |
-| CEN-K5b | each promoted block's attestation witness travels and is checked | sequencing — the witness is in `AltBlock`; `validate`'s attestation rule reads it | ingest switch + `AltBlock` (slice 9) | a tampered witness on an alt entry fails promotion. UPDATE 2026-10-11 (Slice C bundle redesign, §2.3): the alt row carries bundle **references**, not the witness; the bodies are fetched before the closure and the bundle verifier runs inside it over `BatchView` — the witness cell becomes "a body that does not hash to its reference stops the switch before the closure; an invalid bundle fails it inside" (a5) Built with the bundle legs out (§2.3): the alt row carries the block's bundle references (`SO-D12` 4b, C2); `switch` refuses a formed block whose references are not its row's; test `tampered_references_on_an_alt_row_fail_promotion_k5b` (CEN-B4 refuses a planted section until admission is live). The body fetch before the closure is the switch's C3. |
+| CEN-K5b | each promoted block's attestation witness travels and is checked | sequencing — the witness is in `AltBlock`; `validate`'s attestation rule reads it | ingest switch + `AltBlock` (slice 9) | a tampered witness on an alt entry fails promotion. UPDATE 2026-10-11 (Slice C bundle redesign, §2.3): the alt row carries bundle **references**, not the witness; the bodies are fetched before the closure and the bundle verifier runs inside it over `BatchView` — the witness cell becomes "a body that does not hash to its reference stops the switch before the closure; an invalid bundle fails it inside" (a5) Built with the bundle legs out (§2.3): the alt row carries the block's bundle references (`SO-D12` 4b, C2); `switch` refuses a formed block whose references are not its row's; test `tampered_references_on_an_alt_row_fail_promotion_k5b` (CEN-J29, run by promotion's `validate`, refuses a planted section whose reference does not parse). The body fetch before the closure is the switch's C3. |
 | CEN-K6 | switch iff alt cumulative difficulty strictly greater (checkpoint forces) | rule — `fork_choice`'s verdict matched; the crossing is Q1b's | `shekyl-difficulty` (landed) + ingest match (slice 9) | equal keeps; greater switches; checkpoint-forced promotes a lighter chain Built (switch PR): the match in `switch.rs` (`offer`, re-derived in `switch`); test `a_heavier_branch_switches_and_equals_the_branch_connected_directly`; the checkpoint arm in `a_checkpoint_forced_switch_discards_the_demoted_chain`, reachable once CEN-E2 floors on the last anchor the tip has reached. |
 | CEN-K7 | demoted blocks re-enter as alt blocks; discard on checkpoint-forced | sequencing — step 3 under the verdict's arm (`E5-12`) | ingest switch (slice 9) | after a switch AL7 lists the demoted blocks; after a forced switch it does not Built (switch PR): the demoted rows from the tier's verdicts on the `Switch` arm, none on `ForcedSwitch` (AL6 = 0); a refusal of a recorded block is SI-27, by ruling (§2.3), not the C++'s log-and-continue; test `a_checkpoint_forced_switch_discards_the_demoted_chain`. |
 | CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | held by store — the alt row carries no supply word (a4, `SCHEMA_VERSION` 24, §2.1); the row's layout is the witness, pinned by `codec::alt_tests::an_alt_row_has_no_supply_word` | store `codec/alt.rs` (landed a4) | UPDATE 2026-10-11: the field is deleted; the a2 witness below (the view's type) stands and is no longer the only one; the registry flips `pending` → `held_by_store` in the census-arms commit (`E5-18`). UPDATE 2026-10-10: Round 0's witness (`rg coins_generated rust/shekyl-chain-rules/` → 0) was wrong at the pin — `RecordedBlock.coins_generated` is F13's operand (`view.rs:177`, `miner.rs:469`). The witness is the type: `rg 'coins_generated' rust/shekyl-chain-rules/src/view.rs` names only `RecordedBlock`'s field, never `HeaderRecord`'s, and `AltView` implements `HeaderView` only |

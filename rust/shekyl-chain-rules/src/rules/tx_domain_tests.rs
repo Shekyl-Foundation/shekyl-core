@@ -24,8 +24,8 @@
 //!    someone decides whether it carries good. A runtime assertion alone would
 //!    let a new class through.
 //! 2. [`the_coinbase_carries_no_good_however_large_its_extra`] — the coinbase
-//!    leg, including a maximal-attestation coinbase: those records live in
-//!    `extra`, which is skeleton, not in a prunable region.
+//!    leg, including a coinbase whose `extra` is built for the most outputs
+//!    the grammar builds: `extra` is skeleton, not a prunable region.
 //! 3. [`the_counter_equals_the_predicate_over_a_mixed_chain`] — boundaries
 //!    derived from `cumulative_tx_count` equal boundaries from counting the
 //!    predicate directly, over a synthetic chain mixing every class with empty
@@ -253,10 +253,11 @@ fn the_empty_region_digest_is_the_coinbases_row() {
     );
 }
 
-/// The coinbase carries no good **however large its `extra` grows**: attestation
-/// records live in `extra`, which is skeleton and is never discarded, not in a
-/// prunable region. Run at one output and at the largest the grammar builds, so
-/// the claim is about the ct and not about the fixture's size.
+/// The coinbase carries no good **however large its `extra` grows**: `extra`
+/// (the tx key, the KEM ciphertexts, the PQC leaf entries) is skeleton and is
+/// never discarded, not a prunable region. Run at one output and at the
+/// largest the grammar builds, so the claim is about the ct and not about the
+/// fixture's size.
 #[test]
 fn the_coinbase_carries_no_good_however_large_its_extra() {
     let small = coinbase(1);
@@ -267,12 +268,12 @@ fn the_coinbase_carries_no_good_however_large_its_extra() {
     maximal.prefix.extra = coinbase_extra(256);
     assert!(
         maximal.prefix.extra.len() > baseline_extra,
-        "the maximal-attestation extra must actually be larger"
+        "the maximal extra must actually be larger"
     );
     assert!(matches!(maximal.ct, Ct::Null(_)), "still a Null ct");
     assert!(
         !in_domain(&maximal),
-        "a coinbase's attestation records are extra, not archival good"
+        "a coinbase's extra is not archival good, however large"
     );
     assert_eq!(
         maximal.txid_parts().prunable_hash,

@@ -86,14 +86,14 @@ consumer. The two clocks must not be conflated.
 
 The countersign pre-sign gate is
 `anchor ∈ [own_height − 720 − L, own_height − 720 + L]`, `L = 4`
-(`rust/shekyl-p-serve/src/countersign.rs:148-156`). Admission is
-`anchor ∈ [predecessor − 720 − L, predecessor − 720]`
-(`SF-D8`;
-`rust/shekyl-archival-retention/src/pass_anchor.rs:114-116`).
+(`rust/shekyl-p-serve/src/countersign.rs:199-205`). Bundle admission
+requires `anchor_height < h`, where `h` is the height of the block whose
+draw the pass answers, and reads the anchor's hash at that height
+(CEN-J36; `rust/shekyl-chain-rules/src/archival/bundle_records.rs:106-109`).
 
 | Side | Quantity today | Evidence |
 | --- | --- | --- |
-| Daemon admission | **ORDINAL** predecessor | `get_tail_id` returns the tip's index; `++blockchain_height` converts to count; `predecessor_height = blockchain_height - 1` is the tip ordinal (`src/cryptonote_core/blockchain.cpp`). Window hashes are looked up with `height >= m_db->height()` as the exclusive **count** bound and `get_block_hash_from_height(height)` as the **ordinal** index (`src/cryptonote_core/blockchain.cpp`). Fixtures: `shape_for_predecessor(H)` last = `H − 720` (`rust/shekyl-archival-retention/src/pass_anchor.rs:223-232`); the window's genesis boundary is pinned at 723 and 724 (`rust/shekyl-archival-retention/tests/pass_transcript_kat.rs`). |
+| Bundle admission | **ORDINAL** | `anchor_height` and `h` are both block ordinals, and the anchor's hash is read with `view.block_hash(anchor_height)`, an ordinal index (`rust/shekyl-chain-rules/src/archival/bundle_records.rs:106-109`). |
 | Witness (`P`) `own_height` | **ORDINAL** | `HostSigner::own_height` is the daemon tip (`DaemonTipCache`, WSS-24 / PR #791, `rust/shekyl-p-host/src/signer.rs:122-124`), typed `Option<BlockHeight>` (height-semantics Phase 2d). Unstamped / not-following / aged-out cache reports `None` (`rust/shekyl-p-host/src/signer.rs:152-158`). Ingest is consecutive from genesis `0, 1, 2, …` (`rust/shekyl-curve-tree/src/client.rs:752-756`). Gate algebra is Instant±span (`checked_sub_count` of `PASS_ANCHOR_DEPTH_BLOCKS` / `PASS_ANCHOR_LAG_BLOCKS`). |
 | Requester mint | protocol **ORDINAL**; production mint **unwired** | Header contract: "hash of its block at `tip − 720`" (`rust/shekyl-p-fetch/src/header.rs:34`). `RequestHeader::fresh` is not on the daemon production fetch path. Inland type is `BlockHeight` (height-semantics Phase 2d). |
 
@@ -299,7 +299,7 @@ one family. **Unclear: none.**
 | Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: the core count, or absent) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; `get_version` and `sync_info` forward the core count (`0` only when the core reported none, `CORE_RPC_VERSION` 3.40); `get_info` still writes `0` when synchronized |
 | Wallet RPC client `Rpc::get_height` | COUNT | `ChainCount` | `ChainCount` at the client decode | RULED 2026-09-20 (height-semantics Phase 2c); name kept (C7) |
 | Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs`) | COUNT vs ORDINAL | `ChainCount` vs `BlockHeight` | `ChainCount` vs `BlockHeight` | RULED 2026-09-20 (height-semantics Phase 2c); comparison punched to raw at that one named site |
-| Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2d); wire punch at encode/decode (C1) |
+| Countersign / pass-anchor (`own_height`, `anchor_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2d); wire punch at encode/decode (C1) |
 | Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2d); generated `u64` wrapped at the const def (C4) |
 | Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
 | Scan result and its echoes (`ScanResult` heights, `RefreshSummary.processed_height_range`, `RefreshReorgEvent.fork_height`, `RefreshProgress.height`, `RefreshDiagnostic` scan/reorg heights, `RefreshError::ConcurrentMutation`, `validate_reorg_fork_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2f); the producer loop is `BlockHeight`; `usize` is the JSON `get_block` number inside `fetch_block_with_retry` / `fetch_block_hash_at`; the exclusive end is `ChainCount::next_height`; `LedgerSnapshot::block_hash_at_ordinal` deleted |

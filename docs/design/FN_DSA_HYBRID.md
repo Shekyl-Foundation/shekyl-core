@@ -235,7 +235,7 @@ open a second road to a release.
 - **Increment 3** puts `ArchivalPKeys::receipt_sign_pk`, as
   `FnDsaHybridPublicKey::to_canonical_bytes()`, in the JoinMarket post; admission's "parses" is
   `FnDsaHybridPublicKey::from_canonical_bytes`, which checks both halves. Done: §8.
-- **Increment 4** signs the unchanged 112-byte transcript under
+- **Increment 4** signs the 113-byte pass transcript under
   `SCHEME_DOMAIN_RECEIPT`. The refusal trailer's `0xFF` fill is already
   shown not to parse (`an_all_ones_fill_is_not_a_signature`). Built: §9;
   selected by the switch (§9.4).
@@ -337,9 +337,8 @@ still verify as they did, and move to this key in increment 4.
 ## 9. Increment 4 — the signing capability
 
 The capability that signs a receipt under the persona's receipt key, and
-both ends of the wire it travels: the serving route's signer trait and the
-fetch client's target are generic over the scheme (§9.3, ruled
-2026-10-12). Increment 4 built it (PR #1049); the SO-D12 4b switch
+both ends of the wire it travels: the serving route's signer and the
+fetch client's target carry the receipt's scheme and width (§9.3). Increment 4 built it (PR #1049); the SO-D12 4b switch
 (PR #1327) selected it, in the change that made the bundle verifier accept
 receipts (§9.4). The serving task signs with the receipt key, and every
 drawn holder's fetch target is the receipt key's.
@@ -356,11 +355,11 @@ took `FND-16`–`FND-20`. A reference to `FND-19` or `FND-20` anywhere is
 | Byte identity | `a_held_key_signs_the_bytes_the_scheme_signs`, and `the_held_key_reproduces_the_pinned_signatures` in `tests/kat_fn_dsa_hybrid_v1.rs`, which reads `FN_DSA_HYBRID_V1_KAT.json` and so runs on the AVX2, no-AVX2 and aarch64 lanes. No vector was added or changed |
 | The key in the actor | `HeldReceiptKey` (`rust/shekyl-engine-core/src/engine/stake_engine/types.rs`), a field of `BondedPersona` and `EphemeralPersona` beside the bundle: a three-state slot — `NotBuilt` until the persona's first receipt signature, then `Built` (the decoded key) or `Undecodable` for the rest of the persona's life (`HeldPersona::sign_receipt_transcript`) |
 | The actor message | `SignReceiptTranscript` (`stake_engine/persona.rs`): the typed transcript (`PassTranscript`, §9.4) in, an `FnDsaHybridSignature` out. The domain is fixed by `sign_receipt_transcript` (`shekyl-p-serve`), which `HeldPersona::sign_receipt_transcript` calls. `StakeEngineHandle::sign_receipt_transcript_blocking` is its blocking sender |
-| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle, a slot, and the refusal it remembers once the actor has refused a signature with `StakeEngineError::ReceiptKeyUndecodable` — that variant only, never a decoded key's failed signature (`ReceiptSign`). A `PassKey` at the receipt envelope's width, 1,356 bytes. Pre-flight is actor liveness plus that remembered refusal; it does not ask the actor, and an unheld slot is found at sign time, as the identity key finds it (§9.4) |
-| The signer trait | `PassKey<const W>` / `PassSigner<const W>` (`rust/shekyl-p-serve/src/countersign.rs`), sealed over the two schemes by `EnvelopeWidth<W>`; the serve loop takes every width from the signer it is bound with (§9.3) |
-| The fetch target | `FetchTarget<K>` / `VerifiedShard<K>` over the sealed `PassVerifyingKey` (`rust/shekyl-p-fetch/src/target.rs`); `PFetchClient::fetch::<K>` (§9.3) |
-| The receipt check | `verify_receipt_transcript` (`rust/shekyl-archival-retention/src/attestation_wire.rs`), beside `verify_pass_transcript`: the same transcript under `SCHEME_DOMAIN_RECEIPT` |
-| The selection | `serving/start.rs` constructs `ResidentReceiptKey` for the serving task, and the host's key field is `PassKey<RECEIPT_ENVELOPE_LEN>` (`shekyl_p_host::PersonaServing::key`); a compile-time assertion holds that the capability is not a `PassKey` at the identity width (§9.4) |
+| The capability | `ResidentReceiptKey` (`stake_engine/serving/receipt_key.rs`): a weak actor handle, a slot, and the refusal it remembers once the actor has refused a signature with `StakeEngineError::ReceiptKeyUndecodable` — that variant only, never a decoded key's failed signature (`ReceiptSign`). A `PassKey` at the receipt envelope's width, 1,356 bytes. Pre-flight is actor liveness plus that remembered refusal; it does not ask the actor, and an unheld slot is found at sign time (§9.4) |
+| The signer trait | `PassKey` / `PassSigner` (`rust/shekyl-p-serve/src/countersign.rs`): `sign_pass` returns an `FnDsaHybridSignature`, and the envelope is `RECEIPT_ENVELOPE_LEN`, 1,356 bytes (§9.3) |
+| The fetch target | `FetchTarget` (`rust/shekyl-p-fetch/src/target.rs`): the persona's endpoint and its receipt key, `FnDsaHybridPublicKey`; `PFetchClient::fetch` (§9.3) |
+| The receipt check | `verify_receipt_transcript` (`rust/shekyl-archival-retention/src/pass_anchor.rs`): the pass transcript under `SCHEME_DOMAIN_RECEIPT` |
+| The selection | `serving/start.rs` constructs `ResidentReceiptKey` for the serving task, and the host's key field is `Arc<dyn PassKey>` (`shekyl_p_host::PersonaServing::key`) (§9.4) |
 | Benches | `crypto_bench_fn_dsa_hybrid_sign_held` (gated) and criterion `fn_dsa_hybrid_sign_held`, `fn_dsa_hybrid_hold_key`; manifest §13 |
 
 **Where the decoded key lives.** In the stake actor and nowhere else, as a
@@ -403,8 +402,8 @@ refusal on itself, so a later pre-flight returns it without another
 question to the actor (§9.4); the slot stays the authority that refuses a
 second decode. The slot's state is a unit: no
 error value and nothing computed from the key is kept. It is per persona
-(`an_undecodable_key_is_one_personas_state`), the identity key and the
-other personas are unaffected
+(`an_undecodable_key_is_one_personas_state`), the other personas are
+unaffected
 (`a_corrupted_receipt_key_refuses_through_the_actor`), and a persona leaves
 it only by being dropped. Nothing checks the key at start: the
 capability's pre-flight latch is what stops a second response (§9.4).
@@ -452,88 +451,61 @@ test starts the actor on a stack a decode does not fit in.
 
 | # | Finding | Disposition |
 | --- | --- | --- |
-| `FND-21` | The serving route could not take a scheme-3 signer as it stood. `PassKey::sign_pass` returned the scheme-1 `HybridSignature` by type, and the response envelope was that signature's canonical length, 3,385 bytes, as one global: `SIGNATURE_ENVELOPE_LEN` sized the signed trailer, the content length and the refusal trailer in `shekyl-p-serve`, and the fetch side read the same width into a fixed array and parsed it as a `HybridSignature`. A receipt is another type and 1,356 bytes | **Built here, by ruling 2026-10-12 (§9.3):** the trait is const-generic over the envelope's width, the fetch target is generic over its key's scheme, `ResidentReceiptKey` implements the trait, and the live scheme's wire bytes are pinned from before the change. **Selected by the switch (PR #1327, §9.4):** the host's key type, the construction in `serving/start.rs` and the daemon's fetch targets, with the bundle verifier that accepts a receipt; the pre-flight latch is kept and the key is not decoded at serving-task start |
+| `FND-21` | The serving route could not take a scheme-3 signer as it stood. `PassKey::sign_pass` returned the scheme-1 `HybridSignature` by type, and the response envelope was that signature's canonical length, 3,385 bytes, as one global: `SIGNATURE_ENVELOPE_LEN` sized the signed trailer, the content length and the refusal trailer in `shekyl-p-serve`, and the fetch side read the same width into a fixed array and parsed it as a `HybridSignature`. A receipt is another type and 1,356 bytes | **Built (§9.3, §9.4):** the serving route and the fetch client carry the receipt's type, `FnDsaHybridSignature`, and its width, 1,356 bytes, end to end; `ResidentReceiptKey` implements the trait, the serving task binds it, and the daemon's fetch targets are receipt keys, with the bundle verifier that accepts a receipt. The identity-key pass path is deleted. The pre-flight latch is kept and the key is not decoded at serving-task start |
 | `FND-22` | `zeroize` wipes an `Option<T>` by taking the value out and writing a fresh `None`: two `T`-sized values on the stack of the caller. For a 118,640-byte decoded key that made dropping a held signer need more stack than a signature (360 KiB unoptimized and 128 KiB optimized for a signature followed by the drop, against 112 KiB and 16 KiB once fixed) | The signer never calls `zeroize` on the slot. The decoded key is wiped by the crate's own derived `ZeroizeOnDrop`, which runs in place when the key's heap slot drops; the signer has no `Drop` of its own, so the key is wiped once. Construction keeps the `Option` wipe for the stack local the key was decoded into, because there the whole slot has to go and it is paid once: that is why building a held key needs 360 KiB optimized, more than a per-call signature |
 | `FND-23` | A decoded key still reaches the heap through the stack. `SigningKey1024::decode` returns the key by value, so the signer decodes into a local, exchanges it with the heap slot and wipes the local. The crate's own frame is out of reach: in a build that does not construct the return value in place, `decode` leaves the copy it built on its dead frame (`FND-3`'s residue). The decoded key itself is `Zeroize + ZeroizeOnDrop` in the crate, asserted at compile time beside the signer | Once per key, at construction, where the per-call signer leaves it on every signature. Closing it needs a decode into caller memory upstream; unsafe placement is refused, as in `FND-14` |
 | `FND-24` | The crate's own figures put decoding at about 13 % of a signature (`FND-4`). On this host holding the key removes 9.96 % of the instructions and 7.0 % of the time. The Ed25519 half is still expanded from its seed on every signature, inside the shared nested body | Recorded with the measurements (§9.1). The floor figure rides `BA-T33`'s floor arm, which now has the held-key arm to run beside the per-call one |
 
-### 9.3 The serving route and the fetch client, generic over the scheme (ruled 2026-10-12)
+### 9.3 The serving route and the fetch client, at the receipt's width
 
-Ruled on PR #1049, on `FND-21`: *"PassKey becomes const-generic over the
-envelope width, instantiated at 3,385 with ResidentPassKey. Prove the wire
-bytes are identical. ResidentReceiptKey implements the trait but is not
-selected. Fetch side: the width comes from the target's key type. No
-dual-scheme acceptance."*
+The serve loop and the fetch client carry one scheme end to end: hybrid
+scheme 3, the persona's receipt key, closing each response with an envelope
+of `RECEIPT_ENVELOPE_LEN` bytes (1,356, the canonical length of an
+`FnDsaHybridSignature`). There is no identity-key signer and no second
+envelope width.
 
-**Serve side.** `PassKey<const W>` signs with the scheme whose canonical
-signature is `W` bytes. `EnvelopeWidth<W>` is sealed and implemented twice,
-each time with the signature type's own `CANONICAL_LEN` written as `W`, and
-it fixes the type `sign_pass` returns. The width therefore decides the
-type: a key at one width cannot return the other scheme's signature, and a
-width that is neither has no key and no endpoint (compile-fail doctests in
-`countersign.rs`, with a compiling control beside them). The trait takes
-one parameter and not an associated signature type so that
-`dyn PassKey<W>` is a complete type and the width alone names the scheme
-everywhere a signer is held. The serve loop names no width: the envelope it
-writes, the term in the content length and the refusal trailer's fill are
-the `W` of the signer the endpoint was bound with. An endpoint is bound
-with one signer and so at one width.
+**Serve side.** `PassKey` (`rust/shekyl-p-serve/src/countersign.rs`) has
+two operations: `ready`, the pre-flight asked before the first response
+byte, and `sign_pass`, which returns an `FnDsaHybridSignature` over the
+typed transcript. Implementors sign through `sign_receipt_transcript`,
+which fixes the domain to `SCHEME_DOMAIN_RECEIPT`. `PassSigner` is a
+`PassKey` plus the height the anchor gate reads. The serve loop writes the
+envelope only from a signature of exactly the receipt's width, so a short
+or long envelope cannot reach the wire; the content length and the refusal
+trailer's fill take the same width. `serve_receipt_width_tests.rs` holds
+each place the width reaches: the envelope's length and position, the
+content length, and the trailer's fill.
 
-| Width | Scheme | Signers |
+| Signer | Where |
+| --- | --- |
+| `ResidentReceiptKey` | The engine's serving task (§9, §9.4) |
+| `HostSigner` | `shekyl-p-host`: the host's `PassKey` with the daemon tip cache as its height |
+| `TestReceiptKeySigner` | Behind the `test-signer` feature, which no production graph reaches |
+
+**Fetch side.** `FetchTarget` (`rust/shekyl-p-fetch/src/target.rs`) holds
+the persona's endpoint and its receipt key, `FnDsaHybridPublicKey`, both
+read from the bond record. The client reads a receipt's width of envelope,
+parses it with the canonical decoder, which accepts 1,356 bytes and no
+other length, and checks it once with `verify_receipt_transcript`.
+
+**A wrong-scheme answer is an ordinary failed read.** Nothing tries a
+response a second way, nothing measures a response to choose a scheme, and
+no function verifies under either of two schemes. `client_scheme_tests.rs`
+holds this over a shard large enough that the head check cannot refuse a
+scheme-1 response by its length:
+
+| Response | Outcome | Test |
 | --- | --- | --- |
-| `RECEIPT_ENVELOPE_LEN`, 1,356 | 3, the receipt key | **Served.** `ResidentReceiptKey`, which the serving task binds; the host's `HostSigner` (generic over its key's width); `TestReceiptKeySigner` behind `test-signer` |
-| `IDENTITY_ENVELOPE_LEN`, 3,385 | 1, the bond identity key | **Not served.** `ResidentPassKey` has no production caller; only tests construct it, and whether it is deleted is open on PR #1327. `TestKeySigner` behind `test-signer` |
+| A valid receipt response (the control) | Accepted | `a_receipt_over_the_large_shard_is_accepted` |
+| A whole scheme-1 (identity-key) response | `Malformed::FrameLong`, with the two signatures' difference, 2,029 bytes, left over | `an_identity_scheme_response_is_a_long_frame` |
+| A scheme-1 signature cut to a receipt's width | `Malformed::Envelope` | `an_identity_signature_cut_to_a_receipts_width_is_malformed` |
 
-**Fetch side.** `FetchTarget<K>` is generic over the sealed
-`PassVerifyingKey`, and the key's type is the exchange's scheme: the width
-read, the signature parsed, the check run (`verify_pass_transcript` for an
-identity key, `verify_receipt_transcript` for a receipt key). Each
-implementation takes its width from its signature type's `CANONICAL_LEN`
-and parses with that type's canonical decoder, which accepts that length
-only.
+The engine's receipt key is put behind the real endpoint and answered by
+the real fetch client in `receipt_round_trip_tests.rs`
+(`the_daemon_client_accepts_a_receipt_the_resident_key_signed`).
 
-**No dual-scheme acceptance.** `PFetchClient::fetch::<K>` is monomorphic in
-`K`. There is no second attempt under the other scheme, nothing measures a
-response to choose one, no enum holds a key of either, and no function
-verifies under either. A response of the other scheme fails this scheme's
-reading of it:
-
-| Target's key | Response | Refusal | Held by |
-| --- | --- | --- | --- |
-| receipt | identity endpoint's, small shard | `Malformed::Oversize`, from the head | `tests/scheme_separation.rs` |
-| identity | receipt endpoint's, small shard | `Malformed::EnvelopeShort`, from the head | same |
-| identity | a valid receipt response, shard large enough to pass the head | `Malformed::FrameShort` | `client_scheme_tests.rs` |
-| receipt | a valid identity response, same | `Malformed::FrameLong`, with exactly the two envelopes' difference left | same |
-| either | an envelope of the right width holding the other scheme's signature | `Malformed::Envelope` | same |
-
-The engine's two capabilities are put through the same four combinations
-behind the real endpoint (`receipt_round_trip_tests.rs`). The type-level
-half is two compile-fail doctests on `FetchTarget`, with a control. This
-repository's compile-fail pattern is the doctest; `trybuild` is used in
-`shekyl-crypto-pq` only.
-
-**The wire bytes of the live scheme are identical.** They were captured
-from the tree before either side was generalized, in a commit of their own,
-and are held since:
-
-| Fixture (`src/wire_pin/*.hex`) | What it pins | Test |
-| --- | --- | --- |
-| p-serve `identity_served` | The whole response — status line, headers with the content length, body, 3,385-byte countersignature — from the endpoint and from the in-memory composition | `a_served_response_is_the_pinned_bytes` |
-| p-serve `identity_unsigned` | The same with the refusal trailer | `a_refusal_trailer_response_is_the_pinned_bytes` |
-| p-fetch `identity_request` | The request the client writes | `the_request_and_a_verified_response_are_the_pinned_bytes` |
-| p-fetch `identity_response`, `identity_verified` | A signed response replayed to the client, and the delivery digest and view hash it returns; the signature returned is the response's last 3,385 bytes | same |
-| p-fetch `identity_refusal_response` | A refusal-trailer response replayed; the verdict is `Unsigned` | `a_pinned_refusal_trailer_response_is_unsigned` |
-
-The signatures in them are real: a key derived from a fixed seed, the
-ML-DSA half signed from a fixed seed, verified under the key before
-anything is compared. No fixture changed across the generalization. The
-fetch side's pin test did not change at all; the serve side's changed in an
-import, its signer's two `impl` headers and one cast.
-Every existing test of the two crates and of their consumers passes with
-its expectations as they were; what changed in them is type plumbing.
-
-**Crates touched:** `shekyl-p-serve`, `shekyl-p-fetch`,
-`shekyl-archival-retention` (the added check), `shekyl-p-host`,
+**Crates on the route:** `shekyl-p-serve`, `shekyl-p-fetch`,
+`shekyl-archival-retention` (the check), `shekyl-p-host`,
 `shekyl-p-loopback`, `shekyl-engine-core`, `shekyl-archival-fetch-sched`,
 `shekyl-sp-t3-spike`. The daemon's holder source builds its targets over
 `record.receipt_sign_pk` (`rust/shekyl-chain-ingest/src/shard_facts.rs`,
@@ -548,22 +520,22 @@ site is a type the compiler follows:
 
 | Site | What it holds |
 | --- | --- |
-| `rust/shekyl-p-host/src/host.rs` (`PersonaServing::key`) | `Arc<dyn PassKey<RECEIPT_ENVELOPE_LEN>>`, the one place the host's scheme is chosen; the bind builds `PassSigner<RECEIPT_ENVELOPE_LEN>` from it |
+| `rust/shekyl-p-host/src/host.rs` (`PersonaServing::key`) | `Arc<dyn PassKey>`, the key the host serves with; the bind builds its `PassSigner` (`HostSigner`) from it |
 | `rust/shekyl-engine-core/src/engine/stake_engine/serving/start.rs` | `key: ResidentReceiptKey::new(&stake, active.p_slot)` |
 | `rust/shekyl-chain-ingest/src/shard_facts.rs` | The production holder source: each target is `FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)` |
-| `rust/shekyl-archival-fetch-sched/src/facts.rs`, `read.rs` | `Holder<K>` and `Read<K>` have no default scheme; `HolderSource` returns `Holder<FnDsaHybridPublicKey>`, and a drawn read is `Read<FnDsaHybridPublicKey>` |
-| `rust/shekyl-sp-t3-spike/src/harness.rs` | The rig serves with `TestReceiptKeySigner` and fetches over `FetchTarget<FnDsaHybridPublicKey>`, so it measures the served route |
+| `rust/shekyl-archival-fetch-sched/src/facts.rs`, `read.rs` | A `Holder`'s target is a `FetchTarget` over the receipt key; `HolderSource` returns holders, and a drawn `Read` carries the receipt-verified shard |
+| `rust/shekyl-sp-t3-spike/src/harness.rs` | The rig serves with `TestReceiptKeySigner` and fetches over a `FetchTarget`, so it measures the served route |
 | `rust/shekyl-chain-rules/src/archival/bundle_records.rs` | Step 8: `verify_receipt_transcript` over the typed transcript |
 
 **The transcript is typed.** `PassTranscript`
 (`rust/shekyl-archival-retention/src/pass_anchor.rs`) is the request header,
 whose anchor is a `BlockHash`, with the shard id and the delivery digest.
-`PassKey::sign_pass`, `sign_pass_transcript`, `sign_receipt_transcript`,
-`verify_pass_transcript`, `verify_receipt_transcript` and the actor's two
-signing messages take it, never the bytes, so both signing domains reach
-their anchor as a block hash; `PassTranscript::message` is the 113-byte
-layout a signature covers. The attestation and receipt rows of
-`DOMAIN_BINDING_RATCHET.tsv` left the ratchet with this change.
+`PassKey::sign_pass`, `sign_receipt_transcript`,
+`verify_receipt_transcript` and the actor's signing message take it, never
+the bytes, so the receipt domain reaches its anchor as a block hash;
+`PassTranscript::message` is the 113-byte layout a signature covers.
+`DOMAIN_BINDING_RATCHET.tsv` holds no row for the receipt domain: its
+binding is typed.
 
 **An undecodable receipt key: the pre-flight latch, not a decode at
 serving-task start.** The key is decoded by the first signature (§9), so

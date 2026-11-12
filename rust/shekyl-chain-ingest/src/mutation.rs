@@ -163,8 +163,8 @@ pub enum Mutation {
     Orphan,
     /// `curve_tree_root` replaced by a root the tree never had.
     WrongRoot,
-    /// `bundle_root` replaced, nothing else: no references, no `0x0B`
-    /// field, so the section is empty and the mined root is not the empty
+    /// `bundle_root` replaced, nothing else: no references, so the
+    /// section is empty and the mined root is not the empty
     /// section's: CEN-J29's root check over the empty section — CEN-A3's
     /// falsifier — at the block.
     WrongBundleRoot,

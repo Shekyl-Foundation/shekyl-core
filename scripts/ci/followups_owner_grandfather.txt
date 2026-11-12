@@ -51,7 +51,6 @@ Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen ga
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
 Should the genesis block header carry a real mint timestamp instead of 0?
-The pool admits duplicate archival unique-keys that only fail at connect.
 External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)
 Emission leg: verify reward→identity binding is structural, not [`design/ARCHIVAL_FIREWALL_GATE6.md`](./design/ARCHIVAL_FIREWALL_GATE6.md)
 FCMP++ circuit: confirm `incomplete_add_pub` need not constrain `c` [`completed/SHEKYL_OXIDE_UNVENDOR.md`](./completed/SHEKYL_OXIDE_UNVENDOR.md)
@@ -86,7 +85,6 @@ Re-derive genesis-sealed redundancy params against the integer backend (+1 deep-
 Funding-seam entry-standoff: consensus surface, wallet conformance, and the [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
 Wallet bond-funding/standoff call site (tracks the `shekyl-standoff` importable surface; 2026-06-16).
 `shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's sensitivity need (separate question; 2026-06-16).
-Archival serve-credit / emission LMDB scans — bound the two unindexed table scans (own schema-round PR).
 Emission-path micro-efficiency cluster — address with C-1 wiring / the schema round (post-build tuning).
 Staker-archival settings are FROZEN; the remaining work is the operator experience, not [`docs/STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md)
 Wallet-side archival bond-post construction (design + JoinMarket, PR 0-2a [`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md)

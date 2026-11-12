@@ -809,7 +809,7 @@ impl SlashedChain {
 /// slice 8 row 4) — same byte count, same row count, the bond rows' keys
 /// and ids moved, the codec did not. Re-pinned 2026-10-08 at the CEN-I13
 /// flip: the thirty-one padding bodies became serve credits
-/// ([`padded_credit`]), which the record carries as thirty-one
+/// (the bench's padded credits), which the record carries as thirty-one
 /// `ServeCredit` rows — 31 × (4 + 56) = 1 860 bytes, the whole delta from
 /// 17 536 — and nothing else moved: the slash families are spelled and
 /// asserted above; the bond rows are the same joins; the budget rows are

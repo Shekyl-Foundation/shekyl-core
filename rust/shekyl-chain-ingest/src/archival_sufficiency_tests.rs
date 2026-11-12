@@ -31,7 +31,7 @@
 //! (`ARW-13`: no capture slashes, which was §6.2 item 5's decision point,
 //! `ARW-Q18` — ruled 2026-10-02: no capture; the `0x04` slash families are
 //! pinned at non-empty by `shekyl-chain-store`'s slash witness instead)
-//! and the attestation witness. For them this module
+//! and the alt-chain family. For them this module
 //! asserts the *absence* — zero rows on every chain — so the empty slash
 //! rows of every `0x04` record are a pre-declared fact of the corpus, not a
 //! silence the oracle happens to agree with. One cell cuts across that
