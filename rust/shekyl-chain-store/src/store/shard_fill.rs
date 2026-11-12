@@ -18,6 +18,12 @@
 //! in which outputs are spent depend on the height alone, so a capture of
 //! its bodies replays as the same blocks.
 
+// A whole-file test module: the parent gates it with `#[cfg(test)]`, and
+// this self-declaration is what the debug-macro lint keys on — the capture
+// writer names the file it wrote and the decision it wrote it under, which
+// is its job, not a debug leftover.
+#![cfg(test)]
+
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;

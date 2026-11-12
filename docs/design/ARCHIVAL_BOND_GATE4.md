@@ -901,8 +901,9 @@ Foundation `CompleteTree` is **excluded from `Market`** but posts **one** floor 
 backlog are independent value flows (§3.5).
 
 **The cooldown's bounds against the slash grace:** `SLASH_GRACE_EPOCHS <
-RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, held at compile time
-(`COOLDOWN_WINDOW_IS_READABLE`, `rust/shekyl-chain-rules/src/rules/tx_bond.rs`). The
+RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, held by the archival parameter set's
+validation (`CooldownNotPastGrace`, `CooldownPastReadableWindow`,
+`rust/shekyl-archival-retention/src/params.rs`), so an override is held to them too. The
 lower bound keeps a Release behind every slash its last pass can still draw. The upper
 bound is the store's reach: J16 reads the issued-draw indexes over the cooldown window,
 `current − (RELEASE_COOLDOWN_EPOCHS − 1)` through `current`, and the store keeps those

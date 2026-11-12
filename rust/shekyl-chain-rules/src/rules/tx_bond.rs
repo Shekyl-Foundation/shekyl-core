@@ -18,7 +18,7 @@ use shekyl_archival_retention::{
     check_admission, cold_authority_pin, verify_join_market_bond_post, verify_reinstate_bond_post,
     verify_release_bond_post, whole_record_last_served, AdmissionShard, ArchivalBondPostVin,
     BondKind, BondPostKind as RetentionKind, HoldingsDescriptor, HoldingsKind, ParentStateHoldings,
-    ShardClose, ShardSet, RELEASE_COOLDOWN_EPOCHS, SLASH_GRACE_EPOCHS,
+    ShardClose, ShardSet,
 };
 use shekyl_types::archival::{BondRecord, Holdings};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -545,14 +545,15 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
 /// `archival_support_issued` (`SO-D12s`). A shard or tree with no pass in
 /// the window is omitted.
 ///
-/// **The window** is the epochs `current − (RELEASE_COOLDOWN_EPOCHS − 1)`
+/// **The window** is the epochs `current − (release_cooldown_epochs − 1)`
 /// through `current`, `current` the connecting block's epoch: a pass any
 /// earlier has had its cooldown elapse (`release_cooldown_elapsed`), and
 /// its epoch has reached its slash deadline, which falls in the epoch
 /// after it (`SLASH_GRACE_EPOCHS`). So an omitted pass changes neither of
 /// J16's checks. The window lies above the issued indexes' read floor
-/// ([`EpochFloor`]`<Settling>`) — `COOLDOWN_WINDOW_IS_READABLE` holds it
-/// at compile time — so the read never asks for a retired epoch.
+/// ([`EpochFloor`]`<Settling>`): the parameter set refuses a cooldown past
+/// the slash grace plus one (`ArchivalParamsError::CooldownPastReadableWindow`),
+/// so the read never asks for a retired epoch.
 ///
 /// Public for the submit engine's Release facts over the Rust pool and the
 /// RPC's claim source (DRS-E5 PR-b M9), so the block path and the engine
@@ -567,12 +568,12 @@ pub fn release_last_served<'id, V: ChainView<'id>>(
     persona: &PCanonicalId,
     record: &BondRecord,
 ) -> Result<Vec<u64>, V::Fault> {
-    let () = COOLDOWN_WINDOW_IS_READABLE;
     let connecting = Tip::connecting_height(view.tip()?.as_ref());
     let schedule = rule_set.settlement_schedule();
     let current = schedule.epoch_at_height(connecting.to_raw());
     let floor = EpochFloor::<Settling>::under(connecting, schedule);
-    let first = current.saturating_sub(RELEASE_COOLDOWN_EPOCHS - 1);
+    let cooldown = shekyl_archival_retention::archival_params().release_cooldown_epochs;
+    let first = current.saturating_sub(cooldown - 1);
     let mut latest: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
     for epoch in first..=current {
         let at = SettlementEpoch::from_raw(epoch);
@@ -600,20 +601,6 @@ pub fn release_last_served<'id, V: ChainView<'id>>(
     }
     Ok(latest.into_values().collect())
 }
-
-/// The cooldown window [`release_last_served`] reads lies above the issued
-/// indexes' read floor, and the cooldown outlasts the slash grace: the
-/// window is the last `RELEASE_COOLDOWN_EPOCHS` epochs, and the settling
-/// family reads back `SLASH_GRACE_EPOCHS` (`EpochFloor<Settling>`), so
-/// `RELEASE_COOLDOWN_EPOCHS − 1 ≤ SLASH_GRACE_EPOCHS`. With the cooldown
-/// above the grace, that pins the cooldown at one epoch past the grace:
-/// `SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`
-/// (`ARCHIVAL_BOND_GATE4.md`, the cooldown's bounds). The store's reach is
-/// the upper bound.
-const COOLDOWN_WINDOW_IS_READABLE: () = assert!(
-    SLASH_GRACE_EPOCHS < RELEASE_COOLDOWN_EPOCHS
-        && RELEASE_COOLDOWN_EPOCHS - 1 <= SLASH_GRACE_EPOCHS
-);
 
 /// The classified arm as the retention crate's vin — the marshal the three
 /// `verify_*` functions read. The kind is the arm's, so a kind no arm names

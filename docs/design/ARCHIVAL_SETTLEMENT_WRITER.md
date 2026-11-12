@@ -1992,8 +1992,9 @@ its own: a held shard's latest epoch with a passed economy draw, and a
 complete tree's latest with a passed support draw, over the last
 `RELEASE_COOLDOWN_EPOCHS` epochs (`release_last_served`). That window
 lies inside the settling floor because `SLASH_GRACE_EPOCHS <
-RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, asserted at compile
-time (`COOLDOWN_WINDOW_IS_READABLE`, `rules/tx_bond.rs`).
+RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, which the archival
+parameter set's validation refuses to break (`CooldownPastReadableWindow`,
+`shekyl-archival-retention` `params.rs`).
 
 | Table | Why no horizon is derived here | Blocker |
 | --- | --- | --- |
