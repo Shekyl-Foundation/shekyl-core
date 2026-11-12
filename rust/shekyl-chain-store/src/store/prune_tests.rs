@@ -235,11 +235,11 @@ impl Builder {
 
     /// Connect the next height listing `txs` as given: bodies already
     /// built, such as captured spends.
-    fn connect_bodies(&mut self, store: &ChainStore, txs: Vec<Transaction>) -> Connected {
+    fn connect_bodies(&mut self, store: &ChainStore, txs: &[Transaction]) -> Connected {
         let out: Result<Connected, TestErr> = store.write(|batch| {
             let view = batch.chain_view();
-            let judged = self.grown.judge_listing(&view, &self.rules, &txs)?;
-            self.record(txs.clone());
+            let judged = self.grown.judge_listing(&view, &self.rules, txs)?;
+            self.record(txs.to_vec());
             Ok(batch.connect(judged, self.rules)?)
         });
         out.expect("the block connects")
@@ -252,7 +252,7 @@ impl Builder {
         let from = self.listed.len();
         chain.blocks[from..blocks]
             .iter()
-            .map(|captured| self.connect_bodies(store, captured.listed.clone()))
+            .map(|captured| self.connect_bodies(store, &captured.listed))
             .collect()
     }
 
@@ -1040,8 +1040,8 @@ fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
     let branch = |b: &mut Builder, store: &ChainStore| -> Vec<Pruned> {
         let mut pruned = Vec::new();
         for connected in [
-            b.connect_bodies(store, head.clone()),
-            b.connect_bodies(store, tail.clone()),
+            b.connect_bodies(store, &head),
+            b.connect_bodies(store, &tail),
         ] {
             pruned.extend(connected.pruned);
         }

@@ -916,12 +916,12 @@ fn every_rule_arm_is_held_somewhere() {
 /// The positive witness: the baseline passes both copies.
 #[test]
 fn the_baseline_passes_the_twin_and_the_crate() {
-    for (name, tx) in [("spend2", spend2())] {
-        tx.validate()
-            .unwrap_or_else(|e| panic!("the twin refuses the {name} baseline: {e}"));
-        tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS)
-            .unwrap_or_else(|r| panic!("the crate refuses the {name} baseline: {r}"));
-    }
+    let spend = spend2();
+    spend
+        .validate()
+        .unwrap_or_else(|e| panic!("the twin refuses the spend baseline: {e}"));
+    tx_form(&spend, TxSlot::Lone, &RuleSet::GENESIS)
+        .unwrap_or_else(|r| panic!("the crate refuses the spend baseline: {r}"));
     let chain = one_block();
     let mut candidate = candidate_on(&chain, Vec::new());
     candidate.block.miner_transaction = coinbase_ok(1);
