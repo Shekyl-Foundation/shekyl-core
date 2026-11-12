@@ -1074,15 +1074,16 @@ refusal path. `regenerate_block_path_fixtures` rewrites them.
 | `crypto_bench_block_connect` | 24,703,181 | 44,035,378 | 34,943,887 |
 | `crypto_bench_block_pop` | 28,679,225 | 76,536,312 | 35,947,387 |
 
-The three reads, on the output-cap fixture: the block 149,492, the header
-run 499,796, the leaf run 22,107. The block read is of the connected
+The three reads, on the output-cap fixture: the block 149,147, the header
+run 504,140, the leaf run 22,044. The block read is of the connected
 subject; the two range reads are over the fixture's history, so their
 setup does not form the subject.
 
-**Repeatability.** Three captures of one build on one machine agreed to
-0.002 % on the form rows and to 0.5 % on the store rows (the block read:
-149,007, 148,838, 149,492). The store rows are not bit-exact from run to
-run; the difference is far inside the class's ±5 % warning.
+**Repeatability.** Captures of one build on one machine agreed to 0.002 %
+on the form rows and to within 1 % on the store rows (the block read:
+149,007, 148,838, 149,492, 149,147; the header run 499,796 and 504,140).
+The store rows are not bit-exact from run to run; the difference is well
+inside the class's ±5 % warning.
 
 **Cost of the capture.** The twelve functions of this binary took 31
 minutes of callgrind on a 16-core development workstation (2026-11-12),
