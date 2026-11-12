@@ -3292,6 +3292,44 @@ once, the narration and the reach probe). The committed narrations move
 only under a cited decision in this document (`committed_fixture.rs`,
 rule 50).
 
+
+### 5.30 A5 of record is the test≡job arm; the pre-TJ opening arm is deleted (2026-11-12)
+
+**Decision (Rick, 2026-11-12, on `SO-D12` 4b, PR #1327).** TJ R1
+(`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §0) already decided this: a
+challenge moves the whole shard. The pre-TJ opening arm is deleted with
+`shekyl-archival-retention`'s `path.rs`: `RESPONSE_BYTES` (6 784 B, one
+challenged leaf and its segment co-path), `a5_proxy_report`, and the two
+tests that pinned it
+(`refetch_beats_storage_at_bulk_transit_but_not_at_retail_egress`,
+`w10_fails_at_bulk_transit_and_the_retail_end_no_longer_free_rides`). They
+are not re-pinned. `tj_shard_payload_report` is A5 of record, with
+`shard_payload_flips_the_margin_on_bandwidth_alone` and `q_risk_star`.
+
+**A5, stated as TJ §5.3 and §5.4 state it.** At metered bandwidth,
+whole-shard reads put the proxy above storage: at 0.01 $/GB the re-fetch
+costs $0.369 an epoch against $0.00468 to hold 12.3 GB, so the margin is
+positive at `q = 0`. At zero byte price (free ingress, flat-rate
+residential) the bandwidth leg vanishes and the deterrent rests on
+`T_risk`: the deadline must force a re-fetch failure rate of
+`q_risk* ≈ 0.10` with the reward forfeit (0.28 bond-only). A5 is not
+restated as "W10 passes".
+
+**What moved.** Both trees' four narrations were rendered and compared:
+this PR's branch against `dev` at `5ea4bff87`. Only the A5 block moves, in
+the two stage-2 narrations
+(`stage2_narration.txt`, `stage2_narration_flat_control.txt`, 41 changed
+lines each): the opening arm's table and verdict go, the TJ arm's header
+says it is A5, the residual-against-the-opening-band paragraph goes, and
+the closing A5 line is added. No number elsewhere moves. The esr10
+narrations do not move. The fixtures take exactly that hunk.
+
+**Not moved here.** The committed narrations already differ from what
+`dev` renders, outside A5, since the nightly of 2026-11-10 (the sim lane
+went red between the 2026-11-09 and 2026-11-10 runs: closed-shard counts,
+fees and A1 onsets moved). That drift is not this decision's; it is left
+for the change that caused it to record and regenerate.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
