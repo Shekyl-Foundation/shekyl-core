@@ -63,49 +63,6 @@ fn bench_intent_serialization(c: &mut Criterion) {
     });
 }
 
-fn bench_encrypt_decrypt(c: &mut Criterion) {
-    use shekyl_multisig::encryption::{decrypt_payload, encrypt_payload};
-    use shekyl_multisig::messages::MessageType;
-
-    let key = [0x42; 32];
-    let intent_hash = [0xAA; 32];
-    let plaintext = vec![0xBB; 1024];
-
-    let ct = encrypt_payload(
-        &key,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        &plaintext,
-    )
-    .unwrap();
-
-    c.bench_function("encrypt_1kb", |b| {
-        b.iter(|| {
-            black_box(
-                encrypt_payload(
-                    &key,
-                    &intent_hash,
-                    MessageType::SpendIntent,
-                    0,
-                    1,
-                    &plaintext,
-                )
-                .unwrap(),
-            )
-        })
-    });
-
-    c.bench_function("decrypt_1kb", |b| {
-        b.iter(|| {
-            black_box(
-                decrypt_payload(&key, &intent_hash, MessageType::SpendIntent, 0, 1, &ct).unwrap(),
-            )
-        })
-    });
-}
-
 fn bench_envelope_roundtrip(c: &mut Criterion) {
     use shekyl_multisig::messages::{MultisigEnvelope, ENVELOPE_VERSION};
 
@@ -148,7 +105,6 @@ criterion_group!(
     benches,
     bench_intent_hash,
     bench_intent_serialization,
-    bench_encrypt_decrypt,
     bench_envelope_roundtrip,
     bench_chain_state_fingerprint,
 );

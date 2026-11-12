@@ -12,9 +12,7 @@ use crate::multisig::{
     verify_multisig, MultisigKeyBlob, MultisigSigContainer, HYBRID_SCHEME_ID_MULTISIG,
 };
 use crate::output::recover_recipient_spend_pubkey;
-use crate::signature::{
-    pqc_leaf_key_bytes, HybridEd25519MlDsa, SignatureScheme, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
-};
+use crate::signature::pqc_leaf_key_bytes;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_address::Network;
 use shekyl_curve_generators::T;
@@ -95,13 +93,12 @@ fn entry_view<'a>(
     n: u8,
     enc_key_hashes: &'a [u8],
 ) -> MultisigEntryView<'a> {
-    let ct = &out.member_kem_ciphertexts[usize::from(i)];
-    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+    let own = own_ciphertext(out, i, n);
     MultisigEntryView {
         out_idx,
-        n,
-        own_x25519_ct: x25519.try_into().expect("x25519 ciphertext is 32 bytes"),
-        own_ml_kem_ct: ml_kem,
+        n: own.n,
+        own_x25519_ct: own.own_x25519_ct,
+        own_ml_kem_ct: own.own_ml_kem_ct,
         enc_key_hashes,
     }
 }
@@ -125,22 +122,28 @@ fn open_as(
     )
 }
 
-/// Member `i`'s per-output signing keypair, as that member derives it.
-fn member_keypair(
+fn own_ciphertext<'a>(out: &'a MultisigOutputData, i: u8, n: u8) -> MemberOwnCiphertext<'a> {
+    let ct = &out.member_kem_ciphertexts[usize::from(i)];
+    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+    MemberOwnCiphertext {
+        n,
+        own_x25519_ct: x25519.try_into().expect("x25519 ciphertext is 32 bytes"),
+        own_ml_kem_ct: ml_kem,
+    }
+}
+
+/// Member `i`'s signature on `msg`, through the production signer.
+fn member_sign(
     g: &Group,
     out: &MultisigOutputData,
     i: u8,
-) -> (HybridPublicKey, HybridSecretKey) {
-    let ct = &out.member_kem_ciphertexts[usize::from(i)];
-    let sk = &g.member_sks[usize::from(i)];
-    let ss = recover_combined_ss(
-        &sk.x25519,
-        &sk.ml_kem,
-        ct[..X25519_KEM_CT_LEN].try_into().unwrap(),
-        &ct[X25519_KEM_CT_LEN..],
+    msg: &SigningPayloadHash,
+) -> Result<MultisigMemberSignature, MultisigSignError> {
+    sign_multisig_member_auth(
+        &member_view(g, i),
+        &own_ciphertext(out, i, g.address.n_total()),
+        msg,
     )
-    .unwrap();
-    derive_multisig_member_keypair(&ss.0).unwrap()
 }
 
 /// The receive positive and the spend positive together: every member opens
@@ -187,16 +190,15 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
                 continue;
             }
             let signers: Vec<u8> = (0..n).filter(|i| mask & (1 << i) != 0).collect();
-            let pairs: Vec<_> = signers
+            let signed: Vec<MultisigMemberSignature> = signers
                 .iter()
-                .map(|&i| member_keypair(&g, &out, i))
+                .map(|&i| member_sign(&g, &out, i, &msg).unwrap())
                 .collect();
             let key = MultisigKeyBlob::assemble(
                 committed.clone(),
-                signers
+                signed
                     .iter()
-                    .zip(&pairs)
-                    .map(|(&i, (pk, _))| (i, pk.clone()))
+                    .map(|s| (s.member_index, s.public_key.clone()))
                     .collect(),
             )
             .unwrap()
@@ -204,14 +206,7 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
             .unwrap();
             let sig = MultisigSigContainer {
                 sig_count: m,
-                sigs: pairs
-                    .iter()
-                    .map(|(_, sk)| {
-                        HybridEd25519MlDsa
-                            .sign(sk, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG, msg.as_bytes())
-                            .unwrap()
-                    })
-                    .collect(),
+                sigs: signed.iter().map(|s| s.signature.clone()).collect(),
                 signer_indices: signers.clone(),
             }
             .to_canonical_bytes()
@@ -494,4 +489,65 @@ fn duplicate_decrypted_key_hashes_are_refused() {
             "member {i}"
         );
     }
+}
+
+/// The signer's refusals and what `verify_multisig` catches after it: a
+/// group-size mismatch is refused before any decapsulation; a member signing
+/// from another member's ciphertext gets a key whose hash is not the
+/// committed one (ML-KEM's implicit rejection yields a key, not an error);
+/// a signature over another message, or filed under another index, does not
+/// verify.
+#[test]
+fn a_member_signature_verifies_only_as_that_member_over_that_message() {
+    let (n, m) = (3u8, 2u8);
+    let g = group(n, m);
+    let index = 2u64;
+    let out = construct_multisig_output(&tx_key(), &g.address, 9_000, index, &NET).unwrap();
+    let leaf = out.pqc_leaf.entry_bytes();
+    let committed = open_as(&g, &out, index, 0, n, &out.enc_key_hashes, &leaf).unwrap();
+    let msg = SigningPayloadHash::from_bytes([0x21; 64]);
+    let other_msg = SigningPayloadHash::from_bytes([0x22; 64]);
+
+    let verify = |signed: &[MultisigMemberSignature], indices: &[u8], over: &SigningPayloadHash| {
+        let key = MultisigKeyBlob::assemble(
+            committed.clone(),
+            indices
+                .iter()
+                .zip(signed)
+                .map(|(&i, s)| (i, s.public_key.clone()))
+                .collect(),
+        )
+        .unwrap()
+        .to_canonical_bytes()
+        .unwrap();
+        let sig = MultisigSigContainer {
+            sig_count: m,
+            sigs: signed.iter().map(|s| s.signature.clone()).collect(),
+            signer_indices: indices.to_vec(),
+        }
+        .to_canonical_bytes()
+        .unwrap();
+        verify_multisig(HYBRID_SCHEME_ID_MULTISIG, &key, &sig, over, &NET)
+    };
+
+    let a = member_sign(&g, &out, 0, &msg).unwrap();
+    let b = member_sign(&g, &out, 2, &msg).unwrap();
+    assert_eq!(verify(&[a.clone(), b.clone()], &[0, 2], &msg), Ok(()));
+    assert!(verify(&[a.clone(), b.clone()], &[0, 2], &other_msg).is_err());
+    assert!(
+        verify(&[a.clone(), b.clone()], &[0, 1], &msg).is_err(),
+        "member 2's key filed as member 1's"
+    );
+
+    // Member 0's secret against member 1's ciphertext. The signer never sees
+    // the committed hashes; verify_multisig is what refuses the resulting key.
+    let crossed =
+        sign_multisig_member_auth(&member_view(&g, 0), &own_ciphertext(&out, 1, n), &msg).unwrap();
+    assert!(verify(&[crossed, b], &[0, 2], &msg).is_err());
+
+    assert_eq!(
+        sign_multisig_member_auth(&member_view(&g, 0), &own_ciphertext(&out, 0, n + 1), &msg,)
+            .err(),
+        Some(MultisigSignError::GroupSize)
+    );
 }

@@ -33,7 +33,6 @@
 #![deny(unsafe_code)]
 
 pub mod ceremony;
-pub mod encryption;
 pub mod group_descriptor;
 pub mod intent;
 pub mod invariants;
@@ -44,7 +43,6 @@ pub use ceremony::{
     CeremonyError, ConsumedNonce, FrostCeremony, NonceCounterError, NonceCounterSink, SpendRequest,
     SpendResponse,
 };
-pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
 pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use intent::{
     ChainStateFingerprint, SpendIntent, SpendIntentError, MAX_ADDRESS_LEN, MAX_INPUTS,
