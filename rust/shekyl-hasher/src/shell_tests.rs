@@ -314,8 +314,8 @@ fn a_warm_loan_is_cancelled_mid_hash_and_its_cache_freed_when_it_returns() {
 /// `lend_warm` never builds: a seed that is not listed, or not built, is
 /// declined, and the build count does not move.
 ///
-/// Red edit: let `Core::request_warm` reserve a build for a seed it
-/// declines.
+/// Red edit: have `Hasher::lend_warm` call `lend` on its seed first, a
+/// warm loan that builds.
 #[test]
 fn a_warm_loan_builds_nothing() {
     let _serial = serial();
