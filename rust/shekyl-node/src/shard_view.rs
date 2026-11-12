@@ -1,24 +1,26 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
-// SPDX-License-Identifier: BSD-3-Clause
+//
+// All rights reserved.
+// BSD-3-Clause
 
 //! The shard view's RPC adapter (`SHARD_VIEW_FETCH.md` `SV-D9`).
 //!
-//! [`DeskViewFacts`] is the `ShardViewFacts` implementor the falsifier
-//! names: a [`ViewDesk`] over the store-backed facts
-//! (`shekyl_chain_ingest::shard_facts::{StoreShardFacts, StoreHolderSource}`),
-//! mapped onto the RPC refusal type. The facts are the fetch scheduler's,
-//! shared with the bundle producer's reads, so they live where the node's
-//! store and the scheduler meet. Production `ServerConfig` still defaults
-//! to [`SkeletonAbsent`](shekyl_daemon_rpc::shard_view::SkeletonAbsent)
-//! until the daemon opens this store (`DRS-E3`).
+//! [`DeskViewFacts`] is the `ShardViewFacts` implementor a node with a Tor
+//! hands the RPC: a [`ViewDesk`] over the node's fetch scheduler and its
+//! store-backed facts, mapped onto the RPC refusal type. The scheduler is
+//! the one the bundle producer reads through (`crate::producer`), so the
+//! adapter lives where the store and the scheduler meet; the RPC crate may
+//! not reach the fetch client (`check_p_fetch_dep_cut.py`).
 
-use shekyl_archival_fetch_sched::{FactsFault, HolderSource, ShardFacts, ViewDesk, ViewRefusal};
+use shekyl_archival_fetch_sched::{
+    FactsFault, HolderSource, ShardFacts, ViewCaller, ViewDesk, ViewRefusal,
+};
 use shekyl_daemon_rpc::shard_view::{ShardViewFacts, ShardViewFuture, ShardViewRefusal};
 use shekyl_types::ShardId;
 
 use shekyl_daemon_rpc::chain_facts::FactsFault as RpcFactsFault;
 
-/// A [`ViewDesk`] answering `request_archival_shard` (`SV-D9`).
+/// A [`ViewDesk`] answering `shard_fetch` (`SV-D9`).
 pub struct DeskViewFacts<F, H> {
     desk: ViewDesk<F, H>,
 }
@@ -29,11 +31,6 @@ impl<F, H> DeskViewFacts<F, H> {
     pub fn new(desk: ViewDesk<F, H>) -> Self {
         Self { desk }
     }
-
-    /// The desk behind this adapter.
-    pub fn desk(&self) -> &ViewDesk<F, H> {
-        &self.desk
-    }
 }
 
 impl<F, H> ShardViewFacts for DeskViewFacts<F, H>
@@ -41,8 +38,13 @@ where
     F: ShardFacts,
     H: HolderSource,
 {
-    fn view(&self, shard_id: ShardId) -> ShardViewFuture<'_> {
-        Box::pin(async move { self.desk.view(shard_id).await.map_err(into_refusal) })
+    fn view(&self, shard_id: ShardId, bounded: bool) -> ShardViewFuture<'_> {
+        let caller = if bounded {
+            ViewCaller::Bounded
+        } else {
+            ViewCaller::Host
+        };
+        Box::pin(async move { self.desk.view(shard_id, caller).await.map_err(into_refusal) })
     }
 }
 
@@ -65,6 +67,7 @@ fn into_refusal(refusal: ViewRefusal) -> ShardViewRefusal {
             ShardViewRefusal::Fault(rpc_fault(fault))
         }
         ViewRefusal::Local(_) => ShardViewRefusal::Fault(RpcFactsFault::Internal),
+        ViewRefusal::Busy { shard_id } => ShardViewRefusal::Busy { shard_id },
     }
 }
 
@@ -80,10 +83,22 @@ fn rpc_fault(fault: FactsFault) -> RpcFactsFault {
 mod tests {
     use super::*;
     use shekyl_chain_ingest::shard_facts::{StoreHolderSource, StoreShardFacts};
+    use shekyl_daemon_rpc::shard_view::ShardViewFacts;
 
     #[test]
     fn desk_view_facts_is_the_sv_d9_implementor() {
         fn assert_impl<T: ShardViewFacts>() {}
         assert_impl::<DeskViewFacts<StoreShardFacts, StoreHolderSource>>();
+    }
+
+    /// The desk's refusal for a bounded caller's second flight is the
+    /// RPC's bound, carrying the shard asked.
+    #[test]
+    fn a_busy_desk_is_the_rpc_bound() {
+        let shard_id = ShardId::from_raw(4);
+        assert_eq!(
+            into_refusal(ViewRefusal::Busy { shard_id }),
+            ShardViewRefusal::Busy { shard_id }
+        );
     }
 }

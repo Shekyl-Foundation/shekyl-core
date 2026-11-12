@@ -561,7 +561,9 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                 parts.prunable_hash.to_bytes()
             );
             assert_eq!(
-                slot.pqc_auth_hash.0.map(|h| h.to_bytes()),
+                slot.pqc_auth_hash
+                    .0
+                    .map(shekyl_rpc_client::HashHex::to_bytes),
                 parts.pqc_auth_hash.map(shekyl_types::PqcAuthHash::to_bytes)
             );
             let skeleton = shekyl_wire::SkeletonTx {

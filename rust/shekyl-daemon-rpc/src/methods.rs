@@ -64,6 +64,8 @@ pub mod codes {
     pub const BOUND_POW_SIZE: &str = "bound.pow-size";
     /// The shared hash budget cannot pay one hash.
     pub const BOUND_HASH: &str = "bound.hash";
+    /// The bounded callers' one shard fetch is in flight (IG-Q90).
+    pub const BOUND_SHARD: &str = "bound.shard";
 }
 
 /// Why a method could not answer.

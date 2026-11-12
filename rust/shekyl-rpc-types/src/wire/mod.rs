@@ -12,10 +12,7 @@
 //! [`Id`]. The schema the grammar's walk gate reads is
 //! [`crate::schema::render`] of [`TABLE`].
 //!
-//! Grants are `RPC_CHANNEL.md` §6.1's, unchanged by the rename. One row
-//! differs from §6.1 as ruled: `shard_fetch` stays under `node` until its
-//! shard-fetch permit (IG-Q90) is wired, and then moves to `chain`
-//! (IG-Q91), so the grant never opens without its bound.
+//! Grants are `RPC_CHANNEL.md` §6.1's.
 
 pub mod archival;
 pub mod block;
@@ -71,7 +68,7 @@ crate::rpc_methods! {
     /// Holders per shard.
     ShardCoverage = "shard_coverage": NoParams => archival::Coverage, g(Chain);
     /// A closed shard's view. `node` until IG-Q90's permit; then `chain`.
-    ShardFetch = "shard_fetch": archival::ShardId => archival::ShardView, g(Node);
+    ShardFetch = "shard_fetch": archival::ShardId => archival::ShardView, g(Chain);
     /// The daemon's state, each part by its grant.
     DaemonStatus = "daemon_status": NoParams => daemon::DaemonStatus, g(Health);
     /// Chain sync's view.

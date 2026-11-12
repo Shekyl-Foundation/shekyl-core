@@ -51,7 +51,7 @@ pub use shekyl_p_fetch::{
     VerifiedTx, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
 };
 pub use shekyl_types::ShardView;
-pub use view::{ViewDesk, ViewRefusal};
+pub use view::{ViewCaller, ViewDesk, ViewRefusal, VIEW_SLOTS};
 
 #[cfg(test)]
 mod tests;

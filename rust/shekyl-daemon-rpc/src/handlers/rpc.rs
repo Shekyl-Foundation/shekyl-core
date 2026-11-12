@@ -359,7 +359,7 @@ async fn dispatch(
             let req = request::<wire::ShardFetch>(params)?;
             // Async by contract: a fetch over the network when a desk is
             // composed. No worker is taken.
-            framed(crate::shard_view::shard_fetch(state.shard_view.as_ref(), req).await?)
+            framed(crate::shard_view::shard_fetch(state.shard_view.as_ref(), req, bounded).await?)
         }
         Id::DaemonStatus => {
             request::<wire::DaemonStatus>(params)?;

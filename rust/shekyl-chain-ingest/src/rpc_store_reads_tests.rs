@@ -331,15 +331,7 @@ async fn the_claim_window_is_the_same_for_a_persona_with_a_bond() {
             source
                 .epoch
                 .iter()
-                .map(|e| {
-                    (
-                        e.id,
-                        e.budget.clone(),
-                        e.work,
-                        e.closing_height,
-                        e.bond.clone(),
-                    )
-                })
+                .map(|e| (e.id, e.budget, e.work, e.closing_height, e.bond.clone()))
                 .collect::<Vec<_>>()
         };
         assert_eq!(

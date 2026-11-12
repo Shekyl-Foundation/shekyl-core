@@ -5679,14 +5679,10 @@ dependencies = [
 name = "shekyld"
 version = "3.1.0"
 dependencies = [
- "shekyl-archival-fetch-sched",
- "shekyl-chain-ingest",
  "shekyl-clearnet",
  "shekyl-daemon",
- "shekyl-daemon-rpc",
  "shekyl-relay",
  "shekyl-transport-layer",
- "shekyl-types",
 ]
 
 [[package]]

@@ -34,7 +34,7 @@ use crate::handlers::rpc;
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
-use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
+use crate::shard_view::ShardViewFacts;
 use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
@@ -50,13 +50,13 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 pub struct AppState {
-    /// The Rust admission engine behind `POST /submit_transaction`
+    /// The Rust admission engine behind `tx_submit`
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
     /// Live connection accounting; shared with the [`LimitedListener`] and read
-    /// by `get_info` to report `rpc_connections_count`.
+    /// by `daemon_status` to report `rpc_connections`.
     pub conn_tracker: Arc<ConnTracker>,
-    /// What `request_archival_shard` reads (`shard_view::ShardViewFacts`).
+    /// What `shard_fetch` reads: the node's handle (`shard_view::ShardViewFacts`).
     pub shard_view: Arc<dyn ShardViewFacts>,
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
@@ -66,7 +66,7 @@ pub struct AppState {
     pub handles: Handles,
     /// One hash budget for every bounded caller (§6.3).
     pub hash_budget: Arc<HashBudget>,
-    /// Bounded `get_coinbase_tx_sum` reads, one at a time. Cold reads wait
+    /// Bounded `chain_coinbase_sum` reads, one at a time. Cold reads wait
     /// on disk; the permit is taken before the blocking-pool task.
     pub coinbase_reads: Arc<Semaphore>,
 }
@@ -77,10 +77,6 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
     /// Concurrent-connection caps enforced by the [`LimitedListener`].
     pub conn_limits: ConnLimits,
-    /// The shard view's facts source. The composition root that can compose
-    /// a `ViewDesk` (the `shekyld` binary crate, `SV-D9`) supplies it; the default is
-    /// [`SkeletonAbsent`], a daemon that serves no shard view.
-    pub shard_view: Arc<dyn ShardViewFacts>,
     /// The options handle (RT-O26); the default serves no options.
     pub options: Arc<dyn OptionsFacts>,
     /// The node's handles. The default is absent: every call is not ready.
@@ -96,7 +92,6 @@ impl Default for ServerConfig {
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
             conn_limits: ConnLimits::default(),
-            shard_view: Arc::new(SkeletonAbsent),
             options: Arc::new(OptionsAbsent),
             handles: Handles::absent(),
             armed: false,
@@ -197,7 +192,7 @@ where
 /// view listener's (`crate::authority::Authority::VIEW_LISTENER`), with one
 /// submit engine and ONE connection
 /// tracker between them: the cap is per daemon, as the section says, and
-/// `get_info` must count every socket. A tracker per listener made a cap of
+/// `daemon_status` must count every socket. A tracker per listener made a cap of
 /// N admit 2N — the same mistake `submit/gate.rs` records for the F39
 /// verification cap ("one cap per daemon, not per listener"), re-made here
 /// once already. An empty set serves nothing; both empty is a daemon with no
@@ -216,7 +211,7 @@ pub async fn serve_listeners(
         let state = Arc::new(AppState {
             submit_engine: submit_engine.clone(),
             conn_tracker: conn_tracker.clone(),
-            shard_view: config.shard_view.clone(),
+            shard_view: Arc::clone(&config.handles.shard_view),
             options: config.options.clone(),
             handles: config.handles.clone(),
             hash_budget: Arc::clone(&hash_budget),
@@ -244,8 +239,8 @@ pub async fn serve_listeners(
     // operator reads which it is.
     if config.armed {
         tracing::warn!(
-            "RPC armed test levers: ON (dev-rpc): generateblocks and \
-             /pop_blocks are served to the host's administrator"
+            "RPC armed test levers: ON (dev-rpc): dev_block_generate and \
+             dev_chain_pop are served to the host's administrator"
         );
     } else {
         info!("RPC armed test levers: off (dev-rpc not set)");
@@ -449,16 +444,12 @@ mod tests {
     }
 
     /// The router serves `/json_rpc` on both listeners and nothing else:
-    /// every 3.x route, the anonymity-graph readout and the armed levers
+    /// every other path, the anonymity-graph readout and the armed levers
     /// among them, is the shared 404 on both, whichever HTTP method asks.
-    /// Gating moved from the path to the method row, so what the view
-    /// listener may call is asserted at dispatch (`handlers::rpc` tests).
-    /// Port of the 3.x `route_table_matches_the_specification`,
-    /// `output_distribution_bin_not_registered`,
-    /// `assembled_router_serves_exactly_the_specified_surface`,
-    /// `assembled_router_gates_the_anonymity_graph` and
-    /// `pop_blocks_needs_the_armed_switch`. Red check run: routing
-    /// `/get_info` beside `/json_rpc` in [`assemble`] turns this red.
+    /// Gating is on the method row, so what the view listener may call is
+    /// asserted at dispatch (`handlers::rpc` tests). Red check run:
+    /// routing `/get_info` beside `/json_rpc` in [`assemble`] turns this
+    /// red.
     #[tokio::test]
     async fn only_json_rpc_is_routed() {
         for authority in [

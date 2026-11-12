@@ -335,6 +335,7 @@ mod tests {
             row::<wire::CurveShow>(),
             row::<wire::ArchivalClaimShow>(),
             row::<wire::ShardCoverage>(),
+            row::<wire::ShardFetch>(),
             row::<wire::DaemonStatus>(),
             row::<wire::OptionShow>(),
             row::<wire::TxpoolList>(),

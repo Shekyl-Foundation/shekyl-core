@@ -561,7 +561,7 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
             "the pool's broadcast count is the node's"
         );
         assert_eq!(
-            info.alt_count.clone().shown().map(|count| count.0),
+            info.alt_count.shown().map(|count| count.0),
             Some(0),
             "a full disclosure shows Status"
         );

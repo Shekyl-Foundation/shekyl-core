@@ -379,7 +379,7 @@ pub type StopHandle = Arc<dyn StopFacts>;
 /// stem tallies, which the node reads from `shekyl-p2p`'s `Network`.
 pub type P2pHandle = Arc<dyn P2pFacts>;
 
-/// The seven handles, absent unless the composition root supplied a node.
+/// The node's handles, absent unless the composition root supplied a node.
 #[derive(Clone)]
 pub struct Handles {
     /// Chain reads.
@@ -396,6 +396,8 @@ pub struct Handles {
     pub stop: StopHandle,
     /// The p2p facts.
     pub p2p: P2pHandle,
+    /// The shard view: the node's view desk, or its Tor-off refusal.
+    pub shard_view: crate::shard_view::ShardViewHandle,
 }
 
 impl Default for Handles {
@@ -416,6 +418,7 @@ impl Handles {
             bans: Arc::new(BansAbsent),
             stop: Arc::new(StopAbsent),
             p2p: Arc::new(P2pAbsent),
+            shard_view: Arc::new(crate::shard_view::ShardViewAbsent),
         }
     }
 }

@@ -236,17 +236,17 @@ shard_coverage	field	shard	served_count	chain	count
 shard_coverage	field	shard	freeze_height	chain	height
 shard_coverage	field	shard	scarcity	chain	micro
 shard_coverage	field	shard	profit	chain	amount or null
-shard_fetch	method		shard_fetch	node	
-shard_fetch	parameter	shard	id	node	integer
-shard_fetch	field	shard	id	node	integer
-shard_fetch	field	shard	hash	node	hash
-shard_fetch	field	shard	size	node	size
-shard_fetch	field	shard	block_count	node	count
-shard_fetch	field	shard	tx_count	node	count
-shard_fetch	field	shard	output_count	node	count
-shard_fetch	field	shard	coinbase_output_count	node	count
-shard_fetch	field	shard	duration	node	duration
-shard_fetch	field	shard	closing_height	node	height
+shard_fetch	method		shard_fetch	chain	
+shard_fetch	parameter	shard	id	chain	integer
+shard_fetch	field	shard	id	chain	integer
+shard_fetch	field	shard	hash	chain	hash
+shard_fetch	field	shard	size	chain	size
+shard_fetch	field	shard	block_count	chain	count
+shard_fetch	field	shard	tx_count	chain	count
+shard_fetch	field	shard	output_count	chain	count
+shard_fetch	field	shard	coinbase_output_count	chain	count
+shard_fetch	field	shard	duration	chain	duration
+shard_fetch	field	shard	closing_height	chain	height
 daemon_status	method		daemon_status	health	
 daemon_status	field	daemon	height	health	height
 daemon_status	field	daemon	hash	health	hash

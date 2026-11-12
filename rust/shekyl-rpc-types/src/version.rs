@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
         assert_eq!(CORE_RPC_VERSION, 262_144);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 0);
+        assert_eq!(CORE_RPC_VERSION, 4 << 16, "minor 0 packs to nothing");
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
         assert_eq!(CORE_RPC_VERSION_MINOR, 0);
         assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.0");

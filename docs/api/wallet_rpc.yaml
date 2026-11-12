@@ -196,9 +196,9 @@
 #                                                   which fetches the body
 #                                                   from a holder. Read-only;
 #                                                   the viewer renders
-#                                                   locally. Open shard, miss
-#                                                   and not-offered are
-#                                                   -29534..-29536, never an
+#                                                   locally. Open shard, miss,
+#                                                   not-offered and busy are
+#                                                   -29534..-29537, never an
 #                                                   empty result)
 #   SPECIFIED (WR-Q2 — staking outcomes a user can see):
 #     acknowledge_staking_outcome                  (clear the staking
@@ -330,7 +330,7 @@
 #                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
 #                            the exit pair); -29530..-29533 are a staker's
-#                            open-time refusals; -29534..-29536 live on
+#                            open-time refusals; -29534..-29537 live on
 #                            `get_shard_view` (SV-D); rest reserved — never
 #                            reuse an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
@@ -477,6 +477,10 @@ info:
   # daemon (CORE_RPC_VERSION 4.0) refused the call as outside this wallet's
   # grant. Before 4.0 a daemon had no grants and no such refusal. A
   # get_shard_view refused this way stays -29536 with cause "restricted".
+  # get_shard_view gains -29537 SHARD_VIEW_BUSY: the daemon fetches one
+  # shard at a time for bounded callers and was already fetching one
+  # (bound.shard); transient. -29536 gains data.cause "tor_off": the daemon
+  # runs with Tor off and has no client to fetch a shard through.
   # api_version stays 1.
   version: 0.17.0
   description: >
@@ -838,6 +842,7 @@ components:
         - -29534   # SHARD_STILL_OPEN
         - -29535   # SHARD_UNAVAILABLE
         - -29536   # SHARD_VIEW_NOT_OFFERED
+        - -29537   # SHARD_VIEW_BUSY
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -1509,21 +1514,30 @@ components:
                                           (the -29528 posture, for serving)
           -29534 SHARD_STILL_OPEN         get_shard_view: the shard has not
                                           closed, so it has no view yet (the
-                                          daemon's -24). A viewer shows
-                                          "still open", not a picture
+                                          daemon's shard.open). A viewer
+                                          shows "still open", not a picture
           -29535 SHARD_UNAVAILABLE        get_shard_view: the shard is closed
                                           and no holder served its body on
-                                          this attempt (the daemon's -22).
-                                          Transient — retry later. A viewer
-                                          shows "could not be retrieved"
+                                          this attempt (the daemon's
+                                          shard.unavailable). Transient —
+                                          retry later. A viewer shows "could
+                                          not be retrieved"
           -29536 SHARD_VIEW_NOT_OFFERED   get_shard_view: this daemon does not
                                           serve shard views. data.cause is
-                                          "restricted" (the method is
-                                          admin-only and the wallet reached a
-                                          public listener — point it at its
-                                          own node) or "skeleton_absent" (the
-                                          daemon's store holds no archival
-                                          skeleton, SV-D9). Not transient
+                                          "restricted" (the call is outside
+                                          the wallet's grant there — point it
+                                          at its own node), "skeleton_absent"
+                                          (the daemon's store holds no
+                                          archival skeleton, SV-D9) or
+                                          "tor_off" (the daemon runs with Tor
+                                          off and has no client to fetch a
+                                          shard through). Not transient
+          -29537 SHARD_VIEW_BUSY          get_shard_view: the daemon fetches
+                                          one shard at a time for bounded
+                                          callers and was already fetching
+                                          one (bound.shard); a view it
+                                          already held would have answered.
+                                          Transient — retry shortly
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over

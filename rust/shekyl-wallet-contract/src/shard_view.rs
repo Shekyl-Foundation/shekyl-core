@@ -17,10 +17,12 @@
 //! The daemon's refusals keep their meaning across the hop, each on its
 //! own wallet code, so a viewer shows the state and never an empty picture
 //! (rule 82): still open (`shard.open`, `-29534`), closed but no holder
-//! served it (`shard.unavailable`, `-29535`), and this daemon does not
-//! serve views to this wallet at all (`shard.view-absent`, or the call
-//! outside the wallet's grant: `-29536`). The refusal is read by its class
-//! and its dotted code, never its message. A transport failure is the
+//! served it (`shard.unavailable`, `-29535`), this daemon does not serve
+//! views to this wallet at all (`shard.view-absent`, `shard.tor-off`, or
+//! the call outside the wallet's grant: `-29536`), and the daemon is
+//! already fetching one for a bounded caller (`bound.shard`, `-29537`).
+//! The refusal is read by its class and its dotted code, never its
+//! message. A transport failure is the
 //! daemon-unreachable code every other method uses; a malformed reply is
 //! the protocol-violation code.
 
@@ -101,6 +103,9 @@ pub enum ShardViewNotOfferedCause {
     /// The daemon holds no archival skeleton and so serves no view
     /// (`SV-D9`): it runs on a store that cannot place a shard boundary.
     SkeletonAbsent,
+    /// The daemon runs with Tor off and has no client to fetch a shard
+    /// through (IG-Q90).
+    TorOff,
 }
 
 impl ShardViewNotOfferedCause {
@@ -109,6 +114,7 @@ impl ShardViewNotOfferedCause {
         match self {
             Self::Restricted => "restricted",
             Self::SkeletonAbsent => "skeleton_absent",
+            Self::TorOff => "tor_off",
         }
     }
 }
@@ -144,13 +150,13 @@ pub fn shard_view_from_daemon(
 ) -> Result<ShardViewResult, WalletRpcError> {
     match answer {
         Ok(Ok(view)) => Ok(view.into()),
-        Ok(Err(refusal)) => Err(shard_view_refusal(refusal)),
+        Ok(Err(refusal)) => Err(shard_view_refusal(&refusal)),
         Err(transport) => Err(from_daemon_fault(transport.fault(), &transport.to_string())),
     }
 }
 
 /// One daemon refusal to one wallet code, by its class and dotted code.
-fn shard_view_refusal(refusal: Refusal) -> WalletRpcError {
+fn shard_view_refusal(refusal: &Refusal) -> WalletRpcError {
     let detail = refusal.diagnostic.message.clone();
     match (refusal.class, refusal.diagnostic.code.as_str()) {
         (ErrorClass::RefusedByMethod, "shard.open") => WalletRpcError::ShardStillOpen { detail },
@@ -161,6 +167,11 @@ fn shard_view_refusal(refusal: Refusal) -> WalletRpcError {
             cause: ShardViewNotOfferedCause::SkeletonAbsent,
             detail,
         },
+        (ErrorClass::RefusedByMethod, "shard.tor-off") => WalletRpcError::ShardViewNotOffered {
+            cause: ShardViewNotOfferedCause::TorOff,
+            detail,
+        },
+        (ErrorClass::OverResourceBound, "bound.shard") => WalletRpcError::ShardViewBusy { detail },
         (ErrorClass::OutsideTheGrant, _) => WalletRpcError::ShardViewNotOffered {
             cause: ShardViewNotOfferedCause::Restricted,
             detail,
@@ -230,8 +241,8 @@ mod tests {
     }
 
     /// Each refusal keeps its meaning on its own wallet code, read by class
-    /// and dotted code. Red edit: map by message, or fold `shard.view-absent`
-    /// into `-29535`.
+    /// and dotted code. Red edit: map by message, fold `shard.view-absent`
+    /// into `-29535`, or fold `bound.shard` into `-29535`.
     #[test]
     fn each_daemon_refusal_keeps_its_meaning_on_its_own_wallet_code() {
         let open = refused(ErrorClass::RefusedByMethod, "shard.open");
@@ -248,6 +259,19 @@ mod tests {
         let outside = refused(ErrorClass::OutsideTheGrant, "grant.outside");
         assert_eq!(outside.code(), WalletRpcErrorCode::ShardViewNotOffered);
         assert_eq!(outside.data().unwrap()["cause"], "restricted");
+
+        let tor_off = refused(ErrorClass::RefusedByMethod, "shard.tor-off");
+        assert_eq!(tor_off.code(), WalletRpcErrorCode::ShardViewNotOffered);
+        assert_eq!(tor_off.data().unwrap()["cause"], "tor_off");
+
+        let busy = refused(ErrorClass::OverResourceBound, "bound.shard");
+        assert_eq!(busy.code(), WalletRpcErrorCode::ShardViewBusy);
+        assert_eq!(busy.data().unwrap()["detail"], "daemon said bound.shard");
+        assert_eq!(
+            refused(ErrorClass::RefusedByMethod, "bound.shard").code(),
+            WalletRpcErrorCode::DaemonProtocolViolation,
+            "a bound under another class is outside the contract"
+        );
     }
 
     #[test]

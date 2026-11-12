@@ -50,7 +50,7 @@ pub mod chain_facts;
 /// authority should not be reached through the module that happened to need
 /// it first.
 ///
-/// Nothing here comes off the wire. `/get_info` does report `target`, and a
+/// Nothing here comes off the wire. `daemon_status` does report `block_spacing`, and a
 /// console that read it would give one genesis-frozen constant two sources —
 /// one of them a remote daemon that could report anything. Comparing the two
 /// is a real check and belongs to the client-side version-and-constants

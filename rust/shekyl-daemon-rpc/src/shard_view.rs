@@ -11,13 +11,11 @@
 //! (`check_p_fetch_dep_cut.py` holds every `*rpc*` crate out of it), so the
 //! RPC sees a view or a refusal and never a socket.
 //!
-//! The implementation this crate ships is [`SkeletonAbsent`]: the daemon
-//! today runs on a store with no shard-range read and no bond-record read,
-//! so no `ViewDesk` can be composed over it and the honest answer to every
-//! request is that this daemon serves no shard view. That is a statement
-//! about the daemon, made as a typed refusal with its own code — not a
-//! "not yet" and not a MISS dressed as a fetch (`23-disposition-visibility`).
-//! `SV-D9` names what lifts it.
+//! The node composes the implementation: a view desk over its fetch
+//! scheduler when it runs a Tor, and [`TorOff`] when it does not — a node
+//! with no Tor has no client to read a shard through (IG-Q90). A bounded
+//! caller's flight is bounded by the desk (`RPC_CHANNEL.md` §6.3), and a
+//! refused one is [`ShardViewRefusal::Busy`].
 
 use std::future::Future;
 use std::pin::Pin;
@@ -39,6 +37,9 @@ pub mod codes {
     pub const UNAVAILABLE: &str = "shard.unavailable";
     /// This daemon holds no archival skeleton and serves no shard view.
     pub const VIEW_ABSENT: &str = "shard.view-absent";
+    /// This node runs with Tor off and has no client to read a shard
+    /// through (IG-Q90).
+    pub const TOR_OFF: &str = "shard.tor-off";
 }
 
 /// The answer to one `shard_fetch`, boxed so a trait object can
@@ -47,8 +48,8 @@ pub type ShardViewFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ShardView, ShardViewRefusal>> + Send + 'a>>;
 
 /// Why no view was produced. Each arm is a state a viewer shows, never a
-/// blank (`SV-D5`, rule 82); each maps to its own JSON-RPC code in
-/// `methods::request_archival_shard`.
+/// blank (`SV-D5`, rule 82); each maps to its own class and dotted code in
+/// [`shard_fetch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShardViewRefusal {
     /// The shard is still filling, or lies past the tip. Nothing was
@@ -66,6 +67,13 @@ pub enum ShardViewRefusal {
     Unavailable { shard_id: ShardId, attempts: usize },
     /// This daemon holds no archival skeleton and serves no shard view.
     SkeletonAbsent,
+    /// This node runs with Tor off: it has no client to read a shard
+    /// through.
+    TorOff,
+    /// A bounded caller would open a flight while another bounded
+    /// caller's holds the one permit (IG-Q90). Nothing was fetched or
+    /// queued.
+    Busy { shard_id: ShardId },
     /// The facts source itself failed; answered as the facts fault it is.
     Fault(FactsFault),
 }
@@ -73,34 +81,64 @@ pub enum ShardViewRefusal {
 /// What `shard_fetch` reads (`RK-D7`: one trait, one production
 /// implementation, chosen by the composition root).
 pub trait ShardViewFacts: Send + Sync {
-    /// The view of `shard_id`, or why there is none.
-    fn view(&self, shard_id: ShardId) -> ShardViewFuture<'_>;
+    /// The view of `shard_id`, or why there is none. A `bounded` caller
+    /// that would open a flight takes the one bounded permit (IG-Q90).
+    fn view(&self, shard_id: ShardId, bounded: bool) -> ShardViewFuture<'_>;
 }
+
+/// A shard-view handle.
+pub type ShardViewHandle = std::sync::Arc<dyn ShardViewFacts>;
 
 /// The facts of a daemon that holds no archival skeleton.
 ///
-/// Every request is refused as [`ShardViewRefusal::SkeletonAbsent`]. The
-/// default when no composition root supplied another implementation —
-/// which, until `SV-D9` lifts, is every daemon.
+/// Every request is refused as [`ShardViewRefusal::SkeletonAbsent`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SkeletonAbsent;
 
 impl ShardViewFacts for SkeletonAbsent {
-    fn view(&self, _shard_id: ShardId) -> ShardViewFuture<'_> {
+    fn view(&self, _shard_id: ShardId, _bounded: bool) -> ShardViewFuture<'_> {
         Box::pin(std::future::ready(Err(ShardViewRefusal::SkeletonAbsent)))
     }
 }
 
+/// The facts of a node that runs with Tor off: every request is refused
+/// as [`ShardViewRefusal::TorOff`], never as an absent skeleton (IG-Q90).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TorOff;
+
+impl ShardViewFacts for TorOff {
+    fn view(&self, _shard_id: ShardId, _bounded: bool) -> ShardViewFuture<'_> {
+        Box::pin(std::future::ready(Err(ShardViewRefusal::TorOff)))
+    }
+}
+
+/// No node was supplied: every request is not ready, as every other
+/// absent handle's is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShardViewAbsent;
+
+impl ShardViewFacts for ShardViewAbsent {
+    fn view(&self, _shard_id: ShardId, _bounded: bool) -> ShardViewFuture<'_> {
+        Box::pin(std::future::ready(Err(ShardViewRefusal::Fault(
+            FactsFault::NotReady,
+        ))))
+    }
+}
+
 /// `shard_fetch` (`SV-D3`): the view of one closed shard, read
-/// through `facts`, or one of the three typed refusals.
+/// through `facts`, or a typed refusal. `bounded` is the caller's
+/// (`RPC_CHANNEL.md` §6.3).
 ///
 /// # Errors
 ///
-/// - [`ShardViewRefusal::Open`] → `CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN`,
-///   with how far the open shard is from closing when that is the shard asked
-///   for;
-/// - [`ShardViewRefusal::Unavailable`] → `CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`;
-/// - [`ShardViewRefusal::SkeletonAbsent`] → `CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT`;
+/// - [`ShardViewRefusal::Open`] → `RefusedByMethod`, `shard.open`, with how
+///   far the open shard is from closing when that is the shard asked for;
+/// - [`ShardViewRefusal::Unavailable`] → `RefusedByMethod`,
+///   `shard.unavailable`;
+/// - [`ShardViewRefusal::SkeletonAbsent`] → `RefusedByMethod`,
+///   `shard.view-absent`;
+/// - [`ShardViewRefusal::TorOff`] → `RefusedByMethod`, `shard.tor-off`;
+/// - [`ShardViewRefusal::Busy`] → `OverResourceBound`, `bound.shard`;
 /// - [`ShardViewRefusal::Fault`] → the facts fault, as every native method
 ///   reports one;
 /// - a view whose `shard_id` is not the one asked for →
@@ -111,9 +149,10 @@ impl ShardViewFacts for SkeletonAbsent {
 pub async fn shard_fetch(
     facts: &dyn ShardViewFacts,
     request: archival::ShardId,
+    bounded: bool,
 ) -> Result<archival::ShardView, RpcFault> {
     let asked = ShardId::from_raw(request.id.0);
-    match facts.view(asked).await {
+    match facts.view(asked, bounded).await {
         Ok(view) if view.shard_id == asked => Ok(project(&view)),
         Ok(view) => {
             tracing::error!(
@@ -190,6 +229,22 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
             codes::VIEW_ABSENT,
             "this daemon holds no archival skeleton and serves no shard view".to_owned(),
         ),
+        ShardViewRefusal::TorOff => refused(
+            codes::TOR_OFF,
+            "this node runs with Tor off and has no client to fetch a shard through".to_owned(),
+        ),
+        ShardViewRefusal::Busy { shard_id } => RpcFault::Refused(RpcError::new(
+            ErrorClass::OverResourceBound,
+            Diagnostic::new(
+                crate::methods::codes::BOUND_SHARD,
+                format!(
+                    "a bounded connection may have one shard fetch in flight, and one is; \
+                     shard {} was not fetched",
+                    shard_id.to_raw()
+                ),
+            )
+            .param("id", shard_id.to_raw().to_string()),
+        )),
         ShardViewRefusal::Fault(fault) => RpcFault::Facts(*fault),
     }
 }
@@ -207,7 +262,7 @@ mod tests {
     struct Scripted(Result<ShardView, ShardViewRefusal>);
 
     impl ShardViewFacts for Scripted {
-        fn view(&self, _shard_id: ShardId) -> ShardViewFuture<'_> {
+        fn view(&self, _shard_id: ShardId, _bounded: bool) -> ShardViewFuture<'_> {
             Box::pin(std::future::ready(self.0.clone()))
         }
     }
@@ -235,8 +290,28 @@ mod tests {
         let facts = SkeletonAbsent;
         for id in [0u64, 1, u64::MAX] {
             assert_eq!(
-                facts.view(ShardId::from_raw(id)).await,
+                facts.view(ShardId::from_raw(id), true).await,
                 Err(ShardViewRefusal::SkeletonAbsent)
+            );
+        }
+    }
+
+    /// A node with Tor off refuses as Tor off, for every caller, never as
+    /// an absent skeleton (IG-Q90); no node at all is not ready.
+    #[tokio::test]
+    async fn tor_off_and_no_node_each_refuse_as_what_they_are() {
+        for bounded in [false, true] {
+            let error = shard_fetch(&TorOff, shard(3), bounded)
+                .await
+                .unwrap_err()
+                .into_error();
+            assert_eq!(
+                (error.class, error.diagnostic.code.as_str()),
+                (ErrorClass::RefusedByMethod, codes::TOR_OFF)
+            );
+            assert_eq!(
+                shard_fetch(&ShardViewAbsent, shard(3), bounded).await,
+                Err(RpcFault::Facts(FactsFault::NotReady))
             );
         }
     }
@@ -269,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn a_view_is_projected_field_for_field() {
         let facts = Scripted(Ok(view()));
-        let response = shard_fetch(&facts, shard(3)).await.unwrap();
+        let response = shard_fetch(&facts, shard(3), true).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap(),
             json!({
@@ -313,16 +388,28 @@ mod tests {
                 codes::UNAVAILABLE,
             ),
             (ShardViewRefusal::SkeletonAbsent, codes::VIEW_ABSENT),
+            (ShardViewRefusal::TorOff, codes::TOR_OFF),
         ];
         for (refusal, code) in cases {
             let facts = Scripted(Err(refusal.clone()));
-            let error = shard_fetch(&facts, shard(3))
+            let error = shard_fetch(&facts, shard(3), true)
                 .await
                 .unwrap_err()
                 .into_error();
             assert_eq!(error.class, ErrorClass::RefusedByMethod, "{refusal:?}");
             assert_eq!(error.diagnostic.code, code, "{refusal:?}");
         }
+        // The bounded permit's refusal is a bound, not the method's.
+        let facts = Scripted(Err(ShardViewRefusal::Busy {
+            shard_id: ShardId::from_raw(3),
+        }));
+        let error = shard_fetch(&facts, shard(3), true)
+            .await
+            .unwrap_err()
+            .into_error();
+        assert_eq!(error.class, ErrorClass::OverResourceBound);
+        assert_eq!(error.diagnostic.code, crate::methods::codes::BOUND_SHARD);
+        assert_eq!(error.diagnostic.parameter["id"], "3");
     }
 
     #[tokio::test]
@@ -330,7 +417,7 @@ mod tests {
         // The scripted source answers shard 3 to every question.
         let facts = Scripted(Ok(view()));
         assert_eq!(
-            shard_fetch(&facts, shard(4)).await.unwrap_err(),
+            shard_fetch(&facts, shard(4), true).await.unwrap_err(),
             RpcFault::Facts(FactsFault::Inconsistent)
         );
     }
@@ -339,7 +426,7 @@ mod tests {
     async fn a_facts_fault_is_reported_as_one() {
         let facts = Scripted(Err(ShardViewRefusal::Fault(FactsFault::NotReady)));
         assert_eq!(
-            shard_fetch(&facts, shard(3)).await.unwrap_err(),
+            shard_fetch(&facts, shard(3), true).await.unwrap_err(),
             RpcFault::Facts(FactsFault::NotReady)
         );
     }

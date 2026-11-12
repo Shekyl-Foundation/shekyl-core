@@ -67,12 +67,13 @@ mod open_network;
 mod p2p_facts;
 mod pool_door;
 mod producer;
+mod shard_view;
 mod sync_owner;
 
 pub use ended::NodeEnd;
 pub use facts::free_bytes;
 pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
-pub use producer::descriptors as producer_descriptors;
+pub use producer::descriptors as fetch_descriptors;
 pub use shekyl_chain_ingest::service::ServiceEnd;
 pub use shekyl_chain_sync::Declaration;
 pub use shekyl_chain_sync_runtime::owner::EndCause;
@@ -342,7 +343,8 @@ impl Node {
         let witness = Arc::new(shekyl_bundle_producer::WitnessRing::new(
             rules.trust().network_id(),
         ));
-        let producer = producer::seat(args.config, &store, &witness, Arc::clone(&network_slot));
+        let scheduler = producer::scheduler(args.config, &store, Arc::clone(&network_slot));
+        let producer = producer::seat(args.config, scheduler.as_ref(), &witness);
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
@@ -538,6 +540,7 @@ impl Node {
                 args.config.offline(),
                 started_at,
             )),
+            shard_view: producer::shard_view(scheduler.as_ref()),
         };
         let slots = Arc::new(Slots {
             facts: facts_slot,

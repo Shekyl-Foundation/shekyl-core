@@ -397,6 +397,7 @@ const VIEW_ADMITTED: &[&str] = &[
     wire::CurveShow::NAME,
     wire::ArchivalClaimShow::NAME,
     wire::ShardCoverage::NAME,
+    wire::ShardFetch::NAME,
     wire::DaemonStatus::NAME,
     wire::OptionShow::NAME,
     wire::TxpoolList::NAME,
@@ -407,21 +408,12 @@ const VIEW_ADMITTED: &[&str] = &[
     wire::Pow::NAME,
 ];
 
-/// The row whose grant the census and the method table disagree on: §17
-/// gives `shard_fetch` the chain grant (the wallet's word), the table the
-/// node grant. Left out of the assertion until that is ruled, so the test
-/// pins neither.
-const UNSETTLED: &[&str] = &[wire::ShardFetch::NAME];
-
 /// Admission happens at dispatch, by the method's row: the view listener
 /// is answered on exactly its methods and refused every other with
 /// OutsideTheGrant — the anonymity graph (`relay_stats`) as host-only, the
 /// armed levers as host-only, node administration as outside the grant.
 /// The admin listener is refused nothing while armed, and only the two
-/// levers (`grant.unarmed`) while not. The 4.0 port of the 3.x path gate
-/// tests (`assembled_router_gates_the_anonymity_graph`,
-/// `assembled_router_serves_exactly_the_specified_surface`,
-/// `pop_blocks_needs_the_armed_switch`). Red check run: skipping
+/// levers (`grant.unarmed`) while not. Red check run: skipping
 /// `authority.admit(row)` in `answer` turns the view-listener arm red.
 #[tokio::test]
 async fn each_listener_is_admitted_to_its_rows_at_dispatch() {
@@ -429,9 +421,6 @@ async fn each_listener_is_admitted_to_its_rows_at_dispatch() {
     let (_scratch, state) = state("admission");
     let outside = ErrorClass::OutsideTheGrant.code();
     for row in TABLE {
-        if UNSETTLED.contains(&row.name) {
-            continue;
-        }
         let request = call(row.name, json!({}));
         let view = refusal(&send(&state, Authority::VIEW_LISTENER, &request).await);
         if VIEW_ADMITTED.contains(&row.name) {

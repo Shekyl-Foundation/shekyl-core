@@ -410,10 +410,15 @@ wallet_rpc_error_codes! {
     /// no holder that served it (the daemon's `-22`). Transient; retry.
     ShardUnavailable = -29535 => "SHARD_UNAVAILABLE",
     /// `get_shard_view`: the daemon this wallet uses does not serve shard
-    /// views — the method is admin-only and this is its public listener
-    /// (`-19`), or the daemon holds no archival skeleton (`-25`).
+    /// views — the call is outside the wallet's grant there
+    /// (`OutsideTheGrant`), the daemon holds no archival skeleton
+    /// (`shard.view-absent`), or it runs with Tor off (`shard.tor-off`).
     /// `data.cause` says which; the remedy is another daemon, not a retry.
     ShardViewNotOffered = -29536 => "SHARD_VIEW_NOT_OFFERED",
+    /// `get_shard_view`: the daemon is already fetching a shard for a
+    /// bounded caller and opens one such fetch at a time (`bound.shard`).
+    /// Transient; retry shortly.
+    ShardViewBusy = -29537 => "SHARD_VIEW_BUSY",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -1106,13 +1111,23 @@ pub enum WalletRpcError {
         detail: String,
     },
     /// `get_shard_view` (`-29536`): the daemon this wallet is pointed at
-    /// does not serve shard views. Two causes, one remedy (another daemon):
-    /// the method is admin-only and this is a public listener, or the
-    /// daemon holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`).
+    /// does not serve shard views. Three causes, one remedy (another
+    /// daemon): the call is outside the wallet's grant there, the daemon
+    /// holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`), or it
+    /// runs with Tor off and has no client to fetch through (IG-Q90).
     #[error("this daemon does not serve shard views — point the wallet at a node that does")]
     ShardViewNotOffered {
-        /// Why: the daemon's `restricted` refusal or its `skeleton_absent`.
+        /// Why: `restricted`, `skeleton_absent` or `tor_off`.
         cause: ShardViewNotOfferedCause,
+        /// The daemon's message.
+        detail: String,
+    },
+    /// `get_shard_view` (`-29537`): the daemon is already fetching a shard
+    /// for a bounded caller and opens one such fetch at a time
+    /// (`RPC_CHANNEL.md` §6.3, IG-Q90). A view it already holds would have
+    /// answered. Transient: retry shortly.
+    #[error("the daemon is fetching another shard view — try again shortly")]
+    ShardViewBusy {
         /// The daemon's message.
         detail: String,
     },
@@ -1247,6 +1262,7 @@ impl WalletRpcError {
             Self::ShardStillOpen { .. } => WalletRpcErrorCode::ShardStillOpen,
             Self::ShardUnavailable { .. } => WalletRpcErrorCode::ShardUnavailable,
             Self::ShardViewNotOffered { .. } => WalletRpcErrorCode::ShardViewNotOffered,
+            Self::ShardViewBusy { .. } => WalletRpcErrorCode::ShardViewBusy,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1278,7 +1294,8 @@ impl WalletRpcError {
             | Self::CollectDaemonUnreachable { detail }
             | Self::UnstakeLocalNodeRequired { detail }
             | Self::ShardStillOpen { detail }
-            | Self::ShardUnavailable { detail } => Some(json!({ "detail": detail })),
+            | Self::ShardUnavailable { detail }
+            | Self::ShardViewBusy { detail } => Some(json!({ "detail": detail })),
             Self::ShardViewNotOffered { cause, detail } => {
                 Some(json!({ "cause": cause.as_str(), "detail": detail }))
             }

@@ -165,17 +165,13 @@ fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
     let before = public(&handles);
     let stranger = tx_relay(
         &*handles.pool,
-        &RelayIds {
-            id: vec![id.clone()],
-        },
+        &RelayIds { id: vec![id] },
         PoolScope::Broadcast,
     );
     let after_stranger = public(&handles);
     let host = tx_relay(
         &*handles.pool,
-        &RelayIds {
-            id: vec![id.clone()],
-        },
+        &RelayIds { id: vec![id] },
         PoolScope::WithUnbroadcast,
     );
     let after_host = public(&handles);
