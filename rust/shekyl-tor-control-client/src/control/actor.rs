@@ -98,8 +98,8 @@ const READ_CHUNK: usize = 4096;
 /// How long a managed `tor` gets to exit after the owning connection is closed
 /// before shutdown escalates to a kill. Tor flushes and exits within about a
 /// second of EOF on that connection; this bound keeps the wait from hanging
-/// if Tor ignores the close. It counts the process clock: a sleep is not Tor
-/// ignoring the close.
+/// if Tor ignores the close. It counts the process clock, so time that clock
+/// leaves out (S3, hibernation) is not Tor ignoring the close.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The read half of a control connection, whatever carries it: a TCP connection to an
@@ -1797,8 +1797,8 @@ async fn next_reply(
     }
 }
 
-/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT` of awake
-/// time: a machine that slept mid-handshake has not given Tor that long.
+/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT` on the
+/// process clock. Time that clock leaves out has not been given to Tor.
 async fn read_reply(
     reader: &mut ControlRead,
     framer: &mut ReplyFramer,

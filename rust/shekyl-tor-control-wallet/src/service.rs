@@ -714,7 +714,7 @@ fn after_failure(
 /// Sleep `delay` of awake time, returning `true` if shutdown arrived first.
 ///
 /// The gap between incarnations is patience, the same clock as the
-/// bootstrap deadline. A machine that slept has not waited that long.
+/// bootstrap deadline. Time that clock leaves out has not been waited.
 async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>) -> bool {
     tokio::select! {
         () = awake::sleep(delay) => false,
@@ -756,8 +756,9 @@ async fn drive_incarnation(
 ) -> IncarnationEnd {
     // Patience on the process clock (`awake`): bootstrap, SOCKS discovery,
     // and the stable-hold below. The vanguard reconcile arm is the
-    // exception. Its delay comes from a guard's `SystemTime` expiry, which
-    // runs during a sleep, so that arm stays on tokio's timer.
+    // exception. Its delay comes from a guard's `SystemTime` expiry, and
+    // that time of day passes during an S3 sleep, which this clock leaves
+    // out, so that arm stays on tokio's timer.
     let deadline = awake::deadline_after(ctx.policy.bootstrap_deadline);
     // Phase 1: to Ready (or death/deadline/shutdown).
     loop {
@@ -909,8 +910,8 @@ async fn drive_incarnation(
         let reconcile = async {
             match ctx.vanguards.next_deadline() {
                 // Wall time, on purpose: `next_deadline` is how long until a
-                // guard's `SystemTime` expiry. The process clock would keep
-                // an expired guard through a sleep.
+                // guard's `SystemTime` expiry. This clock leaves an S3 sleep
+                // out, so it would keep an expired guard across one.
                 Some(delay) => tokio::time::sleep(delay).await,
                 None => std::future::pending().await,
             }

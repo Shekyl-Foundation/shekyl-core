@@ -183,8 +183,9 @@ mod source {
         }
     }
 
-    /// A reading of the unbiased interrupt time: 100 ns units that leave out
-    /// time the machine spent in sleep or hibernation. The precise call
+    /// A reading of the unbiased interrupt time, in 100 ns units. The count
+    /// leaves out S3 sleep and hibernation, not Modern Standby (S0), where
+    /// the kernel keeps running. The precise call
     /// reads the timer hardware, so a short span keeps its resolution where
     /// the plain call moves only at each clock tick (0.5 to 15.6 ms). It
     /// needs Windows 10 or Windows Server 2016, which every Shekyl Windows

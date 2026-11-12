@@ -6,7 +6,7 @@
 //! Tor control-protocol **client**. Any caller. Not an owner of a Tor instance.
 //!
 //! [`awake`] waits on the process clock. A tokio timer on Windows counts
-//! through a sleep; these waits end only when that clock says so.
+//! through every sleep; these waits end when that clock says so.
 //!
 //! # Capability families
 //!

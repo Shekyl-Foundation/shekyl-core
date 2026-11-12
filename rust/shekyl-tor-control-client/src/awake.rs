@@ -6,11 +6,10 @@
 //! Waits that count the process clock.
 //!
 //! A tokio timer follows tokio's clock. On Windows that clock runs through
-//! a machine's sleep, so a wait armed before the sleep ends at the wake with
-//! whatever was left of it. These waits sleep on that timer and, each time
-//! it returns, read [`MonotonicClock`].
-//! They end only once the deadline has passed on that clock, so a sleep
-//! counts for nothing.
+//! every sleep. These waits sleep on that timer and, each time it returns,
+//! read [`MonotonicClock`]. They end only once that clock says so. S3 sleep
+//! and hibernation count for nothing on it. Modern Standby does not: the
+//! clock keeps running, so a standby still ends a wait at the wake.
 //!
 //! The timing engine's thread does not use them. It sleeps on
 //! [`Clock::wait_for`], and linking
