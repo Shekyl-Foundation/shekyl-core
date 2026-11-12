@@ -441,7 +441,7 @@ MEASURE_AXES = {
 # FOLLOWUPS.md with a falsifier.
 FOLLOWON_MEASURES = {
     "pop_reorg_wall_time_s":
-        "best-positioned follow-on: the /pop_blocks RPC already exists, so this "
+        "best-positioned follow-on: the dev_chain_pop RPC already exists, so this "
         "needs a depth schedule and an artifact row, not a new capability.",
     "store_bytes_multi_year":
         "§1.3 states the file-size ceiling is 'set after first multi-year sim', "

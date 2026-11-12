@@ -16,48 +16,30 @@ import socket
 import urllib.error
 import urllib.request
 
-# Whole replies that are not a chain fact. Volatile fields inside a
+# Whole replies that are not a chain fact: every row of the daemon's
+# method table (`docs/generated/rpc_wire_schema.tsv`) is either asked by
+# chain_requests() or named here with its reason. Volatile fields inside a
 # captured reply are named separately, in volatile_fields().
 OMITTED = (
-    ("get_connections", "nondeterministic: the live peer sockets"),
-    ("sync_info", "nondeterministic: peer and sync timing"),
-    ("/get_peer_list", "nondeterministic: the peer list"),
-    ("/get_net_stats", "nondeterministic: counters"),
-    ("generateblocks", "write lever: mining would extend the fixture"),
-    ("/pop_blocks", "write lever: a pop would shorten the fixture"),
-    ("submit_block", "write lever: a submit would extend the fixture"),
-    ("/submit_transaction", "write lever: a submit would change the pool"),
-    ("/start_mining", "write lever"),
-    ("/stop_mining", "write lever"),
-    ("flush_txpool", "write lever"),
-    ("flush_cache", "write lever"),
-    ("set_bans", "write lever"),
-    ("/stop_daemon", "write lever: it stops the daemon"),
-    ("/save_bc", "write lever"),
+    ("peer_connections", "nondeterministic: the live peer sockets"),
+    ("sync_status", "nondeterministic: peer and sync timing"),
+    ("peer_list", "nondeterministic: the peer list"),
+    ("p2p_stats", "nondeterministic: counters"),
+    ("dev_block_generate", "write lever: mining would extend the fixture"),
+    ("dev_chain_pop", "write lever: a pop would shorten the fixture"),
+    ("block_submit", "write lever: a submit would extend the fixture"),
+    ("tx_submit", "write lever: a submit would change the pool"),
+    ("mine_start", "write lever"),
+    ("mine_stop", "write lever"),
+    ("txpool_flush", "write lever"),
+    ("tx_relay", "write lever"),
+    ("ban_add", "write lever"),
+    ("ban_remove", "write lever"),
+    ("daemon_stop", "write lever: it stops the daemon"),
     ("option_set", "write lever"),
-    ("relay_tx", "write lever"),
-    ("inject_archival_serve_credit", "write lever, and armed"),
-    ("/set_log_hash_rate", "write lever"),
-    ("calc_pow", "computes a proof-of-work hash for a supplied blob; not a fact of the stored chain"),
-    ("get_block_template", "needs a wallet address; a template is not a fact of the stored chain"),
-    ("banned", "needs a peer address; the fixture has no ban to ask about"),
-    ("request_archival_shard", "asks the node to fetch a shard"),
-    ("/get_blocks_by_height.bin", "request body is portable_storage, not JSON"),
-    ("/getblocks_by_height.bin", "alias of /get_blocks_by_height.bin; binary, not JSON"),
-    ("/get_o_indexes.bin", "request body is portable_storage, not JSON"),
-    ("/json_rpc", "the endpoint the JSON methods are posted to, not a method"),
-    ("getblockcount", "alias of get_block_count"),
-    ("on_getblockhash", "alias of on_get_block_hash"),
-    ("getblockheaderbyheight", "alias of get_block_header_by_height"),
-    ("getblock", "alias of get_block"),
-    ("getlastblockheader", "alias of get_last_block_header"),
-    ("getblockheaderbyhash", "alias of get_block_header_by_hash"),
-    ("getblockheadersrange", "alias of get_block_headers_range"),
-    ("submitblock", "alias of submit_block"),
-    ("getblocktemplate", "alias of get_block_template"),
-    ("/getheight", "alias of /get_height"),
-    ("/gettransactions", "alias of /get_transactions"),
-    ("/getinfo", "alias of /get_info"),
+    ("pow", "computes a proof-of-work hash for supplied bytes; not a fact of the stored chain"),
+    ("ban_show", "needs a host; the fixture has no ban to ask about"),
+    ("shard_fetch", "asks the node to fetch a shard"),
 )
 
 
@@ -68,74 +50,69 @@ def volatile_fields():
     still captured.
     """
     return (
-        "get_info.adjusted_time",
-        "get_info.start_time",
-        "get_info.rpc_connections_count",
-        "get_info.free_space",
-        "/get_info.adjusted_time",
-        "/get_info.start_time",
-        "/get_info.rpc_connections_count",
-        "/get_info.free_space",
+        "daemon_status.time_adjusted",
+        "daemon_status.started",
+        "daemon_status.rpc_connections",
+        "daemon_status.disk_free",
     )
 
 
 def chain_requests(tip_height, tip_hash, genesis_hash, tx_hash=None):
     """The chain reads, with the heights and hashes filled in.
 
-    `tip_height` is the daemon's reported height (one past the last
-    block). The tip block is at `tip_height - 1`.
+    `tip_height` is the tip's height, an ordinal: the tip block is at
+    `tip_height`, and a chain holding only genesis has tip height 0.
+    Every request is one JSON-RPC call to `/json_rpc`; `params` is the
+    method's named object, or None for a method that takes none.
     """
-    if tip_height < 1:
-        raise ValueError(f"tip height {tip_height} is not a chain")
-    tip_block = tip_height - 1
+    if isinstance(tip_height, bool) or not isinstance(tip_height, int) \
+            or tip_height < 0:
+        raise ValueError(f"tip height {tip_height!r} is not a tip's ordinal")
+    tip = tip_height
     past = tip_height + 10
     unknown = "ff" * 32
     reqs = [
-        ("get_block_count", {}),
-        ("get_last_block_header", {}),
-        ("get_block_header_by_height", {"height": 0}),
-        ("get_block_header_by_height", {"height": tip_block}),
-        ("get_block_header_by_height", {"height": past}),
-        ("get_block", {"height": 0}),
-        ("get_block", {"height": tip_block}),
-        ("get_block", {"height": past}),
-        ("get_block_header_by_hash", {"hashes": [genesis_hash]}),
-        ("get_block_header_by_hash", {"hashes": [tip_hash]}),
-        ("get_block_header_by_hash", {"hashes": [unknown]}),
-        ("on_get_block_hash", [tip_block]),
-        ("get_block_headers_range", {"start_height": 0, "end_height": min(2, tip_block)}),
-        ("get_fee_estimate", {}),
-        ("get_info", {}),
-        ("get_version", {}),
-        ("get_coinbase_tx_sum", {"height": 0, "count": 1}),
-        ("get_alternate_chains", {}),
-        ("get_curve_tree_info", {}),
-        ("get_curve_tree_checkpoint", {"block_height": 0}),
-        ("get_curve_tree_checkpoint", {"block_height": tip_block}),
-        ("get_txpool_backlog", {}),
-        ("get_archival_shard_coverage", {}),
-        ("get_archival_emission_claim_source", {"p_id": "00" * 32}),
+        ("version", None),
+        ("chain_height", None),
+        ("block_header_show", {"tip": None}),
+        ("block_header_show", {"height": 0}),
+        ("block_header_show", {"height": tip}),
+        ("block_header_show", {"height": past}),
+        ("block_header_show", {"hash": genesis_hash}),
+        ("block_header_show", {"hash": tip_hash}),
+        ("block_header_show", {"hash": unknown}),
+        ("block_header_list", {"from": 0, "to": min(2, tip)}),
+        ("block_header_list", {"hash": [genesis_hash, tip_hash, unknown]}),
+        ("block_show", {"height": 0}),
+        ("block_show", {"height": tip}),
+        ("block_show", {"height": past}),
+        ("block_list", {"height": [0, tip, past]}),
+        ("chain_spent", {"key_image": ["00" * 32]}),
+        ("fee", None),
+        ("chain_coinbase_sum", {"from": 0, "to": 0}),
+        ("chain_alt", None),
+        ("curve_show", {"tip": None}),
+        ("curve_show", {"height": 0}),
+        ("curve_show", {"height": tip}),
+        ("archival_claim_show", {"persona": "00" * 32}),
+        ("shard_coverage", None),
+        ("daemon_status", None),
         ("option_show", {}),
-        ("get_miner_data", {}),
-        ("get_bans", {}),
-    ]
-    rest = [
-        ("/get_height", {}),
-        ("/get_alt_blocks_hashes", {}),
-        ("/get_transaction_pool", {}),
-        ("/get_transaction_pool_hashes", {}),
-        ("/get_transaction_pool_stats", {}),
-        ("/get_info", {}),
-        ("/mining_status", {}),
-        ("/get_stem_tallies", {}),
-        ("/is_key_image_spent", {"key_images": ["00" * 32]}),
+        ("txpool_list", None),
+        ("txpool_stats", None),
+        ("block_template", None),
+        ("mine_status", None),
+        ("ban_list", None),
+        ("relay_stats", None),
     ]
     if tx_hash:
-        rest.append(("/get_transactions", {
-            "txs_hashes": [tx_hash], "decode_as_json": False}))
-    out = [{"kind": "json", "method": method, "params": params} for method, params in reqs]
-    out.extend({"kind": "rest", "method": method, "params": params} for method, params in rest)
-    return out
+        reqs.append(("tx_show", {"id": tx_hash}))
+        reqs.append(("tx_list", {"id": [tx_hash]}))
+    return [{"method": method, "params": params} for method, params in reqs]
+
+
+# The rows a capture asks only when it is given a transaction id.
+TX_METHODS = ("tx_show", "tx_list")
 
 
 def reserve_loopback_ports(n):
@@ -169,16 +146,18 @@ def reserve_loopback_ports(n):
 
 
 def json_rpc(base_url, method, params=None, timeout=60):
-    """One JSON-RPC call against `base_url`.
+    """One JSON-RPC 2.0 call against `base_url`'s `/json_rpc`, the only
+    route the daemon serves.
 
-    `params` is the daemon's params value: an object, or a positional
-    list (`on_get_block_hash`). None is an empty object, which is what
-    a method with no arguments takes. An empty list stays a list.
+    `params` is the method's named object; None leaves it out, which is
+    what a method with no parameters takes. The raw reply is returned:
+    a `result`, or an `error` whose code is the class and whose data is
+    the diagnostic.
     """
-    if params is None:
-        params = {}
     url = base_url.rstrip("/") + "/json_rpc"
-    body = {"jsonrpc": "2.0", "id": "0", "method": method, "params": params}
+    body = {"jsonrpc": "2.0", "id": 0, "method": method}
+    if params is not None:
+        body["params"] = params
     return _post(url, body, timeout)
 
 
@@ -229,32 +208,30 @@ def capture(base_url, requests, out_dir, timeout=60):
     os.makedirs(out_dir, exist_ok=True)
     base = base_url.rstrip("/")
     n = 0
+    for item in requests:
+        if set(item) != {"method", "params"}:
+            raise ValueError(f"request {item!r} is not one method and its params")
     for i, item in enumerate(requests):
-        kind = item["kind"]
         method = item["method"]
-        params = item.get("params", {})
+        params = item["params"]
         try:
-            if kind == "json":
-                response = json_rpc(base, method, params, timeout)
-            elif kind == "rest":
-                response = _post(base + method, params, timeout)
-            else:
-                raise ValueError(f"request {i} kind {kind!r} is not json or rest")
+            response = json_rpc(base, method, params, timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as err:
             response = {"capture_error": str(err)}
         record = {"method": method, "params": params, "response": response}
-        name = f"{i:03d}-{method.strip('/').replace('/', '_')}.json"
+        name = f"{i:03d}-{method}.json"
         path = os.path.join(out_dir, name)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(record, fh, indent=2)
             fh.write("\n")
         n += 1
     omitted = [{"method": m, "reason": r} for m, r in OMITTED]
-    if not any(item["method"] == "/get_transactions" for item in requests):
-        omitted.append({
-            "method": "/get_transactions",
-            "reason": "this fixture's capture was given no transaction id",
-        })
+    for method in TX_METHODS:
+        if not any(item["method"] == method for item in requests):
+            omitted.append({
+                "method": method,
+                "reason": "this fixture's capture was given no transaction id",
+            })
     with open(os.path.join(out_dir, "omitted.json"), "w", encoding="utf-8") as fh:
         json.dump(omitted, fh, indent=2)
         fh.write("\n")

@@ -14,7 +14,7 @@
 # test to one sentence, and fails a new regtest spawn that names a lever
 # and does not arm the row.
 #
-# A spawn that calls generateblocks or pop_blocks puts FLAG on that
+# A spawn that calls dev_block_generate or dev_chain_pop puts FLAG on that
 # process's argv and then calls announced_since on the bytes that process
 # wrote. A later restart that calls no lever does not take the flag.
 

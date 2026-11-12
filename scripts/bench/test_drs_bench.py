@@ -963,7 +963,8 @@ class GeneratingSeedShape(unittest.TestCase):
         argv = R.seed_generation_argv(False, "--dev-rpc", "addr")
         self.assertEqual(argv, ["--dev-rpc"])
         self.assertNotIn("--mine-address", argv)
-        body = R.generateblocks_body("lmdb", 3, "addr")
+        method, body = R.generate_request("lmdb", 3, "addr")
+        self.assertEqual(method, "generateblocks")
         self.assertEqual(body["amount_of_blocks"], 3)
         self.assertEqual(body["wallet_address"], "addr")
         self.assertEqual(body["starting_nonce"], 0)
@@ -972,7 +973,25 @@ class GeneratingSeedShape(unittest.TestCase):
     def test_this_binary_posts_count_only_and_takes_mine_address(self):
         argv = R.seed_generation_argv(True, "--dev-rpc", "addr")
         self.assertEqual(argv, ["--dev-rpc", "--mine-address", "addr"])
-        self.assertEqual(R.generateblocks_body("redb", 3, "addr"), {"count": 3})
+        method, body = R.generate_request("redb", 3, "addr")
+        self.assertEqual(body, {"count": 3})
+        # The method is the table's armed lever that mines: its reply names
+        # the blocks' hashes (docs/generated/rpc_wire_schema.tsv).
+        schema = os.path.join(R.ROOT, "docs", "generated", "rpc_wire_schema.tsv")
+        with open(schema, encoding="utf-8") as fh:
+            rows = [line.rstrip("\n").split("\t") for line in fh if not line.startswith("#")]
+        armed = {r[0] for r in rows if r[1] == "method" and r[4] == "armed"}
+        mines = {r[0] for r in rows if r[1] == "field" and r[2] == "block" and r[3] == "hash"}
+        self.assertIn(method, armed & mines)
+
+    def test_each_binary_reads_its_own_generating_reply(self):
+        # This binary: a result is the blocks mined, an error is a refusal.
+        self.assertTrue(R.generated("redb", {"result": {"height": 3, "hash": []}}))
+        self.assertFalse(R.generated("redb", {"error": {"code": -32001}}))
+        # The archived daemon: its result says OK, or it did not mine.
+        self.assertTrue(R.generated("lmdb", {"result": {"status": "OK"}}))
+        self.assertFalse(R.generated("lmdb", {"result": {"status": "BUSY"}}))
+        self.assertFalse(R.generated("lmdb", {"result": {"height": 3, "hash": []}}))
 
     def test_a_readback_from_the_wrong_binary_is_refused(self):
         named_redb = R.generation_shape_refusal(False, "redb")

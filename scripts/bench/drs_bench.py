@@ -20,7 +20,7 @@
 # `compare.py`. It is not a second copy of that script:
 # compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
-# Vehicle: generateblocks needs a node that reads Synced, which a node
+# Vehicle: dev_block_generate needs a node that reads Synced, which a node
 # declared offline does at open, and a node on an open network does not
 # until its peers have answered. So: generate offline, restart networked
 # over the same datadir, measure the subject syncing from it.
@@ -72,12 +72,37 @@ def _reserve_ports(n):
 
 
 def _rpc(port, method, params=None, timeout=60):
-    body = json.dumps({"jsonrpc": "2.0", "id": "0", "method": method,
-                       "params": params or {}}).encode()
+    """One JSON-RPC 2.0 call to the daemon's `/json_rpc`. `params` is the
+    method's named object; None leaves it out. The raw reply: a `result`,
+    or an `error` whose code is the class and whose data the diagnostic."""
+    envelope = {"jsonrpc": "2.0", "id": 0, "method": method}
+    if params is not None:
+        envelope["params"] = params
+    body = json.dumps(envelope).encode()
     req = urllib.request.Request(f"http://127.0.0.1:{port}/json_rpc", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
+
+
+# The archived seed daemon is a frozen binary that serves its own, older
+# wire: `get_info`, whose `height` is the chain count, and `generateblocks`
+# with the trio body. The method names below are that binary's; this
+# binary is asked only through the method table (`chain_height`,
+# `daemon_status`, `dev_block_generate`, `block_template`).
+ARCHIVED_STATUS = "get_info"
+ARCHIVED_GENERATE = "generateblocks"
+
+
+def chain_count(port, archived=False, timeout=60):
+    """Blocks held, genesis included: the tip's height plus one.
+
+    This binary's `chain_height` answers the tip's height, an ordinal. The
+    archived daemon's status reports the count itself.
+    """
+    if archived:
+        return _rpc(port, ARCHIVED_STATUS, timeout=timeout)["result"]["height"]
+    return _rpc(port, "chain_height", timeout=timeout)["result"]["height"] + 1
 
 
 def _dir_bytes(path, apparent):
@@ -118,8 +143,8 @@ def _profile_chain_count(text):
     """The chain count a profile line covers, or None.
 
     The log's `target_height` is the tip, `Some(N)`. The chain count is that
-    tip plus one, which is what `get_info` reports as `height`. A line with
-    no tip covers no count.
+    tip plus one, which is what `chain_count` reports. A line with no tip
+    covers no count.
     """
     match = re.search(r"target_height=Some\((\d+)\)", text)
     if match is None:
@@ -211,7 +236,7 @@ def seed_generation_argv(uses_this_binary, flag, address):
     """Arguments after the binary for the generating seed.
 
     This binary takes the armed lever and `--mine-address`: the payout is
-    not on its generateblocks body. The archived daemon takes the armed
+    not on its dev_block_generate body. The archived daemon takes the armed
     lever only. It has no `--mine-address`; the address rides its request.
     """
     if uses_this_binary:
@@ -219,21 +244,34 @@ def seed_generation_argv(uses_this_binary, flag, address):
     return [flag]
 
 
-def generateblocks_body(engine, count, address):
-    """The generateblocks object for the store `engine` names.
+def generate_request(engine, count, address):
+    """The generating call, `(method, params)`, for the store `engine` names.
 
-    `redb` sends `count` only. `lmdb` sends the archived trio: the block
-    count, the wallet address, and a zero starting nonce.
+    `redb` is this binary: `dev_block_generate` with `count` only. `lmdb` is
+    the archived daemon: its `generateblocks` with the trio, the block count,
+    the wallet address, and a zero starting nonce.
     """
     if engine == "redb":
-        return {"count": count}
+        return "dev_block_generate", {"count": count}
     if engine == "lmdb":
-        return {
+        return ARCHIVED_GENERATE, {
             "amount_of_blocks": count,
             "wallet_address": address,
             "starting_nonce": 0,
         }
-    raise ValueError(f"no generateblocks body for engine {engine!r}")
+    raise ValueError(f"no generating request for engine {engine!r}")
+
+
+def generated(engine, resp):
+    """Whether a generating reply says the blocks were mined.
+
+    This binary answers a `result` (the new tip and the hashes) or an
+    `error`. The archived daemon answers a `result` whose `status` is `OK`.
+    """
+    result = resp.get("result")
+    if engine == "redb":
+        return isinstance(result, dict) and "error" not in resp
+    return isinstance(result, dict) and result.get("status") == "OK"
 
 
 def generation_shape_refusal(uses_this_binary, engine):
@@ -345,18 +383,25 @@ def _peak_rss_bytes(pid):
     return None
 
 
-def _wait_rpc(port, timeout, proc=None):
+def _wait_rpc(port, timeout, proc=None, archived=False):
     """Wait for the daemon's RPC to answer. Returns the timestamp, or None.
 
     `proc` makes a dead daemon fail fast: a process that exited will never
     answer, and waiting the full window turns a crash into a slow start.
+    `archived` names the archived seed binary, asked on its own wire.
     """
     t0 = time.time()
     while time.time() - t0 < timeout:
         if proc is not None and proc.poll() is not None:
             return None
         try:
-            if _rpc(port, "get_info", timeout=5).get("result", {}).get("status") == "OK":
+            if archived:
+                result = _rpc(port, ARCHIVED_STATUS, timeout=5).get("result", {})
+                answered = result.get("status") == "OK"
+            else:
+                answered = isinstance(
+                    _rpc(port, "daemon_status", timeout=5).get("result"), dict)
+            if answered:
                 return time.time()
         except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
             time.sleep(1)
@@ -377,15 +422,18 @@ def _stop(proc, timeout):
 class _RunningDaemon:
     """One shekyld: wait for RPC on enter, terminate (then kill) on exit."""
 
-    def __init__(self, proc, rpc_port, startup_timeout, shutdown_timeout):
+    def __init__(self, proc, rpc_port, startup_timeout, shutdown_timeout,
+                 archived=False):
         self.proc = proc
         self.rpc_port = rpc_port
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
+        self.archived = archived
         self.ready_at = None
 
     def __enter__(self):
-        self.ready_at = _wait_rpc(self.rpc_port, self.startup_timeout, self.proc)
+        self.ready_at = _wait_rpc(self.rpc_port, self.startup_timeout, self.proc,
+                                  self.archived)
         return self
 
     def __exit__(self, *exc):
@@ -402,14 +450,14 @@ class _RunningDaemon:
 
 
 def _await_posted(port, timeout):
-    """Wait until the daemon on `port` answers `get_miner_data`: its node
-    has posted a template, so `generateblocks` will not be refused at
+    """Wait until the daemon on `port` answers `block_template`: its node
+    has posted a template, so `dev_block_generate` will not be refused at
     start. Fails the run when no template is posted within `timeout`."""
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
         try:
-            resp = _rpc(port, "get_miner_data")
+            resp = _rpc(port, "block_template")
             if "result" in resp:
                 return
             last = resp.get("error")
@@ -547,13 +595,13 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
             log.close()
         return proc, argv
 
-    def running(proc, rpc_port):
+    def running(proc, rpc_port, archived=False):
         return _RunningDaemon(proc, rpc_port, args.startup_timeout,
-                              args.shutdown_timeout)
+                              args.shutdown_timeout, archived)
 
     # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
-    # The generating seed calls generateblocks, an armed test lever: it is
+    # The generating seed calls dev_block_generate, an armed test lever: it is
     # served only with the dev-rpc switch set (RPC_CHANNEL.md section 6.1).
     # The daemon announces the switch at start. The seed log is appended, so
     # the check reads only the bytes this spawn wrote.
@@ -562,11 +610,12 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
     seed_daemon_log = os.path.join(work, "seed.daemon.log")
     seed_daemon_from = armed_lever.log_size(seed_daemon_log)
     uses_this_binary = seed_uses_this_binary(daemon, args.seed_daemon)
+    seed_archived = not uses_this_binary
     proc, _ = spawn(
         "seed", seed_dir,
         seed_generation_argv(uses_this_binary, armed_lever.FLAG, addr),
         offline=True)
-    with running(proc, srpc) as seed:
+    with running(proc, srpc, seed_archived) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
@@ -587,11 +636,11 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
         shape_refusal = generation_shape_refusal(uses_this_binary, seed_engine)
         if shape_refusal:
             _fail(shape_refusal)
-        have_h = _rpc(srpc, "get_info")["result"]["height"]
+        have_h = chain_count(srpc, seed_archived)
         seed_reused = have_h > 1
         # A Rust seed posts its first template once its follower has looped
         # after open (the owner's state at open, by the declaration); a
-        # generateblocks sent before that post is refused `mine.not_synced`
+        # dev_block_generate sent before that post is refused `mine.not_synced`
         # by a daemon whose RPC is already up. The regtest harness waits the same way
         # (`await_posted`). An archived seed generates through its own
         # request shape and is not asked.
@@ -601,20 +650,17 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
         if have_h < target_h:
             gen_blocks = target_h - have_h
             gt0 = time.time()
-            resp = _rpc(srpc, "generateblocks",
-                        generateblocks_body(seed_engine, gen_blocks, addr),
-                        timeout=args.gen_timeout)
+            method, params = generate_request(seed_engine, gen_blocks, addr)
+            resp = _rpc(srpc, method, params, timeout=args.gen_timeout)
             gen_wall = time.time() - gt0
-            st = resp.get("result", {}).get("status")
-            if st != "OK":
-                _fail(f"generateblocks refused: status={st!r} "
-                      f"({json.dumps(resp)[:300]})")
+            if not generated(seed_engine, resp):
+                _fail(f"{method} refused: {json.dumps(resp)[:300]}")
         elif have_h > target_h:
             _fail(f"the seed at {seed_dir} already holds height {have_h}, past the "
                   f"requested {target_h}. Blocks cannot be un-generated without "
                   f"changing what is being measured; point --seed-dir elsewhere or "
                   f"pass --fresh-seed.")
-        seed_h = _rpc(srpc, "get_info")["result"]["height"]
+        seed_h = chain_count(srpc, seed_archived)
     if seed_h != target_h:
         _fail(f"seed is at height {seed_h}, expected {target_h} — generation did not "
               "reach the requested height, so the fixture is not the one asked for")
@@ -623,7 +669,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
 
     # This restart serves the chain. It calls no lever, so it stays unarmed.
     proc, _ = spawn("seed", seed_dir, [])
-    with running(proc, srpc) as seed:
+    with running(proc, srpc, seed_archived) as seed:
         if not seed.ready:
             _fail(f"networked seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
@@ -649,7 +695,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
                 subject_daemon_log, subject_log)
             if subject_refusal:
                 _fail(subject_refusal)
-            # Denominator: first successful get_info to height == seed height.
+            # Denominator: first successful daemon_status to height == seed height.
             # CPU is a delta over the same window. A single end-of-run read
             # would carry startup / RandomX init / store open, which the wall
             # figure excludes.
@@ -660,14 +706,19 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
-                    info = _rpc(brpc, "get_info")["result"]
+                    info = _rpc(brpc, "daemon_status")["result"]
                 except (urllib.error.URLError, OSError, json.JSONDecodeError,
-                        TimeoutError):
+                        TimeoutError, KeyError):
                     time.sleep(1)
                     continue
-                reached = info["height"]
-                tip = info.get("top_block_hash")
-                peers = max(peers, info.get("outgoing_connections_count", 0))
+                # The tip's height is an ordinal; the bench counts blocks.
+                reached = info["height"] + 1
+                tip = info.get("hash")
+                # Null while the peer facts are unread: not a count of zero,
+                # and not a new maximum.
+                outbound = info.get("peer_outbound_count")
+                if outbound is not None:
+                    peers = max(peers, outbound)
                 rss = _peak_rss_bytes(subj.pid)
                 if rss is not None:
                     rss_samples.append(rss)
@@ -712,11 +763,11 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
         _fail(f"subject reached height {reached} of {seed_h} in {elapsed:.1f}s and did "
               "not converge. A partial sync is not a shorter measurement of the same "
               "thing — it is a different experiment, so no artifact is written.")
-    # The same get_info that ended the sync. Height equality is not chain
+    # The same daemon_status that ended the sync. Height equality is not chain
     # equality once the seed can be an archived binary: two chains can share
     # a height and not a tip.
     if not A.is_hex64(tip):
-        _fail(f"subject get_info named tip {tip!r}, which is not "
+        _fail(f"subject daemon_status named tip {tip!r}, which is not "
               f"{A.HASH_HEX_CHARS} lowercase hex characters. Height equality "
               "is not chain equality, so no artifact is written.")
 
@@ -777,7 +828,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "verify_note": "PoW longhash is computed and checked for every block with "
                            "no nettype bypass; --dev-difficulty lowers the TARGET "
-                           "only. generateblocks produces coinbase-only blocks, so "
+                           "only. dev_block_generate produces coinbase-only blocks, so "
                            "FCMP++ verification is not exercised at all.",
             "seed_height": int(seed_h),
             "seed_reused": bool(seed_reused),
@@ -793,12 +844,12 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
         "measures": [
             A.measure_row(
                 "ibd_wall_time_s", round(elapsed, 3), scenario,
-                "subject's first successful get_info to height == seed height; "
+                "subject's first successful daemon_status to height == seed height; "
                 "EXCLUDES process start, RandomX dataset init and store open"),
             A.measure_row(
                 "subject_cpu_s", round(cpu_s, 3), scenario,
                 "utime+stime of the subject over all threads, sampled at the first "
-                "successful get_info and again at the end, reported as the DELTA — "
+                "successful daemon_status and again at the end, reported as the DELTA — "
                 "so it spans exactly the same phase as ibd_wall_time_s"),
             A.measure_row(
                 "peak_rss_bytes", int(peak), scenario,
@@ -820,7 +871,7 @@ def _measure_with_probe(args, work, seed_dir, daemon, seed_daemon, addr, subj_di
 def _finish(args, measured, probe_out):
     """Attach the probe's summary over the timed window, then refuse or emit.
 
-    The window is the sync's: the subject's first answered `get_info` to the
+    The window is the sync's: the subject's first answered `daemon_status` to the
     height it was asked to reach, the span every measure row is over."""
     artifact, start, end = measured
     window = fsync_probe.window(fsync_probe.read(probe_out), start, end)

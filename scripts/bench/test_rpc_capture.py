@@ -6,6 +6,7 @@
 
 import json
 import os
+import pathlib
 import sys
 import tempfile
 import threading
@@ -24,7 +25,8 @@ class _Handler(BaseHTTPRequestHandler):
         params = body.get("params")
         height = params.get("height") if isinstance(params, dict) else None
         reply = {"jsonrpc": "2.0", "id": body.get("id"), "result": {
-            "method": body.get("method"), "params": params, "height": height}}
+            "method": body.get("method"), "params": params, "height": height,
+            "sent": body}}
         raw = json.dumps(reply).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -46,32 +48,72 @@ class Capture(unittest.TestCase):
             out = tempfile.mkdtemp(prefix="rpc-capture-")
             n = C.capture(
                 f"http://127.0.0.1:{port}",
-                [{"kind": "json", "method": "get_block", "params": {"height": 0}}],
+                [{"method": "block_show", "params": {"height": 0}}],
                 out)
             self.assertEqual(n, 1)
-            with open(os.path.join(out, "000-get_block.json"), encoding="utf-8") as fh:
+            with open(os.path.join(out, "000-block_show.json"), encoding="utf-8") as fh:
                 got = json.load(fh)
-            self.assertEqual(got["method"], "get_block")
+            self.assertEqual(got["method"], "block_show")
             self.assertEqual(got["params"], {"height": 0})
             self.assertEqual(got["response"]["result"]["height"], 0)
             with open(os.path.join(out, "omitted.json"), encoding="utf-8") as fh:
                 omitted = json.load(fh)
             methods = [row["method"] for row in omitted]
-            self.assertIn("generateblocks", methods)
-            self.assertIn("get_connections", methods)
+            self.assertIn("dev_block_generate", methods)
+            self.assertIn("peer_connections", methods)
+            # No transaction id was given: both transaction reads are named.
+            self.assertIn("tx_show", methods)
+            self.assertIn("tx_list", methods)
         finally:
             server.shutdown()
             server.server_close()
 
     def test_chain_requests_cover_genesis_tip_and_past_the_tip(self):
-        reqs = C.chain_requests(97, "ab" * 32, "cd" * 32)
+        # The tip height is an ordinal: the tip block is at 96.
+        reqs = C.chain_requests(96, "ab" * 32, "cd" * 32)
         heights = [r["params"].get("height") for r in reqs
-                   if r["method"] == "get_block"]
-        self.assertEqual(heights, [0, 96, 107])
+                   if r["method"] == "block_show"]
+        self.assertEqual(heights, [0, 96, 106])
+        listed = [r["params"]["height"] for r in reqs if r["method"] == "block_list"]
+        self.assertEqual(listed, [[0, 96, 106]])
 
-    def test_an_empty_chain_is_refused(self):
+    def test_a_genesis_only_chain_is_a_chain(self):
+        reqs = C.chain_requests(0, "ab" * 32, "ab" * 32)
+        ranges = [r["params"] for r in reqs if r["method"] == "block_header_list"
+                  and "from" in r["params"]]
+        self.assertEqual(ranges, [{"from": 0, "to": 0}])
+
+    def test_a_height_that_is_not_an_ordinal_is_refused(self):
+        for height in (-1, True, None, 1.0):
+            with self.subTest(height=height):
+                with self.assertRaises(ValueError):
+                    C.chain_requests(height, "ab" * 32, "cd" * 32)
+
+    def test_every_table_row_is_asked_or_named_omitted(self):
+        """The daemon's method table is the schema's `method` rows. Each is
+        asked by the capture or named in OMITTED with its reason, never
+        both and never neither; nothing else is asked."""
+        schema = pathlib.Path(__file__).resolve().parents[2] / \
+            "docs" / "generated" / "rpc_wire_schema.tsv"
+        table = set()
+        for line in schema.read_text(encoding="utf-8").splitlines():
+            cells = line.split("\t")
+            if len(cells) > 1 and cells[1] == "method":
+                table.add(cells[0])
+        self.assertEqual(len(table), 42)
+        asked = {r["method"] for r in C.chain_requests(5, "ab" * 32, "cd" * 32, "ee" * 32)}
+        omitted = [m for m, _ in C.OMITTED]
+        self.assertEqual(len(omitted), len(set(omitted)))
+        self.assertEqual(asked & set(omitted), set())
+        self.assertEqual(asked | set(omitted), table)
+
+    def test_a_request_is_one_method_and_its_params(self):
+        out = tempfile.mkdtemp(prefix="rpc-capture-")
         with self.assertRaises(ValueError):
-            C.chain_requests(0, "ab" * 32, "cd" * 32)
+            C.capture("http://127.0.0.1:1",
+                      [{"kind": "rest", "method": "/get_info", "params": {}}],
+                      out, timeout=1)
+        self.assertEqual(os.listdir(out), [])
 
     def test_reserved_ports_are_distinct_loopback_ports(self):
         ports, held = C.reserve_loopback_ports(3)
@@ -97,39 +139,41 @@ class Capture(unittest.TestCase):
 
     def test_a_replies_directory_that_already_holds_a_capture_is_refused(self):
         """The previous run asked for a transaction. This run does not, so
-        its omitted list would say `/get_transactions` was not requested
+        its omitted list would say `tx_show` was not requested
         while the old reply file still sat beside it. The stale file stays,
         and nothing from this run is written."""
         out = tempfile.mkdtemp(prefix="rpc-capture-")
-        stale = os.path.join(out, "000-get_transactions.json")
+        stale = os.path.join(out, "000-tx_show.json")
         stale_body = '{"stale": true}\n'
         with open(stale, "w", encoding="utf-8") as fh:
             fh.write(stale_body)
         with self.assertRaises(ValueError) as caught:
             C.capture(
                 "http://127.0.0.1:1",
-                [{"kind": "json", "method": "get_block", "params": {"height": 0}}],
+                [{"method": "block_show", "params": {"height": 0}}],
                 out,
                 timeout=1)
         self.assertIn(out, str(caught.exception))
         self.assertIn("mix replies from two runs", str(caught.exception))
         with open(stale, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), stale_body)
-        self.assertFalse(os.path.exists(os.path.join(out, "000-get_block.json")))
+        self.assertFalse(os.path.exists(os.path.join(out, "000-block_show.json")))
         self.assertFalse(os.path.exists(os.path.join(out, "omitted.json")))
 
-    def test_json_rpc_keeps_a_positional_params_list(self):
-        """`on_get_block_hash` takes a list. An empty list is still a list:
-        coercing it to an object would ask a different question."""
+    def test_json_rpc_sends_one_strict_envelope(self):
+        """JSON-RPC 2.0 with a numeric id. A method with no parameters
+        leaves `params` out; an empty object is still sent as one."""
         server = HTTPServer(("127.0.0.1", 0), _Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             url = f"http://127.0.0.1:{server.server_address[1]}"
-            filled = C.json_rpc(url, "on_get_block_hash", [96], timeout=5)
-            empty = C.json_rpc(url, "on_get_block_hash", [], timeout=5)
-            self.assertEqual(filled["result"]["params"], [96])
-            self.assertEqual(empty["result"]["params"], [])
+            bare = C.json_rpc(url, "chain_height", timeout=5)
+            empty = C.json_rpc(url, "option_show", {}, timeout=5)
+            self.assertEqual(bare["id"], 0)
+            self.assertNotIn("params", bare["result"]["sent"])
+            self.assertEqual(bare["result"]["sent"]["jsonrpc"], "2.0")
+            self.assertEqual(empty["result"]["params"], {})
         finally:
             server.shutdown()
             server.server_close()
