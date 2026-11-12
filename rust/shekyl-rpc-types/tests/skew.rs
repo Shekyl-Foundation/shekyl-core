@@ -160,3 +160,36 @@ fn unrecognized_never_appears_on_the_authoring_side_of_a_known_cause() {
     }
     assert!(serde_json::to_string(&Rejection::Unrecognized).is_err());
 }
+
+/// Version skew across the major (RK-Q11, RK-D25): a 3.70 daemon's
+/// `get_version` result, the one 3.x reply kept from the retired corpus
+/// (`vectors/rpc/README.md`), is refused on the wire axis by this build's
+/// version-first read, before its 3.x shape is decoded. The client names
+/// both versions; it does not report an unreadable reply.
+///
+/// Red edit: decode the reply strictly before comparing the version.
+#[test]
+fn a_3x_daemon_is_refused_on_the_wire_axis_before_its_shape_is_read() {
+    let reply: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/rpc/get_version_synced_v47.json"))
+            .expect("the kept 3.x reply is JSON");
+    assert_eq!(
+        shekyl_rpc_types::daemon_rpc_version(&reply).expect("its version reads"),
+        (3 << 16) | 70,
+        "the kept reply is 3.70's"
+    );
+    let refusal = shekyl_rpc_types::IdentityExpectation::exact(shekyl_rpc_types::Network::Mainnet)
+        .read(&reply)
+        .expect_err("a 3.x daemon is not this build");
+    assert_eq!(
+        refusal.mismatch,
+        shekyl_rpc_types::IdentityMismatch::Wire {
+            ours: shekyl_rpc_types::version::CORE_RPC_VERSION,
+            theirs: (3 << 16) | 70,
+        }
+    );
+    assert_eq!(
+        refusal.evidence, None,
+        "a version mismatch, not a parse failure"
+    );
+}

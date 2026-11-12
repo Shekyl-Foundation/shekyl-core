@@ -1,0 +1,9 @@
+{
+  "version": 262144,
+  "tagged": false,
+  "height": 1199,
+  "target_height": 1203,
+  "consensus_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "network": "testnet",
+  "genesis": "0000000000000000000000000000000000000000000000000000000000000000"
+}

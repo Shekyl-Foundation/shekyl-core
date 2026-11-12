@@ -1,0 +1,18 @@
+{
+  "height": 1199,
+  "leaf_count": 11650,
+  "frozen_count": 3,
+  "settled_epoch": 7,
+  "budget": "52000000000",
+  "work": 2500000,
+  "shard": [
+    {
+      "id": 2,
+      "bonded_count": 4,
+      "served_count": 3,
+      "freeze_height": 640,
+      "scarcity": 250000,
+      "profit": "13000000000"
+    }
+  ]
+}
