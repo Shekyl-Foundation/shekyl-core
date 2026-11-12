@@ -7,6 +7,10 @@
 //! the window's pass-over on a real connect, a digest that does not fold,
 //! a popped deadline, and a second write of one row.
 //!
+//! Every epoch here is counted from the personas' join epoch
+//! ([`shifted`]): the chain loads the captured shard-fill prefix first, and
+//! the personas join after it.
+//!
 //! The retention floor is specified on
 //! `shekyl_archival_retention::settlement_window_slashable` (ruled
 //! 2026-10-09). This file does not rebuild thirty epochs to re-derive it.
@@ -22,7 +26,7 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
     fn nothing(_: u64, _: u64) -> Option<&'static [bool]> {
         None
     }
-    let last = 2u64;
+    let last = shifted(2);
     let through = RULES.settlement_schedule().slash_deadline_height(last);
     let chain = SlashedChain::build_with("slash-empty-index", WITNESS_PERSONAS, through, nothing);
     let snap = chain.store.begin_read().expect("read");
@@ -31,7 +35,11 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
         Some(SettlementEpoch::from_raw(last)),
         "the pass ran: the watermark moved"
     );
-    assert_eq!(snap.total_burned().expect("read"), AtomicUnits::ZERO);
+    assert_eq!(
+        snap.total_burned().expect("read"),
+        chain.prefix_burned,
+        "nothing burned past the captured prefix's fees"
+    );
     let floor = slash_floor_at(&snap);
     for p in ids_in_table_order(chain.personas) {
         assert!(snap
@@ -82,6 +90,8 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
 #[test]
 fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     fn plan(epoch: u64, persona: u64) -> Option<&'static [bool]> {
+        // The epochs below are counted from the join's ([`shifted`]).
+        let epoch = epoch.checked_sub(JOIN_EPOCH)?;
         match (persona, epoch) {
             (_, 0) | (2, 5) => None,
             (1, 5) => Some(SHORT),
@@ -89,7 +99,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
             _ => Some(MISSED),
         }
     }
-    let m = u64::from(FAILURE_WINDOW_M);
+    let m = SLASHING_EPOCH;
     let schedule = RULES.settlement_schedule();
     let chain = SlashedChain::build_with(
         "slash-window-skip",
@@ -131,12 +141,15 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
             .expect("read")
             .map(SettlementRow::outcome)
     };
-    assert_eq!(outcome(1, 5), Some(SettlementOutcome::NonObservation));
-    assert_eq!(outcome(2, 5), None);
-    assert_eq!(outcome(3, 3), Some(SettlementOutcome::Served));
-    assert_eq!(outcome(3, 7), Some(SettlementOutcome::Served));
-    assert_eq!(outcome(3, 9), Some(SettlementOutcome::Served));
-    assert_eq!(outcome(3, 4), Some(SettlementOutcome::Missed));
+    assert_eq!(
+        outcome(1, shifted(5)),
+        Some(SettlementOutcome::NonObservation)
+    );
+    assert_eq!(outcome(2, shifted(5)), None);
+    assert_eq!(outcome(3, shifted(3)), Some(SettlementOutcome::Served));
+    assert_eq!(outcome(3, shifted(7)), Some(SettlementOutcome::Served));
+    assert_eq!(outcome(3, shifted(9)), Some(SettlementOutcome::Served));
+    assert_eq!(outcome(3, shifted(4)), Some(SettlementOutcome::Missed));
     // Persona 0 was slashed out of the shard by the connect at
     // `last_block(M + 1)`. Its draws of M + 1 were issued below that
     // height, so they count and the epoch has its row; the slash is not
@@ -209,8 +222,10 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
         ("slash-drift-digest", the_digest_changed as Tamper),
         ("slash-drift-lost", a_draw_lost as Tamper),
     ] {
-        let epoch = SettlementEpoch::from_raw(1);
-        let deadline = RULES.settlement_schedule().slash_deadline_height(1);
+        let epoch = SettlementEpoch::from_raw(shifted(1));
+        let deadline = RULES
+            .settlement_schedule()
+            .slash_deadline_height(shifted(1));
         let chain = SlashedChain::build_with(label, 2, deadline - 1, every_epoch_missed);
         tamper(&chain.store, epoch);
         let out: Result<(), TestErr> = chain.store.write(|batch| {
@@ -243,8 +258,10 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
 /// leaves the draws, which the door wrote outside any block.
 #[test]
 fn popping_the_deadline_connect_unsettles_the_epoch() {
-    let epoch = SettlementEpoch::from_raw(1);
-    let deadline = RULES.settlement_schedule().slash_deadline_height(1);
+    let epoch = SettlementEpoch::from_raw(shifted(1));
+    let deadline = RULES
+        .settlement_schedule()
+        .slash_deadline_height(shifted(1));
     let chain = SlashedChain::build_with("slash-pop-settlement", 2, deadline, every_epoch_missed);
     let shard = ShardId::from_raw(0);
     let rows = |store: &ChainStore| -> Vec<Option<SettlementRow>> {
@@ -272,7 +289,7 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
     let snap = chain.store.begin_read().expect("read");
     assert_eq!(
         snap.last_settled_slash_epoch().expect("read"),
-        Some(SettlementEpoch::from_raw(0)),
+        Some(SettlementEpoch::from_raw(shifted(0))),
         "the watermark is the epoch before"
     );
     assert_eq!(
@@ -288,8 +305,10 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
 /// writes it is SI-25 at the insert, before any journal entry.
 #[test]
 fn a_settlement_row_already_recorded_refuses_the_second_write() {
-    let epoch = SettlementEpoch::from_raw(1);
-    let deadline = RULES.settlement_schedule().slash_deadline_height(1);
+    let epoch = SettlementEpoch::from_raw(shifted(1));
+    let deadline = RULES
+        .settlement_schedule()
+        .slash_deadline_height(shifted(1));
     let mut chain =
         SlashedChain::build_with("slash-settled-twice", 2, deadline - 1, every_epoch_missed);
     let p = Persona::at(slot(0)).id();

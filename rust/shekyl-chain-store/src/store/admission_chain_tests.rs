@@ -33,13 +33,13 @@ use super::super::super::connect_fixtures::{
     batch_root_going_into, candidate_over, judge_with_memo,
 };
 use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
-use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
+use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, no_draws, plant_witness_shard_set, witness_shard_slots};
 
 /// Ten blocks after epoch 2 opens. With a shard set of the witness width,
 /// this harness's schedule draws once here.
 fn drawing_height() -> BlockHeight {
-    BlockHeight::from_raw(h_open(2) + 10)
+    BlockHeight::from_raw(h_open(shifted(2)) + 10)
 }
 
 pub(super) struct Linked {
@@ -50,7 +50,7 @@ pub(super) struct Linked {
 struct Prepared {
     chain: SlashedChain,
     memo: DrawableMemo,
-    /// Hash of the block at `h_open(2)`.
+    /// Hash of the block at `h_open(shifted(2))`.
     open_hash: BlockHash,
     /// Hash of the drawing block.
     hash: BlockHash,
@@ -67,7 +67,7 @@ struct Prepared {
 }
 
 fn prepare(label: &str) -> Prepared {
-    let open = h_open(2);
+    let open = h_open(shifted(2));
     let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
     // The joins are complete trees, so they are not in D. The planted set
     // has the witness width: the width this schedule draws once from, at
@@ -528,8 +528,12 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
 /// J33 rather than an unanswered view.
 #[test]
 fn a_bundle_for_genesis_is_refused_at_j33() {
-    let mut chain =
-        SlashedChain::build_with("admit-genesis", WITNESS_PERSONAS, h_open(1) - 2, no_draws);
+    let mut chain = SlashedChain::build_with(
+        "admit-genesis",
+        WITNESS_PERSONAS,
+        h_open(shifted(1)) - 2,
+        no_draws,
+    );
     let mut memo = DrawableMemo::new();
     connect_plain(&mut chain, Some(&mut memo));
     let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES);
@@ -574,8 +578,12 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
 /// An empty memo on a connected open is SI-35, not an absent set.
 #[test]
 fn a_memo_miss_is_the_sequencing_fault() {
-    let mut chain =
-        SlashedChain::build_with("admit-memo", WITNESS_PERSONAS, h_open(1) - 1, no_draws);
+    let mut chain = SlashedChain::build_with(
+        "admit-memo",
+        WITNESS_PERSONAS,
+        h_open(shifted(1)) - 1,
+        no_draws,
+    );
     let mut filled = DrawableMemo::new();
     connect_plain(&mut chain, Some(&mut filled));
     let empty = DrawableMemo::new();
@@ -587,7 +595,7 @@ fn a_memo_miss_is_the_sequencing_fault() {
             BlockHeight::from_raw(1),
             RULES.settlement_schedule(),
         );
-        bundle_view.drawable_epoch(SettlementEpoch::from_raw(0))?;
+        bundle_view.drawable_epoch(SettlementEpoch::from_raw(shifted(0)))?;
         Ok(())
     });
     let TestErr::Store(text) = out.expect_err("a memo miss faults") else {
@@ -603,7 +611,9 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
     let mut prepared = prepare("admit-digest");
     let (admitted, _) = admit(&mut prepared);
     assert_eq!(admitted.len(), 1);
-    let deadline = RULES.settlement_schedule().slash_deadline_height(2);
+    let deadline = RULES
+        .settlement_schedule()
+        .slash_deadline_height(shifted(2));
     while prepared.chain.grown.height().to_raw() < deadline {
         connect_plain(&mut prepared.chain, None);
     }
@@ -682,12 +692,12 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
         .challenge_response_blocks()
         .expect("the harness schedule has a response window")
         .get();
-    let h = BlockHeight::from_raw(h_open(3) - 1);
-    let h_incl = BlockHeight::from_raw(h_open(3) + 1);
+    let h = BlockHeight::from_raw(h_open(shifted(3)) - 1);
+    let h_incl = BlockHeight::from_raw(h_open(shifted(3)) + 1);
     assert!(h_incl.to_raw() - h.to_raw() <= window, "inside the window");
     assert_ne!(schedule.epoch_at(h), schedule.epoch_at(h_incl));
 
-    let open = h_open(2);
+    let open = h_open(shifted(2));
     let mut chain =
         SlashedChain::build_with("cold-memo-admit", WITNESS_PERSONAS, open - 1, no_draws);
     plant_witness_shard_set(&mut chain);

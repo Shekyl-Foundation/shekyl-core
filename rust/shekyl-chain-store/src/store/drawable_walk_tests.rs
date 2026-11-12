@@ -15,8 +15,8 @@
 //! (`ARCHIVAL_SUPPORT_DRAW.md`), so `D(1)` and `D(2)` are empty. Two of
 //! the personas release:
 //!
-//! - slot 3 at [`FIRST_RELEASE`], inside epoch 2 — above `h_open(2)`, so the
-//!   walk for epoch 2 undoes it, and below `h_open(3)`, so epoch 3 does not
+//! - slot 3 at [`FIRST_RELEASE`], inside epoch 2 — above `h_open(shifted(2))`, so the
+//!   walk for epoch 2 undoes it, and below `h_open(shifted(3))`, so epoch 3 does not
 //!   hold the pair;
 //! - slot 2 at [`h_open`]`(3)` itself — undone for epoch 2, and **applied**
 //!   for epoch 3, whose open block it is in.
@@ -56,7 +56,7 @@ use crate::codec::BondRecord;
 use super::*;
 
 /// The first Release: slot 3, half way through epoch 2.
-const FIRST_RELEASE: u64 = 250;
+const FIRST_RELEASE: u64 = shifted(2) * super::SEB + super::SEB / 2;
 /// The persona released at [`FIRST_RELEASE`].
 const FIRST: u32 = 3;
 /// The persona released in epoch 3's open block.
@@ -77,7 +77,7 @@ fn releases_at(h: u64) -> Vec<Listed> {
             slot: FIRST,
             bonded_total: BONDED,
         }]
-    } else if h == h_open(3) {
+    } else if h == h_open(shifted(3)) {
         vec![Listed::Release {
             slot: SECOND,
             bonded_total: BONDED,
@@ -181,15 +181,19 @@ fn personas_of(drawable: &DrawableEpoch) -> Vec<PCanonicalId> {
 #[test]
 fn the_two_derivations_agree_at_every_height_across_releases() {
     let schedule = RULES.settlement_schedule();
-    let settles_3 = schedule.slash_deadline_height(3);
-    let mut chain =
-        SlashedChain::build_with("drawable-agree", WITNESS_PERSONAS, h_open(2) - 1, no_draws);
+    let settles_3 = schedule.slash_deadline_height(shifted(3));
+    let mut chain = SlashedChain::build_with(
+        "drawable-agree",
+        WITNESS_PERSONAS,
+        h_open(shifted(2)) - 1,
+        no_draws,
+    );
     let mut epoch_2_at_pass = None;
     let mut epoch_3_at_pass = None;
-    for h in h_open(2)..=settles_3 {
+    for h in h_open(shifted(2))..=settles_3 {
         connect(&mut chain, &releases_at(h));
         let connecting = BlockHeight::from_raw(h);
-        for epoch in [2, 3] {
+        for epoch in [shifted(2), shifted(3)] {
             if h < h_open(epoch) || !horizon_holds(connecting, epoch) {
                 continue;
             }
@@ -202,7 +206,7 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
             );
             if h == schedule.slash_deadline_height(epoch) {
                 let personas = personas_of(&walked);
-                if epoch == 2 {
+                if epoch == shifted(2) {
                     // Rule 47: the agreement above compared members, not an
                     // empty list. Epoch 2's joins are its support members
                     // (`SO-D12` S1).
@@ -224,7 +228,7 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
     let snap = chain.store.begin_read().expect("read");
     assert_eq!(
         snap.last_settled_slash_epoch().expect("read"),
-        Some(SettlementEpoch::from_raw(3)),
+        Some(SettlementEpoch::from_raw(shifted(3))),
         "both settlement passes ran their check and connected"
     );
     drop(snap);
@@ -269,10 +273,13 @@ fn horizon_holds(connecting: BlockHeight, epoch: u64) -> bool {
 /// Red edit: journal the post-image.
 #[test]
 fn a_release_journals_the_record_it_replaced() {
-    let chain = released_chain("drawable-journal", h_open(3));
+    let chain = released_chain("drawable-journal", h_open(shifted(3)));
     let snap = chain.store.begin_read().expect("read");
     let rows = snap
-        .release_journal_after(BlockHeight::from_raw(h_open(2)), ReleaseJournalFloor::NONE)
+        .release_journal_after(
+            BlockHeight::from_raw(h_open(shifted(2))),
+            ReleaseJournalFloor::NONE,
+        )
         .expect("read");
     let heights: Vec<(u64, PCanonicalId)> = rows
         .iter()
@@ -282,7 +289,7 @@ fn a_release_journals_the_record_it_replaced() {
         heights,
         [
             (FIRST_RELEASE, Persona::at(FIRST).id()),
-            (h_open(3), Persona::at(SECOND).id()),
+            (h_open(shifted(3)), Persona::at(SECOND).id()),
         ]
     );
     for ReleasedRecord {
@@ -296,7 +303,10 @@ fn a_release_journals_the_record_it_replaced() {
         assert_eq!(now.receipt_sign_pk, pre_image.receipt_sign_pk);
     }
     assert!(snap
-        .release_journal_after(BlockHeight::from_raw(h_open(3)), ReleaseJournalFloor::NONE)
+        .release_journal_after(
+            BlockHeight::from_raw(h_open(shifted(3))),
+            ReleaseJournalFloor::NONE
+        )
         .expect("read")
         .is_empty());
     drop(snap);
@@ -323,8 +333,10 @@ fn a_release_journals_the_record_it_replaced() {
 #[test]
 fn a_journal_that_changed_after_the_open_halts_the_settlement() {
     type Tamper = fn(&WriteBatch<'_, '_>) -> Result<(), StoreError>;
-    let epoch = SettlementEpoch::from_raw(2);
-    let settles = RULES.settlement_schedule().slash_deadline_height(2);
+    let epoch = SettlementEpoch::from_raw(shifted(2));
+    let settles = RULES
+        .settlement_schedule()
+        .slash_deadline_height(shifted(2));
 
     fn pre_image(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
         let key = crate::ids::ReleaseJournalKey::new(
@@ -374,7 +386,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
         let entry = SlashLogEntry {
             persona: Persona::at(0).id(),
             shard: ShardId::from_raw(0),
-            epoch: SettlementEpoch::from_raw(1),
+            epoch: SettlementEpoch::from_raw(shifted(1)),
             holding: SlashedHolding::CompleteTree,
         };
         batch
@@ -476,18 +488,18 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
 }
 
 /// **The digest is undone with the open that wrote it**: popping
-/// `h_open(3)` removes epoch 3's digest and the Release journaled in that
+/// `h_open(shifted(3))` removes epoch 3's digest and the Release journaled in that
 /// block, and connecting the same block again writes the same digest and
 /// the same row. Red edit: write either outside the journal.
 #[test]
 fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
-    let mut chain = released_chain("drawable-pop", h_open(3));
+    let mut chain = released_chain("drawable-pop", h_open(shifted(3)));
     let journal = |store: &ChainStore| {
         store
             .begin_read()
             .expect("read")
             .release_journal_after(
-                BlockHeight::from_raw(h_open(3) - 1),
+                BlockHeight::from_raw(h_open(shifted(3)) - 1),
                 ReleaseJournalFloor::NONE,
             )
             .expect("read")
@@ -498,7 +510,7 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
     let popped: Result<Popped, TestErr> = chain.store.write(|batch| Ok(batch.pop()?));
     assert_eq!(
         popped.expect("pops").height,
-        BlockHeight::from_raw(h_open(3))
+        BlockHeight::from_raw(h_open(shifted(3)))
     );
     chain.grown.pop();
     assert_eq!(
@@ -512,7 +524,7 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
         "epoch 2's is untouched"
     );
 
-    connect(&mut chain, &releases_at(h_open(3)));
+    connect(&mut chain, &releases_at(h_open(shifted(3))));
     assert_eq!(recorded(&chain.store, 3), Some(digest));
     assert_eq!(journal(&chain.store).len(), 1);
 }
@@ -531,29 +543,29 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
             SlashLogFloor::window(schedule.blocks(), RULES.reorg_cap())
                 .expect("fits")
                 .to_raw()
-                + h_open(2)
+                + h_open(shifted(2))
                 + 5,
         ),
         schedule.blocks(),
         RULES.reorg_cap(),
     );
     let slash_kept = slash.height().expect("a slash floor");
-    assert!(slash_kept.to_raw() > h_open(2) + 1);
+    assert!(slash_kept.to_raw() > h_open(shifted(2)) + 1);
     // Oldest kept epoch 3: the journal of epoch 2 starts below it.
     let connecting = BlockHeight::from_raw(
-        schedule.open_height(3 + shekyl_archival_retention::SLASH_GRACE_EPOCHS),
+        schedule.open_height(shifted(3) + shekyl_archival_retention::SLASH_GRACE_EPOCHS),
     );
     let journal = ReleaseJournalFloor::of(
         EpochFloor::<Settling>::under(connecting, schedule),
         schedule,
     );
     let journal_kept = journal.height().expect("a journal floor");
-    assert!(journal_kept.to_raw() > h_open(2) + 1);
+    assert!(journal_kept.to_raw() > h_open(shifted(2)) + 1);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
         let refused = drawable_epoch_walked_back(
             &view,
-            SettlementEpoch::from_raw(2),
+            SettlementEpoch::from_raw(shifted(2)),
             schedule,
             RULES.reorg_cap(),
             journal,
@@ -575,7 +587,7 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
     });
     assert!(matches!(out, Err(TestErr::Abort)));
     let snap = chain.store.begin_read().expect("read");
-    let asked = BlockHeight::from_raw(h_open(2));
+    let asked = BlockHeight::from_raw(h_open(shifted(2)));
     let refused_journal = snap.release_journal_after(asked, journal).map(drop);
     assert!(
         matches!(
@@ -620,7 +632,7 @@ fn plant_compact_bond_at(chain: &mut SlashedChain, slot: u32) {
         bond_spend_pk: persona.bond_spend(),
         receipt_sign_pk: persona.receipt_key(),
         endpoint: [0xEE; 32],
-        join_settlement_epoch: SettlementEpoch::from_raw(0),
+        join_settlement_epoch: SettlementEpoch::from_raw(shifted(0)),
         bonded_total: AtomicUnits::from_raw(BONDED),
         holdings: compact_holdings(&[0]),
         bad_intervals: Vec::new(),
@@ -653,12 +665,13 @@ fn plant_witness_shard_set(chain: &mut SlashedChain) {
     }
 }
 
-/// The harness chain through `h_open(2) − 1`, with [`plant_compact_bond`]
+/// The harness chain through `h_open(shifted(2)) − 1`, with [`plant_compact_bond`]
 /// applied before epoch 2 opens, then connected to `through`.
 fn compact_bond_chain(label: &str, through: u64) -> SlashedChain {
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(2) - 1, no_draws);
+    let mut chain =
+        SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(shifted(2)) - 1, no_draws);
     plant_compact_bond(&mut chain);
-    for _ in h_open(2)..=through {
+    for _ in h_open(shifted(2))..=through {
         connect(&mut chain, &[]);
     }
     chain
@@ -670,7 +683,7 @@ fn compact_holdings(shards: &[u64]) -> shekyl_types::archival::Holdings {
             .iter()
             .map(|&shard| shekyl_types::archival::HeldShard {
                 shard: ShardId::from_raw(shard),
-                add_epoch: SettlementEpoch::from_raw(0),
+                add_epoch: SettlementEpoch::from_raw(shifted(0)),
             })
             .collect(),
     )
@@ -695,15 +708,15 @@ fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), Stor
     let entry = SlashLogEntry {
         persona,
         shard: ShardId::from_raw(shard),
-        epoch: SettlementEpoch::from_raw(1),
+        epoch: SettlementEpoch::from_raw(shifted(1)),
         holding: SlashedHolding::Shard {
-            add_epoch: SettlementEpoch::from_raw(0),
+            add_epoch: SettlementEpoch::from_raw(shifted(0)),
         },
     };
     batch
         .open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG)?
         .upsert(
-            crate::ids::SlashLogKey::new(BlockHeight::from_raw(h_open(3) + 1), 0).key(),
+            crate::ids::SlashLogKey::new(BlockHeight::from_raw(h_open(shifted(3)) + 1), 0).key(),
             entry.encoded().as_encoded(),
         )?;
     Ok(())
@@ -725,8 +738,10 @@ fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), Stor
 /// the altered row restores none, so a length comparison does not hide it.
 #[test]
 fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
-    let epoch = SettlementEpoch::from_raw(2);
-    let settles = RULES.settlement_schedule().slash_deadline_height(2);
+    let epoch = SettlementEpoch::from_raw(shifted(2));
+    let settles = RULES
+        .settlement_schedule()
+        .slash_deadline_height(shifted(2));
     let chain = compact_bond_chain("drawable-compact", settles - 1);
     let compact = Persona::at(COMPACT).id();
     // The settling block, one above this tip, is the walk's reader.

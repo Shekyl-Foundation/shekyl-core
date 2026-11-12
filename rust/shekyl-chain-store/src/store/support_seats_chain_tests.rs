@@ -26,7 +26,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId};
 use crate::codec::Canonical;
 
 use super::super::super::StoreBundleView;
-use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
+use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::admission_chain_tests::{connect_committed, connect_plain};
 use super::block_draws_chain_tests::{compose, pop_back};
 use super::{h_open, no_draws};
@@ -66,7 +66,7 @@ fn seat_row(chain: &SlashedChain, h: u64) -> Option<SupportSeats> {
         .map(|row| row.seats)
 }
 
-/// A chain connected from `h_open(1)` through `through` with one memo,
+/// A chain connected from `h_open(shifted(1))` through `through` with one memo,
 /// and each epoch's snapshot as its open filed it.
 struct Seated {
     chain: SlashedChain,
@@ -101,14 +101,15 @@ fn carried_at(chain: &SlashedChain, h: u64) -> Carried {
 }
 
 fn seated(label: &str, through: u64) -> Seated {
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(1) - 1, no_draws);
+    let mut chain =
+        SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(shifted(1)) - 1, no_draws);
     let mut memo = DrawableMemo::new();
     let mut snapshots = BTreeMap::new();
     let mut rows = BTreeMap::new();
     let mut draws = BTreeMap::new();
     let mut carried = BTreeMap::new();
     let schedule = RULES.settlement_schedule();
-    for h in h_open(1)..=through {
+    for h in h_open(shifted(1))..=through {
         let linked = connect_plain(&mut chain, Some(&mut memo));
         rows.insert(
             h,
@@ -188,7 +189,7 @@ fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
 /// count moves).
 #[test]
 fn a_trees_seats_over_an_epoch_are_its_c_slots_and_their_carry_at_each_width() {
-    let through = h_open(4) - 1;
+    let through = h_open(shifted(4)) - 1;
     let seated = seated("support-seats-epochs", through);
     let trees: BTreeSet<PCanonicalId> = (0..WITNESS_PERSONAS)
         .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
@@ -301,9 +302,9 @@ fn a_past_blocks_roster_reads_as_written_at_connect() {
         mut memo,
         snapshots,
         ..
-    } = seated("support-seats-roster", h_open(2));
-    let snapshot = snapshots[&2].clone();
-    let h = first_scheduled_after_open(&snapshot, 2);
+    } = seated("support-seats-roster", h_open(shifted(2)));
+    let snapshot = snapshots[&shifted(2)].clone();
+    let h = first_scheduled_after_open(&snapshot, shifted(2));
     // Connect up to the end of `h`'s window, so the view's `h_incl` is
     // the last height that can still admit `h`'s bundle.
     while chain.grown.height().to_raw() < h + window() {
@@ -445,7 +446,8 @@ fn a_support_row_that_is_not_one_step_of_the_carry_is_si_43() {
     ];
     for (n, (label, plant)) in cases.into_iter().enumerate() {
         // An SI-43 halts the writer, so each case has its chain.
-        let Seated { chain, memo, .. } = seated(&format!("support-seats-si43-{n}"), h_open(2) + 10);
+        let Seated { chain, memo, .. } =
+            seated(&format!("support-seats-si43-{n}"), h_open(shifted(2)) + 10);
         let h = first_seated(&chain, 2);
         let at = BlockHeight::from_raw(h);
         let row = chain
@@ -494,9 +496,9 @@ fn a_roster_steps_from_the_carry_of_the_row_before_it() {
         memo,
         carried,
         ..
-    } = seated("support-seats-step-from-h-1", h_open(3) - 1);
+    } = seated("support-seats-step-from-h-1", h_open(shifted(3)) - 1);
     let tip = chain.grown.height().to_raw() - 1;
-    let h = (h_open(2) + 2..=tip)
+    let h = (h_open(shifted(2)) + 2..=tip)
         .find(|&h| {
             seat_row(&chain, h).is_some_and(|row| !row.is_empty())
                 && carried[&(h - 1)] != carried[&(h - 2)]
@@ -530,7 +532,7 @@ fn a_pop_removes_the_seat_row_and_the_reconnect_restores_it() {
         mut chain,
         mut memo,
         ..
-    } = seated("support-seats-pop", h_open(2) + 40);
+    } = seated("support-seats-pop", h_open(shifted(2)) + 40);
     let h = first_seated(&chain, 2);
     let tip = chain.grown.height().to_raw() - 1;
     let rows: Vec<Option<SupportSeats>> = (h..=tip).map(|at| seat_row(&chain, at)).collect();
@@ -560,11 +562,12 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         mut memo,
         snapshots,
         ..
-    } = seated("support-seats-twin", h_open(2));
-    let first = first_scheduled_after_open(&snapshots[&2], 2) - h_open(2);
+    } = seated("support-seats-twin", h_open(shifted(2)));
+    let first =
+        first_scheduled_after_open(&snapshots[&shifted(2)], shifted(2)) - h_open(shifted(2));
     // Connect to the block before the seated one, then the seated block
     // with a commitment the fixture producer holds the seed of.
-    let h = BlockHeight::from_raw(h_open(2) + first);
+    let h = BlockHeight::from_raw(h_open(shifted(2)) + first);
     while chain.grown.height() < h {
         connect_plain(&mut chain, Some(&mut memo));
     }
