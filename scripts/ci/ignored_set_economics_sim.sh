@@ -41,19 +41,42 @@
 # `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
 # Rust job uses it; the run below is the nightly lane.
 #
+# `--narrations` runs the narration pins alone, after the same judgement:
+# rust-audit-test.yml's economics-sim-narrations job, on every change whose
+# Rust test scope reaches the sim (scripts/ci/change_scope.py,
+# `sim_narrations`). A change to a value the sim reads moves a narration
+# without failing any per-PR test: #1323 (the surge factor, 4 to 3) merged
+# green and turned this lane red for three nights
+# (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30).
+#
 # The crate is a binary with no library target: the tests are in
 # `--bin shekyl-economics-sim`.
 set -euo pipefail
 . "$(dirname "$0")/ignored_set_mode.sh"
+lane=nightly
+budget='180m, the nightly job'
+if [ "${1:-}" = --narrations ]; then
+  lane=narrations
+  budget='40m, the per-PR narrations job'
+  shift
+fi
 ignored_set_mode "$@"
+if [ "$lane" = narrations ] && [ "$ignored_set_check" -eq 1 ]; then
+  echo "usage: $0 [--check | --narrations]" >&2
+  exit 2
+fi
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
-run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
+# The narration pins: each folds the sim and compares its report with the
+# committed fixture. They are the per-PR lane's whole set and the head of
+# the nightly's.
+narration_pins='stage2::tests::stage2_narration_matches_the_committed_fixture
 stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
-esr10::tests::esr10_nightly_narration_matches_the_committed_fixture
+esr10::tests::esr10_nightly_narration_matches_the_committed_fixture'
+run_tests="$narration_pins
 secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
-baseline::tests::every_declared_reader_moves_its_report'
+baseline::tests::every_declared_reader_moves_its_report"
 helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures
 esr10::tests::regen_esr10_narration_fixtures'
@@ -63,9 +86,14 @@ on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture'
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
 # would not; the refusal below is then this script's words, not `set -e`'s
 # silence.
-want=$(printf '%s\n' "$run_tests" | awk 'NF { n++ } END { print n + 0 }')
+if [ "$lane" = narrations ]; then
+  lane_tests=$narration_pins
+else
+  lane_tests=$run_tests
+fi
+want=$(printf '%s\n' "$lane_tests" | awk 'NF { n++ } END { print n + 0 }')
 if [ "$want" -eq 0 ]; then
-  echo "::error::scripts/ci/ignored_set_economics_sim.sh names no test to run"
+  echo "::error::scripts/ci/ignored_set_economics_sim.sh names no test to run in the ${lane} lane"
   exit 1
 fi
 
@@ -84,17 +112,17 @@ if [ "$found" != "$expected" ]; then
   echo "Decide in scripts/ci/ignored_set_economics_sim.sh whether each new ignored test is run here, is a regeneration helper, or runs on demand."
   exit 1
 fi
-echo "shekyl-economics-sim ignored set: ${want} test(s) run, the regeneration helpers and the on-demand tests, exactly the listed set"
+echo "shekyl-economics-sim ignored set: exactly the listed set; the ${lane} lane runs ${want} of it"
 ignored_set_stop_after_judgement
 
 START=$(date +%s)
 status=0
 # shellcheck disable=SC2086 # one test name per word, by design
 cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- \
-  --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
+  --ignored --exact --nocapture $lane_tests > sim-ignored.log 2>&1 || status=$?
 cat sim-ignored.log
 if [ "$status" -ne 0 ]; then
-  echo "::error::economics-sim-ignored: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
+  echo "::error::economics-sim ${lane} lane: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
@@ -103,4 +131,4 @@ if [ "$ran" != "$want" ]; then
   exit 1
 fi
 END=$(date +%s)
-echo "::notice::Economics sim ignored tests completed on ${branch} in $((END - START))s (budget 180m)"
+echo "::notice::Economics sim ${lane} lane completed on ${branch} in $((END - START))s (budget ${budget})"
