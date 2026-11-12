@@ -98,14 +98,6 @@ enum CallBudget {
     Refusal(Duration),
 }
 
-impl CallBudget {
-    fn duration(self) -> Duration {
-        match self {
-            Self::Disk(left) | Self::Refusal(left) => left,
-        }
-    }
-}
-
 /// The disk window and, once mining has been refused, the run that must
 /// end it. A success drops the run. The budget is derived from the two,
 /// so a caller cannot wait on one and report the other.
@@ -194,7 +186,7 @@ async fn child_exited(child: &mut Child) -> ExitStatus {
 /// comes first.
 #[cfg(target_os = "linux")]
 async fn wait_for_mine(child: &mut Child, rpc: &HttpRpc, budget: CallBudget) -> MineWait {
-    let limit = budget.duration();
+    let (CallBudget::Disk(limit) | CallBudget::Refusal(limit)) = budget;
     if limit.is_zero() {
         return match child.try_wait().expect("wait for the daemon") {
             Some(status) => MineWait::Exited(status),
@@ -420,6 +412,9 @@ fn a_success_drops_the_refusal_run_and_the_disk_window_binds_again() {
     let later = now + Duration::from_secs(30);
     let _ = clocks.refused("mine.stopping".to_string(), now);
     let _ = clocks.refused("timed out".to_string(), later);
+    // The run keeps its start and takes the latest answer: the verdict
+    // quotes what the daemon said last.
+    assert_eq!(clocks.refusal_answer(), Some("timed out"));
     let refusal_left = UP_AFTER_REFUSAL
         .checked_sub(Duration::from_secs(30))
         .expect("30s fits in the refusal bound");
@@ -429,6 +424,7 @@ fn a_success_drops_the_refusal_run_and_the_disk_window_binds_again() {
     ));
 
     clocks.mined();
+    assert_eq!(clocks.refusal_answer(), None, "a success closes the run");
     let disk_left = WITHIN
         .checked_sub(Duration::from_secs(30))
         .expect("30s fits in the disk window");
