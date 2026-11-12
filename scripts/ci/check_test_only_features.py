@@ -468,9 +468,13 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         "The shekyl-verify-cost dev edge (2026-11-09, BA-T1) is the pool-admission drift "
         "gate calling sign_pqc_auth_for_output_with_ml_dsa_seed, the wallet signer's "
         "assembly with a seeded ML-DSA nonce — the same shape as shekyl-tx-builder's "
-        "transfer_e2e_iai.",
+        "transfer_e2e_iai. The shekyl-chain-store dev edge (2026-11-11, SO-D12 #1327) "
+        "is the shard-fill capture writer's regeneration guard, "
+        "test_support::regen_decision_or_refuse — the guard every pinned vector's "
+        "rewrite goes through, as in shekyl-archival-retention's gate-4 KAT.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
+            ("test-utils", "shekyl-chain-store", "dev"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),
