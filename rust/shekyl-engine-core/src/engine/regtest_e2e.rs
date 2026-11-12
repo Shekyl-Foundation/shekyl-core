@@ -1622,7 +1622,7 @@ async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
 
 /// **A stop the operator asked for is not a failure:** no line at `error`,
 /// no word that the daemon stops on a task's end, and exit 0. The other
-/// half of [`a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit`]:
+/// half of [`full_disk::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit`]:
 /// the node's end watch must stay silent for a task that was asked to
 /// stop. The daemon mines first, so the ingest service and the miner have
 /// worked.
@@ -1678,148 +1678,6 @@ async fn a_stops_last_line_reaches_the_log_file() {
         log.contains(LAST_LINE),
         "the stop's last line is in the log file; its tail:\n{}",
         log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
-    );
-}
-
-/// The filesystem the full-disk gate fills: the directory `SHEKYL_SMALL_DISK`
-/// names, which must be the mount point of a filesystem no larger than
-/// [`SMALL_DISK_AT_MOST_KIB`]. The daemon reads no environment; this is
-/// the test's own input, as `SHEKYLD_BIN` is. The live-daemon lanes do not
-/// mount one, so the test is decided dark and run by hand.
-///
-/// A directory on a large disk would make the gate mine until its block
-/// bound and fail there, long after the cause, so the size is asserted
-/// first (rule 47).
-#[cfg(target_os = "linux")]
-fn small_disk() -> PathBuf {
-    let dir = PathBuf::from(std::env::var_os("SHEKYL_SMALL_DISK").expect(
-        "SHEKYL_SMALL_DISK not set. It names the mount point of a filesystem \
-         of at most 2 MiB, for a hand run of this gate",
-    ));
-    let output = shekyl_tor_control_client::spawn_lock::output(
-        std::process::Command::new("df").arg("-Pk").arg(&dir),
-    )
-    .expect("run df");
-    assert!(output.status.success(), "df {}: {output:?}", dir.display());
-    let table = String::from_utf8(output.stdout).expect("df prints utf-8");
-    let row: Vec<&str> = table
-        .lines()
-        .nth(1)
-        .unwrap_or_else(|| panic!("df printed no row: {table}"))
-        .split_whitespace()
-        .collect();
-    let size_kib: u64 = row
-        .get(1)
-        .and_then(|blocks| blocks.parse().ok())
-        .unwrap_or_else(|| panic!("df's size column: {table}"));
-    assert_eq!(
-        row.last().copied(),
-        dir.to_str(),
-        "SHEKYL_SMALL_DISK is not a filesystem's mount point: {table}"
-    );
-    assert!(
-        size_kib <= SMALL_DISK_AT_MOST_KIB,
-        "the filesystem at {} holds {size_kib} KiB, more than the {SMALL_DISK_AT_MOST_KIB} KiB \
-         the gate fills in its block bound",
-        dir.display()
-    );
-    dir
-}
-
-/// The largest filesystem the full-disk gate accepts.
-#[cfg(target_os = "linux")]
-const SMALL_DISK_AT_MOST_KIB: u64 = 2 * 1024;
-
-/// **A full disk stops the daemon, and it says so when it happens**
-/// (the CS-5 rehearsal of 2026-11-02). There a store commit met
-/// `ENOSPC`, the ingest service stopped, and the daemon stayed up: nothing
-/// was logged, `daemon_status` answered from the old height, and the one record
-/// printed 34 minutes later at SIGTERM.
-///
-/// The daemon's chain is on a small filesystem and its log is not. The
-/// test mines until a commit fails. It sends no signal. The daemon must
-/// then, on its own: log the fault at `error` when the service records it,
-/// log that it stops on it, and exit with a failure status.
-///
-/// No lever: the daemon is the released binary under its released options,
-/// and the disk is really full.
-#[cfg(target_os = "linux")]
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN and SHEKYL_SMALL_DISK; spawns a live daemon"]
-async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
-    /// More blocks than the largest accepted filesystem holds: a block
-    /// adds about 6.4 KiB to the store (measured 2026-11-11, 537 blocks).
-    const MINE_AT_MOST: u64 = 2_000;
-    /// Blocks per call. Small, so a call on a loaded host stays inside
-    /// the harness's HTTP timeout.
-    const CHUNK: u64 = 8;
-    const WITHIN: Duration = Duration::from_secs(30 * 60);
-    const RECORDED: &str = "the ingest service stops on a fault: ";
-    const STOPS: &str = "the ingest service stopped: ";
-    let disk = small_disk();
-    let serial = serial_lock().lock_owned().await;
-    let mut daemon = RegtestDaemon::spawn(
-        RegtestSpawn::new(Some(serial)).with_chain_dir(disk.join("full-disk-gate")),
-    )
-    .await;
-    // Mine until the daemon has exited. No signal is sent: the daemon
-    // ends itself. A refused or timed-out call is not the verdict (a
-    // loaded host times one out too); the exit is.
-    let deadline = std::time::Instant::now() + WITHIN;
-    let mut mined = 0u64;
-    let mut refused = None;
-    let status = loop {
-        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
-            break status;
-        }
-        assert!(
-            mined < MINE_AT_MOST,
-            "mined {mined} blocks and the disk at {} never filled",
-            disk.display()
-        );
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{WITHIN:?} on, the daemon is still up with {mined} blocks mined and its last \
-             mining call answered {refused:?}: a half-up node, or a disk that did not fill. \
-             Its log tail:\n{}",
-            log_tail(&daemon.data_dir.join("shekyld.log"))
-        );
-        match try_generate_blocks(&daemon.rpc, CHUNK).await {
-            Ok(_) => mined += CHUNK,
-            Err(error) => {
-                refused = Some(format!("{error:?}"));
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
-    };
-    let log_path = daemon.data_dir.join("shekyld.log");
-    let log = std::fs::read_to_string(&log_path).expect("the daemon's log");
-    let tail = log_tail(&log_path);
-    assert!(
-        !status.success(),
-        "the daemon exited {status} after its disk filled; a failure status was owed. Tail:\n{tail}"
-    );
-    let recorded = log
-        .lines()
-        .find(|line| line.contains(RECORDED))
-        .unwrap_or_else(|| panic!("no line records the fault ({RECORDED:?}). Tail:\n{tail}"));
-    assert!(
-        recorded.contains("ERROR"),
-        "the fault is recorded below `error`: {recorded}"
-    );
-    assert!(
-        recorded.contains("No space left on device"),
-        "the fault recorded is not the full disk: {recorded}"
-    );
-    let stops = log
-        .lines()
-        .find(|line| line.contains(STOPS))
-        .unwrap_or_else(|| {
-            panic!("no line says the daemon stops on it ({STOPS:?}). Tail:\n{tail}")
-        });
-    assert!(
-        stops.contains("ERROR") && stops.contains("; the daemon stops"),
-        "the stop line: {stops}"
     );
 }
 
@@ -6332,6 +6190,9 @@ async fn peer_words_answer_through_shekyl_cli() {
 
 #[path = "regtest_e2e_bench_source.rs"]
 mod bench_source;
+
+#[path = "regtest_e2e_full_disk.rs"]
+mod full_disk;
 
 #[path = "regtest_e2e_origin.rs"]
 mod origin;
