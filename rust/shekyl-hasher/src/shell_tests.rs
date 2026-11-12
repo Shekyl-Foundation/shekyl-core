@@ -43,8 +43,39 @@ fn budget(permits: usize) -> Budget {
     Budget::new(NonZeroUsize::new(permits).expect("non-zero"))
 }
 
-fn start(permits: usize) -> (Hasher, Owner) {
-    Hasher::start(budget(permits)).expect("the builder thread starts")
+fn start(permits: usize) -> (Hasher, Stopper) {
+    started(Hasher::start(budget(permits)))
+}
+
+fn started(start: std::io::Result<(Hasher, Owner)>) -> (Hasher, Stopper) {
+    let (hasher, owner) = start.expect("the builder thread starts");
+    (hasher, Stopper(Some(owner)))
+}
+
+/// A test's stop owner. A test that fails leaves its hasher unstopped: the
+/// fault under test can leave a lease out that nothing returns, and a stop
+/// waits for every lease, so the failure would hang in the test's teardown
+/// instead of failing. The process ends with the failed test.
+struct Stopper(Option<Owner>);
+
+impl Stopper {
+    fn stop(mut self) {
+        if let Some(owner) = self.0.take() {
+            owner.stop();
+        }
+    }
+}
+
+impl Drop for Stopper {
+    fn drop(&mut self) {
+        if let Some(owner) = self.0.take() {
+            if std::thread::panicking() {
+                std::mem::forget(owner);
+            } else {
+                owner.stop();
+            }
+        }
+    }
 }
 
 fn window(seeds: &[Seedhash]) -> Ranked {
@@ -252,16 +283,20 @@ fn a_warm_loan_is_cancelled_mid_hash_and_its_cache_freed_when_it_returns() {
         std::thread::spawn(move || {
             let stop = AtomicBool::new(false);
             hasher.lend_warm(Class::Miner, s(1), &stop, |loan| {
+                // The miner's loop ends on a refusal, or gives up after the
+                // test's patience: a loan never cancelled is the failure.
+                let deadline = Instant::now() + PATIENCE;
                 let mut hashed = 0u64;
-                loop {
+                while Instant::now() < deadline {
                     match loan.hash(&hashed.to_le_bytes()) {
                         Ok(_) => {
                             hashed += 1;
                             let _sent = hashing_tx.send(());
                         }
-                        Err(why) => return (hashed, why),
+                        Err(why) => return (hashed, Some(why)),
                     }
                 }
+                (hashed, None)
             })
         })
     };
@@ -269,7 +304,7 @@ fn a_warm_loan_is_cancelled_mid_hash_and_its_cache_freed_when_it_returns() {
     hasher.rank(window(&[s(2)]));
     let (hashed, why) = miner.join().expect("returns").expect("lent");
     assert!(hashed >= 1);
-    assert_eq!(why, Unhashed::Cancelled);
+    assert_eq!(why, Some(Unhashed::Cancelled), "the loan was cancelled");
     until(&hasher, "a freed, b built", |r| {
         !r.caches.iter().any(|(seed, _)| *seed == s(1)) && holds(r, s(2), Residency::Warm)
     });
@@ -348,7 +383,7 @@ fn a_quiet_hasher_holds_what_a_fresh_one_holds_for_the_same_list() {
 fn a_refill_whose_class_rises_waits_for_its_permit_at_the_new_class() {
     let _serial = serial();
     let budget = budget(1);
-    let (hasher, owner) = Hasher::start(budget.clone()).expect("starts");
+    let (hasher, owner) = started(Hasher::start(budget.clone()));
     hasher.rank(window(&[s(1)]));
     until(&hasher, "a built", |r| holds(r, s(1), Residency::Warm));
     let permit = budget.acquire(Class::Chain);
