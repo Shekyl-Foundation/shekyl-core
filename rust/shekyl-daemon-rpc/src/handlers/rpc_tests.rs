@@ -29,7 +29,7 @@ use crate::handles::Handles;
 use crate::hash_budget::HashBudget;
 use crate::options::OptionsAbsent;
 use crate::server::AppState;
-use crate::shard_view::ShardViewAbsent;
+use crate::shard_view::{ShardViewAbsent, ShardViewHandle, TorOff};
 use crate::store_facts::RulesAt;
 use crate::submit::{DaemonTxVerifier, RustPoolShim, StoreChain, SubmitEngine};
 
@@ -54,8 +54,14 @@ impl Drop for Scratch {
 
 /// The state `build_router` serves: a real submit engine over an empty
 /// store and pool, and every node handle absent (each read is
-/// `daemon.unready`).
+/// `daemon.unready`). The shard view is the same absence.
 fn state(tag: &str) -> (Scratch, Arc<AppState>) {
+    state_with(tag, Arc::new(ShardViewAbsent))
+}
+
+/// `state`, with the shard view the test names. A node that was not
+/// supplied is [`ShardViewAbsent`]; a node with Tor off is [`TorOff`].
+fn state_with(tag: &str, shard_view: ShardViewHandle) -> (Scratch, Arc<AppState>) {
     let scratch = Scratch::new(tag);
     let epoch = SettlementEpochBlocks::new(10_000).expect("non-zero epoch");
     let store =
@@ -84,7 +90,7 @@ fn state(tag: &str) -> (Scratch, Arc<AppState>) {
     let state = Arc::new(AppState {
         submit_engine: Arc::new(SubmitEngine::new(shim, DaemonTxVerifier)),
         conn_tracker: ConnTracker::new(ConnLimits::default()),
-        shard_view: Arc::new(ShardViewAbsent),
+        shard_view,
         options: Arc::new(OptionsAbsent),
         handles: Handles::absent(),
         hash_budget: Arc::new(HashBudget::new(Instant::now())),
@@ -453,12 +459,13 @@ async fn each_listener_is_admitted_to_its_rows_at_dispatch() {
     assert_eq!(stems, Some((outside, grant::HOST_ONLY.to_owned())));
 }
 
-/// One refusal per class that dispatch reaches with every handle absent,
-/// each with its dotted code: BadParams (`rpc.params`: a word where the
-/// heights are, and a `tx_submit` body that is not base64), OutsideTheGrant
-/// (`grant.outside`), OverResourceBound (`bound.block`, a bounded caller
-/// past the block cap), NotReady (`daemon.unready`) and RefusedByMethod
-/// (`shard.*`, a daemon with no shard view). Method-not-found
+/// One refusal per class that dispatch reaches, each with its dotted code:
+/// BadParams (`rpc.params`: a word where the heights are, and a `tx_submit`
+/// body that is not base64), OutsideTheGrant (`grant.outside`),
+/// OverResourceBound (`bound.block`, a bounded caller past the block cap),
+/// NotReady (`daemon.unready`: no node, including a shard view that was not
+/// supplied) and RefusedByMethod (`shard.tor-off`: a node with Tor off).
+/// Method-not-found
 /// (`rpc.method`) is [`every_old_name_is_method_not_found`]'s. StoreFault
 /// and Internal need a store that fails; their codes are
 /// `methods::tests::every_fault_is_its_class_and_its_dotted_code`. A
@@ -509,15 +516,35 @@ async fn one_refusal_per_class_through_dispatch() {
             "{request}: {reply}"
         );
     }
-    let shard = send(
+    let unready = send(
         &state,
         ADMIN,
         &call(wire::ShardFetch::NAME, json!({"id": 0})),
     )
     .await;
-    let (class, code) = refusal(&shard).expect("no shard view is a refusal");
-    assert_eq!(class, ErrorClass::RefusedByMethod.code(), "{shard}");
-    assert!(code.starts_with("shard."), "{shard}");
+    assert_eq!(
+        refusal(&unready),
+        Some((
+            ErrorClass::NotReady.code(),
+            crate::methods::codes::DAEMON_UNREADY.to_owned(),
+        )),
+        "{unready}"
+    );
+    let (_tor_scratch, tor_off) = state_with("classes-tor-off", Arc::new(TorOff));
+    let shard = send(
+        &tor_off,
+        ADMIN,
+        &call(wire::ShardFetch::NAME, json!({"id": 0})),
+    )
+    .await;
+    assert_eq!(
+        refusal(&shard),
+        Some((
+            ErrorClass::RefusedByMethod.code(),
+            crate::shard_view::codes::TOR_OFF.to_owned(),
+        )),
+        "{shard}"
+    );
 
     // A verdict is an answer: bytes that are no transaction are `rejected`
     // with `malformed`, in `result`, never an error.
