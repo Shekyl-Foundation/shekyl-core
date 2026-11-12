@@ -151,6 +151,7 @@ stale_through = [
   { through = "e21cd906e7", note = "Multisig slice 2 (21e5e57a0c, e21cd906e7): in this path set, shekyl-fcmp's frost_sal.rs is rewritten over modular_frost's signing machines, frost_dkg.rs is deleted, lib.rs drops that module, and frost_sal_tests.rs is new, all behind the multisig feature. No verify, prove, SAL, leaf or tree function the capture times reads any of it, and none of them changed. Not re-measured; the rows stay stale on their carrier." },
   { through = "137c252bc2", note = "Multisig slice 2 review (137c252bc2): in this path set, SalSigningParams::propose decodes x and y_kem into the params' own fields, the type drops Clone, and two test files change. Multisig feature only; no function the capture times reads it. Not re-measured." },
   { through = "bae848ae8b", note = "Multisig slice 2 review (bae848ae8b): in this path set, frost_sal.rs panics if dkg refuses a group shape check_group_shape already accepted, and frost_sal_tests.rs corrects the spend-test path. Multisig feature only; no verify, prove, SAL, leaf or tree function the capture times reads it. Not re-measured." },
+  { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -1054,6 +1055,7 @@ stale_through = [
   { through = "e21cd906e7", note = "Multisig slice 2 (21e5e57a0c, e21cd906e7): in this path set, shekyl-fcmp's frost_sal.rs is rewritten over modular_frost's signing machines and frost_dkg.rs is deleted, both behind the multisig feature; the spend path the capture times (tree build, path assembly, the single-signer prover) reads neither and is unchanged. Not re-measured; the rows stay stale." },
   { through = "137c252bc2", note = "Multisig slice 2 review (137c252bc2): in this path set, SalSigningParams::propose decodes x and y_kem into the params' own fields, the type drops Clone, and two test files change. Multisig feature only; no function the capture times reads it. Not re-measured." },
   { through = "bae848ae8b", note = "Multisig slice 2 review (bae848ae8b): in this path set, frost_sal.rs panics if dkg refuses a group shape check_group_shape already accepted, and frost_sal_tests.rs corrects the spend-test path. Multisig feature only; the spend path the capture times does not read it. Not re-measured." },
+  { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
