@@ -116,7 +116,7 @@ determines cross-implementation compatibility.
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | `5` | Minimum ref block age in blocks (matches `src/cryptonote_config.h`; reduced from `10` in Decision 14) |
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | `100` | Maximum ref block age in blocks |
 | `MAX_RECIPIENTS` | `16` | Maximum recipients per intent |
-| `MAX_INPUTS` | `128` | Maximum inputs per intent |
+| `MAX_INPUTS` | `8` | Maximum inputs per intent: the consensus cap (`MAX_FCMP_INPUTS`, CEN-I4) |
 | `MAX_ADDRESS_LEN` | `65536` | Maximum address byte length |
 
 ### 2.2 Canonical Byte Layout

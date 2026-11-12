@@ -66,13 +66,17 @@ const _: () = assert!(
     "CT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
 );
 
-/// Maximum recipients per intent (bounds allocation from untrusted input).
+/// Maximum recipients per intent ([`SpendIntent::validate_structural`]).
 pub const MAX_RECIPIENTS: u32 = 16;
 
-/// Maximum inputs per intent (bounds allocation from untrusted input).
-pub const MAX_INPUTS: u32 = 128;
+/// Maximum inputs per intent: the consensus cap on a transaction's key-image
+/// inputs (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, CEN-I4), so an
+/// intent no transaction can carry is refused before anyone signs. Pinned to
+/// that constant by `max_inputs_is_the_consensus_cap` below
+/// ([`SpendIntent::validate_structural`] enforces it).
+pub const MAX_INPUTS: u32 = 8;
 
-/// Maximum address byte length (bounds allocation from untrusted input).
+/// Maximum address byte length ([`SpendIntent::validate_structural`]).
 pub const MAX_ADDRESS_LEN: u32 = 65536;
 
 /// Errors during SpendIntent validation (SS9.2 invariant checks).
@@ -119,6 +123,15 @@ pub enum SpendIntentError {
 
     #[error("recipients not sorted or contain duplicate (address, amount) tuples")]
     RecipientsNotSorted,
+
+    #[error("{0} inputs; an intent spends 1..={MAX_INPUTS}")]
+    InputCount(usize),
+
+    #[error("{0} recipients; an intent pays at most {MAX_RECIPIENTS}")]
+    RecipientCount(usize),
+
+    #[error("a recipient address of {0} bytes exceeds {MAX_ADDRESS_LEN}")]
+    AddressTooLong(usize),
 
     #[error("balance mismatch: inputs={inputs}, outputs+fee={outputs_plus_fee}")]
     BalanceMismatch { inputs: u64, outputs_plus_fee: u64 },
@@ -320,6 +333,21 @@ impl SpendIntent {
         let window = self.expires_at.saturating_sub(self.created_at);
         if window > MAX_VALIDITY_SECS {
             return Err(SpendIntentError::ValidityTooLong { window });
+        }
+        let inputs = self.input_global_indices.len();
+        if inputs == 0 || inputs > MAX_INPUTS as usize {
+            return Err(SpendIntentError::InputCount(inputs));
+        }
+        if self.recipients.len() > MAX_RECIPIENTS as usize {
+            return Err(SpendIntentError::RecipientCount(self.recipients.len()));
+        }
+        if let Some(long) = self
+            .recipients
+            .iter()
+            .map(|r| r.address.len())
+            .find(|&len| len > MAX_ADDRESS_LEN as usize)
+        {
+            return Err(SpendIntentError::AddressTooLong(long));
         }
 
         let mut sorted = self.recipients.clone();
@@ -663,6 +691,48 @@ mod tests {
         assert_eq!(FCMP_REFERENCE_BLOCK_MIN_AGE, 5);
         assert_eq!(FCMP_REFERENCE_BLOCK_MAX_AGE, 100);
         assert_eq!(CT_TYPE_FCMP_PLUS_PLUS_PQC, 1);
+    }
+
+    #[test]
+    fn max_inputs_is_the_consensus_cap() {
+        assert_eq!(
+            MAX_INPUTS as usize,
+            shekyl_wire::transaction::MAX_FCMP_INPUTS,
+            "an intent's input cap drifted from the consensus cap (CEN-I4)"
+        );
+    }
+
+    #[test]
+    fn validate_structural_refuses_each_size_bound_by_name() {
+        let now = make_test_intent().created_at;
+        let refused = |edit: &dyn Fn(&mut SpendIntent)| {
+            let mut intent = make_test_intent();
+            edit(&mut intent);
+            intent.validate_structural(3, now).err()
+        };
+        assert!(matches!(
+            refused(&|i| i.input_global_indices.clear()),
+            Some(SpendIntentError::InputCount(0))
+        ));
+        assert!(matches!(
+            refused(&|i| i.input_global_indices = (0..=u64::from(MAX_INPUTS)).collect()),
+            Some(SpendIntentError::InputCount(n)) if n == MAX_INPUTS as usize + 1
+        ));
+        assert!(matches!(
+            refused(&|i| {
+                i.recipients = (0..=MAX_RECIPIENTS)
+                    .map(|k| IntentRecipient {
+                        address: vec![u8::try_from(k).unwrap()],
+                        amount: AtomicUnits::from_raw(1),
+                    })
+                    .collect();
+            }),
+            Some(SpendIntentError::RecipientCount(n)) if n == MAX_RECIPIENTS as usize + 1
+        ));
+        assert!(matches!(
+            refused(&|i| i.recipients[0].address = vec![0; MAX_ADDRESS_LEN as usize + 1]),
+            Some(SpendIntentError::AddressTooLong(n)) if n == MAX_ADDRESS_LEN as usize + 1
+        ));
     }
 
     #[test]

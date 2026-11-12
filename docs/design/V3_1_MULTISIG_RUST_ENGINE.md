@@ -836,7 +836,7 @@ unchanged across the 9-commit archival drift.
 | ~~`wallet2.cpp` `create_pqc_multisig_group` / `m_pqc_multisig_*`~~ | **DELETED** — non-functional fossil (2-byte header the Rust parser rejects; threw on every input). *Not* a "correct caller" or a group_id consumer. | group_id retired; deletion slice |
 | `MultisigGroup` (engine) | Serialize hex secrets; claims "wallet file encrypted" | **R1-F-5** |
 | `tx_fee_model::pqc_auth_weight` | scheme-1 lengths only | **Track B R-B** |
-| `v31/intent.rs MAX_INPUTS` | 128 vs consensus `FCMP_MAX_INPUTS_PER_TX=8` | **Track B R-C** |
+| `shekyl-multisig` `intent::MAX_INPUTS` | **8**, the consensus cap (`MAX_FCMP_INPUTS`), pinned by a tripwire test and enforced by `validate_structural` (slice 3 PR-A) | **Track B R-C — DONE** |
 | `MULTISIG_CONTAINER_VERSION` / `multisig_group_id` | **Fused:** constant passed as `group_version`, not `container.version`; `spend_auth_version` hardcoded | **R1-F-11 → MSW-4/5** |
 | CI `--features multisig` | **`ci/multisig-feature`** | **R1-F-6 lane; clippy debt open** |
 | Protocol §16.4 | superseded note (Rust-owns-logic) | design branch |
@@ -1162,8 +1162,10 @@ not a quiet reopen of MS-8.
   (no I7 / prover griefing scores) — reconfirm in Round 2.
 - R-B **extends:** multisig arm in `pqc_auth_weight` / fee model
   (scheme-1-only today).
-- R-C **extends:** pin `SpendIntent::MAX_INPUTS` to
-  `FCMP_MAX_INPUTS_PER_TX` (128 → 8); refuse unserializable intents.
+- R-C **done (slice 3 PR-A):** `SpendIntent`'s `MAX_INPUTS` is 8, pinned to
+  `MAX_FCMP_INPUTS`; `validate_structural` refuses an intent with no input,
+  more than 8, more than `MAX_RECIPIENTS` recipients, or an address past
+  `MAX_ADDRESS_LEN`.
 - R-G: MSW-2 KAT remains green after MSW-1 bound raise; flip must not
   assume length-only separation.
 - R-H: F-3 DELETE PR (`dkg`/`group`/`signing` + tests); not quarantine.
