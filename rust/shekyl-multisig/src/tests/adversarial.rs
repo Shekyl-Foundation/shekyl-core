@@ -3,11 +3,7 @@
 
 //! Adversarial test matrix: tests for attack vectors against V3.1 multisig.
 
-use crate::{
-    encryption::{decrypt_payload, encrypt_payload},
-    intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION},
-    messages::MessageType,
-};
+use crate::intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION};
 use shekyl_units::AtomicUnits;
 
 #[test]
@@ -41,64 +37,6 @@ fn replay_detection_via_kem_seed() {
     let mut seen = std::collections::HashSet::new();
     seen.insert(intent1.kem_randomness_seed);
     assert!(seen.contains(&intent2.kem_randomness_seed));
-}
-
-#[test]
-fn wrong_key_cannot_decrypt() {
-    let group_secret = [0x42; 32];
-    let intent_hash = [0xAA; 32];
-    let plaintext = b"sensitive multisig data";
-
-    let ct = encrypt_payload(
-        &group_secret,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        plaintext,
-    )
-    .unwrap();
-
-    let attacker_key = [0x99; 32];
-    let result = decrypt_payload(
-        &attacker_key,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        &ct,
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn tampered_ciphertext_detected() {
-    let group_secret = [0x42; 32];
-    let intent_hash = [0xAA; 32];
-    let plaintext = b"sensitive data";
-
-    let mut ct = encrypt_payload(
-        &group_secret,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        plaintext,
-    )
-    .unwrap();
-
-    let mid = ct.len() / 2;
-    ct[mid] ^= 0xFF;
-
-    let result = decrypt_payload(
-        &group_secret,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        &ct,
-    );
-    assert!(result.is_err());
 }
 
 #[test]

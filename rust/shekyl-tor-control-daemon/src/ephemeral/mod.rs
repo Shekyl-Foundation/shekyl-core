@@ -27,6 +27,7 @@ use std::time::Duration;
 use tokio::sync::{oneshot, watch};
 
 use shekyl_onion_key::OnionKeypair;
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     AddOnionReplyError, BootstrapState, Command, ControlError, ControlReply, EventSink, OnionPow,
@@ -294,7 +295,7 @@ impl DaemonTorControl {
     /// # Errors
     /// As [`ControlAsker::defer_disk_writes`], and a reply past the deadline.
     pub async fn defer_disk_writes(&self) -> Result<(), DaemonTorStartError> {
-        tokio::time::timeout(self.reply_deadline, self.asker().defer_disk_writes())
+        awake::timeout(self.reply_deadline, self.asker().defer_disk_writes())
             .await
             .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
@@ -311,7 +312,7 @@ impl DaemonTorControl {
             actor.stop_gracefully().await.ok();
             observed_exit(&mut exit_watch).await
         };
-        match tokio::time::timeout(REAP_TIMEOUT, stop).await {
+        match awake::timeout(REAP_TIMEOUT, stop).await {
             Ok(exit) => exit,
             Err(_timeout) => {
                 self.actor.kill();
@@ -361,7 +362,7 @@ impl DaemonTorControl {
     ) -> Result<ServiceId, DaemonTorPublishError> {
         let asker = self.asker();
         let add = asker.add_onion(identity, virtual_port, local_target, max_streams, pow);
-        tokio::time::timeout(self.reply_deadline, add)
+        awake::timeout(self.reply_deadline, add)
             .await
             .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))
     }
@@ -385,7 +386,7 @@ impl DaemonTorControl {
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        tokio::time::timeout(self.reply_deadline, self.asker().delete_onion(identity))
+        awake::timeout(self.reply_deadline, self.asker().delete_onion(identity))
             .await
             .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))?;
         self.publish(identity, virtual_port, local_target, max_streams, pow)
@@ -397,7 +398,7 @@ impl DaemonTorControl {
         command: Command,
         deadline: Duration,
     ) -> Result<ControlReply, DaemonTorStartError> {
-        tokio::time::timeout(deadline, self.asker().ask(command))
+        awake::timeout(deadline, self.asker().ask(command))
             .await
             .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
@@ -567,7 +568,7 @@ async fn retire(dir: EphemeralDataDir) -> Retirement {
 async fn delete_within_bound(tombstone: PathBuf) -> TombstoneEnd {
     let target = tombstone.clone();
     let delete = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(target));
-    match tokio::time::timeout(TOMBSTONE_DELETE_BOUND, delete).await {
+    match awake::timeout(TOMBSTONE_DELETE_BOUND, delete).await {
         Ok(Ok(Ok(()))) => TombstoneEnd::Deleted,
         Ok(Ok(Err(error))) => TombstoneEnd::NotDeleted(tombstone, error),
         Ok(Err(joined)) => TombstoneEnd::NotDeleted(tombstone, std::io::Error::other(joined)),

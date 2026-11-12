@@ -116,10 +116,29 @@ impl RerandomizedOutput {
         Self::with_commitment_blind(rng, output, r_c)
     }
 
+    /// Re-randomize so the pseudo-out opens to `pseudo_out_blind`.
+    ///
+    /// `commitment_mask` is `z` in `C = z·G + amount·H`. The commitment blind
+    /// is `r_c = pseudo_out_blind − z`, so
+    /// `C~ = C + r_c·G = pseudo_out_blind·G + amount·H`. The solo prover and
+    /// the multisig SAL proposer both balance through this function, so the
+    /// equation has one definition. The other three blinds are drawn from `rng`.
+    pub fn for_pseudo_out(
+        rng: &mut (impl RngCore + CryptoRng),
+        output: Output,
+        commitment_mask: <Ed25519 as Ciphersuite>::F,
+        pseudo_out_blind: <Ed25519 as Ciphersuite>::F,
+    ) -> RerandomizedOutput {
+        let r_c = Zeroizing::new(pseudo_out_blind - commitment_mask);
+        Self::with_commitment_blind(rng, output, *r_c)
+    }
+
     /// Re-randomize an output using a caller-specified commitment blind `r_c`.
     ///
     /// The resulting pseudo-out is `C_tilde = C + r_c * G`, so the pseudo-out
     /// blinding factor equals the original commitment mask plus `r_c`.
+    /// A spend that must open to a chosen pseudo-out blind calls
+    /// [`Self::for_pseudo_out`] instead of subtracting here.
     /// All other rerandomization scalars (`r_o`, `r_i`, `r_r_i`) remain random.
     pub fn with_commitment_blind(
         rng: &mut (impl RngCore + CryptoRng),

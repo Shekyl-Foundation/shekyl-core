@@ -24,17 +24,15 @@ build = "build.rs"
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # The member file (`member_file.rs`) carries the address payload. The group
-# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes
-# (rule 36); this crate does not HKDF it. The address crate reaches no
+# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes,
+# and the ceremony blobs are sealed there too (`multisig_blob`, R-4): this
+# crate derives, hashes and encrypts nothing under a secret (rule 36). The address crate reaches no
 # transport crate, so the dependency list still enforces the "no transport" ban.
 shekyl-address = { path = "../shekyl-address" }
 serde = { workspace = true }
 serde_json = "1"
 thiserror = { workspace = true }
 zeroize = { workspace = true }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
 
 [build-dependencies]
 # Generate the FCMP reference-block age bounds + CT type from the JSON authority
@@ -43,6 +41,9 @@ sha2 = "0.10"
 serde_json = "1"
 
 [dev-dependencies]
+# The ceremony-blob AEAD round trip in `src/tests/functional.rs` seals with
+# `shekyl_crypto_pq::multisig_blob`, which draws its nonce from an RNG.
+rand = "0.8"
 # Test-only: `intent.rs`'s canonical-bytes test cross-checks against
 # `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge (cargo permits
 # dev-dep cycles), so it never enters the runtime dependency surface the ban covers.

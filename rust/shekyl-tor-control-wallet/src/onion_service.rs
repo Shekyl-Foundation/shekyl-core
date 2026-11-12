@@ -28,6 +28,7 @@ use kameo::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
@@ -249,7 +250,7 @@ pub(crate) async fn publish_onion(
 
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(OnionPublishAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = awake::sleep(reply_deadline) => {
             return Err(OnionPublishAbort::Failed(OnionPublishError::Control(
                 ControlError::Timeout,
             )));

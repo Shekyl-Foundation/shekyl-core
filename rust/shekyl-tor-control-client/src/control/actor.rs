@@ -74,7 +74,6 @@ use tokio::net::TcpStream;
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
@@ -99,7 +98,8 @@ const READ_CHUNK: usize = 4096;
 /// How long a managed `tor` gets to exit after the owning connection is closed
 /// before shutdown escalates to a kill. Tor flushes and exits within about a
 /// second of EOF on that connection; this bound keeps the wait from hanging
-/// if Tor ignores the close.
+/// if Tor ignores the close. It counts the process clock, so time that clock
+/// leaves out (S3, hibernation) is not Tor ignoring the close.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The read half of a control connection, whatever carries it: a TCP connection to an
@@ -1134,7 +1134,7 @@ async fn end_owning_connection<W>(
 /// [`SHUTDOWN_GRACE`]; a child still running is killed and reported as
 /// [`TorExit::Killed`]. A kill is not a clean stop.
 async fn shut_down(child: &mut Child) -> TorExit {
-    match timeout(SHUTDOWN_GRACE, child.wait()).await {
+    match crate::awake::timeout(SHUTDOWN_GRACE, child.wait()).await {
         Ok(Ok(status)) => TorExit::Reaped(status),
         // The grace `wait` errored or timed out (tor wedged): kill and reap
         // unconditionally. `start_kill` kills the process even if the reap can't
@@ -1797,12 +1797,13 @@ async fn next_reply(
     }
 }
 
-/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT`.
+/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT` on the
+/// process clock. Time that clock leaves out has not been given to Tor.
 async fn read_reply(
     reader: &mut ControlRead,
     framer: &mut ReplyFramer,
 ) -> Result<ControlReply, ControlError> {
-    match timeout(HANDSHAKE_READ_TIMEOUT, next_reply(reader, framer)).await {
+    match crate::awake::timeout(HANDSHAKE_READ_TIMEOUT, next_reply(reader, framer)).await {
         Ok(result) => result,
         Err(_) => Err(ControlError::Timeout),
     }
@@ -1831,6 +1832,8 @@ async fn expect_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tokio::time::timeout;
 
     // The actor's I/O paths (handshake, command correlation, event drain) are
     // covered by the live-Tor KATs (item 5); these pin the pure pieces — the wire

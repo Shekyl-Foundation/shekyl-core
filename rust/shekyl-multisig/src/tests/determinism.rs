@@ -8,11 +8,7 @@
 //! protocol would produce incompatible results across platforms —
 //! a consensus-breaking bug.
 
-use crate::{
-    encryption::derive_message_key,
-    intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
-    messages::MessageType,
-};
+use crate::intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
 use shekyl_units::AtomicUnits;
 
 #[test]
@@ -69,20 +65,6 @@ fn chain_state_fingerprint_canary() {
         &hash[..4],
         &[0x65, 0x09, 0xdc, 0x17],
         "chain_state_fingerprint prefix diverged — cross-platform determinism broken"
-    );
-}
-
-#[test]
-fn message_key_derivation_canary() {
-    let group_secret = [0x42; 32];
-    let intent_hash = [0xAA; 32];
-
-    let key = derive_message_key(&group_secret, &intent_hash, MessageType::SpendIntent, 0).unwrap();
-
-    assert_eq!(
-        &key[..4],
-        &[0x6d, 0xbd, 0xa3, 0xaf],
-        "message_key derivation diverged — cross-platform determinism broken"
     );
 }
 
