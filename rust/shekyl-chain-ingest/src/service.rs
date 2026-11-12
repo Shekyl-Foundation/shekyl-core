@@ -538,6 +538,45 @@ pub enum ServiceFault<F> {
     },
 }
 
+impl<F: core::fmt::Debug> ServiceFault<F> {
+    /// This fault's own words. The error line and [`Service::ended`] both
+    /// carry them, so a new variant reaches the daemon's exit line through
+    /// its `thiserror` text and nowhere else.
+    #[must_use]
+    pub fn end(&self) -> ServiceEnd {
+        ServiceEnd {
+            cause: self.to_string(),
+        }
+    }
+}
+
+/// Why the service ended on its own ([`Service::ended`]): the
+/// [`ServiceFault`]'s own words, owned so the process can exit with them.
+///
+/// The fault keeps its payload. This is that payload already rendered.
+/// [`ServiceFault::end`] is how a running service builds one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceEnd {
+    cause: String,
+}
+
+impl ServiceEnd {
+    /// `cause` as a fault already said it. The stop-line tests name a
+    /// sentence; a running service goes through [`ServiceFault::end`].
+    #[must_use]
+    pub fn words(cause: impl Into<String>) -> Self {
+        Self {
+            cause: cause.into(),
+        }
+    }
+}
+
+impl core::fmt::Display for ServiceEnd {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(&self.cause)
+    }
+}
+
 /// What every span task, and the tip attendant, shares.
 pub(crate) struct Shared<S: Substrate> {
     store: Arc<ChainStore>,
@@ -552,6 +591,10 @@ pub(crate) struct Shared<S: Substrate> {
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
+    /// That fault's own words, published when it is recorded
+    /// ([`Service::ended`]). `None` while the service runs, and after a
+    /// stop that met no fault.
+    ended: tokio::sync::watch::Sender<Option<ServiceEnd>>,
     /// Serializes cache pins. Taken after a hasher permit, never before
     /// (the install's settled check takes and drops it holding none).
     /// Holds the seed window last installed: the only seeds a later
@@ -787,12 +830,26 @@ where
     }
 
     /// Record `fault` if it is the first, and stop.
+    ///
+    /// The first fault is logged at `error` here, in its own words, and
+    /// those words are published on [`Service::ended`] for the daemon's
+    /// exit line. A stopped service leaves the process up and the RPC
+    /// answering from the old tip, so the line cannot wait for the
+    /// process to exit (rule 82). A later fault is a consequence of the
+    /// first and is logged at `debug`.
     pub(crate) fn fail(&self, fault: ServiceFault<S::Fault>) {
         let mut first = self
             .fault
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        first.get_or_insert(fault);
+        if first.is_none() {
+            let cause = fault.end();
+            tracing::error!("the ingest service stops on a fault: {cause}");
+            self.ended.send_replace(Some(cause));
+            *first = Some(fault);
+        } else {
+            tracing::debug!("the ingest service, already stopping, met: {fault}");
+        }
         drop(first);
         self.request_stop();
     }
@@ -1263,6 +1320,7 @@ where
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
+            ended: tokio::sync::watch::Sender::new(None),
             pin_lock: Arc::new(Mutex::new(None)),
             branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
@@ -1453,6 +1511,15 @@ where
         }
     }
 
+    /// Why the service ended on its own, once it has: `None` while it
+    /// runs, and after a stop that met no fault. The value is the fault's
+    /// own words, published when the fault is recorded. The node forwards
+    /// them to its end watch, and the daemon's exit line quotes them.
+    #[must_use]
+    pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<ServiceEnd>> {
+        self.shared.ended.subscribe()
+    }
+
     /// The last `TipChanged` publication the tip follower acted on: what a
     /// caller waits on to know the pool and the miner's job are the tip's.
     #[must_use]
@@ -1535,6 +1602,10 @@ pub(crate) use window::{
     divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
     PoolDivision,
 };
+
+#[cfg(test)]
+#[path = "log_capture.rs"]
+mod log_capture;
 
 #[cfg(test)]
 #[path = "service_tests.rs"]

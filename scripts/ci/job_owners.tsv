@@ -135,3 +135,4 @@ scripts/ci/test_check_shell_gate_exits.py	docs-gates:check-doc-links
 scripts/ci/test_run_live_tor_tests.sh	grep-gates:grep-gates
 scripts/ci/test_tor_pin_gates.py	grep-gates:grep-gates
 scripts/ci/windows_probe.ps1	build:build-windows-msvc
+scripts/ci/with_small_disk.sh	none
