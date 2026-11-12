@@ -32,15 +32,16 @@ pub enum WaitReadyError {
 }
 
 /// Drive `ready_rx` until [`BootstrapState::Ready`], the actor dies, bootstrap
-/// fails, or `deadline` elapses. Connecting progress is ignored — it is
+/// fails, or `within` of awake time elapses. Connecting progress is ignored — it is
 /// telemetry, not a gate. The **current** value is examined first: a
 /// subscriber that attaches after `Ready` or `Failed` must not wait for a
 /// further change that will never come.
 pub async fn wait_until_ready(
     actor: &ActorRef<TorControlClient>,
     ready_rx: &mut watch::Receiver<BootstrapState>,
-    deadline: tokio::time::Instant,
+    within: std::time::Duration,
 ) -> Result<(), WaitReadyError> {
+    let deadline = crate::awake::deadline_after(within);
     loop {
         match *ready_rx.borrow_and_update() {
             BootstrapState::Ready => return Ok(()),
@@ -49,7 +50,9 @@ pub async fn wait_until_ready(
         }
         tokio::select! {
             () = actor.wait_for_shutdown() => return Err(WaitReadyError::Died),
-            () = tokio::time::sleep_until(deadline) => return Err(WaitReadyError::Timeout),
+            () = crate::awake::sleep_until(deadline) => {
+                return Err(WaitReadyError::Timeout);
+            }
             changed = ready_rx.changed() => {
                 if changed.is_err() {
                     return Err(WaitReadyError::Died);

@@ -56,6 +56,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::onion_service::{publish_onion, OnionPublishAbort};
 use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
     parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
@@ -671,7 +672,7 @@ async fn stop_and_reap(
         actor.stop_gracefully().await.ok();
         exit_rx.await.ok()
     };
-    match tokio::time::timeout(REAP_TIMEOUT, teardown).await {
+    match awake::timeout(REAP_TIMEOUT, teardown).await {
         Ok(exit) => exit,
         Err(_timeout) => {
             // Teardown wedged past the grace budget — force the actor down so it
@@ -710,10 +711,13 @@ fn after_failure(
     delay
 }
 
-/// Sleep `delay`, returning `true` if the shutdown signal arrived instead.
+/// Sleep `delay` of awake time, returning `true` if shutdown arrived first.
+///
+/// The gap between incarnations is patience, the same clock as the
+/// bootstrap deadline. Time that clock leaves out has not been waited.
 async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>) -> bool {
     tokio::select! {
-        () = tokio::time::sleep(delay) => false,
+        () = awake::sleep(delay) => false,
         _ = &mut *shutdown => true,
     }
 }
@@ -750,7 +754,12 @@ async fn drive_incarnation(
     ctx: &mut IncarnationCtx<'_>,
     mut ready_rx: watch::Receiver<BootstrapState>,
 ) -> IncarnationEnd {
-    let deadline = tokio::time::Instant::now() + ctx.policy.bootstrap_deadline;
+    // Patience on the process clock (`awake`): bootstrap, SOCKS discovery,
+    // and the stable-hold below. The vanguard reconcile arm is the
+    // exception. Its delay comes from a guard's `SystemTime` expiry, and
+    // that time of day passes during an S3 sleep, which this clock leaves
+    // out, so that arm stays on tokio's timer.
+    let deadline = awake::deadline_after(ctx.policy.bootstrap_deadline);
     // Phase 1: to Ready (or death/deadline/shutdown).
     loop {
         tokio::select! {
@@ -758,7 +767,7 @@ async fn drive_incarnation(
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
             }
-            () = tokio::time::sleep_until(deadline) => {
+            () = awake::sleep_until(deadline) => {
                 return IncarnationEnd::Failed(ServiceFailure::BootstrapTimeout);
             }
             changed = ready_rx.changed() => {
@@ -795,7 +804,7 @@ async fn drive_incarnation(
     // control error is preserved rather than collapsed into a generic exit.
     let reply = tokio::select! {
         _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
-        () = tokio::time::sleep(ctx.policy.socks_discovery_deadline) => {
+        () = awake::sleep(ctx.policy.socks_discovery_deadline) => {
             return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
         }
         r = ctx.actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
@@ -888,7 +897,7 @@ async fn drive_incarnation(
     // rather than re-firing `Degraded`, and republish `recovering: false` — the
     // alarm-clear edge. A tor that never reaches a sustained Ready (a genuine
     // flapper) never forgives — it keeps alarming.
-    let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
+    let reset_deadline = awake::deadline_after(ctx.policy.stable_reset);
     let mut forgiven = false;
     loop {
         // Vanguard reconcile rides its own arm: L3 nodes average ~31.5 h and
@@ -900,6 +909,9 @@ async fn drive_incarnation(
         // number a reader would mistake for rotation policy.
         let reconcile = async {
             match ctx.vanguards.next_deadline() {
+                // Wall time, on purpose: `next_deadline` is how long until a
+                // guard's `SystemTime` expiry. This clock leaves an S3 sleep
+                // out, so it would keep an expired guard across one.
                 Some(delay) => tokio::time::sleep(delay).await,
                 None => std::future::pending().await,
             }
@@ -916,7 +928,7 @@ async fn drive_incarnation(
                 // without colliding with this arm's own borrow of it.
                 reconcile_due = true;
             }
-            () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
+            () = awake::sleep_until(reset_deadline), if !forgiven => {
                 let was_degraded = *ctx.degraded;
                 *ctx.attempt = 0;
                 *ctx.degraded = false;
