@@ -26,7 +26,8 @@
 //! capture, 2026-11-12). `form` judges each listed transaction on its own
 //! and then folds the range proofs, so a block of four carries every term
 //! a block of forty-five does: the per-PR rows count the unit block, and
-//! the full block's rows are the `dev` capture's.
+//! the full block's rows are the nightly capture's (`nightly.yml`,
+//! `bench-full`), which compares them with the night before.
 //!
 //! # The limit a full fixture fills
 //!
@@ -68,7 +69,7 @@ use crate::test_support::{h, Family, FIRST_SPEND_HEIGHT};
 enum Size {
     /// [`UNIT_TRANSACTIONS`]: the block the per-PR rows count.
     Unit,
-    /// As many as the weight limit admits: the block the `dev` capture
+    /// As many as the weight limit admits: the block the nightly capture
     /// counts, and the shape set's own definition (§1.3a.7).
     Full,
 }

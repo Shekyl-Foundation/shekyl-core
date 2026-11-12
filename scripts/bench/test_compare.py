@@ -380,5 +380,86 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(len(s["added_in_pr"]), 2)
         self.assertEqual(s["moved"], [])
 
+
+
+class ScopedCaptureTests(unittest.TestCase):
+    """A capture scoped to the rows a change can reach (`captured_rows`)."""
+
+    def _row(self, crate: str, bench: str, instructions: int) -> dict[str, Any]:
+        return _iai(crate, bench, f"{bench}_group", "crypto_bench_x", "cell", instructions)
+
+    def _scoped(self, entries: list[dict[str, Any]], rows: Any) -> dict[str, Any]:
+        envelope = _envelope(entries)
+        envelope["captured_rows"] = rows
+        return envelope
+
+    def test_a_row_the_capture_did_not_run_is_out_of_scope_not_missing(self) -> None:
+        base = _envelope(
+            [self._row("crate-a", "a_iai", 1_000), self._row("crate-b", "b_iai", 2_000)]
+        )
+        pr = self._scoped([self._row("crate-a", "a_iai", 1_000)], ["crate-a::a_iai"])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 0)
+        s = report["summary"]
+        self.assertEqual(s["missing_in_pr"], [])
+        self.assertEqual(len(s["out_of_scope"]), 1)
+        self.assertTrue(s["out_of_scope"][0].startswith("crate-b/b_iai/"))
+        self.assertEqual(s["captured_rows"], ["crate-a::a_iai"])
+        self.assertEqual(s["gated_total"], 1)
+
+    def test_a_function_missing_from_a_row_the_capture_ran_still_fails(self) -> None:
+        # The row was captured and one of its functions is gone: a deleted
+        # bench, in scope.
+        base = _envelope(
+            [
+                self._row("crate-a", "a_iai", 1_000),
+                _iai("crate-a", "a_iai", "a_iai_group", "crypto_bench_y", "cell", 5_000),
+            ]
+        )
+        pr = self._scoped([self._row("crate-a", "a_iai", 1_000)], ["crate-a::a_iai"])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(report["summary"]["missing_in_pr"]), 1)
+        self.assertEqual(report["summary"]["out_of_scope"], [])
+
+    def test_a_scoped_capture_still_gates_the_rows_it_ran(self) -> None:
+        base = _envelope(
+            [self._row("crate-a", "a_iai", 1_000), self._row("crate-b", "b_iai", 2_000)]
+        )
+        pr = self._scoped([self._row("crate-a", "a_iai", 2_000)], ["crate-a::a_iai"])
+
+        rc, report = _run_compare(base, pr)
+        self.assertEqual(rc, 1)
+        self.assertEqual(report["summary"]["fail"], 1)
+
+    def test_an_unscoped_capture_reads_every_absent_row_as_missing(self) -> None:
+        # No `captured_rows` key is the envelope every capture wrote before
+        # scoping; `all` is the push to dev's. Both mean the whole set.
+        base = _envelope(
+            [self._row("crate-a", "a_iai", 1_000), self._row("crate-b", "b_iai", 2_000)]
+        )
+        for pr in (
+            _envelope([self._row("crate-a", "a_iai", 1_000)]),
+            self._scoped([self._row("crate-a", "a_iai", 1_000)], "all"),
+        ):
+            rc, report = _run_compare(base, pr)
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(report["summary"]["missing_in_pr"]), 1)
+            self.assertEqual(report["summary"]["out_of_scope"], [])
+
+    def test_a_malformed_scope_is_an_input_error(self) -> None:
+        base = _envelope([self._row("crate-a", "a_iai", 1_000)])
+        pr = self._scoped([self._row("crate-a", "a_iai", 1_000)], "crate-a::a_iai")
+        # In process: the subprocess helper reads a report, and an input
+        # error writes none.
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        import compare  # noqa: PLC0415
+
+        with self.assertRaises(SystemExit):
+            compare.compare(base, pr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

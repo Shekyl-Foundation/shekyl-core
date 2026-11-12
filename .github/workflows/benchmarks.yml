@@ -70,6 +70,10 @@ on:
       - "rust/**"
       - "scripts/bench/**"
       - ".github/workflows/benchmarks.yml"
+      # The capture's scope: the gated rows' path sets, and the classifier
+      # that reads them.
+      - "docs/benchmarks/measurement_ledger.toml"
+      - "scripts/ci/change_scope.py"
       - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
   push:
     branches: [dev]
@@ -94,6 +98,31 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Which rows a pull request's capture runs: the gated rows whose path
+  # sets the change can reach (`scripts/ci/change_scope.py`, `bench_rows`;
+  # the path sets are the measurement ledger's). A wallet change runs the
+  # wallet rows and not the block path's, whose setup is half an hour of
+  # callgrind. The classifier fails closed: on any error it says `all`.
+  # The push to `dev` does not consult this job; it captures every row.
+  scope:
+    name: bench scope
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      bench_rows: ${{ steps.scope.outputs.bench_rows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          python3 scripts/ci/change_scope.py \
+            --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" \
+            || printf '%s\n' bench_rows=all >> "$GITHUB_OUTPUT"
+
   capture-pr:
     name: capture shekyl_rust_v0 (PR head)
     # `workflow_dispatch` is the (iii) capture mechanism for
@@ -105,7 +134,17 @@ jobs:
     # downstream `compare` / `profile-on-fail` jobs are still
     # gated on `pull_request` (no baseline diff is meaningful for
     # a manual capture), so dispatch only runs `capture-pr`.
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    #
+    # `scope` is skipped on a dispatch, so its result is not required to be
+    # success; a pull request whose scope is `none` skips this job, and the
+    # `compare` job with it. A skipped job is not a failed one.
+    needs: scope
+    if: >-
+      !cancelled() && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' && needs.scope.result == 'success'
+          && needs.scope.outputs.bench_rows != 'none')
+      )
     runs-on: ubuntu-latest
     # The capture took 18 to 24 minutes before the block-path rows
     # (2026-11-12). Those add thirteen functions whose setup replays a
@@ -162,6 +201,9 @@ jobs:
           cargo install gungraun-runner --version '=0.19.3' --locked
 
       - name: capture baseline
+        # The rows in scope on a pull request, every row on a dispatch.
+        env:
+          BENCH_ROWS: ${{ github.event_name == 'pull_request' && needs.scope.outputs.bench_rows || 'all' }}
         run: ./scripts/bench/capture_rust_baseline.sh
 
       - name: upload PR baseline

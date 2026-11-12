@@ -1037,7 +1037,8 @@ runs under the harness longhash, and one header's RandomX verification is
 §16. The view-bound stage, which is §15. A block at the weight limit:
 `benches/block_path_full_iai.rs` counts the same call on
 `block_path_<shape>_full.corpus` (45, 10 and 17 transactions), and is the
-`dev` capture's, because forming the 45 spends of the smallest shape is
+nightly capture's (`nightly.yml`, `bench-full`, compared with the night
+before by `bench-full-drift`), because forming the 45 spends of the smallest shape is
 17,141,243,472 instructions and about twenty minutes of callgrind a row.
 `form` judges each listed transaction on its own, so the four carry every
 term the 45 do; what the full block adds is the count.
@@ -1046,7 +1047,7 @@ term the 45 do; what the full block adds is the count.
 and emission claims need a fixture chain through a closed shard and a
 settled epoch, under the levered schedule the ingest's scenarios use. The
 multisig container needs a builder of a scheme-2 spend, which the harness
-does not have.
+does not have (`docs/FOLLOWUPS.md`).
 
 **Staleness.** `every_block_path_fixture_replays`
 (`src/bench_fixture_tests.rs`, default lane) replays each fixture and runs

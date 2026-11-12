@@ -13,8 +13,10 @@
 //! per-PR capture: forming the 45 spends of the smallest shape is 17.1
 //! billion instructions, about twenty minutes of callgrind on a loaded
 //! workstation (first capture, 2026-11-12), and the connect and pop rows
-//! each pay a form in setup. The `dev` capture runs them; a pull request's
-//! capture runs the unit blocks.
+//! each pay a form in setup. `nightly.yml`'s `bench-full` job captures them
+//! every night (the capture script's nightly set) and `bench-full-drift`
+//! compares the counts with the night before; a pull request's capture
+//! runs the unit blocks.
 //!
 //! What a full block adds over the unit block is the count: the range
 //! proofs of every listed transaction folded in one batch, the store's

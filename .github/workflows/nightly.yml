@@ -17,6 +17,7 @@ on:
           - chain-ingest-ignored
           - wire-ignored
           - trybuild-ignored
+          - bench-full
           - producer-gate
         default: all
       ref:
@@ -412,6 +413,137 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_trybuild.sh
 
+  bench-full:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'bench-full' }}
+    # The block path's instruction counts on blocks at the weight limit:
+    # `shekyl-chain-ingest` `benches/block_path_full_iai.rs`, the capture
+    # script's nightly set. The shapes are DAEMON_REDB_STORE.md §1.3a.7's,
+    # each block filled to the limit in force, and a full block is too
+    # long for a pull request: forming the 45 spends of the smallest shape
+    # is 17.1 billion instructions, about twenty minutes of callgrind on a
+    # workstation, and the connect and pop rows each pay a form in setup.
+    # A pull request counts a block of four transactions of each shape;
+    # this job counts the full blocks every night, and `bench-full-drift`
+    # compares the counts with the night before.
+    #
+    # Same matrix as above; the set is read from the checked-out ref's
+    # scripts/bench/capture_rust_baseline.sh, so each leg is judged by its
+    # own tree.
+    runs-on: ubuntu-latest
+    # Not yet timed here: nine functions, each a form of a full block
+    # under callgrind or one in its setup. Size it from the first runs.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: install apt deps
+        run: |
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: install gungraun-runner
+        run: cargo install gungraun-runner --version '=0.19.3' --locked
+
+      - name: Capture the nightly set
+        env:
+          BENCH_SET: nightly
+          OUT_JSON: ${{ runner.temp }}/bench-full/shekyl_rust_v0.json
+          OUT_IAI_SNAP: ${{ runner.temp }}/bench-full/shekyl_rust_v0.iai.snapshot
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bench-full"
+          ./scripts/bench/capture_rust_baseline.sh
+
+      - name: Artifact name for this branch
+        id: artifact
+        env:
+          BRANCH: ${{ matrix.branch }}
+        # A ref may hold a slash; an artifact name may not.
+        run: echo "name=bench-full-${BRANCH//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tonight's capture
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            ${{ runner.temp }}/bench-full/shekyl_rust_v0.json
+            ${{ runner.temp }}/bench-full/shekyl_rust_v0.iai.snapshot
+          # The next night compares with this one; a month covers a run of
+          # red nights.
+          retention-days: 30
+          if-no-files-found: error
+
+  bench-full-drift:
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
+    # Tonight's full-block counts against the capture before tonight's of
+    # the same branch, through compare.py's thresholds
+    # (scripts/bench/nightly_drift.sh). A row past its fail threshold, or a
+    # row gone, is a red night. The comparison is with the night before,
+    # whatever it concluded, so a count moved on purpose is red once and is
+    # then the figure the next night is held to.
+    #
+    # Its own job: it holds `actions: read`, to list and fetch the earlier
+    # artifact, and the capture job above holds no token at all.
+    needs: bench-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          persist-credentials: false
+
+      - name: Artifact name for this branch
+        id: artifact
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: echo "name=bench-full-${BRANCH//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Download tonight's capture
+        id: tonight
+        # `needs` is every leg of the capture, and this leg runs when
+        # another branch's capture failed. When this branch's own capture
+        # failed there is no artifact: that leg of `bench-full` is the red
+        # and its report, and this leg has nothing to compare.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/tonight
+
+      - name: Compare with the capture before tonight's
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.artifact.outputs.name }}
+          DOWNLOADED: ${{ steps.tonight.outcome }}
+        run: |
+          if [ "$DOWNLOADED" != "success" ]; then
+            echo "::notice::no ${NAME} capture tonight: the bench-full leg for this branch did not upload one, and is the red to read"
+            exit 0
+          fi
+          bash scripts/bench/nightly_drift.sh "$NAME" "${RUNNER_TEMP}/tonight/shekyl_rust_v0.json"
+
   report-red:
     # A nightly tier without a route to a human "joins a silence"
     # (`run_live_daemon_gates.sh` header, PR #660): these lanes exist
@@ -426,7 +558,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, trybuild-ignored, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -488,6 +620,20 @@ jobs:
                   'The `trybuild-ignored` job failed. It runs the four `#[ignore]`d trybuild tests of `shekyl-chain-rules`, `shekyl-mempool` and `shekyl-crypto-pq`: programs compiled as a downstream crate whose whole stderr must match a snapshot (the brand gate on `validate`, the pool verdict that cannot connect and the pool internals that are not public, the output field that cannot be built unencrypted).',
                   'A mismatch is read as the harness\'s doc comment says: an E0046 means a stub fell behind a trait, fix the stub; a reworded diagnostic after a toolchain bump is regenerated with `TRYBUILD=overwrite` after reading it; a different error at the guarded call, or none, is a finding against the crate, not a snapshot to refresh.',
                   'If the job stopped before running anything, a trybuild target\'s ignored set changed: decide in `scripts/ci/ignored_set_trybuild.sh` whether the new test is run here.',
+                ],
+              },
+              'bench-full': {
+                title: 'nightly full-block bench capture RED',
+                lines: [
+                  'The `bench-full` job failed. It captures the block path\'s instruction counts on blocks at the weight limit (`shekyl-chain-ingest` `benches/block_path_full_iai.rs`, the nightly set of `scripts/bench/capture_rust_baseline.sh`).',
+                  'A panic in a bench\'s setup is a stale fixture: a consensus change refused a committed block. `every_block_path_fixture_replays` fails on the same change in the default lane; rewrite the fixtures with `regenerate_block_path_fixtures`.',
+                ],
+              },
+              'bench-full-drift': {
+                title: 'nightly full-block bench DRIFT',
+                lines: [
+                  'The `bench-full-drift` job failed: a full-block row moved past its fail threshold against the capture before this one, or a row is gone (`scripts/bench/nightly_drift.sh`; the job log lists every row with its change).',
+                  'Find the merge that moved it among the commits between the two revisions the log names. A move that was intended needs no fix here: the next night compares with this one. A move nobody intended is a regression in the block path at full weight that the four-transaction rows of the per-PR capture did not show.',
                 ],
               },
             };

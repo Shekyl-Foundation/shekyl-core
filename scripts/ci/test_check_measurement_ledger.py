@@ -1021,6 +1021,8 @@ CAPTURE = (
     "BENCHES=(\n"
     '  # a comment between rows\n'
     '  "crate-a:wall:wall_iai"\n'
+    ")\n"
+    "NIGHTLY_BENCHES=(\n"
     '  "crate-b::count_iai:bench-internals,harness"\n'
     ")\n"
 )
@@ -1058,11 +1060,15 @@ def scenario_gated_rows(results: Results) -> None:
             "a gated row the script does not run", says="no such row in BENCHES",
         )
         results.expect(
-            root, base + gated("crate-a::wall_iai", set_id="nowhere"), 1,
+            root, base + gated("crate-a::wall_iai"), 1,
+            "a row the script captures with no gated row", says="crate-b::count_iai, which has no [[gated_row]]",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai", set_id="nowhere") + gated("crate-b::count_iai"), 1,
             "a gated row on an undefined path set", says="is not defined",
         )
         results.expect(
-            root, base + gated("crate-a::wall_iai", measured='["BA-T99"]'), 1,
+            root, base + gated("crate-a::wall_iai", measured='["BA-T99"]') + gated("crate-b::count_iai"), 1,
             "a gated row measured by an id the tracked set lacks",
             says="not defined in the tracked-set document",
         )
@@ -1078,7 +1084,7 @@ def scenario_gated_rows(results: Results) -> None:
         # constant nor a gated row it is refused, as before.
         own = path_set("rows", '["src/cold"]')
         results.expect(
-            root, document(path_set() + own, control) + gated("crate-a::wall_iai", set_id="rows"),
+            root, document(path_set() + own, control) + gated("crate-a::wall_iai", set_id="rows") + gated("crate-b::count_iai"),
             0, "a path set whose only reader is a gated row",
         )
         results.expect(

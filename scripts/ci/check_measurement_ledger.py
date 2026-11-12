@@ -729,7 +729,8 @@ def interpret(
 
 
 def capture_rows(root: Path) -> set[str]:
-    """The rows of the capture script's `BENCHES` array, as <crate>::<gungraun-target>.
+    """The rows of the capture script's `BENCHES` and `NIGHTLY_BENCHES`
+    arrays, as <crate>::<gungraun-target>.
 
     A row is `"<crate>:<criterion-target>:<gungraun-target>[:<features>]"`,
     the criterion field empty for a count-only row. GateError when the
@@ -742,30 +743,39 @@ def capture_rows(root: Path) -> set[str]:
             "— missing subject (rule 47)"
         )
     text = path.read_text(encoding="utf-8", errors="replace")
-    block = re.search(r"^BENCHES=\(\n(.*?)^\)", text, re.M | re.S)
-    if not block:
+    blocks = re.findall(r"^(?:NIGHTLY_)?BENCHES=\(\n(.*?)^\)", text, re.M | re.S)
+    if not blocks:
         raise GateError(f"{CAPTURE_SCRIPT} has no BENCHES array — missing subject (rule 47)")
     rows: set[str] = set()
-    for line in block.group(1).splitlines():
-        entry = re.fullmatch(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*', line)
-        if entry:
-            rows.add(f"{entry.group(1)}::{entry.group(2)}")
+    for block in blocks:
+        for line in block.splitlines():
+            entry = re.fullmatch(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*', line)
+            if entry:
+                rows.add(f"{entry.group(1)}::{entry.group(2)}")
     if not rows:
         raise GateError(f"{CAPTURE_SCRIPT}'s BENCHES array holds no row — missing subject (rule 47)")
     return rows
 
 
 def audit_gated(root: Path, gated: tuple[GatedRow, ...]) -> list[str]:
-    """Each gated row is a row the capture script runs."""
+    """The gated rows are the rows the capture script runs, both ways."""
     if not gated:
         return []
     rows = capture_rows(root)
-    return [
+    named = {row.bench for row in gated}
+    fails = [
         f"gated row {row.bench}: {CAPTURE_SCRIPT} has no such row in BENCHES. "
         "A row that is not captured is not gated"
         for row in gated
         if row.bench not in rows
     ]
+    fails.extend(
+        f"{CAPTURE_SCRIPT} captures {bench}, which has no [[gated_row]]. A pull "
+        "request's capture is scoped by the rows' path sets, so a row without "
+        "one never runs there"
+        for bench in sorted(rows - named)
+    )
+    return fails
 
 
 def load(root: Path) -> tuple[dict, set[str]]:

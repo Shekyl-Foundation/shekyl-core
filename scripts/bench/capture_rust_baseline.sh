@@ -128,7 +128,7 @@ BENCHES=(
   # needs `harness` for the fixture chain's unpinned regtest rules, which
   # no feature may enable (check_test_only_features.py), so both ride the
   # row. The blocks at the weight limit are `block_path_full_iai`: twenty
-  # minutes of callgrind a row, so not in this list.
+  # minutes of callgrind a row, so in the nightly set below.
   "shekyl-chain-ingest::block_path_iai:bench-internals,harness"
   # BA-T42: one header's proof-of-work verification, `compute_hash` over
   # a cache derived outside the measured region. iai-only: the floor
@@ -136,13 +136,81 @@ BENCHES=(
   "shekyl-pow-randomx::verify_header_iai"
 )
 
+# The nightly set: rows too long for a pull request. Same row format.
+NIGHTLY_BENCHES=(
+  # BA-T2 and BA-T41 on blocks at the weight limit: the three block rows
+  # of `block_path_iai` over 45, 10 and 17 real spends. Forming the 45 is
+  # 17.1 billion instructions and about twenty minutes of callgrind, and
+  # the connect and pop rows each pay a form in setup. nightly.yml's
+  # bench-full job captures it and compares it with the night before.
+  "shekyl-chain-ingest::block_path_full_iai:bench-internals,harness"
+)
+
+# ---- which rows this run captures --------------------------------------
+#
+# BENCH_SET   `pr` (the default: BENCHES) or `nightly` (NIGHTLY_BENCHES).
+# BENCH_ROWS  `all` (the default) or the rows to capture, space-separated,
+#             each `<crate>::<gungraun-target>` as the measurement ledger's
+#             `[[gated_row]]` spells it. A pull request's capture passes
+#             the rows whose path sets its change can reach
+#             (`scripts/ci/change_scope.py`, `bench_rows`); the push to
+#             `dev` captures all.
+#
+# A name that is not a row of the set is an error, not a row skipped: a
+# typo would otherwise capture nothing and compare clean. So is a
+# selection that leaves no row; the caller skips the job when the scope is
+# `none`.
+BENCH_SET="${BENCH_SET:-pr}"
+BENCH_ROWS="${BENCH_ROWS:-all}"
+case "${BENCH_SET}" in
+  pr)      SET_ROWS=("${BENCHES[@]}") ;;
+  nightly) SET_ROWS=("${NIGHTLY_BENCHES[@]}") ;;
+  *)
+    echo "[capture_rust_baseline] ERROR: BENCH_SET must be 'pr' or 'nightly', got '${BENCH_SET}'" >&2
+    exit 2
+    ;;
+esac
+row_id() {
+  local crate crit iai features
+  IFS=':' read -r crate crit iai features <<<"$1"
+  printf '%s::%s' "${crate}" "${iai}"
+}
+SELECTED=()
+if [[ "${BENCH_ROWS}" == "all" ]]; then
+  SELECTED=("${SET_ROWS[@]}")
+  CAPTURED_ROWS="all"
+else
+  CAPTURED_ROWS=""
+  for want in ${BENCH_ROWS}; do
+    found=""
+    for row in "${SET_ROWS[@]}"; do
+      if [[ "$(row_id "${row}")" == "${want}" ]]; then
+        found="${row}"
+        break
+      fi
+    done
+    if [[ -z "${found}" ]]; then
+      echo "[capture_rust_baseline] ERROR: BENCH_ROWS names '${want}', which is not a row of the '${BENCH_SET}' set" >&2
+      exit 2
+    fi
+    SELECTED+=("${found}")
+    CAPTURED_ROWS="${CAPTURED_ROWS:+${CAPTURED_ROWS} }${want}"
+  done
+fi
+if (( ${#SELECTED[@]} == 0 )); then
+  echo "[capture_rust_baseline] ERROR: BENCH_ROWS selects no row" >&2
+  exit 2
+fi
+echo "[capture_rust_baseline] set          : ${BENCH_SET}"
+echo "[capture_rust_baseline] rows         : ${CAPTURED_ROWS}"
+
 # Clean criterion output so the envelope reflects this run only.
 # gungraun output is regenerated on every run; no cleanup needed.
 rm -rf "${RUST_ROOT}/target/criterion"
 
 # ---- criterion runs (wall-clock, Tier-2) -----------------------------------
 
-for row in "${BENCHES[@]}"; do
+for row in "${SELECTED[@]}"; do
   IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
   if [[ -z "${CRIT_BENCH}" ]]; then
     echo
@@ -192,7 +260,7 @@ capture_reported_zero() {
   grep -Eq '^[[:space:]]+Instructions:[[:space:]]+0\|' "$1"
 }
 
-for row in "${BENCHES[@]}"; do
+for row in "${SELECTED[@]}"; do
   IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
   FEATURE_ARGS=()
   if [[ -n "${FEATURES:-}" ]]; then
@@ -266,7 +334,7 @@ echo "[capture_rust_baseline] wrote ${OUT_IAI_SNAP}"
 
 # ---- JSON envelope (python3) -----------------------------------------------
 
-export RUST_ROOT IAI_STDOUT_TMP OUT_JSON \
+export RUST_ROOT IAI_STDOUT_TMP OUT_JSON CAPTURED_ROWS BENCH_SET \
   GIT_REV GIT_DIRTY KERNEL CPU_MODEL \
   RUSTC_VER CARGO_VER VALGRIND_VER GUNGRAUN_RUNNER_VER
 
@@ -280,6 +348,8 @@ import sys
 rust_root = pathlib.Path(os.environ["RUST_ROOT"])
 iai_stdout_path = pathlib.Path(os.environ["IAI_STDOUT_TMP"])
 out_json = pathlib.Path(os.environ["OUT_JSON"])
+_rows = os.environ["CAPTURED_ROWS"]
+captured_rows = "all" if _rows == "all" else _rows.split()
 
 # ── 1. Collect criterion estimates from target/criterion/ ──────────────────
 #
@@ -428,6 +498,13 @@ if zero_entries and not allow_zero:
     flake_path = pathlib.Path(str(out_json) + ".flake.json")
     flake_envelope = {
         "schema_version": "shekyl_rust_v0",
+    # `all`, or the `<crate>::<gungraun-target>` rows this run captured.
+    # `compare.py` reads it: a baseline row outside a scoped capture is
+    # out of scope, not deleted.
+    "bench_set": os.environ["BENCH_SET"],
+    "captured_rows": captured_rows,
+        "bench_set": os.environ["BENCH_SET"],
+        "captured_rows": captured_rows,
         "captured_on": {
             "git_rev": os.environ["GIT_REV"],
             "git_dirty": os.environ["GIT_DIRTY"],
@@ -496,6 +573,11 @@ if zero_entries and allow_zero:
 
 envelope = {
     "schema_version": "shekyl_rust_v0",
+    # `all`, or the `<crate>::<gungraun-target>` rows this run captured.
+    # `compare.py` reads it: a baseline row outside a scoped capture is
+    # out of scope, not deleted.
+    "bench_set": os.environ["BENCH_SET"],
+    "captured_rows": captured_rows,
     "captured_on": {
         "git_rev": os.environ["GIT_REV"],
         "git_dirty": os.environ["GIT_DIRTY"],
