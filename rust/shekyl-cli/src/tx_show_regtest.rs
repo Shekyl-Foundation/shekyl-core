@@ -14,9 +14,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use shekyl_rpc_client::Rpc;
+use shekyl_rpc_client::{wire, Rpc, RpcMethod};
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, Network};
+use shekyl_rpc_types::kinds::{Count, Height, NoParams};
+use shekyl_rpc_types::wire::block::{BlockSelect, GenerateCount, HeaderSelect};
+use shekyl_rpc_types::wire::shared::{Selector, Slot};
+use shekyl_rpc_types::Network;
 
 use super::{report, TxShow};
 
@@ -151,8 +154,8 @@ fn a_failed_wallet_read_does_not_ask_the_daemon() {
 ///
 /// The client is on regtest, a network like the others (NI-R1, NI-R4),
 /// as `--network regtest` makes it. A second client bound to mainnet is refused
-/// before it renders: the handshake is `get_version`, and `get_height` is
-/// not asked.
+/// before it renders: the handshake is `version`, and `chain_height` is not
+/// asked.
 /// `daemon stop` is last, and the process exits.
 #[test]
 #[ignore = "needs SHEKYLD_BIN built from this tree; spawns a regtest daemon"]
@@ -173,13 +176,11 @@ fn section_13_words_answer_a_regtest_daemon() {
     drop(runtime);
 
     let client = daemon.client();
-    let mined: shekyl_rpc_types::mining::GenerateBlocksResponse = client
-        .json_rpc(
-            crate::daemon::posted_json("generateblocks").expect("generateblocks"),
-            &shekyl_rpc_types::mining::GenerateBlocksRequest { count: 3 },
-        )
+    let mined = client
+        .call::<wire::DevBlockGenerate>(&GenerateCount { count: Count(3) })
         .expect("mine three blocks");
-    let height = mined.height.to_string();
+    // `chain height` prints the block count: the new tip plus one.
+    let height = (mined.height.0 + 1).to_string();
 
     let shown = crate::console::execute(&client, &View::ChainHeight).expect("chain height");
     assert_eq!(
@@ -358,7 +359,7 @@ fn section_13_words_answer_a_regtest_daemon() {
     assert!(mismatch.contains("network mismatch"), "{mismatch}");
     let asked = daemon.delta_since(&marks);
     assert!(
-        !asked.contains(&request_line("get_height")),
+        !asked.contains(&request_line(<wire::ChainHeight as RpcMethod>::NAME)),
         "a wrong network is refused before rendering:\n{asked}"
     );
 
@@ -367,15 +368,11 @@ fn section_13_words_answer_a_regtest_daemon() {
 }
 
 fn transactions_method() -> &'static str {
-    shekyl_rpc_types::methods::rest_path("/get_transactions")
-        .expect("the get_transactions row")
-        .name
+    <wire::TxList as RpcMethod>::NAME
 }
 
 fn version_method() -> &'static str {
-    shekyl_rpc_types::methods::json_rpc("get_version")
-        .expect("the get_version row")
-        .name
+    <wire::Version as RpcMethod>::NAME
 }
 
 fn request_line(name: &str) -> String {
@@ -404,24 +401,16 @@ fn daemon_body_bytes(url: &str, id: &str) -> Vec<u8> {
     let rpc =
         shekyl_rpc_transport::SyncDaemon::connect(url.to_owned(), None, Duration::from_secs(30))
             .expect("daemon client");
-    let request = shekyl_rpc_types::GetTransactionsRequest {
-        txs_hashes: vec![id.to_owned()],
-        prune: false,
-    };
-    let raw = rpc
-        .post(
-            "/get_transactions",
-            serde_json::to_vec(&request).expect("request"),
-        )
-        .expect("get_transactions");
-    let reply: shekyl_rpc_types::GetTransactionsResponse =
-        serde_json::from_slice(&raw).expect("reply");
-    let entry = reply
-        .txs
-        .iter()
-        .find(|tx| tx.tx_hash.to_string() == id)
-        .expect("the daemon returned the transaction");
-    hex::decode(&entry.as_hex).expect("wire hex")
+    let reply = rpc
+        .call::<wire::TxList>(&wire::tx::TxListQuery {
+            id: vec![shekyl_rpc_types::hash::HashHex::from_hex(id).expect("an id")],
+            prune: false,
+        })
+        .expect("tx_list");
+    match reply.into_iter().next() {
+        Some(Slot::Item(entry)) => entry.body.0,
+        other => panic!("the daemon returned the transaction: {other:?}"),
+    }
 }
 
 struct Found {
@@ -606,12 +595,9 @@ impl Regtest {
 
         let mut held = None;
         for _ in 0..5 {
-            rpc.json_rpc_call::<shekyl_rpc_types::mining::GenerateBlocksResponse>(
-                "generateblocks",
-                Some(serde_json::json!({ "count": 1 })),
-            )
-            .await
-            .expect("generate one block");
+            rpc.call::<wire::DevBlockGenerate>(GenerateCount { count: Count(1) })
+                .await
+                .expect("generate one block");
             shekyl_engine_core::Engine::start_refresh(
                 wallet.clone(),
                 shekyl_engine_core::RefreshOptions::default(),
@@ -643,20 +629,14 @@ impl Regtest {
         });
 
         let genesis = rpc
-            .json_rpc_call::<GetBlockResponse>(
-                "get_block",
-                Some(
-                    serde_json::to_value(GetBlockRequest {
-                        hash: String::new(),
-                        height: 0,
-                        fill_pow_hash: false,
-                    })
-                    .expect("get_block params"),
-                ),
-            )
+            .call::<wire::BlockHeaderShow>(HeaderSelect(BlockSelect {
+                select: Selector::Height(Height(0)),
+                pow: false,
+                prune: None,
+            }))
             .await
-            .expect("genesis block")
-            .miner_tx_hash
+            .expect("genesis header")
+            .coinbase
             .to_string();
         assert_ne!(
             genesis, held,
@@ -712,10 +692,7 @@ async fn await_ready(rpc: &HttpRpc, logs: &[PathBuf]) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
-        match rpc
-            .json_rpc_call::<shekyl_rpc_types::GetInfoResponse>("get_info", None)
-            .await
-        {
+        match rpc.call::<wire::DaemonStatus>(NoParams).await {
             Ok(_) => {
                 let text: String = logs
                     .iter()
@@ -742,10 +719,7 @@ async fn await_template(rpc: &HttpRpc) {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last = String::new();
     while Instant::now() < deadline {
-        match rpc
-            .json_rpc_call::<shekyl_rpc_types::mining::GetMinerDataResponse>("get_miner_data", None)
-            .await
-        {
+        match rpc.call::<wire::BlockTemplate>(NoParams).await {
             Ok(_) => return,
             Err(error) => last = error.to_string(),
         }

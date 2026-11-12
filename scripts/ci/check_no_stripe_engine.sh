@@ -52,14 +52,10 @@ FAIL=0
 ROOTS=(rust)
 EXCLUDES=(
   -g '!rust/target/**' -g '!**/target/**'
-  # The two negative tests that pin the deletion by spelling the key and
-  # asserting it is ignored / subtracted. They are this gate's own
-  # negative control, not residue.
+  # The negative test that pins the deletion by spelling the key and
+  # asserting it is ignored. It is this gate's own negative control, not
+  # residue.
   -g '!rust/shekyl-levin/tests/payload_kats.rs'
-  -g '!rust/shekyl-rpc-types/tests/rpc_parity.rs'
-  # Retained oracle captures the parity suite derives from (records-was).
-  -g '!rust/shekyl-rpc-types/tests/vectors/rpc/*_v1.json'
-  -g '!rust/shekyl-rpc-types/tests/vectors/rpc/*_v2.json'
 )
 # A comment line: leading whitespace then `//`, `///`, `//!`, `*` or `#`.
 COMMENT_LINE='^[^:]+:[0-9]+:\s*(//|\*|#)'

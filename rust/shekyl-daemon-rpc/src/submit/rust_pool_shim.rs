@@ -664,7 +664,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         _cert: &VerificationCertificate,
         _expected: &SubmitFacts,
     ) -> CommitOutcome {
-        let Ok(parsed) = parse_submission(&hex::encode(blob)) else {
+        let Ok(parsed) = parse_submission(blob) else {
             return CommitOutcome::InternalFault;
         };
         if parsed.txid != *txid {

@@ -119,7 +119,7 @@ impl Timeouts {
     ///   envelope, close probe) and around a bare answer's close probe
     ///   alike. `body_stall` bounds a gap inside it and adds nothing.
     ///
-    /// Not counted: the wait for the slot (`MAX_INFLIGHT`), which is the
+    /// Not counted: the wait for the slot ([`PFetchClient::with_slots`]), which is the
     /// caller's to bound; the countersignature check after the body, CPU
     /// work on bytes already in memory; and anything the caller does
     /// between fetches.
@@ -161,7 +161,9 @@ impl Proxy {
 
 /// The shard-fetch client. One per daemon; `Clone`-free by design — the
 /// in-flight cap is a property of the process's Tor instance, so a second
-/// client would be a second cap.
+/// client would be a second cap. A daemon whose callers keep lanes over
+/// it (the bundle producer's reads, the shard view's flights) sizes it to
+/// their sum with [`Self::with_slots`].
 pub struct PFetchClient {
     proxy: Proxy,
     /// `Arc` so a permit can be *owned* and travel into the blocking
@@ -222,6 +224,16 @@ impl PFetchClient {
             slots: Arc::new(Semaphore::new(MAX_INFLIGHT)),
             timeouts,
         }
+    }
+
+    /// This client with `slots` in-flight slots in place of
+    /// [`MAX_INFLIGHT`]. The caller that composes lanes over one client
+    /// sizes it to their sum, so a caller that starts no more fetches than
+    /// its own lane never waits for a slot.
+    #[must_use]
+    pub fn with_slots(mut self, slots: std::num::NonZeroUsize) -> Self {
+        self.slots = Arc::new(Semaphore::new(slots.get()));
+        self
     }
 
     /// In-flight slots not currently held. Observability for the

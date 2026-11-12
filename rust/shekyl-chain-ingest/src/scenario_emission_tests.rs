@@ -102,10 +102,10 @@ use shekyl_daemon_rpc::submit::{
     SubmitCaller, SubmitEngine, SubmitStateShim, TxVerifier,
 };
 use shekyl_mempool::Pool;
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 use shekyl_types::UnixSeconds;
 
-use crate::pool_submit_tests::hex;
+use crate::pool_submit_tests::body;
 
 /// The claim's transaction key. The engine draws one from the OS; the
 /// driver takes it as an argument, and this scenario needs only that it
@@ -364,12 +364,10 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // market the pass wrote.
     scenario
         .reopen(|path| {
-            use shekyl_daemon_rpc::read_methods::{
-                get_archival_emission_claim_source, get_archival_shard_coverage,
-            };
-            use shekyl_rpc_types::{
-                ClaimBondRow, ClaimCreditPair, ClaimShardRow, GetArchivalEmissionClaimSourceRequest,
-            };
+            use shekyl_daemon_rpc::reads::{archival_claim_show, shard_coverage};
+            use shekyl_rpc_types::kinds::{Height, Integer};
+            use shekyl_rpc_types::nullable::Nullable;
+            use shekyl_rpc_types::wire::archival::{ClaimBond, ClaimShard, Credit, PersonaQuery};
             let store = std::sync::Arc::new(crate::test_support::open_store_under(
                 path,
                 &rules.in_force(BlockHeight::ZERO),
@@ -380,83 +378,88 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
                 path,
                 rules,
             );
-            let source = get_archival_emission_claim_source(
+            let source = archival_claim_show(
                 &facts,
-                &GetArchivalEmissionClaimSourceRequest {
-                    p_id: hex::encode(persona.id().to_bytes()),
+                &PersonaQuery {
+                    persona: shekyl_rpc_types::HashHex::from_bytes(persona.id().to_bytes()),
                 },
             )
-            .expect("the claim source");
-            assert_eq!(source.chain_height, connecting.to_raw());
-            assert!(source.has_bond_record);
-            assert_eq!(source.join_settlement_epoch, join_epoch.to_raw());
-            assert_eq!(source.held_shard_ids, vec![0]);
+            .unwrap_or_else(|_| panic!("the claim source"));
+            // The wire carries the gather tip; `connecting` is the count.
+            assert_eq!(source.height.0 + 1, connecting.to_raw());
+            assert_eq!(
+                source.joined_epoch,
+                Nullable(Some(Integer(join_epoch.to_raw())))
+            );
+            assert_eq!(source.shard, vec![Integer(0)]);
             // The next block is the first of `served + 2`, and the
             // persona's last pass is in `served`: outside the cooldown's
             // window (`served + 1` and `served + 2`), so the source names no
-            // last-served epoch. The anchor inside the window is the
+            // served epoch. The anchor inside the window is the
             // support-trees chain's: its early release is refused on it.
             assert_eq!(
                 settled_schedule().epoch_at(connecting),
                 SettlementEpoch::from_raw(served.to_raw() + RELEASE_COOLDOWN_EPOCHS),
                 "the pass's next block is past the cooldown from `served`"
             );
-            assert!(!source.has_last_served_epoch);
-            assert_eq!(source.last_served_epoch, 0);
+            assert_eq!(source.served_epoch, Nullable(None));
             let row = source
-                .epochs
+                .epoch
                 .iter()
-                .find(|e| e.settlement_epoch == served.to_raw())
+                .find(|e| e.id.0 == served.to_raw())
                 .expect("the served epoch is in the window");
             assert!(
-                row.has_budget_row,
+                row.budget.0.is_some(),
                 "Σwork(served) is a row: the epoch is claimable"
             );
-            assert_eq!(row.sigma_work_milli, result.sigma_work_milli);
-            assert_eq!(row.budget_atomic, close.budget().to_raw());
-            assert_eq!(row.close_block_height, count_at_close);
+            assert_eq!(row.work.0, result.sigma_work_milli);
             assert_eq!(
-                row.bonds,
-                vec![ClaimBondRow {
-                    join_settlement_epoch: join_epoch.to_raw(),
-                    bad_intervals_flat: vec![],
+                row.budget.0.map(|budget| budget.to_atomic_units().to_raw()),
+                Some(close.budget().to_raw())
+            );
+            assert_eq!(row.closing_height.0, count_at_close);
+            assert_eq!(
+                row.bond,
+                vec![ClaimBond {
+                    joined_epoch: Integer(join_epoch.to_raw()),
+                    failure: vec![],
                 }]
             );
             assert_eq!(
-                row.shards,
-                vec![ClaimShardRow {
-                    shard_id: 0,
-                    freeze_height: closed.close_height.to_raw(),
-                    has_segment: true,
+                row.shard,
+                vec![ClaimShard {
+                    id: Integer(0),
+                    freeze_height: Height(closed.close_height.to_raw()),
+                    segment: true,
                 }]
             );
             assert_eq!(
-                row.credit_pairs,
-                vec![ClaimCreditPair {
-                    bond_idx: 0,
-                    shard_idx: 0,
+                row.credit,
+                vec![Credit {
+                    bond: Integer(0),
+                    shard: Integer(0),
                 }]
             );
-            assert_eq!(row.claimant_bond_idx, 0);
+            assert_eq!(row.claimant, Nullable(Some(Integer(0))));
             let next = source
-                .epochs
+                .epoch
                 .iter()
-                .find(|e| e.settlement_epoch == served.to_raw() + 1)
+                .find(|e| e.id.0 == served.to_raw() + 1)
                 .expect("the epoch after is in the window");
-            assert!(!next.has_budget_row, "its pass has not run");
-            assert!(next.bonds.is_empty());
+            assert!(next.budget.0.is_none(), "its pass has not run");
+            assert!(next.bond.is_empty());
 
-            let coverage = get_archival_shard_coverage(&facts).expect("coverage");
-            assert_eq!(coverage.as_of_height, at_pass.to_raw());
-            assert_eq!(coverage.settled_epoch, served.to_raw());
+            let coverage = shard_coverage(&facts).unwrap_or_else(|_| panic!("coverage"));
+            assert_eq!(coverage.height.0, at_pass.to_raw());
+            assert_eq!(coverage.settled_epoch.0, served.to_raw());
             let listed = coverage
-                .shards
+                .shard
                 .iter()
-                .find(|r| r.shard_id == 0)
+                .find(|r| r.id.0 == 0)
                 .expect("the closed shard is listed");
-            assert_eq!(listed.bonded_count, 1);
-            assert_eq!(listed.freeze_height, closed.close_height.to_raw());
-            assert_eq!(listed.served_count, result.r_market_by_shard[0]);
+            assert_eq!(listed.bonded_count.0, 1);
+            assert_eq!(listed.freeze_height.0, closed.close_height.to_raw());
+            assert_eq!(listed.served_count.0, result.r_market_by_shard[0]);
             drop(facts);
             drop(store);
         })
@@ -701,7 +704,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
             let reasons: Vec<String> = submitted[..2]
                 .iter()
                 .map(|tx| {
-                    let parsed = parse_submission(&hex(tx)).expect("the claim parses");
+                    let parsed = parse_submission(&body(tx)).expect("the claim parses");
                     let facts = shim
                         .snapshot_facts(
                             &parsed.txid,
@@ -729,7 +732,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let verdicts: Vec<_> = submitted
                 .iter()
-                .map(|tx| engine.submit(&hex(tx), SubmitCaller::Owner))
+                .map(|tx| engine.submit(&body(tx), SubmitCaller::Owner))
                 .collect();
             (reasons, verdicts)
         })
@@ -744,15 +747,14 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     for _ in 0..2 {
         assert_eq!(
             verdicts.next(),
-            Some(SubmitVerdict::Rejected {
-                cause: RejectCause::Malformed,
-                row: None,
+            Some(Verdict::Rejected {
+                cause: Rejection::Malformed,
             })
         );
     }
     assert_eq!(
         verdicts.next(),
-        Some(SubmitVerdict::Accepted),
+        Some(Verdict::Accepted),
         "the oldest claimable epoch is admitted"
     );
 

@@ -18,8 +18,8 @@ use std::time::Duration;
 use shekyl_archival_fetch_sched::{
     challenge_read, BlockSpan, ChallengeDraw, ChallengeReadError, ClosedShard, DiscardTxs,
     FactsFault, FetchError, FetchScheduler, Holder, HolderSource, NeedBudget, PFetchClient,
-    ReadFailure, ShardClose, ShardFacts, ShardStanding, SuppliedNonce, Timeouts, ViewDesk,
-    ViewRefusal,
+    ReadFailure, ShardClose, ShardFacts, ShardStanding, SuppliedNonce, Timeouts, ViewCaller,
+    ViewDesk, ViewRefusal, VIEW_SLOTS,
 };
 use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, verify_receipt_transcript, PassStream,
@@ -53,6 +53,9 @@ struct Facts {
     /// The span's coinbase count: the skeleton-side field a reorg moves.
     coinbase_outputs: Mutex<u64>,
     closed: ShardId,
+    /// Shards below `closed` the skeleton also holds closed, for tests
+    /// that open flights for several.
+    also_closed: Mutex<Vec<ShardId>>,
     shard_reads: Mutex<u32>,
     /// When set, the `n`th `shard()` read is answered from a reorged
     /// standing (new close hash, one more coinbase) and every read after
@@ -67,6 +70,7 @@ impl Facts {
             close_hash: Mutex::new([0xc1; 32]),
             coinbase_outputs: Mutex::new(11),
             closed: SHARD,
+            also_closed: Mutex::new(Vec::new()),
             shard_reads: Mutex::new(0),
             reorg_at_read: Mutex::new(None),
         }
@@ -117,7 +121,7 @@ impl ShardFacts for Facts {
         if *self.reorg_at_read.lock().unwrap() == Some(reads) {
             self.reorg();
         }
-        if shard_id == self.closed {
+        if shard_id == self.closed || self.also_closed.lock().unwrap().contains(&shard_id) {
             return Ok(ShardStanding::Closed(Box::new(ClosedShard {
                 expected: fixture_expectation(shard_id.to_raw()),
                 span: self.span(),
@@ -621,7 +625,10 @@ async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
     let s = stack(FIXTURE_SHARD_ID, 2).await;
     let desk = ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT);
 
-    let view = desk.view(SHARD).await.expect("first view fetches");
+    let view = desk
+        .view(SHARD, ViewCaller::Host)
+        .await
+        .expect("first view fetches");
     assert_eq!(view.shard_id, SHARD);
     assert_eq!(view.tx_count, 1);
     assert_eq!(view.block_count.to_raw(), 11);
@@ -633,7 +640,7 @@ async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
 
     // Cached: no holder is needed for the second answer.
     s.holders.clear();
-    let again = desk.view(SHARD).await.expect("cache hit");
+    let again = desk.view(SHARD, ViewCaller::Host).await.expect("cache hit");
     assert_eq!(again, view);
     assert_eq!(s.endpoint.served_count(), 1);
     assert_eq!(desk.cached_count(), 1);
@@ -641,7 +648,7 @@ async fn the_view_is_assembled_cached_and_rekeyed_on_the_close_hash() {
     // The block that closed the shard changed hash: the entry is dropped
     // and the view goes back to the holders — of which there are now none.
     s.facts.reorg();
-    let err = desk.view(SHARD).await.unwrap_err();
+    let err = desk.view(SHARD, ViewCaller::Host).await.unwrap_err();
     assert!(
         matches!(err, ViewRefusal::Unavailable { shard_id, ref attempts } if shard_id == SHARD && attempts.is_empty()),
         "{err:?}"
@@ -661,7 +668,10 @@ async fn a_reorg_between_the_cache_check_and_the_read_yields_one_standing() {
     // Read 1 is the desk's cache check; read 2 is the scheduler's snapshot.
     *s.facts.reorg_at_read.lock().unwrap() = Some(2);
 
-    let view = desk.view(SHARD).await.expect("the read's own standing");
+    let view = desk
+        .view(SHARD, ViewCaller::Host)
+        .await
+        .expect("the read's own standing");
     assert_eq!(*s.facts.shard_reads.lock().unwrap(), 2);
     assert_eq!(
         view.coinbase_output_count, 12,
@@ -673,7 +683,10 @@ async fn a_reorg_between_the_cache_check_and_the_read_yields_one_standing() {
     // Cached under the standing it describes: the post-reorg skeleton
     // answers it without a holder.
     s.holders.clear();
-    assert_eq!(desk.view(SHARD).await.expect("cache hit"), view);
+    assert_eq!(
+        desk.view(SHARD, ViewCaller::Host).await.expect("cache hit"),
+        view
+    );
     assert_eq!(s.endpoint.served_count(), 1);
     assert_eq!(desk.cached_count(), 1);
 }
@@ -683,7 +696,7 @@ async fn the_view_refuses_the_open_shard_with_the_distance_to_close() {
     let s = stack(FIXTURE_SHARD_ID, 1).await;
     let desk = ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT);
     let open = ShardId::from_raw(FIXTURE_SHARD_ID + 1);
-    let err = desk.view(open).await.unwrap_err();
+    let err = desk.view(open, ViewCaller::Host).await.unwrap_err();
     let ViewRefusal::Open {
         shard_id,
         open_shard,
@@ -703,7 +716,7 @@ async fn the_view_refuses_the_open_shard_with_the_distance_to_close() {
     );
     // Past the open shard there is no distance to state.
     let beyond = ShardId::from_raw(FIXTURE_SHARD_ID + 5);
-    let err = desk.view(beyond).await.unwrap_err();
+    let err = desk.view(beyond, ViewCaller::Host).await.unwrap_err();
     assert!(matches!(
         err,
         ViewRefusal::Open {
@@ -719,11 +732,11 @@ async fn concurrent_views_of_one_shard_share_one_fetch() {
     let desk = Arc::new(ViewDesk::new(Arc::clone(&s.scheduler), NeedBudget::DEFAULT));
     let a = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     let b = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
     assert_eq!(a, b);
@@ -779,11 +792,11 @@ async fn concurrent_unavailable_views_share_one_walk_and_the_refusal_is_not_cach
 
     let one = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     let two = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     tokio::time::timeout(Duration::from_secs(2), async {
         while accepts.load(Ordering::SeqCst) < 1 {
@@ -820,7 +833,7 @@ async fn concurrent_unavailable_views_share_one_walk_and_the_refusal_is_not_cach
     // The refusal left with the flight. The next caller asks who holds
     // the shard again — a cached refusal would not — and the proxy is
     // gone, so the dial fails without a second accept.
-    let again = desk.view(SHARD).await.unwrap_err();
+    let again = desk.view(SHARD, ViewCaller::Host).await.unwrap_err();
     assert!(
         matches!(again, ViewRefusal::Unavailable { shard_id, .. } if shard_id == SHARD),
         "{again:?}"
@@ -859,7 +872,7 @@ async fn a_cancelled_leader_frees_the_flight() {
 
     let leader = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     tokio::time::timeout(Duration::from_secs(2), async {
         while accepts.load(Ordering::SeqCst) < 1 {
@@ -873,7 +886,7 @@ async fn a_cancelled_leader_frees_the_flight() {
 
     let next = {
         let desk = Arc::clone(&desk);
-        tokio::spawn(async move { desk.view(SHARD).await })
+        tokio::spawn(async move { desk.view(SHARD, ViewCaller::Host).await })
     };
     tokio::time::timeout(Duration::from_secs(2), async {
         while accepts.load(Ordering::SeqCst) < 2 {
@@ -986,5 +999,276 @@ async fn a_challenge_read_of_a_receipt_holder_returns_the_receipt() {
             PassStream::Support => PassStream::Economy,
         };
         assert!(verify(other).is_err(), "a receipt serves one stream");
+    }
+}
+
+/// Bounds long enough that a flight parked on a silent holder stays
+/// parked for the test; the gate's release ends it.
+fn parked_timeouts() -> Timeouts {
+    Timeouts {
+        dial: Duration::from_secs(60),
+        head: Duration::from_secs(60),
+        body_stall: Duration::from_secs(60),
+        body_total: Duration::from_secs(60),
+    }
+}
+
+/// A listener in front of the serving endpoint: the first `forward`
+/// connections are tunnelled to it, every later one is held open and
+/// silent — a flight parked on a holder that never answers — until
+/// `release` fires, which closes them and the listener.
+struct Gate {
+    accepts: Arc<AtomicUsize>,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Gate {
+    fn release(&mut self) {
+        self.release
+            .take()
+            .expect("released once")
+            .send(())
+            .expect("the gate is still holding");
+    }
+
+    /// Wait until `n` connections have arrived, then let the runtime run
+    /// a while and return the count: no further connection is coming
+    /// unless one was already on its way.
+    async fn settled_at(&self, n: usize) -> usize {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.accepts.load(Ordering::SeqCst) < n {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{n} dials never arrived"));
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        self.accepts.load(Ordering::SeqCst)
+    }
+}
+
+struct Gated {
+    _endpoint: shekyl_p_loopback::PServeEndpoint,
+    gate: Gate,
+    facts: Arc<Facts>,
+    holders: Arc<Holders>,
+    scheduler: Arc<FetchScheduler<Facts, Holders>>,
+}
+
+/// The fixture's serve behind a [`Gate`] that forwards `forward` dials,
+/// one holder, and a client of `slots` slots ([`PFetchClient::with_slots`])
+/// or the default.
+async fn gated(forward: usize, slots: Option<std::num::NonZeroUsize>) -> Gated {
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let key = signer.public_key().clone();
+    let (endpoint, _direct) = endpoint_and_client(
+        FIXTURE_SHARD_ID,
+        fixture_body(),
+        signer as Arc<dyn PassSigner>,
+        ephemeral_timeouts(),
+    )
+    .await;
+    let target = endpoint.addr();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = listener.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let (release, mut release_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let accepts = Arc::clone(&accepts);
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                tokio::select! {
+                    _ = &mut release_rx => {
+                        drop(held);
+                        return;
+                    }
+                    accepted = listener.accept() => {
+                        let Ok((mut socket, _)) = accepted else { return };
+                        if accepts.fetch_add(1, Ordering::SeqCst) < forward {
+                            tokio::spawn(async move {
+                                if let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await {
+                                    let _closed =
+                                        tokio::io::copy_bidirectional(&mut socket, &mut upstream).await;
+                                }
+                            });
+                        } else {
+                            held.push(socket);
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let mut client = shekyl_p_loopback::client_through(at, parked_timeouts()).await;
+    if let Some(slots) = slots {
+        client = client.with_slots(slots);
+    }
+    let facts = Arc::new(Facts::new());
+    let holders = Arc::new(Holders::new(1, &key));
+    let scheduler = Arc::new(FetchScheduler::new(
+        Arc::clone(&facts),
+        Arc::clone(&holders),
+        client,
+    ));
+    Gated {
+        _endpoint: endpoint,
+        gate: Gate {
+            accepts,
+            release: Some(release),
+        },
+        facts,
+        holders,
+        scheduler,
+    }
+}
+
+/// IG-Q90: a bounded caller that opens a flight takes the desk's one
+/// bounded permit. While it is out, a second bounded caller that would
+/// open a flight is refused at once — no holder asked, no dial, nothing
+/// queued — while a bounded caller that joins the flight in the air and
+/// the host, who takes no permit, are not. The refusal is the refused
+/// caller's: the joiner takes the flight's own outcome. The permit is
+/// free again once the flight ends.
+///
+/// Red edits: take no bounded permit; take it before the cache check (the
+/// joiner is refused).
+#[tokio::test]
+async fn a_bounded_flight_takes_the_one_permit_and_a_second_is_refused_unqueued() {
+    let mut g = gated(0, None).await;
+    let other = ShardId::from_raw(FIXTURE_SHARD_ID - 1);
+    g.facts.also_closed.lock().unwrap().push(other);
+    let desk = Arc::new(ViewDesk::new(Arc::clone(&g.scheduler), budget(1, 0)));
+    let view = |shard, caller| {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(shard, caller).await })
+    };
+    let leader = view(SHARD, ViewCaller::Bounded);
+    assert_eq!(g.gate.settled_at(1).await, 1, "the bounded leader dialled");
+    let lookups = g.holders.lookups.load(Ordering::SeqCst);
+
+    let refused = desk.view(other, ViewCaller::Bounded).await;
+    assert!(
+        matches!(refused, Err(ViewRefusal::Busy { shard_id }) if shard_id == other),
+        "{refused:?}"
+    );
+    assert_eq!(
+        g.holders.lookups.load(Ordering::SeqCst),
+        lookups,
+        "no holder was asked"
+    );
+
+    let joiner = view(SHARD, ViewCaller::Bounded);
+    let host = view(other, ViewCaller::Host);
+    assert_eq!(
+        g.gate.settled_at(2).await,
+        2,
+        "the host opened its flight with the permit out; the joiner dialled nothing"
+    );
+
+    g.gate.release();
+    for (who, outcome) in [("leader", leader), ("joiner", joiner), ("host", host)] {
+        let outcome = outcome.await.unwrap();
+        assert!(
+            matches!(outcome, Err(ViewRefusal::Unavailable { .. })),
+            "the {who} takes its flight's outcome: {outcome:?}"
+        );
+    }
+    let next = desk.view(other, ViewCaller::Bounded).await;
+    assert!(
+        matches!(next, Err(ViewRefusal::Unavailable { .. })),
+        "the permit came back with the flight's end: {next:?}"
+    );
+}
+
+/// A cached view opens no flight, so it takes no permit: a bounded caller
+/// reads it while another bounded caller's flight holds the permit.
+///
+/// Red edit: take the bounded permit before the cache check.
+#[tokio::test]
+async fn a_cached_view_answers_a_bounded_caller_while_the_permit_is_out() {
+    let mut g = gated(1, None).await;
+    let other = ShardId::from_raw(FIXTURE_SHARD_ID - 1);
+    g.facts.also_closed.lock().unwrap().push(other);
+    let desk = Arc::new(ViewDesk::new(Arc::clone(&g.scheduler), budget(1, 0)));
+    let cached = desk
+        .view(SHARD, ViewCaller::Host)
+        .await
+        .expect("the forwarded dial serves the view");
+    let parked = {
+        let desk = Arc::clone(&desk);
+        tokio::spawn(async move { desk.view(other, ViewCaller::Bounded).await })
+    };
+    assert_eq!(
+        g.gate.settled_at(2).await,
+        2,
+        "the bounded flight is parked"
+    );
+    assert_eq!(
+        desk.view(SHARD, ViewCaller::Bounded)
+            .await
+            .expect("the cache answers with the permit out"),
+        cached
+    );
+    assert_eq!(g.gate.accepts.load(Ordering::SeqCst), 2);
+    g.gate.release();
+    assert!(parked.await.unwrap().is_err());
+}
+
+/// Views hold at most [`VIEW_SLOTS`] of the fetch client, whoever asks:
+/// a third flight waits in the desk's lane, not at the client. A client
+/// sized to another caller's reads plus the lane therefore starts every
+/// one of that caller's reads at once with the view lane full — the
+/// bundle producer's guarantee that a started read never waits behind a
+/// view (IG-Q90).
+///
+/// Red edit: drop the lane's acquire.
+#[tokio::test]
+async fn views_hold_their_lane_and_another_caller_reads_beside_it() {
+    const READS: usize = 3;
+    let slots = std::num::NonZeroUsize::new(READS + VIEW_SLOTS.get()).unwrap();
+    let mut g = gated(0, Some(slots)).await;
+    let shards: Vec<ShardId> = (0..FIXTURE_SHARD_ID).map(ShardId::from_raw).collect();
+    g.facts.also_closed.lock().unwrap().extend(&shards);
+    let desk = Arc::new(ViewDesk::new(Arc::clone(&g.scheduler), budget(1, 0)));
+    let views: Vec<_> = [SHARD, shards[2], shards[1]]
+        .into_iter()
+        .map(|shard| {
+            let desk = Arc::clone(&desk);
+            tokio::spawn(async move { desk.view(shard, ViewCaller::Host).await })
+        })
+        .collect();
+    assert_eq!(
+        g.gate.settled_at(VIEW_SLOTS.get()).await,
+        VIEW_SLOTS.get(),
+        "a third view waits in the lane"
+    );
+    let reads: Vec<_> = (0..READS)
+        .map(|_| {
+            let scheduler = Arc::clone(&g.scheduler);
+            let shard = shards[0];
+            tokio::spawn(async move {
+                scheduler
+                    .read(shard, Arc::new(DiscardTxs), budget(1, 0))
+                    .await
+            })
+        })
+        .collect();
+    assert_eq!(
+        g.gate.settled_at(VIEW_SLOTS.get() + READS).await,
+        VIEW_SLOTS.get() + READS,
+        "every read dialled beside the full view lane"
+    );
+    g.gate.release();
+    for task in views {
+        assert!(task.await.unwrap().is_err());
+    }
+    for task in reads {
+        assert!(task.await.unwrap().is_err());
     }
 }

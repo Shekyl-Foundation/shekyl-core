@@ -63,7 +63,7 @@ use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 pub trait NodeFacts: Send + Sync {
     /// The sync owner's view (DRS-X PR 2's `TipChanged` consumer).
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
-    /// Chain sync's whole view (CS-5 §7): what `sync_info` renders.
+    /// Chain sync's whole view (CS-5 §7): what `sync_status` renders.
     fn sync_view(&self) -> Result<SyncViewFacts, FactsFault>;
     /// The pool's population (PR-b's Rust pool), or
     /// [`PoolState::Retired`].
@@ -94,7 +94,7 @@ pub trait NodeFacts: Send + Sync {
     fn now(&self) -> u64;
 }
 
-/// A pool entry's body, as `get_transactions` reads it.
+/// A pool entry's body, as `tx_list` reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolBody {
     /// The transaction, serialized whole.
@@ -159,15 +159,15 @@ pub struct StoreFacts {
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
     caches: Arc<shekyl_pow_randomx::CacheStore>,
-    /// The daemon's one hasher budget: `calc_pow` hashes under a permit.
+    /// The daemon's one hasher budget: `pow` hashes under a permit.
     budget: shekyl_hash_budget::Budget,
 }
 
 impl StoreFacts {
-    /// The facts over `store`, whose data file is `store_file`. `calc_pow`
+    /// The facts over `store`, whose data file is `store_file`. `pow`
     /// hashes under the caches `caches` already holds — the daemon's one
     /// cache store, the validator's — and never derives one, each hash
-    /// under a permit from `budget` in `calc_pow`'s class (PR2-Q3).
+    /// under a permit from `budget` in `pow`'s class (PR2-Q3).
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
@@ -452,7 +452,7 @@ fn header_for(
     }
 }
 
-/// The adjusted time `get_info` reports for the block connecting at
+/// The adjusted time `daemon_status` reports for the block connecting at
 /// `connecting`: the newer of nothing and the older of the projected median
 /// and the tip's timestamp plus one target, as the C++ `get_adjusted_time`
 /// defined it — a report, not a rule. Before the window fills there is no
@@ -482,12 +482,19 @@ impl ChainFacts for StoreFacts {
         let snap = self.snapshot()?;
         let (height, hash) = tip_of(&snap)?;
         let sync = self.node.sync()?;
+        let halt = match self.store.connect_state() {
+            shekyl_chain_store::store::ConnectState::Live => None,
+            shekyl_chain_store::store::ConnectState::Halted { at_height, row } => {
+                Some((at_height, row.row()))
+            }
+        };
         Ok(ChainTip {
             chain_height: count_at(height),
             top_hash: hash,
             target_height: sync.target,
             synchronized: sync.synchronized,
             release_build: self.identity.release_build,
+            halt,
         })
     }
 
@@ -546,14 +553,42 @@ impl ChainFacts for StoreFacts {
     fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
         let snap = self.snapshot()?;
         let (tip, _) = tip_of(&snap)?;
-        let block = header_for(&snap, tip, at, fill_pow_hash)?.map(|(header, block)| {
-            let tx_hashes: Vec<TxHash> = block.transaction_hashes.clone();
-            BlockFacts {
-                header,
-                blob: block.serialize(),
-                json: None,
-                tx_hashes,
+        let Some((header, block)) = header_for(&snap, tip, at, fill_pow_hash)? else {
+            return Ok(BlockAt {
+                block: None,
+                chain_height: count_at(tip),
+            });
+        };
+        // The block's own section: an alt block carries it in its record;
+        // a main-chain block's is the row at its height.
+        let references = if header.orphan_status {
+            snap.alt_block(&header.hash)
+                .map_err(store_fault)?
+                .and_then(|alt| alt.bundle_references().cloned())
+        } else {
+            match snap
+                .bundle_references_at(header.height)
+                .map_err(store_fault)?
+            {
+                AtHeight::Recorded(section) => section,
+                AtHeight::AboveTip => return Err(FactsFault::Inconsistent),
             }
+        };
+        let bundle_bodies = snap
+            .held_section_bodies(references.as_ref())
+            .map_err(store_fault)?
+            .iter()
+            .map(|body| body.as_bytes().to_vec())
+            .collect();
+        let block = Some(BlockFacts {
+            tx_hashes: block.transaction_hashes.clone(),
+            blob: block.serialize(),
+            json: None,
+            header,
+            bundle_references: references
+                .map(shekyl_types::archival::BundleReferences::into_inner)
+                .unwrap_or_default(),
+            bundle_bodies,
         });
         Ok(BlockAt {
             block,

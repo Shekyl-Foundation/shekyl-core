@@ -110,7 +110,7 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
     }
 }
 
-/// Accept a mining recipient only if the daemon's `generateblocks` path would.
+/// Accept a mining recipient only if the daemon's `dev_block_generate` path would.
 ///
 /// `ShekylAddress::decode` alone is too weak to stand behind that claim: its own
 /// contract accepts `<classical>` display-only addresses as well as full ones,
@@ -147,7 +147,7 @@ fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
 /// address while the committed file held the pre-`msg_sign_pk` encoding, and
 /// every test in this crate stayed green throughout — because none of them read
 /// it. `capture_coinbase.py` consumes it, so the damage showed up only when
-/// someone tried to regenerate the corpus: the daemon's `generateblocks` answers
+/// someone tried to regenerate the corpus: the daemon's `dev_block_generate` answers
 /// `-4 "Failed to parse wallet address"` and no chain can be produced at all.
 ///
 /// The observable had collapsed: a fixture whose format nothing evaluates
@@ -157,7 +157,7 @@ fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
 ///
 /// Acceptance is `accept_mining_recipient`, not a bare `ShekylAddress::decode`.
 /// The first version of this test used the bare decode and claimed, here, that a
-/// pass meant `generateblocks` would accept the address. It did not: `decode`
+/// pass meant `dev_block_generate` would accept the address. It did not: `decode`
 /// accepts display-only addresses and infers the network instead of requiring
 /// one, so the assertion was weaker than the sentence describing it — the same
 /// gap as the fixture, in the paragraph written to close it.

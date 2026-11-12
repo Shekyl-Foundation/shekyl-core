@@ -287,7 +287,7 @@ pub struct Ports {
 /// reads the row; nothing else decides whether a lever runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Lever {
-    /// `dev-rpc`: the armed RPC levers, `generateblocks` and `pop_blocks`
+    /// `dev-rpc`: the armed RPC levers, `dev_block_generate` and `dev_chain_pop`
     /// (NI-R8).
     DevRpc,
     /// `dev-sync`: chain synchronisation with peers switched off.

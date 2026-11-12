@@ -29,7 +29,7 @@
 //! is never a `Rewind`. The fork choice is ingest's: an arrival whose parent
 //! is not the tip is offered to the alt table, and the switch (`OfferAlt`,
 //! `Reorganize`, `switch.rs`) decides and carries out the heavier chain on
-//! the connector. An operator's `pop_blocks` reaches the connector as its own
+//! the connector. An operator's `dev_chain_pop` reaches the connector as its own
 //! `Rewind` message, not through a source. The pipeline only executes.
 //!
 //! Every write a source carries is a block's: there is no out-of-band

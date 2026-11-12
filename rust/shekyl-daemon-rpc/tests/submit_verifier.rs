@@ -50,7 +50,7 @@ use shekyl_daemon_rpc::submit::{
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 use shekyl_tx_builder::{
     encode_final_tx, phase1_payload_hashes, sign_pqc_auths, sign_transaction,
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
@@ -60,7 +60,7 @@ use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
-use submit_fixtures::{hexify, MockShim};
+use submit_fixtures::{tx_bytes, MockShim};
 
 /// Coinbase lock window: the genesis coinbase drains into the tree at
 /// reference heights `>= COINBASE_LOCK_WINDOW + 1` (fcmp_spend_e2e's
@@ -87,8 +87,9 @@ const FEE: u64 = 1_000_000;
 /// The one-time expensive fixture: a consensus-valid spend and the tree
 /// facts it verifies against.
 struct SpendFixture {
-    /// The canonical submit hex (what a wallet would POST).
-    hex: String,
+    /// The canonical submit bytes (what a wallet posts as `tx_submit`'s
+    /// body).
+    body: Vec<u8>,
     /// Its Phase-A parse — the verifier's input.
     parsed: ParsedSubmission,
     /// Curve-tree root at the reference height (the proof's real anchor).
@@ -152,7 +153,7 @@ fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFa
 /// must clear Phase A — the arm under test is the Phase-C battery, and a
 /// mutant that already fails structural admission would test nothing.
 fn reparse(tx: &Transaction) -> ParsedSubmission {
-    parse_submission(&hexify(tx))
+    parse_submission(&tx_bytes(tx))
         .expect("mutant must clear Phase A (the arm under test is Phase C)")
 }
 
@@ -536,8 +537,7 @@ fn build_fixture() -> SpendFixture {
 
     // ── Encode and clear Phase A ────────────────────────────────────────
     let bytes = encode_final_tx(&wire_input).expect("encode the final spend");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built spend clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built spend clears Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::Spend, "fixture is a spend");
     assert_eq!(
         parsed.tx.prefix_hash(),
@@ -546,7 +546,7 @@ fn build_fixture() -> SpendFixture {
     );
 
     SpendFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
         tree_root: su.tree_root,
         other_root: su.other_root,
@@ -564,7 +564,7 @@ fn build_fixture() -> SpendFixture {
 /// pqc_auths slot signed by P's identity key — the same assembly order as
 /// the StakeEngine's `AssembleBond` handler (stake_engine/bond.rs steps 7–16).
 struct BondFixture {
-    hex: String,
+    body: Vec<u8>,
     parsed: ParsedSubmission,
 }
 
@@ -776,8 +776,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Encode and clear Phase A ────────────────────────────────────────
     let bytes = encode_final_tx(&wire_input).expect("encode the final bond-post");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built bond-post clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built bond-post clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
@@ -790,7 +789,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
     );
 
     BondFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
     }
 }
@@ -817,9 +816,9 @@ fn engine_accepts_the_spend_end_to_end_with_the_production_verifier() {
     let shim = MockShim::new(admitting_facts(fx), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 }
@@ -1076,9 +1075,9 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
     let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 
@@ -1126,11 +1125,10 @@ fn bond_race_at_commit_classifies_double_spend_conflict() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a bond-post block landing during Phase C must classify DoubleSpendConflict"
     );
@@ -1148,7 +1146,7 @@ fn missing_bond_record_fact_is_a_shim_contract_fault() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert!(
         matches!(
-            engine.submit(&fx.hex, SubmitCaller::Owner),
+            engine.submit(&fx.body, SubmitCaller::Owner),
             Err(shekyl_daemon_rpc::submit::EngineFault::ShimContract(_))
         ),
         "a bond-post snapshot without the BP3 fact must fault loudly"
@@ -1394,7 +1392,7 @@ fn producerless_bond_post_kinds_refuse_loudly() {
 /// slot signed by **`bond_spend_sk`** — the cold debit authorizer, not the
 /// identity key. `AssembleRelease` assembles it the same way.
 struct ReleaseFixture {
-    hex: String,
+    body: Vec<u8>,
     parsed: ParsedSubmission,
     /// The record's committed authorizer, i.e. what a correct record holds.
     bond_spend_pk: Vec<u8>,
@@ -1689,8 +1687,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     wire_input.pqc_auths = pqc_auths;
 
     let bytes = encode_final_tx(&wire_input).expect("encode the final release");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built release clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built release clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
@@ -1702,7 +1699,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     );
 
     ReleaseFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
         bond_spend_pk,
         identity_pk,
@@ -1994,9 +1991,9 @@ fn the_engine_asks_the_debit_arms_question_for_an_release() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 
@@ -2058,13 +2055,12 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&forged.hex, SubmitCaller::Owner)
+        .submit(&forged.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "a bond slot whose signature does not verify is malformed"
     );
@@ -2210,13 +2206,12 @@ fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&malleated.hex, SubmitCaller::Owner)
+        .submit(&malleated.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "a slot whose signature does not verify is malformed"
     );
@@ -2247,13 +2242,12 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&doomed.hex, SubmitCaller::Owner)
+        .submit(&doomed.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "UB9's static guards refuse a nonzero bond_credit on a Release"
     );
@@ -2285,13 +2279,12 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&forged.hex, SubmitCaller::Owner)
+        .submit(&forged.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "UB3 refuses an identity-key debit"
     );
@@ -2314,7 +2307,7 @@ fn a_missing_release_bundle_faults_the_engine_rather_than_rejecting() {
     let shim = MockShim::new(facts, CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let err = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect_err("a skipped probe is an engine fault");
     assert!(
         matches!(err, EngineFault::ShimContract(_)),
@@ -2343,13 +2336,12 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
     );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "an exit that consumed the balance is terminal for these bytes"
     );
@@ -2372,11 +2364,10 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a debit that no longer matches the record's total is unconnectable"
     );
@@ -2400,11 +2391,10 @@ fn an_release_against_a_vanished_record_is_terminal_not_a_fault() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("absence must classify, not fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a vanished record is a moved slot"
     );

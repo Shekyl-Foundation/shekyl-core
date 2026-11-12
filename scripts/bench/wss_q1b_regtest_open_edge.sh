@@ -40,7 +40,7 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # Nothing reads the daemon's stdin without `--console`, so a closed stdin
 # is fine. The grammar's spellings (INPUT_GRAMMAR.md §5): both connectors
 # off is the offline posture.
-# --dev-rpc: generateblocks is an armed test lever, served only with this
+# --dev-rpc: dev_block_generate is an armed test lever, served only with this
 # switch set (RPC_CHANNEL.md section 6.1). The daemon announces it at
 # start, checked below once RPC is up.
 "$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
@@ -59,9 +59,9 @@ echo "daemon pid $DPID, port $PORT"
 for _ in $(seq 1 60); do
   REPLY_BODY=$(curl -s -m 2 -X POST "http://127.0.0.1:$PORT/json_rpc" \
     -H 'Content-Type: application/json' \
-    -d '{"jsonrpc":"2.0","id":"0","method":"get_info"}')
+    -d '{"jsonrpc":"2.0","id":0,"method":"daemon_status"}')
   case "$REPLY_BODY" in
-    *'"status"'*) READY=1; break ;;
+    *'"result"'*) READY=1; break ;;
   esac
   sleep 2
 done
@@ -71,7 +71,7 @@ if [ "${READY:-0}" != 1 ]; then
 fi
 echo "daemon ready"
 
-# This spawn calls generateblocks. The row is armed above, and the
+# This spawn calls dev_block_generate. The row is armed above, and the
 # announcement is this process's log. armed_lever.py owns the line; the
 # producer test is the_armed_lever_switch_announces_itself. The check's
 # exit status is the verdict: nothing is piped.
@@ -81,13 +81,13 @@ if ! python3 "$WT/scripts/armed_lever.py" --check-log "$DATA/daemon.out"; then
 fi
 
 curl -s -m 60 -X POST "http://127.0.0.1:$PORT/json_rpc" -H 'Content-Type: application/json' \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"generateblocks\",\"params\":{\"count\":$BLOCKS}}" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"dev_block_generate\",\"params\":{\"count\":$BLOCKS}}" \
   > "$SCRATCH/generate.json" 2>&1
 python3 - "$SCRATCH/generate.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
-if "error" in d: print("generateblocks ERROR:", d["error"]); sys.exit(1)
-r=d.get("result",{}); print("mined to height", r.get("height"), "blocks", len(r.get("blocks") or []))
+if "error" in d: print("dev_block_generate ERROR:", d["error"]); sys.exit(1)
+r=d["result"]; print("mined to height", r["height"], "blocks", len(r["hash"]))
 PY
 GEN=$?
 if [ "$GEN" -ne 0 ]; then kill -9 "$DPID" 2>/dev/null; exit 8; fi

@@ -1309,7 +1309,7 @@ where
     // keeps behind the heavier tip it last judged at: the attendant's
     // reconcile re-judges at this tip and the next build lists it. Without
     // the wake the posted job stayed the one built before the return, and a
-    // `generateblocks` after a pop waited on it for ever.
+    // `dev_block_generate` after a pop waited on it for ever.
     let shown_changed = offers.admissions.iter().any(|(_, admission)| {
         matches!(
             admission,

@@ -13,8 +13,8 @@
 //! The loop's threads hash with RandomX for as long as mining runs, and
 //! only under a cache the store already holds. The daemon's other RandomX
 //! callers are the validator's substrate, which fills the canonical slot
-//! through `pin_canonical`, and the RPC's `calc_pow`, which hashes only
-//! under a cache already held. The miner and `calc_pow` never derive: a
+//! through `pin_canonical`, and the RPC's `pow`, which hashes only
+//! under a cache already held. The miner and `pow` never derive: a
 //! derivation publishes into the transient slot and evicts the validator's
 //! spare (`DRS_X_STORE_FLIP.md` §3.1, ruled 2026-10-17), and both run on a
 //! seed they did not pin. They share one

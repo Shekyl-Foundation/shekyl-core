@@ -6,10 +6,10 @@
 //! Emission claim-source RPC client: request shape + response decode
 //! (`EMISSION_CLAIM_BUILDER.md` §7, PR 1).
 //!
-//! The daemon-side handler (`shekyl-daemon-rpc`'s
-//! `get_archival_emission_claim_source`) serializes the gathered snapshot
-//! for every epoch in the claim window, unconditionally. This module is the
-//! wallet-side twin: it decodes that response into **exactly** the structs
+//! The daemon-side handler (`shekyl-daemon-rpc`'s `archival_claim_show`)
+//! serializes the gathered snapshot for every epoch in the claim window,
+//! unconditionally. This module is the wallet-side twin: it decodes that
+//! response into **exactly** the structs
 //! verify already consumes — [`EmissionEpochSource`] + [`ClaimantBondRecord`]
 //! views over owned rows. No builder-private mirror of either
 //! struct exists here (§7.3 decode-locus pin: the §2 step-7 self-check must
@@ -22,37 +22,36 @@
 //! and enforces this). The request carries `p_id` **only**: no epoch selector,
 //! no range, no claimable-subset encoding (§7.2 transport cause-blindness).
 //!
-//! Untrusted-daemon posture (the daemon's reply is untrusted bytes): scalar and
-//! bool fields are mandatory — a response missing one is a malformed reply,
-//! loudly rejected, never silently defaulted. Array fields decode absent as
-//! empty. The decode also enforces `status == "OK"` (a `BUSY`/error-shaped body must
-//! never decode as a valid zeroed source) and the invariants the consumers
-//! rely on: `claimed_settlement_epochs` strictly increasing (the
-//! `claimed_epochs_contains` binary-search operand), `epochs` in strictly
-//! ascending epoch order, and `current_settled_epoch` consistent with
-//! `chain_height` under the frozen mapping (`settlement_epoch_at_height` —
-//! the daemon derives both from one `db.height()` read, and the builder's
-//! window boundaries and the step-7 self-check split the pair downstream).
+//! Untrusted-daemon posture (the daemon's reply is untrusted bytes): the reply
+//! decodes strictly against the method table's type — a member absent, of the
+//! wrong shape, or unknown is no reply, never a default — and a refusal is an
+//! error object, never a body. On the typed reply the decode enforces the
+//! invariants the consumers rely on: `claimed` strictly increasing (the
+//! `claimed_epochs_contains` binary-search operand), `epoch` in strictly
+//! ascending order, and `settled_epoch` consistent with `height` under the
+//! frozen mapping (`settlement_epoch_at_height` — the daemon derives both from
+//! one read, and the builder's window boundaries and the step-7 self-check
+//! split the pair downstream).
+//!
+//! The record carries the hash of the block it was gathered at (IG-Q84), so
+//! it vouches for which chain it describes on its own
+//! ([`CoherentChainView`]).
 
 use std::fmt;
 
-use serde_json::{json, Value};
 use shekyl_archival_retention::{
     settlement_epoch_at_height, BadInterval, ClaimantBondRecord, CreditPair, EmissionEpochSource,
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind,
     ShardClose, ShardCloseWire, ShardSet,
 };
-use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_rpc_client::{wire, Rpc, RpcError};
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::wire::archival::{self as reply, ClaimSource, Holding, PersonaQuery};
 
 use crate::engine::daemon::synced_chain_facts::{
-    fetch_synced_chain_facts, AnchoredView, BracketedChainFacts, CoherentChainView,
-    SyncedChainFacts, TimelineBreak,
+    fetch_synced_chain_facts, AnchoredView, ChainAnchor, CoherentChainView, TimelineBreak,
 };
-use shekyl_types::{ChainCount, PCanonicalId};
-
-/// The daemon JSON-RPC method name (registered on both the epee and
-/// Rust/Axum transports in PR 1's daemon half).
-pub const EMISSION_CLAIM_SOURCE_METHOD: &str = "get_archival_emission_claim_source";
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId};
 
 /// Claim-source fetch/decode failure.
 #[derive(Debug, thiserror::Error)]
@@ -60,21 +59,17 @@ pub enum EmissionSourceError {
     /// Transport / JSON-RPC envelope failure.
     #[error(transparent)]
     Rpc(#[from] RpcError),
-    /// The daemon's response is not the expected shape — an untrusted-input
-    /// rejection (missing mandatory field, wrong type, odd-length interval
-    /// flattening, unknown holdings kind, ordering-invariant violation),
-    /// never silently defaulted.
+    /// The daemon's response decoded and does not hold together — an
+    /// untrusted-input rejection (an inverted interval, an index past
+    /// `usize`, an ordering-invariant violation, a settled epoch the height
+    /// does not derive), never silently repaired.
     #[error("malformed emission claim-source response: {0}")]
     Malformed(String),
-    /// The daemon answered with a non-`OK` `status` (e.g. `BUSY`) — a
-    /// retryable daemon-side condition, never a payload: a zeroed
-    /// error-shaped body must not decode as "no claimable epochs".
-    #[error("daemon status not OK: {0}")]
-    Status(String),
 }
 
-/// One gathered bond row, owned (mirrors the wire's `bonds[]` entry; the
-/// flattened `(start_epoch, end_exclusive)` pairs are re-paired at decode).
+/// One gathered bond row, owned (mirrors the wire's `bond` entry; the
+/// inclusive `failure` intervals become the record's end-exclusive ones at
+/// decode).
 #[derive(Debug, Clone)]
 pub struct BondRow {
     pub join_settlement_epoch: u64,
@@ -95,14 +90,13 @@ pub struct EpochSnapshot {
     pub sigma_work_milli: u64,
     /// Frozen close-row `budget(E)`; meaningful only when `has_budget_row`.
     pub budget_atomic: u64,
-    /// Absent close row ⇒ this epoch is unclaimable to the builder
-    /// (mirrors the verify shim's reject).
+    /// Absent close row (`budget: null`) ⇒ this epoch is unclaimable to the
+    /// builder (mirrors the verify shim's reject).
     pub has_budget_row: bool,
     pub bonds: Vec<BondRow>,
     pub shards: Vec<EpochCloseShard>,
     pub credit_pairs: Vec<CreditPair>,
-    /// `None` = the wire's `u64::MAX` sentinel (the landed `SIZE_MAX`),
-    /// decoded exactly as the verify shim decodes it.
+    /// `None` = the wire's `claimant: null`, no claiming bond.
     pub claimant_bond_idx: Option<usize>,
 }
 
@@ -121,12 +115,12 @@ pub struct EpochSnapshot {
 /// On this side of the wire a bare `None` could also mean "the field never
 /// arrived", and that fact must be *fail-closed*: it would otherwise flow into
 /// the same permissive branch and report an irreversible exit as ready on a
-/// value the wallet never received. The daemon therefore reports the
-/// distinction (`has_last_served_epoch`) instead of leaving it inferred, the
-/// decoder requires the field (an absent one is
-/// [`EmissionSourceError::Malformed`], never a default), and this type has no
-/// variant for "unknown" — so the unsafe state cannot be constructed here at
-/// all, rather than being constructible and merely discouraged.
+/// value the wallet never received. The wire therefore says the distinction
+/// (`served_epoch: null` is "never served", RK-D23) instead of leaving it
+/// inferred, the strict decode requires the member (an absent one is no
+/// reply, never a default), and this type has no variant for "unknown" — so
+/// the unsafe state cannot be constructed here at all, rather than being
+/// constructible and merely discouraged.
 ///
 /// Epoch 0 is a real settlement epoch, so a zero-means-absent encoding would
 /// have collapsed the same two facts one layer lower.
@@ -265,8 +259,11 @@ pub struct EmissionClaimSource {
     /// anchor and the §2 step-3 same-tip staleness operand (the
     /// `AssembleEmissionClaim` handler's same-tip check). The exact operand
     /// the daemon derived `current_settled_epoch` from —
-    /// `archival_claim_source.cpp` gathers both from one `db.height()` read.
+    /// the daemon gathers both from one read.
     pub chain_height: ChainCount,
+    /// The hash of the block at [`chain_height`](Self::chain_height)'s tip,
+    /// from the same read (IG-Q84): which chain the record describes.
+    pub tip_hash: BlockHash,
     /// The daemon's settled-epoch operand (same helper consensus uses),
     /// **decode-enforced** equal to `settlement_epoch_at_height(chain_height)`
     /// — so the step-1 window boundaries (which consume this field) and the
@@ -324,40 +321,6 @@ impl EpochSnapshot {
 
 // ── Decode (untrusted input; loud on malformation) ──────────────────────
 
-fn req_u64(v: &Value, field: &str) -> Result<u64, EmissionSourceError> {
-    v.get(field)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| EmissionSourceError::Malformed(format!("missing/non-u64 `{field}`")))
-}
-
-fn req_bool(v: &Value, field: &str) -> Result<bool, EmissionSourceError> {
-    v.get(field)
-        .and_then(Value::as_bool)
-        .ok_or_else(|| EmissionSourceError::Malformed(format!("missing/non-bool `{field}`")))
-}
-
-/// Array fields: absent decodes as empty (epee KV omits empty containers);
-/// present-but-not-an-array is malformed.
-fn opt_array<'v>(v: &'v Value, field: &str) -> Result<&'v [Value], EmissionSourceError> {
-    match v.get(field) {
-        None => Ok(&[]),
-        Some(a) => a
-            .as_array()
-            .map(Vec::as_slice)
-            .ok_or_else(|| EmissionSourceError::Malformed(format!("non-array `{field}`"))),
-    }
-}
-
-fn u64_array(v: &Value, field: &str) -> Result<Vec<u64>, EmissionSourceError> {
-    opt_array(v, field)?
-        .iter()
-        .map(|e| {
-            e.as_u64()
-                .ok_or_else(|| EmissionSourceError::Malformed(format!("non-u64 in `{field}`")))
-        })
-        .collect()
-}
-
 fn to_usize(value: u64, field: &str) -> Result<usize, EmissionSourceError> {
     usize::try_from(value)
         .map_err(|_| EmissionSourceError::Malformed(format!("`{field}` exceeds usize")))
@@ -378,67 +341,81 @@ fn require_strictly_increasing(values: &[u64], field: &str) -> Result<(), Emissi
     }
 }
 
-fn decode_bond_row(v: &Value) -> Result<BondRow, EmissionSourceError> {
-    let flat = u64_array(v, "bad_intervals_flat")?;
-    if flat.len() % 2 != 0 {
-        return Err(EmissionSourceError::Malformed(
-            "odd-length `bad_intervals_flat`".into(),
-        ));
+fn integers(values: &[shekyl_rpc_types::kinds::Integer]) -> Vec<u64> {
+    values.iter().map(|value| value.0).collect()
+}
+
+fn amount(value: &shekyl_units::wire::AtomicUnitsString) -> u64 {
+    value.to_atomic_units().to_raw()
+}
+
+/// The wire's failure interval is inclusive; the record's is end-exclusive.
+fn decode_failure(failure: &reply::Failure) -> Result<BadInterval, EmissionSourceError> {
+    if failure.to.0 < failure.from.0 {
+        return Err(EmissionSourceError::Malformed(format!(
+            "failure interval {}..={} is inverted",
+            failure.from.0, failure.to.0
+        )));
     }
-    let bad_intervals = flat
-        .chunks_exact(2)
-        .map(|pair| BadInterval {
-            start_epoch: pair[0],
-            end_exclusive: pair[1],
-        })
-        .collect();
-    Ok(BondRow {
-        join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
-        bad_intervals,
+    let end_exclusive = failure.to.0.checked_add(1).ok_or_else(|| {
+        EmissionSourceError::Malformed("failure interval ends past the last epoch".into())
+    })?;
+    Ok(BadInterval {
+        start_epoch: failure.from.0,
+        end_exclusive,
     })
 }
 
-fn decode_epoch(v: &Value) -> Result<EpochSnapshot, EmissionSourceError> {
-    let bonds = opt_array(v, "bonds")?
+fn decode_bond_row(bond: &reply::ClaimBond) -> Result<BondRow, EmissionSourceError> {
+    Ok(BondRow {
+        join_settlement_epoch: bond.joined_epoch.0,
+        bad_intervals: bond
+            .failure
+            .iter()
+            .map(decode_failure)
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn decode_epoch(epoch: &reply::Epoch) -> Result<EpochSnapshot, EmissionSourceError> {
+    let bonds = epoch
+        .bond
         .iter()
         .map(decode_bond_row)
         .collect::<Result<Vec<_>, _>>()?;
-    let shards = opt_array(v, "shards")?
+    // The segment-keyed pair (CEN-L10); [`ShardClose::from_wire`] is the fold.
+    let shards = epoch
+        .shard
         .iter()
-        .map(|s| {
-            // The daemon RPC carries the C++ LMDB validator's segment-keyed
-            // pair (CEN-L10). The JSON keys are its; [`ShardClose::from_wire`]
-            // is the fold.
-            Ok(EpochCloseShard {
-                shard_id: req_u64(s, "shard_id")?,
-                close: ShardClose::from_wire(ShardCloseWire {
-                    has_segment: req_bool(s, "has_segment")?,
-                    freeze_height: req_u64(s, "freeze_height")?,
-                }),
-            })
+        .map(|shard| EpochCloseShard {
+            shard_id: shard.id.0,
+            close: ShardClose::from_wire(ShardCloseWire {
+                has_segment: shard.segment,
+                freeze_height: shard.freeze_height.0,
+            }),
         })
-        .collect::<Result<Vec<_>, EmissionSourceError>>()?;
-    let credit_pairs = opt_array(v, "credit_pairs")?
+        .collect();
+    let credit_pairs = epoch
+        .credit
         .iter()
-        .map(|p| {
+        .map(|pair| {
             Ok(CreditPair {
-                bond_idx: to_usize(req_u64(p, "bond_idx")?, "bond_idx")?,
-                shard_idx: to_usize(req_u64(p, "shard_idx")?, "shard_idx")?,
+                bond_idx: to_usize(pair.bond.0, "credit.bond")?,
+                shard_idx: to_usize(pair.shard.0, "credit.shard")?,
             })
         })
         .collect::<Result<Vec<_>, EmissionSourceError>>()?;
-    // The landed SIZE_MAX sentinel rides the wire as u64::MAX → None,
-    // exactly as the verify shim decodes it.
-    let claimant_bond_idx = match req_u64(v, "claimant_bond_idx")? {
-        u64::MAX => None,
-        idx => Some(to_usize(idx, "claimant_bond_idx")?),
-    };
+    let claimant_bond_idx = epoch
+        .claimant
+        .0
+        .map(|idx| to_usize(idx.0, "claimant"))
+        .transpose()?;
     Ok(EpochSnapshot {
-        settlement_epoch: req_u64(v, "settlement_epoch")?,
-        close_block_height: req_u64(v, "close_block_height")?,
-        sigma_work_milli: req_u64(v, "sigma_work_milli")?,
-        budget_atomic: req_u64(v, "budget_atomic")?,
-        has_budget_row: req_bool(v, "has_budget_row")?,
+        settlement_epoch: epoch.id.0,
+        close_block_height: epoch.closing_height.0,
+        sigma_work_milli: epoch.work.0,
+        budget_atomic: epoch.budget.0.as_ref().map_or(0, amount),
+        has_budget_row: epoch.budget.0.is_some(),
         bonds,
         shards,
         credit_pairs,
@@ -447,112 +424,96 @@ fn decode_epoch(v: &Value) -> Result<EpochSnapshot, EmissionSourceError> {
 }
 
 impl EmissionClaimSource {
-    /// Decode the `get_archival_emission_claim_source` JSON-RPC result.
-    pub fn from_json(v: &Value) -> Result<Self, EmissionSourceError> {
-        // Non-OK status first (the daemon.rs fee-estimate idiom): an
-        // error-shaped body carries zeroed payload fields that would
-        // otherwise decode as a valid "nothing claimable" source.
-        let status = v
-            .get("status")
-            .and_then(Value::as_str)
-            .ok_or_else(|| EmissionSourceError::Malformed("missing/non-string `status`".into()))?;
-        if status != "OK" {
-            return Err(EmissionSourceError::Status(status.to_owned()));
-        }
-        let bond = if req_bool(v, "has_bond_record")? {
-            let kind_raw = req_u64(v, "holdings_kind")?;
-            let kind_byte = u8::try_from(kind_raw).map_err(|_| {
-                EmissionSourceError::Malformed(format!("holdings_kind {kind_raw} exceeds u8"))
-            })?;
-            let kind = HoldingsKind::from_u8(kind_byte).map_err(|_| {
-                EmissionSourceError::Malformed(format!("unknown holdings_kind {kind_byte}"))
-            })?;
-            let claimed_settlement_epochs = u64_array(v, "claimed_settlement_epochs")?;
-            require_strictly_increasing(&claimed_settlement_epochs, "claimed_settlement_epochs")?;
-            Some(BondContext {
-                join_settlement_epoch: req_u64(v, "join_settlement_epoch")?,
-                holdings: HoldingsDescriptor {
-                    kind,
-                    // Daemon-response decoder boundary: the shard list is
-                    // untrusted input, so it is validated at construction (bound
-                    // + duplicate-free) like every other holdings decoder. The
-                    // ShardSetError carries the specific fault (which id
-                    // duplicated / the offending count) — surface it.
-                    shard_ids: ShardSet::new(u64_array(v, "held_shard_ids")?).map_err(|e| {
-                        EmissionSourceError::Malformed(format!("held_shard_ids: {e}"))
-                    })?,
-                },
-                claimed_settlement_epochs,
-                bonded_total_atomic: req_u64(v, "bonded_total_atomic")?,
-                bad_interval_count: to_usize(
-                    req_u64(v, "bad_interval_count")?,
-                    "bad_interval_count",
-                )?,
-                // `req_*`, not an `unwrap_or`: an absent field must be a decode
-                // error, because the only other option — defaulting — produces
-                // exactly the permissive `None` that would report an
-                // irreversible exit as ready on a value that never arrived.
-                // This is the line that makes "unknown" unrepresentable rather
-                // than merely discouraged (see `ServeAnchor`).
-                //
-                // There are two presence encodings here and they answer
-                // different questions, so it is worth saying which wins. The
-                // **required read is authoritative about the wire**: an absent
-                // `has_last_served_epoch`, or a `true` flag with the value
-                // missing, is `Malformed` — the flag cannot vouch for a field
-                // that did not arrive. The **flag is the daemon's assertion
-                // about semantics**: "this record has never served", which is a
-                // fact only the daemon holds. So `false` legitimately means the
-                // value is absent and it is never read; every other
-                // disagreement is a decode error, not a reconciliation.
-                last_served: if req_bool(v, "has_last_served_epoch")? {
-                    ServeAnchor::ServedAt(req_u64(v, "last_served_epoch")?)
-                } else {
-                    ServeAnchor::NeverServed
-                },
-                last_settled_slash: if req_bool(v, "has_last_settled_slash_epoch")? {
-                    SlashWatermark::SettledThrough(req_u64(v, "last_settled_slash_epoch")?)
-                } else {
-                    SlashWatermark::NothingSettled
-                },
-            })
-        } else {
-            None
+    /// Decode the `archival_claim_show` reply.
+    pub fn from_reply(reply: &ClaimSource) -> Result<Self, EmissionSourceError> {
+        let bond = match reply.joined_epoch.0 {
+            None => None,
+            Some(joined) => {
+                let claimed_settlement_epochs = integers(&reply.claimed);
+                require_strictly_increasing(&claimed_settlement_epochs, "claimed")?;
+                Some(BondContext {
+                    join_settlement_epoch: joined.0,
+                    holdings: HoldingsDescriptor {
+                        kind: match reply.holding {
+                            Holding::Shards => HoldingsKind::ShardSetCompact,
+                            Holding::CompleteTree => HoldingsKind::CompleteTree,
+                        },
+                        // Daemon-response decoder boundary: the shard list is
+                        // untrusted input, so it is validated at construction
+                        // (bound + duplicate-free) like every other holdings
+                        // decoder. The ShardSetError carries the specific
+                        // fault — surface it.
+                        shard_ids: ShardSet::new(integers(&reply.shard))
+                            .map_err(|e| EmissionSourceError::Malformed(format!("shard: {e}")))?,
+                    },
+                    claimed_settlement_epochs,
+                    bonded_total_atomic: amount(&reply.bond_total),
+                    bad_interval_count: to_usize(reply.failure_count.0, "failure_count")?,
+                    // `null` is the daemon's word for "never served" — a fact
+                    // only the daemon holds. An absent member never reaches
+                    // here: the decode refused it (see `ServeAnchor`).
+                    last_served: reply
+                        .served_epoch
+                        .0
+                        .map_or(ServeAnchor::NeverServed, |epoch| {
+                            ServeAnchor::ServedAt(epoch.0)
+                        }),
+                    last_settled_slash: reply
+                        .slash_epoch
+                        .0
+                        .map_or(SlashWatermark::NothingSettled, |epoch| {
+                            SlashWatermark::SettledThrough(epoch.0)
+                        }),
+                })
+            }
         };
-        let epochs = opt_array(v, "epochs")?
+        let epochs = reply
+            .epoch
             .iter()
             .map(decode_epoch)
             .collect::<Result<Vec<_>, _>>()?;
         let epoch_ids: Vec<u64> = epochs.iter().map(|e| e.settlement_epoch).collect();
-        require_strictly_increasing(&epoch_ids, "epochs[].settlement_epoch")?;
-        let chain_height = req_u64(v, "chain_height")?;
-        let current_settled_epoch = req_u64(v, "current_settled_epoch")?;
-        // The daemon derives both fields from one `db.height()` read
-        // (`archival_claim_source.cpp`), so the pair is redundant on the
-        // wire — and the two boundary systems downstream split it: the
+        require_strictly_increasing(&epoch_ids, "epoch.id")?;
+        // The wire carries the tip's height, an ordinal (IG-Q45); the record
+        // keeps the chain's count, one more, computed here once.
+        let chain_height = reply.height.0.checked_add(1).ok_or_else(|| {
+            EmissionSourceError::Malformed("`height` is the last representable block".into())
+        })?;
+        let current_settled_epoch = reply.settled_epoch.0;
+        // The daemon derives both from one read, so the pair is redundant on
+        // the wire — and the two boundary systems downstream split it: the
         // step-1 window verdicts consume `current_settled_epoch`, while the
-        // step-7 self-check (and on-chain verify) recompute settled from
-        // `chain_height`. Enforce the invariant here so an inconsistent
-        // reply is one loud `Malformed` refusal at the untrusted boundary,
-        // never a cause-blind whole-batch `SelfCheckFailed` (deflated
-        // settled) or a silently-forfeited claimable epoch (inflated
-        // settled).
+        // step-7 self-check (and on-chain verify) recompute settled from the
+        // count. Enforce the invariant here so an inconsistent reply is one
+        // loud `Malformed` refusal at the untrusted boundary, never a
+        // cause-blind whole-batch `SelfCheckFailed` (deflated settled) or a
+        // silently-forfeited claimable epoch (inflated settled).
         let derived_settled = settlement_epoch_at_height(chain_height);
         if current_settled_epoch != derived_settled {
             return Err(EmissionSourceError::Malformed(format!(
-                "`current_settled_epoch` {current_settled_epoch} inconsistent with \
-                 `chain_height` {chain_height} (derives to {derived_settled})"
+                "`settled_epoch` {current_settled_epoch} inconsistent with `height` {} \
+                 (derives to {derived_settled})",
+                reply.height.0
             )));
         }
         Ok(Self {
-            // The typed-domain edge (rule 18): the raw wire u64 becomes a
-            // ChainCount here, so no consumer can launder the count into a
+            // The typed-domain edge (rule 18): the count becomes a
+            // ChainCount here, so no consumer can launder it into a
             // BlockHeight without naming which chain fact it means.
             chain_height: ChainCount::from_raw(chain_height),
+            tip_hash: BlockHash::from_bytes(reply.hash.to_bytes()),
             current_settled_epoch,
             bond,
             epochs,
         })
+    }
+
+    /// The block this record was gathered at: its own chain identity.
+    pub(crate) fn anchor(&self) -> ChainAnchor {
+        ChainAnchor {
+            height: BlockHeight::from_raw(self.chain_height.to_raw().saturating_sub(1)),
+            hash: self.tip_hash,
+        }
     }
 }
 
@@ -578,13 +539,12 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
 ) -> Result<EmissionClaimSource, EmissionSourceError> {
-    let result: Value = rpc
-        .json_rpc_call(
-            EMISSION_CLAIM_SOURCE_METHOD,
-            Some(json!({ "p_id": hex::encode(p_id) })),
-        )
+    let reply = rpc
+        .call::<wire::ArchivalClaimShow>(PersonaQuery {
+            persona: HashHex::from_bytes(*p_id),
+        })
         .await?;
-    EmissionClaimSource::from_json(&result)
+    EmissionClaimSource::from_reply(&reply)
 }
 
 /// Whether the wallet can vouch for the record it is holding.
@@ -649,15 +609,6 @@ impl VouchedClaimSource {
         self.source
     }
 
-    /// The vouching as decided, for tests that assert *which* broken state
-    /// production reached. Production reads [`Self::actionable`], which is
-    /// the only question it asks; this hatch is test-only for the same
-    /// reason [`Self::for_test`] is.
-    #[cfg(test)]
-    pub(crate) fn vouching(&self) -> Vouching {
-        self.vouching
-    }
-
     /// The view to act on, or the reason there is none.
     ///
     /// For consumers that **act on the record's contents** — signing a claim
@@ -687,18 +638,10 @@ impl VouchedClaimSource {
         let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
             source.chain_height,
             true,
-            crate::engine::test_support::test_block_hash_at(
-                source.chain_height.to_raw().saturating_sub(1),
-            ),
+            source.tip_hash,
         )
         .expect("test vouching is synchronized by construction");
-        let bracketed = facts
-            .bracket(facts.top_hash())
-            .expect("the test witness stands on its own block");
-        let vouching = Vouching::Vouched(CoherentChainView::reconcile(
-            &bracketed,
-            source.chain_height,
-        ));
+        let vouching = Vouching::Vouched(CoherentChainView::reconcile(&facts, source.anchor()));
         Self { source, vouching }
     }
 
@@ -728,21 +671,16 @@ impl VouchedClaimSource {
 /// store read, say — which is safe because the ordering that matters is
 /// internal.
 ///
-/// **Then the bracket.** Ordering alone says the record is the later read;
-/// it does not say the record was gathered on the chain the witness
-/// described — a reorg that crosses the witness tip and catches back up
-/// inside the window leaves the *heights* looking like ordinary advance. So
-/// after the record is in hand the block at the witness tip is re-read
-/// ([`SyncedChainFacts::bracket`]), and only a witness found standing on the
-/// same block can be reconciled. Three sequential round trips, then: witness,
-/// record, re-read. The third is a `get_block_hash` at one height, and it is
-/// paid on every path that mints a vouched view — claim assembly, the exit
-/// path, the serve-set refresh. What it does not prove is on `bracket`.
+/// **No bracket.** The record names the block it was gathered at, read in
+/// the same snapshot (IG-Q84), so it says on its own which chain it
+/// describes; a reorg that crosses the witness tip and catches back up
+/// inside the window changes nothing a re-read could add. Two sequential
+/// round trips: witness, record.
 ///
 /// # Errors
 ///
 /// [`EmissionSourceError`] only for the record read. A failed *facts* read
-/// or a failed re-read is not an error here: it is [`Vouching::Broken`],
+/// is not an error here: it is [`Vouching::Broken`],
 /// because the record may still be worth describing even when it cannot be
 /// acted on.
 pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
@@ -752,41 +690,14 @@ pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
     // Witness first, and awaited, before the record request is issued.
     let witness = fetch_synced_chain_facts(rpc).await;
     let source = fetch_emission_claim_source(rpc, p_id).await?;
-    // Then the bracket: the witness block re-read AFTER the record is in
-    // hand. Only a bracketed witness can be reconciled, so this is not a
-    // step the function could forget.
+    // The record names its own block, so it needs no re-read after it: the
+    // witness is the sync gate and the height a record must not fall below.
     let vouching = match witness {
-        Ok(Some(facts)) => match bracket_after_record(rpc, facts).await {
-            Ok(bracketed) => Vouching::Vouched(CoherentChainView::reconcile(
-                &bracketed,
-                source.chain_height,
-            )),
-            Err(why) => Vouching::Broken(why),
-        },
+        Ok(Some(facts)) => Vouching::Vouched(CoherentChainView::reconcile(&facts, source.anchor())),
         Ok(None) => Vouching::Broken(TimelineBreak::DaemonSyncing),
         Err(e) => Vouching::Broken(TimelineBreak::from_facts_error(&e)),
     };
     Ok(VouchedClaimSource { source, vouching })
-}
-
-/// Re-read the block the witness stands on, now that the record is in hand,
-/// and confirm the witness against it.
-///
-/// One `get_block_hash` at the witness **height** — not a second `get_info`,
-/// whose top hash would move on any honest advance during the record read.
-/// A re-read that fails is classified like a failed witness read: the wallet
-/// cannot vouch, and the reason is the transport's or the contract's.
-async fn bracket_after_record<R: Rpc>(
-    rpc: &R,
-    facts: SyncedChainFacts,
-) -> Result<BracketedChainFacts, TimelineBreak> {
-    let number =
-        usize::try_from(facts.tip().to_raw()).map_err(|_| TimelineBreak::FactsUnreadable)?;
-    let at_tip_now = rpc
-        .get_block_hash(number)
-        .await
-        .map_err(|e| TimelineBreak::from_facts_error(&e))?;
-    facts.bracket(at_tip_now)
 }
 
 /// A claim-source response **paired with the `P` it was actually requested

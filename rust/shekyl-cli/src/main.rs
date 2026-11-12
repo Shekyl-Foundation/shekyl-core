@@ -575,7 +575,7 @@ fn run_repl_command(
     // startup would spend a Tor circuit on a courtesy check.
     if let Some(ref dc) = daemon_client {
         if dc.is_loopback() {
-            if let Err(e) = dc.get_info() {
+            if let Err(e) = dc.daemon_status() {
                 if matches!(e, daemon::DaemonError::ConnectionRefused { .. }) {
                     eprintln!("Note: {e}");
                 }

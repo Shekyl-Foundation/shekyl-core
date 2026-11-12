@@ -8,7 +8,7 @@
 //!
 //! The witness for block `h` is the daemon that served the template `h`
 //! was mined from, whether its built-in miner found the block or an
-//! external one on `get_block_template` did (`SCS-P25`: the `0x0C` field
+//! external one on `block_template` did (`SCS-P25`: the `0x0C` field
 //! already makes the author public). This crate turns the commitment the
 //! template drew into a bundle the queue admits:
 //!

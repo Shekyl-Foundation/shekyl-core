@@ -55,10 +55,11 @@ pub fn connectors(config: &DaemonConfig) -> Vec<ConnectorId> {
 /// not a peer dial and does not count against the in-flight bound, so the
 /// bound does not cover it. An operator's Tor is not probed yet (§4.9).
 ///
-/// A node that runs the bundle producer adds its reads' descriptors
-/// ([`shekyl_node::producer_descriptors`]): it mines and has a Tor, managed
-/// or the operator's, and each started settlement read holds a SOCKS
-/// stream (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11). Those are not peer
+/// A node with a Tor, managed or the operator's, adds its fetch client's
+/// descriptors ([`shekyl_node::fetch_descriptors`]): one SOCKS stream per
+/// slot, the shard view's lane on every such node and the bundle
+/// producer's settlement reads beside it when the node mines
+/// (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11, IG-Q90). Those are not peer
 /// dials either.
 ///
 /// Clearnet adds its linger cap
@@ -86,7 +87,7 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
     } else {
         0
     };
-    let producer = shekyl_node::producer_descriptors(config);
+    let fetch = shekyl_node::fetch_descriptors(config);
     connectors(config)
         .into_iter()
         .map(|c| {
@@ -96,7 +97,7 @@ fn reservation(config: &DaemonConfig, clearnet_linger: u64) -> u64 {
         })
         .fold(
             rpc.saturating_add(probe)
-                .saturating_add(producer)
+                .saturating_add(fetch)
                 .saturating_add(linger),
             u64::saturating_add,
         )
@@ -283,7 +284,8 @@ mod tests {
     /// descriptors its dials can hold, `Confirm` dials at target included.
     /// A managed Tor adds its probe's one (the probe brief, amendment 2):
     /// dropping that term, or adding it for an operator's Tor, fails this.
-    /// Clearnet adds its linger cap (D10.2).
+    /// Clearnet adds its linger cap (D10.2). Either Tor adds its fetch
+    /// client's view lane (IG-Q90).
     #[test]
     fn the_reservation_is_the_rpc_cap_plus_each_connectors_target_and_bound() {
         let held = |c: ConnectorId| {
@@ -301,9 +303,15 @@ mod tests {
             matches!(both.tor, Tor::Managed { .. }),
             "Tor is managed by default"
         );
+        let views = shekyl_node::fetch_descriptors(&both);
+        assert!(views > 0, "a Tor node holds the view lane");
         assert_eq!(
             reserved_descriptors(&both),
-            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor) + PROBE_DESCRIPTORS,
+            25 + held(ConnectorId::Clearnet)
+                + linger
+                + held(ConnectorId::Tor)
+                + PROBE_DESCRIPTORS
+                + views,
             "the managed Tor's probe holds one more"
         );
         let operator = config(&[
@@ -314,9 +322,10 @@ mod tests {
             "--rpc-connections-max",
             "25",
         ]);
+        assert_eq!(shekyl_node::fetch_descriptors(&operator), views);
         assert_eq!(
             reserved_descriptors(&operator),
-            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor),
+            25 + held(ConnectorId::Clearnet) + linger + held(ConnectorId::Tor) + views,
             "an operator's Tor is not probed"
         );
         let offline = config(&[
@@ -363,11 +372,12 @@ mod tests {
         .expect("a full address encodes")
     }
 
-    /// A node that mines adds the bundle producer's reads to the
-    /// reservation, under a managed Tor and under an operator's: each
-    /// started settlement read holds a SOCKS stream. With Tor off it runs
-    /// no producer and adds nothing. Leaving the term out, or adding it for
-    /// one Tor only, fails this. The mining row is a parsed `mine-address`.
+    /// A node with a Tor, managed or the operator's, reserves its fetch
+    /// client's view lane, and one that mines adds the bundle producer's
+    /// reads: each started read or flight holds a SOCKS stream. With Tor
+    /// off there is no fetch client and nothing is added. Leaving the term
+    /// out, or adding it for one Tor only, fails this. The mining row is a
+    /// parsed `mine-address`.
     #[test]
     fn a_mining_node_with_a_tor_reserves_its_settlement_reads() {
         let address = mining_address();
@@ -397,7 +407,9 @@ mod tests {
         ] {
             let idle = with_tor(tor);
             let mining = mining(tor);
-            let reads = shekyl_node::producer_descriptors(&mining);
+            let views = shekyl_node::fetch_descriptors(&idle);
+            assert!(views > 0, "{:?}: the view lane", idle.tor);
+            let reads = shekyl_node::fetch_descriptors(&mining) - views;
             assert!(reads > 0, "{:?}: the producer runs", mining.tor);
             assert_eq!(
                 reserved_descriptors(&mining),
@@ -407,10 +419,11 @@ mod tests {
             );
         }
         let off = &["--tor", "off"][..];
+        assert_eq!(shekyl_node::fetch_descriptors(&with_tor(off)), 0);
         assert_eq!(
             reserved_descriptors(&mining(off)),
             reserved_descriptors(&with_tor(off)),
-            "Tor off runs no producer"
+            "Tor off builds no fetch client"
         );
     }
 

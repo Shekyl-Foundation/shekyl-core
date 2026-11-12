@@ -6,7 +6,7 @@
 #
 # with_small_disk.sh CMD...: run CMD with SHEKYL_SMALL_DISK naming a 1 MiB
 # tmpfs, for the full-disk live-daemon gate
-# (engine::regtest_e2e::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit).
+# (engine::regtest_e2e::full_disk::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit).
 #
 # CI does not use this: build.yml mounts the tmpfs on the job container
 # (`options: --tmpfs`) and sets SHEKYL_SMALL_DISK on the gate step. This is

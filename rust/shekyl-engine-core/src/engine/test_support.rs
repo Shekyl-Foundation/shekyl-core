@@ -296,7 +296,7 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
-    /// When set, `get_info` answers as an UNSYNCHRONIZED daemon
+    /// When set, `daemon_status` answers as an UNSYNCHRONIZED daemon
     /// (`WSS-Q14`). Drives the refusal bites on every consumer of
     /// `daemon_claimed_tip`.
     daemon_syncing: bool,
@@ -410,7 +410,7 @@ fn default_fee_estimates() -> FeeEstimates {
 /// which controls both health facts and submit outcomes.
 /// The hash of the block at `height` on every test fixture's chain.
 ///
-/// One derivation, deliberately: `get_info`'s `top_block_hash` and
+/// One derivation, deliberately: `daemon_status`'s `hash` and
 /// `get_block_hash(height)` must agree on an unbroken chain, and the ledger's
 /// continuity check is exactly the comparison between them. Four fixtures
 /// with four derivations would make that agreement a coincidence to
@@ -427,27 +427,55 @@ pub fn test_block_hash_at(height: u64) -> BlockHash {
 /// not a protocol constant.
 const SYNCING_TARGET_LEAD: u64 = 10_000;
 
-/// `get_info` for [`TestDaemon`] and any other double that should answer
-/// as this daemon does.
+/// `daemon_status` for [`TestDaemon`] and any other double that should
+/// answer as this daemon does.
 ///
 /// `syncing` clears the flag, which is the whole predicate, and places the
 /// target [`SYNCING_TARGET_LEAD`] above the count. A synchronized double
 /// reports no target.
-pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
+pub(crate) fn daemon_status(chain_count: u64, syncing: bool) -> serde_json::Value {
     let target_height = syncing.then(|| chain_count.saturating_add(SYNCING_TARGET_LEAD));
-    super::daemon::synced_chain_facts::GetInfoDocument {
+    super::daemon::synced_chain_facts::DaemonStatusDocument {
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
         synchronized: !syncing,
         top_hash: test_block_hash_at(chain_count.saturating_sub(1)),
-        has_peers: true,
+        peered: true,
     }
     .to_value()
 }
 
+/// The method a JSON-RPC request body names, for a double's `post`.
+pub(crate) fn requested_method(body: &[u8]) -> String {
+    let request: serde_json::Value =
+        serde_json::from_slice(body).expect("a double reads the request it was sent");
+    request["method"]
+        .as_str()
+        .expect("every request names its method")
+        .to_owned()
+}
+
+/// The parameters a JSON-RPC request body carries, for a double's `post`.
+pub(crate) fn requested_params(body: &[u8]) -> serde_json::Value {
+    let mut request: serde_json::Value =
+        serde_json::from_slice(body).expect("a double reads the request it was sent");
+    request["params"].take()
+}
+
+/// A JSON-RPC 2.0 reply carrying `result`, as a double answers.
+pub(crate) fn result_envelope(result: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 0, "result": result}))
+        .expect("an envelope serializes")
+}
+
+/// The name a method's type gives it on the wire.
+pub(crate) fn method_name<M: shekyl_rpc_client::RpcMethod>() -> &'static str {
+    M::NAME
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 0,
         synchronized: true,
     }
@@ -564,7 +592,7 @@ impl TestDaemon {
             .daemon_height_cap = Some(cap);
     }
 
-    /// Answer `get_info` as a daemon that is still synchronizing.
+    /// Answer `daemon_status` as a daemon that is still synchronizing.
     ///
     /// The lever every `WSS-Q14` refusal bite pulls: with this set, the
     /// daemon has no tip to claim, so `daemon_claimed_tip` and every
@@ -679,31 +707,18 @@ impl TestDaemon {
 }
 
 impl Rpc for TestDaemon {
-    fn post(
-        &self,
-        _route: &str,
-        _body: Vec<u8>,
-    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-        async move {
-            panic!(
-                "TestDaemon::post is unreachable: tests override the high-level Rpc methods directly. \
-                 If you reached here, you called a default-impl Rpc method that TestDaemon does not yet override; \
-                 add the override rather than implementing post()."
-            )
-        }
-    }
-
-    /// `get_info`, answered as a **synchronized** daemon at this double's
-    /// height — the override `post`'s panic message asks for rather than a
-    /// `post` implementation.
+    /// `daemon_status`, answered as a **synchronized** daemon at this
+    /// double's height; every other method is overridden at the trait's
+    /// high-level methods, and reaching `post` for one of them is a double
+    /// that lacks its override.
     ///
-    /// `daemon_claimed_tip` reads sync state and height from one `get_info`
-    /// (`WSS-Q14`), so the double has to answer it or every dispatch path
-    /// panics. Synchronized is the right default: every existing scenario was
-    /// written against a daemon whose tip is authoritative, and answering
-    /// otherwise would silently disable the release/post paths under test.
-    /// The unsynchronized timeline has its own fixtures
-    /// (`serve_set_source.rs`'s `ResyncingDaemon`).
+    /// `daemon_claimed_tip` reads sync state and height from one
+    /// `daemon_status` (`WSS-Q14`), so the double has to answer it or every
+    /// dispatch path panics. Synchronized is the right default: every
+    /// existing scenario was written against a daemon whose tip is
+    /// authoritative, and answering otherwise would silently disable the
+    /// release/post paths under test. The unsynchronized timeline has its
+    /// own fixtures (`serve_set_source.rs`'s `ResyncingDaemon`).
     ///
     /// `height` honours [`Self::set_daemon_height_cap`] so both clocks agree.
     /// It deliberately does **not** drain `height_errors`: that queue's
@@ -711,20 +726,20 @@ impl Rpc for TestDaemon {
     /// `height_errors_drain_in_fifo_then_recover`, and draining it from two
     /// methods would make the order depend on which clock a test happened to
     /// read first.
-    fn json_rpc_call<Response: serde::de::DeserializeOwned + std::fmt::Debug>(
+    fn post(
         &self,
-        method: &str,
-        _params: Option<serde_json::Value>,
-    ) -> impl Send + std::future::Future<Output = Result<Response, RpcError>> {
+        _route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
         let state = self.state.clone();
-        let method = method.to_string();
         async move {
-            if method != "get_info" {
-                return Err(RpcError::InternalError(format!(
-                    "TestDaemon has no json_rpc_call override for '{method}': add one rather \
-                     than implementing post()"
-                )));
-            }
+            let method = requested_method(&body);
+            assert_eq!(
+                method,
+                method_name::<shekyl_rpc_client::wire::DaemonStatus>(),
+                "TestDaemon answers only daemon_status by post: override the Rpc method \
+                 instead"
+            );
             let (height, syncing) = {
                 let state = state.lock().expect("TestDaemon state poisoned");
                 let chain_len = state.chain.len() as u64;
@@ -734,12 +749,11 @@ impl Rpc for TestDaemon {
                     .unwrap_or(chain_len);
                 (h, state.daemon_syncing)
             };
-            serde_json::from_value(daemon_get_info(height, syncing))
-                .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
+            Ok(result_envelope(&daemon_status(height, syncing)))
         }
     }
 
-    /// The block at `number`, on the same chain `get_info` describes — so a
+    /// The block at `number`, on the same chain `daemon_status` describes — so a
     /// ledger that re-reads its anchor finds it unchanged unless a test says
     /// otherwise.
     fn get_block_hash(
@@ -873,7 +887,7 @@ impl DaemonEngine for TestDaemon {
             } else {
                 Ok(TxSubmitOutcome::AlreadyInPool {
                     hash,
-                    relay: shekyl_rpc_types::PoolRelay::Published,
+                    relay: shekyl_rpc_client::Publication::Public,
                 })
             }
         }

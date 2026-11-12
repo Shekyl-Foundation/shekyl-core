@@ -8,7 +8,7 @@
 //! Every trigger reaches one latch: the POSIX signals and every Windows
 //! console event through [`own`], which holds the operating system's
 //! streams for the process's life on the signal runtime; the RPC's
-//! `stop_daemon` (`shekyl-cli daemon stop`) through [`request_stop`]; and a
+//! `daemon_stop` (`shekyl-cli daemon stop`) through [`request_stop`]; and a
 //! task the node owns ending on its own, through [`fatal`], whose stop also
 //! makes the exit a failure. A wait is
 //! [`stop_requested`], which answers at once when the latch is already
@@ -77,7 +77,7 @@ pub enum StopCause {
     /// The operating system's stop trigger: a service manager's or a
     /// terminal's ordinary way to stop the daemon.
     Signal(Signal),
-    /// The RPC's `stop_daemon`, which `shekyl-cli daemon stop` posts.
+    /// The RPC's `daemon_stop`, which `shekyl-cli daemon stop` posts.
     Requested,
     /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
     Fatal(NodeEnd),
@@ -87,7 +87,7 @@ impl fmt::Display for StopCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Signal(signal) => f.write_str(signal.name()),
-            Self::Requested => f.write_str("the RPC's stop_daemon"),
+            Self::Requested => f.write_str("the RPC's daemon_stop"),
             Self::Fatal(end) => write!(f, "{end}"),
         }
     }
@@ -115,7 +115,7 @@ fn latched() -> Option<StopCause> {
         .clone()
 }
 
-/// The daemon's own request: the RPC's `stop_daemon`.
+/// The daemon's own request: the RPC's `daemon_stop`.
 pub fn request_stop() {
     latch(StopCause::Requested);
 }

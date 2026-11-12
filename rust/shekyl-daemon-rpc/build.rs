@@ -51,7 +51,7 @@ fn main() {
     // The DAA's target block time. Read here rather than off the wire: it is
     // genesis-frozen and single-sourced through this JSON, and the daemon
     // console renders statistics from it (`console.rs`). A console that took
-    // T from `/get_info` would give one constant two sources, one of them
+    // T from `daemon_status` would give one constant two sources, one of them
     // remote and unverified.
     let daa_target_seconds = get_u64(&map, "daa_target_seconds", &config_path);
 

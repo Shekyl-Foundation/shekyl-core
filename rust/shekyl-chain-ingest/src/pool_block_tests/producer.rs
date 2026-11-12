@@ -263,7 +263,7 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
     assert!(held, "the entry judged at the newer tip is still held");
 }
 
-/// `pop_blocks` (DX-Q3, Q7) through the service: a count that would pop
+/// `dev_chain_pop` (DX-Q3, Q7) through the service: a count that would pop
 /// genesis is refused before any pop; a count of two pops both blocks and
 /// returns both their transactions to the pool through its door, as a
 /// switch's demoted bodies are; and the writer is up after either, so the
@@ -748,7 +748,7 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
 
 /// A body flushed between the producer's two pool locks posts nothing and
 /// evicts nothing: a posted job never names a body an outside miner's
-/// `submit_block` would meet as missing; the follower builds again (the
+/// `block_submit` would meet as missing; the follower builds again (the
 /// landing review of #1165, N2; the brief's c2). Red edit: list the bodies
 /// selected at the first lock without asking the pool again.
 #[tokio::test]

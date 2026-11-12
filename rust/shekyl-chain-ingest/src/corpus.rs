@@ -65,7 +65,7 @@
 //! # Verified, not declared (RD-F15)
 //!
 //! The writer does not record what the source *said* about its bodies —
-//! `/get_blocks_by_height.bin` names a discarded body per slot
+//! `block_list` names a discarded body per slot
 //! (`archived`, `PDM-Q10`), and the fetch refuses that before it reaches
 //! the writer — it parses the block and requires the bodies to match
 //! `block.transaction_hashes` in **count, order and hash** before a height

@@ -11,6 +11,7 @@ use shekyl_archival_retention::{
     CreditPair, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardClose, ShardSet,
     EMISSION_KAT_SHAPE,
 };
+use shekyl_rpc_types::wire::archival as reply;
 use shekyl_types::{BlockHeight, ChainCount};
 
 pub(crate) const BUDGET: u64 = 1_000_000;
@@ -119,6 +120,7 @@ pub(crate) fn source_with(
     );
     EmissionClaimSource {
         chain_height: ChainCount::from_raw(chain_height),
+        tip_hash: crate::engine::test_support::test_block_hash_at(chain_height - 1),
         current_settled_epoch,
         bond: Some(BondContext {
             join_settlement_epoch: EMISSION_KAT_SHAPE.join_settlement_epoch,
@@ -146,149 +148,114 @@ pub(crate) fn source_at_count(
 ) -> EmissionClaimSource {
     let mut source = source_with(settlement_epoch_at_height(chain_height), claimed, epochs);
     source.chain_height = ChainCount::from_raw(chain_height);
+    source.tip_hash = crate::engine::test_support::test_block_hash_at(chain_height - 1);
     source
 }
 
 // ── The single test-side wire encoder ───────────────────────────────
 //
-// One Rust re-encoding of the daemon's `get_archival_emission_claim_source`
-// JSON shape: the decode tests (`emission_source.rs`) and the claim
-// orchestrator's e2e fetch leg both derive their fixtures from it, so a
-// field rename cannot leave two test files updated out of lockstep. The
-// shape's independent pin is the C++ wire-contract test on the
-// serializer side (`archival_claim_source_rpc.cpp`) — one Rust copy,
-// one C++ pin, no third source of truth.
+// One Rust re-encoding of the daemon's `archival_claim_show` reply: the
+// decode tests (`emission_source.rs`) and the claim orchestrator's e2e
+// fetch leg both derive their fixtures from it, so a field rename cannot
+// leave two test files updated out of lockstep. It builds the shared wire
+// type, so the shape it writes is the method table's.
 
-/// A JSON array field the way epee KV serialization emits it: **omitted
-/// when empty** (epee omits empty containers), so the decoder's
-/// absent-decodes-empty rule stays exercised by every fixture built
-/// through this encoder.
-fn put_array<T: Clone + Into<serde_json::Value>>(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    field: &str,
-    values: &[T],
-) {
-    if !values.is_empty() {
-        obj.insert(
-            field.to_owned(),
-            serde_json::Value::Array(values.iter().cloned().map(Into::into).collect()),
-        );
+fn integer(value: u64) -> shekyl_rpc_types::kinds::Integer {
+    shekyl_rpc_types::kinds::Integer(value)
+}
+
+fn amount(value: u64) -> shekyl_units::wire::AtomicUnitsString {
+    shekyl_units::AtomicUnits::from_raw(value).into()
+}
+
+/// An [`EpochSnapshot`] as the daemon writes it.
+pub(crate) fn epoch_reply(e: &EpochSnapshot) -> reply::Epoch {
+    reply::Epoch {
+        id: integer(e.settlement_epoch),
+        closing_height: shekyl_rpc_types::kinds::Height(e.close_block_height),
+        work: shekyl_rpc_types::kinds::Milli(e.sigma_work_milli),
+        budget: e.has_budget_row.then(|| amount(e.budget_atomic)).into(),
+        bond: e
+            .bonds
+            .iter()
+            .map(|b| reply::ClaimBond {
+                joined_epoch: integer(b.join_settlement_epoch),
+                // Inclusive on the wire.
+                failure: b
+                    .bad_intervals
+                    .iter()
+                    .map(|i| reply::Failure {
+                        from: integer(i.start_epoch),
+                        to: integer(i.end_exclusive - 1),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        shard: e
+            .shards
+            .iter()
+            .map(|s| {
+                let wire = s.close.to_wire();
+                reply::ClaimShard {
+                    id: integer(s.shard_id),
+                    freeze_height: shekyl_rpc_types::kinds::Height(wire.freeze_height),
+                    segment: wire.has_segment,
+                }
+            })
+            .collect(),
+        credit: e
+            .credit_pairs
+            .iter()
+            .map(|p| reply::Credit {
+                bond: integer(p.bond_idx as u64),
+                shard: integer(p.shard_idx as u64),
+            })
+            .collect(),
+        claimant: e.claimant_bond_idx.map(|i| integer(i as u64)).into(),
     }
 }
 
-/// Re-encode an [`EpochSnapshot`] as the daemon's epee KV JSON emits it.
-pub(crate) fn epoch_json(e: &EpochSnapshot) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert("settlement_epoch".into(), e.settlement_epoch.into());
-    obj.insert("close_block_height".into(), e.close_block_height.into());
-    obj.insert("sigma_work_milli".into(), e.sigma_work_milli.into());
-    obj.insert("budget_atomic".into(), e.budget_atomic.into());
-    obj.insert("has_budget_row".into(), e.has_budget_row.into());
-    let bonds: Vec<serde_json::Value> = e
-        .bonds
-        .iter()
-        .map(|b| {
-            let mut bond = serde_json::Map::new();
-            bond.insert(
-                "join_settlement_epoch".into(),
-                b.join_settlement_epoch.into(),
-            );
-            let flat: Vec<u64> = b
-                .bad_intervals
+/// The `archival_claim_show` reply for a typed source — the inverse of
+/// [`EmissionClaimSource::from_reply`], so a fixture built here decodes
+/// through the real untrusted-boundary path.
+pub(crate) fn source_reply(source: &EmissionClaimSource) -> reply::ClaimSource {
+    let bond = source.bond.as_ref();
+    reply::ClaimSource {
+        height: shekyl_rpc_types::kinds::Height(source.chain_height.to_raw() - 1),
+        hash: shekyl_rpc_types::hash::HashHex::from_bytes(*source.tip_hash.as_bytes()),
+        settled_epoch: integer(source.current_settled_epoch),
+        joined_epoch: bond.map(|b| integer(b.join_settlement_epoch)).into(),
+        holding: match bond.map(|b| b.holdings.kind) {
+            Some(HoldingsKind::CompleteTree) => reply::Holding::CompleteTree,
+            _ => reply::Holding::Shards,
+        },
+        shard: bond.map_or_else(Vec::new, |b| {
+            b.holdings.shard_ids.iter().copied().map(integer).collect()
+        }),
+        claimed: bond.map_or_else(Vec::new, |b| {
+            b.claimed_settlement_epochs
                 .iter()
-                .flat_map(|i| [i.start_epoch, i.end_exclusive])
-                .collect();
-            put_array(&mut bond, "bad_intervals_flat", &flat);
-            serde_json::Value::Object(bond)
-        })
-        .collect();
-    put_array(&mut obj, "bonds", &bonds);
-    let shards: Vec<serde_json::Value> = e
-        .shards
-        .iter()
-        .map(|s| {
-            let wire = s.close.to_wire();
-            serde_json::json!({
-                "shard_id": s.shard_id,
-                "freeze_height": wire.freeze_height,
-                "has_segment": wire.has_segment,
-            })
-        })
-        .collect();
-    put_array(&mut obj, "shards", &shards);
-    let pairs: Vec<serde_json::Value> = e
-        .credit_pairs
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "bond_idx": p.bond_idx,
-                "shard_idx": p.shard_idx,
-            })
-        })
-        .collect();
-    put_array(&mut obj, "credit_pairs", &pairs);
-    obj.insert(
-        "claimant_bond_idx".into(),
-        e.claimant_bond_idx.map_or(u64::MAX, |i| i as u64).into(),
-    );
-    serde_json::Value::Object(obj)
+                .copied()
+                .map(integer)
+                .collect()
+        }),
+        bond_total: amount(bond.map_or(0, |b| b.bonded_total_atomic)),
+        failure_count: shekyl_rpc_types::kinds::Count(
+            bond.map_or(0, |b| b.bad_interval_count as u64),
+        ),
+        served_epoch: bond
+            .and_then(|b| b.last_served.as_verify_operand())
+            .map(integer)
+            .into(),
+        slash_epoch: bond
+            .and_then(|b| b.last_settled_slash.as_verify_operand())
+            .map(integer)
+            .into(),
+        epoch: source.epochs.iter().map(epoch_reply).collect(),
+    }
 }
 
-/// The full `get_archival_emission_claim_source` result body for a
-/// typed source — the inverse of `EmissionClaimSource::from_json`, so a
-/// fixture built here decodes through the real untrusted-boundary path.
+/// [`source_reply`] as the JSON a double answers with.
 pub(crate) fn source_json(source: &EmissionClaimSource) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert("status".into(), "OK".into());
-    obj.insert("chain_height".into(), source.chain_height.to_raw().into());
-    obj.insert(
-        "current_settled_epoch".into(),
-        source.current_settled_epoch.into(),
-    );
-    obj.insert("has_bond_record".into(), source.bond.is_some().into());
-    if let Some(bond) = source.bond.as_ref() {
-        obj.insert(
-            "join_settlement_epoch".into(),
-            bond.join_settlement_epoch.into(),
-        );
-        obj.insert(
-            "holdings_kind".into(),
-            match bond.holdings.kind {
-                HoldingsKind::ShardSetCompact => 0u8,
-                HoldingsKind::CompleteTree => 1u8,
-            }
-            .into(),
-        );
-        put_array(&mut obj, "held_shard_ids", &bond.holdings.shard_ids);
-        put_array(
-            &mut obj,
-            "claimed_settlement_epochs",
-            &bond.claimed_settlement_epochs,
-        );
-        obj.insert(
-            "bonded_total_atomic".into(),
-            bond.bonded_total_atomic.into(),
-        );
-        obj.insert(
-            "bad_interval_count".into(),
-            (bond.bad_interval_count as u64).into(),
-        );
-        // Emitted as the daemon emits them — flag plus value — so a fixture
-        // cannot accidentally exercise a shape the wire never produces.
-        let (served_flag, served_epoch) = match bond.last_served {
-            ServeAnchor::NeverServed => (false, 0u64),
-            ServeAnchor::ServedAt(e) => (true, e),
-        };
-        obj.insert("has_last_served_epoch".into(), served_flag.into());
-        obj.insert("last_served_epoch".into(), served_epoch.into());
-        let (slash_flag, slash_epoch) = match bond.last_settled_slash {
-            SlashWatermark::NothingSettled => (false, 0u64),
-            SlashWatermark::SettledThrough(e) => (true, e),
-        };
-        obj.insert("has_last_settled_slash_epoch".into(), slash_flag.into());
-        obj.insert("last_settled_slash_epoch".into(), slash_epoch.into());
-    }
-    let epochs: Vec<serde_json::Value> = source.epochs.iter().map(epoch_json).collect();
-    put_array(&mut obj, "epochs", &epochs);
-    serde_json::Value::Object(obj)
+    serde_json::to_value(source_reply(source)).expect("a claim source serializes")
 }

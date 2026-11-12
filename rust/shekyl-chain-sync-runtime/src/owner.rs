@@ -192,7 +192,7 @@ impl Running {
     }
 
     /// The model's view (CS-5 §7), published after every event: what
-    /// `sync_info` renders. A session is named by its admission id.
+    /// `sync_status` renders. A session is named by its admission id.
     #[must_use]
     pub fn view(&self) -> watch::Receiver<SyncView<SocketId>> {
         self.view.clone()

@@ -20,12 +20,38 @@ use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
-use shekyl_rpc_client::{
-    DaemonFault, HashHex, IdentityMismatch, Network, RejectCause, SubmitVerdict,
-};
+use shekyl_rpc_client::{DaemonFault, HashHex, IdentityMismatch, Network};
 use thiserror::Error;
 
 pub use crate::shard_view::ShardViewNotOfferedCause;
+
+/// A definite daemon rejection as the wallet RPC contract names it: the
+/// `-29106` data's `cause` and `-29114`'s (`docs/api/wallet_rpc.yaml`).
+///
+/// The wallet contract's own vocabulary. The daemon's wire spells its
+/// causes as one-key states since `CORE_RPC_VERSION` 4.0 (IG-Q76); this
+/// contract keeps the words its callers read until it is renamed in its
+/// own right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectCause {
+    /// The bytes do not parse, or break a structural or static rule.
+    Malformed,
+    /// Below the fee floor.
+    FeeTooLow,
+    /// Another transaction consumes one of this one's inputs.
+    DoubleSpendConflict,
+    /// The FCMP++ reference block's root is no longer the chain's.
+    StaleRoot,
+    /// The reference block is younger than the minimum age.
+    ReferenceTooRecent,
+    /// The daemon does not know the reference block.
+    ReferenceNotFound,
+    /// A consensus row refused the transaction; the row rides beside it.
+    ConsensusRule,
+    /// A cause this build does not know: the fail-safe disposition.
+    Unrecognized,
+}
 
 /// The Foundation CompleteTree terms, stated to the operator on the path
 /// that would take them on (`COMPLETETREE_ACTIVATION.md` §5, approved
@@ -240,6 +266,9 @@ wallet_rpc_error_codes! {
     /// the tree untouched, and this code says so even when the rescan
     /// already cleared history.
     ResyncRequired = -29211 => "RESYNC_REQUIRED",
+    /// The daemon refused a call as outside this wallet's grant: the
+    /// connection holds no grant the operation needs.
+    DaemonGrantRefused = -29212 => "DAEMON_GRANT_REFUSED",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -381,10 +410,14 @@ wallet_rpc_error_codes! {
     /// no holder that served it (the daemon's `-22`). Transient; retry.
     ShardUnavailable = -29535 => "SHARD_UNAVAILABLE",
     /// `get_shard_view`: the daemon this wallet uses does not serve shard
-    /// views — the method is admin-only and this is its public listener
-    /// (`-19`), or the daemon holds no archival skeleton (`-25`).
+    /// views — the call is outside the wallet's grant there
+    /// (`OutsideTheGrant`), or it runs with Tor off (`shard.tor-off`).
     /// `data.cause` says which; the remedy is another daemon, not a retry.
     ShardViewNotOffered = -29536 => "SHARD_VIEW_NOT_OFFERED",
+    /// `get_shard_view`: the daemon is already fetching a shard for a
+    /// bounded caller and opens one such fetch at a time (`bound.shard`).
+    /// Transient; retry shortly.
+    ShardViewBusy = -29537 => "SHARD_VIEW_BUSY",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -587,6 +620,13 @@ pub enum WalletRpcError {
          incompatible build; try another daemon"
     )]
     DaemonProtocolViolation,
+    /// `-29212`: the daemon refused the call as outside this connection's
+    /// grant. The same call on the same connection repeats the refusal.
+    #[error(
+        "the daemon refused the call as outside this wallet's grant — connect with a key \
+         that holds it, or to your own node"
+    )]
+    DaemonGrantRefused,
     /// `-29210`: the chain kept reorganizing during refresh.
     #[error(
         "the chain kept reorganizing during refresh and nothing was merged — retry once it settles"
@@ -1070,13 +1110,22 @@ pub enum WalletRpcError {
         detail: String,
     },
     /// `get_shard_view` (`-29536`): the daemon this wallet is pointed at
-    /// does not serve shard views. Two causes, one remedy (another daemon):
-    /// the method is admin-only and this is a public listener, or the
-    /// daemon holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`).
+    /// does not serve shard views. Two causes, one remedy (another
+    /// daemon): the call is outside the wallet's grant there, or it runs
+    /// with Tor off and has no client to fetch through (IG-Q90).
     #[error("this daemon does not serve shard views — point the wallet at a node that does")]
     ShardViewNotOffered {
-        /// Why: the daemon's `restricted` refusal or its `skeleton_absent`.
+        /// Why: `restricted` or `tor_off`.
         cause: ShardViewNotOfferedCause,
+        /// The daemon's message.
+        detail: String,
+    },
+    /// `get_shard_view` (`-29537`): the daemon is already fetching a shard
+    /// for a bounded caller and opens one such fetch at a time
+    /// (`RPC_CHANNEL.md` §6.3, IG-Q90). A view it already holds would have
+    /// answered. Transient: retry shortly.
+    #[error("the daemon is fetching another shard view — try again shortly")]
+    ShardViewBusy {
         /// The daemon's message.
         detail: String,
     },
@@ -1138,6 +1187,7 @@ impl WalletRpcError {
             Self::DaemonNetworkMismatch { .. } => WalletRpcErrorCode::DaemonNetworkMismatch,
             Self::DaemonChainMismatch { .. } => WalletRpcErrorCode::DaemonChainMismatch,
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
+            Self::DaemonGrantRefused => WalletRpcErrorCode::DaemonGrantRefused,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
@@ -1210,6 +1260,7 @@ impl WalletRpcError {
             Self::ShardStillOpen { .. } => WalletRpcErrorCode::ShardStillOpen,
             Self::ShardUnavailable { .. } => WalletRpcErrorCode::ShardUnavailable,
             Self::ShardViewNotOffered { .. } => WalletRpcErrorCode::ShardViewNotOffered,
+            Self::ShardViewBusy { .. } => WalletRpcErrorCode::ShardViewBusy,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1241,7 +1292,8 @@ impl WalletRpcError {
             | Self::CollectDaemonUnreachable { detail }
             | Self::UnstakeLocalNodeRequired { detail }
             | Self::ShardStillOpen { detail }
-            | Self::ShardUnavailable { detail } => Some(json!({ "detail": detail })),
+            | Self::ShardUnavailable { detail }
+            | Self::ShardViewBusy { detail } => Some(json!({ "detail": detail })),
             Self::ShardViewNotOffered { cause, detail } => {
                 Some(json!({ "cause": cause.as_str(), "detail": detail }))
             }
@@ -1327,9 +1379,10 @@ impl WalletRpcError {
     }
 
     fn submit_rejected(cause: RejectCause, row: Option<String>) -> Self {
-        let verdict = SubmitVerdict::Rejected { cause, row };
-        let data = serde_json::to_value(verdict)
-            .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
+        let mut data = json!({ "verdict": "rejected", "cause": cause });
+        if let Some(row) = row {
+            data["row"] = json!(row);
+        }
         Self::SubmitRejected { data }
     }
 
@@ -1636,6 +1689,10 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
             WalletRpcError::DaemonFeeResponseInvalid
         }
         DaemonFault::Internal => internal_detail("daemon request", detail),
+        DaemonFault::NotPermitted => {
+            tracing::warn!(detail, "daemon refused the call as outside the grant");
+            WalletRpcError::DaemonGrantRefused
+        }
     }
 }
 
@@ -2193,7 +2250,7 @@ impl From<SubmitError> for WalletRpcError {
     }
 }
 
-/// Map Engine terminal reject kinds onto the wire [`RejectCause`] vocabulary.
+/// Map Engine terminal reject kinds onto the contract's [`RejectCause`].
 fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
     match kind {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
@@ -2207,7 +2264,7 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
     }
 }
 
-/// Map Engine retryable reject causes onto the wire [`RejectCause`] vocabulary.
+/// Map Engine retryable reject causes onto the contract's [`RejectCause`].
 fn retryable_to_reject_cause(cause: RetryableRejectCause) -> RejectCause {
     match cause {
         RetryableRejectCause::StaleRoot => RejectCause::StaleRoot,
@@ -2729,7 +2786,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_rejected_data_is_wire_submit_verdict() {
+    fn submit_rejected_data_is_the_contracts_verdict() {
         use shekyl_engine_core::engine::error::TerminalErrorKind;
         use shekyl_engine_core::engine::SubmitError;
 

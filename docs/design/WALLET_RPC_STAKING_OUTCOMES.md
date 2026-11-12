@@ -221,7 +221,7 @@ cadence driver:
 
 - **The cause type.** The cause the dispatcher holds is the engine's
   `TerminalErrorKind` (`engine/error/submit.rs:34`). `RejectCause` is the
-  daemon reply's type (`shekyl-rpc-types/src/lib.rs:210`); the wallet
+  daemon reply's type (line 210 of `shekyl-rpc-types/src/lib.rs` at `a0d3ebcb1`); the wallet
   contract has no reject-cause type.
 - **The exit is the one kind pruned at its seam.** A definite first-send
   refusal removes it (§2's table). Claims and drains are held.

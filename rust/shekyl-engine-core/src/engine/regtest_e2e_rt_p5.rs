@@ -48,7 +48,6 @@ use std::time::Duration;
 
 use trace::{pair_messages, CountingProxy, Message};
 
-use shekyl_rpc_client::Rpc;
 use shekyl_scanner::WalletLedgerExt;
 use shekyl_tx_weight::{predict_size_and_weight, InputCount, OutputCount, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
@@ -375,11 +374,7 @@ async fn run_cell(cell: &Cell) {
     let restored = Arc::new(RwLock::new(restored));
     refresh(&restored).await;
 
-    let depth: serde_json::Value = daemon
-        .rpc()
-        .json_rpc_call("get_curve_tree_info", None)
-        .await
-        .expect("get_curve_tree_info");
+    let depth = serde_json::to_value(daemon.curve().await).expect("a curve reply serializes");
     let chain_height = daemon.height().await;
 
     // Every connection closes once its wallet is gone; only then is the
@@ -542,7 +537,7 @@ fn write_outputs(
             "fanout_txs": cell.fanout_txs,
             "shapes": cell.shapes,
             "chain_height": chain_height,
-            "curve_tree_info": depth,
+            "curve": depth,
         }))
         .expect("encode run.json"),
     )

@@ -5147,6 +5147,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-rpc-types",
  "shekyl-types",
+ "shekyl-units",
  "std-shims",
  "thiserror",
  "zeroize",
@@ -5198,13 +5199,13 @@ dependencies = [
 name = "shekyl-rpc-types"
 version = "3.1.0"
 dependencies = [
+ "base64",
  "hex",
  "serde",
  "serde_json",
  "sha2",
  "shekyl-address",
  "shekyl-network",
- "shekyl-portable-storage",
  "shekyl-rpc-grants",
  "shekyl-units",
  "shekyl-wire",
@@ -5683,14 +5684,10 @@ dependencies = [
 name = "shekyld"
 version = "3.1.0"
 dependencies = [
- "shekyl-archival-fetch-sched",
- "shekyl-chain-ingest",
  "shekyl-clearnet",
  "shekyl-daemon",
- "shekyl-daemon-rpc",
  "shekyl-relay",
  "shekyl-transport-layer",
- "shekyl-types",
 ]
 
 [[package]]

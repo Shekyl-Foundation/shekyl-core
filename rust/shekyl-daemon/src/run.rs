@@ -456,7 +456,7 @@ fn deliver(report: StopReport) {
 /// The line a start with `mine = on` announces when the node's declaration
 /// is `Open` (DC-F41, rule 82). Such a node mines only once it has a view
 /// of its network, and a node alone on an open network never gets one:
-/// until then the only signs were `mining_status.no_template` and a dialer
+/// until then the only signs are `mine_status`'s `cause` and a dialer
 /// warning. `None` for `mine = off`, or for a node declared offline or
 /// closed, which is synced at open and mines at once. The configuration
 /// check repeats it ([`crate::verify`]).
@@ -613,7 +613,7 @@ mod tests {
         (config, node)
     }
 
-    /// The daemon's own request, the RPC's `stop_daemon`, reaches the one
+    /// The daemon's own request, the RPC's `daemon_stop`, reaches the one
     /// owner, and the run ends with 0: one stop path, whatever asked. The
     /// RPC that served it is started and stopped by the run.
     #[test]
@@ -713,7 +713,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("stop requested by"))
             .unwrap_or_else(|| panic!("no stop announcement: {text}"));
-        assert_eq!(stop, "stop requested by the RPC's stop_daemon", "{text}");
+        assert_eq!(stop, "stop requested by the RPC's daemon_stop", "{text}");
         // The lock was released at the end: it can be taken again.
         assert!(Lock::take(&data).is_ok());
     }
@@ -796,7 +796,7 @@ mod tests {
         use signals::StopCause;
         assert_eq!(
             stop_report(StopCause::Requested),
-            StopReport::Announce("stop requested by the RPC's stop_daemon".to_owned())
+            StopReport::Announce("stop requested by the RPC's daemon_stop".to_owned())
         );
         #[cfg(unix)]
         assert_eq!(

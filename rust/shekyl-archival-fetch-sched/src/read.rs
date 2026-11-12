@@ -208,9 +208,10 @@ pub enum ReadFailure {
 
 /// The daemon's one fetch scheduler.
 ///
-/// Owns the one [`PFetchClient`] — and so the in-flight cap
-/// ([`shekyl_p_fetch::MAX_INFLIGHT`]) every caller shares — and the two
-/// facts seams. Cheap to share behind an `Arc`.
+/// Owns the one [`PFetchClient`] — and so the in-flight cap its callers'
+/// lanes divide (the bundle producer's reads, the view desk's
+/// [`crate::VIEW_SLOTS`]) — and the two facts seams. Cheap to share
+/// behind an `Arc`.
 pub struct FetchScheduler<F, H> {
     facts: Arc<F>,
     holders: Arc<H>,
@@ -232,7 +233,8 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         &self.facts
     }
 
-    /// Fetch slots not currently in use (`MAX_INFLIGHT` minus in-flight).
+    /// Fetch slots not currently in use (the client's slots minus those
+    /// in flight).
     pub fn available_slots(&self) -> usize {
         self.client.available_slots()
     }

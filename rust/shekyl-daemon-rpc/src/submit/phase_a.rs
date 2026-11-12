@@ -33,7 +33,7 @@ use shekyl_wire::transaction::{BondPost, BondPostKind, Ct, Input, Transaction, M
 
 use crate::submit::facts::BondProbe;
 
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 
 /// Shape class of an admissible submission, decided by the input-arm mix
 /// (which `shekyl-wire::validate` has already constrained to the §2.5
@@ -58,7 +58,7 @@ pub enum SubmitTxKind {
 /// with the facts later phases need already extracted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSubmission {
-    /// The exact bytes (post hex-decode) — the blob the commit shim stores,
+    /// The exact bytes submitted — the blob the commit shim stores,
     /// byte-identical to what the engine verified (checked below).
     pub blob: Vec<u8>,
     /// The parsed transaction.
@@ -203,15 +203,14 @@ impl PhaseAReject {
 
     /// The wire verdict this refusal maps to — always `Malformed` (§3.1:
     /// every Phase-A failure is deterministically permanent for the bytes).
-    pub fn verdict(&self) -> SubmitVerdict {
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+    pub fn verdict(&self) -> Verdict {
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         }
     }
 }
 
-/// Run Phase A over the submitted hex string.
+/// Run Phase A over the submitted bytes.
 ///
 /// On success the transaction is structurally and statically admissible:
 /// canonical bytes, canonical shape, known arm mix, valid key-image
@@ -219,20 +218,17 @@ impl PhaseAReject {
 /// submission is `Rejected{Malformed}` with a logged reason; nothing
 /// beyond this function has run, so a failure here provably cost no lock
 /// and no FFI call.
-pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> {
-    // Bound the decode before allocating: a hex string longer than
-    // 2 × MAX_TX_SIZE cannot decode to an admissible blob (row I1's
-    // DoS-bounded-decode property, enforced ahead of the allocation
-    // rather than after it).
-    if tx_hex.len() > MAX_TX_SIZE * 2 {
+pub fn parse_submission(blob: &[u8]) -> Result<ParsedSubmission, PhaseAReject> {
+    // Bound before any copy (row I1's DoS-bounded-decode property). The
+    // request body's own limit already bounds the base64 it came in.
+    if blob.len() > MAX_TX_SIZE {
         return Err(PhaseAReject::new(format!(
-            "tx_blob hex length {} exceeds the {} cap",
-            tx_hex.len(),
-            MAX_TX_SIZE * 2
+            "the transaction is {} bytes, past the {} cap",
+            blob.len(),
+            MAX_TX_SIZE
         )));
     }
-    let blob = hex::decode(tx_hex)
-        .map_err(|e| PhaseAReject::new(format!("tx_blob is not valid hex: {e}")))?;
+    let blob = blob.to_vec();
 
     // Parse: size cap + exact consumption (trailing bytes rejected) —
     // rows I1/I2/N1/N2 and the dense-tag arm gate (row M2).

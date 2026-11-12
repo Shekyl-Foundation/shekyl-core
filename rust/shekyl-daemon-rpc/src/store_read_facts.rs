@@ -16,8 +16,8 @@
 //!   against: the store's `root_at(h + 1)` and `leaf_count_at(h + 1)`, the
 //!   depth derived from the count (`ChainView::depth_at`, `CTW-Q4`). The
 //!   tree after the tip and the tree after a named height are the same
-//!   read, so `get_curve_tree_info` is `get_curve_tree_checkpoint` at the
-//!   tip by construction.
+//!   read, so `curve_show` answers the tip and a named height alike by
+//!   construction.
 //! - The emission of a range is the supply accumulator's growth across it
 //!   (`coins_generated`, CEN-G12's paid reward); its fees are each listed
 //!   body's `ct.fee`, read off the recorded transaction.
@@ -30,7 +30,7 @@
 //!   the byte-cut universe CEN-J15 judges (`ClosedUniverse::final_before`)
 //!   — with the market's counts at the slash pass's watermark.
 //! - The longhash is RandomX under the seed CEN-D3 names, over a cache
-//!   the daemon's cache store already holds. `calc_pow` never derives one.
+//!   the daemon's cache store already holds. `pow` never derives one.
 
 use shekyl_archival_retention::{
     claim_window_floor, whole_record_last_served, ShardClose, ShardCoverageIn,
@@ -223,7 +223,7 @@ impl SlashGather {
     }
 }
 
-/// A recorded transaction's body as `get_transactions` carries it.
+/// A recorded transaction's body as `tx_list` carries it.
 ///
 /// Held segments recompose. Segments absent on a record that
 /// [carries good](carries_archival_good) are discarded, and
@@ -270,7 +270,7 @@ fn chain_body(
     })
 }
 
-/// A recorded transaction as `get_transactions` carries it: its body,
+/// A recorded transaction as `tx_list` carries it: its body,
 /// where it sits, and its global output indices. `None` when the chain
 /// does not hold it.
 fn chain_slot(
@@ -308,7 +308,7 @@ fn chain_slot(
     }))
 }
 
-/// A pool entry's body as `get_transactions` carries it: the skeleton from
+/// A pool entry's body as `tx_list` carries it: the skeleton from
 /// `txid_parts()` — the same three operands a connect would record — and
 /// its good, always held. The Rust pool keeps no receive time (S7) and
 /// holds no entry marked as a double spend (CEN-M7: the door refuses the
@@ -596,7 +596,7 @@ impl ChainReadFacts for StoreFacts {
         pow_blob: &[u8],
         admitted: &AdmittedPow,
     ) -> Result<PowHash, FactsFault> {
-        // Under a permit in calc_pow's class: below the chain's forms and
+        // Under a permit in `pow`'s class (`Class::CalcPow`): below the chain's forms and
         // chain sync's, above the miner's. The facts run on a blocking
         // thread, so the wait is one. The permit is the hasher's, not the
         // RPC hash budget: that spend happens before this call, and only
@@ -607,7 +607,7 @@ impl ChainReadFacts for StoreFacts {
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
         let snap = self.snapshot()?;
-        let (tip, _) = tip_of(&snap)?;
+        let (tip, tip_hash) = tip_of(&snap)?;
         let view = SnapshotView::new(&snap);
         let at = connecting(tip);
         let rule_set = self.rules.in_force(at);
@@ -644,6 +644,7 @@ impl ChainReadFacts for StoreFacts {
             emission_epoch_facts(&view, &rule_set, persona, &window).map_err(derivation_fault)?;
         Ok(ClaimSource {
             chain_height: count_at(tip),
+            tip_hash,
             current_settled_epoch: settled,
             bond,
             epochs,

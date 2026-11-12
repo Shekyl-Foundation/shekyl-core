@@ -41,7 +41,8 @@ use shekyl_daemon_rpc::sync_facts::{
 };
 use shekyl_mempool::Pool;
 use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, ConnectorCounts, Network};
-use shekyl_rpc_types::{ChainSyncState, SyncMode};
+use shekyl_rpc_types::kinds::Count;
+use shekyl_rpc_types::wire::p2p::{SyncMode, SyncState as WireSyncState};
 use shekyl_transport_layer::{BanLeft, ConnectorId, Ipv4Subnet, ListedBan, SocketId};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
 
@@ -258,22 +259,23 @@ impl NodeFacts for Surroundings {
         if self.offline {
             return Ok(PeerFacts::Offline);
         }
-        let rows = self
-            .network
-            .peer_counts()
-            .into_iter()
-            .map(|counts| shekyl_rpc_types::InfoConnectorPeers {
-                connector: wire_connector(counts.connector),
-                incoming_sockets: counts.incoming,
-                outgoing_sockets: counts.outgoing,
-                white_peerlist_size: counts.white,
-                gray_peerlist_size: counts.gray,
-            })
-            .collect();
-        let peers = shekyl_rpc_types::InfoPeers::new(rows).map_err(|err| {
-            tracing::error!(%err, "get_info: the network's connector rows are out of order");
-            FactsFault::Internal
-        })?;
+        let mut peers = shekyl_rpc_types::wire::daemon::ConnectorMap::default();
+        for counts in self.network.peer_counts() {
+            let row = shekyl_rpc_types::wire::daemon::ConnectorCounts {
+                inbound_count: Count(counts.incoming),
+                outbound_count: Count(counts.outgoing),
+                peer_white_count: Count(counts.white),
+                peer_gray_count: Count(counts.gray),
+            };
+            let slot = match counts.connector {
+                ConnectorId::Clearnet => &mut peers.clearnet,
+                ConnectorId::Tor => &mut peers.tor,
+            };
+            if slot.replace(row).is_some() {
+                tracing::error!("daemon_status: the network reports one connector twice");
+                return Err(FactsFault::Internal);
+            }
+        }
         Ok(PeerFacts::Running(peers))
     }
 
@@ -316,12 +318,12 @@ fn millis(duration: std::time::Duration) -> u64 {
 }
 
 /// The wire's name for chain sync's state.
-const fn chain_sync_state(state: SyncState) -> ChainSyncState {
+const fn chain_sync_state(state: SyncState) -> WireSyncState {
     match state {
-        SyncState::NoView => ChainSyncState::NoView,
-        SyncState::Behind { .. } => ChainSyncState::Behind,
-        SyncState::Following { .. } => ChainSyncState::Following,
-        SyncState::Synced => ChainSyncState::Synced,
+        SyncState::NoView => WireSyncState::Unpeered,
+        SyncState::Behind { .. } => WireSyncState::Behind,
+        SyncState::Following { .. } => WireSyncState::Following,
+        SyncState::Synced => WireSyncState::Synced,
     }
 }
 
@@ -526,6 +528,9 @@ pub(crate) struct PoolBridge {
     health: PoolHealth,
     /// Where a flushed id's relay state is released.
     departed: shekyl_chain_ingest::service::Departed,
+    /// The stem entry a fresh local submission takes; `tx_relay`'s
+    /// re-offer enters the relay through it too.
+    stem: shekyl_daemon_rpc::submit::RelayNudge,
 }
 
 impl PoolBridge {
@@ -533,11 +538,13 @@ impl PoolBridge {
         pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
         health: PoolHealth,
         departed: shekyl_chain_ingest::service::Departed,
+        stem: shekyl_daemon_rpc::submit::RelayNudge,
     ) -> Self {
         Self {
             pool,
             health,
             departed,
+            stem,
         }
     }
 }
@@ -619,6 +626,30 @@ impl PoolFacts for PoolBridge {
             }
             gone
         })
+    }
+
+    /// Each id the pool holds is offered through the stem entry, as a
+    /// fresh local submission is; the ids offered. The pool's lock is
+    /// dropped before the first offer: the departure hook takes the relay
+    /// owner's map and then the pool, and an offer takes the map.
+    fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        let pool = self.pool()?;
+        let mut held: std::collections::BTreeMap<TxHash, Vec<u8>> = {
+            let asked: std::collections::BTreeSet<TxHash> = ids.iter().copied().collect();
+            let pool = lock(&pool);
+            pool.relay_view()
+                .entries()
+                .filter(|entry| asked.contains(&entry.id))
+                .map(|entry| (entry.id, entry.tx.serialize()))
+                .collect()
+        };
+        // In the order asked, each id once.
+        let held: Vec<(TxHash, Vec<u8>)> =
+            ids.iter().filter_map(|id| held.remove_entry(id)).collect();
+        for (id, blob) in &held {
+            (self.stem)(id, blob);
+        }
+        Ok(held.into_iter().map(|(id, _)| id).collect())
     }
 }
 
@@ -837,15 +868,6 @@ impl StopFacts for StopBridge {
     }
 }
 
-/// A connector as `get_info`'s Peers rows name it. Exhaustive: a new
-/// connector is a new wire name, decided where it is added.
-const fn wire_connector(connector: ConnectorId) -> shekyl_rpc_types::InfoConnector {
-    match connector {
-        ConnectorId::Clearnet => shekyl_rpc_types::InfoConnector::Clearnet,
-        ConnectorId::Tor => shekyl_rpc_types::InfoConnector::Tor,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,7 +925,7 @@ mod tests {
             network: Arc::new(NoNetwork),
         };
         let facts = surroundings.sync_view().expect("a view");
-        assert_eq!(facts.state, ChainSyncState::Synced);
+        assert_eq!(facts.state, WireSyncState::Synced);
         assert_eq!(facts.target, 9);
         let row = &facts.sessions[0];
         let mut expected = [0u8; 16];

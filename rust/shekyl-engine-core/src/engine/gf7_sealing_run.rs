@@ -91,12 +91,12 @@ const POSITIVE_CONTROL_RUNS: usize = 8;
 /// (`ARCHIVAL_REORG_DEPTH_BLOCKS` = 720) plus slack, so every sweep does real
 /// per-tick fetch work instead of idling on an empty scan window.
 const PREMINE_BLOCKS: u64 = shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS + 30;
-/// Blocks per `generateblocks` RPC (the established regtest batch size).
+/// Blocks per `dev_block_generate` RPC (the established regtest batch size).
 const MINE_BATCH_BLOCKS: u64 = 20;
 /// Background generator interval (§19.8.2 chain row: ~1 block / 30 s).
 const BACKGROUND_MINE_INTERVAL: Duration = Duration::from_secs(30);
 /// Background-miner tolerance: the maximum number of *consecutive*
-/// `generateblocks` failures the session absorbs; the next one past this fails
+/// `dev_block_generate` failures the session absorbs; the next one past this fails
 /// the run loud (via the health check). Three misses ≈ 90 s without chain
 /// advancement — noise against the 720-block finality horizon — while a
 /// persistent failure (daemon gone, port dead) must kill the session, not
@@ -572,12 +572,12 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
                 Err(e) => {
                     consecutive_failures += 1;
                     eprintln!(
-                        "background generateblocks failed \
+                        "background dev_block_generate failed \
                          ({consecutive_failures}/{MINER_MAX_CONSECUTIVE_FAILURES}): {e}"
                     );
                     assert!(
                         consecutive_failures <= MINER_MAX_CONSECUTIVE_FAILURES,
-                        "background miner: {consecutive_failures} consecutive generateblocks \
+                        "background miner: {consecutive_failures} consecutive dev_block_generate \
                          failures (tolerance {MINER_MAX_CONSECUTIVE_FAILURES}) — \
                          chain advancement lost"
                     );

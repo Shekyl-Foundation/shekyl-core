@@ -180,7 +180,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
         .collect();
     assert!(
         budget.try_acquire(Class::CalcPow).is_none(),
-        "a calc_pow permit was still free"
+        "a pow permit was still free"
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);
@@ -234,7 +234,7 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
         dir.path(),
         Arc::new(move || flag.store(true, Ordering::SeqCst)),
     );
-    shekyl_daemon_rpc::node_methods::stop_daemon(&*node.handles().stop).expect("asks");
+    shekyl_daemon_rpc::node_methods::daemon_stop(&*node.handles().stop).expect("asks");
     assert!(asked.load(Ordering::SeqCst), "the handler asked the latch");
     assert_eq!(
         Handles::absent().stop.request_stop(),

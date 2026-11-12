@@ -73,7 +73,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use shekyl_rpc_client::RejectCause;
+use shekyl_rpc_client::Rejection;
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
@@ -561,16 +561,16 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
         TxSubmitOutcome::Rejected { cause, .. } => match cause {
             // Terminal: under single-egress a definite terminal verdict
             // proves the bytes are in neither pool nor chain (§7.1).
-            RejectCause::Malformed
-            | RejectCause::FeeTooLow
-            | RejectCause::DoubleSpendConflict
-            | RejectCause::ConsensusRule
-            | RejectCause::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
+            Rejection::Malformed
+            | Rejection::FeeTooLow
+            | Rejection::DoubleSpendConflict
+            | Rejection::ConsensusRule(_)
+            | Rejection::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
             // Retryable: needs a fresh reference — a human-authorized
             // rebuild, not an automatic one.
-            RejectCause::StaleRoot
-            | RejectCause::ReferenceTooRecent
-            | RejectCause::ReferenceNotFound => ProbeVerdict::ReferenceStale,
+            Rejection::StaleRoot | Rejection::ReferenceTooRecent | Rejection::ReferenceUnknown => {
+                ProbeVerdict::ReferenceStale
+            }
         },
     }
 }

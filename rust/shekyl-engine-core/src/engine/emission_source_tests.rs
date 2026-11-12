@@ -13,17 +13,29 @@
 
 use super::*;
 use crate::engine::emission_claim::test_fixtures::source_json;
+use serde_json::{json, Value};
 use shekyl_archival_retention::{ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, SETTLEMENT_EPOCH_BLOCKS};
 use shekyl_types::BlockHeight;
 
-/// A response as the daemon's epee KV JSON store emits it: one window
-/// epoch with rows, one empty-row epoch (absent arrays omitted, as epee
-/// omits empty containers — the shared encoder reproduces that, so the
-/// absent-decodes-empty rule stays covered). Encoded through the
-/// crate's single test-side wire encoder
-/// (`emission_claim::test_fixtures::source_json`); the shape's
-/// independent pin is the C++ wire-contract test on the serializer
-/// side (`archival_claim_source_rpc.cpp`).
+/// The two gates a reply passes, in order: the method table's type (a
+/// member absent, unknown or misshapen is no reply), then the record's own
+/// invariants.
+#[derive(Debug)]
+enum Refused {
+    /// The reply is not the method table's type.
+    Shape,
+    /// The reply decoded and does not hold together.
+    Malformed,
+}
+
+fn decode(v: &Value) -> Result<EmissionClaimSource, Refused> {
+    let reply: ClaimSource = serde_json::from_value(v.clone()).map_err(|_| Refused::Shape)?;
+    EmissionClaimSource::from_reply(&reply).map_err(|e| match e {
+        EmissionSourceError::Malformed(_) => Refused::Malformed,
+        EmissionSourceError::Rpc(_) => unreachable!("no transport here"),
+    })
+}
+
 /// The exit operands must arrive or the decode must fail — they must never
 /// default.
 ///
@@ -35,41 +47,22 @@ use shekyl_types::BlockHeight;
 /// a dropped field would make the wallet compute readiness from a value it
 /// never received and tell a user an irreversible exit was safe to take.
 ///
-/// So: every exit operand is a required field, and its absence is
-/// `Malformed`. There is no `ServeAnchor` variant for "unknown" — a decode
-/// that cannot answer refuses instead of guessing.
+/// So: every exit operand is a required member, and its absence is no
+/// reply. `null` is the daemon's answer ("never served"); an absent member
+/// is not. There is no `ServeAnchor` variant for "unknown" — a decode that
+/// cannot answer refuses instead of guessing.
 ///
-/// **What this test covers, stated precisely.** It exercises the *decoder's*
-/// contract, not a shape today's wire produces: the C++ marshaler writes all
-/// **four** exit operands whenever `has_bond_record` is set — the bonded
-/// total, the interval-log count, and the two presence flags — so a current
-/// daemon never omits them and this negative control cannot fire against
-/// one. (It said "three" until 2026-08-26, which was the same undercount
-/// that left `bad_interval_count` off the wire in the first place: the
-/// operand with no absent state is the one that goes missing from a list.) Its
-/// value is forward-looking and is the reason it is worth keeping — a daemon
-/// that predates these fields, a field dropped in a future response edit, or
-/// a transport that elides scalars would all arrive here, and the decoder
-/// refuses rather than defaulting into the permissive branch. The
-/// wire-shape pin lives on the C++ side (`archival_claim_source_rpc.cpp`),
-/// where it belongs; this is the decoder's half.
+/// The edit that turns this red is a `#[serde(default)]` on any of them.
 #[test]
 fn a_missing_exit_operand_is_a_decode_error_never_a_permissive_default() {
-    for field in [
-        "bonded_total_atomic",
-        "bad_interval_count",
-        "has_last_served_epoch",
-        "has_last_settled_slash_epoch",
-    ] {
+    for field in ["bond_total", "failure_count", "served_epoch", "slash_epoch"] {
         let mut v = fixture();
         v.as_object_mut()
             .expect("fixture is an object")
             .remove(field);
-        let err =
-            EmissionClaimSource::from_json(&v).expect_err("a missing exit operand must not decode");
         assert!(
-            matches!(err, EmissionSourceError::Malformed(_)),
-            "{field} absent must be Malformed, got {err:?}"
+            matches!(decode(&v), Err(Refused::Shape)),
+            "{field} absent must be no reply"
         );
     }
 }
@@ -82,8 +75,8 @@ fn a_missing_exit_operand_is_a_decode_error_never_a_permissive_default() {
 /// the wallet *asked about*, because that is the fact the wallet holds
 /// first-hand and the only one an untrusted reply cannot move.
 ///
-/// That is also why the response carries no `p_id` echo to check against: a
-/// daemon willing to send the wrong record is willing to echo the right id
+/// That is also why the response carries no persona echo to check against:
+/// a daemon willing to send the wrong record is willing to echo the right id
 /// over it, so an echo would authenticate nothing while making the field
 /// look authoritative.
 ///
@@ -98,29 +91,7 @@ fn a_missing_exit_operand_is_a_decode_error_never_a_permissive_default() {
 /// is authenticated has it backwards.
 #[tokio::test]
 async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
-    #[derive(Clone)]
-    struct OneRecordDaemon(std::sync::Arc<Value>);
-
-    impl Rpc for OneRecordDaemon {
-        fn post(
-            &self,
-            route: &str,
-            _body: Vec<u8>,
-        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-            let reply =
-                serde_json::to_vec(&json!({ "result": *self.0 })).expect("fixture result encodes");
-            let ok = route == "json_rpc";
-            async move {
-                if ok {
-                    Ok(reply)
-                } else {
-                    Err(RpcError::InternalError("unexpected route".into()))
-                }
-            }
-        }
-    }
-
-    let daemon = OneRecordDaemon(std::sync::Arc::new(fixture()));
+    let daemon = ClaimDaemon::new(fixture());
     let asked = PCanonicalId::from_bytes([0x3C; 32]);
     let fetched = fetch_claim_source_for(&daemon, asked)
         .await
@@ -147,12 +118,16 @@ async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
         .expect("the canned reply decodes");
     assert_eq!(again.p_id(), other);
     assert_ne!(again.p_id(), fetched.p_id());
+
+    // And the request named the persona it was asked for.
+    let asked_params = daemon.last_params();
+    assert_eq!(asked_params, json!({ "persona": hex::encode([0xC3; 32]) }));
 }
 
 /// The interval-log length is read from the wire, not assumed.
 ///
 /// It is the sixth and last of `verify_release_bond_post`'s record operands
-/// and the only one with no presence flag, because an empty log is a length
+/// and the only one with no `null` state, because an empty log is a length
 /// rather than a silence. That makes the decode the whole safety boundary:
 /// `0 < MAX_BOND_BAD_INTERVALS` **passes**, so a defaulted read reports "the
 /// log has room" for a record whose log may be full — and a full log makes
@@ -161,7 +136,7 @@ async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
 /// default.
 #[test]
 fn the_interval_log_length_is_decoded_not_defaulted() {
-    let src = EmissionClaimSource::from_json(&fixture()).expect("fixture decodes");
+    let src = decode(&fixture()).expect("fixture decodes");
     let bond = src.bond.as_ref().expect("fixture has a bond record");
     assert_eq!(bond.bad_interval_count, 2);
 }
@@ -197,53 +172,15 @@ fn the_absent_arm_of_each_anchor_renders_distinctly_from_epoch_zero() {
     }
 }
 
-/// A flag that vouches for a field which did not arrive is a decode error,
-/// not a reconciliation.
-///
-/// The two presence encodings answer different questions — the required read
-/// is authoritative about the wire, the flag is the daemon's assertion about
-/// semantics — so `has_last_served_epoch: true` with `last_served_epoch`
-/// missing has no consistent reading and must not be resolved into one. The
-/// dangerous resolution would be "trust the flag, default the value": that
-/// yields `ServedAt(0)`, the earliest possible anchor, which makes the
-/// cooldown look maximally elapsed.
-#[test]
-fn a_flag_without_its_value_is_malformed_not_reconciled() {
-    let mut v = fixture();
-    let obj = v.as_object_mut().expect("fixture is an object");
-    obj.insert("has_last_served_epoch".into(), true.into());
-    obj.remove("last_served_epoch");
-    let err = EmissionClaimSource::from_json(&v)
-        .expect_err("a flag vouching for a missing value must not decode");
-    assert!(
-        matches!(err, EmissionSourceError::Malformed(_)),
-        "got {err:?}"
-    );
-
-    // Same for the watermark, whose absence is fail-closed at consensus.
-    let mut v = fixture();
-    let obj = v.as_object_mut().expect("fixture is an object");
-    obj.insert("has_last_settled_slash_epoch".into(), true.into());
-    obj.remove("last_settled_slash_epoch");
-    let err = EmissionClaimSource::from_json(&v)
-        .expect_err("a flag vouching for a missing value must not decode");
-    assert!(
-        matches!(err, EmissionSourceError::Malformed(_)),
-        "got {err:?}"
-    );
-}
-
-/// The flag carries the fact; the value never encodes it. A served-at-epoch-0
-/// record decodes as *served*, not as "never served" — the collapse a
-/// zero-means-absent encoding would produce, and the one that would flip the
-/// cooldown check from "not elapsed" to permissive.
+/// The value carries the fact; zero never encodes absence. A
+/// served-at-epoch-0 record decodes as *served*, not as "never served" —
+/// the collapse a zero-means-absent encoding would produce, and the one
+/// that would flip the cooldown check from "not elapsed" to permissive.
 #[test]
 fn served_at_epoch_zero_decodes_as_served_not_as_never_served() {
     let mut v = fixture();
-    let obj = v.as_object_mut().expect("fixture is an object");
-    obj.insert("has_last_served_epoch".into(), true.into());
-    obj.insert("last_served_epoch".into(), 0u64.into());
-    let src = EmissionClaimSource::from_json(&v).expect("decodes");
+    v["served_epoch"] = json!(0);
+    let src = decode(&v).expect("decodes");
     let bond = src.bond.expect("fixture has a bond record");
     assert_eq!(bond.last_served, ServeAnchor::ServedAt(0));
     assert_eq!(
@@ -251,6 +188,10 @@ fn served_at_epoch_zero_decodes_as_served_not_as_never_served() {
         Some(0),
         "the verifier must see an anchor, not the permissive None"
     );
+    let mut v = fixture();
+    v["slash_epoch"] = json!(0);
+    let bond = decode(&v).expect("decodes").bond.expect("bonded");
+    assert_eq!(bond.last_settled_slash, SlashWatermark::SettledThrough(0));
 }
 
 /// `NeverServed` is a real daemon answer and must still reach the verifier as
@@ -259,16 +200,18 @@ fn served_at_epoch_zero_decodes_as_served_not_as_never_served() {
 /// is "closed on unknown, faithful on known".
 #[test]
 fn never_served_reaches_the_verifier_as_the_permissive_none() {
-    let src = EmissionClaimSource::from_json(&fixture()).expect("decodes");
+    let src = decode(&fixture()).expect("decodes");
     let bond = src.bond.expect("fixture has a bond record");
     assert_eq!(bond.last_served, ServeAnchor::NeverServed);
     assert_eq!(bond.last_served.as_verify_operand(), None);
     assert_eq!(bond.last_settled_slash.as_verify_operand(), None);
 }
 
-fn fixture() -> Value {
-    source_json(&EmissionClaimSource {
+/// The fixture record, gathered at block count 30 001.
+fn fixture_source() -> EmissionClaimSource {
+    EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30000),
         current_settled_epoch: 3,
         bond: Some(BondContext {
             join_settlement_epoch: 1,
@@ -309,9 +252,7 @@ fn fixture() -> Value {
                 }],
                 claimant_bond_idx: Some(0),
             },
-            // The empty-row epoch: bonds/shards/credit_pairs are OMITTED
-            // by the encoder (epee omit-empty), exercising the decoder's
-            // absent-decodes-empty rule.
+            // The empty-row epoch, with no budget row and no claimant.
             EpochSnapshot {
                 settlement_epoch: 2,
                 close_block_height: 30000,
@@ -324,108 +265,44 @@ fn fixture() -> Value {
                 claimant_bond_idx: None,
             },
         ],
-    })
+    }
 }
 
-/// The encoder really omits the empty containers (the premise of the
-/// absent-decodes-empty coverage above — if it ever emitted `[]`, the
-/// fixture would silently stop exercising the epee omission rule).
+fn fixture() -> Value {
+    source_json(&fixture_source())
+}
+
+/// **Empty lists are written, never omitted.** The reply is strict, so an
+/// epoch with no bonds carries `"bond": []`, and one missing the member is
+/// no reply rather than an empty list.
+///
+/// The edit that turns this red is a `#[serde(default)]` on a list.
 #[test]
-fn fixture_omits_empty_containers() {
+fn empty_lists_are_written_and_a_missing_one_is_refused() {
     let v = fixture();
-    let e2 = &v["epochs"][1];
-    for field in ["bonds", "shards", "credit_pairs"] {
+    let e2 = &v["epoch"][1];
+    for field in ["bond", "shard", "credit"] {
+        assert_eq!(e2[field], json!([]), "`{field}` is written empty");
+        let mut missing = fixture();
+        missing["epoch"][1]
+            .as_object_mut()
+            .expect("an epoch is an object")
+            .remove(field);
         assert!(
-            e2.get(field).is_none(),
-            "`{field}` must be absent (epee omit-empty), not an empty array"
+            matches!(decode(&missing), Err(Refused::Shape)),
+            "`{field}` absent is no reply"
         );
     }
 }
 
-/// The daemon's wire type — `shekyl-rpc-types`'
-/// `GetArchivalEmissionClaimSourceResponse`, what the store-backed handler
-/// answers with — writes, for the bonded fixture, exactly the document
-/// [`source_json`] writes: every decode test in this file is a test of the
-/// daemon's reply. A reply for a persona with no record, whose record
-/// fields the daemon zeroes rather than omits, decodes to no bond.
-#[test]
-fn the_daemon_wire_type_writes_the_document_the_wallet_decodes() {
-    use shekyl_rpc_types::{
-        ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
-        GetArchivalEmissionClaimSourceResponse, RpcStatus,
-    };
-    let bonded = GetArchivalEmissionClaimSourceResponse {
-        status: RpcStatus::ok(),
-        chain_height: 30001,
-        current_settled_epoch: 3,
-        has_bond_record: true,
-        join_settlement_epoch: 1,
-        holdings_kind: 0,
-        held_shard_ids: vec![4, 9],
-        claimed_settlement_epochs: vec![1],
-        bonded_total_atomic: 0,
-        bad_interval_count: 2,
-        has_last_served_epoch: false,
-        last_served_epoch: 0,
-        has_last_settled_slash_epoch: false,
-        last_settled_slash_epoch: 0,
-        epochs: vec![
-            ClaimEpochSnapshot {
-                settlement_epoch: 1,
-                close_block_height: 20000,
-                sigma_work_milli: 5000,
-                budget_atomic: 777,
-                has_budget_row: true,
-                bonds: vec![ClaimBondRow {
-                    join_settlement_epoch: 0,
-                    bad_intervals_flat: vec![2, 3],
-                }],
-                shards: vec![ClaimShardRow {
-                    shard_id: 4,
-                    freeze_height: 15,
-                    has_segment: true,
-                }],
-                credit_pairs: vec![ClaimCreditPair {
-                    bond_idx: 0,
-                    shard_idx: 0,
-                }],
-                claimant_bond_idx: 0,
-            },
-            ClaimEpochSnapshot {
-                settlement_epoch: 2,
-                close_block_height: 30000,
-                sigma_work_milli: 0,
-                budget_atomic: 0,
-                has_budget_row: false,
-                bonds: vec![],
-                shards: vec![],
-                credit_pairs: vec![],
-                claimant_bond_idx: u64::MAX,
-            },
-        ],
-    };
-    let written = serde_json::to_value(&bonded).unwrap();
-    assert_eq!(written, fixture());
-    assert!(EmissionClaimSource::from_json(&written).is_ok());
-
-    let unbonded = GetArchivalEmissionClaimSourceResponse {
-        has_bond_record: false,
-        join_settlement_epoch: 0,
-        held_shard_ids: vec![],
-        claimed_settlement_epochs: vec![],
-        bad_interval_count: 0,
-        ..bonded
-    };
-    let decoded = EmissionClaimSource::from_json(&serde_json::to_value(&unbonded).unwrap())
-        .expect("a zeroed record decodes");
-    assert!(decoded.bond.is_none());
-    assert_eq!(decoded.epochs.len(), 2);
-}
-
 #[test]
 fn decodes_fixture_field_for_field() {
-    let src = EmissionClaimSource::from_json(&fixture()).unwrap();
+    let src = decode(&fixture()).unwrap();
     assert_eq!(src.chain_height, ChainCount::from_raw(30001));
+    assert_eq!(
+        src.tip_hash,
+        crate::engine::test_support::test_block_hash_at(30000)
+    );
     assert_eq!(src.current_settled_epoch, 3);
 
     let bond = src.bond.as_ref().unwrap();
@@ -462,7 +339,6 @@ fn decodes_fixture_field_for_field() {
     );
     assert_eq!(e1.claimant_bond_idx, Some(0));
 
-    // Sentinel + epee omit-empty-container behavior.
     let e2 = &src.epochs[1];
     assert!(!e2.has_budget_row);
     assert!(e2.bonds.is_empty());
@@ -471,9 +347,23 @@ fn decodes_fixture_field_for_field() {
     assert_eq!(e2.claimant_bond_idx, None);
 }
 
+/// **The failure interval is inclusive on the wire and end-exclusive in the
+/// record.** The fixture's `[2, 3)` travels as `{"from": 2, "to": 2}`.
+///
+/// The edit that turns this red is the decode taking `to` as the exclusive
+/// end: every interval would lose its last epoch.
+#[test]
+fn a_failure_interval_is_inclusive_on_the_wire() {
+    let v = fixture();
+    assert_eq!(
+        v["epoch"][0]["bond"][0]["failure"],
+        json!([{"from": 2, "to": 2}])
+    );
+}
+
 #[test]
 fn view_construction_matches_verify_shape() {
-    let src = EmissionClaimSource::from_json(&fixture()).unwrap();
+    let src = decode(&fixture()).unwrap();
     let e1 = &src.epochs[0];
     let bonds = e1.bonds_view();
     let source = e1.source(&bonds);
@@ -500,51 +390,64 @@ fn view_construction_matches_verify_shape() {
     assert_eq!(source.budget, 777);
 }
 
+/// `joined_epoch: null` is "no bond record", and the record's other members
+/// are not read as one.
 #[test]
-fn no_bond_record_decodes_none_without_reading_bond_fields() {
-    // A bond-less response zeroes part-A bond fields daemon-side; the
-    // decode must not read them (has_bond_record is the gate).
-    let v = json!({
-        "status": "OK",
-        "chain_height": 5,
-        "current_settled_epoch": 0,
-        "has_bond_record": false
-    });
-    let src = EmissionClaimSource::from_json(&v).unwrap();
+fn no_bond_record_decodes_none() {
+    let src = decode(&source_json(&EmissionClaimSource {
+        bond: None,
+        epochs: vec![],
+        ..fixture_source()
+    }))
+    .unwrap();
     assert!(src.bond.is_none());
     assert!(src.epochs.is_empty());
 }
 
 #[test]
-fn missing_mandatory_scalar_is_loud() {
-    let mut v = fixture();
-    v.as_object_mut().unwrap().remove("current_settled_epoch");
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+fn missing_mandatory_scalar_is_no_reply() {
+    for field in ["settled_epoch", "height", "hash", "joined_epoch", "holding"] {
+        let mut v = fixture();
+        v.as_object_mut().unwrap().remove(field);
+        assert!(
+            matches!(decode(&v), Err(Refused::Shape)),
+            "{field} absent is no reply"
+        );
+    }
 }
 
-#[test]
-fn non_ok_status_is_status_error_not_a_payload() {
-    // A BUSY body carries zeroed payload fields that must never decode
-    // as a valid "nothing claimable" source.
-    let mut v = fixture();
-    v["status"] = json!("BUSY");
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Status(s)) if s == "BUSY"
-    ));
-}
-
-#[test]
-fn missing_status_is_loud() {
-    let mut v = fixture();
-    v.as_object_mut().unwrap().remove("status");
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+/// **A refusal is not a payload.** A daemon that is not ready answers an
+/// error object, never a zeroed record that would decode as "nothing
+/// claimable"; the fetch surfaces it as the daemon's refusal.
+#[tokio::test]
+async fn a_refusal_is_an_error_not_an_empty_source() {
+    #[derive(Clone)]
+    struct NotReady;
+    impl Rpc for NotReady {
+        fn post(
+            &self,
+            _route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+            let reply = serde_json::to_vec(&json!({
+                "jsonrpc": "2.0", "id": 0,
+                "error": {
+                    "code": -32004, "message": "not ready",
+                    "data": {"code": "daemon.unready", "parameter": {}, "message": "not ready"},
+                },
+            }))
+            .expect("encodes");
+            async move { Ok(reply) }
+        }
+    }
+    let err = fetch_emission_claim_source(&NotReady, &[7; 32])
+        .await
+        .expect_err("a refusal is not a source");
+    assert!(
+        matches!(&err, EmissionSourceError::Rpc(RpcError::Refused(refusal))
+            if refusal.class == shekyl_rpc_client::ErrorClass::NotReady),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -552,112 +455,94 @@ fn unsorted_claimed_epochs_is_loud() {
     // The claimed set is a binary-search operand downstream; unsorted
     // input must be rejected at decode, never searched.
     let mut v = fixture();
-    v["claimed_settlement_epochs"] = json!([5, 1]);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["claimed"] = json!([5, 1]);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
     // Duplicates violate *strictly* increasing too.
     let mut v = fixture();
-    v["claimed_settlement_epochs"] = json!([1, 1]);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["claimed"] = json!([1, 1]);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
 }
 
-/// The settled/height pair is redundant (one `db.height()` read
-/// daemon-side); a reply where they disagree under the frozen mapping is
-/// malformed — refused at decode, never split across the builder's two
-/// boundary systems (window verdicts read `current_settled_epoch`, the
-/// step-7 self-check recomputes from `chain_height`).
+/// The settled/height pair is redundant (one read daemon-side); a reply
+/// where they disagree under the frozen mapping is malformed — refused at
+/// decode, never split across the builder's two boundary systems (window
+/// verdicts read `current_settled_epoch`, the step-7 self-check recomputes
+/// from the count).
 #[test]
-fn settled_epoch_inconsistent_with_chain_height_is_loud() {
+fn settled_epoch_inconsistent_with_height_is_loud() {
     // Deflated settled: the builder's window floor would lag verify's
     // (whole-batch SelfCheckFailed on an expired admit).
     let mut v = fixture();
-    v["current_settled_epoch"] = json!(2);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["settled_epoch"] = json!(2);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
     // Inflated settled: genuinely claimable epochs would silently skip
     // as WindowExpired (forfeited rewards).
     let mut v = fixture();
-    v["current_settled_epoch"] = json!(4);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
-    // The fixture itself is the consistent pair (sanity).
+    v["settled_epoch"] = json!(4);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
+    // The fixture itself is the consistent pair: the settled epoch derives
+    // from the COUNT, the wire's height plus one.
     assert_eq!(
-        settlement_epoch_at_height(fixture()["chain_height"].as_u64().unwrap()),
-        fixture()["current_settled_epoch"].as_u64().unwrap()
+        settlement_epoch_at_height(fixture()["height"].as_u64().unwrap() + 1),
+        fixture()["settled_epoch"].as_u64().unwrap()
     );
 }
 
 #[test]
 fn unsorted_window_epochs_is_loud() {
     let mut v = fixture();
-    v["epochs"][0]["settlement_epoch"] = json!(2);
-    v["epochs"][1]["settlement_epoch"] = json!(1);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["epoch"][0]["id"] = json!(2);
+    v["epoch"][1]["id"] = json!(1);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
 }
 
 #[test]
-fn odd_bad_intervals_flat_is_loud() {
+fn an_inverted_failure_interval_is_loud() {
     let mut v = fixture();
-    v["epochs"][0]["bonds"][0]["bad_intervals_flat"] = json!([2]);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["epoch"][0]["bond"][0]["failure"] = json!([{"from": 3, "to": 2}]);
+    assert!(matches!(decode(&v), Err(Refused::Malformed)));
 }
 
 #[test]
-fn unknown_holdings_kind_is_loud() {
+fn unknown_holding_is_no_reply() {
     let mut v = fixture();
-    v["holdings_kind"] = json!(7);
-    assert!(matches!(
-        EmissionClaimSource::from_json(&v),
-        Err(EmissionSourceError::Malformed(_))
-    ));
+    v["holding"] = json!("everything");
+    assert!(matches!(decode(&v), Err(Refused::Shape)));
 }
 
-// ── The bracket: a vouched view is minted only between two identical
-// readings of the witness block ────────────────────────────────────────
+// ── The record anchors itself: no re-read after it ──────────────────────
 
-/// A daemon that answers the three reads a vouching takes, records the
-/// order it was asked in, and answers the bracket's re-read with whatever
-/// the test says the chain reports **now** at the witness tip.
+/// A daemon that answers the witness and the record, records the order it
+/// was asked in, and keeps the last request's parameters.
 #[derive(Clone)]
-struct BracketDaemon {
+struct ClaimDaemon {
     record: std::sync::Arc<Value>,
-    at_tip_now: shekyl_types::BlockHash,
     calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    params: std::sync::Arc<std::sync::Mutex<Value>>,
 }
 
 /// The witness answers at this count, so its tip is one below.
 const WITNESS_COUNT: u64 = 30_001;
 
-impl BracketDaemon {
-    fn new(record: Value, at_tip_now: shekyl_types::BlockHash) -> Self {
+impl ClaimDaemon {
+    fn new(record: Value) -> Self {
         Self {
             record: std::sync::Arc::new(record),
-            at_tip_now,
-            calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            calls: std::sync::Arc::default(),
+            params: std::sync::Arc::default(),
         }
     }
 
     fn calls(&self) -> Vec<String> {
         self.calls.lock().expect("call log").clone()
     }
+
+    fn last_params(&self) -> Value {
+        self.params.lock().expect("params").clone()
+    }
 }
 
-impl Rpc for BracketDaemon {
+impl Rpc for ClaimDaemon {
     fn get_block_hash(
         &self,
         number: usize,
@@ -666,122 +551,108 @@ impl Rpc for BracketDaemon {
             .lock()
             .expect("call log")
             .push(format!("get_block_hash({number})"));
-        let now = self.at_tip_now;
-        async move { Ok(now) }
+        async move {
+            Ok(crate::engine::test_support::test_block_hash_at(
+                number as u64,
+            ))
+        }
     }
 
     fn post(
         &self,
-        route: &str,
+        _route: &str,
         body: Vec<u8>,
     ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-        let method = serde_json::from_slice::<Value>(&body)
-            .ok()
-            .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
-            .unwrap_or_default();
+        use crate::engine::test_support::{method_name, requested_method, requested_params};
+        let method = requested_method(&body);
         self.calls.lock().expect("call log").push(method.clone());
-        let result = if method == "get_info" {
-            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+        *self.params.lock().expect("params") = requested_params(&body);
+        let result = if method == method_name::<shekyl_rpc_client::wire::DaemonStatus>() {
+            crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
                 chain_count: shekyl_types::ChainCount::from_raw(WITNESS_COUNT),
                 target_height: None,
                 synchronized: true,
                 top_hash: crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
-                has_peers: true,
+                peered: true,
             }
             .to_value()
         } else {
             (*self.record).clone()
         };
-        let reply = serde_json::to_vec(&json!({ "result": result })).expect("fixture encodes");
-        let ok = route == "json_rpc";
-        async move {
-            if ok {
-                Ok(reply)
-            } else {
-                Err(RpcError::InternalError("unexpected route".into()))
-            }
-        }
+        let reply = crate::engine::test_support::result_envelope(&result);
+        async move { Ok(reply) }
     }
 }
 
-/// The fixture record, re-stamped as gathered at `count` — the decoder
-/// cross-checks the settled epoch against it, so both move together.
-fn record_at(count: u64) -> Value {
+/// The fixture record, re-stamped as gathered at `count` under `hash` — the
+/// decoder cross-checks the settled epoch against the count, so both move
+/// together.
+fn record_at(count: u64, hash: [u8; 32]) -> Value {
     let mut v = fixture();
-    v["chain_height"] = json!(count);
-    v["current_settled_epoch"] =
-        json!(shekyl_archival_retention::settlement_epoch_at_height(count));
+    v["height"] = json!(count - 1);
+    v["hash"] = json!(hex::encode(hash));
+    v["settled_epoch"] = json!(shekyl_archival_retention::settlement_epoch_at_height(count));
     v
 }
 
-/// **The catch-back-up reorg the heights cannot see.** The record answers
-/// one block *above* the witness — ordinary advance, by the heights — but
-/// the block the witness stood on has been replaced in between. Nothing
-/// vouches for that record.
+/// **The record anchors itself.** It names the block it was gathered at, so
+/// the vouched view's anchor is that block — its height and its hash, from
+/// the record — and an observation drawn from it is stamped where it was
+/// seen. The witness block is not consulted again.
 ///
-/// The edit that turns this red is `bracket` accepting any hash. The
-/// control is the same sequence on an unbroken chain, which vouches — so
-/// the refusal is the comparison and not a bracket that refuses everything.
+/// The edit that turns this red is anchoring at the witness block, or
+/// stamping at the witness height.
 #[tokio::test]
-async fn a_witness_block_replaced_during_the_record_read_is_not_vouched() {
-    let witness_block = crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1);
-
-    let replaced = BracketDaemon::new(
-        record_at(WITNESS_COUNT + 1),
-        shekyl_types::BlockHash::from_bytes([0xFF; 32]),
-    );
-    let vouched = fetch_vouched_claim_source(&replaced, &[7; 32])
+async fn a_vouched_record_anchors_at_its_own_block() {
+    let daemon = ClaimDaemon::new(record_at(WITNESS_COUNT + 5, [0x5E; 32]));
+    let vouched = fetch_vouched_claim_source(&daemon, &[7; 32])
         .await
-        .expect("the record itself reads");
-    assert!(
-        matches!(
-            vouched.vouching(),
-            Vouching::Broken(TimelineBreak::WitnessBlockReplaced)
-        ),
-        "a record read across a replaced witness block is not vouched: {:?}",
-        vouched.vouching()
-    );
+        .expect("the record reads");
+    let view = vouched.actionable().expect("an advance is actionable");
     assert_eq!(
-        vouched.actionable().expect_err("not actionable"),
-        TimelineBreak::WitnessBlockReplaced
+        view.anchor(),
+        ChainAnchor {
+            height: BlockHeight::from_raw(WITNESS_COUNT + 4),
+            hash: shekyl_types::BlockHash::from_bytes([0x5E; 32]),
+        }
     );
-
-    let unbroken = BracketDaemon::new(record_at(WITNESS_COUNT + 1), witness_block);
-    let vouched = fetch_vouched_claim_source(&unbroken, &[7; 32])
-        .await
-        .expect("the record itself reads");
-    assert!(
-        matches!(vouched.vouching(), Vouching::Vouched(_)),
-        "the same advance on an unbroken chain vouches: {:?}",
-        vouched.vouching()
-    );
-    assert!(vouched.actionable().is_ok());
+    assert_eq!(view.at(), BlockHeight::from_raw(WITNESS_COUNT + 4));
 }
 
-/// **The bracket straddles the record, at the witness height.** A re-read
-/// before the record would be a second pre-read and prove nothing about the
-/// interval the record was gathered in; a re-read at the *tip* would refuse
-/// every honest advance. The order and the height are the whole content.
+/// **Two reads, in order, and no third.** The witness is read first, so a
+/// record below it is a rollback rather than a race; the record names its
+/// own block, so no re-read after it can add anything.
 ///
-/// The edit that turns this red is issuing the re-read before the record
-/// request, or reading `get_info` again instead of the block at the witness
-/// tip.
+/// The edit that turns this red is a re-read of the witness block after the
+/// record, or the record read before the witness.
 #[tokio::test]
-async fn the_bracket_re_reads_the_witness_block_after_the_record() {
-    let daemon = BracketDaemon::new(
-        record_at(WITNESS_COUNT),
-        crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
-    );
+async fn the_witness_then_the_record_and_nothing_after() {
+    let daemon = ClaimDaemon::new(record_at(WITNESS_COUNT, [0x5E; 32]));
     fetch_vouched_claim_source(&daemon, &[7; 32])
         .await
         .expect("reads");
     assert_eq!(
         daemon.calls(),
         vec![
-            "get_info".to_string(),
-            EMISSION_CLAIM_SOURCE_METHOD.to_string(),
-            format!("get_block_hash({})", WITNESS_COUNT - 1),
+            crate::engine::test_support::method_name::<shekyl_rpc_client::wire::DaemonStatus>()
+                .to_string(),
+            crate::engine::test_support::method_name::<shekyl_rpc_client::wire::ArchivalClaimShow>(
+            )
+            .to_string(),
         ],
-        "witness, then record, then the witness block re-read at its own height"
+    );
+}
+
+/// **A record below its witness is a rollback**, refused for acting
+/// whatever hash it carries.
+#[tokio::test]
+async fn a_record_below_its_witness_is_not_actionable() {
+    let daemon = ClaimDaemon::new(record_at(WITNESS_COUNT - 10, [0x5E; 32]));
+    let vouched = fetch_vouched_claim_source(&daemon, &[7; 32])
+        .await
+        .expect("the record reads");
+    assert_eq!(
+        vouched.actionable().expect_err("rolled back"),
+        TimelineBreak::ChainRolledBack
     );
 }

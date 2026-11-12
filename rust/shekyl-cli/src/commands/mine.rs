@@ -4,9 +4,8 @@
 // BSD-3-Clause
 
 //! Mining control from the wallet (CU-3). **The daemon still does the
-//! hashing** — these verbs POST to the daemon's `/start_mining` /
-//! `/stop_mining` / `/mining_status` path handlers; no RandomX runs in this
-//! process. The original "the CLI doesn't mine" cut was about the wallet
+//! hashing** — these verbs call the daemon's `mine_start` / `mine_stop` /
+//! `mine_status`; no RandomX runs in this process. The original "the CLI doesn't mine" cut was about the wallet
 //! *doing* the work, not *controlling* it (CLI_USABILITY.md §1).
 //!
 //! The daemon's built-in hasher is the same path it uses to check blocks:
@@ -14,20 +13,36 @@
 //! will not produce blocks this network accepts.
 //!
 //! Shared fail-closed gates before any mining daemon call (CLI_USABILITY.md
-//! §CU-3): unrestricted RPC and a matching network. The mine words do not
-//! require an open wallet; the daemon pays its `mine-address` (IG-Q21).
-//! `mine start` additionally refuses a daemon that is not synced (the
-//! daemon's own `CHECK_CORE_READY`) and reminds — does not refuse — when
-//! the endpoint is not on this machine, because mining will run on that
-//! machine's CPU.
+//! §CU-3): a connection holding the `mining-control` grant and a matching
+//! network. The mine words do not require an open wallet; the daemon pays
+//! its `mine-address` (IG-Q21). `mine start` additionally refuses a daemon
+//! that is not synced and reminds — does not refuse — when the endpoint is
+//! not on this machine, because mining will run on that machine's CPU.
 
 use serde_json::{json, Value};
-use shekyl_rpc_types::mining::MineSpeed;
+use shekyl_rpc_types::wire::daemon::{DaemonStatus, GrantName};
+use shekyl_rpc_types::wire::node::MineSpeed;
+use shekyl_rpc_types::HexU128;
 
 use crate::daemon::{DaemonClient, DaemonError};
 use crate::display::short_address;
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult};
-use shekyl_rpc_types::GetInfoResponse;
+
+/// The rate in hashes per second, to the hundredth. A whole number prints
+/// without a fraction; an empty window prints `0 H/s`.
+pub(crate) fn hashes_per_second_text(speed: MineSpeed) -> String {
+    const HUNDREDTHS: u128 = 100;
+    if speed.window.0 == 0 {
+        return "0 H/s".to_owned();
+    }
+    let hundredths = u128::from(speed.count.0) * HUNDREDTHS / u128::from(speed.window.0);
+    let (whole, frac) = (hundredths / HUNDREDTHS, hundredths % HUNDREDTHS);
+    if frac == 0 {
+        format!("{whole} H/s")
+    } else {
+        format!("{whole}.{frac:02} H/s")
+    }
+}
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
 /// Not a tuned miner — operators who care pass a count or drive `shekyld`
@@ -40,30 +55,31 @@ fn default_threads() -> u64 {
 }
 
 /// The shared fail-closed gates (CU-3 / §CU-5 F2, F3). Returns the
-/// daemon's `get_info` snapshot when every gate passes, so callers get the
-/// sync fields without a second round-trip.
+/// daemon's `daemon_status` snapshot when every gate passes, so callers get
+/// the sync fields without a second round-trip.
 ///
 /// No wallet check. The shell does not supply a payout address (IG-Q21);
 /// the daemon mines to its `mine-address`.
-fn gate(daemon: Option<&DaemonClient>) -> Result<(&DaemonClient, GetInfoResponse), CommandFailed> {
+fn gate(daemon: Option<&DaemonClient>) -> Result<(&DaemonClient, DaemonStatus), CommandFailed> {
     let Some(dc) = daemon else {
         return Err(refusal(DaemonError::NotConfigured.to_string()));
     };
 
-    // F2 and the sync fields are one `get_info`. The handshake inside it
-    // refuses a daemon on another network before mining is asked. A refused
-    // connection carries the F1 "start shekyld" hint via DaemonClient.
-    let info = dc.get_info().map_err(|e| refusal(e.to_string()))?;
+    // F2 and the sync fields are one `daemon_status`. The handshake inside
+    // it refuses a daemon on another network before mining is asked. A
+    // refused connection carries the F1 "start shekyld" hint via
+    // DaemonClient.
+    let status = dc.daemon_status().map_err(|e| refusal(e.to_string()))?;
 
-    // F3 — restricted listener: admin RPCs are not served there.
-    if info.restricted {
+    // F3 — the connection's grants are the reply's own `grant` list.
+    if !status.grant.contains(&GrantName::MiningControl) {
         return Err(refusal(
-            "The daemon's RPC listener is restricted (view-only); mining control \
-             needs the unrestricted RPC listener.",
+            "This daemon connection does not hold the mining-control grant; mining \
+             control needs a connection that holds it, such as your own node's.",
         ));
     }
 
-    Ok((dc, info))
+    Ok((dc, status))
 }
 
 /// Reminder, not a refusal. Mining on a daemon that is not on this machine
@@ -108,19 +124,20 @@ pub fn cmd_mine_start(daemon: Option<&DaemonClient>, threads: Option<u64>) -> Co
             return Ok(json!({
                 "started": false,
                 "already_mining": true,
-                "threads": status.threads_count,
+                "threads": status.threads.0,
             }));
         }
-        Ok(status) => status.address,
+        Ok(status) => status.address.0.map(|address| address.0),
         Err(e) => return failed(e.to_string()),
     };
 
-    // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
-    // BUSY. Refuse here with the height copy rather than confirm-and-fail.
-    if !info.health.synchronized {
-        let height = info.health.height;
+    // F7 — not synced: the daemon would refuse `mine.syncing`. Refuse here
+    // with the height copy rather than confirm-and-fail. Heights here are
+    // block counts, as this copy has always printed them: the tip plus one.
+    if !info.synchronized {
+        let height = info.height.0.saturating_add(1);
         // The target is for the message only; the refusal is the flag's.
-        let of_target = match info.health.target_height.into_option() {
+        let of_target = match info.target_height.0.map(|tip| tip.0.saturating_add(1)) {
             Some(target) if target > height => format!("height {height} of {target}"),
             _ => format!("height {height}"),
         };
@@ -200,10 +217,12 @@ pub fn cmd_mine_status(daemon: Option<&DaemonClient>) -> CommandResult {
     match dc.mining_status() {
         Ok(status) => Ok(json!({
             "active": status.active,
-            "threads": status.threads_count,
+            "threads": status.threads.0,
             "speed": status.speed,
-            "address": status.address,
-            "difficulty": status.difficulty,
+            "address": status.address.0.map(|address| address.0),
+            // The posted job's difficulty, in the wire's `0x` hex; `null`
+            // with no job.
+            "difficulty": status.difficulty.0,
         })),
         Err(e) => failed(e.to_string()),
     }
@@ -223,14 +242,18 @@ pub(crate) fn show_mine_status(val: &Value) {
         .get("speed")
         .cloned()
         .and_then(|speed| serde_json::from_value::<MineSpeed>(speed).ok())
-        .map_or_else(|| "0 H/s".to_owned(), MineSpeed::hashes_per_second_text);
+        .map_or_else(|| "0 H/s".to_owned(), hashes_per_second_text);
     println!("  Hash rate:  {rate}");
     if let Some(address) = val.get("address").and_then(|v| v.as_str()) {
         if !address.is_empty() {
             println!("  Paying to:  {}", short_address(address));
         }
     }
-    let difficulty = val.get("difficulty").and_then(Value::as_u64).unwrap_or(0);
+    let difficulty = val
+        .get("difficulty")
+        .and_then(Value::as_str)
+        .and_then(|text| HexU128::parse(text).ok())
+        .map_or(0, HexU128::get);
     if difficulty > 0 {
         println!("  Difficulty: {difficulty}");
     }
@@ -240,26 +263,28 @@ pub(crate) fn show_mine_status(val: &Value) {
 mod tests {
     use super::BUILT_IN_MINER_NOTICE;
     use crate::daemon::identity_line;
+    use shekyl_rpc_client::{wire, RpcMethod};
+    use shekyl_rpc_types::kinds::{Height, Integer};
+    use shekyl_rpc_types::nullable::Nullable;
     use shekyl_rpc_types::{
-        genesis_hash_for, GetVersionResponse, HashHex, IdentityExpectation, Network, Nullable,
-        RpcStatus, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+        genesis_hash_for, HashHex, IdentityExpectation, Network, CONSENSUS_CONSTANTS_DIGEST_HASH,
+        CORE_RPC_VERSION,
     };
 
     const URL: &str = "http://127.0.0.1:12029";
 
-    /// What a daemon of this build answers `get_version` with on `network`.
+    /// What a daemon of this build answers `version` with on `network`.
     fn version_reply(network: Network) -> serde_json::Value {
-        serde_json::to_value(GetVersionResponse {
-            status: RpcStatus::ok(),
-            version: CORE_RPC_VERSION,
-            release: false,
-            current_height: 10,
-            target_height: Nullable::NULL,
-            consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: network,
-            genesis_hash: HashHex::from_bytes(genesis_hash_for(network)),
+        serde_json::to_value(wire::chain::Version {
+            version: Integer(u64::from(CORE_RPC_VERSION)),
+            tagged: false,
+            height: Height(9),
+            target_height: Nullable(None),
+            consensus_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
+            network,
+            genesis: HashHex::from_bytes(genesis_hash_for(network)),
         })
-        .expect("a get_version reply serializes")
+        .expect("a version reply serializes")
     }
 
     #[test]
@@ -272,7 +297,7 @@ mod tests {
         }
     }
 
-    /// F2, read from `get_version` (RK-Q6): a daemon on another network is
+    /// F2, read from `version` (RK-Q6): a daemon on another network is
     /// refused, and the refusal names both networks and the endpoint.
     #[test]
     fn the_gate_refuses_a_daemon_on_another_network() {
@@ -320,7 +345,7 @@ mod tests {
     #[test]
     fn the_gate_refuses_a_reply_without_a_network() {
         let mut reply = version_reply(Network::Testnet);
-        reply.as_object_mut().expect("object").remove("nettype");
+        reply.as_object_mut().expect("object").remove("network");
         let refused = IdentityExpectation::exact(Network::Testnet)
             .read(&reply)
             .expect_err("no network named");
@@ -328,7 +353,7 @@ mod tests {
         assert!(line.contains("does not match the RPC contract"), "{line}");
         assert!(line.contains("cannot be named here"), "{line}");
         assert!(
-            !line.contains("nettype"),
+            !line.contains("\"network\""),
             "the daemon's own text is not repeated: {line}"
         );
     }
@@ -386,14 +411,22 @@ mod tests {
              Mining will run on that machine's CPU."
         );
 
-        let info = shekyl_rpc_transport::json_rpc_result_body(&info_reply());
+        let status =
+            shekyl_rpc_transport::json_rpc_result_body(&crate::console::daemon_status_reply());
+        let mine_status = shekyl_rpc_transport::json_rpc_result_body(&serde_json::json!({
+            "active": false, "speed": {"count": 0, "window": 0}, "threads": 0,
+            "address": "4test", "block_spacing": 120, "height": 1, "reward": "1",
+            "difficulty": "0x1", "cause": null, "txpool_retired": false,
+        }));
+        let key =
+            |name: &str| -> &'static str { Box::leak(format!("json_rpc:{name}").into_boxed_str()) };
         let (address, log) = crate::console::route_server_recording(vec![
-            ("json_rpc:get_info", info),
+            (key(<wire::DaemonStatus as RpcMethod>::NAME), status),
+            (key(<wire::MineStatus as RpcMethod>::NAME), mine_status),
             (
-                "/mining_status",
-                r#"{"status":"OK","active":false,"speed":{"count":0,"window":0},"threads_count":0,"address":"4test","pow_algorithm":"randomx","block_target":120,"block_reward":0,"difficulty":1,"wide_difficulty":"1","difficulty_top64":0,"height":0,"pool_retired":false,"no_template":null}"#.to_owned(),
+                key(<wire::MineStart as RpcMethod>::NAME),
+                shekyl_rpc_transport::json_rpc_result_body(&serde_json::json!({})),
             ),
-            ("/start_mining", r#"{"status":"OK"}"#.to_owned()),
         ]);
         let daemon = crate::daemon::DaemonClient::new(
             &format!("http://{address}"),
@@ -405,74 +438,64 @@ mod tests {
 
         let result = super::cmd_mine_start(Some(&daemon), Some(1)).expect("mining starts");
         assert_eq!(result["started"], true);
+        assert_eq!(result["address"], "4test");
         let asked = log.lock().expect("log");
         assert!(
-            asked.iter().any(|(path, _)| path == "/start_mining"),
-            "mine start with no wallet reached /start_mining: {asked:?}"
+            asked
+                .iter()
+                .any(|(_, body)| body.contains(<wire::MineStart as RpcMethod>::NAME)),
+            "mine start with no wallet reached mine_start: {asked:?}"
         );
     }
 
-    fn info_reply() -> serde_json::Value {
-        use shekyl_rpc_types::{
-            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
-            InfoPool, InfoStatus, RpcStatus,
+    /// **F3: a connection without the `mining-control` grant is refused
+    /// before mining is asked**, by the reply's own grant list. Red edit:
+    /// drop the grant check in `gate`.
+    #[test]
+    fn a_connection_without_the_mining_grant_is_refused_before_it_asks() {
+        let mut status = crate::console::daemon_status_reply();
+        status["grant"] = serde_json::json!(["health", "chain", "pool", "submit", "mining-work"]);
+        let key =
+            |name: &str| -> &'static str { Box::leak(format!("json_rpc:{name}").into_boxed_str()) };
+        let (address, log) = crate::console::route_server_recording(vec![(
+            key(<wire::DaemonStatus as RpcMethod>::NAME),
+            shekyl_rpc_transport::json_rpc_result_body(&status),
+        )]);
+        let daemon = crate::daemon::DaemonClient::new(
+            &format!("http://{address}"),
+            None,
+            None,
+            Network::Mainnet,
+        )
+        .expect("the route server parses");
+        let refused = super::cmd_mine_start(Some(&daemon), Some(1)).expect_err("refused");
+        assert!(
+            refused.message.contains("mining-control grant"),
+            "{}",
+            refused.message
+        );
+        let asked = log.lock().expect("log");
+        assert!(
+            asked
+                .iter()
+                .all(|(_, body)| !body.contains(<wire::MineStatus as RpcMethod>::NAME)),
+            "{asked:?}"
+        );
+    }
+
+    /// The hash rate, to the hundredth.
+    #[test]
+    fn the_hash_rate_reads_to_the_hundredth() {
+        use shekyl_rpc_types::kinds::{Count, Duration};
+        use shekyl_rpc_types::wire::node::MineSpeed;
+        let rate = |count, window| {
+            super::hashes_per_second_text(MineSpeed {
+                count: Count(count),
+                window: Duration(window),
+            })
         };
-        serde_json::to_value(shekyl_rpc_types::GetInfoResponse {
-            status: RpcStatus::ok(),
-            health: InfoHealth {
-                height: 1,
-                top_block_hash: HashHex::from_bytes([7; 32]),
-                target_height: shekyl_rpc_types::Nullable::NULL,
-                synchronized: true,
-                busy_syncing: false,
-                following_degraded: false,
-                p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
-            },
-            identity: InfoIdentity {
-                protocol_version: 3,
-            },
-            chain: InfoChain {
-                difficulty: 1,
-                cumulative_difficulty: 1,
-                target: 120,
-                tx_count: 0,
-                block_weight_limit: 600_000,
-                block_weight_median: 300_000,
-                adjusted_time: 0,
-            },
-            economics: InfoEconomics {
-                already_generated_coins: shekyl_units::AtomicUnits::ZERO,
-                release_multiplier: 1_000_000,
-                burn_pct: 0,
-                total_burned: shekyl_units::AtomicUnits::ZERO,
-                staker_emission_share_effective: 0,
-            },
-            pool: InfoPool::Live { tx_pool_size: 0 },
-            node: Hidden::Shown(InfoStatus {
-                start_time: 1,
-                free_space: 1,
-                database_size: 1,
-                version: "test".to_owned(),
-                connections: shekyl_rpc_types::StatusConnections::Running {
-                    outgoing: 0,
-                    incoming: 0,
-                },
-                alt_blocks_count: 0,
-                rpc_connections_count: 0,
-            }),
-            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
-                InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
-                    connector: shekyl_rpc_types::InfoConnector::Clearnet,
-                    incoming_sockets: 0,
-                    outgoing_sockets: 0,
-                    white_peerlist_size: 0,
-                    gray_peerlist_size: 0,
-                }])
-                .expect("one row is in order"),
-            )),
-            host: Hidden::Withheld,
-            restricted: false,
-        })
-        .expect("a get_info reply serializes")
+        assert_eq!(rate(0, 0), "0 H/s");
+        assert_eq!(rate(8, 10), "0.80 H/s");
+        assert_eq!(rate(30, 10), "3 H/s");
     }
 }

@@ -1981,7 +1981,7 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
 
 /// Two builds in a row lose a listed body at one tip: the one rebuild
 /// withdraws for the same reason, and the board rests on `Stuck`, which
-/// `generateblocks` refuses. The next wake, whose first build loses a
+/// `dev_block_generate` refuses. The next wake, whose first build loses a
 /// body again, gets its own rebuild and posts. Red edit: leave the budget
 /// spent, so that wake rests on `Stuck` at once.
 #[tokio::test(flavor = "multi_thread")]
@@ -2781,10 +2781,67 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
     y.close().await;
 }
 
-/// A2's release names its seed. A run in flight pins the seeds of blocks
-/// it has not committed yet (`span.rs`, `pin_seeds`), and the follower
-/// installs the window at the committed tip, which cannot name them, on
-/// every tip move, beside the run. The install's pin demotes the run's seed
+/// A run that begins at genesis hashes under a seed the window does not
+/// name. Every height from 1 through the first epoch and its lag hashes
+/// under block 0's id (CEN-D3), with no lag after block 0. So a span of
+/// blocks 0 and 1 on an empty store pins block 0's id for block 1, while
+/// the window, read at the committed tip, names only the null seed: the
+/// store does not hold block 0 yet. That is the one case found (a probe at
+/// `pin_seeds` over this module and the loopback harness, 2026-11-10).
+/// Past genesis a seed is first named 65 blocks above its block, further
+/// than a span reaches, so the block is committed and the window names it.
+///
+/// The node connects its pinned genesis before it takes a span, so this is
+/// a fresh store's first span and nothing a peer can cause. An install
+/// that released whatever the window does not name took this seed from
+/// under the run (#1301's CI).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name() {
+    use crate::cache_window::seeds_for;
+    let mut y = Scenario::open("service-genesis-run-seed-y");
+    let blocks = y.mine(2).await;
+    assert_eq!(blocks[0].height, BlockHeight::ZERO);
+    assert_eq!(
+        shekyl_chain_rules::seed_height(blocks[1].height),
+        Some(BlockHeight::ZERO),
+        "block 1 hashes under block 0's id"
+    );
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-genesis-run-seed",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let window = seeds_for(service.shared.store(), service.shared.rules())
+        .expect("the window reads on an empty store");
+    assert_eq!(
+        (window.canonical, window.transient),
+        (BlockHash::NULL, None),
+        "an empty store's window names the null seed alone"
+    );
+    assert!(
+        !window.holds(&blocks[0].hash),
+        "the window names block 0's id before block 0 is stored"
+    );
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Reply::Connected { .. })),
+        "the two blocks connect as one run: {replies:?}"
+    );
+    assert!(
+        gate.canonical() == Some(blocks[0].hash) || gate.transient() == Some(blocks[0].hash),
+        "block 0's id is resident after the run"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A2's release names its seed. A run that begins at genesis pins a seed
+/// of a block it has not committed yet (`span.rs`, `pin_seeds`; the test
+/// above), and the follower installs the window at the committed tip,
+/// which cannot name it, on every tip move, beside the run. The install's pin demotes the run's seed
 /// into the transient slot; it must stay resident there. Releasing
 /// "whatever the second slot holds" took it from under the run's forms, so
 /// they missed the cache and the span was asked for again (#1301's CI: a

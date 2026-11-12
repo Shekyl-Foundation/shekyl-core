@@ -8,8 +8,11 @@
 # and checks this spawn's announcement of it.
 #
 # The subject is a source file that both launches a daemon with
-# `--network regtest` and names `generateblocks` or `pop_blocks` as a
-# call. An RPC client that only names the method is not a subject. A
+# `--network regtest` and names `dev_block_generate` or `dev_chain_pop` as
+# a call: the quoted method name in Python and shell, the method's type
+# (`wire::DevBlockGenerate`, `wire::DevChainPop`) in Rust, which names a
+# method by its type and never by a string. An RPC client that only names
+# the method is not a subject. A
 # comment that names both is not a subject. The checker itself is not a
 # subject: its selftest fixtures are the patterns it matches, so it is
 # excluded from the walk, and the selftest shows a fixture of that shape
@@ -73,10 +76,12 @@ COPY_SUFFIXES = SOURCE_SUFFIXES | {".md", ".toml", ".yml", ".yaml", ".cpp", ".h"
 SPAWN = re.compile(
     r"""["']--network["']\s*,\s*["']regtest["']|--network[ \t]+regtest"""
 )
-# The shell harness passes the method inside a double-quoted JSON string,
-# so the source spells the closing quote as a backslash and a quote.
+# The armed rows of the method table (RT-O9.2). The shell harness passes
+# the method inside a double-quoted JSON string, so the source spells the
+# closing quote as a backslash and a quote. Rust names the method's type.
 LEVER = re.compile(
-    r"""["']generateblocks["']|["']generateblocks\\["']|["']/pop_blocks["']|["']pop_blocks["']"""
+    r"""["'](?:dev_block_generate|dev_chain_pop)\\?["']"""
+    r"""|\bwire::(?:DevBlockGenerate|DevChainPop)\b"""
 )
 
 ASSIGNMENT = re.compile(r'^ANNOUNCEMENT = "([^"]*)"', re.M)
@@ -338,7 +343,7 @@ def selftest():
 
     armed_py = (
         'cmd = ["shekyld", "--network", "regtest", armed_lever.FLAG]\n'
-        'rpc("generateblocks", {})\n'
+        'rpc("dev_block_generate", {})\n'
         "armed_lever.announced_since(path, 0)\n"
     )
     check("an armed python spawn is a launcher", is_launcher(armed_py, ".py"))
@@ -346,7 +351,7 @@ def selftest():
 
     bare = (
         'cmd = ["shekyld", "--network", "regtest"]\n'
-        'rpc("generateblocks", {})\n'
+        'rpc("dev_block_generate", {})\n'
     )
     check("an unarmed python spawn is still a launcher", is_launcher(bare, ".py"))
     check("and it is not armed", not is_armed(bare, ".py"))
@@ -354,22 +359,22 @@ def selftest():
     no_lever = 'cmd = ["shekyld", "--network", "regtest", "--dev-rpc"]\n'
     check("a regtest spawn that names no lever is not a subject", not is_launcher(no_lever, ".py"))
 
-    client = 'def generateblocks(self):\n    return send("generateblocks")\n'
+    client = 'def dev_block_generate(self):\n    return send("dev_block_generate")\n'
     check("an RPC client is not a launcher", not is_launcher(client, ".py"))
 
-    comment = '# shekyld --network regtest\n# method "generateblocks"\n'
+    comment = '# shekyld --network regtest\n# method "dev_block_generate"\n'
     check("a python comment is not a launcher", not is_launcher(comment, ".py"))
 
     shell = (
         '"$BIN" --network regtest --dev-rpc\n'
         "python3 scripts/armed_lever.py --check-log \"$DATA/daemon.out\"\n"
-        "-d '{\"method\":\"generateblocks\"}'\n"
+        "-d '{\"method\":\"dev_block_generate\"}'\n"
     )
     check("an armed shell spawn is a launcher", is_launcher(shell, ".sh") and is_armed(shell, ".sh"))
 
     shell_escaped = (
         '"$BIN" --network regtest --dev-rpc \\\n'
-        '  -d "{\\"method\\":\\"generateblocks\\"}"\n'
+        '  -d "{\\"method\\":\\"dev_block_generate\\"}"\n'
         'python3 scripts/armed_lever.py --check-log "$DATA/daemon.out"\n'
     )
     check(
@@ -377,22 +382,22 @@ def selftest():
         is_launcher(shell_escaped, ".sh") and is_armed(shell_escaped, ".sh"),
     )
 
-    shell_bare = '"$BIN" --network regtest\n-d \'{"method":"generateblocks"}\'\n'
+    shell_bare = '"$BIN" --network regtest\n-d \'{"method":"dev_block_generate"}\'\n'
     check(
         "an unarmed shell spawn is not armed",
         is_launcher(shell_bare, ".sh") and not is_armed(shell_bare, ".sh"),
     )
 
     rust_comment = (
-        '/// spawns `shekyld --network regtest` and calls "generateblocks"\n'
+        '/// spawns `shekyld --network regtest` and calls "dev_block_generate"\n'
         "fn parse() {}\n"
     )
     check("a rust comment is not a launcher", not is_launcher(rust_comment, ".rs"))
 
     rust_after_comment = (
-        '// "--network", "regtest" and "generateblocks" in a comment\n'
+        '// "--network", "regtest" and "dev_block_generate" in a comment\n'
         'cmd.args(["--network", "regtest", "--dev-rpc"]);\n'
-        'call("generateblocks");\n'
+        "rpc.call::<wire::DevBlockGenerate>(req);\n"
         "log.contains(ARMED_ROW_ANNOUNCEMENT);\n"
     )
     check(
@@ -402,10 +407,26 @@ def selftest():
 
     pop = (
         'cmd = ["--network", "regtest", armed_lever.FLAG]\n'
-        'other_rpc("pop_blocks", {})\n'
+        'rpc("dev_chain_pop", {})\n'
         "armed_lever.announced_since(path, 0)\n"
     )
-    check("a pop_blocks spawn is a launcher", is_launcher(pop, ".py") and is_armed(pop, ".py"))
+    check("a dev_chain_pop spawn is a launcher", is_launcher(pop, ".py") and is_armed(pop, ".py"))
+
+    rust_typed = (
+        'cmd.args(["--network", "regtest", "--dev-rpc"]);\n'
+        "rpc.call::<wire::DevBlockGenerate>(wire::block::GenerateCount { count })\n"
+        "log.contains(ARMED_ROW_ANNOUNCEMENT);\n"
+    )
+    check(
+        "a rust spawn that calls the lever by its type is a launcher",
+        is_launcher(rust_typed, ".rs") and is_armed(rust_typed, ".rs"),
+    )
+
+    old_name = (
+        'cmd = ["shekyld", "--network", "regtest"]\n'
+        'rpc("generateblocks", {})\n'
+    )
+    check("a 3.x method name is no lever: no daemon serves it", not is_launcher(old_name, ".py"))
 
     found_ok = {"a.py": (armed_py, ".py")}
     check(

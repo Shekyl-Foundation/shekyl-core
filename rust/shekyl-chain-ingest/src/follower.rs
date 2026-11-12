@@ -62,8 +62,8 @@ use crate::service::{
 };
 use crate::template::{produce, NoTemplate, Producer};
 
-/// Why the board holds no job: what `mining_status` and
-/// `get_block_template` say while nothing is posted.
+/// Why the board holds no job: what `mine_status` and
+/// `block_template` say while nothing is posted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoJob {
     /// The follower has not acted on a tip yet.
@@ -100,7 +100,7 @@ impl core::fmt::Display for NoJob {
 }
 
 impl NoJob {
-    /// Whether `generateblocks` waits this withdrawal out.
+    /// Whether `dev_block_generate` waits this withdrawal out.
     ///
     /// True only for a reason a later pass replaces. [`Self::Starting`]
     /// ends on the follower's first pass. [`Unbuilt::Retry`] is one more
@@ -246,7 +246,7 @@ impl Posting {
     /// The withdrawal, when it is already a refusal.
     ///
     /// `None` is a posted job or a [`NoJob::transient`] reason:
-    /// `generateblocks` waits. `Some` is a refusal, and the wait ends.
+    /// `dev_block_generate` waits. `Some` is a refusal, and the wait ends.
     /// [`Unbuilt::Stuck`] is a refusal the next wake builds again; the
     /// wait does not stay open for that wake.
     #[must_use]
@@ -274,7 +274,7 @@ pub struct MinerFeed {
 /// The board the follower posts the node's one template on
 /// (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and what it is built from.
 pub struct JobSeat {
-    /// The board the miner's workers and `get_block_template` read.
+    /// The board the miner's workers and `block_template` read.
     pub board: Arc<JobBoard>,
     /// Whom the coinbase pays: the `mine-address` row's keys. `None`
     /// posts nothing.

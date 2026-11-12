@@ -40,9 +40,11 @@
 #   dev-dependency, so the feature is not in a shipped binary.
 #
 #   TEST-ONLY SPAWNS ARE NOT THIS GATE'S SUBJECT: `tests/`, `benches/` and
-#   `examples/`, a build script, a test module, and a file declared only for
+#   `examples/`, a build script, a test module, a file declared only for
 #   tests (the DC-F12 sibling `true` in notify.rs's tests, the engine's
-#   regtest harness). A test binary is not the daemon's image: the libraries
+#   regtest harness), and a file that opens with its own `#![cfg(test)]`
+#   (the harness's `#[path]` children, which the declaration walk cannot
+#   find by file name). A test binary is not the daemon's image: the libraries
 #   whose descriptors this guards are not running there. Their count is printed so a
 #   production spawn that moved into a test region is visible in the log.
 #
@@ -153,9 +155,9 @@ def cfg_value(tokens):
 
 
 def test_only_cfg(original, start, end):
-    """Whether the attribute `original[start:end]` is a `#[cfg(...)]` that is
-    false in a shipped build."""
-    match = re.match(r"#\[\s*cfg\s*\((.*)\)\s*\]\Z", original[start:end], re.S)
+    """Whether the attribute `original[start:end]` is a `#[cfg(...)]`, or a
+    file's own `#![cfg(...)]`, that is false in a shipped build."""
+    match = re.match(r"#!?\[\s*cfg\s*\((.*)\)\s*\]\Z", original[start:end], re.S)
     if match is None:
         return False
     tokens = cfg_tokens(match.group(1))
@@ -237,6 +239,25 @@ def production_code(original):
     return "".join(out)
 
 
+def marks_itself_test_only(original):
+    """Whether the file opens with an inner `#![cfg(...)]` that is false in a
+    shipped build. The compiler then drops the whole file, whatever declares
+    it, which covers a `#[path]` child the declaration walk cannot find by
+    its file name. Only the attributes ahead of the first item count: an
+    inner attribute further down belongs to an inline module."""
+    code = code_of(original)
+    at = 0
+    while True:
+        while at < len(code) and code[at].isspace():
+            at += 1
+        if not code.startswith("#![", at):
+            return False
+        end = attribute_end(code, at)
+        if test_only_cfg(original, at, end):
+            return True
+        at = end
+
+
 def declarers(rel):
     """Candidate files that declare the module `rel` is, with its name."""
     path = pathlib.PurePosixPath(rel)
@@ -286,6 +307,8 @@ def classify(root, rel, watched):
     if parts[1] != "src":
         return "test"
     if declared_for_tests_only(root, rel):
+        return "test"
+    if marks_itself_test_only((root / rel).read_text(encoding="utf-8", errors="replace")):
         return "test"
     return "production"
 
@@ -452,6 +475,22 @@ def selftest():
                 "a/src/engine/e2e.rs": bare,
             },
             0,
+        ),
+        "a file that marks itself cfg(test)": (
+            {**base, "a/src/other.rs": "//! Docs.\n\n#![cfg(test)]\n" + bare},
+            0,
+        ),
+        "a file that marks itself with a second inner attribute first": (
+            {**base, "a/src/other.rs": "#![allow(dead_code)]\n#![cfg(all(test, unix))]\n" + bare},
+            0,
+        ),
+        "a file whose own cfg a shipped build can hold": (
+            {**base, "a/src/other.rs": "#![cfg(unix)]\n" + bare},
+            1,
+        ),
+        "an inner cfg(test) on an inline module only": (
+            {**base, "a/src/other.rs": "mod m {\n    #![cfg(test)]\n}\n" + bare},
+            1,
         ),
         "an integration test": ({**base, "a/tests/t.rs": bare}, 0),
         "a build script": ({**base, "a/build.rs": bare}, 0),

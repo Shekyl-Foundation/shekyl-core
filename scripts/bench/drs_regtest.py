@@ -14,8 +14,9 @@
 # regtest daemon mines under. Restating that pair here would be a second
 # copy of it.
 #
-# get_info's height is the chain length. The published tip is that length
-# minus one, and an empty chain has no tip.
+# The daemon's `chain_height` answers the tip's height, an ordinal. The
+# session counts blocks where it lays chains: a chain of N blocks has its
+# tip at N - 1.
 
 from __future__ import annotations
 
@@ -28,9 +29,9 @@ import sys
 import drs_bench as B  # noqa: E402
 import armed_lever  # noqa: E402
 
-# The restricted listener refuses a range longer than this
-# (RESTRICTED_BLOCK_HEADER_RANGE). The admin listener does not. A chunk of
-# the cap is a complete read on either door.
+# A bounded caller is refused a `block_header_list` range longer than this
+# (`bound.header`, RESTRICTED_BLOCK_HEADER_RANGE). The admin listener is
+# not bounded. A chunk of the cap is a complete read on either door.
 HEADER_RANGE = 1000
 # Chain identity only. The schedule pair is the tool's production default.
 # `fetch` names the chain alone (the corpus header's tag); the commands that
@@ -54,10 +55,10 @@ _GEN_TIMEOUT_S = 86400
 
 
 def published_tip(height):
-    """The tip index `height` has published, or None for an empty chain.
+    """The tip index a chain of `height` blocks has, or None for no chain.
 
-    `height` is get_info's chain length. A length of one has published
-    block 0.
+    `height` is a chain count, genesis included. A count of one has
+    published block 0.
     """
     if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
         return None
@@ -113,7 +114,7 @@ class Session:
         return B._RunningDaemon(proc, rpc, self.args.startup_timeout, self.args.shutdown_timeout)
 
     def generate(self, data_dir, count, address):
-        """Mine `count` blocks into `data_dir` and return the chain length."""
+        """Mine `count` blocks into `data_dir` and return the chain count."""
         gen_log = os.path.join(self.work, "gen.log")
         gen_from = armed_lever.log_size(gen_log)
         proc = self.spawn("gen", data_dir, [armed_lever.FLAG, "--mine-address", address],
@@ -126,10 +127,10 @@ class Session:
                         f"at start; see {gen_log}")
             B._await_posted(self.srpc, self.args.startup_timeout)
             timeout = getattr(self.args, "gen_timeout", _GEN_TIMEOUT_S)
-            resp = B._rpc(self.srpc, "generateblocks", {"count": count}, timeout=timeout)
-            if resp.get("result", {}).get("status") != "OK":
-                B._fail(f"generateblocks refused: {json.dumps(resp)[:300]}")
-            return B._rpc(self.srpc, "get_info")["result"]["height"]
+            resp = B._rpc(self.srpc, "dev_block_generate", {"count": count}, timeout=timeout)
+            if not B.generated("redb", resp):
+                B._fail(f"dev_block_generate refused: {json.dumps(resp)[:300]}")
+            return B.chain_count(self.srpc)
 
     def lay_fork(self, seed_dir, fork_dir, blocks, fork_depth, address, fork_address):
         """A shared prefix, then a main tip and a heavier fork of it.
@@ -154,18 +155,20 @@ class Session:
         return prefix, main_tip, fork_tip
 
     def observed_tip(self, rpc, timeout=60):
-        """The tip index this daemon's get_info has published."""
-        height = B._rpc(rpc, "get_info", timeout=timeout)["result"]["height"]
-        return published_tip(height)
+        """The tip index this daemon's `chain_height` has published."""
+        return B._rpc(rpc, "chain_height", timeout=timeout)["result"]["height"]
 
     def headers(self, rpc, start, end):
-        """Headers from `start` through `end`, one range per call."""
-        body = B._rpc(rpc, "get_block_headers_range",
-                      {"start_height": start, "end_height": end})
-        result = body.get("result") or {}
-        if result.get("status") != "OK":
-            B._fail(f"get_block_headers_range {start}..{end} refused: {json.dumps(body)[:300]}")
-        return result.get("headers") or []
+        """Headers from `start` through `end`, one range per call. Each slot
+        is a header; a state or `null` in a slot fails the run."""
+        body = B._rpc(rpc, "block_header_list", {"from": start, "to": end})
+        result = body.get("result")
+        if not isinstance(result, list):
+            B._fail(f"block_header_list {start}..{end} refused: {json.dumps(body)[:300]}")
+        for slot in result:
+            if not isinstance(slot, dict) or "hash" not in slot:
+                B._fail(f"block_header_list {start}..{end} held {slot!r} in a header's slot")
+        return result
 
     def record_hashes(self, chain_key, rpc, top):
         """Block hashes from the fork point through `top`, for chain_of."""
@@ -176,13 +179,13 @@ class Session:
                 self.hashes[chain_key][int(hdr["height"])] = hdr["hash"]
 
     def tx_counts(self, rpc, start, end):
-        """`num_txes` on every header from `start` through `end`.
+        """`tx_count` on every header from `start` through `end`.
 
         The field is the non-coinbase count (`transaction_hashes.len()`).
         """
         counts = []
         for start_at, end_at in header_spans(start, end):
-            by_height = {int(hdr["height"]): int(hdr["num_txes"])
+            by_height = {int(hdr["height"]): int(hdr["tx_count"])
                          for hdr in self.headers(rpc, start_at, end_at)}
             for height in range(start_at, end_at + 1):
                 if height not in by_height:

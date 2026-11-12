@@ -22,7 +22,7 @@
 //!    asked for;
 //! 2. [`Class::HeaderPow`] — chain sync's header proof-of-work;
 //! 3. [`Class::Unsolicited`] — blocks a peer announced unasked;
-//! 4. [`Class::CalcPow`] — the RPC's `calc_pow`;
+//! 4. [`Class::CalcPow`] — the RPC's `pow`;
 //! 5. [`Class::Evidence`] — chain sync's past-cap evidence check
 //!    (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 step 3);
 //! 6. [`Class::Miner`] — the built-in miner.
@@ -65,7 +65,7 @@ pub enum Class {
     HeaderPow,
     /// Forming a block a peer announced unasked.
     Unsolicited,
-    /// The RPC's `calc_pow`.
+    /// The RPC's `pow`.
     CalcPow,
     /// Chain sync's past-cap evidence check (module docs).
     Evidence,

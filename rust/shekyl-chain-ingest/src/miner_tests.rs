@@ -309,7 +309,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
 }
 
 /// A miner started [`SearchBound::Until`] a height mines no block above
-/// it (`generateblocks`' exact count). The bound is height one: posted
+/// it (`dev_block_generate`'s exact count). The bound is height one: posted
 /// that height's job, the one worker finds the block, which connects.
 /// Posted the next template's, at height two, that worker parks: after a
 /// full rate window the miner has hashed nothing and found nothing. One

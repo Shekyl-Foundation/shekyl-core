@@ -236,7 +236,7 @@ pub struct Rewind {
     pub to: BlockHeight,
 }
 
-/// Pop `count` blocks from the tip, in one write closure: `pop_blocks`
+/// Pop `count` blocks from the tip, in one write closure: `dev_chain_pop`
 /// (`DRS_X_STORE_FLIP.md` DX-Q3, Q7). The target is the tip the writer
 /// holds less `count`, read when the message runs.
 #[derive(Clone, Copy, Debug)]

@@ -1,0 +1,11 @@
+{
+  "id": 2,
+  "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "size": 3000000,
+  "block_count": 120,
+  "tx_count": 900,
+  "output_count": 1900,
+  "coinbase_output_count": 120,
+  "duration": 14400,
+  "closing_height": 640
+}

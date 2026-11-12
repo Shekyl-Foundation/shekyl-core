@@ -16,7 +16,7 @@ use shekyl_daemon_rpc::submit::{
     ChainSource, DaemonTxVerifier, RustPoolShim, ShimFault, SubmitCaller, SubmitEngine,
 };
 use shekyl_mempool::Pool;
-use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Publication, Rejection, Verdict};
 use shekyl_types::UnixSeconds;
 
 use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
@@ -45,8 +45,9 @@ impl ChainSource for Store<'_> {
     }
 }
 
-pub(crate) fn hex(tx: &shekyl_wire::Transaction) -> String {
-    tx.serialize().iter().map(|b| format!("{b:02x}")).collect()
+/// The bytes `tx_submit` carries.
+pub(crate) fn body(tx: &shekyl_wire::Transaction) -> Vec<u8> {
+    tx.serialize()
 }
 
 /// The pool the submit shim shares with the ingest service keeps admitting
@@ -93,11 +94,11 @@ async fn a_poisoned_pool_still_admits() {
                 || UnixSeconds::from_raw(1),
                 shekyl_network::HARNESS_NETWORK_ID,
             ));
-            SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
+            SubmitEngine::new(shim, DaemonTxVerifier).submit(&body(&paid), SubmitCaller::Owner)
         })
         .await;
     scenario.close().await;
-    assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
+    assert_eq!(verdict.expect("no engine fault"), Verdict::Accepted);
 }
 
 /// A spend paying the floor is accepted and held by the pool, not public.
@@ -141,25 +142,24 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 shekyl_network::HARNESS_NETWORK_ID,
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-            let first = engine.submit(&hex(&paid), SubmitCaller::Owner);
-            let again = engine.submit(&hex(&paid), SubmitCaller::Owner);
-            let below = engine.submit(&hex(&cheap), SubmitCaller::Owner);
+            let first = engine.submit(&body(&paid), SubmitCaller::Owner);
+            let again = engine.submit(&body(&paid), SubmitCaller::Owner);
+            let below = engine.submit(&body(&cheap), SubmitCaller::Owner);
             let held = shim.with_pool(|pool| pool.record(&txid));
             (first, again, below, held)
         })
         .await;
-    assert_eq!(first.expect("no engine fault"), SubmitVerdict::Accepted);
+    assert_eq!(first.expect("no engine fault"), Verdict::Accepted);
     assert_eq!(
         again.expect("no engine fault"),
-        SubmitVerdict::AlreadyInPool {
-            relay: PoolRelay::Untracked,
+        Verdict::AlreadyInPool {
+            publication: Publication::Untracked,
         }
     );
     assert_eq!(
         below.expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::FeeTooLow,
         }
     );
     let held = held.expect("the pool holds the accepted spend");
@@ -216,17 +216,16 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                 DaemonTxVerifier,
             );
             (
-                engine.submit(&hex(&paid), SubmitCaller::Owner),
-                engine.submit(&hex(&twin), SubmitCaller::Owner),
+                engine.submit(&body(&paid), SubmitCaller::Owner),
+                engine.submit(&body(&twin), SubmitCaller::Owner),
             )
         })
         .await;
-    assert_eq!(first.expect("no engine fault"), SubmitVerdict::Accepted);
+    assert_eq!(first.expect("no engine fault"), Verdict::Accepted);
     assert_eq!(
         second.expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         }
     );
     scenario.close().await;
@@ -358,12 +357,12 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
             );
             listed
                 .iter()
-                .map(|tx| engine.submit(&hex(tx), SubmitCaller::Owner))
+                .map(|tx| engine.submit(&body(tx), SubmitCaller::Owner))
                 .collect::<Vec<_>>()
         })
         .await;
     for verdict in verdicts {
-        assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
+        assert_eq!(verdict.expect("no engine fault"), Verdict::Accepted);
     }
     scenario.close().await;
 }
@@ -522,12 +521,12 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let counted = |tx: &shekyl_wire::Transaction, caller| {
                 let before = (probes::fcmp_verifies(), probes::signature_verifies());
-                let verdict = engine.submit(&hex(tx), caller).expect("no engine fault");
+                let verdict = engine.submit(&body(tx), caller).expect("no engine fault");
                 let after = (probes::fcmp_verifies(), probes::signature_verifies());
                 (verdict, (after.0 - before.0, after.1 - before.1))
             };
             let owned = counted(&paid, SubmitCaller::Owner);
-            assert_eq!(owned.0, SubmitVerdict::Accepted);
+            assert_eq!(owned.0, Verdict::Accepted);
             let stem = (
                 counted(&paid, SubmitCaller::Foreign),
                 counted(&twin, SubmitCaller::Foreign),
@@ -546,20 +545,19 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     let (duplicate, conflict, accepted, below, (held, twin_held)) = stem;
     assert_eq!(
         duplicate.0,
-        SubmitVerdict::Accepted,
+        Verdict::Accepted,
         "a held stem duplicate is concealed"
     );
     assert_eq!(
         conflict.0,
-        SubmitVerdict::Accepted,
+        Verdict::Accepted,
         "a stem spender's conflict is concealed"
     );
-    assert_eq!(accepted.0, SubmitVerdict::Accepted);
+    assert_eq!(accepted.0, Verdict::Accepted);
     assert_eq!(
         below,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::FeeTooLow,
         }
     );
     assert!(!twin_held, "the concealed twin is not admitted");
@@ -575,16 +573,15 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     );
     assert_eq!(
         after.0,
-        SubmitVerdict::AlreadyInPool {
-            relay: PoolRelay::Published,
+        Verdict::AlreadyInPool {
+            publication: Publication::Public,
         },
         "fluffed: disclosed"
     );
     assert_eq!(
         after.1,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "fluffed: the conflict is disclosed"
     );
@@ -642,7 +639,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             ));
             let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
             let submit = |tx: &shekyl_wire::Transaction, caller| {
-                engine.submit(&hex(tx), caller).expect("no engine fault")
+                engine.submit(&body(tx), caller).expect("no engine fault")
             };
             let owned = submit(&held, SubmitCaller::Owner);
             let duplicate = submit(&held, SubmitCaller::Foreign);
@@ -652,17 +649,12 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             (owned, duplicate, fresh, unpublished)
         })
         .await;
-    assert_eq!(
-        owned,
-        SubmitVerdict::Accepted,
-        "the stem spend fills the pool"
-    );
+    assert_eq!(owned, Verdict::Accepted, "the stem spend fills the pool");
     assert_eq!(unpublished, Some(false), "held in its stem phase");
     assert_eq!(
         fresh,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::FeeTooLow,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::FeeTooLow,
         },
         "a fresh spend at its rate finds no room"
     );
@@ -736,9 +728,9 @@ async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&hex(&paid), SubmitCaller::Owner)
+            .submit(&body(&paid), SubmitCaller::Owner)
             .expect("no engine fault"),
-        SubmitVerdict::Accepted
+        Verdict::Accepted
     );
     let service = Service::start(
         Arc::clone(&store),

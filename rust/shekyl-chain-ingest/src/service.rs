@@ -21,7 +21,7 @@
 //! accepted arrival carries sends [`Reply::Stopped`] if it is dropped
 //! without a reply, so no path through the service can leave a ticket
 //! unanswered. Who uses the door: the protocol handler's FFI entry,
-//! `submit_block` and the miner's found-block sink. There is no second
+//! `block_submit` and the miner's found-block sink. There is no second
 //! path.
 //!
 //! **Room** ([`Door::room`]) is the count of arrivals the service will
@@ -86,7 +86,7 @@ pub enum Origin {
         /// Whether this node asked for it.
         solicited: bool,
     },
-    /// This node: `submit_block` or the miner's found-block sink.
+    /// This node: `block_submit` or the miner's found-block sink.
     Local,
 }
 
@@ -1078,7 +1078,7 @@ impl Door {
     /// it waits answers [`Reply::Stopped`]: the service is stopping, and the
     /// block was not accepted.
     ///
-    /// The miner's sink, `submit_block`, `generateblocks` and the node's
+    /// The miner's sink, `block_submit`, `dev_block_generate` and the node's
     /// genesis connect all enter here, so a local block has one path in.
     ///
     /// # Errors
@@ -1258,7 +1258,7 @@ pub struct PoolWiring {
     pub departed: Option<Departed>,
 }
 
-/// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
+/// Pops blocks for `dev_chain_pop` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
 /// apart from the service ([`Service::rewinder`]).
 pub struct Rewinder<S: Substrate>
 where
@@ -1644,13 +1644,13 @@ where
 
     /// Whether the pool file faulted and the pool was retired: no relay,
     /// no compact-block resolution and no transactions in a template until
-    /// a restart. What `get_info` and `mining_status` report (PR 3b).
+    /// a restart. What `daemon_status` and `mine_status` report (PR 3b).
     #[must_use]
     pub fn pool_retired(&self) -> bool {
         self.shared.pool_retired()
     }
 
-    /// What pops blocks for `pop_blocks`, held apart from the service.
+    /// What pops blocks for `dev_chain_pop`, held apart from the service.
     #[must_use]
     pub fn rewinder(&self) -> Rewinder<S> {
         Rewinder {

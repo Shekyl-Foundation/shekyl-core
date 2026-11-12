@@ -12,7 +12,7 @@
 //! **network** ([`Network`]) and **genesis** (block 0's hash, added by
 //! `VC-R2`). This module carries the second and third.
 //!
-//! `VC-2` publishes both on `get_version`. [`crate::identity`] compares them
+//! `VC-2` publishes both on `version`. [`crate::identity`] compares them
 //! (`VC-3` console, `VC-4` wallet). This module is the source of the rules
 //! and network pins, not a staged placeholder.
 //!
@@ -54,8 +54,8 @@ include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
 pub const CONSENSUS_CONSTANTS_DIGEST_HASH: HashHex =
     HashHex::from_bytes(CONSENSUS_CONSTANTS_DIGEST_BYTES);
 
-/// The network a daemon reports it runs, as `get_version.nettype` and
-/// `/get_info.nettype` carry it: the network table's one type
+/// The network a daemon reports it runs, as `version.network` carries it:
+/// the network table's one type
 /// (`NETWORK_IDENTITY.md` NI-Q8). Serialises as the network's name; an
 /// unknown string is a deserialisation error, never a default — a daemon
 /// reporting a network this build does not know is a daemon this build

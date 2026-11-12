@@ -5,7 +5,7 @@
 
 //! The economics of the chain at its tip, as one projection.
 //!
-//! A status reader — the daemon's `get_info` — wants the same handful of
+//! A status reader — the daemon's `daemon_status` — wants the same handful of
 //! figures consensus derives from the same operands: how fast the curve is
 //! releasing, what the next coinbase burns, what share of emission goes to
 //! stakers. It should not assemble them from parts, because the assembling
