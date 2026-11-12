@@ -51,15 +51,16 @@ fn params_for(g: &SplitGroup) -> SalSigningParams {
     let y_group = decode_point(&g.split.y_group).unwrap();
     let O = EdwardsPoint::generator() * x + y_group + EdwardsPoint(*T) * y_kem;
     let C = EdwardsPoint::random(&mut OsRng);
-    SalSigningParams::propose(
-        &mut OsRng,
-        &O.to_bytes(),
-        &C.to_bytes(),
-        SIGNABLE,
-        &x.to_repr(),
-        &y_kem.to_repr(),
-    )
-    .unwrap()
+    let z = Scalar::random(&mut OsRng).to_repr();
+    let a = Scalar::random(&mut OsRng).to_repr();
+    let spent = SpentOutput {
+        output_key: &O.to_bytes(),
+        commitment: &C.to_bytes(),
+        spend_scalar: &x.to_repr(),
+        y_kem: &y_kem.to_repr(),
+        commitment_mask: &z,
+    };
+    SalSigningParams::propose(&mut OsRng, &spent, &a, SIGNABLE).unwrap()
 }
 
 /// `params` with another rerandomization, `x` or `y_kem` (the type is not
@@ -451,23 +452,41 @@ fn the_proposal_refuses_each_bad_value_by_name() {
     let good = EdwardsPoint::random(&mut OsRng).to_bytes();
     let scalar = Scalar::random(&mut OsRng).to_repr();
     let identity = EdwardsPoint::identity().to_bytes();
-    let propose = |o: &[u8; 32], c: &[u8; 32], x: &[u8; 32], y: &[u8; 32]| {
-        SalSigningParams::propose(&mut OsRng, o, c, SIGNABLE, x, y).err()
-    };
+    let bad = [0xFF; 32];
+    let propose =
+        |o: &[u8; 32], c: &[u8; 32], x: &[u8; 32], y: &[u8; 32], z: &[u8; 32], a: &[u8; 32]| {
+            let spent = SpentOutput {
+                output_key: o,
+                commitment: c,
+                spend_scalar: x,
+                y_kem: y,
+                commitment_mask: z,
+            };
+            SalSigningParams::propose(&mut OsRng, &spent, a, SIGNABLE).err()
+        };
+    let s = &scalar;
     assert_eq!(
-        propose(&identity, &good, &scalar, &scalar),
+        propose(&identity, &good, s, s, s, s),
         Some(FrostSalError::OutputKey)
     );
     assert_eq!(
-        propose(&good, &identity, &scalar, &scalar),
+        propose(&good, &identity, s, s, s, s),
         Some(FrostSalError::Commitment)
     );
     assert_eq!(
-        propose(&good, &good, &[0xFF; 32], &scalar),
+        propose(&good, &good, &bad, s, s, s),
         Some(FrostSalError::SpendScalar)
     );
     assert_eq!(
-        propose(&good, &good, &scalar, &[0xFF; 32]),
+        propose(&good, &good, s, &bad, s, s),
         Some(FrostSalError::OutputTweak)
+    );
+    assert_eq!(
+        propose(&good, &good, s, s, &bad, s),
+        Some(FrostSalError::CommitmentMask)
+    );
+    assert_eq!(
+        propose(&good, &good, s, s, s, &bad),
+        Some(FrostSalError::PseudoOutBlind)
     );
 }

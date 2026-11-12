@@ -268,13 +268,7 @@ impl ManagedInstance {
             readiness,
         });
 
-        match wait_until_ready(
-            &control,
-            &mut ready_rx,
-            tokio::time::Instant::now() + BOOTSTRAP_TIMEOUT,
-        )
-        .await
-        {
+        match wait_until_ready(&control, &mut ready_rx, BOOTSTRAP_TIMEOUT).await {
             Ok(()) => {}
             Err(WaitReadyError::Timeout | WaitReadyError::Failed) => {
                 return Err(ApparatusError::Bootstrap);

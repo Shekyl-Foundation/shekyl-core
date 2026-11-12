@@ -583,9 +583,7 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
             },
         )?;
 
-        let r_c = a - z;
-
-        let rerand = RerandomizedOutput::with_commitment_blind(&mut *rng, output, r_c);
+        let rerand = RerandomizedOutput::for_pseudo_out(&mut *rng, output, z, a);
         let crate_input = rerand.input();
         let c_tilde_bytes: [u8; 32] = crate_input.C_tilde().to_bytes();
 

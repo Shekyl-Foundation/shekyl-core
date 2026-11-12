@@ -235,6 +235,32 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.94.0
 
+      # The process clock is awake time on every platform (Rick,
+      # 2026-11-11): every deadline and age in the node leaves a machine's
+      # sleep out. On Windows its source is the unbiased interrupt time,
+      # which no Linux lane can run. This lane is the one with a Windows
+      # runner, so it runs the clock's tests on every entry, and Windows
+      # names its own source test too. Each is required by name, so a test
+      # that stopped compiling on a platform fails here (rule 47).
+      - name: the process clock's source (shekyl-timing-engine)
+        run: |
+          set -o pipefail
+          cd rust
+          # The status is taken in the `if`: under the step's `-e`, a bare
+          # failing command would end the step before the output is shown.
+          if cargo test --locked -p shekyl-timing-engine --lib clock_tests -- --test-threads=1 > clock.out 2>&1; then
+            rc=0
+          else
+            rc=$?
+          fi
+          cat clock.out
+          [ "$rc" -eq 0 ]
+          required=(clock_tests::an_awake_span_keeps_its_length_and_resolution)
+          if [ "$RUNNER_OS" = Windows ]; then
+            required+=(clock_tests::on_windows_the_clock_is_the_unbiased_interrupt_time)
+          fi
+          ../scripts/ci/require_live_tests.sh clock.out "${required[@]}"
+
       # TWO invocations, not one, because the pinned-tor set now spans two
       # crates: the control protocol and the pin gate live in
       # `shekyl-tor-control-client`, the supervisor that drives them in `shekyl-tor-control-wallet`.

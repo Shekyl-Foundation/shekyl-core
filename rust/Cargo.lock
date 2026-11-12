@@ -4670,12 +4670,10 @@ dependencies = [
 name = "shekyl-multisig"
 version = "3.1.0"
 dependencies = [
- "chacha20poly1305",
  "criterion",
- "hkdf",
+ "rand 0.8.6",
  "serde",
  "serde_json",
- "sha2",
  "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -5361,6 +5359,7 @@ dependencies = [
  "criterion",
  "proptest",
  "shekyl-thread-ledger",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

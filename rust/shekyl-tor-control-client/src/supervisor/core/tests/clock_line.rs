@@ -566,6 +566,17 @@ fn an_aging_consensus_does_not_retire_tors_report() {
         !repeated.actions.contains(&Action::Announce),
         "the same report was a new line"
     );
+    let blocked = core.on(Input::ExternalBlocked, (4 + last) * SECOND);
+    assert!(
+        !blocked.actions.contains(&Action::Announce),
+        "aging gave the line to the block: {}",
+        render(&core.status())
+    );
+    assert!(
+        matches!(core.status().cause, Cause::ClockSkew { .. }),
+        "aging retired the report for the block: {:?}",
+        core.status().cause
+    );
 }
 
 /// **A sleep is not the clock set right** (Copilot on #1340). On Linux and
@@ -609,6 +620,17 @@ fn a_sleep_does_not_retire_tors_report() {
         "the report was retired: {:?}",
         core.status().cause
     );
+    let blocked = core.on(Input::ExternalBlocked, 9 * SECOND);
+    assert!(
+        !blocked.actions.contains(&Action::Announce),
+        "a sleep gave the line to the block: {}",
+        render(&core.status())
+    );
+    assert!(
+        matches!(core.status().cause, Cause::ClockSkew { skew } if skew == report),
+        "a sleep retired the report for the block: {:?}",
+        core.status().cause
+    );
 }
 
 /// **A blocked link named first gives way to the clock** (Copilot on
@@ -637,4 +659,224 @@ fn a_blocked_link_named_first_gives_way_to_the_clock() {
     let last = said.lines.last().expect("a line was said");
     assert!(!last.contains("cannot reach the Tor network"), "{last}");
     assert_eq!(last.matches("date and time").count(), 1, "{last}");
+}
+
+/// One handshake stretch: the window the certificate evidence already uses.
+fn stretch() -> u64 {
+    policy().clock_evidence_within.as_secs() * SECOND
+}
+
+/// The consensus check, reading the wall inside the tolerance. It never
+/// names a clock behind.
+fn wall_inside_tolerance(core: &mut Core, at: u64) {
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: VALID_AFTER,
+        },
+        at,
+    );
+}
+
+/// **A jump after an ahead report gives the line to a block.** The
+/// consensus check only sees a clock behind, so an ahead report has no
+/// lower bound to clear. Tor reports the jump, repeats the same figure
+/// inside the handshake stretch, and says the link is blocked. The line
+/// names the block. Fails if the jump does not yield the report, or if
+/// the repeat inside the stretch takes the line back.
+#[test]
+fn a_jump_after_an_ahead_report_gives_the_line_to_a_block() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(7_200);
+    let named = core.on(Input::ClockSkew { skew: report }, SECOND);
+    assert!(named.actions.contains(&Action::Announce), "the report");
+    wall_inside_tolerance(&mut core, 2 * SECOND);
+    assert!(core.status().clock_behind.is_none(), "the check tripped");
+    core.on(Input::ClockJumped, 3 * SECOND);
+    let repeated = core.on(Input::ClockSkew { skew: report }, 4 * SECOND);
+    assert!(
+        !repeated.actions.contains(&Action::Announce),
+        "the repeat inside the stretch was said"
+    );
+    let blocked = core.on(Input::ExternalBlocked, 5 * SECOND);
+    assert!(
+        blocked.actions.contains(&Action::Announce),
+        "the block was not named: {}",
+        render(&core.status())
+    );
+    let line = render(&core.status());
+    assert!(line.contains("cannot reach the Tor network"), "{line}");
+    assert!(!line.contains("clock is"), "{line}");
+}
+
+/// **A skew already in flight does not take the line back.** The jump,
+/// then the block, then the same figure inside the stretch. The block
+/// stays, and nothing is said of the figure. Fails if a handshake that
+/// was already open replaces the block because it arrived second.
+#[test]
+fn a_skew_already_in_flight_does_not_take_the_line_back() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(7_200);
+    core.on(Input::ClockSkew { skew: report }, SECOND);
+    core.on(Input::ClockJumped, 2 * SECOND);
+    let blocked = core.on(Input::ExternalBlocked, 3 * SECOND);
+    assert!(blocked.actions.contains(&Action::Announce), "the block");
+    let tail = core.on(Input::ClockSkew { skew: report }, 4 * SECOND);
+    assert!(
+        tail.actions.is_empty(),
+        "the tail was said: {}",
+        render(&core.status())
+    );
+    let line = render(&core.status());
+    assert!(line.contains("cannot reach the Tor network"), "{line}");
+    assert!(!line.contains("clock is"), "{line}");
+}
+
+/// **A consensus clear leaves the block with the clock.** Three days
+/// behind, named. The wall then jumps inside the tolerance, and Tor
+/// reports no jump. A block stays unnamed. Fails if the clear is read as
+/// the clock being set.
+#[test]
+fn a_consensus_clear_leaves_the_block_with_the_clock() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(-258_357);
+    core.on(Input::ClockSkew { skew: report }, SECOND);
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: WALL_AT_START,
+        },
+        2 * SECOND,
+    );
+    assert!(
+        core.status().clock_behind.is_some(),
+        "the check did not trip"
+    );
+    wall_inside_tolerance(&mut core, 3 * SECOND);
+    assert!(
+        core.status().clock_behind.is_none(),
+        "the bound did not clear"
+    );
+    let blocked = core.on(Input::ExternalBlocked, 4 * SECOND);
+    assert!(
+        !blocked.actions.contains(&Action::Announce),
+        "the clear gave the line to the block: {}",
+        render(&core.status())
+    );
+    let line = render(&core.status());
+    assert!(line.contains("clock is"), "{line}");
+    assert!(!line.contains("cannot reach the Tor network"), "{line}");
+}
+
+/// **A repeat of the yielded figure does not take the line back.** Behind,
+/// named. Tor reports the jump, the check reads the wall inside the
+/// tolerance, Tor repeats the same figure, and then says the link is
+/// blocked. The block is named. Fails if the repeat re-arms the hold: the
+/// line stays on the clock, which is what a stale handshake brings back.
+#[test]
+fn a_repeat_of_the_yielded_figure_does_not_take_the_line_back() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(-258_357);
+    let named = core.on(Input::ClockSkew { skew: report }, SECOND);
+    assert!(named.actions.contains(&Action::Announce), "the report");
+    core.on(
+        Input::ConsensusClock {
+            valid_after: VALID_AFTER,
+            wall: WALL_AT_START,
+        },
+        2 * SECOND,
+    );
+    core.on(Input::ClockJumped, 3 * SECOND);
+    wall_inside_tolerance(&mut core, 4 * SECOND);
+    assert!(
+        core.status().clock_behind.is_none(),
+        "the bound did not clear"
+    );
+    let repeated = core.on(Input::ClockSkew { skew: report }, 5 * SECOND);
+    assert!(
+        !repeated.actions.contains(&Action::Announce),
+        "the repeat was said"
+    );
+    let blocked = core.on(Input::ExternalBlocked, 6 * SECOND);
+    assert!(
+        blocked.actions.contains(&Action::Announce),
+        "the block was not named: {}",
+        render(&core.status())
+    );
+    let line = render(&core.status());
+    assert!(line.contains("cannot reach the Tor network"), "{line}");
+    assert!(!line.contains("clock is"), "{line}");
+}
+
+/// **A figure that outlasts the handshake stretch owns the block again.**
+/// Ahead, the jump, then the same figure after `clock_evidence_within`,
+/// then a block. The clock is named and the block is not. Fails if a
+/// repeat after the stretch is still the handshake that was already open.
+/// A wake reports `CLOCK_JUMPED` too, and Tor keeps reporting the figure
+/// when the clock is still wrong.
+#[test]
+fn a_figure_that_outlasts_the_handshake_stretch_owns_the_block_again() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(7_200);
+    core.on(Input::ClockSkew { skew: report }, SECOND);
+    let jumped_at = 2 * SECOND;
+    core.on(Input::ClockJumped, jumped_at);
+    let later = jumped_at + stretch() + SECOND;
+    let again = core.on(Input::ClockSkew { skew: report }, later);
+    assert!(
+        !again.actions.contains(&Action::Announce),
+        "a kept figure was said"
+    );
+    let blocked = core.on(Input::ExternalBlocked, later + SECOND);
+    assert!(
+        !blocked.actions.contains(&Action::Announce),
+        "the stretch never ended: {}",
+        render(&core.status())
+    );
+    let line = render(&core.status());
+    assert!(line.contains("clock is"), "{line}");
+    assert!(!line.contains("cannot reach the Tor network"), "{line}");
+}
+
+/// **A new figure takes the line back from the block.** After the jump a
+/// block is named. A different figure names the clock once, and a block
+/// after it stays unnamed. Fails if the new figure is treated as the
+/// repeat of the yielded one.
+#[test]
+fn a_new_figure_takes_the_line_back_from_the_block() {
+    let mut core = bootstrapping();
+    let report = ReportedSkew::Measured(7_200);
+    core.on(Input::ClockSkew { skew: report }, SECOND);
+    core.on(Input::ClockJumped, 2 * SECOND);
+    let blocked = core.on(Input::ExternalBlocked, 3 * SECOND);
+    assert!(blocked.actions.contains(&Action::Announce), "the block");
+    let again = core.on(
+        Input::ClockSkew {
+            skew: ReportedSkew::Measured(-3_600),
+        },
+        4 * SECOND,
+    );
+    assert!(
+        again.actions.contains(&Action::Announce),
+        "the new figure was not said"
+    );
+    assert_eq!(
+        again
+            .actions
+            .iter()
+            .filter(|action| matches!(action, Action::Announce))
+            .count(),
+        1,
+        "said more than once: {again:?}"
+    );
+    let line = render(&core.status());
+    assert!(line.contains("clock is"), "{line}");
+    assert!(!line.contains("cannot reach"), "{line}");
+    let later = core.on(Input::ExternalBlocked, 5 * SECOND);
+    assert!(
+        !later.actions.contains(&Action::Announce),
+        "the block took the line back: {}",
+        render(&core.status())
+    );
+    assert!(render(&core.status()).contains("clock is"));
 }

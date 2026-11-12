@@ -73,6 +73,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
 use shekyl_tor_control_client::control::vanguards::{
     HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
@@ -1125,7 +1126,7 @@ async fn fetch_consensus(
 ) -> Result<ConsensusView, VanguardsAbort> {
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = awake::sleep(reply_deadline) => {
             return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
         }
         r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
@@ -1171,7 +1172,7 @@ async fn apply_pins(
     })?;
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = awake::sleep(reply_deadline) => {
             return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
         }
         r = actor.ask(Command::SetConf(pins)) => r,

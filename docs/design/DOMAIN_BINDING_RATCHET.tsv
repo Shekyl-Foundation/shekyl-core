@@ -24,7 +24,7 @@
 # section	literal	note
 input-raw	shekyl/ek-bind-v1	input:SaltForKey: the site hashes the address's ML-KEM encapsulation key, a public key decoded from address bytes, not a key derived under salt_for; the binding needs a ruling (2026-11-07)
 input-raw	shekyl/archival-p-id-v1	input:SaltForKey: the site hashes the persona's public hybrid key, which every verifier reads off the wire; the key is derived under salt_for, its public half is not; the binding needs a ruling (2026-11-07)
-input-raw	nonce	input:SaltForKey: the input is a multisig group secret expanded under HKDF with no salt, not salt_for, and the module has no production caller; the binding and the module need a ruling (2026-11-07)
+input-raw	shekyl/multisig-blob-key-v1	input:SaltForKey: the site (multisig_blob.rs blob_key) takes the group transport secret, a key derived under salt_for (R-4), as raw bytes; no SaltForKey type exists yet. Owner SO-D12, which mints the type
 input-raw	shekyl-subaddr-v1\0	input:SaltForKey: the input is the reduced view scalar, not an HKDF output, and the function's only callers are tests and KATs; its type needs a ruling (2026-11-07)
 input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: a wallet's and a persona's d_z derive under salt_for, but the harness miner's derives under its own fixture salt and its keys are pinned in every fixture chain; typing waits on a ruling for the harness (2026-11-07)
 unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix

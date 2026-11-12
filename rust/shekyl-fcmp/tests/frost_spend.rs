@@ -41,7 +41,7 @@ use shekyl_crypto_pq::multisig_output::{
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
 use shekyl_fcmp::frost_sal::{
     complete, dealer_split, preprocess, sign, threshold_keys, Ed25519T, Participant,
-    SalSigningParams, ThresholdKeys,
+    SalSigningParams, SpentOutput, ThresholdKeys,
 };
 use shekyl_fcmp::proof::{prove_with_sal, verify, BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
@@ -133,6 +133,7 @@ fn load_keys(file: &MemberFile) -> ThresholdKeys<Ed25519T> {
 struct Scanned {
     x: Zeroizing<[u8; 32]>,
     y_kem: Zeroizing<[u8; 32]>,
+    z: Zeroizing<[u8; 32]>,
     key_image: KeyImage,
     committed_form: Vec<u8>,
     blind: Zeroizing<[u8; 32]>,
@@ -148,7 +149,9 @@ fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
     )
     .unwrap()
     .0;
-    let y_kem = Zeroizing::new(derive_output_secrets(&ss, index).y);
+    let secrets = derive_output_secrets(&ss, index);
+    let y_kem = Zeroizing::new(secrets.y);
+    let z = Zeroizing::new(secrets.z);
     assert!(*y_kem == out.y, "the scan recovers the sender's y_kem");
     let spend =
         compute_output_key_image(&ss, index, file.b(), &key_image_generator(&out.output_key))
@@ -189,6 +192,7 @@ fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned {
     Scanned {
         x: spend.spend_secret_x.clone(),
         y_kem,
+        z,
         key_image: spend.key_image,
         committed_form,
         blind: Zeroizing::new(leaf.blind),
@@ -309,19 +313,23 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
 
     // The proposer fixes each input's parameters from its own scan; the
     // signers sign from their loaded files.
+    let blinds: Vec<Zeroizing<[u8; 32]>> = outputs
+        .iter()
+        .map(|_| Zeroizing::new(random_scalar().to_bytes()))
+        .collect();
     let params: Vec<SalSigningParams> = outputs
         .iter()
         .zip(&scans)
-        .map(|((out, _), s)| {
-            SalSigningParams::propose(
-                &mut OsRng,
-                &out.output_key,
-                &out.commitment,
-                SIGNABLE,
-                &s.x,
-                &s.y_kem,
-            )
-            .unwrap()
+        .zip(&blinds)
+        .map(|(((out, _), s), a)| {
+            let spent = SpentOutput {
+                output_key: &out.output_key,
+                commitment: &out.commitment,
+                spend_scalar: &s.x,
+                y_kem: &s.y_kem,
+                commitment_mask: &s.z,
+            };
+            SalSigningParams::propose(&mut OsRng, &spent, a, SIGNABLE).unwrap()
         })
         .collect();
     let keys: HashMap<Participant, ThresholdKeys<Ed25519T>> = signer_indices
@@ -381,6 +389,18 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
         SIGNABLE,
     );
     assert!(matches!(verified, Ok(true)), "{m}-of-{n}: {verified:?}");
+
+    // Each pseudo-out opens to the blind the assembler chose and the input's
+    // amount (`C~ = a·G + amount·H`), so the last one can be balanced.
+    for ((pseudo_out, a), amount) in proved.pseudo_outs.iter().zip(&blinds).zip([500u64, 700]) {
+        let a = DalekScalar::from_canonical_bytes(**a).unwrap();
+        let expected =
+            ED25519_BASEPOINT_POINT * a + *shekyl_curve_generators::H * DalekScalar::from(amount);
+        assert!(
+            *pseudo_out == expected.compress().to_bytes(),
+            "{m}-of-{n}: the pseudo-out opens to its chosen blind"
+        );
+    }
 
     // The proof is over this transaction's message and no other.
     let other = TxSignableHash::from_bytes([0x3C; 32]);
