@@ -98,9 +98,9 @@ archival_families! {
     Settlement => "archival_settlement",
     /// `archival_bundle_references`
     BundleReferences => "archival_bundle_references",
-    /// `archival_alt_bundle_references`: an alt block's bundle references,
+    /// `archival_alt_section_references`: an alt block's section references,
     /// held as a field of its `alt_blocks` record (`FOLDED_INTO`).
-    AltBundleReferences => "archival_alt_bundle_references",
+    AltSectionReferences => "archival_alt_section_references",
     /// `archival_bond`
     Bond => "archival_bond",
     /// `archival_shard_segment`

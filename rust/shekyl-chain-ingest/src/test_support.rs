@@ -60,7 +60,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{base_block_reward, EconomicParams};
 use shekyl_harness_spender::{first_spending_height, MinerWallet};
 use shekyl_harness_wallet::coinbase::repay;
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, KeyImage, LongTermWeight};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, SectionRoot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
@@ -263,7 +263,7 @@ pub fn block_with_nonce(
             curve_tree_root: root,
             // The empty section's root: a block carrying no references is
             // judged against it (CEN-J29).
-            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction,
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),

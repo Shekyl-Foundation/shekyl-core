@@ -6,7 +6,7 @@
 use std::io::Cursor;
 
 use shekyl_chain_rules::Candidate;
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::*;
@@ -55,7 +55,7 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            bundle_root: BundleRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: bodies.iter().map(Transaction::hash).collect(),

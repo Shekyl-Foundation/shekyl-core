@@ -1055,7 +1055,7 @@ impl Door {
             .filter_map(|posting| {
                 let posted = &posting.job.block.header;
                 let section = posting.section.as_ref()?;
-                (posted.previous == header.previous && posted.bundle_root == header.bundle_root)
+                (posted.previous == header.previous && posted.section_root == header.section_root)
                     .then(|| {
                         (
                             section.references.as_slice().to_vec(),

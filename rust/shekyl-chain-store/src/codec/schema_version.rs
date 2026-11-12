@@ -393,7 +393,7 @@ use super::{Canonical, CodecError};
 ///   Rebuild from the block corpus, as at every bump.
 ///
 /// - `36` — the switch (`SO-D12` 4b; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3,
-///   `SCS-P34`): the header's last 32 bytes are the bundle root, a root
+///   `SCS-P34`): the header's last 32 bytes are the section root, a root
 ///   over the references of the bundles a block admits, and every
 ///   network's genesis commits the empty section's root, so every genesis
 ///   hash and network id moved. The block's sidecar becomes its bundle
@@ -420,7 +420,7 @@ use super::{Canonical, CodecError};
 ///   `ServeCredit` archival family goes too, so each later family's bit in
 ///   a stored `family_set` moves down one and `family_set.snap` re-pins.
 ///   The alt-chain family is named for what it holds:
-///   `archival_alt_attestation_witness` is `archival_alt_bundle_references`,
+///   `archival_alt_attestation_witness` is `archival_alt_section_references`,
 ///   its bit unchanged. A `35` file is refused at open. Rebuild from the block corpus, as at
 ///   every bump.
 ///

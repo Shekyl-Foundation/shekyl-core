@@ -10,7 +10,7 @@
 //! followed by the block blob in one LMDB value, with the block's sidecar in
 //! a **second** table keyed by the same hash. This record re-specifies that
 //! along its seams rather than porting it, and the alt block's bundle
-//! references are a field of it (the family `archival_alt_bundle_references`,
+//! references are a field of it (the family `archival_alt_section_references`,
 //! folded into `alt_blocks`):
 //!
 //! - `cumulative_difficulty` is **one** `u128`, the encoding the chain
@@ -435,7 +435,7 @@ impl Canonical for AltBodies {
 /// this snapshot's own literals and nothing else's.
 #[cfg(test)]
 pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-    use shekyl_types::{BlockHash, BundleRoot, CurveTreeRoot};
+    use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot};
     use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
     // The snapshot's own bytes. `UNLOCK_OFFSET` happens to equal the genesis
     // unlock window and `KEY` / `MASK` the harness's `G` / `2·G` at the pin;
@@ -460,7 +460,7 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::EMPTY,
-            bundle_root: BundleRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {

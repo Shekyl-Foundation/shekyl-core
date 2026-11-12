@@ -17,7 +17,7 @@ use core::future::Future;
 use shekyl_rpc_types::wire::shared::{Archived, ArchivedState};
 
 use shekyl_types::{
-    ArchivalLength, BlockHash, BundleRoot, CurveTreeRoot, PqcAuthHash, PrunableHash, TxHash,
+    ArchivalLength, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, SectionRoot, TxHash,
 };
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL};
@@ -192,7 +192,7 @@ fn coinbase_block(number: u64) -> Block {
             previous: BlockHash::NULL,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {

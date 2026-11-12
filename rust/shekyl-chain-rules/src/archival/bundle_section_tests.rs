@@ -16,7 +16,7 @@
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
+    section_budget, section_root, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -49,10 +49,10 @@ pub(in crate::archival::bundle) fn section_of(counts: &[u32]) -> Vec<BundleRef> 
         .collect()
 }
 
-/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// [`section_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
 pub(in crate::archival::bundle) fn root_of(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// The including block for `refs`: one above the last. The oldest

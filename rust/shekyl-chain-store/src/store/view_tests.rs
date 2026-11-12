@@ -14,7 +14,7 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     validate, AtHeight, Candidate, ChainView, Fault, HeaderView, RuleSet, Trust,
 };
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use super::connect_fixtures::{formed, priced};
@@ -57,7 +57,7 @@ fn block(height: u64, timestamp: u64) -> Block {
             // (not through `validate`), so this header is not judged under
             // CEN-B5; the value is a placeholder, as it is in LMDB fixtures.
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            bundle_root: BundleRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: Vec::new(),
@@ -435,8 +435,8 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
-        b1.header.bundle_root =
-            BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root());
+        b1.header.section_root =
+            SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root());
         let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
             formed(&view, b1)?,

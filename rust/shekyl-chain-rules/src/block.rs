@@ -114,7 +114,7 @@ pub struct Candidate {
     pub transactions: Vec<Transaction>,
     /// The bundle references carried beside the block — **not in it**
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
-    /// `bundle_root` commits, undecoded, `None` when the block admits no
+    /// `section_root` commits, undecoded, `None` when the block admits no
     /// bundle. The operand of CEN-J29 through J37: `form` holds the root to
     /// them, and `validate` admits each. The verdict carries them to the
     /// store, which records them at the block's height.

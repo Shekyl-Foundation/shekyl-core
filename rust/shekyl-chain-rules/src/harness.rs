@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_types::archival::{RMarket, SigmaWorkMilli};
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, BlockWeight, BundleRoot, CurveTreeRoot, KeyImage,
-    LongTermWeight, SettlementEpoch, ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage, LongTermWeight,
+    SectionRoot, SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;

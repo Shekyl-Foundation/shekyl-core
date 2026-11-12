@@ -14,7 +14,7 @@
 //! loads the captured shard-fill prefix first and the personas join after it.
 
 use shekyl_archival_retention::{
-    bundle_root, challenge_nonce, draw_commit, select_draw, BundleBody, BundleRef, DrawableEpoch,
+    challenge_nonce, draw_commit, section_root, select_draw, BundleBody, BundleRef, DrawableEpoch,
     PassBitmap, PassStream,
 };
 use shekyl_chain_rules::harness::bundle::BundleWorld;
@@ -561,7 +561,7 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
         );
         let refs = [reference];
         let bodies = [body];
-        let root = bundle_root(&refs).expect("one reference");
+        let root = section_root(&refs).expect("one reference");
         let refused = judge_bundles(
             &refs,
             &bodies,

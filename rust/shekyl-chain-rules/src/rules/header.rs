@@ -6,7 +6,7 @@
 //! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
 //! the version fields (B1, B2), the curve-tree root (B5) and the block's
 //! identity (B6). B3 is surface-bound and the store's. B4 is deleted: the
-//! header's bundle root is the block's section, judged by CEN-J29 through
+//! header's section root is the block's section, judged by CEN-J29 through
 //! J37 (`rules::bundle_admission`), and A3 holds by the section's one door.
 //!
 //! # The version pair

@@ -26,7 +26,7 @@ use shekyl_economics::{
     price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionError,
     EmissionInputs, TxVolume, FULL_REWARD_ZONE,
 };
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot, Timestamp};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input, Transaction};
 use shekyl_wire::tx_extra::{self, check_tx_extra_shape, ExtraSubject, TxExtraField};
@@ -137,7 +137,7 @@ fn context<'a>(
         curve_tree_root,
         // The template carries no references, so the validator judges it
         // against the empty section's root (CEN-J29).
-        bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         major_version: RuleSet::GENESIS.header_major_version(),
         now: NOW,
         median_timestamp: median_of(chain),

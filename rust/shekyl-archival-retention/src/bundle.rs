@@ -42,7 +42,7 @@
 //! - [`bundle_commitment`] — what the witness signs.
 //! - [`bundle_prunable_hash`] — what a reference carries of the prunable
 //!   part, and the key a body is fetched and accepted by.
-//! - [`bundle_root`] — what the block header commits to.
+//! - [`section_root`] — what the block header commits to.
 //!
 //! All three are consensus: every node must compute the same bytes.
 //!
@@ -82,8 +82,8 @@ pub const BUNDLE_COMMITMENT: IdDomain<2, W64> =
 /// cSHAKE256 customization for [`bundle_prunable_hash`].
 pub const BUNDLE_PRUNABLE_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-prunable-v1";
 
-/// cSHAKE256 customization for [`bundle_root`].
-pub const BUNDLE_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
+/// cSHAKE256 customization for [`section_root`].
+pub const SECTION_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
 
 /// The draw seed's length.
 pub const BUNDLE_SEED_LEN: usize = 32;
@@ -905,21 +905,21 @@ impl<'a> CarriedBodies<'a> {
 /// root's preimage counts them in four bytes, so such a section has no
 /// root. A consensus caller refuses the section for it; nothing here
 /// panics.
-pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
+pub fn section_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
     let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
     input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
         reference.encode_into(&mut input);
     }
-    Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
+    Ok(cshake256_32(SECTION_ROOT_CUSTOMIZATION, &input))
 }
 
 /// The root of a section with no references: what the header commits to
 /// on a block that admits no bundle, genesis included (§7.3, `SCS-P34`).
 #[must_use]
-pub fn empty_bundle_root() -> [u8; 32] {
-    match bundle_root(&[]) {
+pub fn empty_section_root() -> [u8; 32] {
+    match section_root(&[]) {
         Ok(root) => root,
         Err(_) => unreachable!("an empty section's count fits"),
     }
@@ -941,9 +941,9 @@ pub struct TooManyReferences {
 /// `n` as the root's preimage carries it: the section's reference count in
 /// 32 bits, checked, never truncated.
 ///
-/// Crate-private. [`bundle_root`] is the caller. The bound is tested on
+/// Crate-private. [`section_root`] is the caller. The bound is tested on
 /// this function because a section of 2³² references is not something a
-/// test allocates. The verifier maps [`bundle_root`]'s error and does not
+/// test allocates. The verifier maps [`section_root`]'s error and does not
 /// call this.
 ///
 /// # Errors

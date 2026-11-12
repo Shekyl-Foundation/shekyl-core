@@ -34,7 +34,7 @@
 
 use kameo::message::{Context, Message};
 use shekyl_archival_retention::{
-    bundle_root, constants::W2_MAX_DEFENSIBLE_BLOCKS, BundleBody, BundleRef, PassStream,
+    constants::W2_MAX_DEFENSIBLE_BLOCKS, section_root, BundleBody, BundleRef, PassStream,
 };
 use shekyl_bundle_producer::{DrawTarget, Targets};
 use shekyl_chain_rules::{
@@ -393,7 +393,7 @@ fn judge_section(
 /// that fits, so this section has a root.
 fn root_of_one(reference: &BundleRef) -> [u8; 32] {
     let refs = std::slice::from_ref(reference);
-    match bundle_root(refs) {
+    match section_root(refs) {
         Ok(root) => root,
         Err(_) => unreachable!("one reference is a section count that fits"),
     }

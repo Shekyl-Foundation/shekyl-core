@@ -262,7 +262,7 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
 /// definition here to constrain and its floor moved with the fold. The
 /// class table names the host table, not this LMDB spelling.
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
-    "archival_alt_bundle_references",
+    "archival_alt_section_references",
     "alt_blocks",
     "an alt block's bundle references are an attribute of the alt block they are keyed by \
      (written beside the block, removed with it, never outliving it), so they are a field \
@@ -630,7 +630,7 @@ tables! {
 
     /// `archival_bundle_references` — INTEGERKEY; a block's bundle references
     /// (`BundleReferences::encode`), absent when the block admitted no
-    /// bundle (never an empty row). The section the header's `bundle_root`
+    /// bundle (never an empty row). The section the header's `section_root`
     /// commits (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). S-ARCH (A10).
     pub const ARCHIVAL_BUNDLE_REFERENCES: TableDefinition<u64, Blob<BundleReferencesBytes>> =
         TableDefinition::new("archival_bundle_references");

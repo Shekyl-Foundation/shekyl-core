@@ -30,15 +30,15 @@ use crate::trust::Trust;
 use crate::validate::validate;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_archival_retention::{
-    bundle_root, empty_bundle_root, BundleKept, BundleRef, PassBitmap,
+    empty_section_root, section_root, BundleKept, BundleRef, PassBitmap,
 };
 use shekyl_types::archival::BundleReferences;
-use shekyl_types::{BlockHeight, BundleRoot};
+use shekyl_types::{BlockHeight, SectionRoot};
 use shekyl_wire::tx_extra::parse;
 
-/// `candidate` with its header's `bundle_root` replaced.
+/// `candidate` with its header's `section_root` replaced.
 fn with_root(mut candidate: Candidate, root: [u8; 32]) -> Candidate {
-    candidate.block.header.bundle_root = BundleRoot::from_bytes(root);
+    candidate.block.header.section_root = SectionRoot::from_bytes(root);
     candidate
 }
 
@@ -58,7 +58,7 @@ fn reference_for(h: u64) -> BundleRef {
 
 /// `candidate` carrying `refs` as its section, under the root they make.
 fn carrying(candidate: Candidate, refs: &[BundleRef]) -> Candidate {
-    let root = bundle_root(refs).expect("a countable section");
+    let root = section_root(refs).expect("a countable section");
     let section = BundleReferences::new(refs.iter().map(BundleRef::encode).collect())
         .expect("a non-empty section of non-empty references");
     with_root(candidate, root).with_bundle_references(Some(section))
@@ -87,8 +87,8 @@ fn j29_the_empty_section_under_the_empty_root_is_a_judged_pass() {
     let candidate = candidate_on(&chain, Vec::new());
     assert!(candidate.bundle_references.is_none());
     assert_eq!(
-        candidate.block.header.bundle_root.as_bytes(),
-        &empty_bundle_root()
+        candidate.block.header.section_root.as_bytes(),
+        &empty_section_root()
     );
     let formed = formed_on(&chain, candidate);
     chain.with_view(|view| {
@@ -179,7 +179,7 @@ fn j29_references_under_another_root_are_refused() {
     let chain = chain_of(3);
     let candidate = with_root(
         carrying(candidate_on(&chain, Vec::new()), &[reference_for(1)]),
-        empty_bundle_root(),
+        empty_section_root(),
     );
     assert_refused(judge_on(&chain, candidate), CenRow::J29, Locus::Block);
 }
@@ -231,12 +231,12 @@ fn a_view_with_no_bundle_rows_faults_and_never_refuses() {
 fn bind_section_holds_the_stateless_half() {
     let at = BlockHeight::from_raw(3);
     let rules = RuleSet::GENESIS;
-    assert_eq!(bind_section(&[], &empty_bundle_root(), at, &rules), Ok(()));
+    assert_eq!(bind_section(&[], &empty_section_root(), at, &rules), Ok(()));
     let one = reference_for(1);
-    let root = bundle_root(std::slice::from_ref(&one)).expect("one reference");
+    let root = section_root(std::slice::from_ref(&one)).expect("one reference");
     assert_eq!(bind_section(&[one.encode()], &root, at, &rules), Ok(()));
     assert_refused(
-        bind_section(&[one.encode()], &empty_bundle_root(), at, &rules),
+        bind_section(&[one.encode()], &empty_section_root(), at, &rules),
         CenRow::J29,
         Locus::Block,
     );
@@ -246,7 +246,7 @@ fn bind_section_holds_the_stateless_half() {
         Locus::Bundle { position: 0 },
     );
     let late = reference_for(3);
-    let late_root = bundle_root(std::slice::from_ref(&late)).expect("one reference");
+    let late_root = section_root(std::slice::from_ref(&late)).expect("one reference");
     assert_refused(
         bind_section(&[late.encode()], &late_root, at, &rules),
         CenRow::J31,

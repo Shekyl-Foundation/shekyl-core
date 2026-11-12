@@ -341,7 +341,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             );
             assert_eq!(
                 header.section_root,
-                HashHex::from_bytes(block.header.bundle_root.to_bytes())
+                HashHex::from_bytes(block.header.section_root.to_bytes())
             );
             assert_eq!(
                 header.difficulty.0,

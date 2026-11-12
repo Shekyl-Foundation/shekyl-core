@@ -166,7 +166,7 @@ pub fn header(facts: &BlockHeaderFacts) -> block::BlockHeader {
         pow: facts.pow_hash.map(hash).into(),
         coinbase: hash(facts.miner_tx_hash.to_bytes()),
         curve_root: hash(facts.curve_tree_root.to_bytes()),
-        section_root: hash(facts.bundle_root.to_bytes()),
+        section_root: hash(facts.section_root.to_bytes()),
     }
 }
 

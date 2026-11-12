@@ -469,8 +469,8 @@ impl Grown {
         bodies: Vec<shekyl_archival_retention::BundleBody>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
         let mut cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
-        let root = shekyl_archival_retention::bundle_root(refs).expect("a countable section");
-        cand.block.header.bundle_root = shekyl_types::BundleRoot::from_bytes(root);
+        let root = shekyl_archival_retention::section_root(refs).expect("a countable section");
+        cand.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
         let section = shekyl_types::archival::BundleReferences::new(
             refs.iter()
                 .map(shekyl_archival_retention::BundleRef::encode)

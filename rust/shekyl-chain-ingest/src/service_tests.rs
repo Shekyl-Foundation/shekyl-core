@@ -2208,7 +2208,7 @@ fn current_thread_runtime() -> tokio::runtime::Runtime {
 }
 
 fn coinbase_block() -> shekyl_wire::Block {
-    use shekyl_types::{BundleRoot, CurveTreeRoot};
+    use shekyl_types::{CurveTreeRoot, SectionRoot};
     use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
     use shekyl_wire::{Block, BlockHeader, Transaction};
     Block {
@@ -2219,7 +2219,7 @@ fn coinbase_block() -> shekyl_wire::Block {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 1,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            bundle_root: BundleRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {

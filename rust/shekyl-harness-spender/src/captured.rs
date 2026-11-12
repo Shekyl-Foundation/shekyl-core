@@ -233,7 +233,7 @@ mod tests {
                 previous: shekyl_types::BlockHash::NULL,
                 nonce: 7,
                 curve_tree_root: shekyl_types::CurveTreeRoot::EMPTY,
-                bundle_root: shekyl_types::BundleRoot::from_bytes([0; 32]),
+                section_root: shekyl_types::SectionRoot::from_bytes([0; 32]),
             },
             miner_transaction: shekyl_harness_wallet::coinbase::paying(
                 crate::MinerWallet::harness().recipient(),

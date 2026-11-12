@@ -110,13 +110,12 @@ pub use bond_wire::{
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use bundle::{
-    assemble_bundle, bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root,
-    empty_bundle_root, section_budget, section_d_max, sign_bundle_commitment, BodyRefused,
-    BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, CarriedBodies, PassBitmap,
-    SectionBudget, TooManyReferences, BUNDLE_COMMITMENT, BUNDLE_KEPT_FIXED_LEN,
-    BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
-    BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
-    BUNDLE_WITNESS_LEN,
+    assemble_bundle, bundle_charge, bundle_commitment, bundle_prunable_hash, empty_section_root,
+    section_budget, section_d_max, section_root, sign_bundle_commitment, BodyRefused, BundleBody,
+    BundleKept, BundleRecord, BundleRef, BundleWireError, CarriedBodies, PassBitmap, SectionBudget,
+    TooManyReferences, BUNDLE_COMMITMENT, BUNDLE_KEPT_FIXED_LEN, BUNDLE_PRUNABLE_CUSTOMIZATION,
+    BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN, BUNDLE_SEED_LEN, BUNDLE_SIGNATURE_LEN,
+    BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN, SECTION_ROOT_CUSTOMIZATION,
 };
 pub use claimed_epochs::{
     claim_window_floor, claimed_epochs_check_and_set, claimed_epochs_contains,

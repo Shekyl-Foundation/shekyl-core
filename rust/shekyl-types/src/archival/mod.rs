@@ -242,7 +242,7 @@ pub const MAX_SECTION_REFERENCES: usize = 500;
 
 /// A block's bundle references as they travel and are stored beside it
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
-/// `bundle_root` commits, one reference per admitted bundle, in the order
+/// `section_root` commits, one reference per admitted bundle, in the order
 /// the block gives them.
 ///
 /// **Undecoded.** Each reference is opened by `shekyl-chain-rules`

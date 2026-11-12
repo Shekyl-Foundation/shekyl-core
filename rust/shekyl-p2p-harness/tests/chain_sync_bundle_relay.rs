@@ -24,7 +24,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use shekyl_archival_retention::{
-    assemble_bundle, draw_commit, empty_bundle_root, sign_bundle_commitment, BundleBody,
+    assemble_bundle, draw_commit, empty_section_root, sign_bundle_commitment, BundleBody,
     BundleKept, BundleRef, PassBitmap, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_block_template::{build, EmissionOperands, MinerKeys, TemplateContext};
@@ -34,7 +34,7 @@ use shekyl_chain_ingest::ChainRules;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
 use shekyl_p2p_harness::sync::{Node, PeerDial, SyncPeer};
 use shekyl_transport_layer::SocketId;
-use shekyl_types::{BlockHeight, BundleRoot, Timestamp};
+use shekyl_types::{BlockHeight, SectionRoot, Timestamp};
 use zeroize::Zeroizing;
 
 // The shared support serves every chain-sync binary. This one links two
@@ -146,7 +146,7 @@ async fn committed_block(node: &Node, rules: ChainRules, witness: &Witness) -> V
         height: facts.connecting,
         previous: facts.previous,
         curve_tree_root: facts.curve_tree_root,
-        bundle_root: BundleRoot::from_bytes(empty_bundle_root()),
+        section_root: SectionRoot::from_bytes(empty_section_root()),
         major_version: rule_set.header_major_version(),
         now: Timestamp::from_raw(now),
         median_timestamp: facts.median_timestamp,

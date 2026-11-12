@@ -348,7 +348,7 @@ count_pattern() {
 # Bundle verifier, the hashes (2026-10-12): 70 -> 73. Three production sites
 # in rust/shekyl-archival-retention/src/bundle.rs -- `bundle_commitment`
 # (shekyl/archival-serve-credit-bundle-v1), `bundle_prunable_hash`
-# (shekyl/archival-bundle-prunable-v1) and `bundle_root`
+# (shekyl/archival-bundle-prunable-v1) and `section_root`
 # (shekyl/archival-bundle-root-v1). Their vectors were computed outside the
 # tree and are pinned as hex, so the tests add no site.
 # SCS-P39 (2026-10-12): 73 -> 74. One inline #[cfg(test)] site in

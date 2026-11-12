@@ -114,7 +114,7 @@ pub(crate) fn admit<'id, V: ChainView<'id>>(
     for row in ROWS {
         coverage.insert(row);
     }
-    let header_root = candidate.block.header.bundle_root.as_bytes();
+    let header_root = candidate.block.header.section_root.as_bytes();
     // No references is the empty section: its root is still compared
     // (J29, the A3 falsifier), and it names no epoch, so nothing is filed
     // and no row is read.

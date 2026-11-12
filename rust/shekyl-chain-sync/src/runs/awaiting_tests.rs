@@ -11,13 +11,13 @@
 
 use std::time::{Duration, Instant};
 
-use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef};
+use shekyl_archival_retention::{section_root, BundleBody, BundleRef};
 use shekyl_chain_rules::harness::bundle::BundleWorld;
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{form_header, AtHeight, HeaderRecord, HeaderView, Trust};
 use shekyl_draw_rng::RelayRng;
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, ChainCount, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockBody, PowBlob};
 
 use super::{AWAITING_AGE, AWAITING_PER_SESSION, AWAITING_TOTAL};
@@ -146,8 +146,8 @@ impl World {
             &fixed(1, 64),
         );
         let (reference, bundle): (BundleRef, BundleBody) = world.bundle(&[]);
-        let root = bundle_root(std::slice::from_ref(&reference)).expect("one reference");
-        block.header.bundle_root = BundleRoot::from_bytes(root);
+        let root = section_root(std::slice::from_ref(&reference)).expect("one reference");
+        block.header.section_root = SectionRoot::from_bytes(root);
         let hash = PowBlob::read(&block.pow_blob())
             .expect("preimage")
             .identity();

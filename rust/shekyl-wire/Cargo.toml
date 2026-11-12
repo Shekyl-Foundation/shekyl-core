@@ -60,7 +60,7 @@ serde_json = { workspace = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# Live empty-section bundle_root for block-header KATs (no hand-copied pin).
+# Live empty-section section_root for block-header KATs (no hand-copied pin).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Regtest mining-address emitter (`tests/emit_regtest_addr.rs`).
 shekyl-address = { path = "../shekyl-address" }

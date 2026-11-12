@@ -1047,14 +1047,14 @@ pub fn header() -> BlockHeader {
         previous: BlockHash::from_bytes([0x11; 32]),
         nonce: 7,
         curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-        bundle_root: BundleRoot::from_bytes([0x33; 32]),
+        section_root: SectionRoot::from_bytes([0x33; 32]),
     }
 }
 
 /// A well-formed candidate **on `chain`'s tip**: `previous` is the tip's
 /// hash (the null hash on an empty chain — CEN-A2), `curve_tree_root`
 /// is the tree state at the connecting height (`root_at(tip + 1)`; the
-/// empty tree at genesis — CEN-B5), `bundle_root` is the empty
+/// empty tree at genesis — CEN-B5), `section_root` is the empty
 /// section's (no references — CEN-J29; no `0x0B` field in the coinbase —
 /// CEN-I20); the header lists exactly the bodies it carries.
 /// Mutate one field to build a negative fixture. A corrupt
@@ -1071,7 +1071,7 @@ pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
         header: BlockHeader {
             previous: tip.map_or(BlockHash::NULL, |t| t.hash),
             curve_tree_root: root,
-            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
             ..header()
         },
         miner_transaction: coinbase(connecting.to_raw()),

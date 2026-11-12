@@ -6,7 +6,7 @@
 """RTN-7 gate: `shekyl-wire`'s public surface carries no unnamed `[u8; 32]`.
 
 Every 32-byte chain identity leaving the wire crate is a `shekyl-types`
-newtype — `TxHash`, `TxTreeHash`, `BlockHash`, `CurveTreeRoot`, `BundleRoot`,
+newtype — `TxHash`, `TxTreeHash`, `BlockHash`, `CurveTreeRoot`, `SectionRoot`,
 `PrefixHash`, `PqcAuthHash`, `PrunableHash`, `SigningPayloadHash`,
 `PCanonicalId`. What remains raw
 is raw for a reason, and this gate is where the reason lives.

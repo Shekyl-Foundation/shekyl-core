@@ -12,7 +12,7 @@
 //! `UnexpectedEof`. See `docs/design/GENESIS_TX_WIRE_FORMAT.md` (§9, §11) and
 //! `tests/vectors/README.md`.
 //!
-//! The header's last 32 bytes are the bundle root (`SCS-P34`), and h0 is
+//! The header's last 32 bytes are the section root (`SCS-P34`), and h0 is
 //! regtest's genesis, so the corpus is recaptured whenever genesis moves
 //! (`capture_coinbase.py`, against a daemon built at the same tree).
 //!

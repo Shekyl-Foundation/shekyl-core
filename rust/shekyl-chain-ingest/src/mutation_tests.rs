@@ -557,7 +557,7 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
-        | Mutation::WrongBundleRoot
+        | Mutation::WrongSectionRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward

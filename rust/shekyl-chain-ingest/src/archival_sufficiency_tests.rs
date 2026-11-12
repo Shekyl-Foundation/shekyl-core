@@ -143,7 +143,7 @@ const fn witness(family: ArchivalFamily) -> Witness {
             why: "ARW-13: no capture slashes (as SlashLog)",
         },
         ArchivalFamily::Settlement
-        | ArchivalFamily::AltBundleReferences
+        | ArchivalFamily::AltSectionReferences
         | ArchivalFamily::ShardSegment
         | ArchivalFamily::EmissionClaimLog
         | ArchivalFamily::BondReinstateLog

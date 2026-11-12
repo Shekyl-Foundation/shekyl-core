@@ -17,8 +17,8 @@ daemon is the wire-format / hashing oracle. Two assertions ride these:
 > re-capturing these vectors (and the shekyl-rpc-types §3.4 oracle txs that
 > extract from them) — see `shekyl-dev/docs/GENESIS_WALKTHROUGH.md` §5.
 >
-> **Empty `bundle_root`:** every captured height admits no bundle and must
-> carry `empty_bundle_root()` (not `null_hash`). `coinbase_hash.rs` asserts this
+> **Empty `section_root`:** every captured height admits no bundle and must
+> carry `empty_section_root()` (not `null_hash`). `coinbase_hash.rs` asserts this
 > live against `shekyl-archival-retention`.
 
 - **Round-trip byte-identity** (`../coinbase_roundtrip.rs`): `Block::from_bytes` →

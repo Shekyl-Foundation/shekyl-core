@@ -2644,7 +2644,7 @@ async fn overfill_pool(
 /// at its fee/penalty equilibrium just past `M`, so a block at the bound
 /// exists only as a Rust-built one. The Rust template is built against the
 /// C++'s own state — its template's header (parent, curve-tree root,
-/// bundle root, versions, timestamp), `block_template`'s median and
+/// section root, versions, timestamp), `block_template`'s median and
 /// accumulator, the pool's bodies, the F20 volume window from the headers
 /// — so the only thing that differs between the two blocks submitted is
 /// one listed hash, and the only rule that can tell them apart is F14.
@@ -2688,7 +2688,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
-    use shekyl_types::{BlockCount, BlockHeight, BundleRoot, Timestamp};
+    use shekyl_types::{BlockCount, BlockHeight, SectionRoot, Timestamp};
     use shekyl_wire::{Block, Transaction};
     use zeroize::Zeroizing;
 
@@ -2704,7 +2704,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 
     // --- the daemon's state for the next block, read rather than assumed ---
     // The daemon's own template supplies the header a block at this height
-    // must carry: parent, curve-tree root (B5), bundle root, the
+    // must carry: parent, curve-tree root (B5), section root, the
     // version pair, and a timestamp past the MTP (C2).
     let job = daemon
         .rpc
@@ -2801,7 +2801,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             height: BlockHeight::from_raw(height),
             previous: cxx_block.header.previous,
             curve_tree_root: cxx_block.header.curve_tree_root,
-            bundle_root: BundleRoot::from_bytes(*cxx_block.header.bundle_root.as_bytes()),
+            section_root: SectionRoot::from_bytes(*cxx_block.header.section_root.as_bytes()),
             major_version: cxx_block.header.major_version,
             // The C++'s template timestamp is already `max(now, MTP + 1)`;
             // claiming it with no median reproduces it exactly.

@@ -20,7 +20,7 @@
 use core::fmt;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, section_d_max, ArchivalParams, BundleRef, BundleWireError,
+    section_budget, section_d_max, section_root, ArchivalParams, BundleRef, BundleWireError,
     DrawableEpoch, SectionBudget, SettlementEpochBlocks, SettlementSchedule, TooManyReferences,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch};
@@ -338,7 +338,7 @@ pub fn check_section_stateless(
 /// larger `D`.
 ///
 /// The result is a section [`check_section`] admits at `h_incl` under the
-/// root [`bundle_root`] computes over it.
+/// root [`section_root`] computes over it.
 ///
 /// The block template (`shekyl-chain-ingest`'s `template.rs`) calls it
 /// over the bundle queue's references and the store's bundle view of the
@@ -395,9 +395,9 @@ fn section_shape(
             position: offender + 1,
         });
     }
-    // The one refusal `bundle_root` has, mapped by name: a section the
+    // The one refusal `section_root` has, mapped by name: a section the
     // root cannot count is a verdict here, never a panic.
-    let root = bundle_root(refs)
+    let root = section_root(refs)
         .map_err(|TooManyReferences { found }| SectionRefused::TooManyReferences { found })?;
     if root != *header_root {
         return Err(SectionRefused::Root);

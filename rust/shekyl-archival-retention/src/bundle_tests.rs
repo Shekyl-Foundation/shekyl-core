@@ -41,10 +41,10 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// [`bundle_root`] over a section every test here can hold: far fewer than
+/// [`section_root`] over a section every test here can hold: far fewer than
 /// 2³² references, so the one refusal is not this helper's.
 fn root(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// Record `k` of the vectors: `attempt = k mod 3`, `anchor_height =
@@ -611,8 +611,11 @@ fn the_bundle_labels_are_distinct() {
         BUNDLE_COMMITMENT.customization(),
         BUNDLE_PRUNABLE_CUSTOMIZATION
     );
-    assert_ne!(BUNDLE_COMMITMENT.customization(), BUNDLE_ROOT_CUSTOMIZATION);
-    assert_ne!(BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_ROOT_CUSTOMIZATION);
+    assert_ne!(
+        BUNDLE_COMMITMENT.customization(),
+        SECTION_ROOT_CUSTOMIZATION
+    );
+    assert_ne!(BUNDLE_PRUNABLE_CUSTOMIZATION, SECTION_ROOT_CUSTOMIZATION);
 }
 
 // ---------------------------------------------------- prunable hash, root
@@ -808,7 +811,7 @@ fn a_section_the_root_cannot_count_has_no_root() {
     assert_eq!(section_reference_count(1), Ok(1));
     let (first, second) = vector_refs();
     assert_eq!(
-        bundle_root(&[first, second]).map(|root| hex(&root)),
+        section_root(&[first, second]).map(|root| hex(&root)),
         Ok("0c7f9da64f6d3cf7edee74761c6e92cd9099bcdd51e8d9333eb691d1de1af8e5".to_string())
     );
     // The boundary itself needs a `usize` wider than 32 bits to state.

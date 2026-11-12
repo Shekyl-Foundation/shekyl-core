@@ -353,7 +353,7 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
     G2::listed_match(&block.transaction_hashes, &carried)?;
     bind_section(
         &body.bundle_references,
-        block.header.bundle_root.as_bytes(),
+        block.header.section_root.as_bytes(),
         header.connecting(),
         &header.rule_set(),
     )?;

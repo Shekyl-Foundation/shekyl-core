@@ -25,7 +25,7 @@ use shekyl_chain_rules::{
     DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
     RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
-use shekyl_types::{BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
@@ -84,7 +84,7 @@ pub(super) fn candidate_over(
             curve_tree_root: root,
             // The empty section's root: a candidate carrying no references is
             // judged against it (CEN-J29).
-            bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),

@@ -60,7 +60,7 @@ use shekyl_economics::EconomicParams;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
-    BlockHash, BlockHeight, BundleRoot, CurveTreeRoot, PCanonicalId, SettlementEpoch, Timestamp,
+    BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SectionRoot, SettlementEpoch, Timestamp,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
@@ -418,9 +418,9 @@ where
         let (references, bodies) = match section {
             None => (None, Vec::new()),
             Some((refs, bodies)) => {
-                let root = shekyl_archival_retention::bundle_root(&refs)
+                let root = shekyl_archival_retention::section_root(&refs)
                     .expect("a queue's section is countable");
-                template.block.header.bundle_root = shekyl_types::BundleRoot::from_bytes(root);
+                template.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
                 let references = shekyl_types::archival::BundleReferences::new(
                     refs.iter()
                         .map(shekyl_archival_retention::BundleRef::encode)
@@ -979,7 +979,7 @@ pub(crate) fn build_template(
         // section (the switch's C4), so every template commits the empty
         // section's root, the root CEN-J29 compares a block with no
         // references against.
-        bundle_root: BundleRoot::from_bytes(shekyl_archival_retention::empty_bundle_root()),
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         major_version: rule_set.header_major_version(),
         now,
         median_timestamp: facts.median_timestamp,

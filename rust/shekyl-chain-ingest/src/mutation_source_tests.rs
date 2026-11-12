@@ -13,8 +13,8 @@ use shekyl_difficulty::FTL_SECONDS;
 use shekyl_types::{BlockHeight, CurveTreeRoot, Timestamp};
 
 use crate::mutation::{
-    Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Unmutable,
-    UNHELD_BUNDLE_ROOT, UNHELD_ROOT,
+    Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Unmutable, UNHELD_ROOT,
+    UNHELD_SECTION_ROOT,
 };
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{h, GrownTree, Scripted, FIRST_SPEND_HEIGHT};
@@ -177,7 +177,7 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::Orphan, ExpectedPlace::Block),
             (Mutation::WrongRoot, ExpectedPlace::Block),
             // The switch's C3: J29's root check names the block, as the header rows do.
-            (Mutation::WrongBundleRoot, ExpectedPlace::Block),
+            (Mutation::WrongSectionRoot, ExpectedPlace::Block),
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
@@ -283,13 +283,13 @@ fn the_unheld_root_is_not_a_fixture_root() {
 }
 
 #[test]
-fn the_unheld_bundle_root_is_not_the_empty_sections() {
+fn the_unheld_section_root_is_not_the_empty_sections() {
     // The mutation's whole claim: a block admitting no bundle commits the
     // empty section, so a root that is not the empty section's is CEN-B4's
     // refusal. Pinned against the retention crate's recompute, which the
-    // production module cannot name (`UNHELD_BUNDLE_ROOT` docs).
+    // production module cannot name (`UNHELD_SECTION_ROOT` docs).
     let chain = crate::test_support::chain(CHAIN_LEN);
-    let mut source = Mutated::new(scripted(&chain), h(AT), Mutation::WrongBundleRoot, env());
+    let mut source = Mutated::new(scripted(&chain), h(AT), Mutation::WrongSectionRoot, env());
     for _ in 0..AT {
         source.next().expect("blocks below the mutation");
     }
@@ -298,11 +298,11 @@ fn the_unheld_bundle_root_is_not_the_empty_sections() {
         panic!("Extend-only");
     };
     assert!(candidate.bundle_references.is_none(), "nothing supplied");
-    let root = candidate.block.header.bundle_root;
-    assert_eq!(root.as_bytes(), &UNHELD_BUNDLE_ROOT);
+    let root = candidate.block.header.section_root;
+    assert_eq!(root.as_bytes(), &UNHELD_SECTION_ROOT);
     assert_ne!(
         *root.as_bytes(),
-        shekyl_archival_retention::empty_bundle_root()
+        shekyl_archival_retention::empty_section_root()
     );
 }
 

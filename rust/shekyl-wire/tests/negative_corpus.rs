@@ -20,7 +20,7 @@ use shekyl_wire::Block;
 fn zeroed_header_bytes() -> Vec<u8> {
     let mut b = Vec::new();
     // BlockHeader: major=1, minor=0, timestamp=0, prev[32], nonce[4],
-    // curve_tree_root[32], bundle_root[32].
+    // curve_tree_root[32], section_root[32].
     b.push(0x01);
     b.push(0x00);
     b.push(0x00);

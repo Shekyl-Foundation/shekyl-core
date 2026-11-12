@@ -46,7 +46,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use rand::RngCore;
-use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef};
+use shekyl_archival_retention::{section_root, BundleBody, BundleRef};
 use shekyl_block_template::{
     build, EmissionOperands, Fill, MinerKeys, Template, TemplateContext, TemplateError,
 };
@@ -56,7 +56,7 @@ use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreBundleView, Sto
 use shekyl_economics::EconomicParams;
 use shekyl_mempool::{select_shown, Evicted, Pool};
 use shekyl_miner::{Job, ListedBody};
-use shekyl_types::{BlockHash, BundleRoot, Timestamp, TxHash};
+use shekyl_types::{BlockHash, SectionRoot, Timestamp, TxHash};
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
@@ -202,7 +202,7 @@ pub(crate) fn produce(
     let section = section(snap, height, &rule_set)?;
     let root = section
         .as_ref()
-        .map_or_else(shekyl_archival_retention::empty_bundle_root, |section| {
+        .map_or_else(shekyl_archival_retention::empty_section_root, |section| {
             section.root
         });
     let template = secrets.build(producer, &facts, &rule_set, &listed, root)?;
@@ -277,7 +277,7 @@ pub(crate) fn section(
     }
     // `fill_section` packs a non-empty section of at most W₂ ≤ 500
     // references, each a parsed reference: a section, with a root.
-    let root = bundle_root(&packed).expect("a packed section's count fits the root");
+    let root = section_root(&packed).expect("a packed section's count fits the root");
     let references = shekyl_types::archival::BundleReferences::new(
         packed.iter().map(BundleRef::encode).collect(),
     )
@@ -435,7 +435,7 @@ impl Secrets {
             curve_tree_root: facts.curve_tree_root,
             // The section's root (module docs); the empty section's when
             // the block admits no bundle.
-            bundle_root: BundleRoot::from_bytes(root),
+            section_root: SectionRoot::from_bytes(root),
             major_version: rule_set.header_major_version(),
             now: producer.now,
             median_timestamp: facts.median_timestamp,

@@ -53,7 +53,7 @@
 //!
 //! `archival_settlement` (the C++ chain has no settlement writer to
 //! compare with, `SO-D10`), the seven `NOT_PORTED` journals (no
-//! state to compare), `archival_alt_bundle_references` (alt-chain,
+//! state to compare), `archival_alt_section_references` (alt-chain,
 //! excluded as v0 excludes alt-chain), the txpool. [`disposition`] is the
 //! exhaustive `match` over [`ArchivalFamily`] that says so, so a family
 //! added to the X-macro without a snapshot disposition is a compile error.
@@ -230,7 +230,7 @@ pub const fn disposition(family: ArchivalFamily) -> Disposition {
                 "archival_settlement has no production writer in the C++ store to compare with (SO-D10)",
             )
         }
-        ArchivalFamily::AltBundleReferences => {
+        ArchivalFamily::AltSectionReferences => {
             Disposition::Excluded("alt-chain state, excluded as v0 excludes alt-chain")
         }
         ArchivalFamily::ShardSegment

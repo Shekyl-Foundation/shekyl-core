@@ -20,7 +20,7 @@
 //! table (enforced below); h1/h2 are mined regtest blocks.
 //!
 //! Empty-section invariant: every captured height admits no bundle, so it must
-//! carry `empty_bundle_root()` — live-derived from `shekyl-archival-retention`,
+//! carry `empty_section_root()` — live-derived from `shekyl-archival-retention`,
 //! not a hand-copied pin — so the daemon that mined it and this crate agree
 //! without a third hex constant.
 //!
@@ -34,8 +34,8 @@
 //! the file. Note h0 **is** regtest's genesis, so a regtest genesis re-pin
 //! requires re-capturing this corpus.
 
-use shekyl_archival_retention::empty_bundle_root;
-use shekyl_types::BundleRoot;
+use shekyl_archival_retention::empty_section_root;
+use shekyl_types::SectionRoot;
 use shekyl_wire::Block;
 
 /// Regtest's genesis block id, from the network table (`shekyl-network`,
@@ -66,7 +66,7 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         (2, include_bytes!("vectors/regtest_coinbase_h2.block")),
     ];
 
-    let empty_root = empty_bundle_root();
+    let empty_root = empty_section_root();
 
     for (height, blob) in corpus {
         let want = &expected[height.to_string()];
@@ -91,11 +91,11 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         );
         // Every height in this corpus admits no bundle, so the header must
         // commit the empty section's root — not null_hash. Ties the daemon's
-        // template to empty_bundle_root() without a hex pin.
+        // template to empty_section_root() without a hex pin.
         assert_eq!(
-            block.header.bundle_root,
-            BundleRoot::from_bytes(empty_root),
-            "height {height}: bundle_root must be empty_bundle_root(), not null_hash"
+            block.header.section_root,
+            SectionRoot::from_bytes(empty_root),
+            "height {height}: section_root must be empty_section_root(), not null_hash"
         );
         if height == 0 {
             // Cross-anchor: daemon-captured h0 must equal regtest's genesis

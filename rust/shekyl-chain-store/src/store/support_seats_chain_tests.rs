@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    bundle_root, draw_commit, DrawableEpoch, PassBitmap, SUPPORT_DRAWS_PER_EPOCH,
+    draw_commit, section_root, DrawableEpoch, PassBitmap, SUPPORT_DRAWS_PER_EPOCH,
 };
 use shekyl_chain_rules::harness::bundle::BundleWorld;
 use shekyl_chain_rules::{
@@ -628,7 +628,7 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         );
         let refs = [reference];
         let bodies = [body];
-        let root = bundle_root(&refs).expect("one reference");
+        let root = section_root(&refs).expect("one reference");
         let admitted = judge_bundles(
             &refs,
             &bodies,
