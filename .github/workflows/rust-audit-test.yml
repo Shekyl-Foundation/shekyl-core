@@ -477,6 +477,13 @@ jobs:
         # own workspace and lockfile, type-checked on the pinned stable
         # toolchain as the API-drift gate; running them needs nightly.
         run: cargo check --locked --manifest-path rust/shekyl-wire/fuzz/Cargo.toml
+      - name: compile the shekyl-multisig fuzz harnesses
+        # The multisig envelope, payload and intent decoders read bytes a
+        # group member's file carries. Same shape as the fcmp and wire steps:
+        # its own workspace and lockfile, type-checked on the pinned stable
+        # toolchain as the API-drift gate (rule 47: a fuzz crate nothing
+        # compiles cannot see its own drift); running them needs nightly.
+        run: cargo check --locked --manifest-path rust/shekyl-multisig/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its
