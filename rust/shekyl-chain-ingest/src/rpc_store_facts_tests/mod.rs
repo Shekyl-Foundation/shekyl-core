@@ -283,8 +283,11 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 prune: None,
             })
         };
-        let at_height = |height: u64, pow| {
-            block_header_show(&facts, &select(Selector::Height(Height(height)), pow))
+        let at_height = |height: BlockHeight, pow| {
+            block_header_show(
+                &facts,
+                &select(Selector::Height(Height(height.to_raw())), pow),
+            )
         };
 
         // The tip: the wire carries its height, an ordinal, and its hash.
@@ -293,7 +296,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         assert_eq!(tip_reply.hash, hex(mined.last().expect("tip").hash));
         for m in &mined {
             assert_eq!(
-                at_height(m.height.to_raw(), false).expect("in range").hash,
+                at_height(m.height, false).expect("in range").hash,
                 hex(m.hash),
                 "block hash at {}",
                 m.height.to_raw()
@@ -302,7 +305,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
 
         // Every header field, by height, from the block as mined.
         for m in &mined {
-            let header = at_height(m.height.to_raw(), true).expect("in range");
+            let header = at_height(m.height, true).expect("in range");
             let block = &m.template.block;
             assert_eq!(header.hash, hex(m.hash));
             assert_eq!(header.height.0, m.height.to_raw());
@@ -364,14 +367,14 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         let mut sum = 0u128;
         for m in &mined {
             sum += m.target.difficulty().to_raw();
-            let header = at_height(m.height.to_raw(), false).expect("in range");
+            let header = at_height(m.height, false).expect("in range");
             assert_eq!(header.difficulty_cumulative.0, sum);
             assert_eq!(header.pow.0, None, "not requested, not filled");
         }
 
         // By hash and at the tip, the same header.
         let last = mined.last().expect("tip");
-        let by_height = at_height(last.height.to_raw(), false).expect("in range");
+        let by_height = at_height(last.height, false).expect("in range");
         assert_eq!(
             block_header_show(&facts, &select(Selector::Hash(hex(last.hash)), false))
                 .expect("by hash"),
@@ -456,7 +459,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         // Past the tip: refused by height; an unknown hash is refused by
         // `block_header_show` and a `missing` slot in `block_header_list`.
         assert!(matches!(
-            at_height(tip.to_raw() + 1, false),
+            at_height(tip.saturating_add(shekyl_types::BlockCount::ONE), false),
             Err(RpcFault::Refused(_))
         ));
         let unknown = HashHex::from_bytes([0x5a; 32]);

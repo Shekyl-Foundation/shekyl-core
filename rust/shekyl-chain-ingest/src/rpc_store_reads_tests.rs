@@ -507,11 +507,15 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let at = |height: u64| curve_show(&facts, &CurveSelect(Selector::Height(Height(height))));
+        let at = |height: BlockHeight| {
+            curve_show(
+                &facts,
+                &CurveSelect(Selector::Height(Height(height.to_raw()))),
+            )
+        };
         for pair in mined.windows(2) {
             let (below, above) = (&pair[0], &pair[1]);
-            let checkpoint =
-                at(below.height.to_raw()).unwrap_or_else(|_| panic!("through the tip"));
+            let checkpoint = at(below.height).unwrap_or_else(|_| panic!("through the tip"));
             assert_eq!(checkpoint.height.0, below.height.to_raw());
             assert_eq!(
                 checkpoint.root.to_string(),
@@ -529,7 +533,7 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
             info.leaf_count.0 > 0,
             "the coinbases matured into the tree (rule 47: the subject exists)"
         );
-        let at_tip = at(tip.to_raw()).unwrap_or_else(|_| panic!("the tip"));
+        let at_tip = at(tip).unwrap_or_else(|_| panic!("the tip"));
         assert_eq!(at_tip, info, "the tip's tree is the tree after the tip");
         let summary = store
             .begin_read()
@@ -540,7 +544,7 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
         assert_eq!(info.leaf_count.0, summary.leaf_count.to_raw());
         assert_eq!(info.layers.0, u64::from(summary.depth.to_raw()));
 
-        let above = tip.to_raw() + 1;
+        let above = tip.saturating_add(shekyl_types::BlockCount::ONE);
         match at(above) {
             Err(RpcFault::Refused(refusal)) => {
                 assert_eq!(refusal.diagnostic.code, "curve.missing");

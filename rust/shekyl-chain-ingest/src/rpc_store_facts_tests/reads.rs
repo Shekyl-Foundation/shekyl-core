@@ -509,15 +509,18 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                     shekyl_types::KeyImage::from_bytes(pooled_image),
                 ],
             );
-            let past = landed.height.to_raw() + 1;
-            let query = |heights: Vec<u64>, prune| BlockListQuery {
-                height: heights.into_iter().map(Height).collect(),
+            let past = landed.height.saturating_add(shekyl_types::BlockCount::ONE);
+            let query = |heights: Vec<BlockHeight>, prune| BlockListQuery {
+                height: heights
+                    .into_iter()
+                    .map(|height| Height(height.to_raw()))
+                    .collect(),
                 prune,
             };
             let blocks = block_list(
                 &facts,
                 &facts,
-                &query(vec![0, landed.height.to_raw(), past], false),
+                &query(vec![BlockHeight::ZERO, landed.height, past], false),
                 false,
             )
             .unwrap_or_else(|_| panic!("blocks"));
@@ -542,13 +545,8 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
 
             // The pruned form (SB-Q2): the slot is the skeleton, and it binds
             // to the id the block lists through `SkeletonTx::txid`.
-            let pruned = block_list(
-                &facts,
-                &facts,
-                &query(vec![landed.height.to_raw()], true),
-                false,
-            )
-            .unwrap_or_else(|_| panic!("blocks"));
+            let pruned = block_list(&facts, &facts, &query(vec![landed.height], true), false)
+                .unwrap_or_else(|_| panic!("blocks"));
             let [Slot::Item(pruned_block)] = pruned.as_slice() else {
                 panic!("one block: {pruned:?}");
             };

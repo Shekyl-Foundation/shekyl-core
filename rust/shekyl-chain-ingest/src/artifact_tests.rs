@@ -462,10 +462,10 @@ mod fetch {
     }
 
     /// A served block's header. Nothing here is read by the fetch.
-    fn header(height: u64) -> serde_json::Value {
+    fn header(height: BlockHeight) -> serde_json::Value {
         let zero = "00".repeat(32);
         serde_json::json!({
-            "height": height, "hash": zero, "parent": zero, "version_major": 1,
+            "height": height.to_raw(), "hash": zero, "parent": zero, "version_major": 1,
             "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
             "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
             "weight": 0, "weight_longterm": 0, "tx_count": 0, "pow": null,
@@ -495,9 +495,11 @@ mod fetch {
             entries
                 .iter()
                 .enumerate()
-                .map(|(height, (block, txs))| {
+                .map(|(index, (block, txs))| {
+                    let height =
+                        BlockHeight::from_raw(u64::try_from(index).expect("a block height"));
                     serde_json::json!({
-                        "header": header(height as u64),
+                        "header": header(height),
                         "body": Bytes(block.clone()),
                         "tx": txs.iter().map(&mut slot).collect::<Vec<_>>(),
                         "output_index": 0,
