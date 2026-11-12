@@ -1163,8 +1163,9 @@ not a quiet reopen of MS-8.
 - R-B **extends:** multisig arm in `pqc_auth_weight` / fee model
   (scheme-1-only today).
 - R-C **done (slice 3 PR-A):** `SpendIntent`'s `MAX_INPUTS` is 8, pinned to
-  `MAX_FCMP_INPUTS`; `validate_structural` refuses an intent with no input,
-  more than 8, more than `MAX_RECIPIENTS` recipients, or an address past
+  `MAX_FCMP_INPUTS`, and `MAX_RECIPIENTS` is 16, pinned to `MAX_OUTPUTS`
+  (a change payment is a recipient). `validate_structural` refuses an intent
+  with no input, more than 8, more than 16 recipients, or an address past
   `MAX_ADDRESS_LEN`.
 - R-G: MSW-2 KAT remains green after MSW-1 bound raise; flip must not
   assume length-only separation.

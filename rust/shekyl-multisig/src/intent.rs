@@ -66,7 +66,11 @@ const _: () = assert!(
     "CT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
 );
 
-/// Maximum recipients per intent ([`SpendIntent::validate_structural`]).
+/// Maximum recipients per intent: the consensus cap on a transaction's
+/// outputs (`shekyl_wire::transaction::MAX_OUTPUTS`). A change payment is a
+/// recipient, the group's own address, so an intent lists every output the
+/// transaction will carry. Pinned by `max_recipients_is_the_output_cap`
+/// ([`SpendIntent::validate_structural`] enforces it).
 pub const MAX_RECIPIENTS: u32 = 16;
 
 /// Maximum inputs per intent: the consensus cap on a transaction's key-image
@@ -310,7 +314,8 @@ impl SpendIntent {
     }
 
     /// Validate structural invariants that don't require external state
-    /// (checks 1, 3, 5-6, 11 from SS9.2).
+    /// (checks 1, 3, 5-6, 11 from SS9.2), and the size bounds
+    /// [`MAX_INPUTS`], [`MAX_RECIPIENTS`] and [`MAX_ADDRESS_LEN`].
     pub fn validate_structural(&self, n_total: u8, now_secs: u64) -> Result<(), SpendIntentError> {
         if self.version != SPEND_INTENT_VERSION {
             return Err(SpendIntentError::WrongVersion(self.version));
@@ -699,6 +704,15 @@ mod tests {
             MAX_INPUTS as usize,
             shekyl_wire::transaction::MAX_FCMP_INPUTS,
             "an intent's input cap drifted from the consensus cap (CEN-I4)"
+        );
+    }
+
+    #[test]
+    fn max_recipients_is_the_output_cap() {
+        assert_eq!(
+            MAX_RECIPIENTS as usize,
+            shekyl_wire::transaction::MAX_OUTPUTS,
+            "an intent's recipient cap drifted from the consensus output cap"
         );
     }
 

@@ -434,22 +434,33 @@ pub fn open_multisig_entry(
     Ok(committed)
 }
 
+/// This member's own `0x0D` ciphertext, which is all [`sign_multisig_member_auth`]
+/// reads. The committed key hashes are not here: a signature under a key the
+/// output did not commit fails [`crate::multisig::verify_multisig`], and ML-KEM's
+/// implicit rejection would otherwise look like a successful decapsulation.
+pub struct MemberOwnCiphertext<'a> {
+    /// The entry's member count.
+    pub n: u8,
+    /// This member's X25519 ciphertext.
+    pub own_x25519_ct: &'a [u8; X25519_KEM_CT_LEN],
+    /// This member's ML-KEM-768 ciphertext.
+    pub own_ml_kem_ct: &'a [u8],
+}
+
 /// Why a member cannot sign for an output its group owns.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum MultisigSignError {
-    /// The entry's member count is not the group's, or this member's index
-    /// is not below it.
-    #[error("the multisig entry is not for a group of this size")]
+    /// The ciphertext's member count is not the group's, or this member's
+    /// index is not below it.
+    #[error("the multisig ciphertext is not for a group of this size")]
     GroupSize,
-    /// This member's own ciphertext does not decapsulate.
+    /// This member's ciphertext does not decapsulate, or the per-output key
+    /// does not derive from the shared secret.
     #[error("this member's multisig ciphertext does not decapsulate")]
     MemberDecap,
-    /// The per-output keypair could not be derived from the shared secret.
-    #[error("this member's per-output key could not be derived: {0}")]
-    KeyDerivation(String),
     /// The hybrid signer refused.
-    #[error("the hybrid signature failed: {0}")]
-    Sign(String),
+    #[error("the hybrid signature failed")]
+    Sign,
 }
 
 /// One member's signature on one input of a multisig spend: the per-output
@@ -471,35 +482,36 @@ pub struct MultisigMemberSignature {
 /// per-output hybrid key, and sign `message` (the input's `signed_hash(i)`,
 /// CEN-I17) under [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`], the domain
 /// [`crate::multisig::verify_multisig`] checks. The shared secret and the
-/// secret key exist only inside this call.
+/// secret key exist only inside this call. The ciphertext is this member's
+/// own; the function does not see the committed key hashes.
 ///
 /// # Errors
 ///
 /// [`MultisigSignError`], naming the step that failed.
 pub fn sign_multisig_member_auth(
     member: &MultisigMemberView<'_>,
-    entry: &MultisigEntryView<'_>,
+    ciphertext: &MemberOwnCiphertext<'_>,
     message: &SigningPayloadHash,
 ) -> Result<MultisigMemberSignature, MultisigSignError> {
-    if entry.n != member.n_total || member.member_index >= member.n_total {
+    if ciphertext.n != member.n_total || member.member_index >= member.n_total {
         return Err(MultisigSignError::GroupSize);
     }
     let member_ss = recover_combined_ss(
         member.member_x25519_sk,
         member.member_ml_kem_dk,
-        entry.own_x25519_ct,
-        entry.own_ml_kem_ct,
+        ciphertext.own_x25519_ct,
+        ciphertext.own_ml_kem_ct,
     )
     .map_err(|_| MultisigSignError::MemberDecap)?;
-    let (public_key, secret_key) = derive_multisig_member_keypair(&member_ss.0)
-        .map_err(|e| MultisigSignError::KeyDerivation(e.to_string()))?;
+    let (public_key, secret_key) =
+        derive_multisig_member_keypair(&member_ss.0).map_err(|_| MultisigSignError::MemberDecap)?;
     let signature = HybridEd25519MlDsa
         .sign(
             &secret_key,
             SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
             message.as_bytes(),
         )
-        .map_err(|e| MultisigSignError::Sign(e.to_string()))?;
+        .map_err(|_| MultisigSignError::Sign)?;
     // `member_ss` and `secret_key` drop here, wiped.
     Ok(MultisigMemberSignature {
         member_index: member.member_index,

@@ -93,13 +93,12 @@ fn entry_view<'a>(
     n: u8,
     enc_key_hashes: &'a [u8],
 ) -> MultisigEntryView<'a> {
-    let ct = &out.member_kem_ciphertexts[usize::from(i)];
-    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+    let own = own_ciphertext(out, i, n);
     MultisigEntryView {
         out_idx,
-        n,
-        own_x25519_ct: x25519.try_into().expect("x25519 ciphertext is 32 bytes"),
-        own_ml_kem_ct: ml_kem,
+        n: own.n,
+        own_x25519_ct: own.own_x25519_ct,
+        own_ml_kem_ct: own.own_ml_kem_ct,
         enc_key_hashes,
     }
 }
@@ -123,18 +122,26 @@ fn open_as(
     )
 }
 
+fn own_ciphertext<'a>(out: &'a MultisigOutputData, i: u8, n: u8) -> MemberOwnCiphertext<'a> {
+    let ct = &out.member_kem_ciphertexts[usize::from(i)];
+    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+    MemberOwnCiphertext {
+        n,
+        own_x25519_ct: x25519.try_into().expect("x25519 ciphertext is 32 bytes"),
+        own_ml_kem_ct: ml_kem,
+    }
+}
+
 /// Member `i`'s signature on `msg`, through the production signer.
 fn member_sign(
     g: &Group,
     out: &MultisigOutputData,
-    index: u64,
     i: u8,
     msg: &SigningPayloadHash,
 ) -> Result<MultisigMemberSignature, MultisigSignError> {
-    let n = g.address.n_total();
     sign_multisig_member_auth(
         &member_view(g, i),
-        &entry_view(out, i, u8::try_from(index).unwrap(), n, &out.enc_key_hashes),
+        &own_ciphertext(out, i, g.address.n_total()),
         msg,
     )
 }
@@ -185,7 +192,7 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
             let signers: Vec<u8> = (0..n).filter(|i| mask & (1 << i) != 0).collect();
             let signed: Vec<MultisigMemberSignature> = signers
                 .iter()
-                .map(|&i| member_sign(&g, &out, index, i, &msg).unwrap())
+                .map(|&i| member_sign(&g, &out, i, &msg).unwrap())
                 .collect();
             let key = MultisigKeyBlob::assemble(
                 committed.clone(),
@@ -523,8 +530,8 @@ fn a_member_signature_verifies_only_as_that_member_over_that_message() {
         verify_multisig(HYBRID_SCHEME_ID_MULTISIG, &key, &sig, over, &NET)
     };
 
-    let a = member_sign(&g, &out, index, 0, &msg).unwrap();
-    let b = member_sign(&g, &out, index, 2, &msg).unwrap();
+    let a = member_sign(&g, &out, 0, &msg).unwrap();
+    let b = member_sign(&g, &out, 2, &msg).unwrap();
     assert_eq!(verify(&[a.clone(), b.clone()], &[0, 2], &msg), Ok(()));
     assert!(verify(&[a.clone(), b.clone()], &[0, 2], &other_msg).is_err());
     assert!(
@@ -532,34 +539,15 @@ fn a_member_signature_verifies_only_as_that_member_over_that_message() {
         "member 2's key filed as member 1's"
     );
 
-    // Member 0's secret against member 1's ciphertext.
-    let crossed = sign_multisig_member_auth(
-        &member_view(&g, 0),
-        &entry_view(
-            &out,
-            1,
-            u8::try_from(index).unwrap(),
-            n,
-            &out.enc_key_hashes,
-        ),
-        &msg,
-    )
-    .unwrap();
+    // Member 0's secret against member 1's ciphertext. The signer never sees
+    // the committed hashes; verify_multisig is what refuses the resulting key.
+    let crossed =
+        sign_multisig_member_auth(&member_view(&g, 0), &own_ciphertext(&out, 1, n), &msg).unwrap();
     assert!(verify(&[crossed, b], &[0, 2], &msg).is_err());
 
     assert_eq!(
-        sign_multisig_member_auth(
-            &member_view(&g, 0),
-            &entry_view(
-                &out,
-                0,
-                u8::try_from(index).unwrap(),
-                n + 1,
-                &out.enc_key_hashes
-            ),
-            &msg,
-        )
-        .err(),
+        sign_multisig_member_auth(&member_view(&g, 0), &own_ciphertext(&out, 0, n + 1), &msg,)
+            .err(),
         Some(MultisigSignError::GroupSize)
     );
 }
