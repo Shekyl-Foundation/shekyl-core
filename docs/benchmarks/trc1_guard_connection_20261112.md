@@ -1,6 +1,8 @@
 # `TRC-1` guard-connection reading: can the guard connection's byte counts show when the daemon sent? Registration, 2026-11-12
 
-**State of this record: REGISTERED 2026-11-12, not yet collecting.**
+**State of this record: REGISTERED 2026-11-12, collecting since
+2026-11-12 20:57Z. Amendment 1 (2026-11-12, below) changes the instrument
+and four definitions before any guard-connection byte figure was read.**
 Everything under "Registered before the run" is fixed from the moment
 this record is pushed. A change after that is a dated amendment that says
 what had been read by then. Results are added below.
@@ -205,3 +207,80 @@ on them is Rick's.
 
 **Data.** The raw 100 ms rows and the send log stay in `shekyl-dev`. The
 reduced tables are added beside this record with the results.
+
+## Amendment 1, 2026-11-12: guard coverage, sample validity, matching sends, cell size
+
+*Written 2026-11-12 at about 21:30Z. Collection had started at 20:57:11Z.
+No guard-connection byte figure had been read. What had been read by then:
+- row counts and late samples (11 of 5,551 rows more than 50 ms late at
+  21:06Z);
+- the sampler's log (three guards tracked, no epoch change);
+- the send log (every attempt failed, item 5 below);
+- two shape-only smoke runs of the new sampler version.
+
+Prompted by review of this record (PR #1356).*
+
+1. **Fallback guards.** When no primary guard is usable, Tor falls back
+   to a confirmed non-primary guard, then to any usable sampled guard
+   (`src/feature/client/entrynodes.c:2315-2349`). Circuits on those would
+   be missed by the three tracked guards.
+   - **Instrument change.** Sampler version 2 (`guard_sample.py`) also
+     samples every other listed sampled guard, summed as `gx`. Once a
+     minute it writes Tor's path-bias counters (`pb_circ_attempts`,
+     `pb_use_attempts`) summed per label, to `guard_state.tsv`. Tor writes
+     a guard's counters within 30 s of a change (`entrynodes.c:3636`).
+   - **Fallback seen.** If `gx`'s counters rose between two reads, that
+     interval is "fallback seen". Its windows are left out of item 5 and
+     counted.
+   - **The check is partial.** The counters leave out rendezvous and
+     conflux circuits (`src/feature/client/circpathbias.c`,
+     `pathbias_should_count`). So item 3's correlation is also run on
+     `gx`'s bytes, and a peak there is reported as uncovered sending.
+   - **Version 1 rows are not used.** Rows from version 1 (20:57:11Z
+     until the switch) have no `gx` and go into no result.
+2. **Sample validity.** A row's deltas run from the previous row. So a
+   row after a missed or late slot carries more than 100 ms of bytes.
+   - **The rule.** A slot is valid only if the previous scheduled slot has
+     a row, neither row is more than 50 ms late, and it is not the first
+     row after a relay or guard epoch change.
+   - **What it applies to.** Byte figures come only from valid slots. In
+     Part 7's 5 % rule (line 3), invalid slots count as missing. The same
+     rule applies to daemon writes and to send matching.
+3. **Matching a send to its write.** The first daemon write after a
+   submit may be other daemon traffic. The daemon may also hold a
+   transaction without sending it at once. So each send is matched by its
+   own size, and this replaces the registered definition of an
+   own-transaction send.
+   - **Its size.** The transaction's serialized size is read from the
+     daemon by its logged hash (`get_transactions`).
+   - **The own-transaction send** is the first run of consecutive valid
+     slots with daemon loopback bytes sent that starts within 10 s after
+     the submit call starts and whose total reaches that size.
+   - **Sends are reported in four groups:** matched; not seen (accepted,
+     with no matching run within 10 s); rejected (the daemon's verdict was
+     not `ACCEPTED`); and failed before submit (a build or submit error).
+   - **Item 5's comparison groups** leave out any window within 10 s
+     after a submit that is not a matched send. That keeps a mislabelled
+     stem out of the "other windows".
+4. **Cells.** A relay cell carries at most 498 bytes of payload in 514
+   bytes on the wire (`src/core/or/or.h:563-584`).
+   - The registered "bytes ÷ 514, rounded up, an upper bound" is
+     withdrawn.
+   - Item 4 reports each send as plaintext bytes and as its minimum wire
+     bytes, ⌈bytes ÷ 498⌉ × 514. Each is set against the guard
+     connection's outbound bytes in the same window.
+   - Neither figure is a bound. Other daemon traffic in the window can add
+     to the plaintext, and framing can add cells.
+   - Guard volumes in item 2 stay in 514-byte cell equivalents.
+5. **Sends so far, and the duration.** Every send attempt since the start
+   failed before submit.
+   - **The first three** failed because the funds were not yet spendable,
+     though the wallet already reported them unlocked.
+   - **Every later one** failed in the signer, with an error that does not
+     name its cause.
+   - **A comparison.** The same build from the funding wallet, which was
+     scanned from genesis, succeeds. The sending wallet had been restored
+     from height 11640 and is being re-scanned from genesis.
+   - **Duration.** The 48 hours now count from the first accepted own send
+     under sampler version 2. The run ends at 48 hours or at the alpha.12
+     changeover, whichever comes first.
