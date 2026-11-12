@@ -411,8 +411,7 @@ wallet_rpc_error_codes! {
     ShardUnavailable = -29535 => "SHARD_UNAVAILABLE",
     /// `get_shard_view`: the daemon this wallet uses does not serve shard
     /// views — the call is outside the wallet's grant there
-    /// (`OutsideTheGrant`), the daemon holds no archival skeleton
-    /// (`shard.view-absent`), or it runs with Tor off (`shard.tor-off`).
+    /// (`OutsideTheGrant`), or it runs with Tor off (`shard.tor-off`).
     /// `data.cause` says which; the remedy is another daemon, not a retry.
     ShardViewNotOffered = -29536 => "SHARD_VIEW_NOT_OFFERED",
     /// `get_shard_view`: the daemon is already fetching a shard for a
@@ -1111,13 +1110,12 @@ pub enum WalletRpcError {
         detail: String,
     },
     /// `get_shard_view` (`-29536`): the daemon this wallet is pointed at
-    /// does not serve shard views. Three causes, one remedy (another
-    /// daemon): the call is outside the wallet's grant there, the daemon
-    /// holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`), or it
-    /// runs with Tor off and has no client to fetch through (IG-Q90).
+    /// does not serve shard views. Two causes, one remedy (another
+    /// daemon): the call is outside the wallet's grant there, or it runs
+    /// with Tor off and has no client to fetch through (IG-Q90).
     #[error("this daemon does not serve shard views — point the wallet at a node that does")]
     ShardViewNotOffered {
-        /// Why: `restricted`, `skeleton_absent` or `tor_off`.
+        /// Why: `restricted` or `tor_off`.
         cause: ShardViewNotOfferedCause,
         /// The daemon's message.
         detail: String,

@@ -480,7 +480,8 @@ info:
   # get_shard_view gains -29537 SHARD_VIEW_BUSY: the daemon fetches one
   # shard at a time for bounded callers and was already fetching one
   # (bound.shard); transient. -29536 gains data.cause "tor_off": the daemon
-  # runs with Tor off and has no client to fetch a shard through.
+  # runs with Tor off and has no client to fetch a shard through. The
+  # cause "skeleton_absent" is gone: no daemon refuses that way.
   # api_version stays 1.
   version: 0.17.0
   description: >
@@ -1526,10 +1527,8 @@ components:
                                           serve shard views. data.cause is
                                           "restricted" (the call is outside
                                           the wallet's grant there — point it
-                                          at its own node), "skeleton_absent"
-                                          (the daemon's store holds no
-                                          archival skeleton, SV-D9) or
-                                          "tor_off" (the daemon runs with Tor
+                                          at its own node) or "tor_off" (the
+                                          daemon runs with Tor
                                           off and has no client to fetch a
                                           shard through). Not transient
           -29537 SHARD_VIEW_BUSY          get_shard_view: the daemon fetches

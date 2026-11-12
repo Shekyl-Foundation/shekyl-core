@@ -243,17 +243,14 @@ async fn a_call_outside_the_grant_and_a_skeletonless_store_are_each_not_offered(
         "{restricted}"
     );
 
-    let absent = shard_view(fake_daemon(refusal(
+    let tor_off = shard_view(fake_daemon(refusal(
         shekyl_rpc_types::errors::ErrorClass::RefusedByMethod,
-        "shard.view-absent",
-        "no skeleton",
+        "shard.tor-off",
+        "Tor is off",
     )))
     .await;
-    assert_eq!(absent["error"]["code"], -29536, "{absent}");
-    assert_eq!(
-        absent["error"]["data"]["cause"], "skeleton_absent",
-        "{absent}"
-    );
+    assert_eq!(tor_off["error"]["code"], -29536, "{tor_off}");
+    assert_eq!(tor_off["error"]["data"]["cause"], "tor_off", "{tor_off}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

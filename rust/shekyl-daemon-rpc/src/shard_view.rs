@@ -35,8 +35,6 @@ pub mod codes {
     pub const OPEN: &str = "shard.open";
     /// The shard is closed and no holder served it this time.
     pub const UNAVAILABLE: &str = "shard.unavailable";
-    /// This daemon holds no archival skeleton and serves no shard view.
-    pub const VIEW_ABSENT: &str = "shard.view-absent";
     /// This node runs with Tor off and has no client to read a shard
     /// through (IG-Q90).
     pub const TOR_OFF: &str = "shard.tor-off";
@@ -65,8 +63,6 @@ pub enum ShardViewRefusal {
     /// is how many dials were made; what each one returned is the daemon's
     /// log (`SF-D12`), not the wire's.
     Unavailable { shard_id: ShardId, attempts: usize },
-    /// This daemon holds no archival skeleton and serves no shard view.
-    SkeletonAbsent,
     /// This node runs with Tor off: it has no client to read a shard
     /// through.
     TorOff,
@@ -89,20 +85,8 @@ pub trait ShardViewFacts: Send + Sync {
 /// A shard-view handle.
 pub type ShardViewHandle = std::sync::Arc<dyn ShardViewFacts>;
 
-/// The facts of a daemon that holds no archival skeleton.
-///
-/// Every request is refused as [`ShardViewRefusal::SkeletonAbsent`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SkeletonAbsent;
-
-impl ShardViewFacts for SkeletonAbsent {
-    fn view(&self, _shard_id: ShardId, _bounded: bool) -> ShardViewFuture<'_> {
-        Box::pin(std::future::ready(Err(ShardViewRefusal::SkeletonAbsent)))
-    }
-}
-
 /// The facts of a node that runs with Tor off: every request is refused
-/// as [`ShardViewRefusal::TorOff`], never as an absent skeleton (IG-Q90).
+/// as [`ShardViewRefusal::TorOff`] (IG-Q90).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TorOff;
 
@@ -135,8 +119,6 @@ impl ShardViewFacts for ShardViewAbsent {
 ///   far the open shard is from closing when that is the shard asked for;
 /// - [`ShardViewRefusal::Unavailable`] → `RefusedByMethod`,
 ///   `shard.unavailable`;
-/// - [`ShardViewRefusal::SkeletonAbsent`] → `RefusedByMethod`,
-///   `shard.view-absent`;
 /// - [`ShardViewRefusal::TorOff`] → `RefusedByMethod`, `shard.tor-off`;
 /// - [`ShardViewRefusal::Busy`] → `OverResourceBound`, `bound.shard`;
 /// - [`ShardViewRefusal::Fault`] → the facts fault, as every native method
@@ -225,10 +207,6 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
             .param("id", shard_id.to_raw().to_string())
             .param("attempts", attempts.to_string()),
         )),
-        ShardViewRefusal::SkeletonAbsent => refused(
-            codes::VIEW_ABSENT,
-            "this daemon holds no archival skeleton and serves no shard view".to_owned(),
-        ),
         ShardViewRefusal::TorOff => refused(
             codes::TOR_OFF,
             "this node runs with Tor off and has no client to fetch a shard through".to_owned(),
@@ -288,19 +266,8 @@ mod tests {
         archival::ShardId { id: Integer(id) }
     }
 
-    #[tokio::test]
-    async fn the_absent_skeleton_refuses_every_shard_the_same_way() {
-        let facts = SkeletonAbsent;
-        for id in [0u64, 1, u64::MAX] {
-            assert_eq!(
-                facts.view(ShardId::from_raw(id), true).await,
-                Err(ShardViewRefusal::SkeletonAbsent)
-            );
-        }
-    }
-
-    /// A node with Tor off refuses as Tor off, for every caller, never as
-    /// an absent skeleton (IG-Q90); no node at all is not ready.
+    /// A node with Tor off refuses as Tor off, for every caller (IG-Q90);
+    /// no node at all is not ready.
     #[tokio::test]
     async fn tor_off_and_no_node_each_refuse_as_what_they_are() {
         for bounded in [false, true] {
@@ -390,7 +357,6 @@ mod tests {
                 },
                 codes::UNAVAILABLE,
             ),
-            (ShardViewRefusal::SkeletonAbsent, codes::VIEW_ABSENT),
             (ShardViewRefusal::TorOff, codes::TOR_OFF),
         ];
         for (refusal, code) in cases {

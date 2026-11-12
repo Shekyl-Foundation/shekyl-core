@@ -18,7 +18,7 @@
 //! own wallet code, so a viewer shows the state and never an empty picture
 //! (rule 82): still open (`shard.open`, `-29534`), closed but no holder
 //! served it (`shard.unavailable`, `-29535`), this daemon does not serve
-//! views to this wallet at all (`shard.view-absent`, `shard.tor-off`, or
+//! views to this wallet at all (`shard.tor-off`, or
 //! the call outside the wallet's grant: `-29536`), and the daemon is
 //! already fetching one for a bounded caller (`bound.shard`, `-29537`).
 //! The refusal is read by its class and its dotted code, never its
@@ -100,9 +100,6 @@ pub enum ShardViewNotOfferedCause {
     /// The wallet's own node, on a connection that holds the grant,
     /// answers.
     Restricted,
-    /// The daemon holds no archival skeleton and so serves no view
-    /// (`SV-D9`): it runs on a store that cannot place a shard boundary.
-    SkeletonAbsent,
     /// The daemon runs with Tor off and has no client to fetch a shard
     /// through (IG-Q90).
     TorOff,
@@ -113,7 +110,6 @@ impl ShardViewNotOfferedCause {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Restricted => "restricted",
-            Self::SkeletonAbsent => "skeleton_absent",
             Self::TorOff => "tor_off",
         }
     }
@@ -163,10 +159,6 @@ fn shard_view_refusal(refusal: &Refusal) -> WalletRpcError {
         (ErrorClass::RefusedByMethod, "shard.unavailable") => {
             WalletRpcError::ShardUnavailable { detail }
         }
-        (ErrorClass::RefusedByMethod, "shard.view-absent") => WalletRpcError::ShardViewNotOffered {
-            cause: ShardViewNotOfferedCause::SkeletonAbsent,
-            detail,
-        },
         (ErrorClass::RefusedByMethod, "shard.tor-off") => WalletRpcError::ShardViewNotOffered {
             cause: ShardViewNotOfferedCause::TorOff,
             detail,
@@ -241,8 +233,8 @@ mod tests {
     }
 
     /// Each refusal keeps its meaning on its own wallet code, read by class
-    /// and dotted code. Red edit: map by message, fold `shard.view-absent`
-    /// into `-29535`, or fold `bound.shard` into `-29535`.
+    /// and dotted code. Red edit: map by message, fold `shard.tor-off` into
+    /// `-29535`, or fold `bound.shard` into `-29535`.
     #[test]
     fn each_daemon_refusal_keeps_its_meaning_on_its_own_wallet_code() {
         let open = refused(ErrorClass::RefusedByMethod, "shard.open");
@@ -251,10 +243,6 @@ mod tests {
 
         let miss = refused(ErrorClass::RefusedByMethod, "shard.unavailable");
         assert_eq!(miss.code(), WalletRpcErrorCode::ShardUnavailable);
-
-        let absent = refused(ErrorClass::RefusedByMethod, "shard.view-absent");
-        assert_eq!(absent.code(), WalletRpcErrorCode::ShardViewNotOffered);
-        assert_eq!(absent.data().unwrap()["cause"], "skeleton_absent");
 
         let outside = refused(ErrorClass::OutsideTheGrant, "grant.outside");
         assert_eq!(outside.code(), WalletRpcErrorCode::ShardViewNotOffered);
@@ -279,6 +267,8 @@ mod tests {
         for (class, code) in [
             (ErrorClass::Internal, "daemon.internal"),
             (ErrorClass::RefusedByMethod, "shard.something-new"),
+            // No daemon writes it: the skeleton-absent refusal is deleted.
+            (ErrorClass::RefusedByMethod, "shard.view-absent"),
             (ErrorClass::NotReady, "shard.open"),
         ] {
             assert_eq!(

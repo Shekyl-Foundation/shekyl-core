@@ -29,7 +29,7 @@ use crate::handles::Handles;
 use crate::hash_budget::HashBudget;
 use crate::options::OptionsAbsent;
 use crate::server::AppState;
-use crate::shard_view::SkeletonAbsent;
+use crate::shard_view::ShardViewAbsent;
 use crate::store_facts::RulesAt;
 use crate::submit::{DaemonTxVerifier, RustPoolShim, StoreChain, SubmitEngine};
 
@@ -84,7 +84,7 @@ fn state(tag: &str) -> (Scratch, Arc<AppState>) {
     let state = Arc::new(AppState {
         submit_engine: Arc::new(SubmitEngine::new(shim, DaemonTxVerifier)),
         conn_tracker: ConnTracker::new(ConnLimits::default()),
-        shard_view: Arc::new(SkeletonAbsent),
+        shard_view: Arc::new(ShardViewAbsent),
         options: Arc::new(OptionsAbsent),
         handles: Handles::absent(),
         hash_budget: Arc::new(HashBudget::new(Instant::now())),

@@ -79,9 +79,9 @@ fn the_fetch_client_holds_its_lanes_descriptors_only_under_a_tor() {
 
 /// A node with Tor off has no client to read a shard through: its
 /// `shard_fetch` refuses as Tor off, for the host and a bounded caller,
-/// never as an absent skeleton (IG-Q90).
+/// never as a fault (IG-Q90).
 ///
-/// Red edit: hand the RPC `SkeletonAbsent` when there is no scheduler.
+/// Red edit: hand the RPC the absent handle when there is no scheduler.
 #[test]
 fn a_node_with_tor_off_refuses_a_shard_fetch_as_tor_off() {
     let dir = tempfile::tempdir().expect("temp");

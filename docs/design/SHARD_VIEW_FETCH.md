@@ -250,14 +250,14 @@ cumulative-archival-length index either; that read is owed with the cutover.
 **Ruling** (Rick, in review of the shard-view plan: *"That is definitely a
 blocker. We do need to wait on that, or that becomes the plan."*). No C++ is
 written to close the gap (`SV-D3`), and no Rust adapter is faked over the
-LMDB. Step 3 lands the RPC over its `RK-D7` trait with one shipped
-implementation, `shekyl_daemon_rpc::shard_view::SkeletonAbsent`, which
-refuses every request as `CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT`
-(-25): a statement about the daemon — *this daemon holds no archival skeleton
-and serves no shard view* — with its own code, so a viewer shows that state
-and never mistakes it for a miss (`23-disposition-visibility`: say what is,
-not what might be). The scheduler is linked into the daemon image with no
-production caller: **STAGED**, consumer named below.
+LMDB. Step 3 landed the RPC over its `RK-D7` trait with one interim
+implementation that refused every request with its own code, a statement
+about the daemon (*this daemon holds no archival skeleton and serves no
+shard view*), so a viewer showed that state and never mistook it for a miss
+(`23-disposition-visibility`). The scheduler was linked into the daemon
+image with no production caller: **STAGED**, consumer named below. That
+interim implementation, its refusal and the wallet's cause for it are
+deleted (Rick, 2026-11-12): once the lift below landed, no daemon wrote it.
 
 **Lifted (as built at `34255a8945`, #1344).** The store flip (`DRS-X`)
 made `shekyl-chain-store` the daemon's live store, with the shard-range read,
@@ -272,9 +272,8 @@ scheduler meet; the RPC crates stay out of the fetch client
 through and hands the RPC `TorOff`, which refuses `shard.tor-off`
 (IG-Q90). The falsifier's line exists: `impl ShardViewFacts for
 DeskViewFacts` in `rust/shekyl-node/src/shard_view.rs`, over
-`shekyl-chain-store` rows. Production selects `SkeletonAbsent` nowhere, and
-a daemon with no node answers `NotReady` like every other absent handle;
-whether `SkeletonAbsent` and `shard.view-absent` stay is a FOLLOWUPS row.
+`shekyl-chain-store` rows. A daemon with no node answers `NotReady` like
+every other absent handle.
 
 **`PDM-Q9` note.** The view cache is an in-memory map of a public aggregate,
 held by the RESTRICTED listener's process and keyed on the close block's hash.
@@ -343,7 +342,7 @@ branch.
 | 2a | fetch Sub-PR 2 client: tx-range frame, streaming per-tx `ContentVerify`, range-derived response ceiling, `ServedFrameHeader` / `recompute_segment_r_k` out of the client path | `SF-` (FOLLOWUPS row) | — |
 | 2b | the scheduler: `shekyl-archival-fetch-sched` as a real `fetch()` scheduler (holder draw `SF-D10`, `MAX_INFLIGHT = 8`, `SF-D6` outcomes), the view caller folding `SV-D1`/`SV-D4`, the `SV-D5` cache | this round | 2a |
 | 2c | the serve read: `StoreShardProvider` over a `BodyStoreReader` streams the tx-range frame. The writer is `StakeEngine`'s (`WSS-Q1`(a)). Fill (`WSS-Q4`) is not written, so an empty store answers 404 until fill. Erase (`WSS-Q8`) runs when the pin-release gate clears a shard. The reader decrypted (`WSS-Q13` unmet) until 2026-11-02, when the reads moved to the store's owning actor (#1261) | the wallet lane (`WSS-`) | fill `WSS-Q4`, erase `WSS-Q8` |
-| 3 | the method natively in `shekyl-daemon-rpc` (`shard_fetch` since 4.0); C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the `SkeletonAbsent` facts; the `ViewDesk` adapter in `rust/shekyl-node` — **landed 2026-11-12** (#1344, `SV-D9` lifted) | this round | 2b |
+| 3 | the method natively in `shekyl-daemon-rpc` (`shard_fetch` since 4.0); C++ deleted (`SV-D3`); `close_height` on the wire — **landed 2026-10-08** over the interim refusing facts (deleted 2026-11-12); the `ViewDesk` adapter in `rust/shekyl-node` — **landed 2026-11-12** (#1344, `SV-D9` lifted) | this round | 2b |
 | 4 | wallet RPC method (contract registry), CLI and GUI local render, shekyl-web server PNG route — **landed 2026-10-09**: `get_shard_view` SPECIFIED (`wallet_rpc.yaml` 0.11.0; codes `-29534` `SHARD_STILL_OPEN`, `-29535` `SHARD_UNAVAILABLE`, `-29536` `SHARD_VIEW_NOT_OFFERED` with `data.cause` `restricted` \| `skeleton_absent`; 0.17.0 adds the cause `tor_off` and `-29537` `SHARD_VIEW_BUSY` for `bound.shard`), the daemon call and refusal mapping once in `shekyl-wallet-contract::shard_view::fetch_shard_view`, served by `shekyl-wallet-rpc`; CLI `shard fetch <id> [--png <path>] [--size <n>]`; GUI `get_shard_view` contract adapter drawing locally; `shekyl-shard-render` (`shekyl-shard-visual`, feature `cli`) for shekyl-web, whose `/api/shards/{id}/view[/png]` routes call the site daemon's unrestricted listener; the `ArchivalShardSource` stub deleted | this round | 3 |
 
 **What a viewer shows today.** A daemon with a Tor fetches the view, so a
