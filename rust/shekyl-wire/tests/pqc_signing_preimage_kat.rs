@@ -29,10 +29,7 @@
 //! chosen so the shapes a divergence could hide in are all present — one
 //! input, two, six (twice: a captured chain's and the live oracle's), and the
 //! emission's `to_key ‖ to_key ‖ emission` (mixed archival arms, whose
-//! pseudo-out count is the *spend* subset). *Records-was:* the fixture also
-//! held a serve-credit body, whose form had no preimage, and two keyless
-//! JoinMarket bond posts; both forms are deleted (C7) and their entries with
-//! them.
+//! pseudo-out count is the *spend* subset).
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in
 //! C++ (`tx_pqc_verify.cpp`, `get_transaction_signed_payload`) until E6
@@ -155,10 +152,8 @@ impl SubjectBytes {
     }
 }
 
-/// The subjects, in the fixture's order. *Records-was:* the two C++-captured
-/// bond posts (`bond-post-to_key-bond_post`, `emission-bond-post-to_key-bond_post`)
-/// were keyless JoinMarkets, `post_kind` 0; the kind is deleted (C7, 2026-11-11)
-/// and they left the fixture with it. The JoinMarket's preimage and digest are
+/// The subjects, in the fixture's order. No bond post is among them; the
+/// JoinMarket's preimage and digest are
 /// witnessed on Rust-built posts (`shekyl-chain-rules`,
 /// `i18_the_identity_signature_covers_the_join_markets_receipt_key`; the
 /// ingest's `a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it`).

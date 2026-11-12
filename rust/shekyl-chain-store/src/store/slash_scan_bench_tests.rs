@@ -22,10 +22,8 @@
 //! (CEN-J27: a bond post is judged by I13/I15 over its `ToKey` inputs, so a
 //! listed join is a proof over a coinbase the chain mined, built by the
 //! harness spender over [`Grown`]'s tree). Every epoch below is counted
-//! from the join's ([`shifted`]). *Records-was:* until the switch's C7 the
-//! joins came first, in epoch 0, and padded serve credits on shard 1 closed
-//! shard 0 in the same epoch; the serve-credit input is deleted, and real
-//! spends close a shard no sooner than height 131.
+//! from the join's ([`shifted`]): real spends close shard 0 no sooner than
+//! height 131, in epoch 1, so no persona can join a closed shard in epoch 0.
 //! Each pair on shard 0 is planted three draws in every epoch from the
 //! join's plus one
 //! (`store_tests::plant_issued_draws`), none passed — which is how every

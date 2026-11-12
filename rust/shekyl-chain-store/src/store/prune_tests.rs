@@ -15,12 +15,9 @@
 //! 161 blocks of one-input spends whose bytes every landed rule verifies,
 //! closing shard 0 at height 131, shard 1 at 147 and shard 2 at 160. A
 //! test connects the prefix it needs ([`Builder::captured`]) and extends it
-//! with empty blocks, or with spends it builds. *Records-was:* until the
-//! switch's C7 the bodies were serve credits whose pruned pass records
-//! were padded to the lengths a table asked for; the serve-credit input is
-//! deleted, and the exact-length properties those tables pinned (a
-//! transaction starting at `k·W`, a straddle) are tests of `shard_of` with
-//! any lengths (`shekyl-types`).
+//! with empty blocks, or with spends it builds. The exact-length properties
+//! (a transaction starting at `k·W`, a straddle) are tests of `shard_of`
+//! with any lengths (`shekyl-types`), not of these chains.
 //!
 //! The chains run under a 100-block epoch with a 50-block undo retention,
 //! or a 10-block epoch with a 3-block retention (`Horizons::new`, the

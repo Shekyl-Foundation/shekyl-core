@@ -630,10 +630,10 @@ fn witness_shard_slots() -> impl Iterator<Item = u32> {
 /// listed in the block connecting next. Its join epoch is that block's, so
 /// the pair is in `D` from the next epoch on, and the block journals it, so
 /// a drawable set rebuilt from the journals agrees with the one written at
-/// each open (SI-30). *Records-was:* until 2026-11-11 the record was planted
-/// outside any journal, which a rebuild of an epoch opened before the plant
-/// read as a member; the captured shard-fill chain closes shard 0 early
-/// enough for a real join to be admissible here (CEN-J15).
+/// each open (SI-30). A record planted outside every journal would not: a
+/// rebuild of an epoch opened before the plant reads it as a member. The
+/// join is admissible here (CEN-J15) because the captured shard fill closes
+/// shard 0 at height 131.
 fn join_compact_bond(chain: &mut SlashedChain) {
     connect(
         chain,

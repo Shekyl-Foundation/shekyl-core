@@ -27,9 +27,7 @@
 //! The bodies are not new: five are the daemon-accepted transactions of
 //! `pqc_signing_preimage_v1.json`, read from that fixture by name, and the
 //! sixth is the coinbase of `vectors/regtest_coinbase_h1.block`.
-//! *Records-was:* the fixture also pinned two keyless JoinMarket bond posts
-//! captured from the C++ daemon; `post_kind` 0 is deleted (C7, 2026-11-11),
-//! and a bond post's digest is witnessed on Rust-built posts
+//! A bond post's digest is witnessed on Rust-built posts
 //! (`shekyl-chain-rules`,
 //! `i18_the_identity_signature_covers_the_join_markets_receipt_key`).
 //!
