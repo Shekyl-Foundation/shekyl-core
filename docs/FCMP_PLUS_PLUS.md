@@ -136,8 +136,11 @@ public inputs. The proof does not reveal which leaves are spent — the entire
 UTXO set serves as the anonymity set — and, because `CM` is hiding, the
 public input `K` is not a value any leaf or `0x07` entry publishes.
 
-The per-input key scalars `k = H_ℓ(hybrid_pk)` are passed to
-`shekyl_fcmp::proof::verify` as its `pqc_keys` (`PqcKeyScalar`); the verifier
+The per-input key scalars are passed to `shekyl_fcmp::proof::verify` as its
+`pqc_keys`, each `PqcKeyScalar::from_pqc_auth(scheme_id, hybrid_public_key)`:
+`k = H_ℓ` over the whole key for a solo spend (scheme 1), and over the
+committed form alone for a multisig spend (scheme 2), never the signer list
+and keys the blob also carries (`PQC_MULTISIG.md` §7.5). The verifier
 derives `K` from each and the proof succeeds only if the prover committed to
 leaves whose commitments open to exactly those points. This binding is
 DLOG-sound (Generalized Bulletproofs): see `FCMP_SPEND_LINKABILITY.md` §4
@@ -312,11 +315,19 @@ rederive per-output keys, sign with `pqc_auths` on the spend transaction).
 ### Transaction Hash Computation
 
 The txid is built in `shekyl_wire::transaction::txid` (`GENESIS_TX_WIRE_FORMAT.md`
-§11): a coinbase mixes `H(prefix) · H(base) · null`; an FCMP++ spend mixes
-`H(prefix) · H(base) · H(pqc_auths) · H(prunable) · len`, where `len` is the
-archival length (prunable region plus `pqc_auths`). Coinbase transactions
-omit PQC authorization fields; non-coinbase FCMP++ transactions must have
-`pqc_auths.len() == vin.len()`.
+§11), in one of three shapes:
+
+- a coinbase: `H(prefix) · H(base) · null`;
+- a serve-credit-only FCMP++ body, which carries no `pqc_auths` (CEN-H20;
+  its countersignature is CEN-J10's, over the pass record):
+  `H(prefix) · H(base) · H(prunable) · len`;
+- every other FCMP++ body (a spend, a bond post, an emission), which
+  carries one `pqc_auths` entry per input:
+  `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · len`.
+
+`len` is the archival length (prunable region plus `pqc_auths`). The three
+shapes are three word counts, so no body of one shape shares a preimage
+with another.
 
 The `prunable_hash` covers `fcmp_pp_proof`, `curve_trees_tree_depth`,
 `pseudoOuts`, and `BulletproofPlus` range proofs.
@@ -480,30 +491,50 @@ encoding of `HybridPublicKey`.
 
 ## 7. Verification Order
 
-The following is the consensus-critical verification sequence for
-`CT_TYPE_FCMP` transactions in `shekyl-chain-rules` (`rules/tx_inputs.rs`,
-`rules/tx_against.rs`, `rules/proofs.rs`).
-Steps are ordered to fail fast on cheap checks before expensive proof
-verification.
+The consensus checks on a `CT_TYPE_FCMP` spend, in `shekyl-chain-rules`.
+The step labels are the anchors `CONSENSUS_RULE_CENSUS.md` cites; they are
+not an execution order. The validator judges in two stages
+(`shekyl-chain-rules/src/validate.rs`):
+
+- **Stateless** (`form`; the pool's `judge_lone_stateless`): reads the
+  transaction alone and runs outside the store's write transaction. The
+  structural rows (steps 0 and 3), then the PQC signatures (step 6), then
+  the FCMP++ proof (steps 4–5) against the root the caller *claims* for the
+  reference, then the range proofs (step 7; in a block, one batch over every
+  listed transaction after the slot loop).
+- **View-bound** (`tx_against`): reads the chain. No key image already
+  spent (CEN-I7), the reference block on the chain and inside the window
+  (step 1), and the anchor and depth at it (step 2), which also confirms
+  the claimed root the proof was verified against.
+
+A transaction wrong in two rows of one stage is refused by the earlier;
+a stateless refusal comes before any view-bound one. A serve-credit-only
+body carries no FCMP++ proof, pseudo-outs, outputs or `pqc_auths`
+(CEN-H20), so steps 4–6 do not apply to it.
 
 ### Step 0: Structural Pre-Checks
 
 - `tx.version == 3`
 - `tx.vout.size() >= 2`
-- `tx.vin.size() <= FCMP_MAX_INPUTS_PER_TX`
-- `tx.unlock_time < CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL`
+- `tx.vin.len() <= MAX_FCMP_INPUTS` (8, `shekyl-wire`)
+- `tx.unlock_time < UNLOCK_TIME_SENTINEL` (500 000 000, `rules/tx.rs`)
   (Decision 13: timestamp-based unlock times are rejected in consensus)
 - All inputs are `txin_to_key` (no `txin_gen` except coinbase)
 - Key images are sorted and unique
-- No key image is already spent (double-spend check)
+- (View-bound stage) no key image is already spent (CEN-I7)
 
 ### Step 1: referenceBlock Validation
 
 ```text
-1a. block_exists(rv.referenceBlock, &ref_height) must be true
-1b. ref_height >= tip - FCMP_REFERENCE_BLOCK_MAX_AGE    (not too old)
-1c. ref_height <= tip - FCMP_REFERENCE_BLOCK_MIN_AGE    (not too recent)
+1a. referenceBlock is a block of this chain, at ref_height            (CEN-I10)
+1b. c <= MAX_AGE, or ref_height >= c - MAX_AGE           (not too old) (CEN-I11)
+1c. c >= MIN_AGE and ref_height <= c - MIN_AGE           (not too recent)
 ```
+
+`c` is the **connecting height**, the height of the block that lists the
+transaction (the tip's height plus one), not the tip's height: at tip 100 a
+reference at 96 is admissible (`c − MIN_AGE = 96`). The window is
+`admissible_references(c)` in `rules/tx_against.rs`.
 
 Constants from `config/consensus_constants.json`
 (`fcmp_reference_block_max_age`, `fcmp_reference_block_min_age`), read by
@@ -524,11 +555,15 @@ Constants from `config/consensus_constants.json`
 ```text
 2a. tree_root = get_curve_tree_root_at(ref_height)
 2b. tree_depth = get_curve_tree_depth_at(ref_height)
-2c. rv.p.curve_trees_tree_depth == tree_depth
+2c. 1 <= rv.p.curve_trees_tree_depth <= tree_depth                    (CEN-I13)
 ```
 
 The tree root and depth at `referenceBlock` height anchor the proof. A
-mismatch in `curve_trees_tree_depth` is a consensus failure.
+declared depth outside `[1, depth at ref_height]` is refused; the depth is
+read at the reference, not at the tip (`I13`, `rules/tx_against.rs`). The
+census records the spec's equality against the code's range as found, not
+ruled (`CONSENSUS_RULE_CENSUS.md`, CEN-I13); until that ruling the range
+is what the validator applies.
 
 **What the anchor is (ruled 2026-09-04, CEN-I12).** The anchor is the
 curve-tree state **at chain height `ref_height`**: the tree as it stands
@@ -569,26 +604,31 @@ For each input `i` in `tx.vin`:
 ```text
 3a. in_to_key.key_offsets.empty() == true
     (FCMP++ replaces ring members; no key offsets allowed)
-3b. Key image y-normalization: bit 7 of byte 31 must be 0
-    (FCMP++ requires y-normalized key images)
+3b. the key image is a canonical, prime-order, non-identity point (CEN-H11)
+    (no sign-bit rule: FCMP++ key images are not y-normalized, §8)
 ```
 
 ### Step 4: FCMP++ Proof Verification
 
 ```text
-proof       = rv.p.fcmp_pp_proof
-key_images  = [ tx.vin[i].k_image for i in 0..num_inputs ]
+layers      = rv.p.curve_trees_tree_depth + 1      # checked; the verifier counts the leaf layer
+proof       = ShekylFcmpProof { data: rv.p.fcmp_pp_proof, num_inputs, tree_depth: layers }
+key_images  = [ tx.vin[i].key_image for i in 0..num_inputs ]
 pseudo_outs = rv.p.pseudoOuts
-pqc_keys    = [ PqcKeyScalar::from_pqc_auth(scheme_id_i, hybrid_public_key_i)  # k = H_l(...)
-                for i in 0..num_inputs ]
-tree_root   = (from Step 2a)
-tree_depth  = rv.p.curve_trees_tree_depth
+pqc_keys    = [ PqcKeyScalar::from_pqc_auth(pqc_auths[i].scheme_id,
+                                            pqc_auths[i].hybrid_public_key)
+                for i in 0..num_inputs ]           # scheme 2: the committed form only
+tree_root   = the root claimed for the reference   # step 2a confirms it in the view-bound stage
 
-result = shekyl_fcmp::proof::verify(
-    proof, key_images, pseudo_outs, pqc_keys,
-    tree_root, tree_depth, signable_tx_hash
-)
+accept iff shekyl_fcmp::proof::verify(
+    &proof, key_images, pseudo_outs, pqc_keys,
+    tree_root, layers, tx.tx_signable(network)
+) == Ok(true)                                      # Ok(false) and Err are refusals
 ```
+
+This is CEN-I15 (`I15::verify`, `rules/tx_against.rs`), the one verifier
+both the validator and the submit path (K12) call. `tx_signable(network)`
+binds the proof to the chain's network.
 
 ### Step 5: PQC Commitment Opening (inside step 4)
 
@@ -908,14 +948,13 @@ watermark.
 
 ### Verification Time
 
-| Check | Time | Cacheable |
+| Check | Time | Kept by the pool (CEN-M8) |
 |-------|------|-----------|
 | FCMP++ proof (per input) | ~35 ms | Yes |
 | BP+ range proofs (batched) | ~5 ms | Yes |
 | PQC auth (per input) | ~18 ms | Yes |
-| Structural checks | < 0.1 ms | No |
+| Structural checks | < 0.1 ms | Yes |
 | **Total (first verify)** | **~58 ms** (2-input) | |
-| **Total (cached, block inclusion)** | **~0.1 ms** | |
 
 ### Proof Generation Time (Wallet)
 
@@ -941,8 +980,10 @@ validator returns it as a `StatelessPass` (`shekyl-chain-rules/src/validate.rs`,
 `judge_lone_stateless`), and the pool keeps it beside each held transaction
 (`shekyl-mempool/src/door.rs`). While the transaction's rule set and claim
 hold, the pass is the answer again: the pool re-judges only the view-bound
-half (`tx_against` and the policy) as the chain moves, and nothing is
-verified twice (CEN-M8).
+half (`tx_against` and the policy) as the chain moves, and the pool
+verifies nothing twice (CEN-M8). A block does not inherit those passes:
+`form` never passes a prior, so a block's own judgement verifies its
+transactions' signatures, proofs and range proofs again (`E5-Q8`).
 
 ---
 
@@ -1023,7 +1064,7 @@ in [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (membership-
 backing + work payload; dedup on the bond record). FCMP++ membership proofs
 for ordinary spends are unchanged.
 
-**PQC ownership binding** for **regular** spends: the circuit proves `leaf[96:128] = (K + r·J).x` with `K = PqcKeyScalar::from_pqc_public_key(pqc_pk)·G_k` (`PL-D3`); no verifier-side equality on the leaf value exists.
+**PQC ownership binding** for **regular** spends: the circuit proves `leaf[96:128] = (K + r·J).x` with `K = PqcKeyScalar::from_pqc_auth(scheme_id, hybrid_public_key)·G_k` (`PL-D3`; the whole key for scheme 1, the committed form for scheme 2); no verifier-side equality on the leaf value exists.
 
 Lock-tier staked-output / `txin_stake_claim` PQC checks, claim-reward fingerprinting
 rules, the claim sub-path of input checking, claim-transaction construction, batch pool
@@ -1041,13 +1082,13 @@ or the block that carries it is rejected.
 | Check | Failure |
 |-------|---------|
 | referenceBlock unknown | Block hash not on the chain |
-| referenceBlock too old | `ref_height < tip - MAX_AGE` |
-| referenceBlock too recent | `ref_height > tip - MIN_AGE` |
-| tree depth out of range | `curve_trees_tree_depth` 0 or > current |
+| referenceBlock too old | `c > MAX_AGE` and `ref_height < c - MAX_AGE` (`c`: the connecting height, §7 step 1) |
+| referenceBlock too recent | `c < MIN_AGE`, or `ref_height > c - MIN_AGE` |
+| tree depth out of range | `curve_trees_tree_depth` 0, or above the tree's depth **at `ref_height`** |
 | key_offsets non-empty | Ring members present in FCMP++ tx |
-| key image not y-normalized | Sign bit set on key image |
+| key image not a valid point | Not canonical, not prime-order, or the identity (CEN-H11); the sign bit is not a condition |
 | FCMP++ proof invalid | `shekyl_fcmp::proof::verify` does not accept |
-| `pqc_auths` count mismatch | `pqc_auths.len() != vin.len()` |
+| `pqc_auths` count wrong | A spend, bond post or emission without one auth per input; a serve-credit-only body with any (CEN-H20) |
 | PQC signature invalid | `verify_pqc_auth` refuses |
 | Key image double-spend | Key image already spent on the chain |
 
