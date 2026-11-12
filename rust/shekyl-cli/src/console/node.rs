@@ -11,11 +11,13 @@
 //! the console's own retirement slice, because the C++ forms called the
 //! `get_info` handler directly and that handler is deleted next.
 
-use shekyl_rpc_types::pool::{GetTransactionPoolStatsResponse, TxpoolStats};
+use shekyl_rpc_client::wire;
+use shekyl_rpc_types::kinds::NoParams;
+use shekyl_rpc_types::wire::tx::TxpoolStats;
 use shekyl_rpc_types::{core_rpc_version_string, daemon_rpc_version, CORE_RPC_VERSION};
 use shekyl_units::AtomicUnits;
 
-use super::info::{decode_get_info_ok, fetch_get_info};
+use super::info::{chain_count, fetch_status};
 use crate::daemon::DaemonClient;
 
 /// `diff`: the tip, the two difficulties, and the network hash rate.
@@ -25,19 +27,19 @@ use crate::daemon::DaemonClient;
 /// `target` member, which is the same constant.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn show_difficulty(daemon: &DaemonClient) -> Result<String, String> {
-    let info = fetch_get_info(daemon)?;
+    let status = fetch_status(daemon)?;
     let target = u128::from(shekyl_economics::economic_params().daa_target_seconds);
-    let hash_rate = info
-        .chain
+    let hash_rate = status
         .difficulty
+        .get()
         .checked_div(target)
         .ok_or_else(|| "the difficulty target is zero".to_owned())?;
     Ok(format!(
         "BH: {}, TH: {}, DIFF: {}, CUM_DIFF: {}, HR: {hash_rate} H/s",
-        info.health.height,
-        hex::encode(info.health.top_block_hash.to_bytes()),
-        info.chain.difficulty,
-        info.chain.cumulative_difficulty,
+        chain_count(&status),
+        hex::encode(status.hash.to_bytes()),
+        status.difficulty.get(),
+        status.difficulty_cumulative.get(),
     ))
 }
 
@@ -56,9 +58,9 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// answer:
 ///
 /// - **The versions differ.** The reply names both and says which side is
-///   older, and that is all: `get_info` is not read, because its shape is
+///   older, and that is all: `daemon_status` is not read, because its shape is
 ///   another version's and this build decodes it strictly or not at all.
-/// - **The versions agree.** `get_info` is decoded as every other reader
+/// - **The versions agree.** `daemon_status` is decoded as every other reader
 ///   decodes it, and the software version is printed.
 ///
 /// A daemon that does not disclose its version withholds the Status part,
@@ -74,17 +76,20 @@ pub(super) fn version(daemon: &DaemonClient) -> Result<String, String> {
     if theirs != CORE_RPC_VERSION {
         return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
     }
-    // `/get_info` without the handshake: this word exists to name a daemon
+    // `daemon_status` without the handshake: this word exists to name a daemon
     // the handshake would refuse.
-    let path = crate::daemon::posted_rest("/get_info").map_err(|error| error.to_string())?;
-    let raw = daemon
-        .post_unchecked(path, b"{}".to_vec())
+    let status = daemon
+        .call_unchecked::<wire::DaemonStatus>(&NoParams)
         .map_err(|error| error.to_string())?;
-    let info = decode_get_info_ok(&raw)?;
-    info.node
-        .shown()
-        .map(|status| status.version.clone())
-        .ok_or_else(|| VERSION_UNAVAILABLE.to_owned())
+    match status.revision.shown() {
+        None => Err(VERSION_UNAVAILABLE.to_owned()),
+        // A shown Status with an empty revision is contract drift, not an
+        // undisclosed version (RK-D23).
+        Some(revision) if revision.0.is_empty() => {
+            Err("malformed daemon_status reply: a shown Status with an empty `revision`".to_owned())
+        }
+        Some(revision) => Ok(revision.0),
+    }
 }
 
 /// What `version` says of a daemon on another RPC version.
@@ -102,71 +107,60 @@ fn rpc_version_difference(ours: u32, theirs: u32) -> String {
     )
 }
 
-/// `/get_transaction_pool_stats`'s `pool_stats`. The pool does not record
-/// when a transaction arrived (S7), so there is no age and no histogram.
-fn fetch_pool_stats(daemon: &DaemonClient) -> Result<TxpoolStats, String> {
-    let raw = super::rest_post(daemon, "/get_transaction_pool_stats", b"{}".to_vec())?;
-    // A grant or method refusal has no `status`. The shared decoder names
-    // the class and the diagnostic code; a bare `from_slice` would call
-    // that reply malformed.
-    let reply =
-        super::decode_reply::<GetTransactionPoolStatsResponse>(&raw, "get_transaction_pool_stats")?;
-    if reply.status.is_ok() {
-        Ok(reply.pool_stats)
-    } else {
-        Err(reply.status.0)
-    }
-}
-
 fn money(atomic: u64) -> String {
     AtomicUnits::from_raw(atomic).to_skl_string()
 }
 
 /// `print_pool_stats`.
 ///
-/// Two reads: the pool's statistics, and `get_info` for the block weight
+/// Two reads: the pool's statistics, and `daemon_status` for the block weight
 /// limit the backlog estimate is measured against.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_transaction_pool_stats(daemon: &DaemonClient) -> Result<String, String> {
-    let stats = fetch_pool_stats(daemon)?;
-    let info = fetch_get_info(daemon)?;
-    Ok(render_pool_stats(&stats, info.chain.block_weight_limit))
+    let stats = super::call::<wire::TxpoolStats>(daemon, &NoParams)?;
+    let status = fetch_status(daemon)?;
+    Ok(render_pool_stats(&stats, status.block_weight_max.0))
 }
 
+/// The pool's summary. Sizes are weights, as the wire carries them; the
+/// count of entries not yet public is the host's alone (RT-O9.3), so a
+/// caller that is not the host is told it was not disclosed.
 #[deny(clippy::arithmetic_side_effects)]
 fn render_pool_stats(stats: &TxpoolStats, block_weight_limit: u64) -> String {
-    let n = u64::from(stats.txs_total);
-    let avg_bytes = stats.bytes_total.checked_div(n).unwrap_or(0);
+    let n = stats.count.0;
+    let total = stats.weight_total.0;
+    let fee_total = stats.fee_total.to_atomic_units().to_raw();
+    let avg_weight = total.checked_div(n).unwrap_or(0);
 
-    // The full reward zone is half the weight limit; the backlog is how many
-    // such blocks the pool's bytes would fill.
     let full_reward_zone = block_weight_limit / 2;
-    let backlog_message = if stats.bytes_total <= full_reward_zone {
+    let backlog_message = if total <= full_reward_zone {
         "no backlog".to_owned()
     } else if full_reward_zone == 0 {
-        // A weight limit under two leaves no zone to measure against.
         "backlog unknown (the block weight limit is zero)".to_owned()
     } else {
-        let backlog = stats.bytes_total.div_ceil(full_reward_zone);
+        let backlog = total.div_ceil(full_reward_zone);
         format!(
             "estimated {backlog} block ({} minutes) backlog",
             backlog.saturating_mul(shekyl_economics::economic_params().daa_target_seconds) / 60
         )
     };
+    let not_relayed = stats
+        .private_count
+        .shown()
+        .map_or_else(|| "not disclosed".to_owned(), |count| count.0.to_string());
 
     let lines = [
         format!(
-            "{n} tx(es), {} bytes total (min {}, max {}, avg {avg_bytes}, median {})",
-            stats.bytes_total, stats.bytes_min, stats.bytes_max, stats.bytes_med
+            "{n} tx(es), {total} weight total (min {}, max {}, avg {avg_weight}, median {})",
+            stats.weight_min.0, stats.weight_max.0, stats.weight_median.0
         ),
         format!(
-            "fees {} (avg {} per tx, {} per byte)",
-            money(stats.fee_total),
-            money(stats.fee_total.checked_div(n).unwrap_or(0)),
-            money(stats.fee_total.checked_div(stats.bytes_total).unwrap_or(0)),
+            "fees {} (avg {} per tx, {} per unit of weight)",
+            money(fee_total),
+            money(fee_total.checked_div(n).unwrap_or(0)),
+            money(fee_total.checked_div(total).unwrap_or(0)),
         ),
-        format!("{} not relayed, {backlog_message}", stats.num_not_relayed),
-        // The C++ ended with an empty line.
+        format!("{not_relayed} not relayed, {backlog_message}"),
         String::new(),
     ];
     lines.join("\n")
@@ -175,83 +169,89 @@ fn render_pool_stats(stats: &TxpoolStats, block_weight_limit: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_rpc_types::kinds::{Count, Size, Withheld};
 
     fn stats() -> TxpoolStats {
         TxpoolStats {
-            bytes_total: 9_000,
-            bytes_min: 2_000,
-            bytes_max: 4_000,
-            bytes_med: 3_000,
-            fee_total: 3_000_000_000,
-            txs_total: 3,
-            num_not_relayed: 1,
+            count: Count(3),
+            weight_total: Size(9_000),
+            weight_min: Size(2_000),
+            weight_max: Size(4_000),
+            weight_median: Size(3_000),
+            fee_total: AtomicUnits::from_raw(3_000_000_000).into(),
+            private_count: Withheld::Shown(Count(1)),
         }
     }
 
-    /// The summary lines: averages by integer division, money with nine
-    /// fractional digits, and a trailing empty line. The pool does not
-    /// record age (S7), so the third line is the unrelayed count and the
-    /// backlog.
     #[test]
     fn pool_stats_renders_the_summary() {
         let out = render_pool_stats(&stats(), 600_000);
         assert_eq!(
             out,
-            "3 tx(es), 9000 bytes total (min 2000, max 4000, avg 3000, median 3000)\n\
-             fees 3.000000000 (avg 1.000000000 per tx, 0.000333333 per byte)\n\
+            "3 tx(es), 9000 weight total (min 2000, max 4000, avg 3000, median 3000)\n\
+             fees 3.000000000 (avg 1.000000000 per tx, 0.000333333 per unit of weight)\n\
              1 not relayed, no backlog\n"
         );
     }
 
-    /// An empty pool divides by nothing: every average is zero.
     #[test]
     fn an_empty_pool_renders_zero_averages() {
-        let empty = TxpoolStats::default();
+        let empty = TxpoolStats {
+            count: Count(0),
+            weight_total: Size(0),
+            weight_min: Size(0),
+            weight_max: Size(0),
+            weight_median: Size(0),
+            fee_total: AtomicUnits::ZERO.into(),
+            private_count: Withheld::Shown(Count(0)),
+        };
         let out = render_pool_stats(&empty, 600_000);
         assert!(
-            out.starts_with("0 tx(es), 0 bytes total (min 0, max 0, avg 0, median 0)\n"),
+            out.starts_with("0 tx(es), 0 weight total (min 0, max 0, avg 0, median 0)\n"),
             "{out}"
         );
         assert!(
-            out.contains("(avg 0.000000000 per tx, 0.000000000 per byte)"),
+            out.contains("(avg 0.000000000 per tx, 0.000000000 per unit of weight)"),
             "{out}"
         );
         assert!(out.contains("0 not relayed, no backlog"), "{out}");
     }
 
-    /// The backlog is the pool's bytes over half the weight limit, rounded
-    /// up, and its minutes use the build's block target.
     #[test]
     fn a_pool_over_the_full_reward_zone_estimates_a_backlog() {
         let mut s = stats();
-        s.bytes_total = 700_001;
+        s.weight_total = Size(700_001);
         let out = render_pool_stats(&s, 600_000);
-        // Zone 300_000; 700_001 bytes is 3 blocks; 3 * 120 / 60 minutes.
         assert!(
             out.contains("estimated 3 block (6 minutes) backlog"),
             "{out}"
         );
-        // Exactly the zone is still no backlog.
-        s.bytes_total = 300_000;
+        s.weight_total = Size(300_000);
         assert!(render_pool_stats(&s, 600_000).contains("no backlog"));
     }
 
-    /// A reply missing a member this command prints is refused, not
-    /// rendered with a zero.
+    /// The count of entries not yet public is the host's alone: withheld,
+    /// it is said not to be disclosed, never printed as zero. Red edit:
+    /// read a withheld count as zero.
+    #[test]
+    fn a_withheld_not_relayed_count_is_not_disclosed_never_zero() {
+        let mut s = stats();
+        s.private_count = Withheld::Withheld;
+        let out = render_pool_stats(&s, 600_000);
+        assert!(out.contains("not disclosed not relayed"), "{out}");
+    }
+
     #[test]
     fn a_pool_stats_reply_missing_a_member_is_refused() {
         let whole = serde_json::json!({
-            "status": "OK",
-            "pool_stats": {
-                "bytes_total": 1, "bytes_min": 1, "bytes_max": 1, "bytes_med": 1,
-                "fee_total": 1, "txs_total": 1, "num_not_relayed": 0
-            }
+            "count": 1, "weight_total": 1, "weight_min": 1, "weight_max": 1,
+            "weight_median": 1, "fee_total": "1",
         });
-        assert!(serde_json::from_value::<GetTransactionPoolStatsResponse>(whole.clone()).is_ok());
-        for member in ["bytes_total", "txs_total", "fee_total", "num_not_relayed"] {
+        assert!(serde_json::from_value::<TxpoolStats>(whole.clone()).is_ok());
+        for member in ["count", "weight_total", "fee_total"] {
             let mut doc = whole.clone();
-            doc["pool_stats"].as_object_mut().unwrap().remove(member);
-            let refusal = serde_json::from_value::<GetTransactionPoolStatsResponse>(doc)
+            doc.as_object_mut().unwrap().remove(member);
+            let refusal = serde_json::from_value::<TxpoolStats>(doc)
                 .expect_err("a missing member must not decode")
                 .to_string();
             assert!(refusal.contains(member), "{refusal}");

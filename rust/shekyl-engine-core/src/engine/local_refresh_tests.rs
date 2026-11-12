@@ -235,19 +235,13 @@ fn classify_rpc_error_refresh_reachable_subset() {
 }
 
 /// `classify_rpc_error` defensively maps the non-refresh-
-/// reachable upstream variants (`TransactionsNotFound` /
-/// `InvalidFee` / `InvalidPriority`) to
+/// reachable fee variants (`InvalidFee` / `InvalidPriority`) to
 /// [`ProtocolErrorKind::InvalidNode`] per the rustdoc
-/// disposition. These variants belong to PR 5's
-/// `PendingTxEngine` send-tx path; if PR 5 needs distinct
+/// disposition. They belong to the send-tx path; if it needs distinct
 /// tagging, [`ProtocolErrorKind`] grows additively under
 /// `#[non_exhaustive]`.
 #[test]
 fn classify_rpc_error_non_refresh_reachable_subset_falls_back_to_invalid_node() {
-    assert_eq!(
-        classify_rpc_error(&RpcError::TransactionsNotFound(vec![])),
-        ProtocolErrorKind::InvalidNode
-    );
     assert_eq!(
         classify_rpc_error(&RpcError::InvalidFee),
         ProtocolErrorKind::InvalidNode
@@ -255,6 +249,26 @@ fn classify_rpc_error_non_refresh_reachable_subset_falls_back_to_invalid_node() 
     assert_eq!(
         classify_rpc_error(&RpcError::InvalidPriority),
         ProtocolErrorKind::InvalidNode
+    );
+}
+
+/// **A refusal is tagged by its class, and only its class**; a daemon with
+/// no such method is the wrong daemon, not a bad envelope.
+///
+/// The edit that turns this red is a refusal folded into `InvalidNode`.
+#[test]
+fn classify_rpc_error_tags_a_refusal_by_its_class() {
+    let refusal = shekyl_rpc_client::Refusal::new(
+        shekyl_rpc_client::ErrorClass::NotReady,
+        shekyl_rpc_client::Diagnostic::new("daemon.unready", "not ready"),
+    );
+    assert_eq!(
+        classify_rpc_error(&RpcError::Refused(refusal)),
+        ProtocolErrorKind::Refused(shekyl_rpc_client::ErrorClass::NotReady)
+    );
+    assert_eq!(
+        classify_rpc_error(&RpcError::NoSuchMethod("block_show")),
+        ProtocolErrorKind::IdentityMismatch
     );
 }
 

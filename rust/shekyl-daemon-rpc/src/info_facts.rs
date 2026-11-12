@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The facts `get_info` reads, one read per unit of disclosure
+//! The facts `daemon_status` reads, one read per unit of disclosure
 //! (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §4.2).
 //!
-//! `get_info` is gathered **by part** (RK-D24): a part the caller will not
+//! `daemon_status` is gathered **by part** (RK-D24): a part the caller will not
 //! be shown is not read. So [`InfoFacts`] is not one snapshot of everything
 //! but six reads, and the handler makes only those its caller is entitled
 //! to. A read that is never made cannot fail the caller it was never for.
@@ -106,7 +106,7 @@ pub struct InfoStatusFacts {
 /// for a caller who is shown Peers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerFacts {
-    Running(shekyl_rpc_types::InfoPeers),
+    Running(shekyl_rpc_types::wire::daemon::ConnectorMap),
     Offline,
 }
 
@@ -152,8 +152,8 @@ pub struct PoolCounts {
 /// node stops reading the pool until it restarts, while it goes on
 /// following the chain. A read that would need the pool answers
 /// [`PoolState::Retired`] where a reply can carry "no answer" for the pool
-/// alone (`get_info`'s counts, `get_transactions`' pool lookups), and
-/// faults where it cannot (`is_key_image_spent`: an unknown pool spend
+/// alone (`daemon_status`'s counts, `tx_list`'s pool lookups), and
+/// faults where it cannot (`chain_spent`: an unknown pool spend
 /// must not read as unspent).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolState<T> {
@@ -163,7 +163,7 @@ pub enum PoolState<T> {
     Retired,
 }
 
-/// The reads behind `get_info`.
+/// The reads behind `daemon_status`.
 pub trait InfoFacts: Send + Sync {
     /// The chain at its tip. One chain state: see the module docs.
     fn chain(&self) -> Result<InfoChainFacts, FactsFault>;

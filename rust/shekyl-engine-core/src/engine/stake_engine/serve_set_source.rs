@@ -16,7 +16,7 @@
 //!
 //! # The two halves, and why each comes from where it does
 //!
-//! **The set** comes from `get_archival_emission_claim_source`, decoded by
+//! **The set** comes from `archival_claim_show`, decoded by
 //! [`fetch_emission_claim_source`](crate::engine::emission_source::fetch_emission_claim_source)
 //! — the **connected** record as the daemon
 //! read it back from its own database, never the wallet's memory of what it
@@ -270,7 +270,7 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         // this one is sound: a daemon that reports synchronized and *then*
         // answers the record cannot have answered it from deep resync,
         // whereas reading the record first leaves a window in which a
-        // pre-bond record is paired with a by-then-caught-up `get_info`. It
+        // pre-bond record is paired with a by-then-caught-up `daemon_status`. It
         // also makes the witness's height the earlier of the two, which is
         // the conservative direction for the release gate's clock (see
         // [`Self::observe`]). The third read is the bracket — the witness

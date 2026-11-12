@@ -53,10 +53,12 @@ class DaemonRPC:
         self.url = url.rstrip("/")
         self.timeout = timeout
 
-    def json_rpc(self, method: str, params: dict | None = None) -> dict:
+    def json_rpc(self, method: str, params: dict | None = None):
+        # The daemon serves JSON-RPC 2.0 at /json_rpc and nothing else: a
+        # numeric id, `params` a named object or left out.
         payload = {
             "jsonrpc": "2.0",
-            "id": "0",
+            "id": 0,
             "method": method,
             "params": params or {},
         }
@@ -66,33 +68,30 @@ class DaemonRPC:
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
-            raise RuntimeError(f"RPC error from {self.url}: {data['error']}")
-        return data.get("result", {})
+            # The class is the error's code; the diagnostic's dotted code
+            # rides in its data.
+            error = data["error"]
+            code = (error.get("data") or {}).get("code")
+            raise RuntimeError(
+                f"RPC error from {self.url}: {error.get('code')} {code}: {error.get('message')}"
+            )
+        return data["result"]
 
-    def rpc(self, endpoint: str, params: dict | None = None) -> dict:
-        resp = requests.post(
-            f"{self.url}/{endpoint}", json=params or {}, timeout=self.timeout
-        )
-        resp.raise_for_status()
-        return resp.json()
+    def tip_height(self) -> int:
+        """The tip's height: an ordinal, not a count."""
+        return self.json_rpc("chain_height")["height"]
 
-    def get_height(self) -> int:
-        return self.json_rpc("get_block_count")["count"]
+    def daemon_status(self) -> dict:
+        return self.json_rpc("daemon_status")
 
-    def get_info(self) -> dict:
-        return self.json_rpc("get_info")
+    def curve_show(self) -> dict:
+        return self.json_rpc("curve_show", {"tip": None})
 
-    def get_curve_tree_info(self) -> dict:
-        return self.json_rpc("get_curve_tree_info")
+    def block_header_show(self, height: int) -> dict:
+        return self.json_rpc("block_header_show", {"height": height})
 
-    def get_block_header_by_height(self, height: int) -> dict:
-        result = self.json_rpc(
-            "get_block_header_by_height", {"height": height}
-        )
-        return result["block_header"]
-
-    def get_txpool_stats(self) -> dict:
-        return self.rpc("get_transaction_pool_stats")
+    def txpool_stats(self) -> dict:
+        return self.json_rpc("txpool_stats")
 
 
 @dataclass
@@ -104,7 +103,7 @@ class NodeMetrics:
     curve_tree_root: str = ""
     curve_tree_depth: int = 0
     leaf_count: int = 0
-    # None when the node reports its pool retired (`pool_retired`): no count,
+    # None when the node reports its pool retired (`txpool_retired`): no count,
     # which is not an empty pool.
     tx_pool_size: int | None = 0
     difficulty: int = 0
@@ -154,30 +153,32 @@ def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
     """Poll a single node for current metrics."""
     m = NodeMetrics(url=daemon.url)
     try:
-        info = daemon.get_info()
-        # Required: a reply without a height is not a get_info reply, and
-        # reading that as height 0 would report a node at an empty chain.
+        info = daemon.daemon_status()
+        # Required: a reply without a height is not a daemon_status reply,
+        # and reading that as height 0 would report a node at an empty
+        # chain. The height is the tip's ordinal.
         m.height = info["height"]
-        # The whole 128-bit difficulty, from the one name get_info carries
-        # it under. Required, and read strictly: a missing key or a string
-        # that is not `0x` hex is an error, never a difficulty of 0.
-        m.difficulty = parse_wide_hex(info["wide_difficulty"])
+        # The whole 128-bit difficulty. Required, and read strictly: a
+        # missing key or a string that is not `0x` hex is an error, never a
+        # difficulty of 0.
+        m.difficulty = parse_wide_hex(info["difficulty"])
         # The entries the node has broadcast: one quantity whoever asks, so
         # it compares across nodes. Required: a reply without it is not a
-        # get_info reply, and reading that as an empty pool would hide it.
-        # A node that retired its pool (its pool file faulted) says so and
-        # answers null: kept as None, never read as zero.
-        retired = info.get("pool_retired", False)
-        m.tx_pool_size = info["tx_pool_size"]
-        if (m.tx_pool_size is None) != retired:
+        # daemon_status reply, and reading that as an empty pool would hide
+        # it. A node that retired its pool (its pool file faulted) answers
+        # null: kept as None, never read as zero. `txpool_retired` rides
+        # under the status grant; where it is shown, the two must agree.
+        m.tx_pool_size = info["txpool_count"]
+        retired = info.get("txpool_retired")
+        if retired is not None and (m.tx_pool_size is None) != retired:
             raise ValueError(
-                f"tx_pool_size {m.tx_pool_size!r} disagrees with pool_retired {retired!r}"
+                f"txpool_count {m.tx_pool_size!r} disagrees with txpool_retired {retired!r}"
             )
 
-        tree = daemon.get_curve_tree_info()
-        m.curve_tree_root = tree.get("root", "")
-        m.curve_tree_depth = tree.get("depth", 0)
-        m.leaf_count = tree.get("leaf_count", 0)
+        tree = daemon.curve_show()
+        m.curve_tree_root = tree["root"]
+        m.curve_tree_depth = tree["layers"]
+        m.leaf_count = tree["leaf_count"]
 
     except Exception as e:
         m.error = str(e)
@@ -196,9 +197,8 @@ def collect_block_validation_times(
     times = []
     for h in range(max(1, start_height), end_height):
         try:
-            header = daemon.get_block_header_by_height(h)
-            block_size = header.get("block_size", 0)
-            num_txes = header.get("num_txes", 0)
+            header = daemon.block_header_show(h)
+            num_txes = header["tx_count"]
             estimated_ms = num_txes * 58 + 5  # rough estimate from spec
             times.append(estimated_ms)
         except Exception:

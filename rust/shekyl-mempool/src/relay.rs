@@ -47,7 +47,7 @@ pub const fn shown(record: &PoolRecord) -> bool {
 /// still in their stem phase included (the review of #1102, S6). Criterion 2
 /// is what such a reader enforces, not what it is given: nothing that
 /// answers a peer or a foreign caller reads the pool through this — a
-/// fluffy block's missing-transaction answer, `is_key_image_spent`, a
+/// fluffy block's missing-transaction answer, `chain_spent`, a
 /// listing — but through [`shown`] (the listing, peer sync and the
 /// template), as the C++ paths filter on `relay_category::broadcasted`.
 #[derive(Clone, Copy)]

@@ -35,7 +35,7 @@
 //! epee acceptor: a [`LimitedListener`] wraps the TCP listener and admits or
 //! rejects each connection against a shared [`ConnTracker`], handing accepted
 //! sockets back as a [`CountedStream`] whose drop (connection close) releases
-//! the slot. The same tracker's live total is what `get_info` reports as
+//! the slot. The same tracker's live total is what `daemon_status` reports as
 //! `rpc_connections_count`.
 
 use std::collections::HashMap;
@@ -117,16 +117,16 @@ impl ConnLimits {
 }
 
 /// Shared connection accounting for one server — every socket of a start
-/// admits through the same tracker, and `get_info` counts them all.
+/// admits through the same tracker, and `daemon_status` counts them all.
 ///
 /// Constructed via [`ConnTracker::new`], which returns an `Arc` because the
 /// tracker is shared between the [`LimitedListener`] (admission) and the
-/// `get_info` handler (which reads [`ConnTracker::active_total`]).
+/// `daemon_status` handler (which reads [`ConnTracker::active_total`]).
 #[derive(Debug)]
 pub struct ConnTracker {
     limits: ConnLimits,
     /// Live connection total. Mutated only while `per_ip`'s lock is held so it
-    /// stays coherent with the map; read lock-free for the `get_info` metric.
+    /// stays coherent with the map; read lock-free for the `daemon_status` metric.
     total: AtomicU64,
     /// Per-IP live counts, in the same `u64` width as the caps so comparisons
     /// need no cast (a per-IP count is bounded by ports/FDs far below `u32`, but

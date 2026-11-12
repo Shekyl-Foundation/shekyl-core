@@ -429,9 +429,9 @@ impl HttpRpc {
 
 impl HttpRpc {
     async fn inner_post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, PostFault> {
-        // Route → Content-Type is a shared protocol invariant (which routes are
-        // EPEE-binary), so it lives once in `shekyl_rpc_client::content_type_for`.
-        let content_type = shekyl_rpc_client::content_type_for(route);
+        // Every daemon call is JSON-RPC (`RPC_WIRE.md` RW-Q2, RW-Q5: no
+        // binary method remains).
+        let content_type = "application/json";
         let request_fn = |uri| {
             Request::post(uri)
                 .header("content-type", content_type)
@@ -659,14 +659,28 @@ impl SyncDaemon {
         })
     }
 
-    /// One JSON-RPC call. The envelope is this method's: `id` is `0`, the
-    /// same value `shekyl-rpc-client` posts. A refusal is the RW-Q3 error
-    /// object, read by [`shekyl_rpc_types::errors::read_error_object`].
+    /// One call of method `M`. The envelope is this method's: `id` is `0`,
+    /// the same value `shekyl-rpc-client` posts. A refusal is the RW-Q3
+    /// error object, read by [`shekyl_rpc_types::errors::read_error_object`].
     ///
     /// # Errors
     ///
-    /// The transport failed, the body is not a JSON-RPC reply, or the daemon
-    /// refused.
+    /// The transport failed, the body is not a JSON-RPC reply, the daemon
+    /// has no such method, or the daemon refused.
+    pub fn call<M: shekyl_rpc_client::RpcMethod>(
+        &self,
+        request: &M::Request,
+    ) -> Result<M::Reply, JsonRpcError> {
+        self.json_rpc(M::NAME, request)
+    }
+
+    /// One JSON-RPC call by name: the table's calls go through
+    /// [`Self::call`]; this is for a reply read undecoded (the version
+    /// read, whose decode is `IdentityExpectation`'s).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`].
     pub fn json_rpc<Req, Reply>(&self, method: &str, request: &Req) -> Result<Reply, JsonRpcError>
     where
         Req: serde::Serialize,
@@ -680,11 +694,14 @@ impl SyncDaemon {
         }))
         .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
         let raw = self
-            .post("json_rpc", body)
+            .post(shekyl_rpc_types::endpoint::JSON_RPC_ROUTE, body)
             .map_err(JsonRpcError::Transport)?;
         let envelope: serde_json::Value = serde_json::from_slice(&raw)
             .map_err(|_| JsonRpcError::Malformed(format!("malformed {method} reply")))?;
         if let Some(error) = envelope.get("error") {
+            if shekyl_rpc_types::errors::is_method_not_found(error) {
+                return Err(JsonRpcError::NoSuchMethod(method.to_owned()));
+            }
             return Err(match shekyl_rpc_types::errors::read_error_object(error) {
                 Some(refusal) => JsonRpcError::Refusal(refusal),
                 None => JsonRpcError::Malformed(format!("{method} failed")),
@@ -705,6 +722,9 @@ pub enum JsonRpcError {
     Transport(PostFault),
     /// The daemon refused. The class and the diagnostic are the refusal.
     Refusal(shekyl_rpc_types::errors::RpcError),
+    /// The daemon serves no method by this name: a daemon of another RPC
+    /// version.
+    NoSuchMethod(String),
     /// The body was not a reply of the requested type.
     Malformed(String),
 }
@@ -726,6 +746,7 @@ impl std::fmt::Display for JsonRpcError {
         match self {
             Self::Transport(error) => write!(f, "{error}"),
             Self::Refusal(refusal) => write!(f, "{}", refusal.report()),
+            Self::NoSuchMethod(method) => write!(f, "the daemon has no method {method}"),
             Self::Malformed(detail) => write!(f, "{detail}"),
         }
     }

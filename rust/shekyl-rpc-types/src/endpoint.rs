@@ -20,6 +20,12 @@ use crate::errors::Diagnostic;
 /// The path a JSON-RPC call is posted to, on the daemon and the wallet RPC.
 pub const JSON_RPC_PATH: &str = "/json_rpc";
 
+/// [`JSON_RPC_PATH`] relative to a base URL: what a client posts to a
+/// transport that appends a route as `{url}/{route}`. The path's own
+/// leading slash there would put `//json_rpc` on the wire, which no router
+/// matches.
+pub const JSON_RPC_ROUTE: &str = "json_rpc";
+
 /// The JSON-RPC code of a name a server does not serve.
 ///
 /// Both servers already answer a method that is not in their table with
@@ -58,6 +64,14 @@ pub fn unrouted_path(path: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The route, joined to a base, is the path. Red edit: give the route
+    /// its slash.
+    #[test]
+    fn the_route_joined_to_a_base_is_the_path() {
+        assert_eq!(format!("/{JSON_RPC_ROUTE}"), JSON_RPC_PATH);
+    }
+
     use crate::errors::read_error_object;
 
     #[test]
@@ -67,9 +81,9 @@ mod tests {
         assert!(body["id"].is_null());
         assert_eq!(body["error"]["code"], -32_601);
         assert_eq!(body["error"]["data"]["code"], "rpc.path.unrouted");
-        let params = &body["error"]["data"]["params"];
-        assert_eq!(params[0], serde_json::json!(["path", "/"]));
-        assert_eq!(params[1], serde_json::json!(["json_rpc", "/json_rpc"]));
+        let parameter = &body["error"]["data"]["parameter"];
+        assert_eq!(parameter["path"], "/");
+        assert_eq!(parameter["json_rpc"], "/json_rpc");
         assert_eq!(
             body["error"]["message"],
             "no RPC is served at /; this server takes JSON-RPC calls at /json_rpc"

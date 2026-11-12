@@ -15,7 +15,7 @@
 //! This harness is where that acceptance is already selected
 //! ([`super::regtest_expectation`]), in-process, with no operator surface,
 //! and the source uses it unchanged. The daemon under test sees an ordinary
-//! wallet's `send_raw_transaction`.
+//! wallet's `tx_submit`.
 //!
 //! Driven by `scripts/bench/drs_crash.py`, which reads its stdout:
 //!

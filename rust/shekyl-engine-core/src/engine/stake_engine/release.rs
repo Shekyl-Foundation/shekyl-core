@@ -197,7 +197,7 @@ impl ReleaseRecordState {
 /// Assemble the **full, wire-encoded** `Release` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
 ///
-/// The exit lane is REACHABLE as of PR-C: native `/submit_transaction`
+/// The exit lane is REACHABLE as of PR-C: native `tx_submit`
 /// admits a `Release` (2026-08-29, `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
 /// this producer is the construction leg that fired that reopening
 /// criterion), the dispatch seam ([`Engine::submit_release`]) exists, and

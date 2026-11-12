@@ -7,7 +7,7 @@
 //! the list's timing owner reaches its deadline ([`BanList::expire`]), or
 //! when it is lifted; a lookup never changes the list (Rick, 2026-10-31).
 //!
-//! The operator is the only writer. RPC `set_bans` passes a duration
+//! The operator is the only writer. RPC `ban_add` passes a duration
 //! added to the monotonic clock, and the ban file stores entries with
 //! no deadline. A duration that does not fit a [`Tick`] is not stored.
 //! A peer cannot make a ban. One list lives in the socket table; this

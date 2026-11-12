@@ -99,12 +99,9 @@ impl Rpc for PRpc {
         route: &str,
         body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-        // Route → Content-Type via the shared protocol invariant
-        // (`shekyl_rpc_client::content_type_for`), so `PRpc` and `HttpRpc`
-        // can't drift on which routes are EPEE-binary. Sent for parity + daemon
-        // forward-compat, **not** a validation the daemon enforces (its handlers
-        // read the body via `String`/`Bytes` extractors that ignore `Content-Type`).
-        let content_type = shekyl_rpc_client::content_type_for(route);
+        // Every request is JSON: the daemon serves one route, `/json_rpc`
+        // (RW-Q8), and no binary form.
+        let content_type = "application/json";
         let url = format!("{}/{}", self.base_url, route);
         let client = self.client.clone();
         async move {

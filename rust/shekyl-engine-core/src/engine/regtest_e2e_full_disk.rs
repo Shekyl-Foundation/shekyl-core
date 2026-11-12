@@ -291,7 +291,7 @@ fn small_disk() -> PathBuf {
 /// **A full disk stops the daemon, and it says so when it happens**
 /// (the CS-5 rehearsal of 2026-11-02). There a store commit met
 /// `ENOSPC`, the ingest service stopped, and the daemon stayed up: nothing
-/// was logged, `get_info` answered from the old height, and the one record
+/// was logged, `daemon_status` answered from the old height, and the one record
 /// printed 34 minutes later at SIGTERM.
 ///
 /// The daemon's chain is on a small filesystem and its log is not. The

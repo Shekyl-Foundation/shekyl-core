@@ -59,6 +59,40 @@ class Response(dict):
                 return False
         return True
 
+def wrap(value):
+    """A reply as Response objects wherever it holds a JSON object."""
+    if type(value) == dict:
+        return Response(value)
+    if type(value) == list:
+        return [wrap(v) for v in value]
+    return value
+
+# The daemon's error classes by their wire code (RPC_WIRE.md; the
+# shekyl-rpc-types ErrorClass registry).
+ERROR_CLASSES = {
+    -32602: 'BadParams',
+    -32001: 'RefusedByMethod',
+    -32002: 'OutsideTheGrant',
+    -32003: 'OverResourceBound',
+    -32004: 'NotReady',
+    -32005: 'StoreFault',
+    -32603: 'Internal',
+}
+
+class RpcRefusal(Exception):
+    """A daemon's refusal: its class, and the diagnostic's dotted code,
+    parameters and message. A caller branches on the class and the code,
+    never on the message."""
+    def __init__(self, error):
+        self.error = error
+        self.wire_code = error.get('code')
+        self.error_class = ERROR_CLASSES.get(self.wire_code)
+        diagnostic = error.get('data') or {}
+        self.code = diagnostic.get('code')
+        self.parameter = diagnostic.get('parameter') or {}
+        self.message = diagnostic.get('message', error.get('message'))
+        super().__init__('%s %s: %s' % (self.error_class or self.wire_code, self.code, self.message))
+
 class JSONRPC(object):
     def __init__(self, url):
         self.url = url
@@ -79,6 +113,21 @@ class JSONRPC(object):
 
     def send_json_rpc_request(self, inputs):
         return self.send_request("/json_rpc", inputs, 'result')
+
+    def call(self, method, params = None):
+        """One JSON-RPC 2.0 call to the daemon's `/json_rpc` (the only
+        route it serves). `params` is the method's named object, or left
+        out. A refusal raises `RpcRefusal`."""
+        envelope = {'jsonrpc': '2.0', 'id': 0, 'method': method}
+        if params is not None:
+            envelope['params'] = params
+        res = requests.post(
+            self.url + "/json_rpc",
+            data=json.dumps(envelope),
+            headers={'content-type': 'application/json'}).json()
+        if 'error' in res:
+            raise RpcRefusal(res['error'])
+        return wrap(res['result'])
 
 
 

@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The RPC's p2p facts, read from the network
-//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, "RPC facts"): `get_connections`
+//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, "RPC facts"): `peer_connections`
 //! and `net_stats` from the session board and the link gate, the peer list
 //! from the peers owner, the stem tallies from the relay snapshot. An
 //! offline node answers [`P2pRead::Offline`] where the read has that answer.
@@ -19,7 +19,8 @@ use shekyl_daemon_rpc::core::{ConnectionFacts, ConnectionsSnapshot, P2pRead, Pee
 use shekyl_p2p::{session_of, Endpoint, ListedAddress, Network, Row};
 use shekyl_relay::owner::RelaySnapshot;
 use shekyl_relay::{ConnectorId, StemTallySnapshot};
-use shekyl_rpc_types::{StemConnector, StemFloor, StemTallies, StemTallyRow};
+use shekyl_rpc_types::kinds::{Count, Text};
+use shekyl_rpc_types::wire::p2p::{Connector, Floor, RelayStats, Tally};
 use shekyl_transport_layer::{Direction, NetworkAddress};
 
 /// Unix milliseconds in one second. The link gate stamps milliseconds; the
@@ -102,7 +103,7 @@ impl P2pFacts for NodeP2pFacts {
         })
     }
 
-    fn stem_tallies(&self) -> Result<StemTallies, FactsFault> {
+    fn stem_tallies(&self) -> Result<RelayStats, FactsFault> {
         Ok(project_stem_tallies(&self.network.relay_snapshot()))
     }
 }
@@ -214,41 +215,43 @@ fn render_listed(address: &NetworkAddress) -> (String, u32, u16) {
 }
 
 /// Floors in connector order, omitting a connector with no observation.
-/// Tallies sorted by peer id.
-fn project_stem_tallies(snapshot: &RelaySnapshot) -> StemTallies {
+/// Tallies sorted by connection id. A tally whose connector has not been
+/// observed has `connector` null (IG-Q83).
+fn project_stem_tallies(snapshot: &RelaySnapshot) -> RelayStats {
     let mut floor = Vec::new();
     for connector in ConnectorId::ALL {
         let Some((_, observed)) = snapshot.floors.iter().find(|(id, _)| id == connector) else {
             continue;
         };
-        floor.push(StemFloor {
-            connector: stem_connector(Some(*connector)),
-            achieved_out_connections: u64::from(observed.achieved),
-            floor: u64::from(observed.floor),
+        floor.push(Floor {
+            connector: wire_connector(*connector),
+            outbound_count: Count(u64::from(observed.achieved)),
+            outbound_min: Count(u64::from(observed.floor)),
             below: observed.below,
         });
     }
     let mut rows: Vec<&(shekyl_relay::ConnectionId, StemTallySnapshot)> =
         snapshot.tallies.iter().collect();
     rows.sort_by(|left, right| left.0 .0.cmp(&right.0 .0));
-    let tallies = rows
+    let tally = rows
         .into_iter()
-        .map(|(peer, tally)| StemTallyRow {
-            peer: hex::encode(peer.0),
-            connector: stem_connector(tally.connector),
-            propagated: tally.propagated,
-            silent: tally.silent,
-            distinct_sources: tally.distinct_sources,
+        .map(|(peer, tally)| Tally {
+            connection: Text(hex::encode(peer.0)),
+            connector: tally.connector.map(wire_connector).into(),
+            propagated: Count(tally.propagated),
+            silent: Count(tally.silent),
+            sender_count: Count(tally.distinct_sources),
         })
         .collect();
-    StemTallies { floor, tallies }
+    RelayStats { floor, tally }
 }
 
-fn stem_connector(connector: Option<ConnectorId>) -> StemConnector {
+/// A connector as the wire names it. Exhaustive: a new connector is a new
+/// wire keyword, decided where it is added.
+const fn wire_connector(connector: ConnectorId) -> Connector {
     match connector {
-        Some(ConnectorId::Clearnet) => StemConnector::Clearnet,
-        Some(ConnectorId::Tor) => StemConnector::Tor,
-        None => StemConnector::Unnamed,
+        ConnectorId::Clearnet => Connector::Clearnet,
+        ConnectorId::Tor => Connector::Tor,
     }
 }
 
@@ -258,7 +261,8 @@ mod tests {
 
     use shekyl_relay::owner::RelaySnapshot;
     use shekyl_relay::{ConnectionId, ConnectorId, FloorSnapshot, StemTallySnapshot};
-    use shekyl_rpc_types::{StemConnector, StemFloor, StemTallies, StemTallyRow};
+    use shekyl_rpc_types::kinds::{Count, Text};
+    use shekyl_rpc_types::wire::p2p::{Connector, Floor, RelayStats, Tally};
 
     use super::{is_link_local_v6, project_stem_tallies, render_listed};
 
@@ -301,27 +305,28 @@ mod tests {
         };
         assert_eq!(
             project_stem_tallies(&snapshot),
-            StemTallies {
-                floor: vec![StemFloor {
-                    connector: StemConnector::Clearnet,
-                    achieved_out_connections: 3,
-                    floor: 8,
+            RelayStats {
+                floor: vec![Floor {
+                    connector: Connector::Clearnet,
+                    outbound_count: Count(3),
+                    outbound_min: Count(8),
                     below: true,
                 }],
-                tallies: vec![
-                    StemTallyRow {
-                        peer: "00000000000000000000000000000000".to_owned(),
-                        connector: StemConnector::Tor,
-                        propagated: 5,
-                        silent: 1,
-                        distinct_sources: 3,
+                tally: vec![
+                    Tally {
+                        connection: Text("00000000000000000000000000000000".to_owned()),
+                        connector: Some(Connector::Tor).into(),
+                        propagated: Count(5),
+                        silent: Count(1),
+                        sender_count: Count(3),
                     },
-                    StemTallyRow {
-                        peer: "00000000000000000000000000000001".to_owned(),
-                        connector: StemConnector::Unnamed,
-                        propagated: 2,
-                        silent: 0,
-                        distinct_sources: 1,
+                    // A connector not yet observed is null (IG-Q83).
+                    Tally {
+                        connection: Text("00000000000000000000000000000001".to_owned()),
+                        connector: None.into(),
+                        propagated: Count(2),
+                        silent: Count(0),
+                        sender_count: Count(1),
                     },
                 ],
             }

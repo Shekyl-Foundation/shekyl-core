@@ -112,7 +112,7 @@ impl Daemon {
                     log_tail(&self.log_path())
                 );
             }
-            match get_info(self.rpc_port) {
+            match daemon_status(self.rpc_port) {
                 Ok(_) => {
                     wait_tcp(self.p2p_port, deadline);
                     return;
@@ -189,17 +189,20 @@ fn log_tail(log_path: &Path) -> String {
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
 }
 
+/// The daemon's chain as its handshake carries it: the block count (the
+/// tip's height plus one) and the tip's hash.
 struct ChainTip {
     height: u64,
     top_id: [u8; 32],
 }
 
-fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
+/// The chain from `daemon_status`, whose `height` is the tip's ordinal.
+fn daemon_status(rpc_port: u16) -> Result<ChainTip, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
-    let body = r#"{"jsonrpc":"2.0","id":"0","method":"get_info"}"#;
+    let body = r#"{"jsonrpc":"2.0","id":0,"method":"daemon_status"}"#;
     let req = format!(
         "POST /json_rpc HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -211,10 +214,12 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&buf);
     let json = text.split("\r\n\r\n").nth(1).unwrap_or(&text);
-    let height = json_u64(json, "height").ok_or_else(|| format!("no height in {json}"))?;
-    let top_id =
-        json_hex32(json, "top_block_hash").ok_or_else(|| format!("no top_block_hash in {json}"))?;
-    Ok(ChainTip { height, top_id })
+    let tip = json_u64(json, "height").ok_or_else(|| format!("no height in {json}"))?;
+    let top_id = json_hex32(json, "hash").ok_or_else(|| format!("no hash in {json}"))?;
+    Ok(ChainTip {
+        height: tip + 1,
+        top_id,
+    })
 }
 
 fn json_u64(body: &str, key: &str) -> Option<u64> {
@@ -350,7 +355,7 @@ const CLIENT_NONCE: [u8; 32] = [0x42; 32];
 #[test]
 fn rust_client_handshakes_with_shekyld() {
     let daemon = Daemon::start();
-    let tip = get_info(daemon.rpc_port).expect("get_info after ready");
+    let tip = daemon_status(daemon.rpc_port).expect("daemon_status after ready");
 
     let mut session = Session::connect(daemon.p2p_port, daemon.log_path());
     // The handshake carries no address on any connector (ruled 2026-10-09):

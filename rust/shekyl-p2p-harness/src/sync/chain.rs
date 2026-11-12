@@ -7,7 +7,7 @@
 //! through a real ingest service into a real store, and header chains
 //! built on one.
 //!
-//! A corpus is connected the way `submit_block` connects a block: through
+//! A corpus is connected the way `block_submit` connects a block: through
 //! the door, from this node, one block at a time, each formed and judged.
 //! That is the store an honest peer serves and the store a node starts
 //! from. A header chain is a fork only a header path judges: each header

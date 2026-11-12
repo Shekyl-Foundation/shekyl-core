@@ -64,10 +64,12 @@ class DaemonRPC:
         self.url = url.rstrip("/")
         self.timeout = timeout
 
-    def json_rpc(self, method: str, params: dict | None = None) -> dict:
+    def json_rpc(self, method: str, params: dict | None = None):
+        # The daemon serves JSON-RPC 2.0 at /json_rpc and nothing else: a
+        # numeric id, `params` a named object or left out.
         payload = {
             "jsonrpc": "2.0",
-            "id": "0",
+            "id": 0,
             "method": method,
             "params": params or {},
         }
@@ -77,30 +79,27 @@ class DaemonRPC:
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
-            raise RuntimeError(f"RPC error from {self.url}: {data['error']}")
-        return data.get("result", {})
+            # The class is the error's code; the diagnostic's dotted code
+            # rides in its data.
+            error = data["error"]
+            code = (error.get("data") or {}).get("code")
+            raise RuntimeError(
+                f"RPC error from {self.url}: {error.get('code')} {code}: {error.get('message')}"
+            )
+        return data["result"]
 
-    def rpc(self, endpoint: str, params: dict | None = None) -> dict:
-        resp = requests.post(
-            f"{self.url}/{endpoint}", json=params or {}, timeout=self.timeout
-        )
-        resp.raise_for_status()
-        return resp.json()
+    def tip_height(self) -> int:
+        """The tip's height: an ordinal, not a count."""
+        return self.json_rpc("chain_height")["height"]
 
-    def get_height(self) -> int:
-        return self.json_rpc("get_block_count")["count"]
+    def block_header_show(self, height: int) -> dict:
+        return self.json_rpc("block_header_show", {"height": height})
 
-    def get_block_header_by_height(self, height: int) -> dict:
-        result = self.json_rpc(
-            "get_block_header_by_height", {"height": height}
-        )
-        return result["block_header"]
+    def curve_show(self) -> dict:
+        return self.json_rpc("curve_show", {"tip": None})
 
-    def get_curve_tree_info(self) -> dict:
-        return self.json_rpc("get_curve_tree_info")
-
-    def get_info(self) -> dict:
-        return self.json_rpc("get_info")
+    def daemon_status(self) -> dict:
+        return self.json_rpc("daemon_status")
 
 
 class WalletRPC:
@@ -151,7 +150,7 @@ def check_tree_root_consensus(daemons: list[DaemonRPC]) -> tuple[bool, dict]:
     results = {}
     for d in daemons:
         try:
-            info = d.get_curve_tree_info()
+            info = d.curve_show()
             results[d.url] = info
         except Exception as e:
             log.error("Failed to query tree info from %s: %s", d.url, e)

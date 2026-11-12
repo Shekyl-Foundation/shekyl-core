@@ -13,24 +13,23 @@
 mod submit_fixtures;
 
 use shekyl_daemon_rpc::submit::{parse_submission, SubmitTxKind};
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 use shekyl_types::PCanonicalId;
-use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
+use shekyl_wire::transaction::{MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN};
 use shekyl_wire::{
     BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Output, Transaction, TxPrefix,
 };
 use submit_fixtures::{
-    emission_tx, emission_vin_bytes, hexify, serve_credit_tx, spend_tx, spend_tx_with_kis,
+    emission_tx, emission_vin_bytes, serve_credit_tx, spend_tx, spend_tx_with_kis, tx_bytes,
     valid_key_images, FIXTURE_REF_BLOCK,
 };
 
-fn reject_reason(tx_hex: &str) -> String {
-    let reject = parse_submission(tx_hex).expect_err("expected Phase-A rejection");
+fn reject_reason(tx: &[u8]) -> String {
+    let reject = parse_submission(tx).expect_err("expected Phase-A rejection");
     assert_eq!(
         reject.verdict(),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "every Phase-A failure maps to Rejected{{Malformed}}"
     );
@@ -45,7 +44,7 @@ fn valid_spend_parses_with_extracted_facts() {
     let tx = spend_tx_with_kis(&kis, 12_345);
     let blob = tx.serialize();
 
-    let parsed = parse_submission(&hexify(&tx)).expect("valid spend must clear Phase A");
+    let parsed = parse_submission(&tx_bytes(&tx)).expect("valid spend must clear Phase A");
 
     assert_eq!(parsed.blob, blob, "blob must be the exact decoded bytes");
     assert_eq!(parsed.tx, tx);
@@ -63,8 +62,8 @@ fn valid_spend_parses_with_extracted_facts() {
 
 #[test]
 fn valid_serve_credit_parses_as_non_spending() {
-    let parsed =
-        parse_submission(&hexify(&serve_credit_tx(0))).expect("fee-0 serve-credit clears Phase A");
+    let parsed = parse_submission(&tx_bytes(&serve_credit_tx(0)))
+        .expect("fee-0 serve-credit clears Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::ServeCreditOnly);
     assert!(
         parsed.key_images.is_empty(),
@@ -75,24 +74,27 @@ fn valid_serve_credit_parses_as_non_spending() {
 
 // ── Transport-shape rejects (rows T2 / I1 / I2) ─────────────────────────
 
+/// Bytes that are no transaction reject at the parse. The 4.0 port of the
+/// 3.x `non_hex_rejects` and `odd_length_hex_rejects`: the body reaches
+/// Phase A as bytes, and what is not base64 never does — it is `rpc.params`
+/// at dispatch (`handlers::rpc` tests).
 #[test]
-fn non_hex_rejects() {
-    let reason = reject_reason("zz not hex");
-    assert!(reason.contains("hex"), "unexpected reason: {reason}");
+fn bytes_that_are_no_transaction_reject() {
+    for bytes in [&b"zz not hex"[..], &b"abc"[..], &[][..]] {
+        let reason = reject_reason(bytes);
+        assert!(
+            reason.contains("parse failed"),
+            "unexpected reason: {reason}"
+        );
+    }
 }
 
 #[test]
-fn odd_length_hex_rejects() {
-    let reason = reject_reason("abc");
-    assert!(reason.contains("hex"), "unexpected reason: {reason}");
-}
-
-#[test]
-fn oversized_hex_rejects_before_decoding() {
-    // 2 × MAX_TX_SIZE + 2 hex chars: over any admissible blob. The reject
-    // must fire on the *length*, before the decode allocation (row I1's
-    // DoS-bounded-decode property).
-    let oversized = "00".repeat(1_000_001);
+fn oversized_body_rejects_before_parsing() {
+    // One byte over the cap: over any admissible blob. The reject must fire
+    // on the *length*, before the copy (row I1's DoS-bounded-decode
+    // property).
+    let oversized = vec![0u8; MAX_TX_SIZE + 1];
     let reason = reject_reason(&oversized);
     assert!(reason.contains("cap"), "unexpected reason: {reason}");
 }
@@ -101,7 +103,7 @@ fn oversized_hex_rejects_before_decoding() {
 fn trailing_bytes_reject() {
     let mut blob = spend_tx(1000).serialize();
     blob.push(0x00);
-    let reason = reject_reason(&hex::encode(blob));
+    let reason = reject_reason(&blob);
     assert!(reason.contains("trailing"), "unexpected reason: {reason}");
 }
 
@@ -109,7 +111,7 @@ fn trailing_bytes_reject() {
 fn truncated_blob_rejects() {
     let blob = spend_tx(1000).serialize();
     let truncated = &blob[..blob.len() - 10];
-    let reason = reject_reason(&hex::encode(truncated));
+    let reason = reject_reason(truncated);
     assert!(
         reason.contains("parse failed"),
         "unexpected reason: {reason}"
@@ -140,7 +142,7 @@ fn coinbase_submission_rejects() {
             commitments: vec![[0u8; 32]],
         }),
     };
-    let reason = reject_reason(&hexify(&coinbase));
+    let reason = reject_reason(&tx_bytes(&coinbase));
     assert!(reason.contains("coinbase"), "unexpected reason: {reason}");
 }
 
@@ -150,7 +152,7 @@ fn nonzero_unlock_time_rejects() {
     // block-height form (validate() passes it); the pool static must not.
     let mut tx = spend_tx(1000);
     tx.prefix.unlock_time = 500;
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("unlock_time"),
         "unexpected reason: {reason}"
@@ -162,7 +164,7 @@ fn serve_credit_with_nonzero_fee_rejects() {
     // Row N6's static leg: consensus pins the non-spending arm to fee 0
     // (tx_verification_utils.cpp:126). shekyl-wire's validate() does not
     // own the fee pin; the engine does.
-    let reason = reject_reason(&hexify(&serve_credit_tx(1)));
+    let reason = reject_reason(&tx_bytes(&serve_credit_tx(1)));
     assert!(reason.contains("zero fee"), "unexpected reason: {reason}");
 }
 
@@ -176,7 +178,7 @@ fn empty_fcmp_proof_rejects() {
     {
         prunable.fcmp_proof.clear();
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("empty FCMP++ proof"),
         "unexpected reason: {reason}"
@@ -189,14 +191,14 @@ fn empty_fcmp_proof_rejects() {
 fn ascending_key_images_reject() {
     let mut kis = valid_key_images(2);
     kis.reverse(); // strictly ascending now — violates §12
-    let reason = reject_reason(&hexify(&spend_tx_with_kis(&kis, 1000)));
+    let reason = reject_reason(&tx_bytes(&spend_tx_with_kis(&kis, 1000)));
     assert!(reason.contains("descending"), "unexpected reason: {reason}");
 }
 
 #[test]
 fn duplicate_key_images_reject() {
     let ki = valid_key_images(1)[0];
-    let reason = reject_reason(&hexify(&spend_tx_with_kis(&[ki, ki], 1000)));
+    let reason = reject_reason(&tx_bytes(&spend_tx_with_kis(&[ki, ki], 1000)));
     assert!(reason.contains("descending"), "unexpected reason: {reason}");
 }
 
@@ -206,7 +208,7 @@ fn identity_key_image_rejects() {
     // explicitly excluded (cryptonote_core.cpp:1051-1052).
     let mut identity = [0u8; 32];
     identity[0] = 1;
-    let reason = reject_reason(&hexify(&spend_tx_with_kis(&[identity], 1000)));
+    let reason = reject_reason(&tx_bytes(&spend_tx_with_kis(&[identity], 1000)));
     assert!(reason.contains("identity"), "unexpected reason: {reason}");
 }
 
@@ -218,7 +220,7 @@ fn small_order_key_image_rejects() {
     let mut order_two = [0xFF; 32];
     order_two[0] = 0xEC;
     order_two[31] = 0x7F;
-    let reason = reject_reason(&hexify(&spend_tx_with_kis(&[order_two], 1000)));
+    let reason = reject_reason(&tx_bytes(&spend_tx_with_kis(&[order_two], 1000)));
     assert!(
         reason.contains("prime-order subgroup"),
         "unexpected reason: {reason}"
@@ -234,7 +236,7 @@ fn non_canonical_key_image_encoding_rejects() {
     let mut non_canonical = [0u8; 32];
     non_canonical[0] = 1;
     non_canonical[31] = 0x80;
-    let reason = reject_reason(&hexify(&spend_tx_with_kis(&[non_canonical], 1000)));
+    let reason = reject_reason(&tx_bytes(&spend_tx_with_kis(&[non_canonical], 1000)));
     assert!(reason.contains("key image"), "unexpected reason: {reason}");
 }
 
@@ -288,7 +290,7 @@ fn bond_post_without_funding_input_rejects() {
     // ver_non_input_consensus:151-152: spend_input_count == 0 rejects.
     // (Zero pseudo-outs — the spend-subset shape for zero funding inputs —
     // so the wire parses cleanly and the *engine* static is what fires.)
-    let reason = reject_reason(&hexify(&bond_post_tx(0, 0)));
+    let reason = reject_reason(&tx_bytes(&bond_post_tx(0, 0)));
     assert!(reason.contains("funding"), "unexpected reason: {reason}");
 }
 
@@ -299,7 +301,7 @@ fn funded_bond_post_with_spend_subset_pseudo_outs_admits() {
     // and clears Phase A as a BondPost. (Before the closure the wire
     // demanded == vin count while consensus demanded == funding count, so
     // no funded bond-post could admit; that contradiction is gone.)
-    let parsed = parse_submission(&hexify(&bond_post_tx(1, 1)))
+    let parsed = parse_submission(&tx_bytes(&bond_post_tx(1, 1)))
         .expect("funded bond-post must clear Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::BondPost);
     assert_eq!(
@@ -311,7 +313,7 @@ fn funded_bond_post_with_spend_subset_pseudo_outs_admits() {
     // Per-vin pseudo-outs (the pre-closure wire shape) no longer parse:
     // the reader consumes exactly the spend subset, so the extra chunk is
     // trailing garbage.
-    let reason = reject_reason(&hexify(&bond_post_tx(1, 2)));
+    let reason = reject_reason(&tx_bytes(&bond_post_tx(1, 2)));
     assert!(reason.contains("trailing"), "unexpected reason: {reason}");
 }
 
@@ -320,7 +322,7 @@ fn funded_bond_post_with_spend_subset_pseudo_outs_admits() {
 #[test]
 fn emission_tx_classifies_and_carries_the_decoded_vin() {
     let parsed =
-        parse_submission(&hexify(&emission_tx(1_000))).expect("emission tx clears Phase A");
+        parse_submission(&tx_bytes(&emission_tx(1_000))).expect("emission tx clears Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::Emission);
     assert_eq!(
         parsed.key_images.len(),
@@ -344,7 +346,7 @@ fn emission_vin_that_fails_the_codec_rejects() {
             canonical_bytes.truncate(canonical_bytes.len() / 2);
         }
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("emission vin"),
         "unexpected reason: {reason}"
@@ -364,7 +366,7 @@ fn emission_vin_with_trailing_bytes_rejects() {
             canonical_bytes.push(0x00);
         }
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(reason.contains("trailing"), "unexpected reason: {reason}");
 }
 
@@ -376,7 +378,7 @@ fn emission_with_zero_loud_vout_sum_rejects() {
     for output in &mut tx.prefix.outputs {
         output.amount = 0;
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("loud reward"),
         "unexpected reason: {reason}"
@@ -404,7 +406,7 @@ fn zero_fee_input_emission_admits_with_empty_proof() {
         prunable.fcmp_proof.clear();
         prunable.pseudo_outs.clear();
     }
-    let parsed = parse_submission(&hexify(&tx)).expect("zero-fee emission clears Phase A");
+    let parsed = parse_submission(&tx_bytes(&tx)).expect("zero-fee emission clears Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::Emission);
     assert!(parsed.key_images.is_empty());
 
@@ -422,7 +424,7 @@ fn zero_fee_input_emission_admits_with_empty_proof() {
         pqc_auths.truncate(1);
         prunable.pseudo_outs.clear();
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("must not carry"),
         "unexpected reason: {reason}"
@@ -442,7 +444,7 @@ fn emission_proof_presence_couples_to_fee_inputs() {
     {
         prunable.fcmp_proof.clear();
     }
-    let reason = reject_reason(&hexify(&tx));
+    let reason = reject_reason(&tx_bytes(&tx));
     assert!(
         reason.contains("fee inputs but an empty"),
         "unexpected reason: {reason}"

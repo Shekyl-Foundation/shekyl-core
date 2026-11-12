@@ -10,7 +10,6 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 shekyl-daemon-rpc = { path = ".." }
-hex = "0.4"
 
 [[bin]]
 name = "fuzz_submit_phase_a"

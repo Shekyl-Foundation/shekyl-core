@@ -10,7 +10,7 @@
 # A trial passes when every operation the daemon acknowledged before the
 # kill survives the reopen, and the reopened chain's logical-state digest
 # equals a clean replay of the same chain to the reopened tip. The
-# acknowledgement is a tip the subject's get_info published. The clean
+# acknowledgement is a tip the subject's chain_height published. The clean
 # replay is one `shekyl-chain-replay baseline --digests-out` of the seed's
 # chain, and the reopened side is `shekyl-chain-replay digest` over the
 # subject's store. Both read the same digest function.
@@ -46,7 +46,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 
 import drs_artifact as A  # noqa: E402
 import drs_bench as B  # noqa: E402
@@ -125,14 +124,12 @@ def gate_refusals(artifact):
 
 
 def pool_hashes(port):
-    """The daemon's pool, as txids (`/get_transaction_pool_hashes`)."""
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/get_transaction_pool_hashes",
-                                 data=b"{}", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as response:
-        body = json.load(response)
-    if body.get("status") != "OK":
+    """The daemon's pool, as txids (`txpool_list`'s ids)."""
+    body = B._rpc(port, "txpool_list")
+    result = body.get("result")
+    if not isinstance(result, list):
         B._fail(f"the reopened pool did not read: {json.dumps(body)[:300]}")
-    return body.get("tx_hashes") or []
+    return [entry["id"] for entry in result]
 
 
 class Harness:
@@ -174,10 +171,8 @@ class Harness:
             if proc.poll() is not None:
                 B._fail(f"the subject exited before the kill; see {session.work}/subject.log")
             try:
-                height = B._rpc(session.brpc, "get_info", timeout=2)["result"]["height"]
-                tip = R.published_tip(height)
-                if tip is not None:
-                    acked = tip if acked is None else max(acked, tip)
+                tip = B._rpc(session.brpc, "chain_height", timeout=2)["result"]["height"]
+                acked = tip if acked is None else max(acked, tip)
                 started = started or time.time()
             except (OSError, ValueError, KeyError):
                 pass
@@ -196,7 +191,7 @@ class Harness:
     def pool_trial(self, subj_dir, kill_after):
         """Start the synced subject offline, feed it the source's spends
         until the first is ACCEPTED, then kill it `kill_after` seconds into
-        the spends that follow. The tip get_info published before the kill
+        the spends that follow. The tip chain_height published before the kill
         is the acknowledgement, including when the reopen does not come up.
         Each spend run is a fresh wallet, so every trial starts from the
         same spendable outputs."""

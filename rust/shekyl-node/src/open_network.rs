@@ -25,6 +25,7 @@ use shekyl_chain_ingest::{ChainRules, ProductionSubstrate, TipChanged};
 use shekyl_chain_store::store::ChainStore;
 use shekyl_chain_sync::{Declaration, Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
+use shekyl_daemon_rpc::submit::RelayNudge;
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_p2p::{CoreSyncData, Network, NetworkParts, NetworkPlan, NodeSync, SupervisorFeeds};
@@ -41,6 +42,10 @@ use crate::OpenError;
 pub(crate) struct Started {
     pub network: Network,
     pub sync_owner: sync_owner::Held,
+    /// Where a transaction this node offers enters the relay: the submit
+    /// shim's commit nudge, and `tx_relay`'s re-offer through the pool
+    /// handle.
+    pub stem: RelayNudge,
 }
 
 /// What [`start`] needs once the ingest service is running.
@@ -159,19 +164,20 @@ pub(crate) fn start(parts: Parts<'_>) -> Result<Started, OpenError> {
             return Err(error);
         }
     };
+    let stem = stem_entry(network.relay().clone(), nudge_door, offline);
     install_submit(Submit {
         store,
         rules,
         pool: submit_pool,
         health: pool_health,
         relay: network.relay().clone(),
-        door: nudge_door,
+        stem: Arc::clone(&stem),
         departed,
-        offline,
     });
     Ok(Started {
         network,
         sync_owner,
+        stem,
     })
 }
 
@@ -249,9 +255,8 @@ struct Submit {
     pool: Arc<Mutex<Pool>>,
     health: PoolHealth,
     relay: RelayHandle,
-    door: Arc<NodePoolDoor>,
+    stem: RelayNudge,
     departed: Departed,
-    offline: bool,
 }
 
 fn facts_origin(
@@ -266,6 +271,26 @@ fn facts_origin(
     }
 }
 
+/// The stem entry: a transaction this node offers is handed to the relay
+/// owner, which plans it as a local origin.
+fn stem_entry(relay: RelayHandle, door: Arc<NodePoolDoor>, offline: bool) -> RelayNudge {
+    Arc::new(move |txid: &TxHash, blob: &[u8]| {
+        // An offline node has no network to hide from, so the
+        // transaction is shown at once (RX-2, Rick 2026-10-29).
+        // With one, the relay owner takes it before the zone plans
+        // on its strand, so `NoOwnEdge` and `AwaitSync` never reach
+        // this branch: the zone holds those (`hold_origin`),
+        // neither fluffed nor shown. The owner refuses only once it
+        // has stopped. An empty blob is nothing to relay.
+        let taken = !offline
+            && !blob.is_empty()
+            && relay.relay_local(TxId::from_bytes(txid.to_bytes()), blob.to_vec());
+        if !taken {
+            door.note_shown(*txid);
+        }
+    })
+}
+
 fn install_submit(submit: Submit) {
     let Submit {
         store,
@@ -273,9 +298,8 @@ fn install_submit(submit: Submit) {
         pool,
         health,
         relay,
-        door,
+        stem,
         departed,
-        offline,
     } = submit;
     shekyl_daemon_rpc::submit::install_production(
         shekyl_daemon_rpc::submit::RustPoolShim::new(
@@ -290,21 +314,7 @@ fn install_submit(submit: Submit) {
             let relay = relay.clone();
             Arc::new(move |txid: &TxHash| facts_origin(&relay, txid))
         })
-        .nudging(Arc::new(move |txid: &TxHash, blob: &[u8]| {
-            // An offline node has no network to hide from, so the
-            // transaction is shown at once (RX-2, Rick 2026-10-29).
-            // With one, the relay owner takes it before the zone plans
-            // on its strand, so `NoOwnEdge` and `AwaitSync` never reach
-            // this branch: the zone holds those (`hold_origin`),
-            // neither fluffed nor shown. The owner refuses only once it
-            // has stopped. An empty blob is nothing to relay.
-            let taken = !offline
-                && !blob.is_empty()
-                && relay.relay_local(TxId::from_bytes(txid.to_bytes()), blob.to_vec());
-            if !taken {
-                door.note_shown(*txid);
-            }
-        }))
+        .nudging(stem)
         .departing(departed),
     );
 }

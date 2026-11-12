@@ -1,0 +1,19 @@
+{
+  "active": false,
+  "speed": {
+    "count": 0,
+    "window": 0
+  },
+  "threads": 0,
+  "address": null,
+  "block_spacing": 120,
+  "height": null,
+  "reward": null,
+  "difficulty": null,
+  "cause": {
+    "code": "mine.address.unset",
+    "parameter": {},
+    "message": "no mine-address is set: this node posts no job"
+  },
+  "txpool_retired": false
+}

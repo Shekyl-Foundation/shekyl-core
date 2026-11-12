@@ -27,9 +27,36 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Daemon class to make rpc calls and store state."""
+"""Daemon class to make rpc calls and store state.
 
-from .rpc import JSONRPC 
+Every call is one JSON-RPC 2.0 request to `/json_rpc`, named as the
+daemon's method table names it (`INPUT_GRAMMAR.md` §17,
+`docs/generated/rpc_wire_schema.tsv`). Bytes travel as base64: the
+methods here take and give `bytes`. Heights are tip ordinals. A refusal
+raises `framework.rpc.RpcRefusal`.
+"""
+
+import base64
+
+from .rpc import JSONRPC
+
+def b64(data):
+    """`bytes` as the wire's base64."""
+    return base64.b64encode(data).decode('ascii')
+
+def unb64(text):
+    """The wire's base64 as `bytes`."""
+    return base64.b64decode(text, validate=True)
+
+def selector(height = None, hash = None):
+    """A block selector: exactly one of `height`, `hash`, or the tip."""
+    if height is not None and hash is not None:
+        raise ValueError('a selector names a height or a hash, not both')
+    if height is not None:
+        return {'height': height}
+    if hash is not None:
+        return {'hash': hash}
+    return {'tip': None}
 
 class Daemon(object):
 
@@ -39,485 +66,181 @@ class Daemon(object):
         self.port = port
         self.rpc = JSONRPC('{protocol}://{host}:{port}'.format(protocol=protocol, host=host, port=port if port else base+idx))
 
-    def getblocktemplate(self):
-        getblocktemplate = {
-            'method': 'getblocktemplate',
-            'params': {},
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getblocktemplate)
-    get_block_template = getblocktemplate
+    def call(self, method, params = None):
+        return self.rpc.call(method, params)
 
-    def get_miner_data(self):
-        get_miner_data = {
-            'method': 'get_miner_data',
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_miner_data)
+    # Chain reads.
 
-    def calc_pow(self, height, block_blob, seed_hash = ''):
-        calc_pow = {
-            'method': 'calc_pow',
-            'params': {
-                'height': height,
-                'block_blob' : block_blob,
-                'seed_hash' : seed_hash,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(calc_pow)
+    def version(self):
+        return self.call('version')
 
-    def submit_transaction(self, tx_as_hex):
-        # Native typed submit route (DAEMON_SUBMIT_VERDICT.md sec. 2.4): the
-        # response body is the serde-tagged SubmitVerdict. Transport-level
-        # failures (HTTP 400/500) raise, mirroring the wallet client's Err
-        # arm; verdicts including Rejected come back as HTTP 200 JSON.
-        submit_transaction = {
-            'tx_blob': tx_as_hex,
-        }
-        return self.rpc.send_request("/submit_transaction", submit_transaction)
+    def chain_height(self):
+        return self.call('chain_height')
 
-    def submitblock(self, block):
-        submitblock = {
-            'method': 'submitblock',
-            'params': { 'body': block },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(submitblock)
-    submit_block = submitblock
+    def block_header_show(self, height = None, hash = None, pow = False):
+        params = selector(height, hash)
+        if pow:
+            params['pow'] = True
+        return self.call('block_header_show', params)
 
-    def getblock(self, hash = '', height = 0, fill_pow_hash = False, client = ""):
-        getblock = {
-            'method': 'getblock',
-            'params': {
-                'client': client,
-                'hash': hash,
-                'height': height,
-                'fill_pow_hash': fill_pow_hash,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getblock)
-    get_block = getblock
+    def block_header_list(self, from_height = None, to_height = None, hashes = None, pow = False):
+        """Inclusive heights `from_height`..`to_height`, or a list of
+        hashes. Each slot is a header, `{"missing": null}`, or `null`."""
+        if hashes is not None:
+            params = {'hash': list(hashes)}
+        else:
+            params = {'from': from_height, 'to': to_height}
+        if pow:
+            params['pow'] = True
+        return self.call('block_header_list', params)
 
-    def getlastblockheader(self, fill_pow_hash = False):
-        params = {}
-        if fill_pow_hash:
-            params['fill_pow_hash'] = True
-        getlastblockheader = {
-            'method': 'getlastblockheader',
-            'params': params,
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getlastblockheader)
-    get_last_block_header = getlastblockheader
+    def block_show(self, height = None, hash = None, pow = False, prune = False):
+        params = selector(height, hash)
+        if pow:
+            params['pow'] = True
+        if prune:
+            params['prune'] = True
+        return self.call('block_show', params)
 
-    def getblockheaderbyhash(self, hash = "", hashes = None, fill_pow_hash = False):
-        # The wire dropped the singular `hash` in 3.27; keep the Python
-        # argument as a convenience that becomes `hashes`.
-        requested = list(hashes) if hashes else []
-        if hash:
-            requested = [hash] + requested
-        params = {'hashes': requested}
-        if fill_pow_hash:
-            params['fill_pow_hash'] = True
-        getblockheaderbyhash = {
-            'method': 'getblockheaderbyhash',
-            'params': params,
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getblockheaderbyhash)
-    get_block_header_by_hash = getblockheaderbyhash
+    def block_list(self, heights, prune = False):
+        params = {'height': list(heights)}
+        if prune:
+            params['prune'] = True
+        return self.call('block_list', params)
 
-    def getblockheaderbyheight(self, height, client = ""):
-        getblockheaderbyheight = {
-            'method': 'getblockheaderbyheight',
-            'params': {
-                'client': client,
-                'height': height,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getblockheaderbyheight)
-    get_block_header_by_height = getblockheaderbyheight
+    def tx_show(self, id, prune = False):
+        params = {'id': id}
+        if prune:
+            params['prune'] = True
+        return self.call('tx_show', params)
 
-    def getblockheadersrange(self, start_height, end_height, fill_pow_hash = False):
-        params = {
-            'start_height': start_height,
-            'end_height': end_height,
-        }
-        if fill_pow_hash:
-            params['fill_pow_hash'] = True
-        getblockheadersrange = {
-            'method': 'getblockheadersrange',
-            'params': params,
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(getblockheadersrange)
-    get_block_headers_range = getblockheadersrange
+    def tx_list(self, ids, prune = False):
+        params = {'id': list(ids)}
+        if prune:
+            params['prune'] = True
+        return self.call('tx_list', params)
 
-    def get_connections(self, client = ""):
-        get_connections = {
-            'client': client,
-            'method': 'get_connections',
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_connections)
+    def chain_spent(self, key_images):
+        return self.call('chain_spent', {'key_image': list(key_images)})
 
-    def get_info(self, client = ""):
-        get_info = {
-            'method': 'get_info',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }    
-        return self.rpc.send_json_rpc_request(get_info)
-    getinfo = get_info
+    def fee(self):
+        return self.call('fee')
 
-    def generateblocks(self, blocks=1):
-        generateblocks = {
-            'method': 'generateblocks',
-            'params': {
-                'count': blocks,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(generateblocks)
+    def chain_coinbase_sum(self, from_height, to_height):
+        """The coinbase sum over the inclusive heights."""
+        return self.call('chain_coinbase_sum', {'from': from_height, 'to': to_height})
 
-    def get_height(self, client = ""):
-        get_height = {
-                'method': 'get_height',
-                'jsonrpc': '2.0',
-                'id': '0'
-        }
-        return self.rpc.send_request("/get_height", get_height)
-    getheight = get_height
+    def chain_alt(self):
+        return self.call('chain_alt')
 
-    def pop_blocks(self, nblocks = 1):
-        pop_blocks = {
-            'nblocks' : nblocks,
-        }
-        return self.rpc.send_request("/pop_blocks", pop_blocks)
+    def curve_show(self, height = None):
+        params = {'height': height} if height is not None else {'tip': None}
+        return self.call('curve_show', params)
 
-    def start_mining(self, threads_count = "auto"):
-        start_mining = {
-            'threads' : threads_count,
-        }
-        return self.rpc.send_request('/start_mining', start_mining)
+    def archival_claim_show(self, persona):
+        return self.call('archival_claim_show', {'persona': persona})
 
-    def stop_mining(self):
-        stop_mining = {
-        }
-        return self.rpc.send_request('/stop_mining', stop_mining)
+    def shard_coverage(self):
+        return self.call('shard_coverage')
 
-    def mining_status(self):
-        mining_status = {
-        }
-        return self.rpc.send_request('/mining_status', mining_status)
+    def shard_fetch(self, id):
+        return self.call('shard_fetch', {'id': id})
 
-    def get_transaction_pool(self, client = ""):
-        get_transaction_pool = {
-            'client': client,
-        }
-        return self.rpc.send_request('/get_transaction_pool', get_transaction_pool)
+    # Node state.
 
-    def get_transaction_pool_hashes(self, client = ""):
-        get_transaction_pool_hashes = {
-            'client': client,
-        }
-        return self.rpc.send_request('/get_transaction_pool_hashes', get_transaction_pool_hashes)
+    def daemon_status(self):
+        return self.call('daemon_status')
 
-    def get_transaction_pool_stats(self, client = ""):
-        get_transaction_pool_stats = {
-            'client': client,
-        }
-        return self.rpc.send_request('/get_transaction_pool_stats', get_transaction_pool_stats)
+    def sync_status(self):
+        return self.call('sync_status')
 
-    def flush_txpool(self, txids = []):
-        flush_txpool = {
-            'method': 'flush_txpool',
-            'params': {
-                'txids': txids
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(flush_txpool)
+    def peer_connections(self):
+        return self.call('peer_connections')
 
-    def get_version(self):
-        get_version = {
-            'method': 'get_version',
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_version)
+    def peer_list(self, local = False):
+        return self.call('peer_list', {'local': True} if local else {})
 
-    def get_bans(self):
-        get_bans = {
-            'method': 'get_bans',
-            'params': {
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_bans)
+    def p2p_stats(self):
+        return self.call('p2p_stats')
 
-    def set_bans(self, bans = []):
-        set_bans = {
-            'method': 'set_bans',
-            'params': {
-                'bans': bans
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(set_bans)
+    def relay_stats(self):
+        return self.call('relay_stats')
 
-    def banned(self, address = ''):
-        banned = {
-            'method': 'banned',
-            'params': {
-                'address': address
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(banned)
-
-    def get_transactions(self, txs_hashes = [], decode_as_json = False, prune = False, split = False, client = ""):
-        get_transactions = {
-            'client': client,
-            'txs_hashes': txs_hashes,
-            'decode_as_json': decode_as_json,
-            'prune': prune,
-            'split': split,
-        }
-        return self.rpc.send_request('/get_transactions', get_transactions)
-    gettransactions = get_transactions
-
-    def get_outs(self, outputs = [], get_txid = False, client = ""):
-        get_outs = {
-            'client': client,
-            'outputs': outputs,
-            'get_txid': get_txid,
-        }
-        return self.rpc.send_request('/get_outs', get_outs)
-
-    def get_coinbase_tx_sum(self, height, count, client = ""):
-        get_coinbase_tx_sum = {
-            'method': 'get_coinbase_tx_sum',
-            'params': {
-                'client': client,
-                'height': height,
-                'count': count,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_coinbase_tx_sum)
-
-    def get_output_distribution(self, amounts = [], from_height = 0, to_height = 0, cumulative = False, binary = False, compress = False, client = ""):
-        get_output_distribution = {
-            'method': 'get_output_distribution',
-            'params': {
-                'client': client,
-                'amounts': amounts,
-                'from_height': from_height,
-                'to_height': to_height,
-                'cumulative': cumulative,
-                'binary': binary,
-                'compress': compress,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_output_distribution)
-
-    def option_set(self, options):
-        """`option_set`: `options` is a list of (name, value-text) pairs in
-        the input grammar's syntax (RPC_CHANNEL.md 6.4); all or nothing."""
-        option_set = {
-            'method': 'option_set',
-            'params': {
-                'options': [{'name': name, 'value': value} for (name, value) in options],
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(option_set)
+    def option_set(self, values):
+        """`option_set`: `values` maps option names to value text in the
+        input grammar's syntax (RPC_CHANNEL.md 6.4); all or nothing."""
+        return self.call('option_set', {'value': dict(values)})
 
     def option_show(self, names = None):
         """`option_show`: every row the caller may see, or the named rows."""
-        option_show = {
-            'method': 'option_show',
-            'params': {} if names is None else {'names': names},
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(option_show)
+        return self.call('option_show', {} if names is None else {'name': list(names)})
 
-    def get_alt_blocks_hashes(self, client = ""):
-        get_alt_blocks_hashes = {
-            'client': client,
-        }
-        return self.rpc.send_request('/get_alt_blocks_hashes', get_alt_blocks_hashes)
+    def daemon_stop(self):
+        return self.call('daemon_stop')
 
-    def get_alternate_chains(self, client = ""):
-        get_alternate_chains = {
-            'method': 'get_alternate_chains',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_alternate_chains)
+    # The pool.
 
-    def get_fee_estimate(self, grace_blocks = 0):
-        get_fee_estimate = {
-            'method': 'get_fee_estimate',
-            'params': {
-                'grace_blocks': grace_blocks,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_fee_estimate)
+    def txpool_list(self):
+        return self.call('txpool_list')
 
-    def is_key_image_spent(self, key_images = [], client = ""):
-        is_key_image_spent = {
-            'key_images': key_images,
-            'client': client,
-        }
-        return self.rpc.send_request('/is_key_image_spent', is_key_image_spent)
+    def txpool_stats(self):
+        return self.call('txpool_stats')
 
-    def save_bc(self):
-        save_bc = {
-        }
-        return self.rpc.send_request('/save_bc', save_bc)
+    def txpool_flush(self, ids = None):
+        return self.call('txpool_flush', {} if ids is None else {'id': list(ids)})
 
-    def get_peer_list(self):
-        get_peer_list = {
-        }
-        return self.rpc.send_request('/get_peer_list', get_peer_list)
+    def tx_relay(self, ids):
+        return self.call('tx_relay', {'id': list(ids)})
 
-    def set_log_hash_rate(self, visible):
-        set_log_hash_rate = {
-            'visible': visible,
-        }
-        return self.rpc.send_request('/set_log_hash_rate', set_log_hash_rate)
+    def tx_submit(self, body):
+        """The submit verdict (DAEMON_SUBMIT_VERDICT.md sec. 2.1), tagged
+        by `verdict`; a rejection is a verdict, not a refusal."""
+        return self.call('tx_submit', {'body': b64(body)})
 
-    def stop_daemon(self):
-        stop_daemon = {
-        }
-        return self.rpc.send_request('/stop_daemon', stop_daemon)
+    # Mining.
 
-    def get_net_stats(self):
-        get_net_stats = {
-        }
-        return self.rpc.send_request('/get_net_stats', get_net_stats)
+    def block_template(self):
+        return self.call('block_template')
 
-    def out_peers(self, out_peers):
-        out_peers = {
-            'out_peers': out_peers,
-        }
-        return self.rpc.send_request('/out_peers', out_peers)
+    def block_submit(self, body):
+        return self.call('block_submit', {'body': b64(body)})
 
-    def in_peers(self, in_peers):
-        in_peers = {
-            'in_peers': in_peers,
-        }
-        return self.rpc.send_request('/in_peers', in_peers)
+    def pow(self, height, hashing, seed = None):
+        params = {'height': height, 'hashing': b64(hashing)}
+        if seed is not None:
+            params['seed'] = seed
+        return self.call('pow', params)
 
-    def get_block_count(self):
-        get_block_count = {
-            'method': 'get_block_count',
-            'params': {
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_block_count)
-    getblockcount = get_block_count
+    def mine_start(self, threads = 'auto'):
+        return self.call('mine_start', {'threads': threads})
 
-    def get_block_hash(self, height):
-        # The daemon registers this method as `on_get_block_hash` (and
-        # `on_getblockhash`); it has never answered a bare `get_block_hash`,
-        # so this client had always received -32601.
-        get_block_hash = {
-            'method': 'on_get_block_hash',
-            'params': [height],
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_block_hash)
-    on_get_block_hash = get_block_hash
-    on_getblockhash = get_block_hash
+    def mine_stop(self):
+        return self.call('mine_stop')
 
-    def relay_tx(self, txids = [], client = ""):
-        relay_tx = {
-            'method': 'relay_tx',
-            'params': {
-                'txids': txids,
-                'client': client,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(relay_tx)
+    def mine_status(self):
+        return self.call('mine_status')
 
-    def sync_info(self, client = ""):
-        sync_info = {
-            'method': 'sync_info',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(sync_info)
+    # Bans.
 
-    def get_txpool_backlog(self, client = ""):
-        get_txpool_backlog = {
-            'method': 'get_txpool_backlog',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0', 
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_txpool_backlog)
+    def ban_add(self, host, duration = None):
+        params = {'host': host}
+        if duration is not None:
+            params['duration'] = duration
+        return self.call('ban_add', params)
 
-    def flush_cache(self, bad_txs = False):
-        flush_cache = {
-            'method': 'flush_cache',
-            'params': {
-                'bad_txs': bad_txs,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(flush_cache)
+    def ban_remove(self, host):
+        return self.call('ban_remove', {'host': host})
 
-    def sync_txpool(self):
-        sync_txpool = {
-            'method': 'sync_txpool',
-            'params': {
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(sync_txpool)
+    def ban_list(self):
+        return self.call('ban_list')
+
+    def ban_show(self, host):
+        return self.call('ban_show', {'host': host})
+
+    # The armed levers (RT-O9.2): served only by a daemon started armed.
+
+    def dev_block_generate(self, count = 1):
+        return self.call('dev_block_generate', {'count': count})
+
+    def dev_chain_pop(self, count = 1):
+        return self.call('dev_chain_pop', {'count': count})

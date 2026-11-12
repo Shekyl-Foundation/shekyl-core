@@ -13,13 +13,6 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# The shard view's RPC adapter, where the fetch scheduler and the RPC meet
-# (`shard_view`). A library target so its test runs under `cargo test`;
-# the binary is `main` alone and carries no test of its own.
-[lib]
-name = "shekyld"
-path = "src/lib.rs"
-
 [[bin]]
 name = "shekyld"
 path = "src/main.rs"
@@ -30,14 +23,6 @@ doctest = false
 # The sequence: the parse, the lock, logging, the node and its network,
 # the one signal owner, the RPC and the managed Tor.
 shekyl-daemon = { path = "../shekyl-daemon" }
-# The shard view's two ends: the RPC's trait and the fetch scheduler.
-shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
-shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
-# The scheduler's store-backed facts (`shard_facts`), shared with the
-# bundle producer's reads. Default features: the node's graph, `producer`
-# included.
-shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
-shekyl-types = { path = "../shekyl-types" }
 # Direct edges with no features of their own, so the measurement build
 # (cmake/BuildRust.cmake, `SHEKYL_MEASUREMENT_SPANS`) can name
 # `shekyl-transport-layer/measurement-spans`,

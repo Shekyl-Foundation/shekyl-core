@@ -1072,7 +1072,7 @@ shard whose byte size is used for pricing without being bounded by
 
 **Grounded at** `dev@20ebdf1e5`; anchors re-verified at source
 (`shekyl-levin/src/payload/types.rs:104,149`,
-`shekyl-rpc-types/src/p2p.rs:125,241,295`, `cryptonote_core.cpp:127`,
+lines 125, 241 and 295 of `shekyl-rpc-types/src/p2p.rs` at `20ebdf1e5`, `cryptonote_core.cpp:127`,
 `cryptonote_protocol_handler.inl:1979` / `:2810`).
 
 **Ruling.** The stripe engine's purpose — a node-local, seed-assigned

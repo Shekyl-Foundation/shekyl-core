@@ -21,7 +21,7 @@
 //! `shekyl-rpc-types::chain::ConnectState`, which carries the register's
 //! stable row *number* rather than this crate's enum, so a wallet decodes a
 //! tip without linking the store (PR #751 disposition); the two are joined
-//! at the daemon when the Rust store serves `get_info` (cutover).
+//! at the daemon when the Rust store serves `daemon_status` (cutover).
 
 use shekyl_types::BlockHeight;
 

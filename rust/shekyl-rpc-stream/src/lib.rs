@@ -37,8 +37,8 @@
 //!   including a byte after the close. [`InboundShape`] is the verdict at
 //!   the last data record, decided as the record is admitted: a finished
 //!   padded frame, or exactly [`SUBMISSION_RECORDS`] largest-class payload
-//!   records since a message boundary. The daemon's `submit_transaction`
-//!   route checks it (RT-W10).
+//!   records since a message boundary. The daemon checks it on a
+//!   `tx_submit` call (RT-W10).
 //! - **An authenticated end.** Shutting down the write side flushes, seals
 //!   the close record (occupancy 0 in the smallest class, which nothing
 //!   else sends), then shuts the transport's write side. A reader sees the

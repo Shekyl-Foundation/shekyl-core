@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! RT-W10: what one height of `get_coinbase_tx_sum` reads from the store.
+//! RT-W10: what one height of `chain_coinbase_sum` reads from the store.
 //!
 //! Ignored. The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. `RT_W10_OUT` is the

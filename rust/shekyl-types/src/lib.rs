@@ -794,7 +794,7 @@ hash32! {
     /// [`TxHash`]) — a view hash is per shard, never a skeleton row, never
     /// consensus, and never carried on the serving wire. Distinct from
     /// [`CurveTreeRoot`] (the retired leaf-segment root `R_k` this value
-    /// replaces on the `request_archival_shard` wire). Public; full-hex
+    /// replaces on the `shard_fetch` wire). Public; full-hex
     /// `Debug`.
     ShardViewHash
 }

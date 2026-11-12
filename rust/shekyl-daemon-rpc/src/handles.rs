@@ -41,12 +41,12 @@ use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead {
     /// This object as the chain-facts trait the method functions take.
     fn as_chain_facts(&self) -> &dyn ChainFacts;
-    /// This object as the info-facts trait `get_info` takes.
+    /// This object as the info-facts trait `daemon_status` takes.
     fn as_info_facts(&self) -> &dyn InfoFacts;
     /// This object as the read-facts trait the store methods take.
     fn as_read_facts(&self) -> &dyn ChainReadFacts;
-    /// This object as chain sync's view, which `sync_info` and
-    /// `get_connections` take.
+    /// This object as chain sync's view, which `sync_status` and
+    /// `peer_connections` take.
     fn as_sync_view(&self) -> &dyn SyncViewRead;
 }
 
@@ -133,7 +133,7 @@ pub trait PoolFacts: Send + Sync {
     fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
 
     /// Remove `ids` from the pool, or every entry when `ids` is empty
-    /// (`flush_txpool`); the removed ids. It writes the pool file, so it
+    /// (`txpool_flush`); the removed ids. It writes the pool file, so it
     /// waits: the node runs it on a blocking thread.
     ///
     /// # Errors
@@ -143,15 +143,15 @@ pub trait PoolFacts: Send + Sync {
     /// which retires the pool.
     fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>>;
 
-    /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
-    /// offered. The relay driver is RD's; until it is wired, not ready.
+    /// Offer `ids` to the relay again through the stem entry a fresh
+    /// local submission takes (`tx_relay`); the ids the pool held and
+    /// offered, in the order asked.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] until a relay driver is supplied.
-    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-        Err(FactsFault::NotReady)
-    }
+    /// [`FactsFault::NotReady`] when no pool was supplied, or the pool is
+    /// retired.
+    fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault>;
 }
 
 /// A pool handle.
@@ -178,7 +178,7 @@ pub trait DoorFacts: Send + Sync {
     fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
 
     /// Pop `count` blocks from the tip, returning their bodies to the pool
-    /// (`pop_blocks`, DX-Q3, Q7). A pop below the lowest poppable height is
+    /// (`dev_chain_pop`, DX-Q3, Q7). A pop below the lowest poppable height is
     /// refused before any pop.
     ///
     /// # Errors
@@ -379,7 +379,7 @@ pub type StopHandle = Arc<dyn StopFacts>;
 /// stem tallies, which the node reads from `shekyl-p2p`'s `Network`.
 pub type P2pHandle = Arc<dyn P2pFacts>;
 
-/// The seven handles, absent unless the composition root supplied a node.
+/// The node's handles, absent unless the composition root supplied a node.
 #[derive(Clone)]
 pub struct Handles {
     /// Chain reads.
@@ -396,6 +396,8 @@ pub struct Handles {
     pub stop: StopHandle,
     /// The p2p facts.
     pub p2p: P2pHandle,
+    /// The shard view: the node's view desk, or its Tor-off refusal.
+    pub shard_view: crate::shard_view::ShardViewHandle,
 }
 
 impl Default for Handles {
@@ -416,6 +418,7 @@ impl Handles {
             bans: Arc::new(BansAbsent),
             stop: Arc::new(StopAbsent),
             p2p: Arc::new(P2pAbsent),
+            shard_view: Arc::new(crate::shard_view::ShardViewAbsent),
         }
     }
 }
@@ -561,6 +564,10 @@ impl PoolFacts for PoolAbsent {
     fn flush(&self, _ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
         Box::pin(async { Err(FactsFault::NotReady) })
     }
+
+    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
 }
 
 struct DoorAbsent;
@@ -671,7 +678,7 @@ impl P2pFacts for P2pAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn stem_tallies(&self) -> Result<shekyl_rpc_types::StemTallies, FactsFault> {
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::wire::p2p::RelayStats, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

@@ -271,6 +271,12 @@ is cached and topped up via `--seed-dir` rather than regenerated. Only the
 subject is wiped per run — it is the thing being measured, and an IBD that
 starts from a partial chain is a different experiment.
 
+The seed and the subject are one binary, `--daemon`. The archived-seed leg,
+which served the seed chain from the archived C++ daemon on its LMDB store
+over the 3.x wire (`--seed-daemon`), is retired (Rick, 2026-11-12): its last
+code is at `f993270e85`. Recorded flip-leg artifacts keep their seed's hash
+and readback note, and `check` still reads them.
+
 `scripts/bench/test_drs_bench.py` is the selftest; it runs in `docs-gates.yml`.
 
 ## Measurement ledger
