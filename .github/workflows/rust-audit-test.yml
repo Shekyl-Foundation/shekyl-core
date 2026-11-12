@@ -127,6 +127,15 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: the runner's CPUs
+        # Printed so the test step's wall time can be read against the
+        # cores it ran on: nextest runs one test per CPU, and the runner
+        # size is the platform's to change. A figure derived from this job's
+        # time states the count printed here, not an assumed one.
+        run: |
+          echo "nproc: $(nproc)"
+          grep -m1 'model name' /proc/cpuinfo
+          grep MemTotal /proc/meminfo
       - name: set apt conf
         run: ${{env.APT_SET_CONF}}
       - name: update apt
