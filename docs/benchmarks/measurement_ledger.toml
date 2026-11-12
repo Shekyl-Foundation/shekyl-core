@@ -950,6 +950,7 @@ stale_through = [
   { through = "5861ad72b484", note = "The member verdict moved out of scan.rs into multisig_scan.rs. What remains in scan.rs is a match on the scanner's receive policy. The solo arm is the same leaf comparison as before, one constant-time compare of an entry the output already derived. The member's extra decapsulation is no longer in this path set. Not re-measured; the rows stay stale." },
   { through = "e5c7697e65", note = "In this path set, output.rs gains sign_emission_backing_for_output, which signs an emission's Framed64 binding message under the backing domain. The decapsulation and the output scan do not call it. Not re-measured." },
   { through = "4a22840849", note = "The switch's C1: scan.rs renames the header field attestation_root to bundle_root in two test-block fixtures and fills it with the empty bundle root. Decapsulation and the output scan are unchanged. Not re-measured." },
+  { through = "1e6f95a13e", note = "IG-Q102 (the switch): scan.rs's two test-block fixtures rename the header field bundle_root to section_root and its type to SectionRoot. A rename only; decapsulation and the output scan are unchanged. Not re-measured." },
 ]
 
 [[constant]]
