@@ -41,8 +41,17 @@ pub async fn sleep_until(deadline: Tick) {
 }
 
 /// Wait `within` of process-clock time.
-pub async fn sleep(within: Duration) {
-    sleep_on(&MonotonicClock::new(), within).await;
+///
+/// The deadline is read when this is called, not when the future is first
+/// polled. Work done before that poll still counts, which is what a budget
+/// passed across other awaits means.
+#[must_use = "the wait does nothing unless it is awaited"]
+pub fn sleep(within: Duration) -> impl Future<Output = ()> + Send {
+    let deadline = deadline_after(within);
+    async move {
+        let clock = MonotonicClock::new();
+        sleep_until_on(&clock, deadline).await;
+    }
 }
 
 /// `within` of the process clock passed before the future finished.
@@ -61,14 +70,22 @@ impl std::error::Error for Elapsed {}
 /// has passed. The future is polled first, so an output ready at the
 /// deadline is kept.
 ///
+/// The deadline is read when this is called, not when the future is first
+/// polled, the same as [`sleep`].
+///
 /// # Errors
 ///
 /// [`Elapsed`] when the time passed first.
-pub async fn timeout<F>(within: Duration, future: F) -> Result<F::Output, Elapsed>
+#[must_use = "the bound does nothing unless it is awaited"]
+pub fn timeout<F>(within: Duration, future: F) -> impl Future<Output = Result<F::Output, Elapsed>>
 where
     F: Future,
 {
-    timeout_on(&MonotonicClock::new(), within, future).await
+    let deadline = deadline_after(within);
+    async move {
+        let clock = MonotonicClock::new();
+        wait_for(deadline, &clock, future).await
+    }
 }
 
 /// The deadline `within` from now on `clock`.
@@ -94,19 +111,31 @@ async fn sleep_until_on<C: Clock + ?Sized>(clock: &C, deadline: Tick) {
     }
 }
 
-/// Wait `within` of `clock`'s time.
+/// Wait `within` of `clock`'s time. The deadline is read when this is
+/// polled, which the hand-clock tests do at once.
+#[cfg(test)]
 async fn sleep_on<C: Clock + ?Sized>(clock: &C, within: Duration) {
     sleep_until_on(clock, deadline_on(clock, within)).await;
 }
 
 /// `future`'s output, or [`Elapsed`] once `within` of `clock`'s time has
-/// passed.
+/// passed. The deadline is read when this is polled, which the hand-clock
+/// tests do at once.
+#[cfg(test)]
 async fn timeout_on<C, F>(clock: &C, within: Duration, future: F) -> Result<F::Output, Elapsed>
 where
     C: Clock + ?Sized,
     F: Future,
 {
-    let deadline = deadline_on(clock, within);
+    wait_for(deadline_on(clock, within), clock, future).await
+}
+
+/// `future`'s output, or [`Elapsed`] once `deadline` has passed on `clock`.
+async fn wait_for<C, F>(deadline: Tick, clock: &C, future: F) -> Result<F::Output, Elapsed>
+where
+    C: Clock + ?Sized,
+    F: Future,
+{
     let mut future = pin!(future);
     let mut waited = pin!(sleep_until_on(clock, deadline));
     std::future::poll_fn(|cx| {
@@ -127,7 +156,7 @@ mod tests {
 
     use shekyl_timing_engine::{Clock, ManualClock, Tick};
 
-    use super::{sleep_on, timeout_on, Elapsed};
+    use super::{sleep, sleep_on, timeout, timeout_on, Elapsed};
 
     const SECOND: u64 = 1_000_000_000;
 
@@ -192,5 +221,35 @@ mod tests {
             Ok(7)
         );
         assert_eq!(clock.now(), Tick::new(0));
+    }
+
+    /// **A budget starts when the wait is built.** An unpolled `sleep` of
+    /// 40 ms, held across 80 ms of awake time, is already done. Fails if
+    /// the deadline is read at the first poll, which would wait another
+    /// 40 ms here.
+    #[tokio::test]
+    async fn a_budget_starts_when_the_wait_is_built() {
+        let waiting = sleep(Duration::from_millis(40));
+        std::thread::sleep(Duration::from_millis(80));
+        let started = std::time::Instant::now();
+        waiting.await;
+        assert!(
+            started.elapsed() < Duration::from_millis(30),
+            "the deadline was read at the first poll"
+        );
+    }
+
+    /// **A timeout budget starts when the bound is built.** Same failure
+    /// as the sleep budget: the deadline is read at the call.
+    #[tokio::test]
+    async fn a_timeout_budget_starts_when_the_bound_is_built() {
+        let bounded = timeout(Duration::from_millis(40), std::future::pending::<()>());
+        std::thread::sleep(Duration::from_millis(80));
+        let started = std::time::Instant::now();
+        assert_eq!(bounded.await, Err(Elapsed));
+        assert!(
+            started.elapsed() < Duration::from_millis(30),
+            "the deadline was read at the first poll"
+        );
     }
 }

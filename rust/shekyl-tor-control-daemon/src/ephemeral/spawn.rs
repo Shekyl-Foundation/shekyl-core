@@ -106,6 +106,9 @@ impl DaemonTorControl {
     /// [`Self::spawn_keeping`] within the config's reply deadline, retiring
     /// the directory when the spawn fails.
     pub async fn launch(config: DaemonTorConfig) -> Result<Self, DaemonTorStartError> {
+        // The reply budget starts here. `sleep` reads that deadline at this
+        // call, so the directory and the cache copy `spawn_keeping` finishes
+        // before it polls this future still count against it.
         let deadline = shekyl_tor_control_client::awake::sleep(config.reply_deadline);
         match Self::spawn_keeping(config, deadline).await {
             Ok(up) => Ok(up),
