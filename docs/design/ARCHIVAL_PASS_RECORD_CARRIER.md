@@ -232,11 +232,11 @@ gives a segment of `38·18·38 = 25,992` leaves. The path assembler loops
 
 **The leaf chunk is on-wire cost even though no struct declares it.**
 `SegmentPathOpening` holds only the two layer vectors
-([`path.rs:52-55`](../../rust/shekyl-archival-retention/src/path.rs#L52-L55)),
+(`rust/shekyl-archival-retention/src/path.rs:52-55` at `5a71724c01`),
 but `verify_segment_path` takes `leaf_layer_scalars` as a **separate parameter**
-([`path.rs:116-118`](../../rust/shekyl-archival-retention/src/path.rs#L116-L118)),
+(`rust/shekyl-archival-retention/src/path.rs:116-118` at `5a71724c01`),
 and `leaf_bytes_in_layer` requires it be a multiple of `SCALARS_PER_LEAF`
-*containing* the challenged leaf ([`path.rs:95-108`](../../rust/shekyl-archival-retention/src/path.rs#L95-L108))
+*containing* the challenged leaf (`rust/shekyl-archival-retention/src/path.rs:95-108` at `5a71724c01`)
 — the full chunk, not one leaf. The verifier cannot run without it and cannot
 derive it. **Anything a verifier requires and cannot derive must be transmitted**,
 so it is part of the record's cost regardless of which struct names it.

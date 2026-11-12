@@ -151,8 +151,13 @@ SCOPE = (
 # 134 with the attestation record's wire tests and KAT (SO-D12 4b C7),
 # four recorded fixture helpers among them. 132 with the pass-anchor
 # window (SO-D12 4b C7): its test helpers `window_at` and `chain_hash`
-# went with it.
-GRANDFATHER_CEILING = 132
+# went with it. 123 at the switch's close (SO-D12 4b): the challenge
+# helpers, the gate-2 KAT and the segment-path cross-check went with the
+# serve-credit input and `path.rs`, the ingest's `anchor` helper and the
+# prune tests' `key_of` went with the padded-credit fixtures, one
+# `archival_write.rs` site left with the serve-credit write, and the
+# prune tests' close height is typed.
+GRANDFATHER_CEILING = 123
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

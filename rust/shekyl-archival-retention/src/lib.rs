@@ -8,15 +8,13 @@
 //! - **Pure, verify-side.** Nothing here reads a store or writes one: the
 //!   validator (`shekyl-chain-rules`) and the store (`shekyl-chain-store`)
 //!   call these functions with the values they hold.
-//! - **Public material only.** Leaf bytes and path siblings are on-chain public
-//!   inputs; no secrets in this crate (`35-secure-memory.mdc`).
+//! - **Public material only.** Every input is on-chain public data; no
+//!   secrets in this crate (`35-secure-memory.mdc`).
 //!
 //! # Public surface (selected)
 //!
 //! - [`drawable_pair`] — one drawable `(P, s)` pair. The public urn that
 //!   scheduled these pairs is deleted; the secret draw replaces it.
-//! - [`path`] — [`SegmentPathOpening`], [`verify_segment_path`] (requires the
-//!   Selene leaf-layer chunk scalars for the challenged output's parent node).
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — the exact-length rule the bond-post and emission readers
 //!   share.
@@ -64,14 +62,12 @@ pub mod emission_auth;
 pub mod emission_kat_shape;
 pub mod emission_verify;
 pub mod emission_wire;
-pub mod error;
 pub mod failure_window;
 pub mod hash;
 pub mod held_at_height;
 pub mod id;
 pub mod params;
 pub mod pass_anchor;
-pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
 pub mod secret_draw;
@@ -178,7 +174,6 @@ pub use emission_wire::{
     EMISSION_AUTH_BACKING, EMISSION_AUTH_CLAIM, MAX_BACKING_PROOF_BYTES,
     MAX_SETTLEMENT_EPOCHS_PER_EMISSION, VIN_TYPE_ARCHIVAL_REWARD_EMISSION,
 };
-pub use error::VerifyError;
 pub use failure_window::{
     failure_window_slashable, settlement_retention_floor, settlement_window_slashable,
     BaselineObservation, FailureWindowError, FAILURE_WINDOW_M, FAILURE_WINDOW_N,
@@ -188,9 +183,6 @@ pub use failure_window::{
 pub use held_at_height::holds_shard_at;
 pub use id::{p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION};
 pub use params::{archival_params, ArchivalParams, ArchivalParamsError};
-pub use path::{
-    challenged_leaf_bytes, verify_segment_path, SegmentPathOpening, CHALLENGED_LEAF_LEN,
-};
 pub use release_cooldown::{release_cooldown_elapsed, whole_record_last_served};
 pub use reward_arithmetic::{
     curve_milli, g_age_milli, mul_div_floor, reward_share_floor, scarcity_micro,

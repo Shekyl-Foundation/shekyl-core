@@ -115,8 +115,8 @@ fn closing(k: u64) -> usize {
 }
 
 /// The height of the block that closes shard `k` in the captured chain.
-fn close_height(k: u64) -> u64 {
-    u64::try_from(closing(k)).expect("small") - 1
+fn close_height(k: u64) -> BlockHeight {
+    BlockHeight::from_raw(u64::try_from(closing(k)).expect("small") - 1)
 }
 
 /// A chain under construction: the blocks so far ([`Grown`], which builds
@@ -451,11 +451,13 @@ fn tip(store: &ChainStore) -> u64 {
 fn chain_to_400(path: impl AsRef<std::path::Path>) -> (ChainStore, Builder, Connected, Connected) {
     let (store, mut b) = Builder::captured(path, "seb100", RULES, horizons(), closing(0));
     assert_eq!(
-        RULES.settlement_schedule().epoch_at_height(close_height(0)),
+        RULES
+            .settlement_schedule()
+            .epoch_at_height(close_height(0).to_raw()),
         1,
         "shard 0 closes in epoch 1"
     );
-    let first = close_height(0) + 1;
+    let first = close_height(0).to_raw() + 1;
     let to_299 = b.connect(&store, first, 299, |_| Vec::new());
     assert_eq!(
         to_299[usize::try_from(200 - first).expect("small")]
@@ -739,7 +741,7 @@ fn h_scarce_is_the_last_discarded_shards_close_height() {
         ))
     });
     let (e1, e2, e3) = out.expect("reads");
-    let closed = close_height(0);
+    let closed = close_height(0).to_raw();
     assert_eq!(
         store.begin_read().expect("read").h_scarce().expect("read"),
         Some(BlockHeight::from_raw(closed)),
@@ -789,7 +791,7 @@ fn short_captured(path: impl AsRef<std::path::Path>, blocks: usize) -> (ChainSto
 /// The first boundary under the ten-block schedule that discards: the one
 /// at `close_epoch(0) + 2`.
 fn first_discarding_boundary() -> u64 {
-    (close_height(0) / SHORT_SEB + 2) * SHORT_SEB
+    (close_height(0).to_raw() / SHORT_SEB + 2) * SHORT_SEB
 }
 
 /// Every stored length is the one measured off the body — the model's
@@ -841,7 +843,7 @@ fn the_store_records_each_length_and_the_running_total() {
 fn a_closed_shard_is_the_indexed_fold_and_the_next_is_open() {
     let path = tmp("shard-fold");
     let (store, b) = short_captured(&path, closing(0));
-    let through = b.model().cumulative_through(close_height(0));
+    let through = b.model().cumulative_through(close_height(0).to_raw());
     let snap = store.begin_read().expect("read");
     match snap.shard_fold(ShardId::from_raw(0)).expect("shard 0") {
         ShardFold::Closed(rows) => {
@@ -889,10 +891,12 @@ fn a_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in() {
         .position(|&(_, start, len)| start < w && start + len > w)
         .expect("a spend straddles W");
     let (height, start, len) = txs[straddler];
-    assert_eq!(height, close_height(0), "it closes shard 0");
+    assert_eq!(height, close_height(0).to_raw(), "it closes shard 0");
     let straddler = u64::try_from(straddler).expect("small");
     let boundary = first_discarding_boundary();
-    b.connect(&store, close_height(0) + 1, boundary, |_| Vec::new());
+    b.connect(&store, close_height(0).to_raw() + 1, boundary, |_| {
+        Vec::new()
+    });
     let model = b.model();
     assert_eq!(
         model.shard_of_id()[usize::try_from(straddler).expect("small")],
@@ -918,7 +922,7 @@ fn a_transaction_straddling_a_boundary_belongs_to_the_shard_it_starts_in() {
     let out: Result<Option<u64>, TestErr> = store.write(|batch| Ok(batch.h_scarce(boundary)?));
     assert_eq!(
         out,
-        Ok(Some(close_height(0))),
+        Ok(Some(close_height(0).to_raw())),
         "shard 0 closed at the straddler's height"
     );
     assert_eq!(
@@ -939,7 +943,7 @@ fn consecutive_boundaries_and_every_batch_match_the_model() {
     let first = first_discarding_boundary();
     let (store, mut b) = short_captured(&path, usize::try_from(first).expect("small"));
     let captured = shard_fill().blocks.len();
-    let last = (close_height(2) / SHORT_SEB + 3) * SHORT_SEB;
+    let last = (close_height(2).to_raw() / SHORT_SEB + 3) * SHORT_SEB;
     for boundary in (first..=last).step_by(usize::try_from(SHORT_SEB).expect("small")) {
         let mut pruned = None;
         for h in u64::try_from(b.listed.len()).expect("small")..=boundary {
@@ -988,7 +992,7 @@ fn consecutive_boundaries_and_every_batch_match_the_model() {
 /// spends: each references a block at least `REFERENCE_BLOCK_MIN_AGE`
 /// below its own height either way.
 fn closing_block_split(b: &Builder) -> (Vec<Transaction>, Vec<Transaction>) {
-    let h = close_height(2);
+    let h = close_height(2).to_raw();
     let before = b.model().cumulative_through(h - 1);
     let listed = &shard_fill().blocks[usize::try_from(h).expect("small")].listed;
     let mut total = before;
@@ -1015,7 +1019,7 @@ fn closing_block_split(b: &Builder) -> (Vec<Transaction>, Vec<Transaction>) {
 /// block later.
 #[test]
 fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
-    let close = close_height(2);
+    let close = close_height(2).to_raw();
     let boundaries: Vec<u64> = (close / SHORT_SEB * SHORT_SEB..)
         .step_by(usize::try_from(SHORT_SEB).expect("small"))
         .skip_while(|&x| x < close)
@@ -1086,8 +1090,10 @@ fn a_reorg_back_across_a_shard_boundary_is_the_new_branchs_partition() {
 fn pruned_and_unpruned_stores_place_every_shard_alike() {
     let path = tmp("prune-membership");
     let (store, mut b) = short_captured(&path, closing(1));
-    let discards_1 = (close_height(1) / SHORT_SEB + 2) * SHORT_SEB;
-    b.connect(&store, close_height(1) + 1, discards_1 - 1, |_| Vec::new());
+    let discards_1 = (close_height(1).to_raw() / SHORT_SEB + 2) * SHORT_SEB;
+    b.connect(&store, close_height(1).to_raw() + 1, discards_1 - 1, |_| {
+        Vec::new()
+    });
     let ranges = |store: &ChainStore| -> Vec<core::ops::Range<u64>> {
         let snap = store.begin_read().expect("read");
         (0..2)
@@ -1126,7 +1132,7 @@ fn pruned_and_unpruned_stores_place_every_shard_alike() {
 /// blocks to `to`, with the store closed for a raw plant.
 fn short_chain_to(path: impl AsRef<std::path::Path>, to: u64) -> Builder {
     let (store, mut b) = short_captured(path, closing(0));
-    b.connect(&store, close_height(0) + 1, to, |_| Vec::new());
+    b.connect(&store, close_height(0).to_raw() + 1, to, |_| Vec::new());
     b
 }
 
@@ -1257,7 +1263,7 @@ fn a_decreasing_archival_total_refuses_the_boundary() {
 fn a_shifted_run_between_two_samples_refuses_the_boundary() {
     let path = tmp("prune-archival-run");
     let boundary = first_discarding_boundary();
-    let closed = close_height(0);
+    let closed = close_height(0).to_raw();
     let b = short_chain_to(&path, boundary - 1);
     let model = b.model();
     let w = SHARD_LENGTH.to_raw();
@@ -1310,7 +1316,7 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
     let boundary = first_discarding_boundary() + SHORT_SEB;
     let b = short_chain_to(&path, boundary - 1);
     let model = b.model();
-    let start = close_height(1) - 2;
+    let start = close_height(1).to_raw() - 2;
     let raise = SHARD_LENGTH.to_raw();
     for height in start..boundary {
         plant_info(&path, height, |info| {
@@ -1346,7 +1352,7 @@ fn a_shift_that_persists_through_the_window_refuses_the_boundary() {
 fn a_length_row_that_disagrees_with_the_fold_refuses_the_boundary() {
     let path = tmp("prune-archival-rows");
     let boundary = first_discarding_boundary();
-    let closed = close_height(0);
+    let closed = close_height(0).to_raw();
     let b = short_chain_to(&path, boundary - 1);
     let model = b.model();
     let (id, len) = model
@@ -1703,7 +1709,7 @@ fn the_predicate_survives_a_prune_on_the_stored_rows() {
     // at the epoch-3 boundary), and the closing block's last spends start
     // shard 1 (retained). Recorded at 299, before the first discard.
     let (store, mut b) = Builder::captured(&path, "seb100", RULES, horizons(), closing(0));
-    b.connect(&store, close_height(0) + 1, 299, |_| Vec::new());
+    b.connect(&store, close_height(0).to_raw() + 1, 299, |_| Vec::new());
 
     let count = store.begin_read().expect("read").tx_count().expect("count");
     let before: Vec<Option<bool>> = (0..count).map(|id| good_state(&store, id)).collect();
