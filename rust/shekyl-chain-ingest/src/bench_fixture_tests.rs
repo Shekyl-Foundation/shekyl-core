@@ -52,13 +52,14 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{complete_tree, Persona, Spender};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::Network;
 use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::{COINBASE_RESERVE, MAX_FCMP_INPUTS, MAX_OUTPUTS};
 use shekyl_wire::Transaction;
 
+use crate::archival_driver::{ENDPOINT, FEE};
 use crate::bench_support::BlockPath;
 use crate::corpus::CorpusWriter;
 use crate::scenario::{Mined, Scenario};
@@ -132,6 +133,22 @@ const SHAPES: &[Shape] = &[
         inputs_per_tx: 1,
         build: |spender, wallet, coinbases, at| {
             spender.spend_coinbase_paying(wallet, coinbases[0], at, Family::Main.fee(), MAX_OUTPUTS)
+        },
+    },
+    // Shape 6: bond posts. Each transaction is a coinbase spend with a
+    // complete-tree join riding it, by its own persona: the post's input,
+    // its cleartext term and the bond slot's signature, which CEN-J27,
+    // CEN-H21 and CEN-L7 judge beside the spend's rows. A complete-tree
+    // join needs no closed shard, so the chain is the other shapes'.
+    Shape {
+        name: "bond_post",
+        inputs_per_tx: 1,
+        build: |spender, wallet, coinbases, at| {
+            // One persona a transaction: the slot is the coinbase's height.
+            let slot = u32::try_from(coinbases[0].to_raw()).expect("a short chain");
+            let persona = Persona::at(slot);
+            let join = persona.join(complete_tree(), ENDPOINT);
+            spender.spend_coinbase_posting(wallet, coinbases[0], at, FEE, Some(&join))
         },
     },
 ];

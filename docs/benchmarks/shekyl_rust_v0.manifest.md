@@ -1017,6 +1017,7 @@ transactions came through the pool, and the verifier's term of `PB-D1`
 | `spend_1in_2out` | four 1-in/2-out spends, block weight 54,165 | 1,825,906,454 |
 | `spend_8in_2out` | four spends at the input cap (`MAX_FCMP_INPUTS`), block weight 236,501 | 4,934,399,305 |
 | `spend_1in_16out` | four spends at the output cap (`MAX_OUTPUTS`), block weight 139,725 | 2,188,084,731 |
+| `bond_post` | four coinbase spends each carrying a complete-tree join by its own persona, block weight 99,373 | 1,848,299,171 |
 
 The counts are a development workstation's, recorded to show the rows'
 scale. The gate compares a pull request with the baseline the runner
@@ -1036,16 +1037,18 @@ read there too.
 runs under the harness longhash, and one header's RandomX verification is
 §16. The view-bound stage, which is §15. A block at the weight limit:
 `benches/block_path_full_iai.rs` counts the same call on
-`block_path_<shape>_full.corpus` (45, 10 and 17 transactions), and is the
+`block_path_<shape>_full.corpus` (45, 10, 17 and 24 transactions), and is the
 nightly capture's (`nightly.yml`, `bench-full`, compared with the night
 before by `bench-full-drift`), because forming the 45 spends of the smallest shape is
 17,141,243,472 instructions and about twenty minutes of callgrind a row.
 `form` judges each listed transaction on its own, so the four carry every
 term the 45 do; what the full block adds is the count.
 
-**Shapes owed.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. Bond posts
-and emission claims need a fixture chain through a closed shard and a
-settled epoch, under the levered schedule the ingest's scenarios use. The
+**Shapes owed.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An emission
+claim's own verification (its backing proof and its two signatures) is
+`validate`'s, not `form`'s, so its row needs a store holding a settled
+epoch: a fixture chain through a closed shard and about three epochs of
+the levered schedule the ingest's scenarios use. The
 multisig container needs a builder of a scheme-2 spend, which the harness
 does not have (`docs/FOLLOWUPS.md`).
 
@@ -1070,10 +1073,10 @@ refusal path. `regenerate_block_path_fixtures` rewrites them.
 | `crypto_bench_store_read_header_range` | a read snapshot, and the 64 header records below the tip |
 | `crypto_bench_store_read_tree_leaves` | a read snapshot, and the first 8 curve-tree leaves |
 
-| Function | `spend_1in_2out` | `spend_8in_2out` | `spend_1in_16out` |
-| --- | --- | --- | --- |
-| `crypto_bench_block_connect` | 24,703,181 | 44,035,378 | 34,943,887 |
-| `crypto_bench_block_pop` | 28,679,225 | 76,536,312 | 35,947,387 |
+| Function | `spend_1in_2out` | `spend_8in_2out` | `spend_1in_16out` | `bond_post` |
+| --- | --- | --- | --- | --- |
+| `crypto_bench_block_connect` | 24,703,181 | 44,035,378 | 34,943,887 | 30,505,662 |
+| `crypto_bench_block_pop` | 28,679,225 | 76,536,312 | 35,947,387 | 31,979,949 |
 
 The three reads, on the output-cap fixture: the block 149,147, the header
 run 504,140, the leaf run 22,044. The block read is of the connected
@@ -1086,9 +1089,10 @@ on the form rows and to within 1 % on the store rows (the block read:
 The store rows are not bit-exact from run to run; the difference is well
 inside the class's ±5 % warning.
 
-**Cost of the capture.** The twelve functions of this binary took 31
-minutes of callgrind on a 16-core development workstation (2026-11-12),
-about two and a half minutes a function. Most of each is setup: the
+**Cost of the capture.** Twelve functions of this binary (before the
+bond-post cells, which add three) took 31 minutes of callgrind on a
+16-core development workstation (2026-11-12), about two and a half
+minutes a function. Most of each is setup: the
 fixture's history, seventy to a hundred coinbase-only blocks, validated
 and connected under callgrind before the measured call. The history is
 connected in one write, since a commit per block was slower still.

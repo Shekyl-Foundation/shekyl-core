@@ -68,6 +68,7 @@ use support::{before_connect, before_form, connected};
 const SPEND_1IN_2OUT: &[u8] = include_bytes!("fixtures/block_path_spend_1in_2out_unit.corpus");
 const SPEND_8IN_2OUT: &[u8] = include_bytes!("fixtures/block_path_spend_8in_2out_unit.corpus");
 const SPEND_1IN_16OUT: &[u8] = include_bytes!("fixtures/block_path_spend_1in_16out_unit.corpus");
+const BOND_POST: &[u8] = include_bytes!("fixtures/block_path_bond_post_unit.corpus");
 
 /// The header records one range read asks for.
 const RANGE: u64 = 64;
@@ -84,6 +85,7 @@ const LEAVES: u64 = 8;
 #[bench::spend_1in_2out(args = (SPEND_1IN_2OUT), setup = before_form)]
 #[bench::spend_8in_2out(args = (SPEND_8IN_2OUT), setup = before_form)]
 #[bench::spend_1in_16out(args = (SPEND_1IN_16OUT), setup = before_form)]
+#[bench::bond_post(args = (BOND_POST), setup = before_form)]
 fn crypto_bench_block_form(
     (chain, subject, claimed): (BlockPath, Candidate, Claimed),
 ) -> (BlockPath, StructurallyValid, Claimed) {
@@ -95,6 +97,7 @@ fn crypto_bench_block_form(
 #[bench::spend_1in_2out(args = (SPEND_1IN_2OUT), setup = before_connect)]
 #[bench::spend_8in_2out(args = (SPEND_8IN_2OUT), setup = before_connect)]
 #[bench::spend_1in_16out(args = (SPEND_1IN_16OUT), setup = before_connect)]
+#[bench::bond_post(args = (BOND_POST), setup = before_connect)]
 fn crypto_bench_block_connect(
     (mut chain, formed, claimed): (BlockPath, StructurallyValid, Claimed),
 ) -> (BlockPath, Claimed) {
@@ -106,6 +109,7 @@ fn crypto_bench_block_connect(
 #[bench::spend_1in_2out(args = (SPEND_1IN_2OUT), setup = connected)]
 #[bench::spend_8in_2out(args = (SPEND_8IN_2OUT), setup = connected)]
 #[bench::spend_1in_16out(args = (SPEND_1IN_16OUT), setup = connected)]
+#[bench::bond_post(args = (BOND_POST), setup = connected)]
 fn crypto_bench_block_pop(mut chain: BlockPath) -> BlockPath {
     chain.pop();
     chain
