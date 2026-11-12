@@ -132,10 +132,12 @@ jobs:
         # cores it ran on: nextest runs one test per CPU, and the runner
         # size is the platform's to change. A figure derived from this job's
         # time states the count printed here, not an assumed one.
+        # awk, not grep: a line the image lacks prints nothing and does not
+        # fail the job over a diagnostic.
         run: |
           echo "nproc: $(nproc)"
-          grep -m1 'model name' /proc/cpuinfo
-          grep MemTotal /proc/meminfo
+          awk -F': ' '/^model name/ { print "cpu: " $2; exit }' /proc/cpuinfo
+          awk '/^MemTotal/ { print "memory: " $2 " " $3; exit }' /proc/meminfo
       - name: set apt conf
         run: ${{env.APT_SET_CONF}}
       - name: update apt
