@@ -3940,7 +3940,7 @@ components:
         bytes a daemon can read, so every view — including a shard this
         wallet itself serves — is answered by the wallet's configured
         daemon, which fetches the body from a holder
-        (`request_archival_shard`, SHARD_VIEW_FETCH.md SV-D3) and folds the
+        (`shard_fetch`, SHARD_VIEW_FETCH.md SV-D3) and folds the
         view hash (SV-D1). Rendering is the viewer's: the result carries
         exactly the renderer's aggregate fields. No size or format
         parameter — a picture is never on this wire.

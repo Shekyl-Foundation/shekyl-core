@@ -1304,7 +1304,7 @@ administration easy, but permissions coupled in one grant are hard to
 separate later. The whole assignment was ratified 2026-10-09 (RT-O9).
 
 A grant is a **set of facts or actions**, not a list of methods. Most
-methods fall whole into one grant. `get_info` does not: it mixes facts
+methods fall whole into one grant. `daemon_status` does not: it mixes facts
 about the network with facts about this node, so it is served to any
 connection holding `health` and each field is present only when the
 connection holds that field's grant. **A field outside the grant is
@@ -1318,32 +1318,32 @@ value: the three wire states of RK-D23, ruled in the RK-5c round
 ruled there too (RK-Q8, 2026-10-09):
 in RK-5c itself, after `has_peers` lands — so the wire change is that
 slice's, and RT-W10 inherits absence rather than introducing it. A target
-height the core does not have is `null` on `get_info`, `get_version` and
-`sync_info` alike (RK-Q7, same date), so an absent field in a `health`
+height the node does not have is `null` on `daemon_status`, `version` and
+`sync_status` alike (RK-Q7, same date), so an absent field in a `health`
 reply is never "no target".
 
 One question draws the line between `health` and `status`: *does a client
 need this fact to decide whether it can use this node right now, and is it
 transient — saying nothing lasting about this node?* Sync state passes: it
 differs between nodes, but it describes a moment, not a host. Everything
-`get_version` returns passes for a stronger reason, being the same on every
-node of the build ([`methods.rs:112-145`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+`version` returns passes for a stronger reason, being the same on every
+node of the build ([`wire/chain.rs`](../../rust/shekyl-rpc-types/src/wire/chain.rs):
 RPC contract version, release flag, heights, fork schedule,
-consensus-constants digest, nettype, genesis) — it identifies a build and a
+consensus-constants digest, network, genesis) — it identifies a build and a
 network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`, `request_archival_shard` (public, closed history; moved from `node`, `INPUT_GRAMMAR.md` IG-Q91, and bounded by §6.3's shard-fetch permit); and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
-| `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
-| `health` | Whether this node is usable now (`get_version` is under no grant: every authenticated caller may call it, [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q6): from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
-| `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
-| `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes; `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
-| `submit` | `/submit_transaction` |
-| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
-| `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
-| `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `flush_txpool`, `flush_cache`, `relay_tx`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
+| `chain` | Chain reads: `chain_height`, `block_header_show` and `block_header_list` (including their `pow` switch, RT-O9.4), `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum` (a public chain fact; moved from the admin set, RT-O9.4), `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch` (public, closed history; moved from `node`, `INPUT_GRAMMAR.md` IG-Q91, and bounded by §6.3's shard-fetch permit); and `daemon_status`'s chain fields (`difficulty`, `difficulty_cumulative`, `block_weight_max` and `block_weight_median`, `tx_count`, the difficulty target in seconds (`block_spacing`), `time_adjusted`, emission and economics fields) |
+| `pool` | The **relayed** pool: `txpool_list`, `txpool_stats`; `daemon_status`'s `txpool_count`, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
+| `health` | Whether this node is usable now (`version` is under no grant: every authenticated caller may call it, [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q6): from `daemon_status`, the chain tip (`height`, `hash`), `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, **`peered`** (a boolean, RK-D14 — never a count), `writer` (IG-Q92), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the protocol contract version (the network comes from `version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
+| `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build revision (`revision`); start time (`started`); free space and database size; aggregate inbound and outbound peer counts; RPC connection count; `txpool_retired` (IG-Q74); alt-blocks count (`alt_count`), `chain_alt`; `p2p_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
+| `peers` | The graph: `peer_connections`, `sync_status`, `peer_list`; `daemon_status`'s `connector` map of socket counts and peerlist sizes (IG-Q82); `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
+| `submit` | `tx_submit` |
+| `mining-work` | An external miner's loop: `block_template`, `block_submit`, `pow` (a computation service; moved from the admin set, RT-O9.4) |
+| `mining-control` | This node's own miner: `mine_start`, `mine_stop`, `mine_status` |
+| `bans` | `ban_add`, `ban_remove`, `ban_list`, `ban_show` |
+| `node` | Control of the node, and nothing else: `daemon_stop`, `txpool_flush`, `tx_relay`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
 | `config` | The node's configuration: `option_show`'s default rows, every row that names no other grant, including everything that describes the host or links the operator (the onion, SOCKS endpoints, paths, notify commands, `mine-address`). A secret's value is in no grant (§6.4, RT-O24). Carried by the `admin` preset only |
 | `enrol` | `rpc_client_add`, `rpc_client_set`, `rpc_client_remove`, `rpc_client_list`, `rpc_bundle_show` (RT-O9.1; `INPUT_GRAMMAR.md` IG-Q87). Carried by the `admin` preset only |
 
@@ -1352,8 +1352,8 @@ network, never a node.
 on any connector (RK-Q4, ruled there 2026-10-09). It exists because a
 caller without `status` no longer sees the peer counts, and without it
 could not tell a peerless daemon from a following one. `nettype` and the
-three network booleans are **retired from `get_info`** (RK-Q6, ruled there
-the same day): the identity source is `get_version` alone, which every
+three network booleans are **retired from `daemon_status`** (RK-Q6, ruled there
+the same day): the identity source is `version` alone, which every
 authenticated caller may read (RW-Q6), so no grant changes and only the
 method that answers moves.
 
@@ -1361,14 +1361,14 @@ method that answers moves.
 one grant above or in exactly one of these; no ceiling, `admin` included,
 can contain either.
 
-- **Host-only data (RULED, RT-O9.3).** `/get_stem_tallies` — per-successor relay
+- **Host-only data (RULED, RT-O9.3).** `relay_stats` — per-successor relay
   outcome counts, whose consumer is a human tuning `n_min`, `cut` and
-  `cooldown` (`handlers/json.rs:489-506`) — and **unrelayed pool
+  `cooldown` (`shekyl-node/src/p2p_facts.rs`) — and **unrelayed pool
   entries**: stem-phase and not-yet-broadcast transactions, including ones
   this node originated. The pool's sensitivity flag is what reaches them
-  today: the pool listing, its hashes and its statistics
-  (`core_rpc_server.cpp:499-543`), `/get_transactions` by hash
-  (`handlers/json.rs:191-194`), and `get_info`'s pool size when it counts
+  today: the pool listing and its statistics
+  (`pool_methods.rs`), `tx_show` and `tx_list` by id
+  (`reads.rs`), and `daemon_status`'s `txpool_private_count`, which counts
   them. These are served **only to the host's administrator**: the owner
   leg (the same-user socket or pipe, RT-15) and the console key (service
   mode, §5). **Never to an enrolled key, whatever its ceiling** — `admin`
@@ -1380,9 +1380,9 @@ can contain either.
   describes the node's own sends, names no transaction, and sits in
   `status` (ruled 2026-10-24, `INPUT_GRAMMAR.md` Part E).
 - **Armed test levers (RT-O9.2; the arming ruled 2026-10-09).**
-  `generateblocks`, `inject_archival_serve_credit` and `/pop_blocks`
+  `dev_block_generate` and `dev_chain_pop`
   (ruled 2026-10-14, §6.4) are not production capabilities. The regtest
-  harnesses depend on `generateblocks`
+  harnesses depend on `dev_block_generate`
   (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
   RT-W10 carries an **armed-and-pinned override** (rule 71): an explicit
   start switch, `dev-rpc`, logged at every start; when armed, the levers
@@ -1390,16 +1390,16 @@ can contain either.
   that enables them; the network type never does. The switch is refused on
   mainnet with its own error (`INPUT_GRAMMAR.md` IG-Q49): the network type
   can only restrict the switch, never select the behaviour, so rule 71 and
-  IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `/pop_blocks`
+  IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `dev_chain_pop`
   has three users, all served there: the regtest roll-back helper, the
   Python framework and the CT-2 fixture generator (§6.4).
-  `inject_archival_serve_credit` went with the C++ chain at the DRS-X flip
-  (`DRS_X_STORE_FLIP.md` DX-Q3): the method table pins two armed levers,
-  and the daemon answers the old name as a method it does not know, armed
-  or not. The switch is regtest's alone (`NETWORK_IDENTITY.md` NI-R8): a
+  The method table pins two armed levers (`DRS_X_STORE_FLIP.md` DX-Q3),
+  and the daemon answers any other name as a method it does not know,
+  armed or not.
+  The switch is regtest's alone (`NETWORK_IDENTITY.md` NI-R8): a
   testnet or stagenet daemon given `dev-rpc` is refused at load
   (`dev_rpc_is_refused_on_every_network_but_regtest`), and on regtest
-  `generateblocks` and `/pop_blocks` are served, which the e2e test
+  `dev_block_generate` and `dev_chain_pop` are served, which the e2e test
   `the_armed_switch_serves_two_levers_and_knows_no_third` holds. Under
   RT-O36 the network narrows what the switch enables and never enables
   anything.
@@ -1541,23 +1541,23 @@ A connection's authority — its grant set, whether it is the host's
 administrator, and the armed switch — is stamped on every request and read
 by every gate (`shekyl-daemon-rpc` `authority.rs`, RT-W10 step 1). The method
 table's policy column says which grant, or which non-grant class, each row
-needs (`shekyl-rpc-types` `methods.rs`), and C++ is told only the host flag.
+needs (`shekyl-rpc-types` `wire/mod.rs`, `wire::TABLE`).
 
 ### 6.3 Resource policy (RULED, RT-O9.4 — independent of §6.1)
 
 What a caller **may** ask for is its grant. How **much** work one request
 may cost is this policy. They are separate: today's restriction encodes
 both as authority, which is why an expensive public fact
-(`get_coinbase_tx_sum`) and a computation service (`calc_pow`) sat behind
+(`chain_coinbase_sum`) and a computation service (`pow`) sat behind
 the admin listener.
 
 - **What is bounded:** the four batch caps
-  ([`methods.rs:621-638`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+  ([`methods.rs:249-255`](../../rust/shekyl-daemon-rpc/src/methods.rs):
   `RESTRICTED_BLOCK_COUNT`, `RESTRICTED_BLOCK_HEADER_RANGE`,
   `RESTRICTED_TRANSACTIONS_COUNT`, `RESTRICTED_SPENT_KEY_IMAGES_COUNT`) and
-  the expensive computation `calc_pow`, a bounded `get_coinbase_tx_sum`,
-  and `fill_pow_hash`, which is a header read of the hash recorded at
-  validation.
+  the expensive computation `pow`, a bounded `chain_coinbase_sum`, the
+  headers' `pow` switch, which is a header read of the hash recorded at
+  validation, and a shard fetch that opens a flight.
 - **Who is bounded:** every connection except the host's administrator
   (the owner leg and the console key), **whatever its grant**. An
   `admin`-ceiling key over the channel is bounded like any other.
@@ -1569,23 +1569,23 @@ the admin listener.
   execution: the 33,000,128-byte series cost 1.089 times the 136-byte
   series at the thread-CPU 99th percentile, so one hashing blob costs one
   hash whatever its length inside the format.
-  - `calc_pow` accepts a blob no longer than `MAX_POW_BLOB_SIZE`, the
+  - `pow` accepts hashing bytes no longer than `MAX_POW_BLOB_SIZE`, the
     longest hashing blob `PowBlob::read` accepts (the header, the
     transaction-tree hash and the count varint; not `MAX_BLOCK_BLOB_SIZE`,
-    which is the body). One such blob is one hash.
+    which is the body; `bound.pow-size`). One such blob is one hash.
   - Bounded callers share one hash budget, the handshake budget's shape
     (`charges ≤ share × elapsed + capacity`). The share is a quarter of
     one core. One charge is `HASH_CPU_NANOS`, the header series' thread-CPU
     99th percentile, 1,290,885,199 ns. A one-second burst of the share
-    cannot pay that charge, so the bucket holds one hash. A `calc_pow`
+    cannot pay that charge, so the bucket holds one hash. A `pow`
     spends that hash after the seed's cache is held and before RandomX.
-    A `calc_pow` while the bucket is empty is `OverResourceBound` and
-    spends nothing. A request that will not hash — a bad blob, a bad
+    A `pow` while the bucket is empty is `OverResourceBound`,
+    `bound.hash`, and spends nothing. A request that will not hash — a bad blob, a bad
     seed, a seed this node does not hold, or a seed above the tip —
     spends nothing. The host's administrator does not pay.
-    `fill_pow_hash` does not pay: it is the hash recorded at validation,
+    The headers' `pow` switch does not pay: it is the hash recorded at validation,
     and a bounded caller is held to the header cap.
-  - A bounded `get_coinbase_tx_sum` takes the one coinbase-read permit
+  - A bounded `chain_coinbase_sum` takes the one coinbase-read permit
     and then runs on the blocking pool. The permit is one because a cold
     read waits on disk. It does not pay the hash budget. The host's
     administrator does not take the permit.
@@ -1597,7 +1597,7 @@ the admin listener.
   its own, and a record already started still fails after 4 seconds
   without progress. A response write that makes no progress for 4 seconds
   closes the connection, on every listener.
-- **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit. A cached view takes none. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The bundle producer's challenge reads take the fetch client's slots before any view flight, the host's own included, because a missed read is a missed witness duty. A node with Tor off has no client to read through and refuses with `shard.tor-off`.
+- **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit, taken at the view desk's cache miss (`rust/shekyl-archival-fetch-sched/src/view.rs`). A cached view takes none, and neither does a call that joins a flight already in the air. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The host takes no permit. The bundle producer's challenge reads come first by reservation, not priority: the node's one fetch client has exactly the slots its lanes use, `READS_AT_ONCE` for the producer when the node mines and `VIEW_SLOTS` (two: the bounded permit's flight and one host flight beside it) for every view flight, the host's included (`rust/shekyl-node/src/producer.rs`). Views never hold more than their lane, so a started producer read never waits for a slot and its read ceiling holds; a missed read is a missed witness duty. Every node with a Tor builds the scheduler and serves the view; a node with Tor off has no client to read through and refuses with `RefusedByMethod`, `shard.tor-off`.
 - **A request over a bound is refused with the bound named**, never silently truncated. Each bound has its own dotted code (`INPUT_GRAMMAR.md` IG-Q79).
 
 ### 6.4 Runtime options: `option_set` and `option_show` (RT-O23…RT-O27)
@@ -1622,8 +1622,8 @@ cites this section.
 **RT-O23 — names.** `option_set` and `option_show`: the grammar's
 own words (`option set`, `option show`, IG-3), so what an operator types
 and what a script calls are the same terms. One spelling each, no alias,
-as `request_archival_shard` was born
-([`json_rpc.rs:225-227`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)).
+as every method in the table
+([`wire/mod.rs`](../../rust/shekyl-rpc-types/src/wire/mod.rs)).
 **JSON-RPC methods only, with no REST path:** one way to call each, not
 two. Every route they replace is a REST path today.
 
@@ -1664,18 +1664,18 @@ two. Every route they replace is a REST path today.
   grant to `node`. *From the tree:* `log-category` is placed beside
   `log-level` here, since today one filter holds both
   ([`filter.rs:107-131`](../../rust/shekyl-logging/src/filter.rs)).
-- **Who may call `option_show`:** like `get_info`, any connection holding
+- **Who may call `option_show`:** like `daemon_status`, any connection holding
   `health`; each row is present only when the connection holds the row's
   grant. A row the caller may not see is **absent** from the reply, never
   zeroed or emptied (§6.1, rule 43). A secret's value is never shown, at
   any grant. No row is host-only (RT-O9.3).
 - ***From the tree:* the interim mapping, before RT-W10.** The methods
   land on today's two listeners, before the channel exists. `option_set`'s
-  row in the method table is the host's
-  ([`methods.rs:124`](../../rust/shekyl-rpc-types/src/methods.rs)), and it
-  is in the specified list the gate test compares against
-  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:751`),
-  so the restricted listener refuses it. `option_show` is served on both
+  row in the method table holds `node`
+  ([`wire/mod.rs`](../../rust/shekyl-rpc-types/src/wire/mod.rs)), which
+  the view listener does not hold
+  (`the_view_listener_serves_exactly_its_specified_set`, `authority.rs`),
+  so the view listener refuses it. `option_show` is served on both
   listeners, and its rows are chosen through `Disclosure`
   ([`info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs)), which already
   carries `status` and `peers` axes; it gains a `config` axis, set by
@@ -1775,7 +1775,7 @@ two. Every route they replace is a REST path today.
   The implementing PR therefore adds JSON-RPC 2.0's optional `data` member,
   carrying the list of diagnostics, and one new numeric code for a
   configuration refusal, the next free after `-25`
-  ([`archival.rs:84`](../../rust/shekyl-rpc-types/src/archival.rs)). It
+  (`archival.rs:84` at `cb4d950141`). It
   bumps `CORE_RPC_VERSION` for both. A call outside the caller's grant is
   refused as §6.2 says; that code is RT-W10's, not minted here.
 
@@ -1823,7 +1823,7 @@ its handler, and fixes its callers in the same PR.
 Census at `1b7803f69a`: the routes
 ([`server.rs:267-354`](../../rust/shekyl-daemon-rpc/src/server.rs)), the
 router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
-([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
+(`json.rs:293`,
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
 `print_net_stats`, which reads `/get_limit` (`console/mod.rs:1126-1169` at
 that census) with its tests (`console/tests.rs:1130-1170`); the Python

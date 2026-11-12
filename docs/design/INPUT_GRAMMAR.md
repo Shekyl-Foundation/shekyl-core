@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, RULED 2026-11-11 (Rick), as posed.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, RULED 2026-11-11 (Rick), as posed. Parts C and F are the daemon's wire at `CORE_RPC_VERSION` 4.0 (`RPC_WIRE.md` RW-Q8), its schema generated at `docs/generated/rpc_wire_schema.tsv`.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -1411,6 +1411,7 @@ A state other than the item is a one-key object naming the state, with its paylo
 | `bound.key-image` | key images one `chain_spent` may name | 5,000 | `D/methods.rs:639`; `D/read_methods.rs:636` |
 | `bound.pow-size` | the size of `pow`'s hashing bytes | `MAX_POW_BLOB_SIZE` | `D/read_methods.rs:191` |
 | `bound.hash` | the shared hash budget, when it cannot pay one hash | one hash | `D/hash_budget.rs:141` |
+| `bound.shard` | a bounded caller's shard fetch that would open a flight while another bounded caller's holds the one permit (IG-Q90) | one flight | after the ground, at `34255a8945`: the view desk's cache miss, `rust/shekyl-archival-fetch-sched/src/view.rs` (`ViewRefusal::Busy`); `D/shard_view.rs` |
 
 The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coinbase_sum` waits for its one permit and is not refused. The method is never a parameter: the caller knows what it called.
 

@@ -1825,10 +1825,12 @@ because it appears after the node opens and moves when Tor respawns. A read
 while there is no route is `Stall::NoRoute`: nothing was sent, and it
 retries the same `P`. Each read still presents its own credentials from its
 nonce (`SF-D3`), so settlement reads share no circuit with each other, the
-peer dials or the probe. A node with Tor off runs no producer. Where it
-runs, under either Tor, the daemon reserves its reads' descriptors for the
-inbound ceiling: one SOCKS stream per slot of the fetch client,
-`READS_AT_ONCE` (`shekyl_node::producer_descriptors`).
+peer dials or the probe. A node with Tor off runs no producer. Under
+either Tor the node builds one fetch client with two lanes (IG-Q90): the
+producer's `READS_AT_ONCE` slots when the node mines, and the shard view's
+`VIEW_SLOTS`, which views never exceed, so a started read never waits for a
+slot. The daemon reserves the client's descriptors for the inbound ceiling,
+one SOCKS stream per slot (`shekyl_node::fetch_descriptors`).
 
 **Tests.** The gate (`bundle_producer_gate_tests`, live lane): a compact
 bond on a closed shard, the ring drawing every template, the producer's own

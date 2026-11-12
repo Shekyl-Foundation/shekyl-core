@@ -243,7 +243,10 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
                     shard_id.to_raw()
                 ),
             )
-            .param("id", shard_id.to_raw().to_string()),
+            .param("id", shard_id.to_raw().to_string())
+            // IG-Q79: one flight in total; this asked for a second.
+            .param("bound", "1")
+            .param("asked", "2"),
         )),
         ShardViewRefusal::Fault(fault) => RpcFault::Facts(*fault),
     }
@@ -410,6 +413,8 @@ mod tests {
         assert_eq!(error.class, ErrorClass::OverResourceBound);
         assert_eq!(error.diagnostic.code, crate::methods::codes::BOUND_SHARD);
         assert_eq!(error.diagnostic.parameter["id"], "3");
+        assert_eq!(error.diagnostic.parameter["bound"], "1");
+        assert_eq!(error.diagnostic.parameter["asked"], "2");
     }
 
     #[tokio::test]

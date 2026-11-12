@@ -8,7 +8,7 @@ established `shekyl-shard-visual` as a domain-primitive library crate
 (no actor wrapping; pure-CPU, async-free, deterministic). **Production
 input (2026-10-08,
 [`design/SHARD_VIEW_FETCH.md`](design/SHARD_VIEW_FETCH.md) `SV-D`):** the
-aggregate a daemon answers to `request_archival_shard` after fetching the
+aggregate a daemon answers to `shard_fetch` after fetching the
 shard's archival body from a holder, reached by every viewer through the
 wallet contract's `get_shard_view` (CLI `shard fetch`, the GUI's Shards
 page) or, for shekyl-web, the site's own daemon server-side. The
@@ -1361,16 +1361,16 @@ paragraphs below were written when the producer of a shard's aggregate was
 to be a wallet-side `ArchivalEngine` and the layer added no RPC. Neither
 holds: the producer is the daemon's fetch scheduler, and the layer added
 one wallet method, `get_shard_view` (`wallet_rpc.yaml` 0.11.0), over the
-daemon's existing restricted `request_archival_shard`. Visualizations are
+daemon's `shard_fetch`. Visualizations are
 still computed client-side from public chain data with no consensus
 involvement. What ships, and what gates it:
 
-- **The surface is landed; the daemon's facts are not.** CLI `shard
-  fetch`, the GUI Shards page and shekyl-web's staking guide all draw from
-  `get_shard_view` / `request_archival_shard`. Until the `DRS-E3` store
-  cutover gives the daemon a shard-range read, every shipped daemon answers
-  `ARCHIVAL_SKELETON_ABSENT` (`SV-D9`) and every viewer shows *not offered
-  by this daemon* — a state, never an empty picture.
+- **The surface and the daemon's facts are landed** (`SV-D9` lifted
+  2026-11-12). CLI `shard fetch`, the GUI Shards page and shekyl-web's
+  staking guide all draw from `get_shard_view` / `shard_fetch`. A daemon
+  with a Tor fetches the view; one with Tor off answers `shard.tor-off`, and
+  every viewer shows *not offered by this daemon* — a state, never an empty
+  picture.
 - **Shards that closed before the facts exist get visualizations
   retroactively.** The view is a function of the archival bytes and the
   skeleton, both of which the network already holds.
