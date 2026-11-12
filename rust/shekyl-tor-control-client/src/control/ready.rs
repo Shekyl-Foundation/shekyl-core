@@ -41,10 +41,7 @@ pub async fn wait_until_ready(
     ready_rx: &mut watch::Receiver<BootstrapState>,
     within: std::time::Duration,
 ) -> Result<(), WaitReadyError> {
-    // Awake time: a machine that slept through the wait has not given Tor
-    // that long to bootstrap.
-    let clock = shekyl_timing_engine::MonotonicClock::new();
-    let deadline = shekyl_timing_engine::wait::deadline_after(&clock, within);
+    let deadline = crate::awake::deadline_after(within);
     loop {
         match *ready_rx.borrow_and_update() {
             BootstrapState::Ready => return Ok(()),
@@ -53,7 +50,7 @@ pub async fn wait_until_ready(
         }
         tokio::select! {
             () = actor.wait_for_shutdown() => return Err(WaitReadyError::Died),
-            () = shekyl_timing_engine::wait::sleep_until(&clock, deadline) => {
+            () = crate::awake::sleep_until(deadline) => {
                 return Err(WaitReadyError::Timeout);
             }
             changed = ready_rx.changed() => {

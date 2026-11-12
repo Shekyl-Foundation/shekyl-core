@@ -59,11 +59,11 @@ fn an_awake_span_keeps_its_length_and_resolution() {
 #[test]
 fn on_windows_the_clock_is_the_unbiased_interrupt_time() {
     let clock = MonotonicClock::new();
-    let counted = super::awake::unbiased_interrupt_time();
+    let counted = super::source::unbiased_interrupt_time();
     let from = clock.now().get();
     std::thread::sleep(Duration::from_millis(100));
     let moved = clock.now().get() - from;
-    let count = (super::awake::unbiased_interrupt_time() - counted) * 100;
+    let count = (super::source::unbiased_interrupt_time() - counted) * 100;
     assert!(
         moved.abs_diff(count) < 1_000_000,
         "the clock moved {moved} ns and the unbiased count {count} ns"

@@ -5,6 +5,9 @@
 
 //! Tor control-protocol **client**. Any caller. Not an owner of a Tor instance.
 //!
+//! [`awake`] waits on the process clock. A tokio timer on Windows counts
+//! through a sleep; these waits end only when that clock says so.
+//!
 //! # Capability families
 //!
 //! Two identities in this tree speak the control protocol, and they must not
@@ -30,6 +33,7 @@
 //! this crate. A caller that only needs types already on `WalletTorControl`'s
 //! public surface names the wallet crate.
 
+pub mod awake;
 pub mod binary;
 pub mod control;
 pub mod directory_cache;

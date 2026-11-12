@@ -16,9 +16,6 @@ publish = false
 # ed25519-dalek, sha3, hex-literal, zeroize) went with them; this crate is the
 # supervisor and holds none of them directly.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
-# The process clock, and waits that count awake time: a timer that ends at
-# a machine's wake would tear an incarnation down (Rick, 2026-11-11).
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 
 # The supervisor loop: tokio for the incarnation timers, socket probes and
 # `spawn_blocking` hash offload; kameo for the control actor handle it drives.

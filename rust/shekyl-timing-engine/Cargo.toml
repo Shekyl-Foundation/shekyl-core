@@ -13,11 +13,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The thread ledger. This crate does not build a runtime.
+# The thread ledger only. This crate does not build a runtime, and it does
+# not link tokio: the transport layer depends on it. A tokio task waits on
+# the process clock through `shekyl-tor-control-client::awake`.
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
-# The awake-time waits sleep on tokio's timer (`wait`). Its `time` feature
-# alone, from the tokio already in Cargo.lock.
-tokio = { version = "1", default-features = false, features = ["time"] }
 
 # The awake-time source on Windows: the unbiased interrupt time
 # (`MonotonicClock`). Already in the lockfile, at the version the workspace's
@@ -26,8 +25,6 @@ tokio = { version = "1", default-features = false, features = ["time"] }
 windows-sys = { version = "0.61", features = ["Win32_System_WindowsProgramming"] }
 
 [dev-dependencies]
-# The waits' tests pause tokio's time and jump it.
-tokio = { version = "1", default-features = false, features = ["time", "rt", "macros", "test-util"] }
 # Already pinned in the workspace lockfile. The model test is the
 # scheduler's evidence; the bench is the input to D5's engine-thread budget.
 proptest = "1"

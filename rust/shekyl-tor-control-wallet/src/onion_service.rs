@@ -28,6 +28,7 @@ use kameo::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
@@ -247,11 +248,9 @@ pub(crate) async fn publish_onion(
         .with_flags(OnionFlags { discard_pk: true })
         .with_pow(spec.pow);
 
-    // Awake time: a wait a machine slept through is not Tor's silence.
-    let clock = shekyl_timing_engine::MonotonicClock::new();
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(OnionPublishAbort::Shutdown),
-        () = shekyl_timing_engine::wait::sleep(&clock, reply_deadline) => {
+        () = awake::sleep(reply_deadline) => {
             return Err(OnionPublishAbort::Failed(OnionPublishError::Control(
                 ControlError::Timeout,
             )));

@@ -26,9 +26,9 @@ publish = false
 unpinned-tor-for-tests = []
 
 [dependencies]
-# The process clock and its awake-time waits: the managed launch's handshake
-# read and the readiness wait end on awake time, not at a machine's wake
-# (Rick, 2026-11-11). Also the supervisor core's tests' clocks.
+# The process clock. The handshake read, the readiness wait, and `awake`
+# end on it, so a machine's sleep is not time Tor was given. The supervisor
+# core's tests use the same crate's hand clock.
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }

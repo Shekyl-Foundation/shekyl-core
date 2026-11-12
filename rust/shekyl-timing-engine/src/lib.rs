@@ -133,34 +133,34 @@ impl Clock for ManualClock {
 
 /// The process origin every [`MonotonicClock`] measures from: the first
 /// reading any of them took.
-static PROCESS_ORIGIN: OnceLock<awake::Reading> = OnceLock::new();
+static PROCESS_ORIGIN: OnceLock<source::Reading> = OnceLock::new();
 
 /// Production clock. Every instance reads the one process origin, so two
 /// clocks built at different times give comparable ticks; the instance
 /// holds no time of its own.
 ///
-/// It counts awake time on Linux, macOS and Windows: it does not advance while the
-/// machine is suspended, so a deadline is not late by the time the machine
-/// spent suspended, and a span it measures leaves the sleep out (Rick,
-/// 2026-11-11). On Linux it is `Instant`, which is `CLOCK_MONOTONIC`; on
-/// macOS it is `Instant`, which is `CLOCK_UPTIME_RAW`. On Windows `Instant`
-/// counts through a sleep, so the clock reads the unbiased interrupt time
-/// instead ([`awake`]).
+/// It counts awake time on Linux, macOS and Windows: it does not advance
+/// while the machine is suspended, so a deadline is not late by the time
+/// the machine spent suspended, and a span it measures leaves the sleep
+/// out. On Linux it is `Instant`, which is `CLOCK_MONOTONIC`; on macOS it
+/// is `Instant`, which is `CLOCK_UPTIME_RAW`. On Windows `Instant` counts
+/// through a sleep, so the clock reads the unbiased interrupt time
+/// instead.
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
-    origin: &'static awake::Reading,
+    origin: &'static source::Reading,
 }
 
 impl MonotonicClock {
     pub fn new() -> Self {
         Self {
-            origin: PROCESS_ORIGIN.get_or_init(awake::Reading::now),
+            origin: PROCESS_ORIGIN.get_or_init(source::Reading::now),
         }
     }
 }
 
 /// The awake-time source, one per platform.
-mod awake {
+mod source {
     /// A reading of the awake-time source.
     #[cfg(not(windows))]
     #[derive(Debug)]
@@ -885,7 +885,6 @@ impl<C: Clock> Engine<C> {
 }
 
 mod service;
-pub mod wait;
 
 pub use service::{EngineService, Handle, OwnerHandle, WakeWait};
 

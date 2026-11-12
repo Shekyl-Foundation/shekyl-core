@@ -88,8 +88,9 @@ impl DaemonTorControl {
     /// not a gate. The spawn waits for that first reply until `until`
     /// resolves, and past it stops and reaps the child and fails with
     /// [`DaemonTorStartError::Unanswered`]: a deadline is the caller's to
-    /// give (`tokio::time::sleep`), and a supervisor that holds its own
-    /// bound gives the signal it abandons the launch with.
+    /// give. [`Self::launch`] gives [`shekyl_tor_control_client::awake::sleep`]
+    /// of the reply bound. A supervisor that holds its own bound passes the
+    /// future that abandons the launch.
     pub async fn spawn_keeping(
         config: DaemonTorConfig,
         until: impl Future<Output = ()> + Send,
@@ -105,7 +106,7 @@ impl DaemonTorControl {
     /// [`Self::spawn_keeping`] within the config's reply deadline, retiring
     /// the directory when the spawn fails.
     pub async fn launch(config: DaemonTorConfig) -> Result<Self, DaemonTorStartError> {
-        let deadline = tokio::time::sleep(config.reply_deadline);
+        let deadline = shekyl_tor_control_client::awake::sleep(config.reply_deadline);
         match Self::spawn_keeping(config, deadline).await {
             Ok(up) => Ok(up),
             Err(SpawnError::DataDir(error)) => Err(DaemonTorStartError::DataDir(error)),

@@ -5355,7 +5355,6 @@ dependencies = [
  "criterion",
  "proptest",
  "shekyl-thread-ledger",
- "tokio",
  "windows-sys 0.61.2",
 ]
 
@@ -5422,7 +5421,6 @@ dependencies = [
  "kameo",
  "shekyl-onion-key",
  "shekyl-p-transport",
- "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",
