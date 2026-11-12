@@ -189,6 +189,7 @@ mod tests {
     struct Pool {
         entries: Vec<PoolEntryFacts>,
         flushed: Mutex<Vec<TxHash>>,
+        offered: Mutex<Vec<TxHash>>,
     }
 
     fn pool() -> Pool {
@@ -204,6 +205,7 @@ mod tests {
         Pool {
             entries: vec![entry(1, true, 10), entry(2, false, 30)],
             flushed: Mutex::new(Vec::new()),
+            offered: Mutex::new(Vec::new()),
         }
     }
 
@@ -224,6 +226,11 @@ mod tests {
         fn flush(&self, ids: Vec<TxHash>) -> crate::mining_facts::Pending<'_, Vec<TxHash>> {
             self.flushed.lock().expect("lock").extend_from_slice(&ids);
             Box::pin(async move { Ok(ids) })
+        }
+
+        fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+            self.offered.lock().expect("lock").extend_from_slice(ids);
+            Ok(ids.to_vec())
         }
     }
 
@@ -306,10 +313,11 @@ mod tests {
     }
 
     /// `tx_relay` offers only what the caller may see; an id it may not
-    /// is `{"missing": null}` and reaches no relay. A held id needs a relay
-    /// driver, and without one the call is not ready.
+    /// is `{"missing": null}` and reaches no relay (IG-Q89). The host sees
+    /// and offers every entry; each slot is the id offered, in the order
+    /// asked. Red edit: offer `held` before `visible` filters it.
     #[test]
-    fn relay_acts_on_the_visible_set_and_waits_for_a_driver() {
+    fn relay_offers_the_visible_set_and_nothing_else() {
         let pool = pool();
         let unseen = tx_relay(
             &pool,
@@ -318,17 +326,31 @@ mod tests {
             },
             PoolScope::Broadcast,
         )
-        .expect("nothing to offer, nothing asked of the relay");
+        .expect("nothing to offer");
         assert_eq!(unseen, vec![missing(), missing()]);
-        let refused = tx_relay(
+        assert!(
+            pool.offered.lock().expect("lock").is_empty(),
+            "a stem entry the caller may not see reaches no relay"
+        );
+        let host = tx_relay(
             &pool,
-            &tx::RelayIds { id: vec![id(1)] },
-            PoolScope::Broadcast,
+            &tx::RelayIds {
+                id: vec![id(2), id(7), id(1)],
+            },
+            PoolScope::WithUnbroadcast,
         )
-        .expect_err("no driver");
+        .expect("offered");
         assert_eq!(
-            refused.class,
-            shekyl_rpc_types::errors::ErrorClass::NotReady
+            host,
+            vec![
+                shared::Slot::Item(id(2)),
+                missing(),
+                shared::Slot::Item(id(1))
+            ]
+        );
+        assert_eq!(
+            *pool.offered.lock().expect("lock"),
+            vec![TxHash::from_bytes([2; 32]), TxHash::from_bytes([1; 32])]
         );
     }
 }

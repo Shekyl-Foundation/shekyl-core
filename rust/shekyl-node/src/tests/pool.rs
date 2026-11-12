@@ -124,3 +124,76 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         "the pool's id has no answer"
     );
 }
+
+/// `tx_relay` re-offers through the stem entry a fresh local submission
+/// takes. On a node with no network (clearnet and Tor off) that entry
+/// shows the transaction at once (RX-2), so a held entry the host
+/// re-offers turns public: before the offer the broadcast listing lacks
+/// it, after it the listing holds it. A caller without the host's view
+/// is not shown the held entry and its re-offer reaches nothing (IG-Q89).
+///
+/// Red edit: `PoolBridge::relay` collects the ids without offering them.
+#[test]
+fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
+    use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
+    use shekyl_daemon_rpc::info_facts::PoolScope;
+    use shekyl_daemon_rpc::pool_methods::{tx_relay, txpool_list};
+    use shekyl_rpc_types::wire::shared::{Slot, SlotState};
+    use shekyl_rpc_types::wire::tx::RelayIds;
+    use shekyl_rpc_types::HashHex;
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_posted(dir.path(), &[]);
+    let pool = node.pool().expect("a pool");
+    let held = pool.lock().expect("the pool").plant(
+        shekyl_chain_rules::harness::fixture::paying_fee(
+            shekyl_chain_rules::harness::fixture::listed([7; 32]),
+            1,
+        ),
+        PoolRecord {
+            received: ReceivedHour::from_raw(1),
+            public: false,
+        },
+    );
+    let handles = node.handles();
+    let id = HashHex::from_bytes(held.to_bytes());
+    let public = |handles: &shekyl_daemon_rpc::handles::Handles| {
+        txpool_list(&*handles.pool, PoolScope::Broadcast)
+            .unwrap_or_else(|_| panic!("a listing"))
+            .iter()
+            .any(|entry| entry.id == id)
+    };
+    let before = public(&handles);
+    let stranger = tx_relay(
+        &*handles.pool,
+        &RelayIds {
+            id: vec![id.clone()],
+        },
+        PoolScope::Broadcast,
+    );
+    let after_stranger = public(&handles);
+    let host = tx_relay(
+        &*handles.pool,
+        &RelayIds {
+            id: vec![id.clone()],
+        },
+        PoolScope::WithUnbroadcast,
+    );
+    let after_host = public(&handles);
+    node.stop();
+    assert!(!before, "a held entry is not public");
+    assert_eq!(
+        stranger.unwrap_or_else(|_| panic!("a stranger's re-offer answers")),
+        vec![Slot::State(SlotState::Missing(
+            shekyl_rpc_types::wire::shared::Null
+        ))]
+    );
+    assert!(!after_stranger, "a stranger's re-offer reaches nothing");
+    assert_eq!(
+        host.unwrap_or_else(|_| panic!("the host's re-offer answers")),
+        vec![Slot::Item(id)]
+    );
+    assert!(
+        after_host,
+        "the stem entry shows it on a node with no network"
+    );
+}

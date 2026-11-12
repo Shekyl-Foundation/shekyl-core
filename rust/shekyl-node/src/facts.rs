@@ -528,6 +528,9 @@ pub(crate) struct PoolBridge {
     health: PoolHealth,
     /// Where a flushed id's relay state is released.
     departed: shekyl_chain_ingest::service::Departed,
+    /// The stem entry a fresh local submission takes; `tx_relay`'s
+    /// re-offer enters the relay through it too.
+    stem: shekyl_daemon_rpc::submit::RelayNudge,
 }
 
 impl PoolBridge {
@@ -535,11 +538,13 @@ impl PoolBridge {
         pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
         health: PoolHealth,
         departed: shekyl_chain_ingest::service::Departed,
+        stem: shekyl_daemon_rpc::submit::RelayNudge,
     ) -> Self {
         Self {
             pool,
             health,
             departed,
+            stem,
         }
     }
 }
@@ -621,6 +626,30 @@ impl PoolFacts for PoolBridge {
             }
             gone
         })
+    }
+
+    /// Each id the pool holds is offered through the stem entry, as a
+    /// fresh local submission is; the ids offered. The pool's lock is
+    /// dropped before the first offer: the departure hook takes the relay
+    /// owner's map and then the pool, and an offer takes the map.
+    fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        let pool = self.pool()?;
+        let mut held: std::collections::BTreeMap<TxHash, Vec<u8>> = {
+            let asked: std::collections::BTreeSet<TxHash> = ids.iter().copied().collect();
+            let pool = lock(&pool);
+            pool.relay_view()
+                .entries()
+                .filter(|entry| asked.contains(&entry.id))
+                .map(|entry| (entry.id, entry.tx.serialize()))
+                .collect()
+        };
+        // In the order asked, each id once.
+        let held: Vec<(TxHash, Vec<u8>)> =
+            ids.iter().filter_map(|id| held.remove_entry(id)).collect();
+        for (id, blob) in &held {
+            (self.stem)(id, blob);
+        }
+        Ok(held.into_iter().map(|(id, _)| id).collect())
     }
 }
 

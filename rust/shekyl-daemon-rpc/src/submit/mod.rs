@@ -52,8 +52,8 @@ pub use facts::{
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
 pub use rust_pool_shim::{
-    clear_production, install_production, production, ChainSource, OriginHold, RustPoolShim,
-    StoreChain,
+    clear_production, install_production, production, ChainSource, OriginHold, RelayNudge,
+    RustPoolShim, StoreChain,
 };
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure, VerifyReject};

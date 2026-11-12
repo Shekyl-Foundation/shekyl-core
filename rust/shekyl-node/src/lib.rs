@@ -462,6 +462,7 @@ impl Node {
         let open_network::Started {
             network,
             sync_owner,
+            stem,
         } = seated;
         let rewinder = service.rewinder();
         let at_open = declared.state_at_open();
@@ -526,6 +527,7 @@ impl Node {
                 Arc::clone(&pool_slot),
                 pool_health.clone(),
                 Arc::clone(&departed),
+                stem,
             )),
             door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips.clone())),
             mining: Arc::clone(&mining) as _,

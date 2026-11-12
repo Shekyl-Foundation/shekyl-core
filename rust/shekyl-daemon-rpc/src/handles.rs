@@ -143,15 +143,15 @@ pub trait PoolFacts: Send + Sync {
     /// which retires the pool.
     fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>>;
 
-    /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
-    /// offered. The relay driver is RD's; until it is wired, not ready.
+    /// Offer `ids` to the relay again through the stem entry a fresh
+    /// local submission takes (`tx_relay`); the ids the pool held and
+    /// offered, in the order asked.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] until a relay driver is supplied.
-    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-        Err(FactsFault::NotReady)
-    }
+    /// [`FactsFault::NotReady`] when no pool was supplied, or the pool is
+    /// retired.
+    fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault>;
 }
 
 /// A pool handle.
@@ -560,6 +560,10 @@ impl PoolFacts for PoolAbsent {
 
     fn flush(&self, _ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
         Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        Err(FactsFault::NotReady)
     }
 }
 
