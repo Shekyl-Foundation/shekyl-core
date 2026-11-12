@@ -310,7 +310,7 @@ For the protocol specification of these properties, see
    - XChaCha20-Poly1305 under an HKDF-SHA-512 key per (intent, message
      type, sender), from the group transport secret
    - A random 24-byte nonce per blob, so a restored wallet cannot repeat one
-   - Key and plaintext zeroization after use
+   - The blob key and the plaintext working buffer zeroize on drop, including a seal the cipher refuses
 
 8. **CounterProof verification** (SS13.4)
    - 8-rule verification pipeline prevents forged advancement

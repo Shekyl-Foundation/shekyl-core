@@ -1316,17 +1316,22 @@ Every ceremony blob's payload is sealed with XChaCha20-Poly1305
 ```
 key    = HKDF-SHA-512(ikm = transport_secret).expand(
              "shekyl/multisig-blob-key-v1" ‖ intent_hash ‖ u8(message_type) ‖ u8(sender_index), 32)
-sealed = nonce(24, random) ‖ XChaCha20-Poly1305(key, nonce, aad = the blob header, payload) ‖ tag(16)
+aad    = version ‖ address_fingerprint ‖ intent_hash ‖ u8(sender_index)   // 66 bytes, BLOB_AAD_LEN
+sealed = nonce(24, random) ‖ XChaCha20-Poly1305(key, nonce, aad, payload) ‖ tag(16)
 ```
 
 `transport_secret` is the group transport secret every member file holds
-(§6.6), derived by the dealer under `salt_for`. The nonce is drawn at random
-for every blob: a nonce derived from a persisted counter would repeat after a
-wallet is restored from a backup, and a repeated nonce under this AEAD leaks
-the XOR of two payloads and the Poly1305 key. A ceremony's message counter
-orders blobs and refuses replays; it no longer keeps the AEAD safe. A blob
-sealed for one intent, message type or sender, or with another header, does
-not open as another.
+(§6.6), derived by the dealer under `salt_for`. The associated data is the
+envelope's prefix through the sender index
+(`SHEKYL_MULTISIG_WIRE_FORMAT.md` §4.3). The message type is a key field
+and stays inside the payload (SS12.5). The sender signature is not
+associated data: its preimage is the sealed payload, so binding it would
+make sealing and signing depend on each other. The nonce is drawn at
+random for every blob: a nonce derived from a persisted counter would
+repeat after a wallet is restored from a backup, and a repeated nonce
+under this AEAD leaks the XOR of two payloads and the Poly1305 key. A
+ceremony's message counter orders blobs and refuses replays; it is not an
+input to the AEAD. A blob sealed for one header does not open as another.
 
 ### 12.4 Multi-relay with operator uniqueness (mandatory)
 

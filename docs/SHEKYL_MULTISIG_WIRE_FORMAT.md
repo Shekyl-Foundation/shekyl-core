@@ -1,11 +1,12 @@
 # Shekyl Multisig Wire Format v1
 
-> **Status:** **Historical Option-D transport record — pending E′ rewrite.**
-> Was normative for V3.1 Option-D conformance; under Option E′ the `group_id`
-> field is retired (identity is the address fingerprint) and the wallet owns no
-> transport, so the envelope/relay framing below is not yet a conforming E′
-> spec. See the "Option-D residue" note under §1. A conforming E′ wire spec
-> lands with the transport slice.
+> **Status:** **Envelope tables are the Option-D record; §4 is the E′ seal.**
+> Under Option E′ the `group_id` field is retired (identity is the address
+> fingerprint) and the wallet owns no transport, so the envelope offset tables
+> are not yet a conforming E′ spec. See the "Option-D residue" note under §1.
+> **§4 is normative** for the ceremony blob and matches
+> `shekyl_crypto_pq::multisig_blob`. A full envelope rewrite lands with the
+> transport slice.
 >
 > **Spec version:** 1
 >
@@ -19,17 +20,18 @@ implementation can target this document without reading the full V3.1
 multisig spec. All multi-byte integers are **little-endian** unless
 stated otherwise.
 
-> **Option-D residue (2026-07-18, MS-5 PR-B / E′).** Two facts have moved
-> out from under this spec and it has **not** yet been rewritten to match:
-> (1) the `group_id` field named throughout (envelope offset 1, §2, §3, §4)
-> is the **retired** per-container Keccak-256 group hash — group identity is now the
-> **address fingerprint** (`PQC_MULTISIG.md` §5.3), and (2) under Option E′
-> the wallet **owns no transport** — the engine emits/consumes a
-> self-authenticating blob and this envelope/relay framing is not a wallet
-> responsibility (the E′ "no wallet transport" decision; see
-> `design/V3_1_MULTISIG_RUST_ENGINE.md`). The offset tables below are
-> retained as the Option-D transport record; a conforming E′ wire spec
-> lands with the transport slice, not here.
+> **Option-D residue (2026-07-18, MS-5 PR-B / E′; §4 rewritten 2026-11-12).**
+> Two facts have moved out from under the envelope tables and those tables
+> have **not** yet been rewritten to match: (1) the `group_id` field named
+> in the offset tables (envelope offset 1, §2, §3) is the **retired**
+> per-container Keccak-256 group hash — group identity is now the **address
+> fingerprint** (`PQC_MULTISIG.md` §5.3), and those 32 bytes are what §4
+> calls `address_fingerprint`; (2) under Option E′ the wallet **owns no
+> transport** — the engine emits/consumes a self-authenticating blob and
+> this envelope/relay framing is not a wallet responsibility (the E′ "no
+> wallet transport" decision; see `design/V3_1_MULTISIG_RUST_ENGINE.md`).
+> The offset tables are retained as the Option-D transport record. §4 is
+> the E′ seal. A conforming E′ envelope spec lands with the transport slice.
 
 ---
 
@@ -51,7 +53,7 @@ Offset   Size     Field                   Notes
 66       4        sig_len                 u32 LE, length of sender_sig
 70       sig_len  sender_sig              Hybrid signature over the §1.2 bytes (no production signer yet; see §1.2)
 70+S     4        payload_len             u32 LE, length of encrypted_payload
-74+S     P        encrypted_payload       AEAD ciphertext (see §4)
+74+S     P        encrypted_payload       sealed blob: nonce ‖ ciphertext ‖ tag (§4)
 ```
 
 Where `S = sig_len` and `P = payload_len`.
@@ -115,7 +117,7 @@ determines cross-implementation compatibility.
 | `MAX_VALIDITY_SECS` | `86400` | Maximum validity window (24h) |
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | `5` | Minimum ref block age in blocks (matches `src/cryptonote_config.h`; reduced from `10` in Decision 14) |
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | `100` | Maximum ref block age in blocks |
-| `MAX_RECIPIENTS` | `16` | Maximum recipients per intent |
+| `MAX_RECIPIENTS` | `16` | Maximum recipients per intent: the consensus output cap (`MAX_OUTPUTS`). Change is a recipient |
 | `MAX_INPUTS` | `8` | Maximum inputs per intent: the consensus cap (`MAX_FCMP_INPUTS`, CEN-I4) |
 | `MAX_ADDRESS_LEN` | `65536` | Maximum address byte length |
 
@@ -234,85 +236,89 @@ reserved and MUST NOT be sent in V3.1.
 
 ---
 
-## 4. AEAD Encryption
+## 4. Ceremony blob seal
 
-All payloads are encrypted with ChaCha20-Poly1305.
+`encrypted_payload` is one sealed blob from
+`shekyl_crypto_pq::multisig_blob` (Round 0 ruling R-4;
+`PQC_MULTISIG.md` §12.3). The Option-D ChaCha20-Poly1305 construction,
+its SHA-256 HKDF, its counter-derived 12-byte nonce and its empty
+associated data are deleted. Do not implement them.
 
-### 4.1 Key Derivation
+### 4.1 Key
 
 ```
-message_key = HKDF-Expand(
-    PRK  = group_shared_secret,       // 32 bytes
-    info = intent_hash                 // 32 bytes
-           || u8(message_type)         // 1 byte
-           || u8(sender_index),        // 1 byte
+key = HKDF-SHA-512(
+    ikm  = transport_secret,              // 32 bytes, the group transport secret
+    salt = empty,                         // RFC 5869's HashLen zero salt
+    info = "shekyl/multisig-blob-key-v1"  // LABEL_MULTISIG_BLOB_KEY
+           || intent_hash                 // 32 bytes
+           || u8(message_type)            // 1 byte
+           || u8(sender_index),           // 1 byte
     L    = 32
 )
 ```
 
-The HKDF uses SHA-256 as the hash function. `group_shared_secret` is
-the 32-byte shared secret established during DKG. The `info` field is
-the raw concatenation of these bytes with no length prefixes or
-delimiters — all three components are fixed-length (32 + 1 + 1 = 34
-bytes total).
+`transport_secret` is the group transport secret every member file
+holds (`PQC_MULTISIG.md` §6.6), derived by the dealer under `salt_for`.
+It is not the DKG shared secret. The `info` field is that label, then
+the raw concatenation of the three fixed-width fields, with no length
+prefixes. The message type is a key field. It is not written on the
+envelope in the clear (SS12.5).
 
-### 4.2 Nonce Derivation
+### 4.2 Nonce
 
-```
-nonce = HKDF-Expand(
-    PRK  = group_shared_secret,        // 32 bytes
-    info = b"nonce"                     // 5 bytes, ASCII literal
-           || u8(sender_index)          // 1 byte
-           || u64_le(message_counter),  // 8 bytes
-    L    = 12
-)
-```
+Each seal draws 24 bytes from a cryptographic RNG and writes them at
+the front of `encrypted_payload`. The nonce is not derived. A ceremony
+counter still orders blobs and refuses replays; it is not an input to
+this seal, and a restored wallet does not resume one. A nonce taken
+from a persisted counter would repeat after a restore, and a repeated
+nonce under this AEAD leaks the XOR of two payloads and the Poly1305 key.
 
-The `info` field is the raw concatenation with no delimiters (5 + 1 +
-8 = 14 bytes total).
+### 4.3 Associated data and ciphertext
 
-The `message_counter` is a per-sender monotonic counter that prevents
-nonce reuse. Each sender maintains their own counter independently.
-
-**Persistence requirements:** `message_counter` MUST be persisted
-durably to non-volatile storage. It MUST survive application restarts
-and OS reboots. On wallet restore from seed, the counter MUST be
-seeded to a value strictly greater than any value the wallet could have
-plausibly used. The recommended recovery strategy is to scan the
-wallet's own past envelopes from all configured relays and set the
-counter to `max_observed + 1`. If no past envelopes are found, start
-at `0`. Failure to persist the counter creates a nonce-reuse window
-exploitable by an attacker replaying old envelopes.
-
-### 4.3 Encryption
+The associated data is fixed width, [`BLOB_AAD_LEN`](../rust/shekyl-crypto-pq/src/multisig_blob.rs)
+bytes (66), and it is the envelope's own prefix through `sender_index`:
 
 ```
-ciphertext || tag = ChaCha20-Poly1305.Encrypt(
-    key       = message_key,
-    nonce     = nonce,
-    plaintext = DecryptedPayload,
-    aad       = (none)
-)
+aad = version                  // 1 byte
+      || address_fingerprint   // 32 bytes; the offset tables' retired group_id slot
+      || intent_hash           // 32 bytes
+      || u8(sender_index)      // 1 byte
 ```
 
-The `tag` is 16 bytes appended to the ciphertext. The total
-`encrypted_payload` length is `plaintext_len + 16`.
+`BlobHeader::associated_data` is that encoding. The sender signature is
+not in it: the signature's preimage is the sealed payload, so binding
+the signature here would make sealing and signing depend on each other.
+The payload length is not in it either: it is the length of the bytes
+that follow. The message type is not in it: the key binds the type, and
+the type lives inside the plaintext.
 
-### 4.4 Sensitive Material Lifecycle
+```
+encrypted_payload = nonce(24)
+                    || XChaCha20-Poly1305(key, nonce, aad, DecryptedPayload)
+                    || tag(16)
+```
+
+`encrypted_payload` length is `plaintext_len + 40`. A payload shorter
+than 40 bytes is not a sealed blob.
+
+### 4.4 Sensitive material
 
 Implementations MUST zeroize the following values when no longer needed:
 
-- **`message_key`**: zeroize immediately after each encrypt or decrypt
-  operation completes.
-- **Decrypted plaintext**: zeroize after the message body has been
-  parsed and processed.
-- **`group_shared_secret`**: lives for the lifetime of the wallet
-  session. MUST be zeroized on wallet close, session end, or process
-  exit. MUST be stored in memory pages excluded from swap/core dumps
-  where the OS supports it.
+- **The blob key**, immediately after each seal or open. The cipher
+  wipes its copy of the key on drop.
+- **The plaintext working buffer.** Seal keeps it in a zeroizing buffer
+  so a refusal does not free the unencrypted copy. Open returns the
+  plaintext in a zeroizing buffer; wipe it after the message body has
+  been parsed.
+- **`transport_secret`**: lives for the lifetime of the wallet session.
+  MUST be zeroized on wallet close, session end, or process exit. MUST
+  be stored in memory pages excluded from swap/core dumps where the OS
+  supports it.
 
-Nonce bytes are not sensitive (they are derived from public
-information and are implicitly disclosed by the ciphertext).
+The nonce is not sensitive. It is random and it travels with the
+ciphertext.
 
 ---
 
@@ -519,15 +525,16 @@ An implementation claiming V3.1 wire format conformance MUST:
    same `SpendIntent` inputs. The `intent_hash` equality follows from
    serialization equality, but it is the serialization itself that is
    the interoperability requirement.
-2. Successfully decrypt envelopes produced by any other conforming
-   implementation given the same `group_shared_secret`.
+2. Successfully open envelopes produced by any other conforming
+   implementation given the same group transport secret (§4.1).
 3. Reject envelopes with unknown version bytes (no silent skip).
 4. Reject unknown `message_type` bytes (no silent skip).
 5. Reject recipients that are not sorted per §2.3 or contain
    duplicates.
 6. Enforce all size bounds in §1.1 and §2.2 (reject oversized length
    prefixes without allocating).
-7. Persist `message_counter` durably per §4.2.
+7. Draw a fresh 24-byte nonce for every seal (§4.2). The ceremony
+   counter is not an input to the AEAD.
 8. Pass all canonical test vectors in `test_vectors/v3.1/`.
 
 ---
@@ -538,3 +545,4 @@ An implementation claiming V3.1 wire format conformance MUST:
 |---------|------|---------|
 | 1 | 2026-04-13 | Initial release for V3.1 |
 | 1.1 | 2026-04-14 | Tighten ambiguities: add size bounds on all length prefixes, clarify recipient sort order as unsigned bytewise comparison, fix signable header to include payload_len, clarify signable bytes gap semantics, add message_counter persistence requirements, add message body layouts for all 11 types, fix RotationIntent target to V3.2, expand zeroization guidance, require CSPRNG for file naming, strengthen conformance requirements |
+| 1.2 | 2026-11-12 | §4 is the E′ seal: XChaCha20-Poly1305, HKDF-SHA-512 under `shekyl/multisig-blob-key-v1` from the group transport secret, a random 24-byte nonce, and associated data of version ‖ address fingerprint ‖ intent hash ‖ sender index. The counter-derived nonce is not an AEAD input. |
