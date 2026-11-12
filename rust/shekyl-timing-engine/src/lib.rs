@@ -139,13 +139,18 @@ static PROCESS_ORIGIN: OnceLock<source::Reading> = OnceLock::new();
 /// clocks built at different times give comparable ticks; the instance
 /// holds no time of its own.
 ///
-/// It counts awake time on Linux, macOS and Windows: it does not advance
-/// while the machine is suspended, so a deadline is not late by the time
-/// the machine spent suspended, and a span it measures leaves the sleep
-/// out. On Linux it is `Instant`, which is `CLOCK_MONOTONIC`; on macOS it
-/// is `Instant`, which is `CLOCK_UPTIME_RAW`. On Windows `Instant` counts
-/// through a sleep, so the clock reads the unbiased interrupt time
-/// instead.
+/// It counts awake time: it does not advance while the machine is
+/// suspended, so a deadline is not late by the time the machine spent
+/// suspended, and a span it measures leaves the sleep out. On Linux it is
+/// `Instant`, which is `CLOCK_MONOTONIC`; on macOS it is `Instant`, which is
+/// `CLOCK_UPTIME_RAW`. On Windows `Instant` counts through every sleep, so
+/// the clock reads the unbiased interrupt time instead, which leaves out S3
+/// sleep and hibernation. It does not leave out Modern Standby (S0 low-power
+/// idle, the only sleep most current Windows laptops offer): the kernel
+/// keeps running, and the count went on through two standbys on 2026-11-11
+/// (`TOR_SUPERVISOR.md` §10, `TSR-M8`). A process frozen across a standby
+/// finds its deadlines late at the wake, and the Tor supervisor's resume
+/// check reads that as a wake.
 #[derive(Clone, Debug)]
 pub struct MonotonicClock {
     origin: &'static source::Reading,

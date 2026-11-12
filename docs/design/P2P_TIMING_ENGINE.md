@@ -248,7 +248,10 @@ whole process (the first reading any `MonotonicClock` took). It counts
 awake time, so a deadline is not late by the time the machine spent
 suspended. On Linux the reading is `Instant` (`CLOCK_MONOTONIC`). On
 macOS the reading is `Instant` (`CLOCK_UPTIME_RAW`). On Windows `Instant`
-counts through a sleep, so the reading is `QueryUnbiasedInterruptTimePrecise`.
+counts through every sleep, so the reading is
+`QueryUnbiasedInterruptTimePrecise`, which leaves out S3 sleep and
+hibernation but not Modern Standby (S0): through a standby it counts on, as
+measured on 2026-11-11 (`TOR_SUPERVISOR.md` §10, `TSR-M8`).
 The transport layer and the dialer use this clock. They do not keep their own.
 
 The engine thread sleeps on `Clock::wait_for`. It does not link tokio. A

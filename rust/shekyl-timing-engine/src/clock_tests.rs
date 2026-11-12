@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The process clock's source. That it leaves a sleep out is shown on a
-//! real sleep (`TOR_SUPERVISOR.md` §10, `TSR-M8`); these show that it is
-//! the source named and that an awake span keeps its length and its
+//! The process clock's source. What it leaves out of a real sleep is
+//! measured, not tested (`TOR_SUPERVISOR.md` §10, `TSR-M8`); these show that
+//! it is the source named and that an awake span keeps its length and its
 //! resolution. On Windows they run in `tor-pin-verify`'s Windows entry.
 
 use std::time::{Duration, Instant};
