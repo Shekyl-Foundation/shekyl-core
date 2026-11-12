@@ -18,8 +18,8 @@
 //! `0x04` is `V(count) · count×32`; `0x00` padding is a run of zero bytes
 //! (≤ [`TX_EXTRA_PADDING_MAX_COUNT`]). Inherited Monero tags that are **not**
 //! part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
-//! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay
-//! retired. The coinbase admission grammar (CEN-I20) is [`coinbase`]: one
+//! minergate" (`0xDE`) — are **rejected** (rule 60): they parse as unknown
+//! tags. The coinbase admission grammar (CEN-I20) is [`coinbase`]: one
 //! constructor and one slice match. The `0x0D` entry codec is [`multisig`].
 //! This file is the tag parser those call.
 
@@ -60,9 +60,8 @@ pub const TX_EXTRA_TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
 // entry with no producer and no reader, superseded by the in-circuit
 // leaf-commitment binding (`PL-D3`, `docs/FCMP_PLUS_PLUS.md` "PQC ownership
 // binding") and by the address fingerprint as group identity
-// (`docs/PQC_MULTISIG.md` §5.3). REJECTED 2026-09-22; the byte stays retired
-// like `0x03` / `0xDE`, so a later tag cannot reuse a meaning
-// old software parsed differently.
+// (`docs/PQC_MULTISIG.md` §5.3). REJECTED 2026-09-22; it parses as an
+// unknown tag.
 /// `0x06` — per-output hybrid KEM ciphertexts.
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
 /// `0x07` — per-output PQC leaf entries (`CM ‖ record`, `PL-D3`; the
@@ -75,8 +74,7 @@ pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
 // `0x09` was the Option D multisig view-tag hints and `0x0A` its per-member
 // spend-auth pubkeys. Option E′ replaced both with `0x0D` (one entry per
 // multisig output; `docs/PQC_MULTISIG.md` §7.4). Neither ever had a
-// producer. Both bytes stay retired like `0x03` / `0x05` / `0xDE` — never
-// reused — and parse as unknown tags.
+// producer. Both parse as unknown tags.
 
 /// `0x0C` — the secret draw's commitment: 32 bytes, no length prefix, as
 /// the pubkey is encoded (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2; `SO-D12i`).

@@ -395,19 +395,16 @@ fn bond_post_spend_with_kind(kind: BondPostKind) -> Transaction {
     tx
 }
 
-/// `Other` carrying the JoinMarket tag (5) or the retired keyless one (0)
-/// is a misconstruction that never validates. Today the size bound's
-/// counting write reaches the writer's guard first and panics on it
-/// (`serialized_len` `.expect`s the write; the conformance registry's note
-/// on the `Other` invariant), before `BondPost::validate`'s own guard
-/// returns its error. Either is a refusal, so this asserts the one thing
-/// both give — never `Ok` — and that the two tags get the same.
-/// `Other(2)` (Release) is the control: the guard is the tag, not `Other`.
+/// `Other` carrying the JoinMarket tag (5) is a misconstruction that never
+/// validates. Today the size bound's counting write reaches the writer's
+/// guard first and panics on it (`serialized_len` `.expect`s the write; the
+/// conformance registry's note on the `Other` invariant), before
+/// `BondPost::validate`'s own guard returns its error. Either is a refusal,
+/// so this asserts the one thing both give — never `Ok`. `Other(2)`
+/// (Release) is the control: the guard is the tag, not `Other`.
 #[test]
 fn bond_post_other_with_a_joinmarket_tag_never_validates() {
-    use shekyl_wire::transaction::{
-        BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
-    };
+    use shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
     // `Err(message)` for a returned refusal, `Err(panic message)` for the
     // writer's guard reached through the counting write.
     let outcome = |tag: u8| -> Result<(), String> {
@@ -423,10 +420,7 @@ fn bond_post_other_with_a_joinmarket_tag_never_validates() {
         }
     };
     let live = outcome(BOND_POST_KIND_JOINMARKET).expect_err("Other(5) never validates");
-    let retired =
-        outcome(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET).expect_err("Other(0) never validates");
     assert!(live.contains("must not use the JoinMarket tag"), "{live}");
-    assert_eq!(retired, live);
     assert_eq!(outcome(2), Ok(()), "Other(Release) is not a JoinMarket tag");
 }
 

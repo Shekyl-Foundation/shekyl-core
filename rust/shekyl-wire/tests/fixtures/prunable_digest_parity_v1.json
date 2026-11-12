@@ -29,16 +29,6 @@
       "prunable_hash_hex": "57326f9e8cd485d3d85a3a5d32f2af74ca93cc4af9c33c640fd36d63b17a0371"
     },
     {
-      "class": "bond-post",
-      "name": "bond-post-to_key-bond_post",
-      "prunable_hash_hex": "06674043d2fba727b1df5560c854c0e56176b3cef597bd1fe6d18f0a56d3237e"
-    },
-    {
-      "class": "bond-post",
-      "name": "emission-bond-post-to_key-bond_post",
-      "prunable_hash_hex": "aa33f2daba112c9e034bb4a356a133fc80509051e9a2940297fc358b8bf2384e"
-    },
-    {
       "class": "emission",
       "name": "emission-to_key-to_key-emission",
       "prunable_hash_hex": "e74070650d7ab2dec2d6167963fe7d254a07e75a133fe1c4217bd1385b978620"

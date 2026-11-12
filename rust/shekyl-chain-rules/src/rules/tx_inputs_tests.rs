@@ -20,7 +20,7 @@ use crate::verdict::TxSlot;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{BondPost, BondPostKind, Ct, Input, RetiredKeylessJoinMarket, Transaction};
+use shekyl_wire::{BondPost, BondPostKind, Ct, Input, Transaction};
 
 /// The fixture spend's key image, the same point `tx_tests` pins.
 const KI: [u8; 32] = point(9);
@@ -603,9 +603,9 @@ fn j28_a_receipt_key_that_does_not_parse_is_refused() {
 }
 
 /// A JoinMarket with no receipt key does not exist for CEN-J28 to judge:
-/// the fixture join's bytes with the kind byte set back to the retired
-/// keyless `0` do not parse, and neither do they with the key cut out under
-/// kind 5. And the older rows name first: a post wrong in `bond_spend_pk`
+/// the fixture join's bytes with the kind byte set to `0`, an unknown kind,
+/// do not parse (the JoinMarket's coupled fields are no holdings), and
+/// neither do they with the key cut out under kind 5. And the older rows name first: a post wrong in `bond_spend_pk`
 /// too is J12's, and one wrong in its hint J11's.
 #[test]
 fn j28_no_join_market_without_a_key_parses_and_older_rows_name_first() {
@@ -632,16 +632,10 @@ fn j28_no_join_market_without_a_key_parses_and_older_rows_name_first() {
         bytes[kind_at],
         shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET
     );
-    let mut retired = bytes.clone();
-    retired[kind_at] = 0;
-    let err = Transaction::from_bytes(&retired).expect_err("post_kind 0 does not parse");
-    // The typed cause, not its sentence: `RetiredKeylessJoinMarket` is what
-    // `BondPost::read` puts inside the `io::Error`.
-    assert!(
-        err.get_ref()
-            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
-        "{err}"
-    );
+    let mut unknown_kind = bytes.clone();
+    unknown_kind[kind_at] = 0;
+    let err = Transaction::from_bytes(&unknown_kind).expect_err("post_kind 0 does not parse");
+    assert!(err.to_string().contains("holdings kind"), "{err}");
     // The keyless layout under the live byte: cut `varint(1837) ‖ key`.
     let key_field_at = kind_at + 1 + 2 + PQC_HYBRID_SINGLE_KEY_LEN;
     let mut keyless = bytes.clone();

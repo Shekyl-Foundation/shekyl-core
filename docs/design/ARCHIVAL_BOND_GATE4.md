@@ -263,8 +263,8 @@ enum BondPostKind {
   Reinstate  = 1,
   Release    = 2,
   JoinMarket = 5, // commits bond_spend_pk, the receipt key and the endpoint (FN_DSA_HYBRID.md §8)
-  // 0 = the keyless JoinMarket: RETIRED 2026-10-12 — the receipt key is mandatory. Not a variant;
-  //     `from_u8(0)` is `InvalidPostKind`.
+  // 0 = unassigned (the keyless JoinMarket, deleted in the switch's C7, 2026-11-11):
+  //     `from_u8(0)` is `InvalidPostKind`, as for every unknown kind.
   // 3 = HoldingsUpdate: REJECTED 2026-09-20 — not a variant; `from_u8(3)` is `InvalidPostKind`
   //     (PR #808).
   // 4 = EndpointUpdate: REJECTED 2026-09-13 (ARCHIVAL_ENDPOINT_UPDATE.md) — not a variant either.

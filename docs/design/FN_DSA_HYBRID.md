@@ -296,7 +296,7 @@ post.
 
 | Piece | Where |
 | --- | --- |
-| The wire | Bond-post `post_kind` **`5`** is the JoinMarket, its one form: `varint ‖ bond_spend_pk`, `varint(1837) ‖ receipt_sign_pk`, `endpoint[32]`. `post_kind` `0`, the keyless JoinMarket, is retired and refused at parse by both decoders. Both representations hold the key as a typed, non-optional field of the JoinMarket variant (`shekyl_wire::BondPostKind`, `shekyl_archival_retention::BondKind`) |
+| The wire | Bond-post `post_kind` **`5`** is the JoinMarket, its one form: `varint ‖ bond_spend_pk`, `varint(1837) ‖ receipt_sign_pk`, `endpoint[32]`. `post_kind` `0` is unassigned: the keyless JoinMarket is deleted (switch C7, 2026-11-11), so the wire reads the byte as an unknown kind and the bond-post decoder refuses it (`InvalidPostKind`), as it refuses every unknown kind. Both representations hold the key as a typed, non-optional field of the JoinMarket variant (`shekyl_wire::BondPostKind`, `shekyl_archival_retention::BondKind`) |
 | The type | `shekyl_types::archival::ReceiptSignPk`: exactly `RECEIPT_SIGN_PK_LEN` (1,837) bytes. It lives in `shekyl-types` because the wire, the validator and both stores carry it and that crate holds the words they share (rule 18); parsing it as a key stays in `shekyl-crypto-pq` (`FnDsaHybridPublicKey::from_receipt_sign_pk`, `to_receipt_sign_pk`), which asserts at compile time that the two lengths are one |
 | "Is this a JoinMarket?" | `BondPostKind::is_join_market` (retention) and `is_join_market_post_kind` (wire), each one predicate over one byte |
 | Admission | **CEN-J28**: the key parses as a canonical `FnDsaHybridPublicKey`. `rules::tx_inputs::J28`, in `tx_form` after J11 and J12. A JoinMarket with no key, or with one of another length, is unrepresentable in the type and refused at parse, so the row judges the key's content |
@@ -327,8 +327,9 @@ is recorded UNREVIEWED in the conformance register for that reason.
 
 **What was retired** (`FND-19`). Captured C++ material that contains a
 JoinMarket contains a keyless one. Two captured chains are replayed only
-below their join, and three fixture files' bond-post bodies are held to
-their refusal on the Rust side.
+below their join. The switch's C7 deleted the keyless kind outright
+(2026-11-11): `0` is an unknown kind, and the two fixtures that held
+C++-captured keyless bond posts dropped those entries.
 
 **Not in this increment.** Nothing signs with the receipt key: receipts
 still verify as they did, and move to this key in increment 4.

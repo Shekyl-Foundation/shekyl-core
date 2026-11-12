@@ -103,46 +103,14 @@ pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 /// persona's receipt key and the serving endpoint, present on the wire iff
 /// `post_kind == JOINMARKET` (§9.11, `EU-D3`, `FN_DSA_HYBRID.md` §8).
 ///
-/// The byte is `5` because `0`, `3` and `4` are refused names, not free
-/// ones (rule 23): `0` was the keyless JoinMarket
-/// ([`BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET`]); `3` was `HoldingsUpdate`
-/// (REJECTED 2026-09-20, immutable-bond); `4` was `EndpointUpdate` (REJECTED
-/// 2026-09-13, `ARCHIVAL_ENDPOINT_UPDATE.md`: a bonded persona's endpoint
-/// never changes). None is reused.
+/// The byte is `5` because `3` and `4` are refused names, not free ones
+/// (rule 23): `3` was `HoldingsUpdate` (REJECTED 2026-09-20,
+/// immutable-bond); `4` was `EndpointUpdate` (REJECTED 2026-09-13,
+/// `ARCHIVAL_ENDPOINT_UPDATE.md`: a bonded persona's endpoint never
+/// changes). Neither is reused. `0` is unassigned: a kind byte of `0`
+/// reads as [`BondPostKind::Other`] and is refused where every unknown kind
+/// is, by the bond post's decoder (`InvalidPostKind`).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 5;
-/// `post_kind` `0`: the JoinMarket that committed no receipt key. **RETIRED
-/// 2026-10-12** (ruling on PR #1046): the receipt key is mandatory, and a
-/// keyless join would put a pair in the drawable set that the `h_open(E)`
-/// snapshot cannot build, blocking every bundle for that epoch. The byte is
-/// refused at parse — its coupled fields would otherwise be read as holdings
-/// — and is never reassigned.
-pub const BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET: u8 = 0;
-
-/// `post_kind` 0, refused at parse (`FN_DSA_HYBRID.md` §8, `FND-19`).
-///
-/// [`BondPost::read`] returns this inside an [`io::Error`]. A caller that
-/// has to tell this refusal from every other malformed transaction matches
-/// [`Self::downcast_is`] on [`io::Error::get_ref`]; the sentence is what a
-/// human and the conformance table's read-face row see.
-#[derive(Debug)]
-pub struct RetiredKeylessJoinMarket;
-
-impl RetiredKeylessJoinMarket {
-    /// Whether `cause` — the inner error of an [`io::Error`] — is this refusal.
-    #[must_use]
-    pub fn downcast_is(cause: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-        cause.is::<Self>()
-    }
-}
-
-impl std::fmt::Display for RetiredKeylessJoinMarket {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("shekyl-wire: bond_post post_kind 0 is the retired keyless JoinMarket")
-    }
-}
-
-impl std::error::Error for RetiredKeylessJoinMarket {}
-
 /// Whether `post_kind` is a JoinMarket. The one predicate every byte-level
 /// "is this a JoinMarket?" reads, so a consumer that records the wire byte
 /// asks the definition that produced it.
@@ -151,13 +119,6 @@ pub const fn is_join_market_post_kind(post_kind: u8) -> bool {
     post_kind == BOND_POST_KIND_JOINMARKET
 }
 
-/// Whether `post_kind` is a byte [`BondPostKind::Other`] may not carry: the
-/// JoinMarket's own tag, or the retired keyless JoinMarket's. Either would
-/// serialize as a blob with no coupled fields that `read` does not read
-/// back as the value written.
-const fn is_join_market_tag_live_or_retired(post_kind: u8) -> bool {
-    is_join_market_post_kind(post_kind) || post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET
-}
 /// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
 /// persona's v3 onion service. Present iff JoinMarket (`EU-D3`).
 pub const BOND_POST_ENDPOINT_LEN: usize = 32;
@@ -703,7 +664,7 @@ impl BondPost {
                 // (consuming the holdings bytes as the key), and carrying the
                 // retired keyless tag (`0x00`) one that `read` refuses. Reject
                 // the misconstruction rather than emit it.
-                if is_join_market_tag_live_or_retired(*post_kind) {
+                if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
                          (use BondPostKind::JoinMarket)",
@@ -723,9 +684,9 @@ impl BondPost {
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = PCanonicalId::from_bytes(read_array(r)?);
         let post_kind = read_byte(r)?;
-        // `read` never yields `Other(JOINMARKET)` nor `Other(0)`: the JoinMarket
-        // tag always takes the first arm and the retired keyless tag is
-        // refused, so the `write` guard above only fires on a hand-built value.
+        // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always
+        // takes the first arm, so the `write` guard above only fires on a
+        // hand-built value.
         let kind = if is_join_market_post_kind(post_kind) {
             let bond_spend_pk =
                 read_len_prefixed_exact(r, "bond_spend_pk", PQC_HYBRID_SINGLE_KEY_LEN)?;
@@ -736,11 +697,6 @@ impl BondPost {
                 receipt_sign_pk,
                 endpoint: read_array(r)?,
             }
-        } else if post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET {
-            // A keyless JoinMarket's coupled fields follow this byte on the
-            // wire; read as `Other` they would be taken for the holdings.
-            // The type, not the sentence, is what a caller matches.
-            return Err(io::Error::other(RetiredKeylessJoinMarket));
         } else {
             BondPostKind::Other(post_kind)
         };
@@ -781,7 +737,7 @@ impl BondPost {
             // mis-parse) — nor the retired keyless one (`0x00`), which `read`
             // refuses.
             BondPostKind::Other(post_kind) => {
-                if is_join_market_tag_live_or_retired(*post_kind) {
+                if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag",
                     ));

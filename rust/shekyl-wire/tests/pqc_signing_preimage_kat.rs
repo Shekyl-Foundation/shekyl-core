@@ -20,23 +20,19 @@
 //!                        [tx_signable, pqc_header(i), key_hashes, prunable_hash])
 //! ```
 //!
-//! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of eight
+//! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of five
 //! daemon-accepted transactions, the transaction's bytes and — **per input** —
 //! the payload bytes and the signed hash, as the **specification's output**:
 //! what §1.1 defines for those bytes. The transactions are real: every one
 //! was accepted and connected by a running `shekyld` (the captured chains
-//! under `shekyl-chain-ingest/tests/vectors`, the live-oracle spend, the
-//! serve-credit parity capture), chosen so the shapes a divergence could hide
-//! in are all present — one input, two, six (twice: a captured chain's and
-//! the live oracle's), the bond post's `to_key ‖ bond_post` and the
-//! emission's `to_key ‖ to_key ‖ emission` (mixed archival
-//! arms, whose pseudo-out count is the *spend* subset), and the serve-credit
-//! form, which has **no** preimage at all — not because it is unsigned, but
-//! because consensus forbids it `pqc_auths` (CEN-H20) and its hybrid
-//! countersignature is over the pass record, by the bond's registered key,
-//! with the Ed25519 leg on the vin and the ML-DSA leg in the pruned record
-//! (the serve-credit verifier, CEN-J10, pending in `shekyl-chain-rules`). Its zero entry here
-//! is that boundary recorded, and it is why CEN-I18 is vacuous on the form.
+//! under `shekyl-chain-ingest/tests/vectors` and the live-oracle spend),
+//! chosen so the shapes a divergence could hide in are all present — one
+//! input, two, six (twice: a captured chain's and the live oracle's), and the
+//! emission's `to_key ‖ to_key ‖ emission` (mixed archival arms, whose
+//! pseudo-out count is the *spend* subset). *Records-was:* the fixture also
+//! held a serve-credit body, whose form had no preimage, and two keyless
+//! JoinMarket bond posts; both forms are deleted (C7) and their entries with
+//! them.
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in
 //! C++ (`tx_pqc_verify.cpp`, `get_transaction_signed_payload`) until E6
@@ -62,7 +58,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::SigningPayloadHash;
-use shekyl_wire::{Ct, PqcSigningPreimage, RetiredKeylessJoinMarket, Transaction};
+use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
 
@@ -159,36 +155,13 @@ impl SubjectBytes {
     }
 }
 
-/// The two fixture bodies that are **keyless JoinMarket bond posts**
-/// (`post_kind` 0), captured from the C++ daemon. Retired from this test's
-/// Rust-side derivation 2026-10-12 (ruling on PR #1046; `FN_DSA_HYBRID.md`
-/// `FND-19`): the receipt key is mandatory, the keyless byte is refused at
-/// parse, and a C++ capture can never contain a key-carrying JoinMarket —
-/// its serializer has no such kind. The fixture file is untouched, because
-/// the C++ leg still parses these bytes; here each is held to exactly one
-/// thing, that it is refused for being the retired form, and to whatever
-/// the test checks without parsing. The JoinMarket's preimage and digest
-/// are witnessed on Rust-built posts instead (`shekyl-chain-rules`,
+/// The subjects, in the fixture's order. *Records-was:* the two C++-captured
+/// bond posts (`bond-post-to_key-bond_post`, `emission-bond-post-to_key-bond_post`)
+/// were keyless JoinMarkets, `post_kind` 0; the kind is deleted (C7, 2026-11-11)
+/// and they left the fixture with it. The JoinMarket's preimage and digest are
+/// witnessed on Rust-built posts (`shekyl-chain-rules`,
 /// `i18_the_identity_signature_covers_the_join_markets_receipt_key`; the
 /// ingest's `a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it`).
-const RETIRED_KEYLESS_BOND_POSTS: [&str; 2] = [
-    "bond-post-to_key-bond_post",
-    "emission-bond-post-to_key-bond_post",
-];
-
-/// `bytes` is refused by the parser for carrying the retired keyless
-/// JoinMarket byte, and for nothing else — matched on the typed cause
-/// `BondPost::read` returns, not on the sentence it displays.
-fn refused_as_the_retired_keyless_join_market(name: &str, bytes: &[u8]) {
-    let err = Transaction::from_bytes(bytes).expect_err("a keyless JoinMarket no longer parses");
-    assert!(
-        err.get_ref()
-            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
-        "{name}: refused for another reason: {err}"
-    );
-}
-
-/// The eight subjects, in the fixture's order.
 fn subjects() -> Vec<Subject> {
     vec![
         Subject {
@@ -221,22 +194,6 @@ fn subjects() -> Vec<Subject> {
             bytes: SubjectBytes::Fixture {
                 path: "tests/fixtures/live_oracle_spend_v1.json",
                 field: "tx_hex",
-            },
-        },
-        Subject {
-            name: "bond-post-to_key-bond_post",
-            source: "shekyl-chain-ingest/tests/vectors/bond-post (daemon-accepted, connected)",
-            bytes: SubjectBytes::CapturedChain {
-                shape: "bond-post",
-                txid: "1292cfc5035c57c704b6ad9c04aa462da7bd960839fba301dee97dbe9f58b8cc",
-            },
-        },
-        Subject {
-            name: "emission-bond-post-to_key-bond_post",
-            source: "shekyl-chain-ingest/tests/vectors/emission-claim (daemon-accepted, connected)",
-            bytes: SubjectBytes::CapturedChain {
-                shape: "emission-claim",
-                txid: "3e3c7e7951f66ec01ea1084be1e968712d9a3daf5f974795443e63a362ffa438",
             },
         },
         Subject {
@@ -292,7 +249,7 @@ fn emit_pqc_signing_preimage_kat_inputs() {
 }
 
 /// The Rust leg: this crate's derivation reproduces every captured payload
-/// and hash, transaction by transaction, input by input; the eight shapes
+/// and hash, transaction by transaction, input by input; the shapes
 /// are all present; the serve-credit form yields nothing (its signature is
 /// CEN-J10's, over the pass record — see the module doc).
 #[test]
@@ -328,11 +285,9 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         );
     }
     let mut input_counts = Vec::new();
-    let mut retired_seen = 0;
     for entry in transactions {
         let name = entry["name"].as_str().expect("name");
         let tx_bytes = hex_bytes(entry["tx_hex"].as_str().expect("tx_hex"));
-        let retired = RETIRED_KEYLESS_BOND_POSTS.contains(&name);
         let payloads: Vec<Vec<u8>> = entry["payloads_hex"]
             .as_array()
             .expect("payloads_hex")
@@ -354,14 +309,6 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
                 *hash,
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
-        }
-        if retired {
-            // The fixture's own consistency above still holds for these
-            // bytes; the derivation below needs a parse this crate no
-            // longer gives a keyless JoinMarket.
-            refused_as_the_retired_keyless_join_market(name, &tx_bytes);
-            retired_seen += 1;
-            continue;
         }
         let tx = Transaction::from_bytes(&tx_bytes)
             .unwrap_or_else(|e| panic!("{name}: the pinned bytes parse: {e}"));
@@ -451,14 +398,6 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
     assert!(
         input_counts.iter().any(|(_, inputs, _)| *inputs >= 6),
         "a many-input spend"
-    );
-    // *Was:* "a bond post" among the derived shapes. The fixture's two bond
-    // posts are keyless JoinMarkets and are retired above; both are still
-    // in the fixture and both were seen refused as that form.
-    assert_eq!(
-        retired_seen,
-        RETIRED_KEYLESS_BOND_POSTS.len(),
-        "each retired bond post is in the fixture and is refused as the retired form"
     );
     assert!(
         !input_counts
