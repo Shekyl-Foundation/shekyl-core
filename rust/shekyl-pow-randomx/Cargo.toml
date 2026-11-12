@@ -120,6 +120,10 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # both benches are **informational baselines** (recorded in
 # `BENCH_RESULTS.md`), not enforced PR gates.
 criterion = { version = "0.5", features = ["html_reports"] }
+# `cache_derive_iai`: the derive counted in instructions, the drift gate on
+# the hashing actor's rebuild bound (`RANDOMX_CACHE_ACTOR.md` §5.8). The
+# version the workspace's other gungraun rows use.
+gungraun = "0.19"
 
 [[bench]]
 # `Cache::derive(&KEY)` end-to-end (Argon2d 256 MiB + 8 ×
@@ -129,6 +133,13 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # in `RANDOMX_V2_PHASE2C_PLAN.md` §14. See `benches/cache_derive.rs`
 # for the harness rationale and the threshold-enforcement disposition.
 name = "cache_derive"
+harness = false
+
+[[bench]]
+# One `PreparedCache::derive` in instructions (gungraun): the drift gate
+# beside the criterion row above. Registered in
+# `scripts/bench/capture_rust_baseline.sh`.
+name = "cache_derive_iai"
 harness = false
 
 [[bench]]

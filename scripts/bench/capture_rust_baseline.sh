@@ -120,6 +120,12 @@ BENCHES=(
   # criterion arm signs through the production entry and reports the
   # distribution. The floor-device figures are BA-T33's T3 arm.
   "shekyl-crypto-pq:fn_dsa_hybrid:fn_dsa_hybrid_iai"
+  # The hashing actor's rebuild bound (RANDOMX_CACHE_ACTOR.md §5.8): one
+  # PreparedCache::derive. Every forced rebuild the actor's wargame counts
+  # (§5.9, §9) is this work, so a dearer derive moves those bounds. The
+  # criterion arm is wall clock on this host; the floor device's figure is
+  # docs/benchmarks/cache_derive_pi4_20261110.txt.
+  "shekyl-pow-randomx:cache_derive:cache_derive_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.

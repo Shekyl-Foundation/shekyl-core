@@ -64,6 +64,10 @@ members = [
     # by priority class. See docs/design/DRS_X_STORE_FLIP.md.
     "shekyl-hash-budget",
 
+    # The one owner of every RandomX cache (docs/design/RANDOMX_CACHE_ACTOR.md,
+    # HA-R1…HA-R8): three places, jobs before warm residency.
+    "shekyl-hasher",
+
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
     # the genesis tx key deterministically (domain-separated cSHAKE over the
