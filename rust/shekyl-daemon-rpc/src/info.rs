@@ -264,7 +264,9 @@ pub fn daemon_status(
         syncing: chain.busy_syncing,
         offline: chain.offline,
         degraded: chain.following_degraded,
-        peered: sessions.map(|s| s.has_peers()).into(),
+        peered: sessions
+            .map(crate::info_facts::SessionCounts::has_peers)
+            .into(),
         writer: crate::reads::writer_of(halt),
         protocol_version: Integer(chain.protocol_version),
         difficulty: HexU128(chain.difficulty),

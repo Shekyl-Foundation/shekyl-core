@@ -389,23 +389,25 @@ mod fetch {
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
-    use shekyl_rpc_client::{Rpc, RpcError};
-    use shekyl_rpc_types::{
-        BlockEntry, BlockTx, BlockTxSkeleton, GetBlocksByHeightRequest, GetBlocksByHeightResponse,
-        RpcStatus,
-    };
+    use shekyl_rpc_client::{wire, Rpc, RpcError, RpcMethod};
+    use shekyl_rpc_types::hash::HashHex;
+    use shekyl_rpc_types::kinds::{Bytes, Integer, Size};
+    use shekyl_rpc_types::nullable::Nullable;
+    use shekyl_rpc_types::wire::block::BlockTx;
+    use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived};
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
 
     use super::three_blocks;
     use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
-    use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
+    use crate::fetch::{fetch_corpus, FetchFault};
     use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
     use shekyl_network::Network;
 
-    /// One recorded request: the route and the heights asked.
+    /// One recorded request: the method and the heights asked.
     type Asked = (String, Vec<u64>);
 
-    /// A transport that answers from a script and records what it was asked.
+    /// A transport that answers from a script of JSON-RPC replies and
+    /// records what it was asked.
     #[derive(Clone)]
     struct Scripted {
         replies: Arc<Mutex<VecDeque<Vec<u8>>>>,
@@ -413,12 +415,23 @@ mod fetch {
     }
 
     impl Scripted {
-        fn new(replies: &[GetBlocksByHeightResponse]) -> Self {
+        /// Each reply a `block_list` result.
+        fn new(results: &[serde_json::Value]) -> Self {
+            Self::envelopes(
+                &results
+                    .iter()
+                    .map(|result| serde_json::json!({"jsonrpc": "2.0", "id": 0, "result": result}))
+                    .collect::<Vec<_>>(),
+            )
+        }
+
+        /// Each reply a whole JSON-RPC envelope.
+        fn envelopes(envelopes: &[serde_json::Value]) -> Self {
             Self {
                 replies: Arc::new(Mutex::new(
-                    replies
+                    envelopes
                         .iter()
-                        .map(|r| r.to_bin().expect("encode"))
+                        .map(|envelope| serde_json::to_vec(envelope).expect("encode"))
                         .collect(),
                 )),
                 asked: Arc::new(Mutex::new(Vec::new())),
@@ -429,39 +442,69 @@ mod fetch {
     impl Rpc for Scripted {
         fn post(
             &self,
-            route: &str,
+            _route: &str,
             body: Vec<u8>,
         ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-            let req = GetBlocksByHeightRequest::from_bin(&body).expect("a by-height request");
-            self.asked
-                .lock()
-                .expect("lock")
-                .push((route.to_owned(), req.heights));
+            let request: serde_json::Value = serde_json::from_slice(&body).expect("a request");
+            let heights = request["params"]["height"]
+                .as_array()
+                .expect("a by-height request")
+                .iter()
+                .map(|h| h.as_u64().expect("a height"))
+                .collect();
+            self.asked.lock().expect("lock").push((
+                request["method"].as_str().expect("a method").to_owned(),
+                heights,
+            ));
             let next = self.replies.lock().expect("lock").pop_front();
             async move { next.ok_or_else(|| RpcError::ConnectionError("script exhausted".into())) }
         }
     }
 
+    /// A served block's header. Nothing here is read by the fetch.
+    fn header(height: u64) -> serde_json::Value {
+        let zero = "00".repeat(32);
+        serde_json::json!({
+            "height": height, "hash": zero, "parent": zero, "version_major": 1,
+            "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
+            "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
+            "weight": 0, "weight_longterm": 0, "tx_count": 0, "pow": null,
+            "coinbase": zero, "curve_root": zero, "attestation_root": zero,
+        })
+    }
+
     /// A full-form reply: every listed body whole.
-    fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> GetBlocksByHeightResponse {
-        reply_with(entries, |body| BlockTx::Full(body.clone()))
+    fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> serde_json::Value {
+        reply_with(entries, |body| {
+            OrArchived::Item(BlockTx {
+                id: HashHex::ZERO,
+                body: Bytes(body.clone()),
+                prunable_hash: HashHex::ZERO,
+                pqc_auth_hash: Nullable(None),
+                archival_size: Size(0),
+            })
+        })
     }
 
     /// A full-form reply with each body shaped by `slot`.
     fn reply_with(
         entries: &[(Vec<u8>, Vec<Vec<u8>>)],
-        mut slot: impl FnMut(&Vec<u8>) -> BlockTx,
-    ) -> GetBlocksByHeightResponse {
-        GetBlocksByHeightResponse {
-            status: RpcStatus::ok(),
-            blocks: entries
+        mut slot: impl FnMut(&Vec<u8>) -> OrArchived<BlockTx>,
+    ) -> serde_json::Value {
+        serde_json::Value::Array(
+            entries
                 .iter()
-                .map(|(block, txs)| BlockEntry {
-                    block: block.clone(),
-                    txs: txs.iter().map(&mut slot).collect(),
+                .enumerate()
+                .map(|(height, (block, txs))| {
+                    serde_json::json!({
+                        "header": header(height as u64),
+                        "body": Bytes(block.clone()),
+                        "tx": txs.iter().map(&mut slot).collect::<Vec<_>>(),
+                        "output_index": 0,
+                    })
                 })
                 .collect(),
-        }
+        )
     }
 
     fn batch(n: usize) -> std::num::NonZeroUsize {
@@ -469,7 +512,7 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn fetches_in_batches_through_the_route_and_the_corpus_reads_back() {
+    async fn fetches_in_batches_through_block_list_and_the_corpus_reads_back() {
         let blocks = three_blocks();
         let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
         let mut w = CorpusWriter::create(
@@ -484,7 +527,10 @@ mod fetch {
         assert_eq!(written, 3);
         assert_eq!(
             *rpc.asked.lock().expect("lock"),
-            vec![(ROUTE.to_owned(), vec![0, 1]), (ROUTE.to_owned(), vec![2])]
+            vec![
+                (<wire::BlockList as RpcMethod>::NAME.to_owned(), vec![0, 1]),
+                (<wire::BlockList as RpcMethod>::NAME.to_owned(), vec![2])
+            ]
         );
         let bytes = w.finish().expect("count").into_inner();
         let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
@@ -507,12 +553,18 @@ mod fetch {
         let rpc = Scripted::new(&[reply_with(&blocks, |body| {
             slots += 1;
             if slots == 2 {
-                BlockTx::Archived {
-                    tx_hash: archived_hash,
-                    shard: 7,
-                }
+                OrArchived::Archived(ArchivedState::Archived(Archived {
+                    id: HashHex::from_bytes(archived_hash),
+                    shard: Integer(7),
+                }))
             } else {
-                BlockTx::Full(body.clone())
+                OrArchived::Item(BlockTx {
+                    id: HashHex::ZERO,
+                    body: Bytes(body.clone()),
+                    prunable_hash: HashHex::ZERO,
+                    pqc_auth_hash: Nullable(None),
+                    archival_size: Size(0),
+                })
             }
         })]);
         let mut w = CorpusWriter::create(
@@ -537,35 +589,6 @@ mod fetch {
             }
             other => panic!("{other}"),
         }
-    }
-
-    #[tokio::test]
-    async fn a_skeleton_in_a_full_form_reply_is_refused() {
-        // The request did not ask for `prune`; a skeleton in the answer is a
-        // daemon not keeping the form the request chose.
-        let blocks = three_blocks();
-        let rpc = Scripted::new(&[reply_with(&blocks, |body| {
-            BlockTx::Skeleton(BlockTxSkeleton {
-                unprunable: body.clone(),
-                prunable_hash: [0; 32],
-                pqc_auth_hash: None,
-                archival_len: 0,
-            })
-        })]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            Network::Regtest,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
-            .await
-            .expect_err("skeleton");
-        // Block 0 lists no body; the first skeleton is block 1's.
-        assert!(
-            matches!(err, FetchFault::NotWhole { height } if height == BlockHeight::from_raw(1)),
-            "{err}"
-        );
     }
 
     #[tokio::test]
@@ -597,13 +620,13 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn a_refusal_and_a_short_reply_are_the_conversations_faults() {
+    async fn a_refusal_a_missing_block_and_a_short_reply_are_the_conversations_faults() {
         let blocks = three_blocks();
-        let refused = GetBlocksByHeightResponse {
-            status: RpcStatus("Failed".into()),
-            blocks: Vec::new(),
-        };
-        let rpc = Scripted::new(&[refused]);
+        let refused = serde_json::json!({"jsonrpc": "2.0", "id": 0, "error": {
+            "code": -32004, "message": "not ready",
+            "data": {"code": "daemon.unready", "parameter": {}, "message": "not ready"},
+        }});
+        let rpc = Scripted::envelopes(&[refused]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
             Network::Regtest,
@@ -614,14 +637,30 @@ mod fetch {
             .await
             .expect_err("refused");
         assert!(
-            matches!(
-                err,
-                FetchFault::Refused {
-                    first: 0,
-                    end: 3,
-                    ..
-                }
-            ),
+            matches!(&err, FetchFault::Rpc(RpcError::Refused(refusal))
+                if refusal.diagnostic.code == "daemon.unready"),
+            "{err}"
+        );
+
+        // A height above the tip is `{"missing": null}`: the daemon holds
+        // no block there, and the fetch names the height.
+        let mut slots = reply(&blocks[..2]);
+        slots
+            .as_array_mut()
+            .expect("slots")
+            .push(serde_json::json!({ "missing": null }));
+        let rpc = Scripted::new(&[slots]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            Network::Regtest,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+            .await
+            .expect_err("missing");
+        assert!(
+            matches!(err, FetchFault::Missing { height } if height == BlockHeight::from_raw(2)),
             "{err}"
         );
 

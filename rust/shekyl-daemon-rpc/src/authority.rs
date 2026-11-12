@@ -222,17 +222,16 @@ pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_rpc_types::methods::{json_rpc, METHODS};
+    use shekyl_rpc_types::method::{RpcMethod, UNARMED};
+    use shekyl_rpc_types::wire::{self, TABLE};
 
-    fn row(name: &str) -> &'static Method {
-        json_rpc(name)
-            .or_else(|| rest_path(name))
-            .unwrap_or_else(|| panic!("{name} has no row"))
+    fn row<M: RpcMethod>() -> Method {
+        Method::of::<M>()
     }
 
     /// The version read is under no grant (RW-Q6): a key that holds
-    /// `submit` alone runs the skew check, and is still refused `get_info`.
-    /// Red edit: give `get_version` the `health` grant in the table.
+    /// `submit` alone runs the skew check, and is still refused
+    /// `daemon_status`. Red edit: give `version` the `health` grant.
     #[test]
     fn a_submit_only_key_reads_the_version() {
         let submit_only = Authority {
@@ -240,34 +239,47 @@ mod tests {
             host: false,
             armed: false,
         };
-        assert!(submit_only.admit(row("get_version")).is_ok());
-        assert!(submit_only.admit(row("/submit_transaction")).is_ok());
-        let refused = submit_only.admit(row("get_info")).expect_err("health");
+        assert!(submit_only.admit(&row::<wire::Version>()).is_ok());
+        assert!(submit_only.admit(&row::<wire::TxSubmit>()).is_ok());
+        let refused = submit_only
+            .admit(&row::<wire::DaemonStatus>())
+            .expect_err("health");
         assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
     }
 
     #[test]
     fn the_view_listener_is_refused_every_grant_it_does_not_hold() {
         let view = Authority::VIEW_LISTENER;
-        let refused = view.admit(row("/stop_daemon")).expect_err("node");
+        let refused = view.admit(&row::<wire::DaemonStop>()).expect_err("node");
         assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
         assert_eq!(refused.diagnostic.code, codes::OUTSIDE_THE_GRANT);
-        assert!(view.admit(row("get_connections")).is_err(), "peers");
-        assert!(view.admit(row("/get_alt_blocks_hashes")).is_err(), "status");
-        assert!(view.admit(row("get_block_count")).is_ok(), "chain");
-        assert!(view.admit(row("/submit_transaction")).is_ok(), "submit");
-        assert!(view.admit(row("get_block_template")).is_ok(), "mining-work");
+        assert_eq!(refused.diagnostic.parameter["grant"], "node");
+        assert!(
+            view.admit(&row::<wire::PeerConnections>()).is_err(),
+            "peers"
+        );
+        assert!(view.admit(&row::<wire::ChainAlt>()).is_err(), "status");
+        assert!(view.admit(&row::<wire::ChainHeight>()).is_ok(), "chain");
+        assert!(view.admit(&row::<wire::TxSubmit>()).is_ok(), "submit");
+        assert!(
+            view.admit(&row::<wire::BlockTemplate>()).is_ok(),
+            "mining-work"
+        );
     }
 
     #[test]
     fn host_only_data_and_the_armed_levers_are_the_hosts_alone() {
         let view = Authority::VIEW_LISTENER;
-        for name in ["/get_stem_tallies", "generateblocks", "/pop_blocks"] {
-            let refused = view.admit(row(name)).expect_err(name);
-            assert_eq!(refused.diagnostic.code, codes::HOST_ONLY, "{name}");
+        for row in [
+            row::<wire::RelayStats>(),
+            row::<wire::DevBlockGenerate>(),
+            row::<wire::DevChainPop>(),
+        ] {
+            let refused = view.admit(&row).expect_err(row.name);
+            assert_eq!(refused.diagnostic.code, codes::HOST_ONLY, "{}", row.name);
         }
         assert!(Authority::admin_listener(false)
-            .admit(row("/get_stem_tallies"))
+            .admit(&row::<wire::RelayStats>())
             .is_ok());
     }
 
@@ -275,84 +287,69 @@ mod tests {
     fn an_armed_lever_needs_the_switch_even_for_the_host() {
         let unarmed = Authority::admin_listener(false);
         let armed = Authority::admin_listener(true);
-        for name in ["generateblocks", "/pop_blocks"] {
-            let refused = unarmed.admit(row(name)).expect_err(name);
-            assert_eq!(refused.class, ErrorClass::OutsideTheGrant, "{name}");
-            assert_eq!(
-                refused.diagnostic.code,
-                shekyl_rpc_types::methods::UNARMED,
-                "{name}"
-            );
-            assert!(armed.admit(row(name)).is_ok(), "{name}");
+        for row in [row::<wire::DevBlockGenerate>(), row::<wire::DevChainPop>()] {
+            let refused = unarmed.admit(&row).expect_err(row.name);
+            assert_eq!(refused.class, ErrorClass::OutsideTheGrant, "{}", row.name);
+            assert_eq!(refused.diagnostic.code, UNARMED, "{}", row.name);
+            assert!(armed.admit(&row).is_ok(), "{}", row.name);
         }
     }
 
+    /// `pow` and the coinbase sum are bounded reads, paid from the hash
+    /// budget and the coinbase permit, and are admitted on the view
+    /// listener.
     #[test]
-    fn calc_pow_and_the_coinbase_sum_are_admitted_on_the_view_listener() {
+    fn pow_and_the_coinbase_sum_are_admitted_on_the_view_listener() {
         let view = Authority::VIEW_LISTENER;
-        for name in ["calc_pow", "get_coinbase_tx_sum"] {
-            assert!(view.admit(row(name)).is_ok(), "{name}");
-        }
+        assert!(view.admit(&row::<wire::Pow>()).is_ok());
+        assert!(view.admit(&row::<wire::ChainCoinbaseSum>()).is_ok());
     }
 
-    /// Every row is admitted for the host's administrator with the switch
-    /// on: the admin listener's method set is the whole table.
+    /// Every row is admitted for the host with the switch on: the admin
+    /// listener's method set is the whole table.
     #[test]
     fn the_admin_listener_is_admitted_every_row() {
         let armed = Authority::admin_listener(true);
-        for row in METHODS {
+        for row in TABLE {
             assert!(armed.admit(row).is_ok(), "{}", row.name);
         }
     }
 
-    /// The view listener's method set, written out (RT-O33: it keeps today's
-    /// set, less `/get_alt_blocks_hashes`, which §6.1 moves to `status`).
-    /// `calc_pow` and `get_coinbase_tx_sum` are on it: they are bounded
-    /// reads, paid from the hash budget and the coinbase permit, not
-    /// admin-gated. Written from the specification, not from the table.
+    /// The view listener's method set, written out from the grants it holds
+    /// (`view` plus `submit` and `mining-work`, RT-O33), not from the
+    /// table: a row that moves grant moves this list by hand.
     #[test]
     fn the_view_listener_serves_exactly_its_specified_set() {
-        let specified: &[&str] = &[
-            "get_version",
-            "get_block_count",
-            "on_get_block_hash",
-            "get_block_header_by_height",
-            "get_block",
-            "get_last_block_header",
-            "get_block_header_by_hash",
-            "get_block_headers_range",
-            "calc_pow",
-            "get_coinbase_tx_sum",
-            "get_fee_estimate",
-            "option_show",
-            "get_info",
-            "submit_block",
-            "get_block_template",
-            "get_miner_data",
-            "get_txpool_backlog",
-            "get_curve_tree_info",
-            "get_curve_tree_checkpoint",
-            "get_archival_emission_claim_source",
-            "get_archival_shard_coverage",
-            "/json_rpc",
-            "/get_height",
-            "/get_transactions",
-            "/is_key_image_spent",
-            "/submit_transaction",
-            "/get_transaction_pool",
-            "/get_transaction_pool_hashes",
-            "/get_transaction_pool_stats",
-            "/get_info",
-            "/get_blocks_by_height.bin",
-            "/get_o_indexes.bin",
+        let specified = [
+            row::<wire::Version>(),
+            row::<wire::ChainHeight>(),
+            row::<wire::BlockHeaderShow>(),
+            row::<wire::BlockHeaderList>(),
+            row::<wire::BlockShow>(),
+            row::<wire::BlockList>(),
+            row::<wire::TxShow>(),
+            row::<wire::TxList>(),
+            row::<wire::ChainSpent>(),
+            row::<wire::Fee>(),
+            row::<wire::ChainCoinbaseSum>(),
+            row::<wire::CurveShow>(),
+            row::<wire::ArchivalClaimShow>(),
+            row::<wire::ShardCoverage>(),
+            row::<wire::DaemonStatus>(),
+            row::<wire::OptionShow>(),
+            row::<wire::TxpoolList>(),
+            row::<wire::TxpoolStats>(),
+            row::<wire::TxSubmit>(),
+            row::<wire::BlockTemplate>(),
+            row::<wire::BlockSubmit>(),
+            row::<wire::Pow>(),
         ];
-        let served: Vec<&str> = METHODS
+        let mut want: Vec<&str> = specified.iter().map(|row| row.name).collect();
+        let mut got: Vec<&str> = TABLE
             .iter()
             .filter(|row| Authority::VIEW_LISTENER.admit(row).is_ok())
             .map(|row| row.name)
             .collect();
-        let mut want = specified.to_vec();
-        let mut got = served.clone();
         want.sort_unstable();
         got.sort_unstable();
         assert_eq!(got, want);
@@ -361,17 +358,18 @@ mod tests {
     #[test]
     fn a_refusal_is_the_json_rpc_error_object_with_its_diagnostic() {
         let error = Authority::VIEW_LISTENER
-            .admit(row("/stop_daemon"))
+            .admit(&row::<wire::DaemonStop>())
             .expect_err("node");
         let body = serde_json::to_value(refusal(serde_json::Value::Null, &error)).unwrap();
         assert_eq!(body["error"]["code"], -32_002);
         assert_eq!(body["error"]["data"]["code"], codes::OUTSIDE_THE_GRANT);
-        assert_eq!(body["error"]["data"]["params"][1][1], "node");
+        assert_eq!(body["error"]["data"]["parameter"]["grant"], "node");
+        assert_eq!(body["error"]["data"]["parameter"]["method"], "daemon_stop");
         assert_eq!(
             grant_refusal_message(&body.to_string()).as_deref(),
             Some(error.diagnostic.message.as_str())
         );
-        assert_eq!(grant_refusal_message(r#"{"status":"OK"}"#), None);
+        assert_eq!(grant_refusal_message(r#"{"result":{}}"#), None);
         assert_eq!(
             grant_refusal_message(r#"{"error":{"code":-32603,"message":"boom"}}"#),
             None

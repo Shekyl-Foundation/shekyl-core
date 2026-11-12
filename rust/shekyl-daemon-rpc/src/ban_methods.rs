@@ -155,8 +155,6 @@ pub fn ban_show(
 mod tests {
     use std::sync::Mutex;
 
-    use shekyl_rpc_types::bans::SetBan;
-
     use super::*;
     use crate::chain_facts::FactsFault;
     use crate::handles::BanRow;
@@ -192,31 +190,72 @@ mod tests {
         }
     }
 
-    /// A request whose second ban the clock cannot hold bans nothing: every
-    /// deadline is checked before any entry is applied (the review of
-    /// #1165). Red edit: check each deadline as its entry is applied.
-    #[test]
-    fn a_ban_the_clock_cannot_hold_leaves_the_whole_request_unapplied() {
-        let table = Table {
+    fn table() -> Table {
+        Table {
             banned: Mutex::new(Vec::new()),
-        };
-        let entry = |host: &str, seconds: u64| SetBan {
-            host: host.to_owned(),
-            ban: true,
-            seconds: Some(seconds),
-        };
-        let refused = set_bans(
+        }
+    }
+
+    /// A ban the clock cannot hold is refused before anything is applied:
+    /// the deadline is checked before the ban (the review of #1165). Red
+    /// edit: apply the ban, then check the deadline.
+    #[test]
+    fn a_ban_the_clock_cannot_hold_is_refused_and_bans_nothing() {
+        let table = table();
+        let refused = ban_add(
             &table,
-            &SetBansRequest {
-                bans: vec![entry("203.0.113.1", 60), entry("203.0.113.2", u64::MAX)],
+            &node::BanAdd {
+                host: Text("203.0.113.2".to_owned()),
+                duration: Some(shekyl_rpc_types::kinds::Duration(u64::MAX)),
             },
         )
         .expect_err("too long");
         assert_eq!(refused.class, ErrorClass::BadParams);
         assert_eq!(refused.diagnostic.code, codes::TOO_LONG);
-        assert!(
-            table.banned.lock().expect("lock").is_empty(),
-            "the first entry was not applied"
-        );
+        assert!(table.banned.lock().expect("lock").is_empty());
+
+        ban_add(
+            &table,
+            &node::BanAdd {
+                host: Text("203.0.113.1".to_owned()),
+                duration: Some(shekyl_rpc_types::kinds::Duration(60)),
+            },
+        )
+        .expect("a minute fits");
+        assert_eq!(table.banned.lock().expect("lock").len(), 1);
+    }
+
+    /// A host that is not one is `ban.host` (BadParams) on every ban
+    /// method; a host not banned shows `null`, not an error.
+    #[test]
+    fn a_host_that_is_not_one_is_refused_and_an_unbanned_host_shows_null() {
+        let table = table();
+        let bad = node::BanHost {
+            host: Text("not a host".to_owned()),
+        };
+        for refused in [
+            ban_remove(&table, &bad).expect_err("bad host"),
+            ban_show(&table, &bad).expect_err("bad host"),
+            ban_add(
+                &table,
+                &node::BanAdd {
+                    host: bad.host.clone(),
+                    duration: None,
+                },
+            )
+            .expect_err("bad host"),
+        ] {
+            assert_eq!(refused.class, ErrorClass::BadParams);
+            assert_eq!(refused.diagnostic.code, codes::BAD_HOST);
+        }
+        let shown = ban_show(
+            &table,
+            &node::BanHost {
+                host: Text("203.0.113.9".to_owned()),
+            },
+        )
+        .expect("an answer");
+        assert_eq!(shown, Nullable(None));
+        assert!(ban_list(&table).expect("a list").is_empty());
     }
 }

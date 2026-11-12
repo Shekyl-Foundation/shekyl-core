@@ -234,7 +234,7 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
         dir.path(),
         Arc::new(move || flag.store(true, Ordering::SeqCst)),
     );
-    shekyl_daemon_rpc::node_methods::stop_daemon(&*node.handles().stop).expect("asks");
+    shekyl_daemon_rpc::node_methods::daemon_stop(&*node.handles().stop).expect("asks");
     assert!(asked.load(Ordering::SeqCst), "the handler asked the latch");
     assert_eq!(
         Handles::absent().stop.request_stop(),

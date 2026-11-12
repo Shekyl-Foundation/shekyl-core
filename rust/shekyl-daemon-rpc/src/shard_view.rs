@@ -198,7 +198,8 @@ fn refuse(refusal: &ShardViewRefusal) -> RpcFault {
 mod tests {
     use super::*;
     use serde_json::json;
-    use shekyl_rpc_types::CORE_RPC_ERROR_CODE_WRONG_PARAM;
+    use shekyl_rpc_types::errors::ErrorClass;
+    use shekyl_rpc_types::kinds::Integer;
     use shekyl_types::{BlockCount, BlockHeight, ShardViewHash};
 
     /// A facts source scripted with one answer, so the method's mapping is
@@ -225,11 +226,8 @@ mod tests {
         }
     }
 
-    fn code_of(fault: &RpcFault) -> i64 {
-        match fault {
-            RpcFault::Refused(r) => r.code,
-            other => panic!("expected a refusal, got {other:?}"),
-        }
+    fn shard(id: u64) -> archival::ShardId {
+        archival::ShardId { id: Integer(id) }
     }
 
     #[tokio::test]
@@ -243,41 +241,49 @@ mod tests {
         }
     }
 
+    /// `id` is required and nothing else is accepted: the request is the
+    /// strict wire type, refused at the envelope as `rpc.params`.
     #[test]
-    fn shard_id_is_required_and_nothing_else_is_accepted() {
+    fn id_is_required_and_nothing_else_is_accepted() {
         for params in [
             json!(null),
             json!({}),
-            json!([3]),
-            json!({"shard_id": "3"}),
-            json!({"shard_id": 3, "fill": true}),
-            json!({"shard_id": -1}),
+            // A positional array never reaches the type: the envelope refuses
+            // it as `rpc.envelope` (`handlers::rpc` tests).
+            json!({"id": "3"}),
+            json!({"id": 3, "fill": true}),
+            json!({"id": -1}),
+            json!({"shard_id": 3}),
         ] {
-            let fault = request_archival_shard_request(&params).unwrap_err();
-            assert_eq!(code_of(&fault), CORE_RPC_ERROR_CODE_WRONG_PARAM, "{params}");
+            assert!(
+                serde_json::from_value::<archival::ShardId>(params.clone()).is_err(),
+                "{params}"
+            );
         }
         assert_eq!(
-            request_archival_shard_request(&json!({"shard_id": 3})).unwrap(),
-            RequestArchivalShardRequest { shard_id: 3 }
+            serde_json::from_value::<archival::ShardId>(json!({"id": 3})).unwrap(),
+            shard(3)
         );
     }
 
     #[tokio::test]
     async fn a_view_is_projected_field_for_field() {
         let facts = Scripted(Ok(view()));
-        let response = request_archival_shard(&facts, RequestArchivalShardRequest { shard_id: 3 })
-            .await
-            .unwrap();
-        assert_eq!(response.status, RpcStatus::ok());
-        assert_eq!(response.shard_id, 3);
-        assert_eq!(response.shard_hash, HashHex::from_bytes([0x5a; 32]));
-        assert_eq!(response.archival_len, 3_000_000);
-        assert_eq!(response.block_count, 11);
-        assert_eq!(response.tx_count, 2);
-        assert_eq!(response.output_count, 13);
-        assert_eq!(response.coinbase_output_count, 11);
-        assert_eq!(response.time_range_seconds, 1_200);
-        assert_eq!(response.close_height, 9_000);
+        let response = shard_fetch(&facts, shard(3)).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({
+                "id": 3,
+                "hash": "5a".repeat(32),
+                "size": 3_000_000,
+                "block_count": 11,
+                "tx_count": 2,
+                "output_count": 13,
+                "coinbase_output_count": 11,
+                "duration": 1_200,
+                "closing_height": 9_000,
+            })
+        );
     }
 
     #[tokio::test]
@@ -289,7 +295,7 @@ mod tests {
                     open_shard: ShardId::from_raw(4),
                     remaining_to_close: Some(ArchivalLength::from_raw(10)),
                 },
-                CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN,
+                codes::OPEN,
             ),
             (
                 ShardViewRefusal::Open {
@@ -297,26 +303,25 @@ mod tests {
                     open_shard: ShardId::from_raw(4),
                     remaining_to_close: None,
                 },
-                CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN,
+                codes::OPEN,
             ),
             (
                 ShardViewRefusal::Unavailable {
                     shard_id: ShardId::from_raw(3),
                     attempts: 3,
                 },
-                CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE,
+                codes::UNAVAILABLE,
             ),
-            (
-                ShardViewRefusal::SkeletonAbsent,
-                CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
-            ),
+            (ShardViewRefusal::SkeletonAbsent, codes::VIEW_ABSENT),
         ];
         for (refusal, code) in cases {
             let facts = Scripted(Err(refusal.clone()));
-            let fault = request_archival_shard(&facts, RequestArchivalShardRequest { shard_id: 3 })
+            let error = shard_fetch(&facts, shard(3))
                 .await
-                .unwrap_err();
-            assert_eq!(code_of(&fault), code, "{refusal:?}");
+                .unwrap_err()
+                .into_error();
+            assert_eq!(error.class, ErrorClass::RefusedByMethod, "{refusal:?}");
+            assert_eq!(error.diagnostic.code, code, "{refusal:?}");
         }
     }
 
@@ -325,9 +330,7 @@ mod tests {
         // The scripted source answers shard 3 to every question.
         let facts = Scripted(Ok(view()));
         assert_eq!(
-            request_archival_shard(&facts, RequestArchivalShardRequest { shard_id: 4 })
-                .await
-                .unwrap_err(),
+            shard_fetch(&facts, shard(4)).await.unwrap_err(),
             RpcFault::Facts(FactsFault::Inconsistent)
         );
     }
@@ -336,9 +339,7 @@ mod tests {
     async fn a_facts_fault_is_reported_as_one() {
         let facts = Scripted(Err(ShardViewRefusal::Fault(FactsFault::NotReady)));
         assert_eq!(
-            request_archival_shard(&facts, RequestArchivalShardRequest { shard_id: 3 })
-                .await
-                .unwrap_err(),
+            shard_fetch(&facts, shard(3)).await.unwrap_err(),
             RpcFault::Facts(FactsFault::NotReady)
         );
     }

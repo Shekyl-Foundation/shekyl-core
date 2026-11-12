@@ -20,11 +20,10 @@ use std::process::ExitCode;
 use clap::Parser;
 use serde::Serialize;
 use shekyl_engine_core::engine::daemon::DaemonClient;
-use shekyl_rpc_client::Rpc;
-use shekyl_rpc_types::{
-    GetBlockCountResponse, GetBlockRequest, GetBlockResponse, GetTransactionsRequest,
-    GetTransactionsResponse, RpcStatus,
-};
+use shekyl_rpc_client::{wire, Rpc};
+use shekyl_rpc_types::kinds::{Height, NoParams};
+use shekyl_rpc_types::wire::block::{BlockSelect, BlockShowSelect};
+use shekyl_rpc_types::wire::shared::{OrArchived, Selector};
 use shekyl_wss_q1b_bench::corpus::nominal_block_weight;
 use shekyl_wss_q1b_bench::openedge::{
     judge_density, project, Attribution, BlockSample, CorpusDensity, Projection, RoundTripFloor,
@@ -33,11 +32,9 @@ use shekyl_wss_q1b_bench::report::{emit, ProverPin, Verdict, OPEN_EDGE_BUDGET_S,
 use shekyl_wss_q1b_bench::rig::{self, Environment, RigVerdict, StorageAttestation};
 use shekyl_wss_q1b_bench::timing::duration_s;
 
-/// Round trips `fetch_scannable_block` makes for a block with no non-miner
-/// transactions: `get_block` + `get_o_indexes`.
-const ROUND_TRIPS_EMPTY_BLOCK: u32 = 2;
-/// Transactions per `get_transactions` call — `block_fetch::TXS_PER_REQUEST`.
-const TXS_PER_REQUEST: usize = 100;
+/// Round trips `fetch_scannable_block` makes for one block: one
+/// `block_show`, whatever the block holds.
+const ROUND_TRIPS_PER_BLOCK: u32 = 1;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -162,33 +159,19 @@ async fn main() -> ExitCode {
     // Measured directly rather than regressed out of the block samples: round
     // trips per block are nearly constant, so a fit over them is
     // under-determined.
-    // `get_block_count`, not `get_info`: a minimal JSON-RPC body that is also
-    // TYPED, so the reply's `status` can be checked. The first version timed
-    // `get_info` into a `serde_json::Value`, which succeeds for any body the
-    // deserializer accepts -- including a refusal. Timing a rejected call is
-    // not timing a round trip, and this figure decides an attribution, so a
-    // BUSY reply could have selected the wrong miss remedy. `block_fetch.rs`
-    // puts it exactly right about a non-OK status: *"its body is not
-    // evidence"*.
+    // `chain_height`: a minimal JSON-RPC body, TYPED, so a refusal is an
+    // error and never a timed sample. Timing a refused call is not timing a
+    // round trip, and this figure decides an attribution.
     eprintln!("── timing {} minimal round trips ──", args.floor_samples);
     let floor_sample_count = usize::from(args.floor_samples);
     let mut floor_samples = Vec::with_capacity(floor_sample_count);
     for _ in 0..floor_sample_count {
         let start = std::time::Instant::now();
-        let res: Result<GetBlockCountResponse, _> =
-            client.json_rpc_call("get_block_count", None).await;
+        let res = client.call::<wire::ChainHeight>(NoParams).await;
         let elapsed = duration_s(start.elapsed());
-        match res {
-            Ok(reply) => {
-                if let Err(why) = refuse_unless_ok(&reply.status, "get_block_count") {
-                    eprintln!("floor probe: {why}");
-                    return ExitCode::from(4);
-                }
-            }
-            Err(e) => {
-                eprintln!("floor probe failed: {e}");
-                return ExitCode::from(4);
-            }
+        if let Err(e) = res {
+            eprintln!("floor probe failed: {e}");
+            return ExitCode::from(4);
         }
         floor_samples.push(elapsed);
     }
@@ -217,15 +200,13 @@ async fn main() -> ExitCode {
         };
         let seconds = duration_s(start.elapsed());
 
-        // Round trips are counted analytically from the block's shape, because
-        // the production fetch exposes no counter. The accounting is recorded
-        // in the output so a reader can check it against `block_fetch.rs`
-        // rather than trust it.
-        let tx_count = block.block.transaction_hashes.len();
-        let tx_calls = tx_count.div_ceil(TXS_PER_REQUEST) as u32;
-        let round_trips = ROUND_TRIPS_EMPTY_BLOCK + tx_calls;
+        // Round trips are counted analytically, because the production fetch
+        // exposes no counter. The accounting is recorded in the output so a
+        // reader can check it against `block_fetch.rs` rather than trust it.
+        drop(block);
+        let round_trips = ROUND_TRIPS_PER_BLOCK;
 
-        // Byte accounting rides a SEPARATE, untimed `get_block`: the production
+        // Byte accounting rides a SEPARATE, untimed `block_show`: the production
         // fetch returns parsed types, not the bytes it received, and
         // instrumenting the timed path would change what is being timed.
         //
@@ -233,7 +214,7 @@ async fn main() -> ExitCode {
         // a legitimate-looking sample that drags the measured density down,
         // which both understates the volume term and pushes the attribution
         // toward round-trip bound -- an error conflated with a measurement.
-        let (wire_hex_bytes, decoded_bytes) = match measure_bytes(&client, height).await {
+        let (wire_bytes, decoded_bytes) = match measure_bytes(&client, height).await {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("byte accounting failed at height {height}: {e}");
@@ -244,7 +225,7 @@ async fn main() -> ExitCode {
         samples.push(BlockSample {
             height,
             round_trips,
-            wire_hex_bytes,
+            wire_bytes,
             decoded_bytes,
             seconds,
         });
@@ -302,9 +283,8 @@ async fn main() -> ExitCode {
         threshold_s: OPEN_EDGE_BUDGET_S,
         verdict,
         miss_response,
-        round_trip_accounting: "per block: get_block (1) + get_transactions \
-                                (ceil(tx_count / 100)) + get_o_indexes (1), all \
-                                sequentially awaited in block_fetch.rs",
+        round_trip_accounting: "per block: block_show under prune (1), awaited \
+                                in block_fetch.rs",
     };
 
     // The write failure is an error, not a warning: an explicitly requested
@@ -324,84 +304,33 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Wire bytes for one block, through the **shared** request/response types.
+/// Wire bytes for one block: **the block's bytes plus its transactions'
+/// bodies**, in the pruned form the production fetch requests, read through
+/// the shared `block_show` type, so a renamed member fails this compile the
+/// same way it fails the wallet instead of reporting zero bytes.
 ///
-/// `GetBlockRequest` / `GetBlockResponse` are the same types `block_fetch.rs`
-/// deserializes, for the reason its own comment gives: a hand-rolled params
-/// object and a walk over an untyped reply are *"two definitions of one shape,
-/// and the one the daemon cannot see is the one that drifts."* A renamed field
-/// then fails this compile the same way it fails the wallet, instead of
-/// silently reporting zero bytes.
-/// Wire bytes for one block: **the block blob plus the non-miner transaction
-/// bodies**, in the pruned form the production fetch requests.
-///
-/// The first version counted only the `get_block` blob. That blob carries the
-/// miner transaction and the *hashes* of the non-miner ones — the bodies come
-/// separately, through `get_transactions` (`block_fetch.rs`). So a
-/// transaction-filled block still measured thin, which is not a cosmetic
-/// undercount: **the density gate reads this figure**, so it could never have
-/// recognised the 300 kB corpus it exists to require, and the volume term it
-/// feeds was understated at the same time.
-///
-/// `prune: true` matches `TxBodyForm::Pruned`, which is what
-/// `default_fetch_scannable_block` asks for — measuring the unpruned form
-/// would count bytes the timed path never moves.
-/// Refuse a reply whose `status` is not OK, before any other field is read.
-///
-/// The wording is `block_fetch.rs`'s and so is the reason: a refusal's body is
-/// **not evidence**. A deserializer accepting the body says the daemon
-/// answered, not that it answered the question.
-fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Result<(), String> {
-    if status.is_ok() {
-        return Ok(());
-    }
-    Err(format!(
-        "{method} refused with status {}; its body is not evidence",
-        status.0
-    ))
-}
-
+/// Every body arrives base64-encoded, so the wire figure is the encoded
+/// length of each and the decoded figure the bytes themselves.
 async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64), String> {
-    let request = GetBlockRequest {
-        hash: String::new(),
-        height,
-        fill_pow_hash: false,
-    };
-    let params = serde_json::to_value(request).map_err(|e| format!("encode request: {e}"))?;
-    let response: GetBlockResponse = client
-        .json_rpc_call("get_block", Some(params))
+    let block = client
+        .call::<wire::BlockShow>(BlockShowSelect(BlockSelect {
+            select: Selector::Height(Height(height)),
+            pow: false,
+            prune: Some(true),
+        }))
         .await
-        .map_err(|e| format!("get_block: {e}"))?;
-    refuse_unless_ok(&response.status, "get_block")?;
-    let mut hex_len = response.blob.len() as u64;
-
-    let block = shekyl_wire::Block::from_bytes(
-        &hex::decode(&response.blob).map_err(|e| format!("block blob is not hex: {e}"))?,
-    )
-    .map_err(|_| "block blob did not parse".to_string())?;
-    let hashes: Vec<String> = block.transaction_hashes.iter().map(hex::encode).collect();
-    if !hashes.is_empty() {
-        let req = GetTransactionsRequest {
-            txs_hashes: hashes,
-            prune: true,
+        .map_err(|e| format!("block_show: {e}"))?;
+    let base64_len = |n: usize| (n.div_ceil(3) * 4) as u64;
+    let mut wire = base64_len(block.body.0.len());
+    let mut decoded = block.body.0.len() as u64;
+    for slot in &block.tx {
+        let OrArchived::Item(tx) = slot else {
+            return Err("a pruned block_show answered an archived slot".to_string());
         };
-        let params = serde_json::to_value(req).map_err(|e| format!("encode tx request: {e}"))?;
-        let txs: GetTransactionsResponse = client
-            .rpc_call("get_transactions", Some(params))
-            .await
-            .map_err(|e| format!("get_transactions: {e}"))?;
-        refuse_unless_ok(&txs.status, "get_transactions")?;
-        for entry in &txs.txs {
-            // The pruned body is what the timed fetch moves; `as_hex` carries
-            // the whole transaction and would overcount by the prunable region.
-            hex_len += entry.pruned_as_hex.len() as u64;
-        }
+        wire += base64_len(tx.body.0.len());
+        decoded += tx.body.0.len() as u64;
     }
-
-    // Everything above arrives hex-encoded, so the decoded size is half the
-    // wire size. Reporting one figure for both would understate the wire by
-    // half.
-    Ok((hex_len, hex_len / 2))
+    Ok((wire, decoded))
 }
 
 fn summarize(record: &OpenEdgeRecord) {
@@ -419,8 +348,8 @@ fn summarize(record: &OpenEdgeRecord) {
         p.blocks_projected, p.projected_round_trips
     );
     eprintln!(
-        "  bytes          {} wire (hex), {} decoded",
-        p.projected_wire_hex_bytes, p.projected_decoded_bytes
+        "  bytes          {} wire (base64), {} decoded",
+        p.projected_wire_bytes, p.projected_decoded_bytes
     );
     eprintln!(
         "  REFETCH        {:.3} s  (threshold {:.1} s)",

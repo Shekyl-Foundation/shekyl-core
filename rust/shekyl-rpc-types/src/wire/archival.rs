@@ -72,7 +72,8 @@ crate::wire_object! {
         pub id: Integer,
         pub closing_height: Height,
         pub work: Milli,
-        /// `null` with no budget row.
+        /// The frozen close row's budget; `null` until the claim verify's
+        /// citing gate admits the epoch.
         pub budget: Nullable<Amount>,
         pub bond: Vec<ClaimBond>,
         pub shard: Vec<ClaimShard>,

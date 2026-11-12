@@ -227,78 +227,105 @@ mod tests {
         }
     }
 
-    /// A caller who is not the host is never shown the stem entry; the
-    /// host's administrator is (RT-O9.3).
+    fn id(n: u8) -> HashHex {
+        HashHex::from_bytes([n; 32])
+    }
+
+    fn missing() -> shared::Slot<HashHex> {
+        shared::Slot::State(shared::SlotState::Missing(shared::Null))
+    }
+
+    /// A caller who is not the host is never shown the stem entry; the host
+    /// is (RT-O9.3). Each entry is its id, weight and fee, never a receive
+    /// time (IG-Q57).
     #[test]
     fn a_stem_entry_reaches_the_host_and_no_one_else() {
         assert_eq!(scope_for(false), PoolScope::Broadcast);
         assert_eq!(scope_for(true), PoolScope::WithUnbroadcast);
         let pool = pool();
-        let anyone = get_transaction_pool(&pool, scope_for(false)).expect("listing");
-        assert_eq!(anyone.transactions.len(), 1);
-        assert!(anyone.transactions[0].relayed);
-        let host = get_transaction_pool(&pool, scope_for(true)).expect("listing");
-        assert_eq!(host.transactions.len(), 2);
-        assert_eq!(host.spent_key_images.len(), 1, "one image, two spenders");
-        assert_eq!(host.spent_key_images[0].txs_hashes.len(), 2);
-        let hashes = get_transaction_pool_hashes(&pool, scope_for(false)).expect("hashes");
-        assert_eq!(hashes.tx_hashes, vec![HashHex::from_bytes([1; 32])]);
+        let anyone = txpool_list(&pool, scope_for(false)).expect("listing");
+        assert_eq!(
+            anyone,
+            vec![tx::PoolEntry {
+                id: id(1),
+                weight: Size(100),
+                fee: amount(10),
+            }]
+        );
+        let host = txpool_list(&pool, scope_for(true)).expect("listing");
+        assert_eq!(host.len(), 2);
     }
 
+    /// The stats are over what the caller may see; the count not yet public
+    /// is the host's alone, withheld from anyone else.
     #[test]
     fn the_stats_are_over_what_the_caller_may_see() {
         let pool = pool();
-        let anyone = get_transaction_pool_stats(&pool, PoolScope::Broadcast)
-            .expect("stats")
-            .pool_stats;
+        let anyone = txpool_stats(&pool, PoolScope::Broadcast).expect("stats");
+        assert_eq!(anyone.count, Count(1));
+        assert_eq!(anyone.weight_total, Size(100));
+        assert_eq!(anyone.fee_total, amount(10));
+        assert!(anyone.private_count.is_withheld());
+        let host = txpool_stats(&pool, PoolScope::WithUnbroadcast).expect("stats");
         assert_eq!(
-            anyone,
-            TxpoolStats {
-                bytes_total: 10,
-                bytes_min: 10,
-                bytes_max: 10,
-                bytes_med: 10,
-                fee_total: 10,
-                txs_total: 1,
-                num_not_relayed: 0,
-            }
+            (host.count, host.weight_total, host.weight_max),
+            (Count(2), Size(300), Size(200))
         );
-        let host = get_transaction_pool_stats(&pool, PoolScope::WithUnbroadcast)
-            .expect("stats")
-            .pool_stats;
         assert_eq!(
-            (host.bytes_total, host.bytes_max, host.txs_total),
-            (40, 30, 2)
-        );
-        assert_eq!(host.num_not_relayed, 1);
-        let backlog = get_txpool_backlog(&pool, PoolScope::Broadcast).expect("backlog");
-        assert_eq!(
-            backlog.backlog,
-            vec![TxpoolBacklogEntry {
-                weight: 100,
-                fee: 10
-            }]
+            host.private_count,
+            shekyl_rpc_types::kinds::Withheld::Shown(Count(1))
         );
     }
 
-    /// `flush_txpool` hands its ids to the pool's remove verb; `relay_tx`
-    /// is not ready until a relay driver is supplied.
+    /// **The visible set** (IG-Q89): `txpool_flush` removes only the ids the
+    /// caller may see; a stem entry named by anyone but the host is
+    /// `{"missing": null}` and stays. With no ids it flushes everything the
+    /// caller may see. Red edit: hand the pool every named id.
     #[tokio::test]
-    async fn flush_names_its_ids_and_relay_waits_for_a_driver() {
+    async fn flush_acts_on_the_visible_set_alone() {
         let pool = pool();
-        flush_txpool(
+        let named = tx::FlushIds {
+            id: Some(vec![id(2), id(1), id(7)]),
+        };
+        let out = txpool_flush(&pool, &named, PoolScope::Broadcast)
+            .await
+            .expect("flushed");
+        assert_eq!(out, vec![missing(), shared::Slot::Item(id(1)), missing()]);
+        assert_eq!(
+            *pool.flushed.lock().expect("lock"),
+            vec![TxHash::from_bytes([1; 32])]
+        );
+        let all = txpool_flush(
             &pool,
-            &FlushTxpoolRequest {
-                txids: vec![HashHex::from_bytes([2; 32])],
-            },
+            &tx::FlushIds { id: None },
+            PoolScope::WithUnbroadcast,
         )
         .await
         .expect("flushed");
-        assert_eq!(
-            *pool.flushed.lock().expect("lock"),
-            vec![TxHash::from_bytes([2; 32])]
-        );
-        let refused = relay_tx(&pool, &RelayTxRequest::default()).expect_err("no driver");
+        assert_eq!(all.len(), 2);
+    }
+
+    /// `tx_relay` offers only what the caller may see; an id it may not
+    /// is `{"missing": null}` and reaches no relay. A held id needs a relay
+    /// driver, and without one the call is not ready.
+    #[test]
+    fn relay_acts_on_the_visible_set_and_waits_for_a_driver() {
+        let pool = pool();
+        let unseen = tx_relay(
+            &pool,
+            &tx::RelayIds {
+                id: vec![id(2), id(7)],
+            },
+            PoolScope::Broadcast,
+        )
+        .expect("nothing to offer, nothing asked of the relay");
+        assert_eq!(unseen, vec![missing(), missing()]);
+        let refused = tx_relay(
+            &pool,
+            &tx::RelayIds { id: vec![id(1)] },
+            PoolScope::Broadcast,
+        )
+        .expect_err("no driver");
         assert_eq!(
             refused.class,
             shekyl_rpc_types::errors::ErrorClass::NotReady

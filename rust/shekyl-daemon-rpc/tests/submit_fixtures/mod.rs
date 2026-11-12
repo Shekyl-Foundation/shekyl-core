@@ -262,9 +262,10 @@ pub fn emission_tx(fee: u64) -> Transaction {
     }
 }
 
-/// Hex-encode a transaction for `parse_submission` / `SubmitEngine::submit`.
-pub fn hexify(tx: &Transaction) -> String {
-    hex::encode(tx.serialize())
+/// A transaction's bytes, as `parse_submission` / `SubmitEngine::submit`
+/// take them.
+pub fn tx_bytes(tx: &Transaction) -> Vec<u8> {
+    tx.serialize()
 }
 
 /// A fact snapshot under which the spend fixture is fully admissible:

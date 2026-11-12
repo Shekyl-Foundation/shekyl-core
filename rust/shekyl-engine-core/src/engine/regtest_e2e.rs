@@ -1258,8 +1258,8 @@ impl RegtestDaemon {
         }
     }
 
-    /// The curve tree at the tip (`curve_show`). Its daemon depth is
-    /// `layers - 1`.
+    /// The curve tree at the tip (`curve_show`). `layers` is the tree's
+    /// depth (the grammar's rename of `depth`).
     pub(super) async fn curve(&self) -> wire::chain::Curve {
         self.rpc
             .call::<wire::CurveShow>(wire::chain::CurveSelect(Selector::Tip))
@@ -2543,7 +2543,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     for _ in 0..MAX_MINE_BATCHES {
         daemon.generate_blocks(MINE_BATCH_BLOCKS).await;
         let info = daemon.curve().await;
-        tree_depth = u8::try_from(info.layers.0.saturating_sub(1)).unwrap_or(u8::MAX);
+        tree_depth = u8::try_from(info.layers.0).unwrap_or(u8::MAX);
         if tree_depth >= TARGET_DAEMON_DEPTH {
             eprintln!(
                 "curve tree reached daemon depth {tree_depth} (= {} layers): {info:?}",
@@ -3266,7 +3266,7 @@ async fn e2e_trim_curve_tree_restores_grow_root() {
 
     async fn tree_info(daemon: &RegtestDaemon) -> (u8, u64, String) {
         let info = daemon.curve().await;
-        let depth = u8::try_from(info.layers.0.saturating_sub(1)).unwrap_or(u8::MAX);
+        let depth = u8::try_from(info.layers.0).unwrap_or(u8::MAX);
         (depth, info.leaf_count.0, info.root.to_string())
     }
 

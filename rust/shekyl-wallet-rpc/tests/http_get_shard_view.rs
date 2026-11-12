@@ -4,15 +4,14 @@
 // BSD-3-Clause
 
 //! `get_shard_view` (SV-D) over the router: the wallet forwards `shard_id`
-//! to its daemon's `request_archival_shard`, returns the aggregate without
-//! the daemon's `status`, and keeps each daemon refusal on its own wallet
-//! code — still open, could not be retrieved, not offered — so a viewer
-//! shows a state and never an empty picture.
+//! to its daemon's `shard_fetch`, returns the aggregate in the contract's
+//! names, and keeps each daemon refusal on its own wallet code — still
+//! open, could not be retrieved, not offered — so a viewer shows a state
+//! and never an empty picture.
 //!
 //! Driven end to end: a real `DaemonClient` (identity handshake included)
-//! over a loopback socket against a daemon that answers `get_version`
-//! from the real response type and `request_archival_shard` as the case
-//! dictates.
+//! over a loopback socket against a daemon that answers `version` from the
+//! real reply type and `shard_fetch` as the case dictates.
 
 use std::io::{Read as _, Write as _};
 use std::sync::Arc;
@@ -23,9 +22,12 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_rpc_types::kinds::{Count, Duration, Height, Integer, Size};
+use shekyl_rpc_types::method::RpcMethod;
+use shekyl_rpc_types::nullable::Nullable;
+use shekyl_rpc_types::wire;
 use shekyl_rpc_types::{
-    genesis_hash_for, GetVersionResponse, HashHex, RequestArchivalShardResponse, RpcStatus,
-    CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
+    genesis_hash_for, HashHex, CONSENSUS_CONSTANTS_DIGEST_HASH, CORE_RPC_VERSION,
 };
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
@@ -37,27 +39,34 @@ use tower::ServiceExt;
 const SERVED: Network = Network::Stagenet;
 
 fn version_reply() -> String {
-    let reply = GetVersionResponse {
-        status: RpcStatus::ok(),
-        version: CORE_RPC_VERSION,
-        release: false,
-        current_height: 1,
-        target_height: shekyl_rpc_types::Nullable::NULL,
-        consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
-        nettype: SERVED,
-        genesis_hash: HashHex::from_bytes(genesis_hash_for(SERVED)),
+    let reply = wire::chain::Version {
+        version: Integer(u64::from(CORE_RPC_VERSION)),
+        tagged: false,
+        height: Height(0),
+        target_height: Nullable(None),
+        consensus_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
+        network: SERVED,
+        genesis: HashHex::from_bytes(genesis_hash_for(SERVED)),
     };
     json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
 }
 
 /// A daemon that passes the identity handshake and answers
-/// `request_archival_shard` with `shard_reply` (a full JSON-RPC envelope).
+/// `shard_fetch` with `shard_reply` (a full JSON-RPC envelope).
 fn fake_daemon(shard_reply: String) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let address = listener.local_addr().expect("local addr");
     std::thread::spawn(move || {
         let version = version_reply();
-        let other = refusal(-32601, "not served by this fake");
+        let other = json!({"jsonrpc": "2.0", "id": 0, "error": {
+            "code": -32601, "message": "not served by this fake"
+        }})
+        .to_string();
+        let asks = |name: &str| format!("\"method\":\"{name}\"");
+        let (version_call, shard_call) = (
+            asks(<wire::Version as RpcMethod>::NAME),
+            asks(<wire::ShardFetch as RpcMethod>::NAME),
+        );
         while let Ok((mut stream, _)) = listener.accept() {
             let mut buf = [0u8; 8192];
             let Ok(n) = stream.read(&mut buf) else { return };
@@ -68,9 +77,9 @@ fn fake_daemon(shard_reply: String) -> String {
             // Anything else the wallet asks in the background (an opened
             // wallet's own reads) is refused, not served: this daemon is
             // only here to answer the view.
-            let reply = if request.contains("\"get_version\"") {
+            let reply = if request.contains(&version_call) {
                 &version
-            } else if request.contains("\"request_archival_shard\"") {
+            } else if request.contains(&shard_call) {
                 &shard_reply
             } else {
                 &other
@@ -145,26 +154,31 @@ async fn shard_view(daemon_address: String) -> Value {
     rpc(state, "get_shard_view", json!({ "shard_id": 7 })).await
 }
 
-fn refusal(code: i64, message: &str) -> String {
-    json!({"jsonrpc": "2.0", "id": "0", "error": {"code": code, "message": message}}).to_string()
+/// A refusal of `class` carrying the dotted `code` (RW-Q3).
+fn refusal(class: shekyl_rpc_types::errors::ErrorClass, code: &str, message: &str) -> String {
+    json!({"jsonrpc": "2.0", "id": 0, "error": {
+        "code": class.code(),
+        "message": message,
+        "data": {"code": code, "parameter": {}, "message": message},
+    }})
+    .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_served_shard_is_the_daemons_aggregate_without_its_status() {
-    let daemon_answer = RequestArchivalShardResponse {
-        status: RpcStatus::ok(),
-        shard_id: 7,
-        shard_hash: HashHex::from_bytes([0x5a; 32]),
-        archival_len: 4_000_000,
-        block_count: 33,
-        tx_count: 1_200,
-        output_count: 2_433,
-        coinbase_output_count: 33,
-        time_range_seconds: 3_900,
-        close_height: 20_481,
+async fn a_served_shard_is_the_daemons_aggregate_in_the_contracts_names() {
+    let daemon_answer = wire::archival::ShardView {
+        id: Integer(7),
+        hash: HashHex::from_bytes([0x5a; 32]),
+        size: Size(4_000_000),
+        block_count: Count(33),
+        tx_count: Count(1_200),
+        output_count: Count(2_433),
+        coinbase_output_count: Count(33),
+        duration: Duration(3_900),
+        closing_height: Height(20_481),
     };
     let reply = shard_view(fake_daemon(
-        json!({"jsonrpc": "2.0", "id": "0", "result": daemon_answer}).to_string(),
+        json!({"jsonrpc": "2.0", "id": 0, "result": daemon_answer}).to_string(),
     ))
     .await;
     assert!(reply.get("error").is_none(), "{reply}");
@@ -188,7 +202,12 @@ async fn a_served_shard_is_the_daemons_aggregate_without_its_status() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_open_shard_is_still_open_not_a_picture() {
-    let reply = shard_view(fake_daemon(refusal(-24, "shard 7 is open"))).await;
+    let reply = shard_view(fake_daemon(refusal(
+        shekyl_rpc_types::errors::ErrorClass::RefusedByMethod,
+        "shard.open",
+        "shard 7 is open",
+    )))
+    .await;
     let error = &reply["error"];
     assert_eq!(error["code"], -29534, "{reply}");
     assert!(
@@ -201,20 +220,35 @@ async fn an_open_shard_is_still_open_not_a_picture() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_miss_is_could_not_be_retrieved() {
-    let reply = shard_view(fake_daemon(refusal(-22, "no holder served shard 7"))).await;
+    let reply = shard_view(fake_daemon(refusal(
+        shekyl_rpc_types::errors::ErrorClass::RefusedByMethod,
+        "shard.unavailable",
+        "no holder served shard 7",
+    )))
+    .await;
     assert_eq!(reply["error"]["code"], -29535, "{reply}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_public_listener_and_a_skeletonless_store_are_each_not_offered() {
-    let restricted = shard_view(fake_daemon(refusal(-19, "restricted"))).await;
+async fn a_call_outside_the_grant_and_a_skeletonless_store_are_each_not_offered() {
+    let restricted = shard_view(fake_daemon(refusal(
+        shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant,
+        "grant.outside",
+        "outside this connection's grant",
+    )))
+    .await;
     assert_eq!(restricted["error"]["code"], -29536, "{restricted}");
     assert_eq!(
         restricted["error"]["data"]["cause"], "restricted",
         "{restricted}"
     );
 
-    let absent = shard_view(fake_daemon(refusal(-25, "no skeleton"))).await;
+    let absent = shard_view(fake_daemon(refusal(
+        shekyl_rpc_types::errors::ErrorClass::RefusedByMethod,
+        "shard.view-absent",
+        "no skeleton",
+    )))
+    .await;
     assert_eq!(absent["error"]["code"], -29536, "{absent}");
     assert_eq!(
         absent["error"]["data"]["cause"], "skeleton_absent",

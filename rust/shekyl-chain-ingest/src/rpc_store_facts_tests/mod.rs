@@ -28,20 +28,21 @@ use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_daemon_rpc::chain_facts::{BlockLookup, ChainFacts, FactsFault};
 
-use shekyl_daemon_rpc::info::{get_info, Disclosure};
+use shekyl_daemon_rpc::info::{daemon_status, Disclosure};
 use shekyl_daemon_rpc::info_facts::{PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts};
-use shekyl_daemon_rpc::methods::{
-    get_block, get_block_count, get_block_hash, get_block_header_by_hash,
-    get_block_header_by_height, get_block_headers_range, get_fee_estimate, get_height,
-    get_last_block_header, RpcFault,
+use shekyl_daemon_rpc::methods::RpcFault;
+use shekyl_daemon_rpc::reads::{
+    block_header_list, block_header_show, block_show, chain_coinbase_sum, chain_height, curve_show,
+    fee,
 };
-use shekyl_daemon_rpc::read_methods::{get_coinbase_tx_sum, get_curve_tree_checkpoint};
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, StoreFacts, SyncFacts};
 use shekyl_pow_randomx::CacheStore;
-use shekyl_rpc_types::{
-    GetBlockHeaderByHashRequest, GetBlockHeadersRangeRequest, GetBlockRequest,
-    GetCoinbaseTxSumRequest, GetCurveTreeCheckpointRequest, GetFeeEstimateRequest, HashHex, Hidden,
+use shekyl_rpc_types::kinds::Height;
+use shekyl_rpc_types::wire::block::{
+    BlockSelect, BlockShowSelect, HeaderRange, HeaderRangeSelect, HeaderSelect,
 };
+use shekyl_rpc_types::wire::shared::{ArchivedState, Null, OrArchived, Selector, Slot, SlotState};
+use shekyl_rpc_types::HashHex;
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PowHash};
 use shekyl_wire::Block;
 
@@ -136,16 +137,17 @@ impl NodeFacts for TestNode {
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // An online node has its peer lists; `Offline` belongs to a node
         // whose sync facts say so.
-        Ok(PeerFacts::Running(
-            shekyl_rpc_types::InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
-                connector: shekyl_rpc_types::InfoConnector::Clearnet,
-                incoming_sockets: 1,
-                outgoing_sockets: 2,
-                white_peerlist_size: 5,
-                gray_peerlist_size: 7,
-            }])
-            .expect("one row is in order"),
-        ))
+        use shekyl_rpc_types::kinds::Count;
+        use shekyl_rpc_types::wire::daemon::{ConnectorCounts, ConnectorMap};
+        Ok(PeerFacts::Running(ConnectorMap {
+            clearnet: Some(ConnectorCounts {
+                inbound_count: Count(1),
+                outbound_count: Count(2),
+                peer_white_count: Count(5),
+                peer_gray_count: Count(7),
+            }),
+            tor: None,
+        }))
     }
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
         Ok(SessionCounts {
@@ -274,17 +276,24 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
 
-        // The tip, the count and every hash.
-        let height = get_height(&facts).expect("height");
-        assert_eq!(height.height, tip.to_raw() + 1, "get_height is the count");
-        assert_eq!(height.hash, hex(mined.last().expect("tip").hash));
-        assert_eq!(
-            get_block_count(&facts).expect("count").count,
-            tip.to_raw() + 1
-        );
+        let select = |select, pow| {
+            HeaderSelect(BlockSelect {
+                select,
+                pow,
+                prune: None,
+            })
+        };
+        let at_height = |height: u64, pow| {
+            block_header_show(&facts, &select(Selector::Height(Height(height)), pow))
+        };
+
+        // The tip: the wire carries its height, an ordinal, and its hash.
+        let tip_reply = chain_height(&facts).expect("height");
+        assert_eq!(tip_reply.height.0, tip.to_raw(), "chain_height is the tip");
+        assert_eq!(tip_reply.hash, hex(mined.last().expect("tip").hash));
         for m in &mined {
             assert_eq!(
-                get_block_hash(&facts, m.height.to_raw()).expect("in range"),
+                at_height(m.height.to_raw(), false).expect("in range").hash,
                 hex(m.hash),
                 "block hash at {}",
                 m.height.to_raw()
@@ -293,34 +302,38 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
 
         // Every header field, by height, from the block as mined.
         for m in &mined {
-            let header = get_block_header_by_height(&facts, m.height.to_raw(), true)
-                .expect("in range")
-                .block_header;
+            let header = at_height(m.height.to_raw(), true).expect("in range");
             let block = &m.template.block;
             assert_eq!(header.hash, hex(m.hash));
-            assert_eq!(header.height, m.height.to_raw());
-            assert_eq!(header.depth, tip.to_raw() - m.height.to_raw());
-            assert_eq!(header.prev_hash, hex(block.header.previous));
+            assert_eq!(header.height.0, m.height.to_raw());
+            assert_eq!(header.depth.0, tip.to_raw() - m.height.to_raw());
+            assert_eq!(header.parent, hex(block.header.previous));
             assert_eq!(
-                header.miner_tx_hash,
+                header.coinbase,
                 HashHex::from_bytes(block.miner_transaction.hash().to_bytes())
             );
-            assert_eq!(header.timestamp, block.header.timestamp);
-            assert_eq!(header.nonce, block.header.nonce);
-            assert_eq!(header.major_version, block.header.major_version);
-            assert_eq!(header.minor_version, block.header.minor_version);
+            assert_eq!(header.time.0, block.header.timestamp);
+            assert_eq!(header.nonce.0, u64::from(block.header.nonce));
             assert_eq!(
-                header.num_txes,
+                header.version_major.0,
+                u64::from(block.header.major_version)
+            );
+            assert_eq!(
+                header.version_minor.0,
+                u64::from(block.header.minor_version)
+            );
+            assert_eq!(
+                header.tx_count.0,
                 u64::try_from(block.transaction_hashes.len()).expect("fits")
             );
             assert_eq!(
-                header.reward,
+                header.reward.to_atomic_units().to_raw(),
                 template_reward(block),
                 "reward at {}",
                 m.height.to_raw()
             );
             assert_eq!(
-                header.curve_tree_root,
+                header.curve_root,
                 HashHex::from_bytes(block.header.curve_tree_root.to_bytes())
             );
             assert_eq!(
@@ -328,19 +341,19 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 HashHex::from_bytes(block.header.attestation_root.to_bytes())
             );
             assert_eq!(
-                u128::from(header.difficulty),
+                header.difficulty.0,
                 m.target.difficulty().to_raw(),
                 "the block's own difficulty is the target its producer claimed"
             );
-            assert!(!header.orphan_status);
+            assert!(!header.orphan);
             assert_eq!(
-                header.block_weight,
+                header.weight.0,
                 m.weights.weight.to_raw(),
                 "weight at {}",
                 m.height.to_raw()
             );
             assert_eq!(
-                header.pow_hash,
+                header.pow.0,
                 Some(HashHex::from_bytes(keccak_pow(&block.pow_blob(), &m.seed))),
                 "the recorded PoW is this block's own hash under its seed"
             );
@@ -351,88 +364,86 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         let mut sum = 0u128;
         for m in &mined {
             sum += m.target.difficulty().to_raw();
-            let header = get_block_header_by_height(&facts, m.height.to_raw(), false)
-                .expect("in range")
-                .block_header;
-            assert_eq!(
-                (u128::from(header.cumulative_difficulty_top64) << 64)
-                    | u128::from(header.cumulative_difficulty),
-                sum
-            );
-            assert_eq!(header.pow_hash, None, "not requested, not filled");
+            let header = at_height(m.height.to_raw(), false).expect("in range");
+            assert_eq!(header.difficulty_cumulative.0, sum);
+            assert_eq!(header.pow.0, None, "not requested, not filled");
         }
 
-        // By hash, the same header.
+        // By hash and at the tip, the same header.
         let last = mined.last().expect("tip");
-        let by_hash = get_block_header_by_hash(
+        let by_height = at_height(last.height.to_raw(), false).expect("in range");
+        assert_eq!(
+            block_header_show(&facts, &select(Selector::Hash(hex(last.hash)), false))
+                .expect("by hash"),
+            by_height
+        );
+        assert_eq!(
+            block_header_show(&facts, &select(Selector::Tip, false))
+                .expect("tip")
+                .hash,
+            hex(last.hash)
+        );
+        let listed = block_header_list(
             &facts,
-            &GetBlockHeaderByHashRequest {
-                hashes: vec![hex(last.hash)],
-                fill_pow_hash: false,
+            &HeaderRange {
+                select: HeaderRangeSelect::Hash(vec![hex(last.hash)]),
+                pow: false,
             },
             false,
         )
         .expect("by hash");
-        assert_eq!(
-            by_hash.block_headers[0].block_header,
-            Some(
-                get_block_header_by_height(&facts, last.height.to_raw(), false)
-                    .expect("in range")
-                    .block_header
-            )
-        );
-        assert_eq!(
-            get_last_block_header(&facts, false)
-                .expect("tip")
-                .block_header
-                .hash,
-            hex(last.hash)
-        );
+        assert_eq!(listed, vec![Slot::Item(by_height)]);
 
         // The range, and its refusal past the tip.
-        let range = get_block_headers_range(
-            &facts,
-            &GetBlockHeadersRangeRequest {
-                start_height: 2,
-                end_height: 5,
-                fill_pow_hash: false,
-            },
-            false,
-        )
-        .expect("in range");
-        assert_eq!(
-            range.headers.iter().map(|h| h.height).collect::<Vec<_>>(),
-            vec![2, 3, 4, 5]
-        );
-        assert!(matches!(
-            get_block_headers_range(
+        let range = |to: u64| {
+            block_header_list(
                 &facts,
-                &GetBlockHeadersRangeRequest {
-                    start_height: 2,
-                    end_height: tip.to_raw() + 1,
-                    fill_pow_hash: false,
-                },
-                false,
-            ),
-            Err(RpcFault::Refused(_))
-        ));
-
-        // The whole block: its blob is the block as mined, its hashes its
-        // listed bodies, and there is no epee rendering.
-        for m in &mined {
-            let reply = get_block(
-                &facts,
-                &GetBlockRequest {
-                    hash: String::new(),
-                    height: m.height.to_raw(),
-                    fill_pow_hash: false,
+                &HeaderRange {
+                    select: HeaderRangeSelect::Range {
+                        from: Height(2),
+                        to: Height(to),
+                    },
+                    pow: false,
                 },
                 false,
             )
+        };
+        let headers = range(5).expect("in range");
+        assert_eq!(
+            headers
+                .iter()
+                .map(|slot| match slot {
+                    Slot::Item(header) => header.height.0,
+                    other => panic!("a header in range: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
+        assert!(matches!(range(tip.to_raw() + 1), Err(RpcFault::Refused(_))));
+
+        // The whole block: its bytes are the block as mined, its listed
+        // bodies the block's transactions.
+        for m in &mined {
+            let reply = block_show(
+                &facts,
+                &facts,
+                &BlockShowSelect(BlockSelect {
+                    select: Selector::Height(Height(m.height.to_raw())),
+                    pow: false,
+                    prune: Some(false),
+                }),
+            )
             .expect("in range");
-            assert_eq!(reply.blob, hex::encode(m.template.block.serialize()));
+            assert_eq!(reply.body.0, m.template.block.serialize());
             assert_eq!(
-                reply.tx_hashes,
+                reply
+                    .tx
+                    .iter()
+                    .map(|slot| match slot {
+                        OrArchived::Item(tx) => tx.id,
+                        OrArchived::Archived(ArchivedState::Archived(a)) => a.id,
+                    })
+                    .collect::<Vec<_>>(),
                 m.template
                     .block
                     .transaction_hashes
@@ -440,33 +451,36 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                     .map(|h| HashHex::from_bytes(h.to_bytes()))
                     .collect::<Vec<_>>()
             );
-            assert_eq!(reply.json, None, "the store has no epee renderer (RK-D11)");
         }
 
-        // Past the tip: refused by height and by an unknown hash, each with
-        // its own refusal.
+        // Past the tip: refused by height; an unknown hash is refused by
+        // `block_header_show` and a `missing` slot in `block_header_list`.
         assert!(matches!(
-            get_block_header_by_height(&facts, tip.to_raw() + 1, false),
+            at_height(tip.to_raw() + 1, false),
             Err(RpcFault::Refused(_))
         ));
+        let unknown = HashHex::from_bytes([0x5a; 32]);
         assert!(matches!(
-            get_block_hash(&facts, tip.to_raw() + 1),
+            block_header_show(&facts, &select(Selector::Hash(unknown), false)),
             Err(RpcFault::Refused(_))
         ));
-        let unknown = get_block_header_by_hash(
-            &facts,
-            &GetBlockHeaderByHashRequest {
-                hashes: vec![HashHex::from_bytes([0x5a; 32])],
-                fill_pow_hash: false,
-            },
-            false,
-        )
-        .expect("an unknown hash is a slot, not a refusal");
-        assert_eq!(unknown.block_headers[0].block_header, None);
+        assert_eq!(
+            block_header_list(
+                &facts,
+                &HeaderRange {
+                    select: HeaderRangeSelect::Hash(vec![unknown]),
+                    pow: false,
+                },
+                false,
+            )
+            .expect("an unknown hash is a slot, not a refusal"),
+            vec![Slot::State(SlotState::Missing(Null))]
+        );
 
         // The recorded hash is a store read.
-        let paid = get_last_block_header(&facts, true).expect("the recorded hash");
-        assert!(paid.block_header.pow_hash.is_some());
+        let paid =
+            block_header_show(&facts, &select(Selector::Tip, true)).expect("the recorded hash");
+        assert!(paid.pow.0.is_some());
         drop(facts);
         drop(store);
     })
@@ -485,10 +499,9 @@ async fn the_fee_estimate_is_the_ladder_at_the_connecting_height() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let fees = get_fee_estimate(&facts, &GetFeeEstimateRequest {})
-            .expect("fees")
-            .fees
-            .0;
+        let reply = fee(&facts).expect("fees");
+        let fees = [&reply.economy, &reply.standard, &reply.high]
+            .map(|tier| tier.to_atomic_units().to_raw());
         let snap = store.begin_read().expect("read");
         let floor = match relay_floor_at(&SnapshotView::new(&snap), connecting) {
             Ok(AtHeight::Recorded(floor)) => floor,
@@ -504,10 +517,10 @@ async fn the_fee_estimate_is_the_ladder_at_the_connecting_height() {
     s.close().await;
 }
 
-/// `get_info` over the store: the chain part from the snapshot and the
+/// `daemon_status` over the store: the chain part from the snapshot and the
 /// rules' derivations, everything else from the node's inputs.
 #[tokio::test]
-async fn get_info_reads_the_chain_from_the_store_and_the_rest_from_the_node() {
+async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node() {
     let mut s = Scenario::open("rpc-store-facts-info");
     let mined = s.mine(5).await;
     let last = mined.last().expect("tip").clone();
@@ -520,38 +533,42 @@ async fn get_info_reads_the_chain_from_the_store_and_the_rest_from_the_node() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let info = get_info(&facts, Disclosure::FULL, 0).expect("info");
-        assert_eq!(info.health.height, last.height.to_raw() + 1);
-        assert_eq!(info.health.top_block_hash, hex(last.hash));
-        assert!(info.health.synchronized);
-        assert!(!info.health.following_degraded);
+        let info = daemon_status(&facts, &facts, Disclosure::FULL, 0)
+            .unwrap_or_else(|_| panic!("daemon_status"));
+        assert_eq!(info.height.0, last.height.to_raw(), "the tip's height");
+        assert_eq!(info.hash, hex(last.hash));
+        assert!(info.synchronized);
+        assert!(!info.degraded);
         assert_eq!(
-            info.chain.tx_count, listed,
+            info.tx_count.0, listed,
             "every listed body, coinbases excluded"
         );
         assert_eq!(
-            info.economics.already_generated_coins, last.emission.coins_generated,
+            info.emission.to_atomic_units(),
+            last.emission.coins_generated,
             "the accumulator through the tip"
         );
         // The scenario's fixed difficulty is the next block's too.
-        assert_eq!(info.chain.difficulty, 1);
+        assert_eq!(info.difficulty.0, 1);
         assert_eq!(
-            info.chain.block_weight_limit,
-            2 * info.chain.block_weight_median,
+            info.block_weight_max.0,
+            2 * info.block_weight_median.0,
             "the limit is twice the effective median (CEN-G6b)"
         );
         assert_eq!(
-            info.pool.tx_pool_size(),
+            info.txpool_count.0.map(|count| count.0),
             Some(3),
             "the pool's broadcast count is the node's"
         );
-        match &info.node {
-            Hidden::Shown(status) => assert_eq!(status.alt_blocks_count, 0),
-            Hidden::Withheld => panic!("a full disclosure shows Status"),
-        }
-        let restricted = get_info(&facts, Disclosure::VIEW, 0).expect("info");
-        assert!(matches!(restricted.node, Hidden::Withheld));
-        assert!(matches!(restricted.peers, Hidden::Withheld));
+        assert_eq!(
+            info.alt_count.clone().shown().map(|count| count.0),
+            Some(0),
+            "a full disclosure shows Status"
+        );
+        let restricted = daemon_status(&facts, &facts, Disclosure::VIEW, 0)
+            .unwrap_or_else(|_| panic!("daemon_status"));
+        assert!(restricted.alt_count.is_withheld(), "Status is withheld");
+        assert!(restricted.connector.is_withheld(), "Peers is withheld");
         drop(facts);
         drop(store);
     })
@@ -581,43 +598,38 @@ async fn an_alt_block_by_hash_is_described_by_its_own_row() {
     x.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let reply = get_block_header_by_hash(
-            &facts,
-            &GetBlockHeaderByHashRequest {
-                hashes: vec![hex(alt.hash)],
-                fill_pow_hash: true,
-            },
-            false,
-        )
-        .expect("by hash");
-        let header = reply.block_headers[0]
-            .block_header
-            .clone()
-            .expect("the alt block is held");
-        assert!(header.orphan_status);
-        assert_eq!(header.height, alt.height.to_raw());
-        assert_eq!(header.depth, 0, "no confirmations on the main chain");
+        let header = |select, pow| {
+            block_header_show(
+                &facts,
+                &HeaderSelect(BlockSelect {
+                    select,
+                    pow,
+                    prune: None,
+                }),
+            )
+        };
+        let alt_header =
+            header(Selector::Hash(hex(alt.hash)), true).expect("the alt block is held");
+        assert!(alt_header.orphan);
+        assert_eq!(alt_header.height.0, alt.height.to_raw());
+        assert_eq!(alt_header.depth.0, 0, "no confirmations on the main chain");
         assert_eq!(
-            header.long_term_weight, 0,
-            "omitted: no chain records its medians"
+            alt_header.weight_longterm.0, None,
+            "null: no chain records its medians"
         );
+        assert_eq!(alt_header.difficulty.0, alt.target.difficulty().to_raw());
         assert_eq!(
-            u128::from(header.difficulty),
-            alt.target.difficulty().to_raw()
-        );
-        assert_eq!(
-            header.pow_hash,
+            alt_header.pow.0,
             Some(HashHex::from_bytes(keccak_pow(
                 &alt.template.block.pow_blob(),
                 &alt.seed
             )))
         );
-        assert_eq!(header.block_weight, alt.weights.weight.to_raw());
+        assert_eq!(alt_header.weight.0, alt.weights.weight.to_raw());
         // The main block at the same height is a different header.
-        let main_header = get_block_header_by_height(&facts, alt.height.to_raw(), false)
-            .expect("in range")
-            .block_header;
-        assert_ne!(main_header.hash, header.hash);
+        let main_header =
+            header(Selector::Height(Height(alt.height.to_raw())), false).expect("in range");
+        assert_ne!(main_header.hash, alt_header.hash);
         let snap = store.begin_read().expect("read");
         assert_eq!(snap.alt_block_count().expect("count"), 1);
         drop(snap);
@@ -802,37 +814,36 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
 
             // The read handlers' values at this height.
             // The tree after the block: the C++ recorded root after it.
-            let checkpoint = get_curve_tree_checkpoint(
+            let checkpoint = curve_show(
                 &facts,
-                &GetCurveTreeCheckpointRequest { block_height: h },
+                &shekyl_rpc_types::wire::chain::CurveSelect(Selector::Height(Height(h))),
             )
-            .expect("through the tip");
+            .unwrap_or_else(|_| panic!("through the tip"));
             push(
                 *height,
                 "checkpoint_root",
                 hex::encode(cxx.root_after.to_bytes()),
-                checkpoint.root,
+                checkpoint.root.to_string(),
             );
             // One block's coinbase sum: its fees are the corpus bodies'; its
             // emission is the C++ accumulator's growth at this height.
-            let one = get_coinbase_tx_sum(
+            let one = chain_coinbase_sum(
                 &facts,
-                &GetCoinbaseTxSumRequest {
-                    height: h,
-                    count: 1,
+                &shekyl_rpc_types::wire::chain::CoinbaseSumRange {
+                    from: Height(h),
+                    to: Height(h),
                 },
             )
-            .expect("coinbase sum");
+            .unwrap_or_else(|_| panic!("coinbase sum"));
             let fees = corpus_fees[usize::try_from(h).expect("fits")];
             push(
                 *height,
                 "coinbase_sum_fees",
                 fees.to_string(),
-                ((u128::from(one.fee_amount_top64) << 64) | u128::from(one.fee_amount)).to_string(),
+                u128::from(one.fee.to_atomic_units().to_raw()).to_string(),
             );
             let coins = u128::from(cxx.coins_generated.to_raw());
-            let emission =
-                (u128::from(one.emission_amount_top64) << 64) | u128::from(one.emission_amount);
+            let emission = u128::from(one.emission.to_atomic_units().to_raw());
             push(
                 *height,
                 "coinbase_sum_emission",

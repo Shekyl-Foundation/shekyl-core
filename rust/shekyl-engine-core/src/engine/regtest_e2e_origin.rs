@@ -631,7 +631,7 @@ async fn daemon_words_answer_through_shekyl_cli() {
 
     let out = daemon.console("txpool stats");
     assert!(
-        out.contains("0 tx(es), 0 bytes total") && out.contains("no backlog"),
+        out.contains("0 tx(es), 0 weight total") && out.contains("no backlog"),
         "the in-process print_pool_stats must render an empty pool from both \
          of its legs; got:\n{out}"
     );

@@ -323,17 +323,17 @@ pub use shekyl_rpc_types::wire;
 // (`DAEMON_SUBMIT_VERDICT.md` §2.3's single-definition rule).
 pub use shekyl_rpc_types::wire::tx::{Publication, Rejection, Verdict};
 
-use shekyl_rpc_types::endpoint::JSON_RPC_PATH;
 use shekyl_rpc_types::kinds::{Bytes, Count, Height};
 use shekyl_units::wire::AtomicUnitsString;
 
-/// The route a call is posted on: [`JSON_RPC_PATH`] relative to the
+/// The route a call is posted on:
+/// [`JSON_RPC_PATH`](shekyl_rpc_types::endpoint::JSON_RPC_PATH) relative to the
 /// transport's base URL. A transport appends a route as `{url}/{route}`
 /// ([`Rpc::post`]), so the path's own leading slash would put `//json_rpc`
 /// on the wire, which no router matches.
 #[must_use]
-pub fn json_rpc_route() -> &'static str {
-    JSON_RPC_PATH.trim_start_matches('/')
+pub const fn json_rpc_route() -> &'static str {
+    shekyl_rpc_types::endpoint::JSON_RPC_ROUTE
 }
 
 /// An RPC connection to a Shekyl daemon.

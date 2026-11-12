@@ -6,6 +6,7 @@
 //! Chain/daemon health and archival-shard commands.
 
 use serde_json::{json, Value};
+use shekyl_rpc_types::wire::archival::{Coverage, CoverageShard};
 use shekyl_rpc_types::HexU128;
 use shekyl_shard_visual::{render_candidate_png, ShardAggregate};
 
@@ -16,40 +17,39 @@ use crate::rpc_client::RpcSession;
 
 pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
-    match dc.get_info() {
-        Ok(info) => {
+    match dc.daemon_status() {
+        Ok(status) => {
             let mut body = json!({
-                "status": info.status.0,
-                "height": info.health.height,
+                // The chain's block count: the wire carries the tip's
+                // height, an ordinal (IG-Q45), and this output has always
+                // printed the count, one more.
+                "height": status.height.0.saturating_add(1),
                 // Whether the daemon has caught up is its own flag. The
                 // target is the core's, `null` when it has none, and is
-                // shown beside the flag, never read as the flag.
-                "synchronized": info.health.synchronized,
-                "target_height": info.health.target_height,
+                // shown beside the flag, never read as the flag. A count,
+                // as the height is.
+                "synchronized": status.synchronized,
+                "target_height": status.target_height.0.map(|tip| tip.0.saturating_add(1)),
                 // The whole 128-bit value, in the wire's own encoding:
-                // `0x` hex under the wire's name. A JSON number cannot hold
-                // it, and this output used to write its low 64 bits as
-                // `difficulty`, which is a wrong number past 2^64.
-                "wide_difficulty": HexU128(info.chain.difficulty),
-                "tx_count": info.chain.tx_count,
+                // `0x` hex. A JSON number cannot hold it.
+                "wide_difficulty": status.difficulty,
+                "tx_count": status.tx_count.0,
                 // Whether the daemon runs P2P at all: its configuration,
-                // told to every caller. The reply's decoder holds it equal
-                // to the Peers part's state (Rick, 2026-10-14).
-                "p2p": if info.health.p2p.is_offline() { "offline" } else { "running" },
+                // told to every caller (Rick, 2026-10-14).
+                "p2p": if status.offline { "offline" } else { "running" },
             });
-            // Status is wholly shown or wholly absent, and a restricted
-            // daemon withholds it. A withheld part is not a zero, so the
-            // keys stay off the object and the line below says the part
-            // was not disclosed. A shown zero is a count.
-            // An offline daemon's Status carries no count: the `p2p` member
-            // above says why, and the line below prints the state.
-            if let Some(status) = info.node.shown() {
-                if let shekyl_rpc_types::StatusConnections::Running { outgoing, incoming } =
-                    status.connections
-                {
-                    body["outgoing_connections_count"] = json!(outgoing);
-                    body["incoming_connections_count"] = json!(incoming);
-                }
+            // Status is wholly shown or wholly absent, and a caller without
+            // the `status` grant is not shown it. A withheld part is not a
+            // zero, so the keys stay off the object and the line below says
+            // the part was not disclosed. A shown zero is a count. An
+            // offline daemon's counts are `null`: the `p2p` member above
+            // says why, and the line below prints the state.
+            if let (Some(outgoing), Some(incoming)) = (
+                status.peer_outbound_count.shown().and_then(|n| n.0),
+                status.peer_inbound_count.shown().and_then(|n| n.0),
+            ) {
+                body["outgoing_connections_count"] = json!(outgoing.0);
+                body["incoming_connections_count"] = json!(incoming.0);
             }
             Ok(body)
         }
@@ -60,10 +60,8 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
 /// The line that says the daemon is still syncing, or `None` when it has
 /// caught up.
 ///
-/// Read from `synchronized`, the daemon's own flag. Until `get_info`
-/// stopped writing its target as `0` for a synchronized node, this was
-/// inferred from the target being non-zero and different from the height.
-/// A synchronized daemon now reports a real target, so that inference
+/// Read from `synchronized`, the daemon's own flag, never inferred from the
+/// target: a synchronized daemon reports a real target, so that inference
 /// would call it syncing whenever a peer had claimed a taller chain.
 ///
 /// A value without the flag is not this command's output; it is shown as
@@ -143,9 +141,7 @@ fn count_line(label: &str, val: &Value, key: &str) -> String {
 }
 
 pub(crate) fn show_chain(val: &Value) {
-    let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("?");
     println!("Chain health:");
-    println!("  Status:       {status}");
     println!("{}", count_line("Height", val, "height"));
     if let Some(line) = sync_line(val) {
         println!("{line}");
@@ -169,7 +165,7 @@ fn require_daemon(
 /// `shard list all` — the daemon's coverage list, in the daemon's order.
 pub fn cmd_shard_list_all(daemon: Option<&DaemonClient>) -> CommandResult {
     let dc = require_daemon(daemon)?;
-    match dc.archival_shard_coverage() {
+    match dc.shard_coverage() {
         Ok(list) => Ok(coverage_json(&list)),
         Err(e) => failed(e.to_string()),
     }
@@ -206,10 +202,10 @@ pub fn cmd_shard_list_mine(_rpc: &crate::rpc_client::RpcSession) -> CommandResul
 /// `shard show <id>` — one coverage row.
 pub fn cmd_shard_show(daemon: Option<&DaemonClient>, shard_id: u64) -> CommandResult {
     let dc = require_daemon(daemon)?;
-    match dc.archival_shard_coverage() {
-        Ok(list) => match list.shards.iter().find(|row| row.shard_id == shard_id) {
+    match dc.shard_coverage() {
+        Ok(list) => match list.shard.iter().find(|row| row.id.0 == shard_id) {
             Some(row) => Ok(json!({
-                "profit_estimate_available": list.profit_estimate_available,
+                "profit_estimate_available": profit_estimated(&list),
                 "shard": row_json(row),
             })),
             None => failed(format!("Shard {shard_id} is not in the list.")),
@@ -315,19 +311,30 @@ pub(crate) fn show_fetch(val: &Value) {
     }
 }
 
-fn coverage_json(list: &shekyl_rpc_types::GetArchivalShardCoverageResponse) -> Value {
+/// Whether the rows' pay is an estimate: the daemon estimates once a
+/// settlement pass has recorded work, and writes each row's `profit` as
+/// `null` until then.
+fn profit_estimated(list: &Coverage) -> bool {
+    list.work.0.is_some_and(|work| work.0 != 0)
+}
+
+fn coverage_json(list: &Coverage) -> Value {
     json!({
-        "profit_estimate_available": list.profit_estimate_available,
-        "shards": list.shards.iter().map(row_json).collect::<Vec<_>>(),
+        "profit_estimate_available": profit_estimated(list),
+        "shards": list.shard.iter().map(row_json).collect::<Vec<_>>(),
     })
 }
 
-fn row_json(row: &shekyl_rpc_types::ShardCoverageRow) -> Value {
+fn row_json(row: &CoverageShard) -> Value {
     json!({
-        "shard_id": row.shard_id,
-        "bonded_count": row.bonded_count,
-        "served_count": row.served_count,
-        "expected_profit_atomic": row.expected_profit_atomic,
+        "shard_id": row.id.0,
+        "bonded_count": row.bonded_count.0,
+        "served_count": row.served_count.0,
+        "expected_profit_atomic": row
+            .profit
+            .0
+            .as_ref()
+            .map_or(0, |profit| profit.to_atomic_units().to_raw()),
     })
 }
 

@@ -180,7 +180,20 @@ pub type OptionsHandle = Arc<dyn OptionsFacts>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_rpc_types::kinds::Text;
+    use shekyl_rpc_types::wire::shared::OpenMap;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
+
+    fn refusal(code: &str, name: &str, message: String) -> Refusal {
+        Refusal {
+            code: code.to_owned(),
+            option: shekyl_rpc_types::Nullable(Some(name.to_owned())),
+            source: "runtime".to_owned(),
+            parameter: BTreeMap::new(),
+            message,
+        }
+    }
 
     /// A handle with two rows: a runtime `status` row and a `config` secret.
     struct TwoRows {
@@ -192,21 +205,19 @@ mod tests {
             let mut refusals = Vec::new();
             for (name, value) in pairs {
                 if name != "log-level" {
-                    refusals.push(Refusal {
-                        code: "config.runtime.startup-only".to_owned(),
-                        option: Some(name.clone()),
-                        source: "runtime".to_owned(),
-                        params: Vec::new(),
-                        message: format!("`{name}` can only be set at startup"),
-                    });
+                    refusals.push(refusal(
+                        "config.runtime.startup-only",
+                        name,
+                        format!("`{name}` can only be set at startup"),
+                    ));
                 } else if !["warn", "info"].contains(&value.as_str()) {
-                    refusals.push(Refusal {
-                        code: "config.value.word".to_owned(),
-                        option: Some(name.clone()),
-                        source: "runtime".to_owned(),
-                        params: vec![("value".to_owned(), value.clone())],
-                        message: format!("the value '{value}' is not a level"),
-                    });
+                    let mut r = refusal(
+                        "config.value.word",
+                        name,
+                        format!("the value '{value}' is not a level"),
+                    );
+                    r.parameter.insert("value".to_owned(), value.clone());
+                    refusals.push(r);
                 }
             }
             if !refusals.is_empty() {
@@ -215,7 +226,12 @@ mod tests {
             let mut rows = Vec::new();
             for (name, value) in pairs {
                 *self.value.lock().unwrap() = value.clone();
-                rows.push(ShownRow::text(name, "runtime", true, Some(value.clone())));
+                rows.push(ShownRow::text(
+                    name,
+                    OptionSource::Runtime,
+                    true,
+                    Some(value.clone()),
+                ));
             }
             Ok(rows)
         }
@@ -225,14 +241,14 @@ mod tests {
                 VisibleRow {
                     row: ShownRow::text(
                         "log-level",
-                        "default",
+                        OptionSource::Default,
                         true,
                         Some(self.value.lock().unwrap().clone()),
                     ),
                     grant: Grant::Status,
                 },
                 VisibleRow {
-                    row: ShownRow::secret("tor-socks-password", "default", false),
+                    row: ShownRow::secret("tor-socks-password", OptionSource::Default, false),
                     grant: Grant::Config,
                 },
             ];
@@ -244,13 +260,11 @@ mod tests {
                         match all.iter().find(|r| r.row.name() == name) {
                             Some(r) => picked.push(r.clone()),
                             None => {
-                                return Err(ShowRefusal::Refused(Refusal {
-                                    code: "config.name.unknown".to_owned(),
-                                    option: Some(name.clone()),
-                                    source: "runtime".to_owned(),
-                                    params: Vec::new(),
-                                    message: format!("there is no option `{name}`"),
-                                }))
+                                return Err(ShowRefusal::Refused(refusal(
+                                    "config.name.unknown",
+                                    name,
+                                    format!("there is no option `{name}`"),
+                                )))
                             }
                         }
                     }
@@ -266,121 +280,156 @@ mod tests {
         }
     }
 
-    /// The request shape: an empty list and a repeated name are
-    /// wrong-parameter refusals, not configuration refusals.
-    #[test]
-    fn an_empty_list_and_a_repeated_name_are_request_faults() {
-        let empty = option_set_request(&serde_json::json!({"options": []})).unwrap_err();
-        let twice = option_set_request(&serde_json::json!({"options": [
-            {"name": "log-level", "value": "info"}, {"name": "log-level", "value": "warn"}]}))
-        .unwrap_err();
-        for fault in [empty, twice] {
-            match fault {
-                RpcFault::Refused(r) => assert_eq!(r.code, RpcRefusal::wrong_param("").code),
-                other => panic!("{other:?}"),
-            }
+    fn set(pairs: &[(&str, &str)]) -> node::OptionSet {
+        node::OptionSet {
+            value: OpenMap(
+                pairs
+                    .iter()
+                    .map(|(n, v)| ((*n).to_owned(), Text((*v).to_owned())))
+                    .collect(),
+            ),
         }
-        let ok = option_set_request(
-            &serde_json::json!({"options": [{"name": "log-level", "value": "info"}]}),
-        )
-        .unwrap();
-        assert_eq!(ok, vec![("log-level".to_owned(), "info".to_owned())]);
+    }
+
+    /// The request shape: an empty map is `option.value-empty`, a request
+    /// fault and not a configuration refusal; a name cannot repeat, because
+    /// the request is a map (IG-Q42).
+    #[test]
+    fn an_empty_map_is_a_request_fault_and_a_name_cannot_repeat() {
+        let h = handle();
+        let OptionsFault::Refused(empty) = option_set(&h, &set(&[])).unwrap_err() else {
+            panic!("a request fault")
+        };
+        assert_eq!(empty.class, ErrorClass::BadParams);
+        assert_eq!(empty.diagnostic.code, "option.value-empty");
+        let twice: Result<node::OptionSet, _> =
+            serde_json::from_str(r#"{"value": {"log-level": "info", "log-level": "warn"}}"#);
+        assert!(
+            twice.is_err() || twice.unwrap().value.0.len() == 1,
+            "a repeated name is one row or no request, never two"
+        );
     }
 
     /// All or nothing: one refused pair refuses the set, every refusal is
-    /// reported in `data` under the configuration code, and the handle's
-    /// value is unchanged.
+    /// reported in `data` (RT-O25), and the handle's value is unchanged.
     #[test]
     fn a_refused_pair_refuses_the_whole_set_and_reports_every_refusal() {
         let h = handle();
-        let pairs = vec![
-            ("log-level".to_owned(), "bogus".to_owned()),
-            ("data-dir".to_owned(), "/x".to_owned()),
-        ];
-        let RpcFault::Refused(refusal) = option_set(&h, &pairs).unwrap_err() else {
-            panic!("not a refusal")
+        let OptionsFault::Config(refusals) =
+            option_set(&h, &set(&[("log-level", "bogus"), ("data-dir", "/x")])).unwrap_err()
+        else {
+            panic!("a configuration refusal")
         };
-        assert_eq!(refusal.code, CONFIG_REFUSED_CODE);
-        let data: Vec<Refusal> = serde_json::from_value(refusal.data.unwrap()).unwrap();
-        assert_eq!(data.len(), 2);
-        assert_eq!(data[0].code, "config.value.word");
-        assert_eq!(data[1].code, "config.runtime.startup-only");
+        assert_eq!(refusals.len(), 2);
+        let (class, _, data) = OptionsFault::Config(refusals).into_parts();
+        assert_eq!(class, ErrorClass::RefusedByMethod);
+        let data: Vec<Refusal> = serde_json::from_value(data).unwrap();
+        let mut codes: Vec<&str> = data.iter().map(|r| r.code.as_str()).collect();
+        codes.sort_unstable();
+        assert_eq!(codes, ["config.runtime.startup-only", "config.value.word"]);
         assert_eq!(*h.value.lock().unwrap(), "warn", "nothing applied");
-        let set = option_set(&h, &[("log-level".to_owned(), "info".to_owned())]).unwrap();
-        assert_eq!(set.options[0].source(), "runtime");
-        assert_eq!(set.options[0].value(), Some(Some("info")));
+        let rows = option_set(&h, &set(&[("log-level", "info")])).unwrap();
+        assert_eq!(rows[0].source(), OptionSource::Runtime);
+        assert_eq!(rows[0].value(), Some(Some("info")));
     }
 
-    /// Each row is shown under the grant it names: the view listener sees
-    /// no `status` and no `config` row, the admin listener both; a named
-    /// row the caller may not see is absent, an unknown name refused.
+    /// Each row is shown under the grant it names: a view caller sees no
+    /// `status` and no `config` row, the host both; a named row the caller
+    /// may not see is absent, an unknown name refused.
     #[test]
     fn show_discloses_each_row_under_its_grant() {
         let h = handle();
-        let full = option_show(&h, None, Disclosure::FULL).unwrap();
-        assert_eq!(full.options.len(), 2);
-        assert!(full.options[1].is_secret());
-        assert_eq!(
-            full.options[1].value(),
-            None,
-            "a secret carries no value member"
-        );
-        let view = option_show(&h, None, Disclosure::VIEW).unwrap();
-        assert!(view.options.is_empty());
+        let all = node::OptionShow { name: None };
+        let full = option_show(&h, &all, Disclosure::FULL).unwrap();
+        assert_eq!(full.len(), 2);
+        assert!(full[1].is_secret());
+        assert_eq!(full[1].value(), None, "a secret carries no value member");
+        assert!(option_show(&h, &all, Disclosure::VIEW).unwrap().is_empty());
         let named = option_show(
             &h,
-            Some(&["tor-socks-password".to_owned()]),
+            &node::OptionShow {
+                name: Some(vec![Text("tor-socks-password".to_owned())]),
+            },
             Disclosure::VIEW,
         )
         .unwrap();
-        assert!(named.options.is_empty(), "absent, not refused");
-        let RpcFault::Refused(unknown) =
-            option_show(&h, Some(&["nope".to_owned()]), Disclosure::FULL).unwrap_err()
-        else {
-            panic!()
-        };
-        assert_eq!(unknown.code, CONFIG_REFUSED_CODE);
+        assert!(named.is_empty(), "absent, not refused");
+        let unknown = option_show(
+            &h,
+            &node::OptionShow {
+                name: Some(vec![Text("nope".to_owned())]),
+            },
+            Disclosure::FULL,
+        )
+        .unwrap_err();
+        assert!(matches!(unknown, OptionsFault::Config(r) if r[0].code == "config.name.unknown"));
     }
 
-    /// The secret and value forms serialize as RT-O25 says: a value row has
-    /// `value` (text or null) and no `secret`; a secret row has `secret`
-    /// and `set` and no `value`.
+    /// A daemon with no options handle refuses both methods with
+    /// `config.runtime.absent`, never an empty list.
+    #[test]
+    fn an_absent_handle_refuses_both_methods() {
+        for fault in [
+            option_set(&OptionsAbsent, &set(&[("log-level", "info")])).unwrap_err(),
+            option_show(
+                &OptionsAbsent,
+                &node::OptionShow { name: None },
+                Disclosure::FULL,
+            )
+            .unwrap_err(),
+        ] {
+            assert!(
+                matches!(fault, OptionsFault::Config(r) if r[0].code == "config.runtime.absent")
+            );
+        }
+    }
+
+    /// The secret and value forms serialize apart (RT-O25): a value row has
+    /// `value` (text or null) and `secret: false`; a secret row has
+    /// `secret: true` and `assigned`, and no `value`.
     #[test]
     fn the_two_row_forms_serialize_apart() {
         let v = serde_json::to_value(ShownRow::text(
             "p2p-upload-max",
-            "default",
+            OptionSource::Default,
             true,
             Some("unlimited".into()),
         ))
         .unwrap();
         assert_eq!(v["value"], "unlimited");
-        assert!(v.get("secret").is_none());
-        let unset =
-            serde_json::to_value(ShownRow::text("mine-address", "default", false, None)).unwrap();
+        assert_eq!(v["secret"], false);
+        let unset = serde_json::to_value(ShownRow::text(
+            "mine-address",
+            OptionSource::Default,
+            false,
+            None,
+        ))
+        .unwrap();
         assert!(unset["value"].is_null());
-        let s = serde_json::to_value(ShownRow::secret("tor-socks-password", "file", true)).unwrap();
+        let s = serde_json::to_value(ShownRow::secret(
+            "tor-socks-password",
+            OptionSource::File,
+            true,
+        ))
+        .unwrap();
         assert!(s.get("value").is_none());
         assert_eq!(s["secret"], true);
-        assert_eq!(s["set"], true);
         assert_eq!(s["runtime"], false);
+        assert_eq!(s["assigned"], true);
 
         let back: ShownRow = serde_json::from_value(v).unwrap();
         assert_eq!(back.value(), Some(Some("unlimited")));
         let unset_back: ShownRow = serde_json::from_value(unset).unwrap();
         assert_eq!(unset_back.value(), Some(None));
-        let secret_back: ShownRow = serde_json::from_value(s).unwrap();
-        assert_eq!(secret_back.set(), Some(true));
+        assert!(serde_json::from_value::<ShownRow>(s).unwrap().is_secret());
 
         for bad in [
             serde_json::json!({"name": "a", "source": "default", "runtime": false}),
-            serde_json::json!({"name": "a", "source": "default", "runtime": false, "value": "x", "secret": true, "set": true}),
-            serde_json::json!({"name": "a", "source": "default", "runtime": false, "secret": false, "set": true}),
-            serde_json::json!({"name": "a", "source": "default", "runtime": true, "secret": true, "set": false}),
+            serde_json::json!({"name": "a", "source": "nowhere", "runtime": false, "secret": false, "value": null}),
         ] {
             assert!(
                 serde_json::from_value::<ShownRow>(bad).is_err(),
-                "an ambiguous or incomplete row is refused"
+                "an incomplete or misnamed row is refused"
             );
         }
     }

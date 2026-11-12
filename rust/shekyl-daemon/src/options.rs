@@ -355,7 +355,7 @@ mod tests {
         let h = handle(&["--network", "regtest"]);
         let rows = h.set(&[pair("p2p-upload-max", "1MiB/s")]).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].source(), "runtime");
+        assert_eq!(rows[0].source(), OptionSource::Runtime);
         assert!(rows[0].runtime());
         assert_eq!(rows[0].value(), Some(Some("1MiB/s")));
         h.set(&[pair("p2p-upload-max", "unlimited")]).unwrap();
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(names, table);
         let level = all.iter().find(|v| v.row.name() == "log-level").unwrap();
         assert_eq!(level.grant, Grant::Status);
-        assert_eq!(level.row.source(), "cli");
+        assert_eq!(level.row.source(), OptionSource::Cli);
         let onion = all.iter().find(|v| v.row.name() == "tor-onion").unwrap();
         assert_eq!(onion.grant, Grant::Config);
         assert_eq!(

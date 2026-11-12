@@ -447,18 +447,37 @@ fn the_submission_count_is_the_consensus_bound_in_records() {
     /// Room the five records were chosen to leave for the HTTP head.
     /// A floor for the count, not a second protocol constant.
     const MIN_HEAD_ROOM: usize = 16 * 1024;
-    let largest_body = submit_envelope_len() + 2 * shekyl_wire::transaction::TX_WEIGHT_LIMIT;
+    let largest_body =
+        submit_envelope_len() + shekyl_wire::transaction::TX_WEIGHT_LIMIT.div_ceil(3) * 4;
     let head_room = SUBMISSION_CAP - largest_body;
     assert!(head_room >= MIN_HEAD_ROOM, "{head_room} bytes for the head");
     assert!(largest_body > (SUBMISSION_RECORDS - 1) * MAX_PAYLOAD);
 }
 
 fn submit_envelope_len() -> usize {
-    serde_json::to_vec(&shekyl_rpc_types::SubmitTransactionRequest {
-        tx_blob: String::new(),
-    })
+    submit_body(&[]).len()
+}
+
+/// A `tx_submit` request body carrying `tx`: the JSON-RPC envelope with
+/// the body base64-encoded (RW-Q8).
+fn submit_body(tx: &[u8]) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": <shekyl_rpc_types::wire::TxSubmit as shekyl_rpc_types::method::RpcMethod>::NAME,
+        "params": shekyl_rpc_types::wire::tx::TxBody {
+            body: shekyl_rpc_types::kinds::Bytes(tx.to_vec()),
+        },
+    }))
     .unwrap()
-    .len()
+}
+
+/// Whether a request body is a `tx_submit` call.
+fn is_submission(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|request| {
+        request["method"]
+            == <shekyl_rpc_types::wire::TxSubmit as shekyl_rpc_types::method::RpcMethod>::NAME
+    })
 }
 
 // ------------------------------------------------------------- HTTP over it
@@ -466,20 +485,17 @@ fn submit_envelope_len() -> usize {
 /// Leading bytes of an answer that carry the request body's length.
 const ECHOED_LEN: usize = std::mem::size_of::<usize>();
 
-const SUBMIT_TRANSACTION: &str = "/submit_transaction";
-
 /// The daemon side: answers every request with the length of its body, in
-/// a body of `answer_len` bytes. A `submit_transaction` body is collected
-/// only after all [`SUBMISSION_RECORDS`] records have been opened.
+/// a body of `answer_len` bytes. A `tx_submit` body is collected only after
+/// all [`SUBMISSION_RECORDS`] records have been opened.
 async fn serve(daemon: RecordStream<DuplexStream>, answer_len: usize) {
     assert!(answer_len >= ECHOED_LEN);
     let received = daemon.counters();
     let service = hyper::service::service_fn(move |request: Request<Incoming>| {
         let received = Arc::clone(&received);
         async move {
-            let submission = request.uri().path() == SUBMIT_TRANSACTION;
             let body = request.into_body().collect().await.unwrap().to_bytes();
-            if submission {
+            if is_submission(&body) {
                 // Padding sealed after the payload would let the body
                 // finish while those records were still unsent.
                 let counts = received.lock().unwrap().received;
@@ -502,23 +518,20 @@ async fn serve(daemon: RecordStream<DuplexStream>, answer_len: usize) {
 }
 
 fn submit(tx_len: usize) -> Request<Full<Bytes>> {
-    let body = serde_json::to_vec(&shekyl_rpc_types::SubmitTransactionRequest {
-        tx_blob: hex::encode(bytes(tx_len)),
-    })
-    .unwrap();
-    Request::post(SUBMIT_TRANSACTION)
+    let body = submit_body(&bytes(tx_len));
+    Request::post(shekyl_rpc_types::endpoint::JSON_RPC_PATH)
         .header("host", "node")
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(body)))
         .unwrap()
 }
 
-/// RT-O28, as ruled: every `submit_transaction` upload is exactly
+/// RT-O28, as ruled: every `tx_submit` upload is exactly
 /// SUBMISSION_RECORDS records of the largest class, whatever the
 /// transaction's size, through hyper as a client sends it. A request that
 /// is not a submission is one small record.
 #[tokio::test]
-async fn every_submit_transaction_upload_is_the_fixed_record_count() {
+async fn every_tx_submit_upload_is_the_fixed_record_count() {
     for tx_len in [
         0,
         1,
@@ -543,7 +556,7 @@ async fn every_submit_transaction_upload_is_the_fixed_record_count() {
         let echoed = usize::from_le_bytes(width);
         assert_eq!(
             echoed,
-            submit_envelope_len() + 2 * tx_len,
+            submit_body(&bytes(tx_len)).len(),
             "the daemon got the whole body"
         );
         assert_eq!(

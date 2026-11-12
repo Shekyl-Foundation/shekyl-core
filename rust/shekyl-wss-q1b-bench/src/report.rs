@@ -123,11 +123,19 @@ use crate::timing::Series;
 ///   one line of this history, and leaving `rung_top` unflagged would cost
 ///   them the comparison.
 ///
+/// **v5 (RPC 4.0, 2026-11-11)** — in an `OpenEdgeRecord`, `wire_hex_bytes`
+///   and `projected_wire_hex_bytes` are `wire_bytes` and
+///   `projected_wire_bytes`. At `CORE_RPC_VERSION` 4.0 a block and its
+///   bodies arrive base64-encoded in one `block_show`, about 4/3 of the
+///   decoded size where hex was twice it, so a `v4` and a `v5` wire figure
+///   are not one axis; the decoded figure is. The fetch is one round trip
+///   per block, where it was two or three.
+///
 /// **No CI arm enforces this constant** — the `schema-snapshot` workflow's
 /// version-bump job covers `shekyl-chain-store`'s persisted schema, not this
 /// record. Bumping it is a reviewer obligation, which is why the history
 /// above is kept here rather than only in the changelog.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The spend-edge budget's absolute floor, in seconds (§6.3.4 row 2).
 pub const SPEND_DELTA_FLOOR_S: f64 = 2.0;

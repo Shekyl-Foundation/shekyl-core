@@ -694,8 +694,8 @@ mod rate_tests {
         assert_eq!(
             state.speed,
             MineSpeed {
-                count: 8,
-                window: 10
+                count: shekyl_rpc_types::kinds::Count(8),
+                window: shekyl_rpc_types::kinds::Duration(10)
             }
         );
     }
@@ -737,11 +737,13 @@ mod diagnostic_tests {
         });
         let diagnostic = no_job_diagnostic(&why);
         assert_eq!(
-            diagnostic.params,
-            vec![
-                ("kind".to_owned(), "stuck".to_owned()),
+            diagnostic.parameter,
+            [
                 ("after".to_owned(), "body_gone".to_owned()),
+                ("kind".to_owned(), "stuck".to_owned()),
             ]
+            .into_iter()
+            .collect()
         );
         assert!(
             diagnostic.message.contains("left the pool") && diagnostic.message.contains("again"),
@@ -807,11 +809,13 @@ mod bound_tests {
         });
         assert_eq!(diagnostic.code, codes::BOUND_SHORT);
         assert_eq!(
-            diagnostic.params,
-            vec![
-                ("until".to_owned(), "1".to_owned()),
+            diagnostic.parameter,
+            [
                 ("height".to_owned(), "2".to_owned()),
+                ("until".to_owned(), "1".to_owned()),
             ]
+            .into_iter()
+            .collect()
         );
         assert_eq!(
             diagnostic.message,

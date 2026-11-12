@@ -774,9 +774,10 @@ pub fn curve_show(
     })
 }
 
-/// One window epoch on the wire: its snapshot where the claim verify's
-/// citing gate admitted it, its budget and work alone while unsettled, or
-/// nothing gathered where it is below the claim window (`SO-D11g`).
+/// One window epoch on the wire: its budget and snapshot where the claim
+/// verify's citing gate admitted it, its work alone while unsettled (the
+/// budget stays `null`: a wallet reads a budget as an admitted close row),
+/// or nothing gathered where it is below the claim window (`SO-D11g`).
 fn claim_epoch(epoch: EmissionEpochFacts) -> archival::Epoch {
     let mut row = archival::Epoch {
         id: Integer(epoch.settlement_epoch),
@@ -791,11 +792,9 @@ fn claim_epoch(epoch: EmissionEpochFacts) -> archival::Epoch {
     match epoch.standing {
         EmissionEpochStanding::Expired { .. } => {}
         EmissionEpochStanding::Unsettled {
-            sigma_work_milli,
-            budget,
+            sigma_work_milli, ..
         } => {
             row.work = Milli(sigma_work_milli.unwrap_or(0));
-            row.budget = budget.map(amount).into();
         }
         EmissionEpochStanding::Settled {
             sigma_work_milli,
@@ -998,3 +997,7 @@ pub fn pow(
         pow: hash(pow.to_bytes()),
     })
 }
+
+#[cfg(test)]
+#[path = "reads_tests.rs"]
+mod tests;

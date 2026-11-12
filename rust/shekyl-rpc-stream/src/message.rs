@@ -48,12 +48,12 @@ pub const CLASS_LENGTHS: [usize; 3] = [512, 16_384, MAX_RECORD_PLAINTEXT];
 /// The most payload one record carries: a record of the largest class.
 pub const MAX_PAYLOAD: usize = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN;
 
-/// The records every `submit_transaction` upload takes, whatever the
-/// transaction's size (RT-O28).
+/// The records every `tx_submit` upload takes, whatever the transaction's
+/// size (RT-O28).
 ///
 /// The largest admissible transaction is `shekyl-wire`'s `TX_WEIGHT_LIMIT`
 /// (weight is size plus the Bp+ clawback). Its request body is that many
-/// bytes, hex-encoded, inside the JSON envelope. Five records of the
+/// bytes, base64-encoded, inside the JSON-RPC envelope. Five records of the
 /// largest class hold it and leave room for the request head. A test pins
 /// the count against the wire constant.
 pub const SUBMISSION_RECORDS: usize = 5;

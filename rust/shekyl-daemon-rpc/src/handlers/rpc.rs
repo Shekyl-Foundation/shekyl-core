@@ -231,9 +231,11 @@ async fn dispatch(
     let host = authority.host();
     match called {
         Id::Version => {
+            request::<wire::Version>(params)?;
             framed(on_chain(state, |c| crate::reads::version(c.as_chain_facts())).await?)
         }
         Id::ChainHeight => {
+            request::<wire::ChainHeight>(params)?;
             framed(on_chain(state, |c| crate::reads::chain_height(c.as_chain_facts())).await?)
         }
         Id::BlockHeaderShow => {
@@ -559,3 +561,7 @@ async fn dispatch(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "rpc_tests.rs"]
+mod tests;

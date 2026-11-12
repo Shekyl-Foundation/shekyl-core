@@ -473,7 +473,12 @@ info:
   # a oneOf of AtomicUnits and type null, the same shape as
   # JsonRpcResponse.id. A refused entry's reason no longer says its funds
   # stay set aside; reserved says what is held. api_version stays 1.
-  version: 0.16.0
+  # 0.17.0: any daemon operation gains -29212 DAEMON_GRANT_REFUSED: the
+  # daemon (CORE_RPC_VERSION 4.0) refused the call as outside this wallet's
+  # grant. Before 4.0 a daemon had no grants and no such refusal. A
+  # get_shard_view refused this way stays -29536 with cause "restricted".
+  # api_version stays 1.
+  version: 0.17.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -788,6 +793,7 @@ components:
         - -29209   # DAEMON_PROTOCOL_VIOLATION
         - -29210   # CHAIN_UNSTABLE
         - -29211   # RESYNC_REQUIRED
+        - -29212   # DAEMON_GRANT_REFUSED
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -1126,6 +1132,13 @@ components:
                                           wallet history; another rescan
                                           while the file is still there
                                           leaves the same tree in place
+          -29212 DAEMON_GRANT_REFUSED     any daemon operation: the daemon
+                                          refused the call as outside this
+                                          wallet's grant (CORE_RPC_VERSION
+                                          4.0); the same call on the same
+                                          connection repeats the refusal.
+                                          Connect with a key that holds the
+                                          grant, or to your own node
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not

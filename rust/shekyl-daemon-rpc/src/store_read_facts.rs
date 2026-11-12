@@ -623,7 +623,7 @@ impl ChainReadFacts for StoreFacts {
             emission_epoch_facts(&view, &rule_set, persona, &window).map_err(derivation_fault)?;
         Ok(ClaimSource {
             chain_height: count_at(tip),
-            tip_hash: tip_hash,
+            tip_hash,
             current_settled_epoch: settled,
             bond,
             epochs,

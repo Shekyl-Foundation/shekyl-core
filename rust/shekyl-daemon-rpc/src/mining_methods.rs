@@ -507,6 +507,17 @@ pub async fn dev_chain_pop(
 mod tests {
     use super::*;
     use crate::handles::Handles;
+    use shekyl_rpc_types::method::{admit_armed, Row};
+    use shekyl_rpc_types::wire;
+
+    /// `dev_block_generate`'s armed admission, as the dispatcher grants it.
+    fn armed() -> Armed {
+        admit_armed(&Row::of::<wire::DevBlockGenerate>(), true).expect("armed")
+    }
+
+    fn count(n: u64) -> block::GenerateCount {
+        block::GenerateCount { count: Count(n) }
+    }
 
     /// An absent node is not ready, never an empty or zero answer
     /// (RK-D23), on every mining method.
@@ -515,25 +526,26 @@ mod tests {
         let handles = Handles::absent();
         let class = |error: RpcError| error.class;
         assert_eq!(
-            get_block_template(&*handles.mining).map_err(class),
+            block_template(&*handles.mining).map_err(class),
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
-            get_miner_data(&*handles.mining).map_err(class),
+            mine_status(&*handles.mining).map_err(class),
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
-            mining_status(&*handles.mining).map_err(class),
+            mine_stop(&handles.mining).await.map_err(class),
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
-            stop_mining(&handles.mining).await.map_err(class),
-            Err(ErrorClass::NotReady)
-        );
-        assert_eq!(
-            start_mining(&handles.mining, StartMiningRequest::default())
-                .await
-                .map_err(class),
+            mine_start(
+                &handles.mining,
+                node::MineStart {
+                    threads: node::Threads::Count(Count(1)),
+                }
+            )
+            .await
+            .map_err(class),
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
@@ -645,6 +657,7 @@ mod tests {
                 target_height: None,
                 synchronized: true,
                 release_build: false,
+                halt: None,
             })
         }
         fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
@@ -685,17 +698,11 @@ mod tests {
     #[tokio::test]
     async fn generateblocks_waits_out_a_reason_that_clears_itself() {
         let mining: MiningHandle = std::sync::Arc::new(Starting::new());
-        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
-        let generated = generateblocks(
-            &mining,
-            &Reached,
-            &Genesis,
-            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
-            GenerateBlocksRequest { count: 1 },
-        )
-        .await
-        .expect("waited out, not refused");
-        assert_eq!(generated.height, 1);
+        let generated = dev_block_generate(&mining, &Reached, &Genesis, armed(), count(1))
+            .await
+            .expect("waited out, not refused");
+        // The double's chain holds genesis alone, so the tip is 0.
+        assert_eq!(generated.height, Height(0));
     }
 
     /// A node whose job is withdrawn for good the moment the call waits: a
@@ -785,6 +792,7 @@ mod tests {
                 target_height: None,
                 synchronized: true,
                 release_build: false,
+                halt: None,
             })
         }
         fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
@@ -828,28 +836,14 @@ mod tests {
     #[tokio::test]
     async fn generateblocks_reads_the_chain_when_a_withdrawal_wins_the_race() {
         let mining: MiningHandle = std::sync::Arc::new(WithdrawnAtOnce);
-        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
-        let armed = || shekyl_rpc_types::methods::admit_armed(row, true).expect("armed");
-        let generated = generateblocks(
-            &mining,
-            &Unwoken,
-            &Grows::to(2),
-            armed(),
-            GenerateBlocksRequest { count: 1 },
-        )
-        .await
-        .expect("the block connected");
-        assert_eq!(generated.height, 2);
-        assert_eq!(generated.blocks.len(), 1);
-        let refused = generateblocks(
-            &mining,
-            &Unwoken,
-            &Grows::to(1),
-            armed(),
-            GenerateBlocksRequest { count: 1 },
-        )
-        .await
-        .expect_err("no block connected");
+        let generated = dev_block_generate(&mining, &Unwoken, &Grows::to(2), armed(), count(1))
+            .await
+            .expect("the block connected");
+        assert_eq!(generated.height, Height(1), "the new tip, an ordinal");
+        assert_eq!(generated.hash.len(), 1);
+        let refused = dev_block_generate(&mining, &Unwoken, &Grows::to(1), armed(), count(1))
+            .await
+            .expect_err("no block connected");
         assert_eq!(refused.class, ErrorClass::NotReady);
     }
 
@@ -863,16 +857,9 @@ mod tests {
     async fn generateblocks_starts_its_miner_until_the_target() {
         let starting = std::sync::Arc::new(Starting::new());
         let mining: MiningHandle = starting.clone();
-        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
-        generateblocks(
-            &mining,
-            &Reached,
-            &Genesis,
-            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
-            GenerateBlocksRequest { count: 3 },
-        )
-        .await
-        .expect("generated");
+        dev_block_generate(&mining, &Reached, &Genesis, armed(), count(3))
+            .await
+            .expect("generated");
         assert_eq!(
             *starting.until.lock().expect("until"),
             vec![shekyl_types::BlockHeight::from_raw(3)],
@@ -949,16 +936,9 @@ mod tests {
     #[tokio::test]
     async fn generateblocks_refuses_a_miner_bound_short_of_the_target() {
         let mining: MiningHandle = std::sync::Arc::new(ShortOfTarget);
-        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
-        let refused = generateblocks(
-            &mining,
-            &Unreached,
-            &Genesis,
-            shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
-            GenerateBlocksRequest { count: 1 },
-        )
-        .await
-        .expect_err("a miner that cannot reach the target is refused");
+        let refused = dev_block_generate(&mining, &Unreached, &Genesis, armed(), count(1))
+            .await
+            .expect_err("a miner that cannot reach the target is refused");
         assert_eq!(refused.class, ErrorClass::RefusedByMethod);
         assert_eq!(refused.diagnostic.code, codes::BOUND_SHORT);
     }
@@ -1032,19 +1012,9 @@ mod tests {
             release: std::sync::Arc::clone(&release),
             stops: std::sync::Arc::clone(&stops),
         });
-        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
         let call = tokio::spawn({
             let mining = std::sync::Arc::clone(&mining);
-            async move {
-                generateblocks(
-                    &mining,
-                    &Reached,
-                    &Genesis,
-                    shekyl_rpc_types::methods::admit_armed(row, true).expect("armed"),
-                    GenerateBlocksRequest { count: 1 },
-                )
-                .await
-            }
+            async move { dev_block_generate(&mining, &Reached, &Genesis, armed(), count(1)).await }
         });
         let entered_wait = std::sync::Arc::clone(&entered);
         tokio::task::spawn_blocking(move || {
@@ -1078,7 +1048,7 @@ mod tests {
 
     /// A miner's speed, or none when the miner is stopped.
     struct Reported {
-        speed: Option<MineSpeed>,
+        speed: Option<node::MineSpeed>,
     }
 
     impl MiningFacts for Reported {
@@ -1124,35 +1094,55 @@ mod tests {
         }
     }
 
-    /// Eight hashes in ten seconds is 0.8 H/s. The reply a client
-    /// deserializes carries that count and that window. A stopped miner
-    /// reports no hashes.
+    /// Eight hashes in ten seconds is 0.8 H/s: the reply carries the count
+    /// and the window, never a rounded rate. A stopped miner reports no
+    /// hashes and no threads.
     #[test]
     fn a_miner_below_one_hash_a_second_reports_its_count_and_window() {
-        let response = mining_status(&Reported {
-            speed: Some(MineSpeed {
-                count: 8,
-                window: 10,
-            }),
-        })
-        .expect("status");
+        let speed = node::MineSpeed {
+            count: Count(8),
+            window: Duration(10),
+        };
+        let response = mine_status(&Reported { speed: Some(speed) }).expect("status");
         assert!(response.active);
-        assert_eq!(response.threads_count, 1);
-        assert_eq!(
-            response.speed,
-            MineSpeed {
-                count: 8,
-                window: 10
-            }
-        );
-        assert_eq!(response.speed.hashes_per_second_text(), "0.80 H/s");
+        assert_eq!(response.threads, Count(1));
+        assert_eq!(response.speed, speed);
         let wire = serde_json::to_value(&response).expect("json");
         assert_eq!(wire["speed"]["count"], 8);
         assert_eq!(wire["speed"]["window"], 10);
 
-        let stopped = mining_status(&Reported { speed: None }).expect("status");
+        let stopped = mine_status(&Reported { speed: None }).expect("status");
         assert!(!stopped.active);
-        assert_eq!(stopped.speed, MineSpeed::NONE);
-        assert_eq!(stopped.threads_count, 0);
+        assert_eq!(stopped.speed.count, Count(0));
+        assert_eq!(stopped.threads, Count(0));
+    }
+
+    /// Zero threads is the caller's error, `mine.threads-zero` (BadParams),
+    /// refused before the node is touched. Red edit: start with no bound.
+    #[tokio::test]
+    async fn zero_threads_is_refused_before_the_node_is_touched() {
+        let handles = Handles::absent();
+        let refused = mine_start(
+            &handles.mining,
+            node::MineStart {
+                threads: node::Threads::Count(Count(0)),
+            },
+        )
+        .await
+        .expect_err("zero threads");
+        assert_eq!(refused.class, ErrorClass::BadParams);
+        assert_eq!(refused.diagnostic.code, codes::THREADS_ZERO);
+    }
+
+    /// A zero count is `block.count-zero` (BadParams), before the miner's
+    /// refusal is read, so the answer is the same on any node.
+    #[tokio::test]
+    async fn a_zero_count_is_refused_before_anything_is_read() {
+        let mining: MiningHandle = std::sync::Arc::new(Starting::new());
+        let refused = dev_block_generate(&mining, &Unreached, &Genesis, armed(), count(0))
+            .await
+            .expect_err("a zero count");
+        assert_eq!(refused.class, ErrorClass::BadParams);
+        assert_eq!(refused.diagnostic.code, codes::COUNT_ZERO);
     }
 }

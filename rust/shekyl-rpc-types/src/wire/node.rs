@@ -169,6 +169,59 @@ impl OptionRow {
         })
     }
 
+    /// The option's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Value(row) => &row.name.0,
+            Self::Secret(row) => &row.name.0,
+        }
+    }
+
+    /// Where the value came from.
+    #[must_use]
+    pub const fn source(&self) -> OptionSource {
+        match self {
+            Self::Value(row) => row.source,
+            Self::Secret(row) => row.source,
+        }
+    }
+
+    /// Whether `option_set` takes the row.
+    #[must_use]
+    pub const fn runtime(&self) -> bool {
+        match self {
+            Self::Value(row) => row.runtime,
+            Self::Secret(row) => row.runtime,
+        }
+    }
+
+    /// Whether the row is a secret.
+    #[must_use]
+    pub const fn is_secret(&self) -> bool {
+        matches!(self, Self::Secret(_))
+    }
+
+    /// A value row's text: `Some(None)` when unset; `None` for a secret,
+    /// whose value is never shown.
+    #[must_use]
+    pub fn value(&self) -> Option<Option<&str>> {
+        match self {
+            Self::Value(row) => Some(row.value.0.as_ref().map(|text| text.0.as_str())),
+            Self::Secret(_) => None,
+        }
+    }
+
+    /// A secret's assignment: `Some(true)` when it holds a value; `None` for
+    /// a value row.
+    #[must_use]
+    pub const fn set(&self) -> Option<bool> {
+        match self {
+            Self::Value(_) => None,
+            Self::Secret(row) => Some(row.assigned),
+        }
+    }
+
     /// A secret row: whether it holds a value, never the value. A secret is
     /// never a runtime row (IG-12).
     #[must_use]

@@ -3,15 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `/stop_daemon` over the node's [`StopFacts`] (`DRS_X_STORE_FLIP.md`
-//! DX-Q3, Q11). `/stop_daemon` dispatches here.
+//! `daemon_stop` over the node's [`StopFacts`] (`DRS_X_STORE_FLIP.md`
+//! DX-Q3, Q11).
 
 use shekyl_rpc_types::errors::RpcError;
 use shekyl_rpc_types::kinds::Done;
 
 use crate::handles::StopFacts;
 
-/// `/stop_daemon`, host only: ask the composition root to stop. The
+/// `daemon_stop`, host only: ask the composition root to stop. The
 /// handler stops nothing itself; the reply is sent before the node goes.
 ///
 /// # Errors
@@ -28,7 +28,7 @@ mod tests {
 
     #[test]
     fn an_absent_latch_does_not_take_the_request() {
-        let refused = stop_daemon(&*crate::handles::Handles::absent().stop).expect_err("absent");
+        let refused = daemon_stop(&*crate::handles::Handles::absent().stop).expect_err("absent");
         assert_eq!(
             refused.class,
             shekyl_rpc_types::errors::ErrorClass::NotReady

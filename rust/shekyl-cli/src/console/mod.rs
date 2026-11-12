@@ -10,10 +10,13 @@
 //! [`shekyl_rpc_transport::SyncDaemon`] and renders the typed reply. The
 //! in-process arm is gone with the console.
 
-use shekyl_rpc_types::{GetHeightResponse, RestErrorEnvelope};
-use shekyl_units::AtomicUnits;
+use shekyl_rpc_client::{wire, RpcMethod};
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::kinds::{Height, NoParams};
+use shekyl_rpc_types::wire::block::{BlockHeader, BlockSelect, BlockShowSelect};
+use shekyl_rpc_types::wire::shared::{Selector, Slot, SlotState};
 
-use crate::daemon::DaemonClient;
+use crate::daemon::{DaemonClient, DaemonError};
 
 mod alt_chain;
 mod blockchain;
@@ -24,34 +27,11 @@ mod status;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::route_server_recording;
+pub(crate) use tests::{daemon_status_reply, route_server_recording};
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
 use status::show_status;
-
-/// Decode a REST reply body: a JSON-RPC refusal first (a grant or a method
-/// refusal has no `status`), then the success type, then the daemon's
-/// status envelope, else a malformed-reply error. The refusal's class and
-/// diagnostic are what the operator reads, never "missing field `status`".
-fn decode_reply<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
-    if let Some(refusal) = shekyl_rpc_types::errors::read_refusal(body) {
-        return Err(refusal.report());
-    }
-    if let Ok(reply) = serde_json::from_slice::<T>(body) {
-        return Ok(reply);
-    }
-    if let Ok(envelope) = serde_json::from_slice::<RestErrorEnvelope>(body) {
-        return Err(format!("{method} failed: {}", envelope.error));
-    }
-    Err(format!(
-        "malformed {method} reply: {}",
-        String::from_utf8_lossy(body)
-            .chars()
-            .take(120)
-            .collect::<String>()
-    ))
-}
 
 /// `%Y-%m-%d %H:%M:%S` in UTC, or `<unknown>` below the same cutoff the C++
 /// used (`tools::get_human_readable_timestamp`). The cutoff is 2009-02-13,
@@ -84,148 +64,78 @@ fn human_readable_timestamp(ts: u64) -> String {
     )
 }
 
-/// The `0x`-prefixed wide difficulty rendered as decimal, which is what the
-/// C++ console printed by constructing a `difficulty_type` from it.
-fn wide_difficulty_decimal(wide: &str) -> String {
-    let digits = wide.strip_prefix("0x").unwrap_or(wide);
-    match u128::from_str_radix(digits, 16) {
-        Ok(value) => value.to_string(),
-        // The daemon produced this field; if it is ever unreadable, showing
-        // it verbatim beats showing nothing.
-        Err(_) => wide.to_owned(),
-    }
-}
-
 /// `print_block_header`'s text, field for field and in its order.
 ///
 /// Built as lines and joined: writing to a `String` cannot fail, so
 /// `write!` here would only produce `Result`s to discard.
-fn render_block_header(h: &shekyl_rpc_types::BlockHeader) -> String {
-    let pow_hash = h.pow_hash.map_or_else(String::new, |p| p.to_string());
+fn render_block_header(h: &BlockHeader) -> String {
+    let pow_hash = h.pow.0.map_or_else(String::new, |p| p.to_string());
+    let time = h.time.0;
     [
-        format!(
-            "timestamp: {} ({})",
-            h.timestamp,
-            human_readable_timestamp(h.timestamp)
-        ),
-        format!("previous hash: {}", h.prev_hash),
-        format!("nonce: {}", h.nonce),
+        format!("timestamp: {time} ({})", human_readable_timestamp(time)),
+        format!("previous hash: {}", h.parent),
+        format!("nonce: {}", h.nonce.0),
         // The C++ streamed a bool, which prints as 0/1.
-        format!("is orphan: {}", u8::from(h.orphan_status)),
-        format!("height: {}", h.height),
-        format!("depth: {}", h.depth),
+        format!("is orphan: {}", u8::from(h.orphan)),
+        format!("height: {}", h.height.0),
+        format!("depth: {}", h.depth.0),
         format!("hash: {}", h.hash),
-        format!(
-            "difficulty: {}",
-            wide_difficulty_decimal(&h.wide_difficulty)
-        ),
-        format!(
-            "cumulative difficulty: {}",
-            wide_difficulty_decimal(&h.wide_cumulative_difficulty)
-        ),
+        format!("difficulty: {}", h.difficulty.get()),
+        format!("cumulative difficulty: {}", h.difficulty_cumulative.get()),
         // Empty when it was not asked for or not allowed — the C++ printed
         // the empty string just the same.
         format!("POW hash: {pow_hash}"),
-        format!("block size: {}", h.block_size),
-        format!("block weight: {}", h.block_weight),
-        format!("long term weight: {}", h.long_term_weight),
-        format!("num txes: {}", h.num_txes),
+        format!("block weight: {}", h.weight.0),
+        // `null` off the main chain, which has none.
         format!(
-            "reward: {}",
-            AtomicUnits::from_raw(h.reward).to_skl_string()
+            "long term weight: {}",
+            h.weight_longterm
+                .0
+                .map_or_else(|| "none".to_owned(), |w| w.0.to_string())
         ),
-        format!("miner tx hash: {}", h.miner_tx_hash),
+        format!("num txes: {}", h.tx_count.0),
+        format!("reward: {}", h.reward.to_atomic_units().to_skl_string()),
+        format!("miner tx hash: {}", h.coinbase),
     ]
     .join("\n")
 }
 
-/// `print_block_by_hash` / `print_block_by_height`: the two console commands
-/// that read `get_block` and nothing else, which is why they migrate with it
-/// (the design's console matrix, §2.1).
+/// `block show`: one block's header, by hash or by height, with its
+/// proof-of-work hash filled (the operator's own terminal; IG-Q56).
 fn print_block(daemon: &DaemonClient, block: &crate::resolve::BlockRef) -> Result<String, String> {
-    let mut request = shekyl_rpc_types::GetBlockRequest {
-        fill_pow_hash: true,
-        ..Default::default()
+    let select = match block {
+        crate::resolve::BlockRef::Hash(hash) => {
+            Selector::Hash(HashHex::from_hex(hash).map_err(|error| error.to_string())?)
+        }
+        crate::resolve::BlockRef::Height(height) => Selector::Height(Height(*height)),
     };
-    match block {
-        crate::resolve::BlockRef::Hash(hash) => request.hash = hash.clone(),
-        crate::resolve::BlockRef::Height(height) => request.height = *height,
-    }
-
-    // In-process the console is the operator's own terminal, so the
-    // restricted-listener rule does not apply: the C++ passed
-    // `fill_pow_hash` straight through here too.
-    let reply: shekyl_rpc_types::GetBlockResponse = native_json_rpc(daemon, "get_block", &request)?;
-    require_ok(&reply.status)?;
-
-    // The C++ order: the blob (only with `+hex`) and a blank line, then the
-    // header, then the block's json.
-    let mut out = String::new();
-    out.push_str(&render_block_header(&reply.block_header));
-    out.push('\n');
-    if let Some(json) = &reply.json {
-        out.push_str(json);
-    }
-    Ok(out)
+    let reply = call::<wire::BlockShow>(
+        daemon,
+        &BlockShowSelect(BlockSelect {
+            select,
+            pow: true,
+            prune: Some(true),
+        }),
+    )?;
+    Ok(render_block_header(&reply.header))
 }
 
-/// One JSON-RPC call. `method` is a lookup in the method table; the posted
-/// name is the table's, and a missing row is an error.
-///
-/// The client's handshake runs first. `version` does not come through here:
-/// it reads `get_version` itself, and a daemon the handshake would refuse is
-/// still one whose version it reports.
-pub(super) fn native_json_rpc<Req, Res>(
+/// One call of method `M`, the console's way: the client's handshake runs
+/// first, and an error is the operator's line. The `version` word does not
+/// come through here: it reads `version` itself, and a daemon the
+/// handshake would refuse is still one whose version it reports.
+pub(super) fn call<M: RpcMethod>(
     daemon: &DaemonClient,
-    method: &str,
-    request: &Req,
-) -> Result<Res, String>
-where
-    Req: serde::Serialize,
-    Res: serde::de::DeserializeOwned,
-{
-    let method = crate::daemon::posted_json(method).map_err(|error| error.to_string())?;
-    daemon
-        .json_rpc(method, request)
-        .map_err(|error| error.to_string())
+    request: &M::Request,
+) -> Result<M::Reply, String> {
+    daemon.call::<M>(request).map_err(|error| error.to_string())
 }
 
-/// One REST post. `path` is a lookup in the method table. The handshake
-/// runs first.
-pub(super) fn rest_post(
-    daemon: &DaemonClient,
-    path: &str,
-    body: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let path = crate::daemon::posted_rest(path).map_err(|error| error.to_string())?;
-    daemon.post(path, body).map_err(|error| error.to_string())
-}
-
-fn require_ok(status: &shekyl_rpc_types::RpcStatus) -> Result<(), String> {
-    if status.is_ok() {
-        Ok(())
-    } else {
-        Err(status.0.clone())
-    }
-}
-
-/// The wide difficulty as a number, or `None` if the daemon sent something
-/// unreadable.
-///
-/// [`wide_difficulty_decimal`] is this plus a fallback to the raw string;
-/// the two exist apart because summing needs the number and rendering needs
-/// something to print either way.
-fn wide_difficulty_value(wide: &str) -> Option<u128> {
-    u128::from_str_radix(wide.strip_prefix("0x").unwrap_or(wide), 16).ok()
-}
-
+/// `chain height`: the chain's block count, as this word has always
+/// printed it — the tip's height plus one.
 fn print_height(src: &DaemonClient) -> Result<String, String> {
-    let body = rest_post(src, "/get_height", b"{}".to_vec())?;
-    let reply = decode_reply::<GetHeightResponse>(&body, "get_height")?;
-    if !reply.status.is_ok() {
-        return Err(reply.status.0);
-    }
-    Ok(reply.height.to_string())
+    let tip = call::<wire::ChainHeight>(src, &NoParams)?;
+    Ok(tip.height.0.saturating_add(1).to_string())
 }
 
 /// `print_transaction <hash> [+meta] [+hex]` — RK-4c. Reads
@@ -251,105 +161,85 @@ pub(crate) enum TxAnswer {
 /// The daemon's view of `hash`. A transport failure, an identity refusal,
 /// or a body that does not hash to `hash` is `Err`.
 pub(crate) fn transaction(daemon: &DaemonClient, hash: &str) -> Result<TxAnswer, String> {
+    let id = HashHex::from_hex(hash).map_err(|error| error.to_string())?;
     // The full form: the whole body, or `archived` with the shard it went
     // in when this daemon discarded its archival good (`PDM-Q10`).
-    let request = shekyl_rpc_types::GetTransactionsRequest {
-        txs_hashes: vec![hash.to_owned()],
+    let reply = match daemon.call::<wire::TxList>(&wire::tx::TxListQuery {
+        id: vec![id],
         prune: false,
+    }) {
+        Ok(reply) => reply,
+        Err(error) => return Err(error.to_string()),
     };
-    let reply = fetch_transactions(daemon, &request)?;
-    if !reply.status.is_ok() {
-        return Err(reply.status.0);
-    }
-    // One requested hash lands in exactly one of these lists. A missed id
-    // is not held even when another list also names it. An archived id has
-    // no entry, so an empty `txs` is a miss only after archived and
-    // unavailable have been read. Extra entries are a malformed reply.
+    let [slot] = reply.as_slice() else {
+        return Err(format!(
+            "tx show: asked about 1 transaction, got {} slots",
+            reply.len()
+        ));
+    };
+    let tx = match slot {
+        Slot::State(SlotState::Missing(_)) => return Ok(TxAnswer::NotHeld),
+        // The chain does not hold it and the pool could not be asked.
+        Slot::Unasked => {
+            return Ok(TxAnswer::Narrative(format!(
+                "Transaction {hash} is not in the chain, and the daemon's pool is unavailable \
+                 until it restarts: whether the pool holds it is not known"
+            )))
+        }
+        Slot::State(SlotState::Archived(archived)) => {
+            return Ok(TxAnswer::Narrative(format!(
+                "Transaction {hash} is in the chain, and its body is archived: this daemon \
+                 discarded it with shard {}. Ask for it with prune, or from an archiver that \
+                 serves that shard",
+                archived.shard.0
+            )))
+        }
+        Slot::Item(tx) => tx,
+    };
     // A count is not a binding. The daemon is untrusted here, so the entry
-    // must be the one that was asked for: `parse_tx_batch` holds the wallet's
-    // consumers to the same rule, and a console that printed whatever came
-    // back would answer a question the operator did not ask.
-    if !reply.missed_tx.is_empty() {
-        return Ok(TxAnswer::NotHeld);
-    }
-    if !reply.unavailable_tx.is_empty() {
-        return Ok(TxAnswer::Narrative(format!(
-            "Transaction {hash} is not in the chain, and the daemon's pool is unavailable \
-             until it restarts: whether the pool holds it is not known"
-        )));
-    }
-    if let [archived] = reply.archived.as_slice() {
-        return Ok(TxAnswer::Narrative(format!(
-            "Transaction {hash} is in the chain, and its body is archived: this daemon \
-             discarded it with shard {}. Ask for it with prune, or from an archiver that \
-             serves that shard",
-            archived.shard
-        )));
-    }
-    if reply.txs.is_empty() {
-        return Ok(TxAnswer::NotHeld);
-    }
-    let [tx] = reply.txs.as_slice() else {
-        return Err(format!(
-            "print_transaction: asked about 1 transaction, got {}",
-            reply.txs.len()
-        ));
-    };
-    if !tx.tx_hash.to_string().eq_ignore_ascii_case(hash) {
-        return Err(format!(
-            "print_transaction: asked about {hash}, got {}",
-            tx.tx_hash
-        ));
+    // must be the one that was asked for: the label first, which names the
+    // cheap failure, then the body itself.
+    if tx.id != id {
+        return Err(format!("tx show: asked about {hash}, got {}", tx.id));
     }
 
-    // The label check above says the daemon *claims* this entry answers the
+    // The label check says the daemon *claims* this entry answers the
     // request; it does not make it so — every field of the reply is the
     // daemon's to choose, and the remote arm posts wherever the operator
-    // pointed it. So the body is bound the way `parse_tx_batch` binds the
-    // wallet's: parse the bytes and recompute the identity. The full form
-    // carries the whole body, so it rehashes whole; a reply that answers the
-    // full form with a pruned segment is refused here, not reassembled.
-    if tx.as_hex.is_empty() {
-        return Err(format!(
-            "print_transaction: the daemon answered {hash} in the pruned form to a request \
-             for the whole body"
-        ));
-    }
-    let blob = hex::decode(&tx.as_hex)
-        .map_err(|_| format!("print_transaction: the daemon's body for {hash} is not hex"))?;
-    let parsed = shekyl_wire::Transaction::from_bytes(&blob).map_err(|_| {
-        format!("print_transaction: the daemon's body for {hash} is not a transaction")
-    })?;
+    // pointed it. So the body is bound the way the wallet's `bind_served`
+    // binds its own: parse the bytes and recompute the identity. The full
+    // form carries the whole body, so it rehashes whole; a pruned segment
+    // answering the full form does not parse whole and is refused here.
+    let blob = tx.body.0.clone();
+    let parsed = shekyl_wire::Transaction::from_bytes(&blob)
+        .map_err(|_| format!("tx show: the daemon's body for {hash} is not a whole transaction"))?;
     let derived_hex = hex::encode(parsed.hash());
     if !derived_hex.eq_ignore_ascii_case(hash) {
         return Err(format!(
-            "print_transaction: the entry is labeled {hash} but its body hashes \
-             to {derived_hex} — a label is not an identity"
+            "tx show: the entry is labeled {hash} but its body hashes to {derived_hex} — a \
+             label is not an identity"
         ));
     }
 
     let mut out = Vec::new();
-    match &tx.location {
-        shekyl_rpc_types::TxLocation::Pooled { .. } => out.push("Found in pool".to_owned()),
-        shekyl_rpc_types::TxLocation::Mined { block_height, .. } => {
-            out.push(format!("Found in blockchain at height {block_height}"));
+    match (tx.pooled, tx.mined_height.0, tx.mined_time.0) {
+        (true, _, _) => out.push("Found in pool".to_owned()),
+        (false, Some(height), Some(time)) => {
+            out.push(format!("Found in blockchain at height {}", height.0));
+            out.push(format!(
+                "Block timestamp: {} ({})",
+                time.0,
+                human_readable_timestamp(time.0)
+            ));
+        }
+        (false, _, _) => {
+            return Err(format!(
+                "tx show: the daemon says {hash} is mined and names no block for it"
+            ))
         }
     }
-
-    // Size, weight and the block time are part of the rendering. `+meta`
-    // was the console's flag for them; §13's `tx show` has no such flag.
-    if let shekyl_rpc_types::TxLocation::Mined {
-        block_timestamp, ..
-    } = &tx.location
-    {
-        out.push(format!(
-            "Block timestamp: {block_timestamp} ({})",
-            human_readable_timestamp(*block_timestamp)
-        ));
-    }
     // The parse is the binding's, above — a body that did not parse (or
-    // did not hash to the request) never reached this rendering, so the
-    // old "Error parsing transaction" soft lines have no input left.
+    // did not hash to the request) never reached this rendering.
     out.push(format!("Size: {}", blob.len()));
     out.push(format!("Weight: {}", parsed.weight()));
     Ok(TxAnswer::Held {
@@ -379,57 +269,32 @@ pub(crate) fn encode_body(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// `is_key_image_spent <key_image>` — RK-4c. Reads that method only.
+/// `chain spent <key_image>`: where the key image is spent, if anywhere.
 fn is_key_image_spent(src: &DaemonClient, ki: &str) -> Result<String, String> {
-    let request = shekyl_rpc_types::IsKeyImageSpentRequest {
-        key_images: vec![ki.to_owned()],
-    };
-    let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let raw = rest_post(src, "/is_key_image_spent", body)?;
-    // A handler's failure is a `RestErrorEnvelope`. Decoding success-only
-    // would report "malformed" over the reason the server gave.
-    let reply =
-        decode_reply::<shekyl_rpc_types::IsKeyImageSpentResponse>(&raw, "is_key_image_spent")?;
-    if !reply.status.is_ok() {
-        return Err(reply.status.0);
-    }
+    let key_image = HashHex::from_hex(ki).map_err(|error| error.to_string())?;
+    let reply = call::<wire::ChainSpent>(
+        src,
+        &wire::chain::SpentQuery {
+            key_image: vec![key_image],
+        },
+    )?;
     // Exactly one, not "at least one": the request carries one key image, the
     // reply is positional, and a reply of a different length is unreadable
-    // rather than partially readable — the property the type's own doc names.
-    let [status] = reply.spent_status.as_slice() else {
+    // rather than partially readable.
+    let [status] = reply.as_slice() else {
         return Err(format!(
-            "is_key_image_spent: asked about 1 key image, got {} statuses",
-            reply.spent_status.len()
+            "chain spent: asked about 1 key image, got {} states",
+            reply.len()
         ));
     };
     Ok(format!(
         "{ki}: {}",
         match status {
-            shekyl_rpc_types::KeyImageStatus::Unspent => "unspent",
-            shekyl_rpc_types::KeyImageStatus::SpentInBlockchain => "spent",
-            shekyl_rpc_types::KeyImageStatus::SpentInPool => "spent (in pool)",
+            wire::chain::Spent::Unspent => "unspent",
+            wire::chain::Spent::Chain => "spent",
+            wire::chain::Spent::Txpool => "spent (in pool)",
         }
     ))
-}
-
-/// The `get_transactions` fetch, shared by the console commands that need it.
-///
-/// The live arm calls the facts path and the projection **directly**, as
-/// `print_block` does — not `json_endpoint`, which dispatches through the C++
-/// JSON table this slice empties. Naming a route by string there would have
-/// compiled and then answered "no reply" the moment the route left C++, which
-/// is exactly what it did until Copilot caught it on this PR. Calling the
-/// Rust functions makes that class of breakage a compile error.
-///
-/// The console is the operator's own node, so the pool read is unrestricted —
-/// the same answer the C++ gave a null `ctx` (§7, 2026-08-26).
-fn fetch_transactions(
-    src: &DaemonClient,
-    request: &shekyl_rpc_types::GetTransactionsRequest,
-) -> Result<shekyl_rpc_types::GetTransactionsResponse, String> {
-    let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
-    let raw = rest_post(src, "/get_transactions", body)?;
-    decode_reply::<shekyl_rpc_types::GetTransactionsResponse>(&raw, "get_transactions")
 }
 
 /// Run one already-parsed daemon word.
@@ -579,73 +444,46 @@ fn human_readable_timespan(seconds: u64) -> String {
     "a long time".to_owned()
 }
 
-/// What the console passes for `public_only`: the whole peerlist. Named
-/// rather than written twice as a bare `false`, so the two commands cannot
-/// drift apart — `print_pl` and `print_pl_stats` reporting different lists
-/// would read as a peerlist that changed between two adjacent commands.
-const PUBLIC_ONLY: bool = false;
+/// What the console asks `peer_list` for: the whole peerlist, endpoints not
+/// dialable on the public internet included. Named rather than written
+/// twice, so `peer list` and `peer stats` cannot drift apart — the two
+/// reporting different lists would read as a peerlist that changed between
+/// two adjacent commands. The operator asking for the peer list is the one
+/// person who wants every entry.
+const LOCAL_TOO: bool = true;
 
-/// The peerlist as the console asks for it.
-///
-/// Blocked peers included, because the operator asking for the peer list is
-/// the one person who wants to see them — and **the whole list, not the
-/// public part of it**, which is what both C++ callers asked for. That is
-/// worth spelling out because the wire default is the opposite and reading
-/// the struct suggests otherwise: `public_only` is `KV_SERIALIZE_OPT(…,
-/// true)`, but an `OPT` default is applied when *deserializing* a document
-/// that omits the field, and the console never deserialized one — it filled
-/// an `epee::misc_utils::struct_init` request, which value-initializes, so
-/// `public_only` was `false` on the in-process arm and serialized as an
-/// explicit `false` on the RPC arm. `print_pl_stats` also wrote `= false`
-/// outright. Asking for the public list here would silently drop the
-/// non-public zones from `print_pl` and leave it disagreeing with the counts
-/// `print_pl_stats` prints.
 /// What the console prints for a daemon started offline: the state,
 /// not an empty table (Rick, 2026-10-14).
 const OFFLINE_LINE: &str = "P2P: offline";
 
-/// `None` for a daemon started offline.
-fn fetch_peer_list(
+/// The code a daemon started offline refuses its P2P reads with.
+const P2P_OFFLINE: &str = "p2p.offline";
+
+/// One P2P read: the reply, or `None` for a daemon started offline (its
+/// `p2p.offline` refusal is the state, not an error).
+fn p2p_call<M: RpcMethod>(
     src: &DaemonClient,
-    public_only: bool,
-) -> Result<Option<shekyl_rpc_types::GetPeerListResponse>, String> {
-    let request = shekyl_rpc_types::GetPeerListRequest {
-        public_only,
-        include_blocked: true,
-    };
-    let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let raw = rest_post(src, "/get_peer_list", body)?;
-    let reply = decode_reply::<shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetPeerListResponse>>(
-        &raw,
-        "get_peer_list",
-    )?;
-    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
-        return Ok(None);
-    };
-    if !reply.status.is_ok() {
-        return Err(reply.status.0);
+    request: &M::Request,
+) -> Result<Option<M::Reply>, String> {
+    match src.call::<M>(request) {
+        Ok(reply) => Ok(Some(reply)),
+        Err(DaemonError::Refusal(refusal)) if refusal.diagnostic.code == P2P_OFFLINE => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
-    Ok(Some(reply))
 }
 
-/// One line per peer: the list and the address. No "last seen" column: the
+/// `None` for a daemon started offline.
+fn fetch_peer_list(src: &DaemonClient) -> Result<Option<Vec<wire::p2p::PeerEntry>>, String> {
+    p2p_call::<wire::PeerList>(src, &wire::p2p::PeerListQuery { local: LOCAL_TOO })
+}
+
+/// One line per peer: the list and the endpoint. No "last seen" column: the
 /// Rust peer lists carry no clock (3.51).
-fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer) -> String {
-    // `host` means three different things across the address arms, and only
-    // two of them leave a port to append. On Tor, `host` is
-    // the whole `network_address::str()`, which *already ends in a port*, and
-    // `port` is 0; the C++ appended anyway and printed
-    // `abcdefghijklmnop.onion:18080:0`. An inherited rendering, not a
-    // regression, and corrected here rather than carried (rule 16).
-    let addr = if peer.port == 0 {
-        peer.host.clone()
-    } else {
-        format!("{}:{}", peer.host, peer.port)
-    };
-    format!("{prefix:<10} {addr}")
+fn render_peer(prefix: &str, peer: &wire::p2p::PeerEntry) -> String {
+    format!("{prefix:<10} {}", peer.endpoint.0)
 }
 
-/// `print_peer_list [white|gray] [limit]`.
+/// `peer list [white|gray] [limit]`.
 ///
 /// `limit` applies **per list**, not to the pair, as the C++ did. The
 /// `pruned` selector went with the stripe engine (`PDM-Q7`): there is no
@@ -657,36 +495,38 @@ fn print_peer_list(
     gray: bool,
     limit: usize,
 ) -> Result<String, String> {
-    let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
+    let Some(peers) = fetch_peer_list(src)? else {
         return Ok(OFFLINE_LINE.to_owned());
     };
     let mut out = Vec::new();
-    let mut take = |prefix: &str, peers: &[shekyl_rpc_types::Peer]| {
+    let mut take = |prefix: &str, tier: wire::p2p::Tier| {
         for peer in peers
             .iter()
+            .filter(|peer| peer.tier == tier)
             .take(if limit == 0 { usize::MAX } else { limit })
         {
             out.push(render_peer(prefix, peer));
         }
     };
     if white {
-        take("white", &reply.white_list);
+        take("white", wire::p2p::Tier::White);
     }
     if gray {
-        take("gray", &reply.gray_list);
+        take("gray", wire::p2p::Tier::Gray);
     }
     Ok(out.join("\n"))
 }
 
-/// `print_pl_stats`: how full each list is.
+/// `peer stats`: how full each list is.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_peer_list_stats(src: &DaemonClient) -> Result<String, String> {
-    let Some(reply) = fetch_peer_list(src, PUBLIC_ONLY)? else {
+    let Some(peers) = fetch_peer_list(src)? else {
         return Ok(OFFLINE_LINE.to_owned());
     };
+    let count = |tier| peers.iter().filter(|peer| peer.tier == tier).count();
     Ok(render_peer_list_stats(
-        reply.white_list.len(),
-        reply.gray_list.len(),
+        count(wire::p2p::Tier::White),
+        count(wire::p2p::Tier::Gray),
         shekyl_peerlist::WHITE_CAP,
         shekyl_peerlist::GRAY_CAP,
     ))
@@ -726,101 +566,102 @@ fn render_peer_list_stats(
     )
 }
 
-/// `print_connections`.
+/// `peer connections`. The rates are bytes per second, as the wire carries
+/// them.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_connections(src: &DaemonClient) -> Result<String, String> {
-    let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> =
-        native_json_rpc(src, "get_connections", &serde_json::json!({}))?;
-    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
+    let Some(connections) = p2p_call::<wire::PeerConnections>(src, &NoParams)? else {
         return Ok(OFFLINE_LINE.to_owned());
     };
-    require_ok(&reply.status)?;
-    // Wide enough for the widest address actually present, plus the four
-    // characters of the `INC `/`OUT ` prefix and a two-column gutter — the
-    // computation the C++ did and then ignored in favour of a fixed `setw(30)`
-    // that its own prefix could overrun.
-    let width = reply
-        .connections
+    // Wide enough for the widest endpoint actually present, plus the four
+    // characters of the `INC `/`OUT ` prefix and a two-column gutter.
+    let width = connections
         .iter()
-        .map(|c| c.address.len().saturating_add(6))
+        .map(|c| c.endpoint.0.len().saturating_add(6))
         .max()
         .unwrap_or(0)
         .max(21);
     let mut out = vec![format!(
-        "{:<width$}{:<8}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
+        "{:<width$}{:<10}{:<30}{:<20}{:<10}{:<12}{:<14}{:<10}{}",
         "Remote Host",
-        "Type",
+        "Connector",
         "Recv/Sent (inactive,sec)",
-        "State",
-        "Livetime(sec)",
-        "Down (kB/s)",
+        "Mode",
+        "Age(sec)",
+        "Down (B/s)",
         "Down(now)",
-        "Up (kB/s)",
+        "Up (B/s)",
         "Up(now)"
     )];
-    for c in &reply.connections {
-        let direction = if c.incoming { "INC " } else { "OUT " };
-        let tail = format!(
-            "{}{}",
-            if c.localhost { "[LOCALHOST]" } else { "" },
-            if c.local_ip { "[LAN]" } else { "" }
-        );
+    for c in &connections {
+        let direction = if c.inbound { "INC " } else { "OUT " };
         out.push(format!(
-            "{:<width$}{:<8}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
-            format!("{direction}{}", c.address),
-            address_type_name(c.address_type),
+            "{:<width$}{:<10}{:<30}{:<20}{:<10}{:<12}{:<14}{:<10}{:<8}{}",
+            format!("{direction}{}", c.endpoint.0),
+            match c.connector {
+                wire::p2p::Connector::Clearnet => "clearnet",
+                wire::p2p::Connector::Tor => "tor",
+            },
             format!(
                 "{}({})/{}({})",
-                c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
+                c.download.0, c.download_idle.0, c.upload.0, c.upload_idle.0
             ),
-            c.state.map_or("-", shekyl_rpc_types::SyncMode::as_str),
-            c.live_time,
-            c.avg_download,
-            c.current_download,
-            c.avg_upload,
-            c.current_upload,
+            c.mode.0.map_or("-", sync_mode_word),
+            c.age.0,
+            c.download_speed_average.0,
+            c.download_speed_current.0,
+            c.upload_speed_average.0,
+            c.upload_speed_current.0,
+            if c.local { "[LOCAL]" } else { "" },
         ));
     }
     Ok(out.join("\n"))
 }
 
-/// `get_address_type_name`'s mapping, as the console printed it — including
-/// its lower-case `invalid`, which is the only arm whose spelling differs
-/// from the others. Carried verbatim; the C++ it came from is deleted, so
-/// this is the definition now rather than a second copy of one.
-fn address_type_name(address_type: u8) -> &'static str {
-    match address_type {
-        1 => "IPv4",
-        2 => "IPv6",
-        4 => "Tor",
-        _ => "invalid",
+/// A sync mode as the wire spells it.
+fn sync_mode_word(mode: wire::p2p::SyncMode) -> &'static str {
+    use wire::p2p::SyncMode as M;
+    match mode {
+        M::Idle => "idle",
+        M::Reachable => "reachable",
+        M::Slot => "slot",
+        M::Challenging => "challenging",
+        M::PastCap => "past-cap",
+        M::EvidenceCandidate => "evidence-candidate",
+        M::Evidence => "evidence",
     }
 }
 
-/// The two rate rows `print_net_stats` reads, from `option_show`
-/// (`RPC_CHANNEL.md` §6.4: `/get_limit` was replaced, not ported): the
-/// download and the upload bound in bytes per second, `None` for
-/// `unlimited`. The text is the grammar's, built back through the row's own
-/// constructor, so a reply that is not a rate is named rather than read as
-/// zero.
+/// The two rate rows `p2p stats` reads, from `option_show`
+/// (`RPC_CHANNEL.md` §6.4): the download and the upload bound in bytes per
+/// second, `None` for `unlimited`. The text is the grammar's, read through
+/// the row's own kind, so a reply that is not a rate is named rather than
+/// read as zero.
 fn rate_limits(src: &DaemonClient) -> Result<(Option<u64>, Option<u64>), String> {
     const DOWN: &str = "p2p-download-max";
     const UP: &str = "p2p-upload-max";
-    let names = vec![DOWN.to_owned(), UP.to_owned()];
-    let request = shekyl_rpc_types::options::OptionShowRequest {
-        names: Some(names.clone()),
-    };
-    let reply: shekyl_rpc_types::options::OptionsResponse =
-        native_json_rpc(src, "option_show", &request)?;
+    let reply = call::<wire::OptionShow>(
+        src,
+        &wire::node::OptionShow {
+            name: Some(vec![
+                shekyl_rpc_types::kinds::Text(DOWN.to_owned()),
+                shekyl_rpc_types::kinds::Text(UP.to_owned()),
+            ]),
+        },
+    )?;
     let bound = |name: &str| -> Result<Option<u64>, String> {
         let row = reply
-            .options
             .iter()
-            .find(|r| r.name() == name)
+            .find(|row| operator::row_name(row) == name)
             .ok_or_else(|| format!("option_show did not answer {name}"))?;
+        let wire::node::OptionRow::Value(row) = row else {
+            return Err(format!("option_show gave {name} as a secret"));
+        };
         let text = row
-            .value()
-            .flatten()
+            .value
+            .0
+            .as_ref()
+            .map(|text| text.0.as_str())
             .ok_or_else(|| format!("option_show gave {name} no value"))?;
         let kind = &shekyl_daemon_config::TABLE
             .row(name)
@@ -840,13 +681,11 @@ fn rate_limits(src: &DaemonClient) -> Result<(Option<u64>, Option<u64>), String>
 /// `print_net_stats`.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_net_stats(src: &DaemonClient, now: u64) -> Result<String, String> {
-    let raw = rest_post(src, "/get_net_stats", b"{}".to_vec())?;
-    let stats = decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
-    if !stats.status.is_ok() {
-        return Err(stats.status.0);
-    }
+    let Some(stats) = p2p_call::<wire::P2pStats>(src, &NoParams)? else {
+        return Ok(OFFLINE_LINE.to_owned());
+    };
     let (down, up) = rate_limits(src)?;
-    let seconds = now.saturating_sub(stats.start_time);
+    let seconds = now.saturating_sub(stats.started.0);
     let line = |verb: &str, bytes: u64, packets: u64, limit: Option<u64>| -> String {
         // Total by construction rather than guarded; see `methods::average_kib`.
         let average = bytes.checked_div(seconds).unwrap_or(0);
@@ -877,75 +716,79 @@ fn print_net_stats(src: &DaemonClient, now: u64) -> Result<String, String> {
     };
     Ok(format!(
         "{}\n{}",
-        line(
-            "Received",
-            stats.total_bytes_in,
-            stats.total_packets_in,
-            down
-        ),
-        line("Sent", stats.total_bytes_out, stats.total_packets_out, up)
+        line("Received", stats.download.0, stats.download_packets.0, down),
+        line("Sent", stats.upload.0, stats.upload_packets.0, up)
     ))
 }
 
-/// `sync_info`: chain sync's view (3.68).
+/// `sync status`: chain sync's view. Heights are block counts, as this
+/// word has always printed them: the wire's tips plus one.
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &DaemonClient) -> Result<String, String> {
-    let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> =
-        native_json_rpc(src, "sync_info", &serde_json::json!({}))?;
-    let shekyl_rpc_types::P2pReply::Running(reply) = reply else {
+    let Some(reply) = p2p_call::<wire::SyncStatus>(src, &NoParams)? else {
         return Ok(OFFLINE_LINE.to_owned());
     };
-    require_ok(&reply.status)?;
+    let height = reply.height.0.saturating_add(1);
     // A target below our own height (we are ahead of what we were told to
     // reach) reads as our height, so the percentage cannot exceed 100 or
     // divide by zero.
-    let target = reply.target_height.max(reply.height).max(1);
+    let target = reply.target_height.0.saturating_add(1).max(height).max(1);
     #[expect(
         clippy::cast_precision_loss,
         reason = "a percentage for a human, from two heights"
     )]
-    let progress = (reply.height as f64 / target as f64) * 100.0;
+    let progress = (height as f64 / target as f64) * 100.0;
     let mut out = vec![format!(
-        "Height: {}, target: {target} ({}%), {}{}",
-        reply.height,
+        "Height: {height}, target: {target} ({}%), {}{}",
         trimmed(progress, 4),
-        reply.state.as_str(),
+        sync_state_word(reply.state),
         if reply.stalled {
             ", stalled: no peer serves what this node still needs"
         } else {
             ""
         }
     )];
-    out.push(format!("{} peers", reply.peers.len()));
+    out.push(format!("{} peers", reply.session.len()));
     out.push(
         "Remote Host               Mode                Claimed  Rate B/s  Headers  Bodies"
             .to_owned(),
     );
-    for p in &reply.peers {
+    for p in &reply.session {
         // Every accumulation saturates: each count is peer-influenced.
         let blocks = p
-            .body_requests
+            .span
             .iter()
-            .fold(0u64, |acc, span| acc.saturating_add(span.count));
+            .fold(0u64, |acc, span| acc.saturating_add(span.blocks.0));
         out.push(format!(
             "{:<24}  {:<18}  {:>7}  {:>8}  {:<7}  {}",
-            p.address,
-            p.mode.as_str(),
-            p.claimed_height
-                .map_or_else(|| "-".to_owned(), |height| height.to_string()),
-            p.rate
-                .map_or_else(|| "-".to_owned(), |rate| rate.to_string()),
-            if p.header_request.is_some() {
-                "asked"
-            } else {
-                "-"
-            },
-            if p.body_requests.is_empty() {
+            p.endpoint.0,
+            sync_mode_word(p.mode),
+            // The claim is a tip; printed as the count it implies, as the
+            // height above is.
+            p.height
+                .0
+                .map_or_else(|| "-".to_owned(), |tip| tip.0.saturating_add(1).to_string()),
+            p.download_speed
+                .0
+                .map_or_else(|| "-".to_owned(), |rate| rate.0.to_string()),
+            if p.header.0.is_some() { "asked" } else { "-" },
+            if p.span.is_empty() {
                 "-".to_owned()
             } else {
-                format!("{blocks} blocks in {} spans", p.body_requests.len())
+                format!("{blocks} blocks in {} spans", p.span.len())
             },
         ));
     }
     Ok(out.join("\n"))
+}
+
+/// Chain sync's state as the wire spells it.
+fn sync_state_word(state: wire::p2p::SyncState) -> &'static str {
+    use wire::p2p::SyncState as S;
+    match state {
+        S::Unpeered => "unpeered",
+        S::Behind => "behind",
+        S::Following => "following",
+        S::Synced => "synced",
+    }
 }
