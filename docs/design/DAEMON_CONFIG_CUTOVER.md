@@ -458,8 +458,8 @@ network, stays the chain-store lane's and does not block this cutover.
 
 Before the cutover every runtime change was forwarded to the C++ JSON
 handlers through one dispatch
-(`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-91` and
-`:389-395` at `09402ea19`), one
+(lines 82 to 91 and 389 to 395 of
+`rust/shekyl-daemon-rpc/src/handlers/json.rs` at `09402ea19`), one
 endpoint per knob. After the cutover there are two JSON-RPC methods,
 `option_set` and `option_show` (RT-O23), served natively by
 `shekyl-daemon-rpc` through an options handle the composition root

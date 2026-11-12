@@ -69,10 +69,10 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 | --- | --- |
 | 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:130` fills `GetVersionResponse.version`. |
 | 2 | The producer's own unit test (`methods.rs:1852`, `:1873`) asserts the reply carries the constant. |
-| 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
+| 4 | The constant's definition: lines 44, 80, 81 and 82 of `rust/shekyl-rpc-types/src/chain.rs` at `2dba46537` (major, minor, the packing formula). The current definition is `rust/shekyl-rpc-types/src/version.rs:12`, `rust/shekyl-rpc-types/src/version.rs:34` and `rust/shekyl-rpc-types/src/version.rs:36`. |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
-| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
+| 2 | The re-export, lines 87 to 88 of `rust/shekyl-rpc-types/src/lib.rs` at `2dba46537`. The current re-export is `rust/shekyl-rpc-types/src/lib.rs:47-49`. |
 | 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
