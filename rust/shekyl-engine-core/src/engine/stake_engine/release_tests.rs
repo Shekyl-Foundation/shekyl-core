@@ -188,6 +188,7 @@ async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
     // describes, so a refusal can only be the binding check.
     let ready_source = || EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
         bond: Some(BondContext {
             join_settlement_epoch: 1,
@@ -352,6 +353,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
         mine,
         EmissionClaimSource {
             chain_height: ChainCount::from_raw(30001),
+            tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
             current_settled_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
             bond: Some(BondContext {
                 join_settlement_epoch: 1,
@@ -465,6 +467,7 @@ fn the_record_carries_the_persona_it_was_read_for() {
     let want = PCanonicalId::from_bytes([0xA5; 32]);
     let source = EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 3,
         bond: Some(BondContext {
             join_settlement_epoch: 1,
@@ -498,6 +501,7 @@ fn the_record_carries_the_persona_it_was_read_for() {
 fn a_response_without_a_bond_record_yields_no_state() {
     let source = EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 3,
         bond: None,
         epochs: vec![],

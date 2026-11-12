@@ -60,66 +60,65 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
-use shekyl_rpc_client::Rpc;
+use shekyl_rpc_client::{wire, Rpc, RpcError};
 use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_types::kinds::{Height, NoParams};
+use shekyl_rpc_types::wire::block::{BlockListQuery, BlockSelect, BlockShowSelect};
+use shekyl_rpc_types::wire::shared::{Selector, Slot};
 use shekyl_wire::Block;
 
 use super::regtest_e2e::RegtestDaemon;
 
 // ---------------------------------------------------------------------------
-// portable_storage — `shekyl-portable-storage` (LV-2a). The two shapes
-// `get_blocks_by_height.bin` is encoded and decoded through the shared
-// command map (`shekyl_rpc_types::bin_commands`, RK-4b). This rig used to
-// build the request `Section` and walk the reply for `block` strings itself
-// — a second definition of a wire the daemon also defines, and the kind
-// that drifts silently because both sides are ours.
+// The batch read: `block_list` by height
 // ---------------------------------------------------------------------------
 
-/// Serialize the `get_blocks_by_height.bin` request.
-fn build_get_blocks_by_height_req(heights: &[u64]) -> Vec<u8> {
-    shekyl_rpc_types::GetBlocksByHeightRequest {
-        heights: heights.to_vec(),
-        prune: false,
-    }
-    .to_bin()
-    .expect("encode get_blocks_by_height request")
-}
-
-/// Decode a `get_blocks_by_height.bin` response into its raw block blobs, in
-/// order.
+/// `block_list` for `heights`: each slot's block bytes, in order, stopping at
+/// the first height the daemon does not hold (the chain's top moved under
+/// the read).
 ///
-/// A non-OK `status` is an error here rather than an empty result: this rig
+/// A refusal is an error here rather than an empty result: this rig
 /// measures read latency, and silently treating a refusal as "no blocks"
 /// would fold a failed request into the sample as a fast one.
-fn decode_block_blobs(resp: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    let reply =
-        shekyl_rpc_types::GetBlocksByHeightResponse::from_bin(resp).map_err(|e| e.to_string())?;
-    if !reply.status.is_ok() {
-        return Err(format!("daemon refused: {}", reply.status.0));
-    }
-    Ok(reply.blocks.into_iter().map(|entry| entry.block).collect())
+async fn block_list_blobs(rpc: &HttpRpc, heights: &[u64]) -> Result<Vec<Vec<u8>>, String> {
+    let slots = rpc
+        .call::<wire::BlockList>(BlockListQuery {
+            height: heights.iter().copied().map(Height).collect(),
+            prune: false,
+        })
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(slots
+        .into_iter()
+        .map_while(|slot| match slot {
+            Slot::Item(block) => Some(block.body.0),
+            _ => None,
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
 // Read paths
 // ---------------------------------------------------------------------------
 
-/// The two block-read paths under study, distinguished only by their daemon
-/// lock behavior.
+/// The two block-read paths under study. The Round-0 run measured the C++
+/// daemon's lock-taking `get_block` against its lock-free
+/// `get_blocks_by_height.bin`; the Rust daemon serves both reads from the
+/// store, and the harness keeps the two methods apart so the coupling of
+/// each stays measurable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ReadPath {
-    /// JSON-RPC `get_block` — enters `m_blockchain_lock` (`get_block_by_hash`).
+    /// `block_show` by height: the header lookup, then the bodies by id.
     Locked,
-    /// `get_blocks_by_height.bin` single-height — bare LMDB `get_block_from_height`.
+    /// `block_list` for one height: the bodies read by height.
     LockFree,
 }
 
 impl ReadPath {
     fn label(self) -> &'static str {
         match self {
-            ReadPath::Locked => "get_block (LOCKED)",
-            ReadPath::LockFree => ".bin       (lock-free)",
+            ReadPath::Locked => "block_show",
+            ReadPath::LockFree => "block_list",
         }
     }
 }
@@ -129,23 +128,23 @@ impl ReadPath {
 async fn fetch_block(rpc: &HttpRpc, path: ReadPath, h: u64) -> Result<Option<Vec<u8>>, String> {
     match path {
         ReadPath::Locked => {
-            let v: Value = rpc
-                .json_rpc_call("get_block", Some(json!({ "height": h })))
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-            match v.get("blob").and_then(Value::as_str) {
-                Some(hexs) => Ok(Some(hex::decode(hexs).map_err(|_| "blob not hex")?)),
-                None => Ok(None),
+            let shown = rpc
+                .call::<wire::BlockShow>(BlockShowSelect(BlockSelect {
+                    select: Selector::Height(Height(h)),
+                    pow: false,
+                    prune: Some(false),
+                }))
+                .await;
+            match shown {
+                Ok(block) => Ok(Some(block.body.0)),
+                // A height above the tip (just popped) is no block.
+                Err(RpcError::Refused(refusal)) if refusal.diagnostic.code == "block.missing" => {
+                    Ok(None)
+                }
+                Err(e) => Err(format!("{e:?}")),
             }
         }
-        ReadPath::LockFree => {
-            let req = build_get_blocks_by_height_req(&[h]);
-            let resp = rpc
-                .bin_call("get_blocks_by_height.bin", req)
-                .await
-                .map_err(|e| format!("{e:?}"))?;
-            Ok(decode_block_blobs(&resp)?.into_iter().next())
-        }
+        ReadPath::LockFree => Ok(block_list_blobs(rpc, &[h]).await?.into_iter().next()),
     }
 }
 
@@ -224,12 +223,12 @@ fn count_established(port: u16) -> (usize, usize) {
 /// **M-enum.** Open more concurrent per-`P` clients than the (dead) epee
 /// `per_private_ip=25` cap, keep them active, and confirm: (1) every client
 /// connects — N is *not* capped by the Axum layer; (2) the connection count is
-/// observable in the host TCP table; (3) `get_info` carries no field that
-/// reveals it. The leak is an OS-level residual below our RPC layer.
+/// observable in the host TCP table; (3) `daemon_status` carries no field
+/// that reveals it beyond its own `rpc_connections`. The leak is an OS-level residual below our RPC layer.
 async fn measure_enum(port: u16) {
     const N: usize = 30; // > the dead per_private_ip=25 default
 
-    // N independent clients, each looping get_info to hold its connection open.
+    // N independent clients, each looping daemon_status to hold its connection open.
     let stop = Arc::new(AtomicBool::new(false));
     let ok = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::new();
@@ -240,7 +239,7 @@ async fn measure_enum(port: u16) {
         handles.push(tokio::spawn(async move {
             let mut succeeded = false;
             while !stop.load(Ordering::Relaxed) {
-                if rpc.json_rpc_call::<Value>("get_info", None).await.is_ok() {
+                if rpc.call::<wire::DaemonStatus>(NoParams).await.is_ok() {
                     if !succeeded {
                         succeeded = true;
                         ok.fetch_add(1, Ordering::Relaxed);
@@ -261,11 +260,11 @@ async fn measure_enum(port: u16) {
 
     // What the RPC surface reports as its own connection count.
     let probe = open_client(port).await;
-    let info: shekyl_rpc_types::GetInfoResponse = probe
-        .json_rpc_call("get_info", None)
+    let status = probe
+        .call::<wire::DaemonStatus>(NoParams)
         .await
-        .expect("get_info");
-    let rpc_conn_field = info.node.shown().map(|node| node.rpc_connections_count);
+        .expect("daemon_status");
+    let rpc_conn_field = status.rpc_connections.shown().map(|count| count.0);
 
     stop.store(true, Ordering::Relaxed);
     for h in handles {
@@ -278,7 +277,7 @@ async fn measure_enum(port: u16) {
     eprintln!("host TCP table, client-side . {client_side} ESTABLISHED → :{port}");
     eprintln!("host TCP table, daemon-side . {daemon_side} ESTABLISHED  :{port} → *");
     eprintln!(
-        "get_info.rpc_connections_count {}",
+        "daemon_status.rpc_connections {}",
         match rpc_conn_field {
             Some(v) => format!("= {v}  (this server's live connection count)"),
             None => "withheld from this caller".to_string(),
@@ -289,7 +288,7 @@ async fn measure_enum(port: u16) {
 
     // Not capped: the dead epee `per_private_ip=25` default must not gate N. A
     // lower bound (not `== N`) — `connected` is sampled at a fixed instant, so a
-    // slow box may not have landed the last client's first get_info yet; the
+    // slow box may not have landed the last client's first daemon_status yet; the
     // property is "well past the dead 25-cap", not an exact count.
     assert!(
         connected > 25,
@@ -592,19 +591,14 @@ async fn measure_consistency(daemon: Arc<RegtestDaemon>, tip: u64) {
                 let base = max_h.saturating_sub(BATCH_SPAN - 1);
                 let heights: Vec<u64> = (base..=max_h).collect();
                 let c0 = commits.load(Ordering::Relaxed);
-                let resp = rpc
-                    .bin_call(
-                        "get_blocks_by_height.bin",
-                        build_get_blocks_by_height_req(&heights),
-                    )
-                    .await;
+                let resp = block_list_blobs(&rpc, &heights).await;
                 let c1 = commits.load(Ordering::Relaxed);
                 batch_reads.fetch_add(1, Ordering::Relaxed);
                 if c1 != c0 {
                     batch_raced.fetch_add(1, Ordering::Relaxed);
                 }
-                if let Ok(bytes) = resp {
-                    if let Ok(blobs) = decode_block_blobs(&bytes) {
+                if let Ok(blobs) = resp {
+                    {
                         // Parse each returned blob. A blob that fails to parse is
                         // itself a batch anomaly (a torn/malformed block) — count
                         // it, do NOT silently drop it: dropping both hides a real

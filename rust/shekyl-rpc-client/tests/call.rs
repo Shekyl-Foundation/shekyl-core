@@ -46,7 +46,7 @@ struct Canned {
 }
 
 impl Canned {
-    fn new(body: Value) -> Self {
+    fn new(body: &Value) -> Self {
         Self {
             body: body.to_string(),
             sent: Arc::default(),
@@ -78,25 +78,34 @@ impl Rpc for Canned {
     }
 }
 
-fn result(result: Value) -> Value {
+fn result(result: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": 0, "result": result})
 }
 
-fn error(code: i64, data: Value) -> Value {
+fn error(code: i64, data: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": 0, "error": {"code": code, "message": "english", "data": data}})
 }
 
 /// A call is strict JSON-RPC 2.0 on `/json_rpc`: the method's name from its
-/// type, and named params (RW-Q2). Red edit: post to another route.
+/// type, and named params (RW-Q2). The route is relative — the transport
+/// appends it to its base URL as `{url}/{route}` — so it carries no leading
+/// slash, and joined it is the daemon's one path. Red edit: post to another
+/// route, or post `JSON_RPC_PATH` itself (the wire would carry
+/// `//json_rpc`).
 #[test]
 fn a_call_is_json_rpc_on_one_route_with_named_params() {
-    let daemon = Canned::new(result(json!({
+    let daemon = Canned::new(&result(&json!({
         "height": 9, "hash": "ab".repeat(32), "writer": {"live": null}
     })));
     let count = block_on(daemon.get_height()).expect("a tip");
     assert_eq!(count.to_raw(), 10, "the count is the tip's height plus one");
     let (route, sent) = daemon.last();
-    assert_eq!(route, "/json_rpc");
+    assert_eq!(route, "json_rpc");
+    assert_eq!(
+        format!("/{route}"),
+        shekyl_rpc_types::endpoint::JSON_RPC_PATH,
+        "joined to a base URL, the route is the daemon's path"
+    );
     assert_eq!(sent["jsonrpc"], "2.0");
     assert_eq!(sent["method"], "chain_height");
     assert_eq!(sent["params"], json!({}));
@@ -107,9 +116,9 @@ fn a_call_is_json_rpc_on_one_route_with_named_params() {
 /// class. Red edit: read every error as `InvalidNode`.
 #[test]
 fn a_refusal_is_typed_by_its_class_and_code() {
-    let daemon = Canned::new(error(
+    let daemon = Canned::new(&error(
         ErrorClass::NotReady.code(),
-        json!({"code": "daemon.unready", "parameter": {}, "message": "english"}),
+        &json!({"code": "daemon.unready", "parameter": {}, "message": "english"}),
     ));
     let out = block_on(daemon.get_block_hash(0));
     let Err(RpcError::Refused(refusal)) = &out else {
@@ -119,9 +128,9 @@ fn a_refusal_is_typed_by_its_class_and_code() {
     assert_eq!(refusal.diagnostic.code, "daemon.unready");
     assert_eq!(out.unwrap_err().fault(), DaemonFault::Unreachable);
 
-    let shard = Canned::new(error(
+    let shard = Canned::new(&error(
         ErrorClass::RefusedByMethod.code(),
-        json!({"code": "shard.open", "parameter": {"id": "7"}, "message": "english"}),
+        &json!({"code": "shard.open", "parameter": {"id": "7"}, "message": "english"}),
     ));
     let answer = block_on(
         shard.call_or_refusal::<wire::ShardFetch>(wire::archival::ShardId {
@@ -137,7 +146,7 @@ fn a_refusal_is_typed_by_its_class_and_code() {
 /// A name the daemon does not serve is its own error, never a refusal.
 #[test]
 fn method_not_found_is_no_such_method() {
-    let daemon = Canned::new(json!({"jsonrpc": "2.0", "id": 0, "error": {
+    let daemon = Canned::new(&json!({"jsonrpc": "2.0", "id": 0, "error": {
         "code": -32601, "message": "Method not found"
     }}));
     let out = block_on(daemon.call::<wire::Fee>(NoParams));
@@ -153,9 +162,9 @@ fn a_body_that_is_neither_one_reply_nor_one_refusal_is_a_protocol_fault() {
         json!({"jsonrpc": "2.0", "id": 0, "result": {}, "error": {"code": -32602, "message": "x"}}),
         json!({"jsonrpc": "2.0", "id": 0, "error": {"code": -24, "message": "a 3.x code"}}),
         // A 3.x fee reply: positional tiers and a status.
-        result(json!({"status": "OK", "fees": [1, 2, 3]})),
+        result(&json!({"status": "OK", "fees": [1, 2, 3]})),
     ] {
-        let out = block_on(Canned::new(body.clone()).call::<wire::Fee>(NoParams));
+        let out = block_on(Canned::new(&body).call::<wire::Fee>(NoParams));
         assert!(
             matches!(out, Err(RpcError::InvalidNode(_))),
             "{body}: {out:?}"
@@ -166,7 +175,7 @@ fn a_body_that_is_neither_one_reply_nor_one_refusal_is_a_protocol_fault() {
 /// The fee read names its tiers, each an amount per unit of weight (IG-Q52).
 #[test]
 fn the_fee_read_names_its_tiers() {
-    let daemon = Canned::new(result(json!({
+    let daemon = Canned::new(&result(&json!({
         "economy": "10", "standard": "20", "high": "40"
     })));
     let rate = |priority| {
@@ -182,7 +191,7 @@ fn the_fee_read_names_its_tiers() {
 /// A `result` of `null` is an answer: `ban_show` for a host not banned.
 #[test]
 fn a_null_result_is_an_answer() {
-    let daemon = Canned::new(result(Value::Null));
+    let daemon = Canned::new(&result(&Value::Null));
     let ban = block_on(daemon.call::<wire::BanShow>(wire::node::BanHost {
         host: shekyl_rpc_types::kinds::Text("192.0.2.1".to_owned()),
     }))

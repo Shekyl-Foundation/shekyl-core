@@ -150,7 +150,9 @@ ARMED=(
   # line inverted to "P2P: online": panicked at "sync status must render
   # the live core's P2P state".
   engine::regtest_e2e::peer_words_answer_through_shekyl_cli
-  engine::regtest_e2e::native_handlers_apply_their_own_request_caps
+  # Renamed at RPC 4.0 (RW-Q8): the caps are `bound.tx` and
+  # `bound.key-image` on `tx_list` and `chain_spent`.
+  engine::regtest_e2e::handlers_apply_their_own_request_caps
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::e2e_fcmp_spend_reorg_restores_pool_and_fee
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
@@ -173,7 +175,9 @@ ARMED=(
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
-  engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
+  # Replaces the result-envelope leg at RPC 4.0 (RW-Q3): a refusal is an
+  # error object, never a status word inside a result.
+  engine::regtest_e2e::chain_coinbase_sum_refuses_a_range_past_the_tip
   engine::regtest_e2e::get_output_histogram_stays_unrouted
   engine::regtest_e2e::origin::restricted_listener_hides_a_transaction_this_node_has_not_broadcast
   engine::regtest_e2e::origin::restricted_listener_names_a_transaction_this_node_shows

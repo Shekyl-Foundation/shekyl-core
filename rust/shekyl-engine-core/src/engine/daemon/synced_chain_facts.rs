@@ -455,8 +455,7 @@ fn tip_of(count: ChainCount) -> BlockHeight {
     })
 }
 
-/// The `get_info` reply [`health_from_get_info`] and
-/// [`top_hash_from_get_info`] read, with the members a test chooses.
+/// A `daemon_status` reply whose wallet-read members a test chooses.
 ///
 /// Test daemons build the reply from this struct, so the choices live next
 /// to the reader. It produces a **complete** reply: the shared type refuses
@@ -465,97 +464,92 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 /// sends. Test-only: production reads the daemon's reply, it does not build
 /// one.
 #[cfg(test)]
-pub(crate) struct GetInfoDocument {
-    /// Block count (`get_info.height`), not the tip's index.
+pub(crate) struct DaemonStatusDocument {
+    /// The chain's block count; the wire carries the tip, one less.
     pub(crate) chain_count: ChainCount,
-    /// The core's target, `None` when it reports none.
+    /// The target's block count, `None` when the core reports none.
     pub(crate) target_height: Option<u64>,
     /// The daemon's own flag.
     pub(crate) synchronized: bool,
     /// Identity of the chain `chain_count` counts.
     pub(crate) top_hash: BlockHash,
-    /// Health's `has_peers`: whether the daemon has a handshaken session.
+    /// Health's `peered`: whether the daemon has a handshaken session.
     ///
-    /// The reply this builds writes **zero for every Status and Peers
-    /// count**, whatever this says. The wallet reads `has_peers` and may
-    /// not read those; a reader that went back to them would see a
+    /// The reply this builds shows the Status part with **zero for every
+    /// connection count**, whatever this says. The wallet reads `peered`
+    /// and may not read those; a reader that went back to them would see a
     /// peerless daemon in every test built on this document.
-    pub(crate) has_peers: bool,
+    pub(crate) peered: bool,
 }
 
 #[cfg(test)]
-impl GetInfoDocument {
-    /// The reply as the shared type. Every member this struct does not
-    /// choose holds a fixed, unremarkable value.
-    pub(crate) fn to_reply(&self) -> GetInfoResponse {
-        use shekyl_rpc_types::{
-            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
-            InfoPool, InfoStatus, RpcStatus,
-        };
-        GetInfoResponse {
-            status: RpcStatus::ok(),
-            health: InfoHealth {
-                height: self.chain_count.to_raw(),
-                top_block_hash: HashHex::from_bytes(*self.top_hash.as_bytes()),
-                target_height: self.target_height.into(),
-                synchronized: self.synchronized,
-                busy_syncing: false,
-                following_degraded: false,
-                p2p: shekyl_rpc_types::HealthP2p::Running {
-                    has_peers: self.has_peers,
-                },
-            },
-            identity: InfoIdentity {
-                protocol_version: 3,
-            },
-            chain: InfoChain {
-                difficulty: 1,
-                cumulative_difficulty: u128::from(self.chain_count.to_raw()),
-                target: 120,
-                tx_count: 0,
-                block_weight_limit: 600_000,
-                block_weight_median: 300_000,
-                adjusted_time: 1_700_000_000,
-            },
-            economics: InfoEconomics {
-                already_generated_coins: shekyl_units::AtomicUnits::ZERO,
-                release_multiplier: 1_000_000,
-                burn_pct: 0,
-                total_burned: shekyl_units::AtomicUnits::ZERO,
-                staker_emission_share_effective: 0,
-            },
-            pool: InfoPool::Live { tx_pool_size: 0 },
-            node: Hidden::Shown(InfoStatus {
-                start_time: 1_700_000_000,
-                free_space: 1 << 40,
-                database_size: 1 << 30,
-                version: "test".to_owned(),
-                connections: shekyl_rpc_types::StatusConnections::Running {
-                    outgoing: 0,
-                    incoming: 0,
-                },
-                alt_blocks_count: 0,
-                rpc_connections_count: 1,
-            }),
-            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
-                InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
-                    connector: shekyl_rpc_types::InfoConnector::Clearnet,
-                    incoming_sockets: 0,
-                    outgoing_sockets: 0,
-                    white_peerlist_size: 0,
-                    gray_peerlist_size: 0,
-                }])
-                .expect("one row is in order"),
-            )),
-            // The wallet is never the daemon's host administrator.
-            host: Hidden::Withheld,
-            restricted: false,
-        }
+impl DaemonStatusDocument {
+    /// The JSON object a `daemon_status` result carries. Every member this
+    /// struct does not choose holds a fixed, unremarkable value.
+    pub(crate) fn to_value(&self) -> Value {
+        let count = self.chain_count.to_raw();
+        serde_json::json!({
+            "height": count.saturating_sub(1),
+            "hash": hex::encode(self.top_hash.as_bytes()),
+            "target_height": self.target_height.map(|target| target.saturating_sub(1)),
+            "synchronized": self.synchronized,
+            "syncing": false,
+            "offline": false,
+            "degraded": false,
+            "peered": self.peered,
+            "writer": {"live": null},
+            "protocol_version": 3,
+            "difficulty": "0x1",
+            "difficulty_cumulative": format!("{:#x}", count.max(1)),
+            "block_spacing": 120,
+            "tx_count": 0,
+            "block_weight_max": 600_000,
+            "block_weight_median": 300_000,
+            "time_adjusted": 1_700_000_000_u64,
+            "emission": "0",
+            "emission_multiplier": 1_000_000,
+            "burn": 0,
+            "burn_total": "0",
+            "stake_share": 0,
+            "txpool_count": 0,
+            "grant": ["health", "status", "chain"],
+            "started": 1_700_000_000_u64,
+            "disk_free": 1_u64 << 40,
+            "data_size": 1_u64 << 30,
+            "revision": "test",
+            "peer_outbound_count": 0,
+            "peer_inbound_count": 0,
+            "alt_count": 0,
+            "rpc_connections": 1,
+            "txpool_retired": false,
+        })
     }
 
-    /// The JSON object a `get_info` result carries.
-    pub(crate) fn to_value(&self) -> Value {
-        serde_json::to_value(self.to_reply()).expect("a get_info reply serializes")
+    /// The reply as the shared type.
+    pub(crate) fn to_reply(&self) -> DaemonStatus {
+        serde_json::from_value(self.to_value()).expect("a daemon_status reply decodes")
+    }
+
+    /// The reply as a caller without the `status` grant reads it: the
+    /// Status part absent whole (RK-D23).
+    pub(crate) fn to_reply_status_withheld(&self) -> DaemonStatus {
+        let mut value = self.to_value();
+        let members = value.as_object_mut().expect("a reply is an object");
+        for key in [
+            "started",
+            "disk_free",
+            "data_size",
+            "revision",
+            "peer_outbound_count",
+            "peer_inbound_count",
+            "alt_count",
+            "rpc_connections",
+            "txpool_retired",
+        ] {
+            members.remove(key);
+        }
+        members.insert("grant".to_owned(), serde_json::json!(["health", "chain"]));
+        serde_json::from_value(value).expect("a reply without Status decodes")
     }
 }
 

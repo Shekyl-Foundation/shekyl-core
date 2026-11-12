@@ -560,8 +560,8 @@ mod tests {
         use crate::engine::stake_engine::PSlot;
 
         /// A daemon that serves one canned claim-source result through the
-        /// real `json_rpc_call` envelope path (the trait's default impl runs
-        /// unmocked — only the transport is canned).
+        /// real envelope path (the trait's `call` runs unmocked — only the
+        /// transport is canned).
         #[derive(Clone)]
         /// The canned claim source, plus the sync state the daemon reports.
         ///
@@ -580,43 +580,27 @@ mod tests {
         }
 
         impl Rpc for ClaimSourceDaemon {
-            /// The bracket's re-read, from the same derivation `get_info`'s
-            /// top hash below comes from, so the witness stands on its own
-            /// block. The default would ride `post` and be answered with the
-            /// claim source.
-            fn get_block_hash(
-                &self,
-                number: usize,
-            ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>>
-            {
-                async move {
-                    Ok(crate::engine::test_support::test_block_hash_at(
-                        number as u64,
-                    ))
-                }
-            }
-
             /// Dispatches on the JSON-RPC method: the orchestrator now reads
-            /// `get_info` for the sync witness alongside the claim source, so
+            /// `daemon_status` for the sync witness alongside the claim source, so
             /// answering every method with the claim source would decode as a
-            /// reply with no `height` and refuse the whole lane.
+            /// status reply and refuse the whole lane.
             fn post(
                 &self,
                 route: &str,
                 body: Vec<u8>,
             ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-                let is_get_info = serde_json::from_slice::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
-                    .is_some_and(|m| m == "get_info");
+                let is_status = crate::engine::test_support::requested_method(&body)
+                    == crate::engine::test_support::method_name::<
+                        shekyl_rpc_client::wire::DaemonStatus,
+                    >();
                 let synced = self.1;
-                let result = if is_get_info {
-                    crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+                let result = if is_status {
+                    crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
                         chain_count: shekyl_types::ChainCount::from_raw(10_000),
                         target_height: (!synced).then_some(1_000_000),
                         synchronized: synced,
                         top_hash: crate::engine::test_support::test_block_hash_at(9_999),
-                        has_peers: true,
+                        peered: true,
                     }
                     .to_value()
                 } else {

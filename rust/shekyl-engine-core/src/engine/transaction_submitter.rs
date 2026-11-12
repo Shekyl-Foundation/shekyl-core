@@ -180,7 +180,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
     canonical_tx_id_opt(tx_bytes).expect("wallet-built tx_bytes parse as canonical shekyl-wire")
 }
 
-/// Map a daemon [`SubmitVerdict`] onto a [`TxSubmitOutcome`]
+/// Map a daemon [`Verdict`] onto a [`TxSubmitOutcome`]
 /// (`DAEMON_SUBMIT_VERDICT.md` §2.1 → wallet projection).
 ///
 /// `hash` is the **locally**-computed transaction id; the daemon reply
@@ -199,10 +199,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// Transport-agnostic: shared by the principal `DaemonClient` and the
 /// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon verdict is
 /// interpreted the same regardless of which circuit carried it.
-pub(crate) fn submit_outcome_from_verdict(
-    verdict: &Verdict,
-    hash: TxHash,
-) -> TxSubmitOutcome {
+pub(crate) fn submit_outcome_from_verdict(verdict: &Verdict, hash: TxHash) -> TxSubmitOutcome {
     match verdict {
         Verdict::Accepted => TxSubmitOutcome::Submitted { hash },
         Verdict::AlreadyInPool { publication } => TxSubmitOutcome::AlreadyInPool {
@@ -215,11 +212,6 @@ pub(crate) fn submit_outcome_from_verdict(
         },
         Verdict::Rejected { cause } => TxSubmitOutcome::Rejected {
             cause: cause.clone(),
-            // The consensus row rides inside its cause (IG-Q76).
-            row: match cause {
-                Rejection::ConsensusRule(row) => CenRowName::parse(&row.0),
-                _ => None,
-            },
         },
     }
 }
@@ -261,21 +253,22 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
         TxSubmitOutcome::AlreadyInChain { hash, height } => {
             Ok(SubmitSuccess::AlreadyInChain { hash, height })
         }
-        TxSubmitOutcome::Rejected { cause, row } => Err(submitter_error_from_cause(cause, row)),
+        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(&cause)),
     }
 }
 
 /// Split a [`Rejection`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submitter_error_from_cause(cause: Rejection, row: Option<CenRowName>) -> SubmitterError {
+fn submitter_error_from_cause(cause: &Rejection) -> SubmitterError {
     let terminal = |kind| SubmitterError::RejectedTerminal { kind };
     let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
         Rejection::Malformed => terminal(TerminalErrorKind::Malformed),
-        // Terminal with its row. A reply that names no row, or one this
-        // wallet cannot carry whole, takes the fail-safe disposition.
-        Rejection::ConsensusRule(_) => match row {
+        // Terminal with its row, which rides inside the cause (IG-Q76). A
+        // row this wallet cannot carry whole takes the fail-safe
+        // disposition.
+        Rejection::ConsensusRule(row) => match CenRowName::parse(&row.0) {
             Some(row) => terminal(TerminalErrorKind::ConsensusRule { row }),
             None => terminal(TerminalErrorKind::Unrecognized),
         },
@@ -487,7 +480,7 @@ const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
 /// `ThirdParty` variant (invariant B), so this enum states the closed set for
 /// free where a boxed `dyn` shim would pay allocation to erase it.
 /// Match-delegation is output-agnostic (§3.1 part 5): it carries through the
-/// `SubmitVerdict` reshapes unchanged, and "both submitters share the
+/// `Verdict` reshapes unchanged, and "both submitters share the
 /// mapping" is literal — one [`outcome_to_result`], two transports, one
 /// dispatch type.
 ///

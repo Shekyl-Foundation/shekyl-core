@@ -324,9 +324,7 @@ fn blocks_since(synced_height: u64, observed_at: u64) -> u64 {
 /// masked by "syncing" — a daemon with no peers cannot sync either.
 fn relay_impossible(health: DaemonHealth) -> Option<WatchdogStep> {
     match health.p2p {
-        DaemonP2p::Offline => {
-            Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline))
-        }
+        DaemonP2p::Offline => Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline)),
         DaemonP2p::Running { has_peers: false } => {
             Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless))
         }

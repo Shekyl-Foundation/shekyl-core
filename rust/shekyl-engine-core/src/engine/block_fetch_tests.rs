@@ -14,18 +14,19 @@
 use super::*;
 use crate::engine::test_support::{conforming_coinbase_extra, conforming_pqc_extra};
 use core::future::Future;
-use shekyl_rpc_types::HashHex;
+use shekyl_rpc_types::wire::shared::{Archived, ArchivedState};
 
 use shekyl_types::{
     ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, TxHash,
 };
-use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
+use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
+use shekyl_wire::transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL};
 use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, SkeletonTx, Transaction, TxPrefix};
 
 /// A skeleton over `unprunable` with null operands: what the daemon serves
 /// for a spend whose prunable region and `pqc_auths` are both empty, which
 /// is most fixtures below. The shape tests exercise the bytes; the binding
-/// tests exercise the operands through `parse_tx_batch`.
+/// tests exercise the operands through `bind_block_txs`.
 fn skeleton(unprunable: &[u8]) -> SkeletonTx {
     SkeletonTx {
         unprunable: unprunable.to_vec(),
@@ -58,96 +59,123 @@ fn served_skeleton(tx: &Transaction) -> (SkeletonTx, TxHash) {
 /// is asked for the null id and refuses on the parse instead.
 fn bind_own(skeleton: &SkeletonTx) -> Result<BoundTx, RpcError> {
     let own = skeleton.txid().unwrap_or(TxHash::from_bytes([0u8; 32]));
-    bind_skeleton(skeleton, own, "")
+    bind_skeleton(skeleton, own)
 }
 
-/// A `prune` reply carrying `txs`, otherwise conformant.
-fn reply(txs: Vec<TxEntry>) -> GetTransactionsResponse {
-    GetTransactionsResponse {
-        status: shekyl_rpc_types::RpcStatus("OK".to_owned()),
-        txs,
-        missed_tx: Vec::new(),
-        unavailable_tx: Vec::new(),
-        archived: Vec::new(),
+/// A block's `tx` slots under `prune`, every one the item.
+fn slots(txs: Vec<BlockTx>) -> Vec<OrArchived<BlockTx>> {
+    txs.into_iter().map(OrArchived::Item).collect()
+}
+
+/// A daemon that answers every request with one fixed document, and keeps
+/// the last request it was sent, so a test can hand the consumer a reply
+/// the wire permits but the contract does not, and read what was asked.
+#[derive(Clone)]
+struct CannedDaemon {
+    reply: std::sync::Arc<Vec<u8>>,
+    asked: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl CannedDaemon {
+    fn new(reply: Vec<u8>) -> Self {
+        Self {
+            reply: std::sync::Arc::new(reply),
+            asked: std::sync::Arc::default(),
+        }
     }
 }
-
-/// A daemon that answers every route with one fixed document, so a test
-/// can hand the consumer a reply the wire permits but the contract does
-/// not — here, a refusal carrying a body.
-#[derive(Clone)]
-struct CannedDaemon(std::sync::Arc<Vec<u8>>);
 
 impl Rpc for CannedDaemon {
     fn post(
         &self,
         _route: &str,
-        _body: Vec<u8>,
+        body: Vec<u8>,
     ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-        let doc = self.0.clone();
+        *self.asked.lock().expect("not poisoned") = body;
+        let doc = self.reply.clone();
         async move { Ok(doc.as_ref().clone()) }
     }
 }
 
 /// **A refusal is not evidence, even when it comes with a body.**
 ///
-/// `rpc_call` only deserializes, so a daemon may answer a non-OK `status`
-/// *and* a complete, plausible entry in one document. The body here is
-/// built to clear every check downstream of the status — the count
-/// matches, the entry's `tx_hash` equals the requested hash AND the body
-/// binds to it (`parse_tx_batch` checks both), and the pruned blob is a
-/// transaction `bind_skeleton` accepts. So without the status check
-/// this call **succeeds** and hands back a transaction the daemon declined
-/// to vouch for; that is the hazard, not a parse error arriving late.
+/// A JSON-RPC 2.0 reply carries exactly one of `result` and `error`. A
+/// daemon that answers both — a refusal beside a complete, plausible block
+/// — is answering with neither, and the fetch refuses the document rather
+/// than read the block out of it. Without that rule this call **succeeds**
+/// and scans a block the daemon declined to vouch for.
 #[tokio::test]
 async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
-    // Derived, not invented: with a chosen constant the body-identity check
-    // at `parse_tx_batch` would refuse this entry anyway, and deleting
-    // `refuse_unless_ok` would leave the test red for the wrong reason —
-    // pinning the binding while claiming to pin the status guard.
-    let tx = pruned_spend_tx(0);
-    let prunable_digest = [0x5Au8; 32];
-    let archival_len = 4_242u64;
-    let txid = tx.hash_with_supplied_components(
-        None,
-        PrunableHash::from_bytes(prunable_digest),
-        ArchivalLength::from_raw(archival_len),
-    );
-    let mut body = Vec::new();
-    tx.write(&mut body).expect("Vec write is infallible");
-    let reply = shekyl_rpc_types::GetTransactionsResponse {
-        status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
-        txs: vec![TxEntry {
-            tx_hash: HashHex::from_bytes(txid.to_bytes()),
-            as_hex: String::new(),
-            pruned_as_hex: hex::encode(&body),
-            prunable_hash: HashHex::from_bytes(prunable_digest),
-            pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
-            archival_len,
-            double_spend_seen: false,
-            location: shekyl_rpc_types::TxLocation::Mined {
-                block_height: 3,
-                block_timestamp: 1_700_000_000,
-                confirmations: 1,
-                output_indices: vec![1],
-            },
-        }],
-        missed_tx: Vec::new(),
-        unavailable_tx: Vec::new(),
-        archived: Vec::new(),
-    };
-    let rpc = CannedDaemon(std::sync::Arc::new(
-        serde_json::to_vec(&reply).expect("wire type serializes"),
-    ));
-
-    let err = fetch_transactions(&rpc, &[txid])
+    let block = coinbase_block(3);
+    let document = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": served_block(&block, &[], 7),
+        "error": {
+            "code": -32004,
+            "message": "not ready",
+            "data": {"code": "daemon.unready", "parameter": {}, "message": "not ready"},
+        },
+    });
+    let rpc = CannedDaemon::new(serde_json::to_vec(&document).expect("serializes"));
+    let err = default_fetch_scannable_block(&rpc, 3)
         .await
-        .expect_err("a refusal must not be accepted as transactions");
-    let text = format!("{err}");
+        .expect_err("a refusal must not be accepted as a block");
     assert!(
-        text.contains("get_transactions refused") && text.contains("not evidence"),
-        "the refusal must name itself rather than surface as some later \
-         failure: {text}"
+        format!("{err}").contains("neither one result nor one error"),
+        "the document must be refused as a whole: {err}"
+    );
+}
+
+/// `block_show`'s reply for `block`: its bytes, `tx` as served, and the
+/// first output's global index.
+fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) -> serde_json::Value {
+    let header = serde_json::json!({
+        "height": block.number().expect("a block with a coinbase"),
+        "hash": "00".repeat(32), "parent": "00".repeat(32), "version_major": 1,
+        "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
+        "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
+        "weight": 0, "weight_longterm": null, "tx_count": 0,
+        "pow": null, "coinbase": "00".repeat(32), "curve_root": "00".repeat(32),
+        "attestation_root": "00".repeat(32),
+    });
+    serde_json::json!({
+        "header": header,
+        "body": Bytes(block.serialize()),
+        "tx": tx,
+        "output_index": output_index,
+    })
+}
+
+/// **One `block_show` is the whole fetch.** The request is `block_show` by
+/// height under `prune`; the reply's bytes become the block, its `tx` the
+/// bound bodies, and its `output_index` the first global output index.
+///
+/// The edit that turns this red is the fetch asking for the whole form, or
+/// dropping the reply's `output_index`.
+#[tokio::test]
+async fn the_fetch_is_one_block_show_under_prune() {
+    let block = coinbase_block(3);
+    let rpc = CannedDaemon::new(crate::engine::test_support::result_envelope(&served_block(
+        &block,
+        &[],
+        41,
+    )));
+    let scannable = default_fetch_scannable_block(&rpc, 3)
+        .await
+        .expect("a served block fetches");
+    assert_eq!(scannable.block.number(), Some(3));
+    assert!(scannable.transactions.is_empty());
+    assert_eq!(scannable.first_output_index, Some(41));
+
+    let asked = rpc.asked.lock().expect("not poisoned").clone();
+    assert_eq!(
+        crate::engine::test_support::requested_method(&asked),
+        crate::engine::test_support::method_name::<wire::BlockShow>()
+    );
+    assert_eq!(
+        crate::engine::test_support::requested_params(&asked),
+        serde_json::json!({"height": 3, "pow": false, "prune": true})
     );
 }
 
@@ -195,8 +223,7 @@ fn parse_block_blob_accepts_coinbase_null_with_committed_base() {
     // shekyl-oxide `Block::read` dropped the coinbase committed base and
     // rejected live daemon blocks as `InvalidNode("invalid block")`.
     let block = coinbase_block(5);
-    let blob = hex::encode(block.serialize());
-    let parsed = parse_block_blob(&blob, 5).expect("coinbase-with-base parses");
+    let parsed = parse_block_blob(&block.serialize(), 5).expect("coinbase-with-base parses");
     assert_eq!(parsed.number(), Some(5));
     match &parsed.miner_transaction.ct {
         Ct::Null(base) => {
@@ -211,21 +238,20 @@ fn parse_block_blob_accepts_coinbase_null_with_committed_base() {
 #[test]
 fn parse_block_blob_rejects_height_mismatch() {
     let block = coinbase_block(5);
-    let blob = hex::encode(block.serialize());
     assert!(matches!(
-        parse_block_blob(&blob, 6),
+        parse_block_blob(&block.serialize(), 6),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_block_blob_rejects_non_hex_and_garbage() {
+fn parse_block_blob_rejects_garbage() {
     assert!(matches!(
-        parse_block_blob("zz", 0),
+        parse_block_blob(&[], 0),
         Err(RpcError::InvalidNode(_))
     ));
     assert!(matches!(
-        parse_block_blob("00ff", 0),
+        parse_block_blob(&[0x00, 0xff], 0),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -250,17 +276,9 @@ fn bind_skeleton_round_trips_and_rejects_trailing() {
 }
 
 #[test]
-fn decode_tx_hex_rejects_non_hex() {
-    assert!(matches!(
-        decode_tx_hex("zz", ""),
-        Err(RpcError::InvalidNode(_))
-    ));
-}
-
-#[test]
 fn bind_skeleton_rejects_coinbase_shaped() {
-    // `get_transactions` returns only non-miner txs (the coinbase is embedded in
-    // the block blob and parsed there). A coinbase served here — whether a clean
+    // A block's `tx` and `tx_list` carry only non-miner txs (the coinbase is
+    // embedded in the block's bytes and parsed there). A coinbase served here — whether a clean
     // `[gen] + Null` coinbase or the non-canonical `gen + Fcmp` mix — must be
     // rejected, never fed to the scanner (it would otherwise carry a cleartext
     // `gen` reward output the wallet has no business ingesting from this path).
@@ -316,7 +334,7 @@ fn bind_skeleton_rejects_coinbase_shaped() {
     assert!(gen_fcmp.validate_context_free_pruned().is_err());
     assert!(matches!(
         bind_own(&skeleton(&gen_fcmp.serialize())),
-        Err(RpcError::InvalidNode(_))
+        Err(RpcError::InvalidTransaction(_))
     ));
 }
 
@@ -334,14 +352,14 @@ fn bind_skeleton_rejects_single_output_spend() {
     }
     assert!(matches!(
         bind_own(&skeleton(&tx.serialize())),
-        Err(RpcError::InvalidNode(_))
+        Err(RpcError::InvalidTransaction(_))
     ));
 }
 
 /// A valid pruned non-miner spend: a `ToKey` key-image input, **2 outputs** (the
 /// anti-deanonymization minimum the ingestion validator enforces), with the prunable
 /// proof + pqc_auths dropped. The shared fixture for the `bind_skeleton` /
-/// `parse_tx_batch` tests; `unlock_time` is varied for the block-height-only gate.
+/// `bind_block_txs` tests; `unlock_time` is varied for the block-height-only gate.
 fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
@@ -379,20 +397,19 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     }
 }
 
-/// Hex of a valid pruned non-miner tx that `bind_skeleton` accepts.
+/// The bytes of a valid pruned non-miner tx that `bind_skeleton` accepts.
 ///
-/// Its hash is **not** irrelevant — `parse_tx_batch` binds the body to the
+/// Its hash is **not** irrelevant — `bind_block_txs` binds the body to the
 /// requested txid, so a caller must label this body with [`pruned_id`]'s
 /// derivation rather than a chosen constant. A fixture that invents a hash is
 /// staging the substitution the binding exists to reject.
-fn pruned_tx_hex() -> String {
-    hex::encode(pruned_spend_tx(0).serialize())
+fn pruned_tx_bytes() -> Vec<u8> {
+    pruned_spend_tx(0).serialize()
 }
 
 /// The hash a pruned fixture body actually has, given the fixtures' all-zero
-/// `prunable_hash` and zero `archival_len`. Deriving it rather than picking a label is the point:
-/// `parse_tx_batch` now binds the body, so a fixture that invents a hash is
-/// staging the substitution it is supposed to reject.
+/// `prunable_hash` and zero `archival_size`. Deriving it rather than picking
+/// a label is the point: the binding refuses an invented one.
 fn pruned_id(tx: &Transaction) -> TxHash {
     skeleton(&tx.serialize())
         .txid()
@@ -444,33 +461,17 @@ fn full_spend_tx() -> Transaction {
     tx
 }
 
-/// A reply entry built from the wire type rather than a JSON literal, so
-/// the double cannot describe a shape the daemon does not produce (RK-D1).
-/// The mined arm, because these fixtures stand in for confirmed txs.
-fn tx_entry_with(tx_hash: TxHash, as_hex: &str, pruned_as_hex: &str) -> TxEntry {
-    TxEntry {
-        tx_hash: HashHex::from_bytes(tx_hash.to_bytes()),
-        as_hex: as_hex.to_owned(),
-        pruned_as_hex: pruned_as_hex.to_owned(),
+/// A served transaction built from the wire type rather than a JSON
+/// literal, so the double cannot describe a shape the daemon does not
+/// produce (RK-D1). Null operands: the fixtures' bodies carry none.
+fn block_tx(tx_hash: TxHash, body: Vec<u8>) -> BlockTx {
+    BlockTx {
+        id: HashHex::from_bytes(tx_hash.to_bytes()),
+        body: Bytes(body),
         prunable_hash: HashHex::from_bytes([0u8; 32]),
-        pqc_auth_hash: shekyl_rpc_types::Nullable::NULL,
-        archival_len: 0,
-        double_spend_seen: false,
-        location: shekyl_rpc_types::TxLocation::Mined {
-            block_height: 1,
-            confirmations: 1,
-            block_timestamp: 0,
-            output_indices: Vec::new(),
-        },
+        pqc_auth_hash: Nullable(None),
+        archival_size: Size(0),
     }
-}
-
-fn tx_entry(tx_hash_hex: &str, pruned_hex: &str) -> TxEntry {
-    let bytes: [u8; 32] = hex::decode(tx_hash_hex)
-        .expect("test hash is hex")
-        .try_into()
-        .expect("test hash is 32 bytes");
-    tx_entry_with(TxHash::from_bytes(bytes), "", pruned_hex)
 }
 
 /// **A canonical transaction under a borrowed label is refused.**
@@ -489,11 +490,8 @@ fn a_valid_body_under_the_requested_label_is_refused() {
     assert_ne!(asked_id, pruned_id(&substituted), "the fixture must differ");
 
     // The label is the requested hash; the bytes are another transaction.
-    let txs = vec![tx_entry(
-        &hex::encode(asked_id),
-        &hex::encode(substituted.serialize()),
-    )];
-    let err = parse_tx_batch(&[asked_id], &reply(txs))
+    let txs = vec![block_tx(asked_id, substituted.serialize())];
+    let err = bind_block_txs(&[asked_id], &slots(txs))
         .expect_err("a body that is not the requested transaction must be refused");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -508,10 +506,10 @@ fn a_valid_body_under_the_requested_label_is_refused() {
 fn a_forged_prunable_digest_does_not_rescue_a_body() {
     let tx = pruned_spend_tx(0);
     let real_id = pruned_id(&tx);
-    let mut entry = tx_entry(&hex::encode(real_id), &hex::encode(tx.serialize()));
+    let mut entry = block_tx(real_id, tx.serialize());
     entry.prunable_hash = HashHex::from_bytes([0x77; 32]); // not the fixtures' zero
 
-    let err = parse_tx_batch(&[real_id], &reply(vec![entry]))
+    let err = bind_block_txs(&[real_id], &slots(vec![entry]))
         .expect_err("a different digest yields a different identity");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -527,10 +525,10 @@ fn a_forged_prunable_digest_does_not_rescue_a_body() {
 fn a_forged_archival_length_does_not_rescue_a_body() {
     let tx = pruned_spend_tx(0);
     let real_id = pruned_id(&tx);
-    let mut entry = tx_entry(&hex::encode(real_id), &hex::encode(tx.serialize()));
-    entry.archival_len = 1; // not the fixtures' zero
+    let mut entry = block_tx(real_id, tx.serialize());
+    entry.archival_size = Size(1); // not the fixtures' zero
 
-    let err = parse_tx_batch(&[real_id], &reply(vec![entry]))
+    let err = bind_block_txs(&[real_id], &slots(vec![entry]))
         .expect_err("a different length yields a different identity");
     assert!(
         format!("{err}").contains("a label is not an identity"),
@@ -539,18 +537,15 @@ fn a_forged_archival_length_does_not_rescue_a_body() {
 }
 
 #[test]
-fn parse_tx_batch_accepts_in_order() {
+fn bind_block_txs_accepts_in_order() {
     // Two DISTINCT bodies, each under the hash its own bytes produce. The
     // fixture used to serve one body under two different labels — which is
     // the substitution case, not the happy path, and only passed while the
     // label was the whole check.
     let (tx0, tx1) = (pruned_spend_tx(0), pruned_spend_tx(1));
     let (h0, h1) = (pruned_id(&tx0), pruned_id(&tx1));
-    let txs = vec![
-        tx_entry(&hex::encode(h0), &hex::encode(tx0.serialize())),
-        tx_entry(&hex::encode(h1), &hex::encode(tx1.serialize())),
-    ];
-    let out = parse_tx_batch(&[h0, h1], &reply(txs)).expect("in-order batch parses");
+    let txs = vec![block_tx(h0, tx0.serialize()), block_tx(h1, tx1.serialize())];
+    let out = bind_block_txs(&[h0, h1], &slots(txs)).expect("in-order batch parses");
     assert_eq!(out.len(), 2);
     assert_eq!(
         out.iter()
@@ -562,116 +557,98 @@ fn parse_tx_batch_accepts_in_order() {
 }
 
 #[test]
-fn parse_tx_batch_rejects_reordered_hashes() {
-    // The daemon returns both requested txs but with their `tx_hash` labels
+fn bind_block_txs_rejects_reordered_hashes() {
+    // The daemon returns both requested txs but with their `id` labels
     // in swapped slots. Running global-output-index assignment depends on
     // block order, so a reorder must be rejected even though each tx is
     // individually valid (the adversarial-daemon mis-association case).
     let (h0, h1) = (TxHash::from_bytes([3u8; 32]), TxHash::from_bytes([4u8; 32]));
-    let blob = pruned_tx_hex();
-    let txs = vec![
-        tx_entry(&hex::encode(h1), &blob),
-        tx_entry(&hex::encode(h0), &blob),
-    ];
+    let blob = pruned_tx_bytes();
+    let txs = vec![block_tx(h1, blob.clone()), block_tx(h0, blob)];
     assert!(matches!(
-        parse_tx_batch(&[h0, h1], &reply(txs)),
+        bind_block_txs(&[h0, h1], &slots(txs)),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_tx_batch_rejects_count_mismatch() {
+fn bind_block_txs_rejects_count_mismatch() {
     let (h0, h1) = (TxHash::from_bytes([3u8; 32]), TxHash::from_bytes([4u8; 32]));
-    let blob = pruned_tx_hex();
-    let txs = vec![tx_entry(&hex::encode(h0), &blob)];
+    let txs = vec![block_tx(h0, pruned_tx_bytes())];
     assert!(matches!(
-        parse_tx_batch(&[h0, h1], &reply(txs)),
+        bind_block_txs(&[h0, h1], &slots(txs)),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn a_reply_without_a_tx_hash_label_is_refused_at_the_boundary() {
-    // No `tx_hash` → no association handle → a daemon that omits the label
-    // cannot be order-pinned. This used to be `parse_tx_batch`'s rejection;
-    // with the shared wire type the field is required, so the refusal now
-    // happens when the reply decodes and the malformed entry never reaches
-    // the batch check. The guard moved — this test moved with it rather
-    // than being dropped as "covered elsewhere".
-    let blob = pruned_tx_hex();
+fn a_reply_without_an_id_label_is_refused_at_the_boundary() {
+    // No `id` → no association handle → a daemon that omits the label
+    // cannot be order-pinned. The field is required on the shared wire
+    // type, so the refusal happens when the reply decodes and the
+    // malformed entry never reaches the binding.
     let doc = serde_json::json!({
-        "status": "OK",
-        "txs": [{
-            "as_hex": "", "pruned_as_hex": blob,
-            "prunable_hash": "00".repeat(32), "pqc_auth_hash": null,
-            "in_pool": false, "double_spend_seen": false,
-            "block_height": 1, "confirmations": 1, "block_timestamp": 0
-        }]
-    })
-    .to_string();
+        "body": Bytes(pruned_tx_bytes()),
+        "prunable_hash": "00".repeat(32), "pqc_auth_hash": null, "archival_size": 0,
+    });
     assert!(
-        serde_json::from_str::<shekyl_rpc_types::GetTransactionsResponse>(&doc).is_err(),
-        "an entry with no tx_hash must not decode"
+        serde_json::from_value::<BlockTx>(doc).is_err(),
+        "an entry with no id must not decode"
     );
 }
 
 #[test]
-fn parse_tx_batch_rejects_missing_pruned_blob() {
+fn bind_block_txs_rejects_an_empty_body() {
     let h0 = TxHash::from_bytes([3u8; 32]);
-    let txs = vec![tx_entry_with(h0, "", "")];
     assert!(matches!(
-        parse_tx_batch(&[h0], &reply(txs)),
+        bind_block_txs(&[h0], &slots(vec![block_tx(h0, Vec::new())])),
         Err(RpcError::InvalidNode(_))
     ));
 }
 
 #[test]
-fn parse_tx_batch_empty_is_ok() {
-    let out = parse_tx_batch(&[], &reply(Vec::new())).expect("empty batch parses");
+fn bind_block_txs_empty_is_ok() {
+    let out = bind_block_txs(&[], &[]).expect("empty batch parses");
     assert!(out.is_empty());
 }
 
 /// **A whole body is not the pruned form** (`SB-Q2` item 10). A `prune`
-/// request is answered by the skeleton alone; a daemon that fills `as_hex`
-/// — even with the right transaction, bound to the right id — is refused,
-/// because the wallet must never have to parse `pqc_auths` bytes it did
-/// not ask for, and because the one pruned form is one shape.
+/// request is answered by the skeleton alone; a daemon that serves the
+/// whole body — even the right transaction, under its own operands — is
+/// refused, because the pruned segment must be consumed exactly: the bytes
+/// after the base would read as authentications the skeleton's txid
+/// ignores, and the wallet must never have to parse `pqc_auths` bytes it
+/// did not ask for.
 #[test]
-fn a_whole_body_in_as_hex_is_refused() {
+fn a_whole_body_is_refused() {
     let full = full_spend_tx();
     let (skeleton, id) = served_skeleton(&full);
-    let mut entry = tx_entry_with(id, &hex::encode(full.serialize()), "");
+    let mut entry = block_tx(id, full.serialize());
     entry.prunable_hash = HashHex::from_bytes(skeleton.prunable_hash.to_bytes());
     entry.pqc_auth_hash = skeleton
         .pqc_auth_hash
         .map(|hash| HashHex::from_bytes(hash.to_bytes()))
         .into();
-    entry.archival_len = skeleton.archival_len.to_raw();
-    let err = parse_tx_batch(&[id], &reply(vec![entry]))
+    entry.archival_size = Size(skeleton.archival_len.to_raw());
+    let err = bind_block_txs(&[id], &slots(vec![entry]))
         .expect_err("a whole body answers no prune request");
     assert!(
-        format!("{err}").contains("whole body"),
-        "the refusal names the form, not a parse failure: {err}"
+        format!("{err}").contains("does not bind"),
+        "the refusal is the binding's, not a later parse: {err}"
     );
 }
 
 /// **An archived slot is not the pruned form's answer.** Every transaction
 /// has a skeleton, so `archived` can only appear in a reply to a full-form
-/// request; a `prune` reply carrying one is refused as a whole, before any
-/// body is read.
+/// request; a `prune` reply carrying one is refused.
 #[test]
 fn an_archived_slot_in_a_prune_reply_is_refused() {
-    let tx = pruned_spend_tx(0);
-    let id = pruned_id(&tx);
-    let mut document = reply(vec![tx_entry(
-        &hex::encode(id),
-        &hex::encode(tx.serialize()),
-    )]);
-    document.archived = vec![shekyl_rpc_types::ArchivedTx {
-        tx_hash: HashHex::from_bytes([9u8; 32]),
-        shard: 3,
-    }];
-    let err = parse_tx_batch(&[id], &document).expect_err("an archived slot is refused");
+    let id = TxHash::from_bytes([9u8; 32]);
+    let slot = OrArchived::Archived(ArchivedState::Archived(Archived {
+        id: HashHex::from_bytes(id.to_bytes()),
+        shard: shekyl_rpc_types::kinds::Integer(3),
+    }));
+    let err = bind_block_txs(&[id], &[slot]).expect_err("an archived slot is refused");
     assert!(
         format!("{err}").contains("archived"),
         "the refusal names the slot: {err}"
@@ -692,13 +669,13 @@ fn a_carrying_skeleton_served_without_its_third_operand_does_not_bind() {
         skeleton.pqc_auth_hash.is_some(),
         "the fixture hashes 4-part"
     );
-    bind_skeleton(&skeleton, id, "").expect("the complete skeleton binds");
+    bind_skeleton(&skeleton, id).expect("the complete skeleton binds");
 
     let downgraded = SkeletonTx {
         pqc_auth_hash: None,
         ..skeleton
     };
-    let err = bind_skeleton(&downgraded, id, "")
+    let err = bind_skeleton(&downgraded, id)
         .expect_err("a third operand the prefix needs and was not given is refused");
     assert!(
         format!("{err}").contains("does not bind"),
@@ -724,7 +701,7 @@ fn a_third_operand_for_a_prefix_that_carries_none_is_refused() {
         pqc_auth_hash: Some(PqcAuthHash::from_bytes([0x33; 32])),
         ..served
     };
-    let err = bind_skeleton(&upgraded, id, "")
+    let err = bind_skeleton(&upgraded, id)
         .expect_err("a third operand the prefix cannot carry is refused");
     assert!(
         format!("{err}").contains("carries none"),
@@ -744,29 +721,31 @@ fn bind_skeleton_rejects_timestamp_form_unlock_time() {
     // form is non-canonical (consensus rejects it — GENESIS §9 creation
     // cut); ingestion must refuse it so the scanner never sees it.
     let bad = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL);
-    assert!(matches!(bind_own(&bad), Err(RpcError::InvalidNode(_))));
+    assert!(matches!(
+        bind_own(&bad),
+        Err(RpcError::InvalidTransaction(_))
+    ));
     // The largest block-form value still parses.
     let ok = pruned_skeleton_with_unlock_time(UNLOCK_TIME_BLOCK_SENTINEL - 1);
     assert!(bind_own(&ok).is_ok());
 }
 
+/// The untrusted-daemon size bound on a skeleton: more than `MAX_TX_SIZE`
+/// bytes is refused before it is parsed.
 #[test]
-fn decode_tx_hex_rejects_oversized_hex_before_decode() {
-    // DoS pre-bound: a hex string longer than `2 * MAX_TX_SIZE` is rejected
-    // by length before `hex::decode` allocates. All-hex chars of even
-    // length, so only the length gate (not a decode error) can fire.
-    let oversized = "0".repeat(MAX_TX_SIZE * 2 + 2);
-    assert!(decode_tx_hex(&oversized, "").is_err());
+fn an_oversized_skeleton_is_refused() {
+    assert!(matches!(
+        bind_own(&skeleton(&vec![0u8; MAX_TX_SIZE + 1])),
+        Err(RpcError::InvalidNode(_))
+    ));
 }
 
+/// The size bound on a block: more than `MAX_BLOCK_BLOB_SIZE` bytes is
+/// refused before it is parsed.
 #[test]
-fn parse_block_blob_rejects_oversized_hex_before_decode() {
-    // DoS pre-bound: a hex string longer than `2 * MAX_BLOCK_BLOB_SIZE` is
-    // rejected by length before `hex::decode` allocates. All-hex chars of
-    // even length, so only the length gate (not a decode error) can fire.
-    let oversized = "0".repeat(MAX_BLOCK_BLOB_SIZE * 2 + 2);
+fn parse_block_blob_rejects_an_oversized_block() {
     assert!(matches!(
-        parse_block_blob(&oversized, 0),
+        parse_block_blob(&vec![0u8; MAX_BLOCK_BLOB_SIZE + 1], 0),
         Err(RpcError::InvalidNode(_))
     ));
 }
@@ -777,42 +756,8 @@ fn parse_block_blob_rejects_timestamp_form_coinbase() {
     // the timestamp form is rejected at ingestion too.
     let mut block = coinbase_block(5);
     block.miner_transaction.prefix.unlock_time = UNLOCK_TIME_BLOCK_SENTINEL;
-    let blob = hex::encode(block.serialize());
     assert!(matches!(
-        parse_block_blob(&blob, 5),
+        parse_block_blob(&block.serialize(), 5),
         Err(RpcError::InvalidNode(_))
     ));
-}
-
-#[test]
-fn missed_tx_hashes_survive_the_typed_reply() {
-    // `missed_tx` used to be walked entry-by-entry by `parse_missed_tx`.
-    // It is `Vec<HashHex>` on the shared reply type now, so the walk is
-    // gone — but the two properties it existed for are not, and they are
-    // asserted here against the type that replaced it: valid hashes come
-    // through in order, and a malformed entry is refused rather than
-    // silently dropped, which would shrink the reported missing set and
-    // misreport which transactions are absent.
-    let (h0, h1) = ([3u8; 32], [4u8; 32]);
-    let doc = |entries: String| format!(r#"{{"status":"OK","missed_tx":[{entries}]}}"#);
-    let ok = doc(format!("\"{}\",\"{}\"", hex::encode(h0), hex::encode(h1)));
-    let parsed: shekyl_rpc_types::GetTransactionsResponse =
-        serde_json::from_str(&ok).expect("valid hashes decode");
-    assert_eq!(
-        parsed
-            .missed_tx
-            .iter()
-            .copied()
-            .map(shekyl_rpc_types::HashHex::to_bytes)
-            .collect::<Vec<_>>(),
-        vec![h0, h1]
-    );
-
-    for bad in ["\"zz\"", "\"00\"", "7", "null"] {
-        let malformed = doc(format!("\"{}\",{bad}", hex::encode(h0)));
-        assert!(
-            serde_json::from_str::<shekyl_rpc_types::GetTransactionsResponse>(&malformed).is_err(),
-            "a malformed missed_tx entry ({bad}) must be refused, not dropped"
-        );
-    }
 }

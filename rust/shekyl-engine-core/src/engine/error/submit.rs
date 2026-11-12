@@ -57,7 +57,7 @@ pub enum TerminalErrorKind {
     Malformed,
 
     /// A consensus row refused the transaction against the chain at the
-    /// pool's commit (`RejectCause::ConsensusRule`): the bytes are sound and
+    /// pool's commit (`Rejection::ConsensusRule`): the bytes are sound and
     /// the chain decides. Terminal; the record is held to its end date
     /// (BD-Q3 Rule 2) and the user is told the row.
     ConsensusRule {
@@ -65,13 +65,13 @@ pub enum TerminalErrorKind {
         row: CenRowName,
     },
     /// The daemon rejected with a cause this wallet build does not
-    /// know ([`RejectCause::Unrecognized`] per the §2.3 version-skew
+    /// know ([`Rejection::Unrecognized`] per the §2.3 version-skew
     /// rules — an additive daemon-side cause landed before this wallet
     /// updated). Fail-safe disposition per `DAEMON_SUBMIT_VERDICT.md`
     /// §2.5: release + one-shot rebuild, same shape as [`Self::Malformed`]
     /// but named distinctly so audit and telemetry can see skew events.
     ///
-    /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
+    /// [`Rejection::Unrecognized`]: shekyl_rpc_client::Rejection::Unrecognized
     Unrecognized,
 }
 

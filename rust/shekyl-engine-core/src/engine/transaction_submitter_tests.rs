@@ -5,11 +5,11 @@
 
 //! Submit-path tests: the transport-agnostic verdict → outcome →
 //! error-class mapping regressions (`DAEMON_SUBMIT_VERDICT.md` §2.1 /
-//! §2.5, exercised directly against `SubmitVerdict` values — no live
+//! §2.5, exercised directly against `Verdict` values — no live
 //! daemon), plus the per-`P` `PTransactionSubmitter`'s
 //! ambiguous-failure + username-non-leak proof (SP-T4a).
 use super::*;
-use shekyl_rpc_client::PoolRelay;
+use shekyl_rpc_client::Publication;
 
 /// Every identity-bearing verdict maps 1:1 and carries the locally
 /// computed hash — never a daemon-supplied id.
@@ -17,39 +17,75 @@ use shekyl_rpc_client::PoolRelay;
 fn verdicts_map_structurally() {
     let hash = TxHash::from_bytes([7u8; 32]);
     assert_eq!(
-        submit_outcome_from_verdict(&SubmitVerdict::Accepted, hash),
+        submit_outcome_from_verdict(&Verdict::Accepted, hash),
         TxSubmitOutcome::Submitted { hash }
     );
     for relay in [
-        PoolRelay::Held,
-        PoolRelay::HeldOverdue,
-        PoolRelay::Published,
-        PoolRelay::Untracked,
+        Publication::Held,
+        Publication::Overdue,
+        Publication::Public,
+        Publication::Untracked,
     ] {
         assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInPool { relay }, hash),
+            submit_outcome_from_verdict(&Verdict::AlreadyInPool { publication: relay }, hash),
             TxSubmitOutcome::AlreadyInPool { hash, relay },
             "the relay state passes through; the wallet does not judge it"
         );
     }
     assert_eq!(
-        submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain { height: 42 }, hash),
+        submit_outcome_from_verdict(
+            &Verdict::AlreadyInChain {
+                mined_height: shekyl_rpc_types::kinds::Height(42)
+            },
+            hash
+        ),
         TxSubmitOutcome::AlreadyInChain { hash, height: 42 },
         "the F40 height passes through the projection untouched"
     );
     assert_eq!(
         submit_outcome_from_verdict(
-            &SubmitVerdict::Rejected {
-                cause: RejectCause::Malformed,
-                row: None,
+            &Verdict::Rejected {
+                cause: Rejection::Malformed,
             },
             hash
         ),
         TxSubmitOutcome::Rejected {
-            cause: RejectCause::Malformed,
-            row: None,
+            cause: Rejection::Malformed,
         }
     );
+}
+
+/// **The consensus row rides inside its cause** (IG-Q76): a
+/// `consensus-rule` refusal names the row, and the wallet carries it to the
+/// terminal kind whole. A row this wallet cannot carry whole is the
+/// fail-safe `Unrecognized`, never a truncated name.
+///
+/// The edit that turns this red is `submitter_error_from_cause` ignoring the
+/// cause's payload.
+#[test]
+fn a_consensus_refusal_carries_its_row() {
+    let hash = TxHash::from_bytes([3u8; 32]);
+    let refused = |row: &str| {
+        let verdict = Verdict::Rejected {
+            cause: Rejection::ConsensusRule(shekyl_rpc_types::kinds::Text(row.to_owned())),
+        };
+        outcome_to_result(submit_outcome_from_verdict(&verdict, hash)).expect_err("a refusal")
+    };
+    assert!(
+        matches!(
+            refused("CEN-J15"),
+            SubmitterError::RejectedTerminal {
+                kind: TerminalErrorKind::ConsensusRule { row }
+            } if row.as_str() == "CEN-J15"
+        ),
+        "the row reaches the terminal kind"
+    );
+    assert!(matches!(
+        refused("CEN-A-NAME-LONGER-THAN-SIXTEEN"),
+        SubmitterError::RejectedTerminal {
+            kind: TerminalErrorKind::Unrecognized
+        }
+    ));
 }
 
 /// All three identity-bearing outcomes resolve `Ok`, split by
@@ -71,10 +107,10 @@ fn identity_outcomes_resolve_ok_split_by_disposition() {
         }
     );
     for relay in [
-        PoolRelay::Held,
-        PoolRelay::HeldOverdue,
-        PoolRelay::Published,
-        PoolRelay::Untracked,
+        Publication::Held,
+        Publication::Overdue,
+        Publication::Public,
+        Publication::Untracked,
     ] {
         assert_eq!(
             outcome_to_result(TxSubmitOutcome::AlreadyInPool { hash, relay })
@@ -98,16 +134,18 @@ fn identity_outcomes_resolve_ok_split_by_disposition() {
 #[test]
 fn terminal_causes_map_to_terminal_kinds() {
     for (cause, expected) in [
-        (RejectCause::Malformed, TerminalErrorKind::Malformed),
-        (RejectCause::FeeTooLow, TerminalErrorKind::FeeTooLow),
+        (Rejection::Malformed, TerminalErrorKind::Malformed),
+        (Rejection::FeeTooLow, TerminalErrorKind::FeeTooLow),
         (
-            RejectCause::DoubleSpendConflict,
+            Rejection::DoubleSpendConflict,
             TerminalErrorKind::DoubleSpend,
         ),
-        (RejectCause::Unrecognized, TerminalErrorKind::Unrecognized),
+        (Rejection::Unrecognized, TerminalErrorKind::Unrecognized),
     ] {
-        let err = outcome_to_result(TxSubmitOutcome::Rejected { cause, row: None })
-            .expect_err("terminal cause");
+        let err = outcome_to_result(TxSubmitOutcome::Rejected {
+            cause: cause.clone(),
+        })
+        .expect_err("terminal cause");
         assert!(
             matches!(err, SubmitterError::RejectedTerminal { kind } if kind == expected),
             "cause {cause:?} must map to terminal kind {expected:?}, got {err:?}"
@@ -120,18 +158,20 @@ fn terminal_causes_map_to_terminal_kinds() {
 #[test]
 fn retryable_causes_map_to_retryable_class() {
     for (cause, expected) in [
-        (RejectCause::StaleRoot, RetryableRejectCause::StaleRoot),
+        (Rejection::StaleRoot, RetryableRejectCause::StaleRoot),
         (
-            RejectCause::ReferenceTooRecent,
+            Rejection::ReferenceTooRecent,
             RetryableRejectCause::ReferenceTooRecent,
         ),
         (
-            RejectCause::ReferenceNotFound,
+            Rejection::ReferenceUnknown,
             RetryableRejectCause::ReferenceNotFound,
         ),
     ] {
-        let err = outcome_to_result(TxSubmitOutcome::Rejected { cause, row: None })
-            .expect_err("retryable cause");
+        let err = outcome_to_result(TxSubmitOutcome::Rejected {
+            cause: cause.clone(),
+        })
+        .expect_err("retryable cause");
         assert!(
             matches!(
                 err,

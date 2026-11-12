@@ -988,11 +988,9 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         // failure or a refusal is a reachable daemon outage (retryable), a
         // malformed response is an untrusted-input rejection (internal).
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(_) => {
-                UnstakeError::DaemonUnreachable {
-                    detail: e.to_string(),
-                }
-            }
+            EmissionSourceError::Rpc(_) => UnstakeError::DaemonUnreachable {
+                detail: e.to_string(),
+            },
             EmissionSourceError::Malformed(_) => UnstakeError::Engine {
                 context: "bond record fetch",
                 detail: e.to_string(),

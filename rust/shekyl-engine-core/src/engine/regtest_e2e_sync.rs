@@ -169,18 +169,14 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     const MINED: u64 = 20;
     const LINK_WAIT: Duration = Duration::from_secs(90);
 
-    async fn incoming_on(daemon: &RegtestDaemon) -> Vec<shekyl_rpc_types::ConnectionInfo> {
-        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> = daemon
+    async fn incoming_on(daemon: &RegtestDaemon) -> Vec<wire::p2p::Connection> {
+        daemon
             .rpc
-            .json_rpc_call("get_connections", None)
+            .call::<wire::PeerConnections>(NoParams)
             .await
-            .expect("get_connections");
-        reply
-            .into_running()
-            .expect("a linked daemon's P2P runs; it must not report offline")
-            .connections
+            .expect("peer_connections")
             .into_iter()
-            .filter(|c| c.incoming)
+            .filter(|c| c.inbound)
             .collect()
     }
 
@@ -206,13 +202,13 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     // pass after the state, so the miner is asked rather than the flag
     // (`get_info` said synchronized while the posting still read
     // `no_view`, observed 2026-10-29). The refusal retried is the
-    // wire-pinned `mine.not_synced`, for the moment `B`'s session opens
+    // wire-pinned `mine.syncing`, for the moment `B`'s session opens
     // and its claim has not yet arrived (the opening, CS-Q2 step 8).
     let deadline = Instant::now() + LINK_WAIT;
     loop {
         match try_generate_blocks(&a.rpc, 1).await {
             Ok(_) => break,
-            Err(e) if format!("{e:?}").contains("mine.not_synced") && Instant::now() < deadline => {
+            Err(e) if format!("{e:?}").contains("mine.syncing") && Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             Err(e) => a.panic_with_log(
@@ -227,11 +223,7 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
         MINED + 1,
         "A mined {MINED} blocks on genesis"
     );
-    let before: BTreeSet<String> = incoming_on(&b)
-        .await
-        .into_iter()
-        .map(|c| c.connection_id)
-        .collect();
+    let before: BTreeSet<String> = incoming_on(&b).await.into_iter().map(|c| c.id.0).collect();
     eprintln!(
         "A at block count {}; B holds {} incoming connection(s) before the restart",
         MINED + 1,
@@ -244,21 +236,25 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
     let deadline = Instant::now() + LINK_WAIT;
     loop {
         let incoming = incoming_on(&b).await;
-        let fresh: Vec<&shekyl_rpc_types::ConnectionInfo> = incoming
+        let fresh: Vec<&wire::p2p::Connection> = incoming
             .iter()
-            .filter(|c| !before.contains(&c.connection_id))
+            .filter(|c| !before.contains(&c.id.0))
             .collect();
-        if let Some(c) = fresh.iter().find(|c| c.height == Some(MINED + 1)) {
+        // The claim is the tip, an ordinal: block count `MINED + 1`.
+        if let Some(c) = fresh
+            .iter()
+            .find(|c| c.height.0.map(|h| h.0) == Some(MINED))
+        {
             eprintln!(
-                "B: fresh incoming connection {} from {} claims height {:?} — the restarted \
+                "B: fresh incoming connection {} from {:?} claims tip {:?} — the restarted \
                  dialer handed B its tip",
-                c.connection_id, c.address, c.height
+                c.id.0, c.endpoint, c.height
             );
             break;
         }
         let seen = fresh
             .iter()
-            .map(|c| format!("{} height {:?}", c.address, c.height))
+            .map(|c| format!("{:?} tip {:?}", c.endpoint, c.height))
             .collect::<Vec<_>>()
             .join(", ");
         if Instant::now() >= deadline {
@@ -266,8 +262,8 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
                 "the restarted A never handed B its tip",
                 format!(
                     "after {LINK_WAIT:?}: fresh incoming connections on B: [{seen}] (wanted one at \
-                     height Some({})); B's log tail:\n{}",
-                    MINED + 1,
+                     tip Some({})); B's log tail:\n{}",
+                    MINED,
                     b.log_tail()
                 ),
             );
@@ -363,21 +359,16 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one testnet daemon"]
 async fn an_offline_testnet_node_is_synced_at_open() {
     let daemon = RegtestDaemon::start_on_testnet().await;
-    let info = daemon
-        .rpc
-        .json_rpc_call::<GetInfoResponse>("get_info", None)
-        .await
-        .expect("get_info");
     assert!(
-        info.health.synchronized,
+        daemon.status().await.synchronized,
         "an offline node is not synchronized at open"
     );
     // Readiness waited for this post; the test states it as its own
     // subject: a synced node's follower posts a job, an unsynced one's
-    // answers `mine.not_synced` here.
+    // answers `mine.syncing` here.
     daemon
         .rpc
-        .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
+        .call::<wire::BlockTemplate>(NoParams)
         .await
         .expect("an offline node posts a template at open");
 }
@@ -390,7 +381,7 @@ async fn an_offline_testnet_node_is_synced_at_open() {
 /// testnet too.
 ///
 /// Red before the declaration was built: `generateblocks` was refused
-/// `mine.not_synced` past the window.
+/// `mine.syncing` past the window.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one regtest daemon"]
 async fn an_offline_regtest_node_mines() {
@@ -404,7 +395,7 @@ async fn an_offline_regtest_node_mines() {
         match try_generate_blocks(&daemon.rpc, 1).await {
             Ok(mined) => break mined,
             Err(e)
-                if ["mine.starting", "mine.not_synced"]
+                if ["mine.starting", "mine.syncing"]
                     .iter()
                     .any(|code| format!("{e:?}").contains(code))
                     && Instant::now() < posted =>
@@ -436,7 +427,7 @@ async fn an_offline_regtest_node_mines() {
 ///
 /// Red before the declaration was built: when its last peer left, the
 /// node published `NoView` and `generateblocks` was refused
-/// `mine.not_synced`. A regtest node opened `Synced` then, by network, so
+/// `mine.syncing`. A regtest node opened `Synced` then, by network, so
 /// the first leg alone does not tell the two apart.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; two daemons"]
@@ -464,7 +455,7 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
         match try_generate_blocks(&node.rpc, MINED).await {
             Ok(_) => break,
             Err(e)
-                if ["mine.starting", "mine.not_synced"]
+                if ["mine.starting", "mine.syncing"]
                     .iter()
                     .any(|code| format!("{e:?}").contains(code))
                     && Instant::now() < posted =>
@@ -515,13 +506,12 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
     drop(peer);
     let left = Instant::now() + Duration::from_secs(60);
     loop {
-        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> = node
+        let info = node
             .rpc
-            .json_rpc_call("sync_info", None)
+            .call::<wire::SyncStatus>(NoParams)
             .await
-            .expect("sync_info");
-        let info = reply.into_running().expect("a linked daemon's P2P runs");
-        if info.peers.is_empty() {
+            .expect("sync_status");
+        if info.session.is_empty() {
             break;
         }
         assert!(Instant::now() < left, "the peer's session never closed");
@@ -532,7 +522,7 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
         match try_generate_blocks(&node.rpc, 1).await {
             Ok(_) => break,
             Err(e)
-                if ["mine.starting", "mine.not_synced"]
+                if ["mine.starting", "mine.syncing"]
                     .iter()
                     .any(|code| format!("{e:?}").contains(code))
                     && Instant::now() < mined =>
@@ -564,15 +554,12 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     const RELAYED_WITHIN: Duration = Duration::from_secs(20);
 
     async fn peers_of(daemon: &RegtestDaemon) -> usize {
-        let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::SyncInfoResponse> = daemon
+        daemon
             .rpc
-            .json_rpc_call("sync_info", None)
+            .call::<wire::SyncStatus>(NoParams)
             .await
-            .expect("sync_info");
-        reply
-            .into_running()
-            .expect("a linked daemon's P2P runs")
-            .peers
+            .expect("sync_status")
+            .session
             .len()
     }
 
@@ -631,7 +618,7 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
         match try_generate_blocks(&a.rpc, 1).await {
             Ok(_) => break,
             Err(e)
-                if ["mine.starting", "mine.not_synced"]
+                if ["mine.starting", "mine.syncing"]
                     .iter()
                     .any(|code| format!("{e:?}").contains(code))
                     && Instant::now() < posted =>
@@ -649,15 +636,9 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     let next = a.height().await;
     let deadline = Instant::now() + Duration::from_secs(30);
     let blob = loop {
-        if let Ok(template) = a
-            .rpc
-            .json_rpc_call::<serde_json::Value>("get_block_template", Some(json!({})))
-            .await
-        {
-            if template["height"].as_u64() == Some(next) {
-                if let Some(blob) = template["blocktemplate_blob"].as_str() {
-                    break blob.to_owned();
-                }
+        if let Ok(template) = a.rpc.call::<wire::BlockTemplate>(NoParams).await {
+            if template.height.0 == next {
+                break template.body;
             }
         }
         assert!(
@@ -668,12 +649,11 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
     };
     let submitted = a
         .rpc
-        .json_rpc_call::<serde_json::Value>("submit_block", Some(json!({ "body": blob })))
+        .call::<wire::BlockSubmit>(wire::block::BlockBody { body: blob })
         .await
-        .unwrap_or_else(|e| {
-            a.panic_with_log("submit_block refused the template", format!("{e:?}"))
-        });
-    let submitted = submitted["block_id"].as_str().expect("block_id").to_owned();
+        .unwrap_or_else(|e| a.panic_with_log("block_submit refused the template", format!("{e:?}")))
+        .hash
+        .to_string();
     assert_eq!(
         a.last_block_hash().await,
         submitted,

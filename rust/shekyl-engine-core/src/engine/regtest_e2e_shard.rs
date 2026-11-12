@@ -205,11 +205,7 @@ pub(super) async fn close_shard_through_the_daemon(
     let mut blocks = 0u64;
     let listed = loop {
         let coverage = daemon.shard_coverage().await;
-        if coverage
-            .shards
-            .iter()
-            .any(|row| row.shard_id == shard.to_raw())
-        {
+        if coverage.shard.iter().any(|row| row.id.0 == shard.to_raw()) {
             break coverage;
         }
         assert!(
@@ -218,8 +214,8 @@ pub(super) async fn close_shard_through_the_daemon(
              {archival_bytes}/{target_bytes} archival bytes; coverage as of {} lists {} \
              final shard(s), crossed in {crossed_in:?})",
             shard.to_raw(),
-            coverage.as_of_height,
-            coverage.frozen_count,
+            coverage.height.0,
+            coverage.frozen_count.0,
         );
         if archival_bytes < target_bytes {
             for _ in 0..FILL_SPENDS_PER_BLOCK {
@@ -260,7 +256,7 @@ pub(super) async fn close_shard_through_the_daemon(
                  final shard(s) at tip {tip}, {cap} + 8 blocks later: the fold and \
                  `Transaction::archival_len` disagree",
                 shard.to_raw(),
-                coverage.frozen_count,
+                coverage.frozen_count.0,
             );
         }
         if blocks.is_multiple_of(4) {
@@ -268,17 +264,17 @@ pub(super) async fn close_shard_through_the_daemon(
                 "shard fill: tip {}, {spends} spends, {archival_bytes}/{target_bytes} archival \
                  bytes, {} final shard(s), {:?} elapsed",
                 daemon.height().await,
-                coverage.frozen_count,
+                coverage.frozen_count.0,
                 started.elapsed()
             );
         }
     };
     let row = listed
-        .shards
+        .shard
         .iter()
-        .find(|row| row.shard_id == shard.to_raw())
+        .find(|row| row.id.0 == shard.to_raw())
         .expect("the loop exited on the listing");
-    let close_height = row.freeze_height;
+    let close_height = row.freeze_height.0;
     if let Some(crossed) = crossed_in.filter(|c| *c != u64::MAX) {
         assert_eq!(
             close_height,
@@ -292,7 +288,7 @@ pub(super) async fn close_shard_through_the_daemon(
         "shard {} closed at {close_height} and final as of {} ({spends} spends, {archival_bytes} \
          archival bytes, {blocks} fill blocks, {:?} elapsed)",
         shard.to_raw(),
-        listed.as_of_height,
+        listed.height.0,
         started.elapsed()
     );
 
@@ -352,11 +348,14 @@ pub(super) async fn close_shard_through_the_daemon(
     for _ in 0..8 {
         let coverage = daemon.shard_coverage().await;
         // The wire's epoch is 0 both before any pass and after the pass
-        // of epoch 0; the settled epoch's budget row exists only after a
-        // pass (the close writes it; the emission walk pins it positive).
-        let watermark = (coverage.settled_epoch > 0 || coverage.budget_atomic > 0)
-            .then_some(coverage.settled_epoch);
-        watermark_seen = Some((coverage.as_of_height, watermark, coverage.budget_atomic));
+        // of epoch 0; the budget is `null` until the first pass writes it.
+        let budget = coverage
+            .budget
+            .0
+            .map(|budget| budget.to_atomic_units().to_raw());
+        let watermark =
+            (coverage.settled_epoch.0 > 0 || budget.is_some()).then_some(coverage.settled_epoch.0);
+        watermark_seen = Some((coverage.height.0, watermark, budget));
         if watermark.is_some_and(|settled| settled >= priced_by_epoch) {
             break;
         }
@@ -367,7 +366,7 @@ pub(super) async fn close_shard_through_the_daemon(
         watermark.is_some_and(|settled| settled >= priced_by_epoch),
         "the slash pass of epoch {priced_by_epoch} (the block at {pass_height}) must have \
          priced shard {} (closed {close_height}, final from {final_for_a_pass_at}); the \
-         coverage as of {as_of} reports watermark {watermark:?}, budget {budget}",
+         coverage as of {as_of} reports watermark {watermark:?}, budget {budget:?}",
         shard.to_raw()
     );
     eprintln!(

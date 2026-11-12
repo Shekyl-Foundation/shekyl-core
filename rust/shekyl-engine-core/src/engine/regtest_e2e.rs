@@ -51,14 +51,16 @@ fn regtest_expectation() -> super::DaemonExpectation {
     }
 }
 
-use serde::Deserialize;
 use serde_json::json;
-use shekyl_chain_ingest::source::{Injection, ServeCredit};
-use shekyl_rpc_client::Rpc;
+use shekyl_chain_ingest::source::Injection;
+use shekyl_rpc_client::{wire, Rpc};
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::mining::GetMinerDataResponse;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse, GetInfoResponse};
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId, TxHash};
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::kinds::{Count, NoParams};
+use shekyl_rpc_types::wire::block::{BlockSelect, BlockShowSelect, HeaderSelect};
+use shekyl_rpc_types::wire::daemon::DaemonStatus;
+use shekyl_rpc_types::wire::shared::Selector;
+use shekyl_types::{BlockCount, ShardId, TxHash};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -288,11 +290,12 @@ enum Peering {
     },
 }
 
-/// `generateblocks` result fields we care about.
-#[derive(Deserialize, Debug)]
+/// What a `dev_block_generate` reports, in the harness's terms.
+#[derive(Debug)]
 pub(super) struct GenerateBlocksResp {
+    /// The chain's block count after the generate.
     height: u64,
-    #[serde(default)]
+    /// The new blocks' hashes, lowercase hex.
     blocks: Vec<String>,
 }
 
@@ -840,7 +843,7 @@ impl RegtestDaemon {
         let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
-        // Base URL only — `Rpc::json_rpc_call` appends the `json_rpc` route itself.
+        // Base URL only — `Rpc::call` appends the `json_rpc` route itself.
         // Long timeout: `generate_blocks` late in a deep-tree mine takes well over
         // the 30s default (each block ~2.5s; the depth-3 mine is ~750 blocks).
         let rpc = HttpRpc::with_custom_timeout(
@@ -875,19 +878,15 @@ impl RegtestDaemon {
         daemon
     }
 
-    /// Poll `get_miner_data` until the daemon has posted a job (or time
+    /// Poll `block_template` until the daemon has posted a job (or time
     /// out). An offline daemon posts a template once its follower has read
-    /// `Synced`; until then `generateblocks` is refused `mine.starting`,
-    /// which is the daemon's honest answer and not a test's finding. Ready
-    /// is the first posted job.
+    /// `Synced`; until then `dev_block_generate` is refused, which is the
+    /// daemon's honest answer and not a test's finding. Ready is the first
+    /// posted job.
     async fn await_posted(&self, deadline: Instant, log_path: &std::path::Path) {
         let mut last = String::new();
         while Instant::now() < deadline {
-            match self
-                .rpc
-                .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
-                .await
-            {
+            match self.rpc.call::<wire::BlockTemplate>(NoParams).await {
                 Ok(_) => return,
                 Err(e) => last = format!("{e:?}"),
             }
@@ -912,25 +911,16 @@ impl RegtestDaemon {
                 let tail = log_tail(&log_path);
                 panic!("daemon exited early ({status}) before RPC became ready; log tail:\n{tail}");
             }
-            match self
-                .rpc
-                .json_rpc_call::<GetInfoResponse>("get_info", None)
-                .await
-            {
-                Ok(info) => {
+            match self.rpc.call::<wire::DaemonStatus>(NoParams).await {
+                Ok(status) => {
                     // The harness reads the P2P state, not a count: a daemon
                     // started offline says so, and one whose P2P runs
-                    // reports its counts (Rick, 2026-10-14).
-                    let state = info
-                        .peers
-                        .shown()
-                        .expect("the harness's main listener is shown Peers");
+                    // says whether it has a peer (Rick, 2026-10-14).
                     assert_eq!(
-                        matches!(state, shekyl_rpc_types::InfoP2p::Offline),
-                        self.offline,
-                        "get_info's P2P state must be the daemon's configuration; got {state:?}"
+                        status.offline, self.offline,
+                        "daemon_status's P2P state must be the daemon's configuration"
                     );
-                    assert_eq!(info.health.p2p.is_offline(), self.offline);
+                    assert_eq!(status.peered.0.is_none(), self.offline);
                     // The armed row is set on regtest and the daemon said so
                     // at start (IG-8's announcement, written before RPC
                     // binds); a testnet daemon is not armed and says nothing.
@@ -959,214 +949,160 @@ impl RegtestDaemon {
         );
     }
 
+    /// The daemon's state, as the harness's listener is told it.
+    pub(super) async fn status(&self) -> DaemonStatus {
+        self.rpc
+            .call::<wire::DaemonStatus>(NoParams)
+            .await
+            .expect("daemon_status")
+    }
+
+    /// The chain's block **count**: the tip's height plus one.
     pub(super) async fn height(&self) -> u64 {
-        self.rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
-            .await
-            .expect("get_info")
-            .health
-            .height
+        self.status().await.height.0 + 1
     }
 
-    /// The tip's hash, from `get_info`: what the chain holds, read whether
-    /// or not the node is synchronized. `get_last_block_header` refuses a
-    /// node that is catching up to a peer's claim, which a node taking a
-    /// relayed block is for the moment between the claim and the block.
+    /// The tip's hash, from `daemon_status`: what the chain holds, read
+    /// whether or not the node is synchronized. `block_header_show` of the
+    /// tip refuses a node that is catching up to a peer's claim, which a
+    /// node taking a relayed block is for the moment between the claim and
+    /// the block.
     pub(super) async fn top_block_hash(&self) -> String {
-        self.rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
-            .await
-            .expect("get_info")
-            .health
-            .top_block_hash
-            .to_string()
+        self.status().await.hash.to_string()
     }
 
-    /// The accepting daemon's own version string (`get_info.version`).
+    /// The accepting daemon's own revision (`daemon_status.revision`).
     ///
     /// Recorded into the live-oracle capture as provenance: a chain-attested
     /// fixture is only as meaningful as the identity of the node that attested
     /// it, and this crate's version is not that identity.
     pub(super) async fn version(&self) -> String {
-        self.rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
+        self.status()
             .await
-            .expect("get_info")
-            .node
+            .revision
             .shown()
             .expect("the harness's own listener is shown Status")
-            .version
-            .clone()
+            .0
     }
 
     /// Every transaction this daemon holds in its pool, broadcast or not —
     /// the drain loop's condition and the pop legs' return-to-pool
     /// observable.
     ///
-    /// `get_info` reports the pool as two counts: the entries the node has
-    /// broadcast, told to every caller, and the entries it has not yet
-    /// broadcast, told only to the host's administrator (RK-Q10). Both
-    /// callers of this mean "everything", and a transaction a wallet has
-    /// just submitted sits in the second count until its stem ends, so
-    /// this is their sum. The harness talks to the unrestricted listener,
-    /// which stands in for the host until the RPC channel exists; a reply
-    /// without the host part would mean it was answered as someone else,
-    /// and is a failure, never a zero.
-    /// The tip's hash, from `get_last_block_header`.
+    /// The tip's hash, from `block_header_show` of the tip.
     pub(super) async fn last_block_hash(&self) -> String {
-        let res: serde_json::Value = self
-            .rpc
-            .json_rpc_call("get_last_block_header", Some(json!({})))
+        self.rpc
+            .call::<wire::BlockHeaderShow>(HeaderSelect(BlockSelect {
+                select: Selector::Tip,
+                pow: false,
+                prune: None,
+            }))
             .await
-            .expect("get_last_block_header");
-        res["block_header"]["hash"]
-            .as_str()
-            .expect("the tip's hash")
-            .to_owned()
+            .expect("block_header_show")
+            .hash
+            .to_string()
     }
 
+    /// Every transaction this daemon holds in its pool, public or not —
+    /// the drain loop's condition and the pop legs' return-to-pool
+    /// observable.
+    ///
+    /// `daemon_status` reports the pool as two counts: the entries the node
+    /// has made public, told to every caller, and the entries it has not,
+    /// told only to the host (RT-O9.3). Both callers of this mean
+    /// "everything", and a transaction a wallet has just submitted sits in
+    /// the second count until its stem ends, so this is their sum. The
+    /// harness talks to the daemon as its host; a reply without the host
+    /// part would mean it was answered as someone else, and is a failure,
+    /// never a zero.
     pub(super) async fn tx_pool_size(&self) -> u64 {
-        let info = self
-            .rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
-            .await
-            .expect("get_info");
-        let unbroadcast = info
-            .host
+        let status = self.status().await;
+        let private = status
+            .txpool_private_count
             .shown()
-            .expect("the harness's listener is the host's, and is told the host-only part")
-            .tx_pool_unbroadcast_count
-            .expect("the harness's pool is live");
-        info.pool
-            .tx_pool_size()
+            .expect("the harness is the host, and is told the host-only part")
+            .0
             .expect("the harness's pool is live")
-            .checked_add(unbroadcast)
+            .0;
+        status
+            .txpool_count
+            .0
+            .expect("the harness's pool is live")
+            .0
+            .checked_add(private)
             .expect("two pool counts fit a u64")
     }
 
-    /// The C++'s `(effective median, block-weight limit)` in force for the
-    /// next block, as `get_info` reports them.
+    /// The `(median, block-weight limit)` in force for the next block, as
+    /// `daemon_status` reports them.
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
-        let info = self
-            .rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
+        let status = self.status().await;
+        (status.block_weight_median.0, status.block_weight_max.0)
+    }
+
+    /// The block at `height`, whole.
+    pub(super) async fn block_at(&self, height: u64) -> wire::block::Block {
+        self.rpc
+            .call::<wire::BlockShow>(BlockShowSelect(BlockSelect {
+                select: Selector::Height(shekyl_rpc_types::kinds::Height(height)),
+                pow: false,
+                prune: Some(false),
+            }))
             .await
-            .expect("get_info");
-        (
-            info.chain.block_weight_median,
-            info.chain.block_weight_limit,
-        )
+            .unwrap_or_else(|e| panic!("block_show {height}: {e:?}"))
+    }
+
+    /// The block named by `hash`, whole.
+    async fn block_by_hash(&self, hash: &str) -> wire::block::Block {
+        self.rpc
+            .call::<wire::BlockShow>(BlockShowSelect(BlockSelect {
+                select: Selector::Hash(HashHex::from_hex(hash).expect("a block hash")),
+                pow: false,
+                prune: Some(false),
+            }))
+            .await
+            .expect("block_show")
     }
 
     /// Non-coinbase transaction hashes carried by the block named by `hash`
-    /// (lowercase hex, as `generateblocks` returns them).
+    /// (lowercase hex, as `dev_block_generate` returns them).
     ///
-    /// Keyed by hash rather than by height on purpose: `generateblocks` hands
-    /// back the hashes of the blocks it actually connected, so this asks about
-    /// *that* block instead of re-deriving its index from a chain height that
-    /// counts blocks (tip index = `height() - 1`) and would be one off.
+    /// Keyed by hash rather than by height on purpose: `dev_block_generate`
+    /// hands back the hashes of the blocks it actually connected, so this
+    /// asks about *that* block instead of re-deriving its index from a
+    /// chain count that would be one off.
     ///
-    /// Uses the production [`GetBlockResponse`] — the same type
-    /// `block_fetch` already deserializes — so a renamed `tx_hashes` field
-    /// fails here the same way it fails the wallet, instead of defaulting to
-    /// an empty vec and looking like "a block connected without the spend".
-    pub(super) async fn block_tx_hashes(&self, hash: &str) -> Vec<shekyl_rpc_types::HashHex> {
-        let res: GetBlockResponse = self
-            .rpc
-            .json_rpc_call(
-                "get_block",
-                Some(
-                    serde_json::to_value(GetBlockRequest {
-                        hash: hash.to_owned(),
-                        height: 0,
-                        fill_pow_hash: false,
-                    })
-                    .expect("encode get_block request"),
-                ),
-            )
+    /// Reads the production [`wire::block::Block`] — the type `block_fetch`
+    /// reads — so a renamed member fails here the same way it fails the
+    /// wallet, instead of looking like "a block connected without the
+    /// spend".
+    pub(super) async fn block_tx_hashes(&self, hash: &str) -> Vec<HashHex> {
+        self.block_by_hash(hash)
             .await
-            .expect("get_block");
-        res.tx_hashes
+            .tx
+            .into_iter()
+            .map(|slot| match slot {
+                wire::shared::OrArchived::Item(tx) => tx.id,
+                wire::shared::OrArchived::Archived(wire::shared::ArchivedState::Archived(
+                    archived,
+                )) => archived.id,
+            })
+            .collect()
     }
 
-    /// The weight the daemon recorded for the block named by `hash`
-    /// (`block_header.block_weight`) and the listed transactions it
-    /// carries — the C++'s own account of how full the block it built is.
+    /// The weight the daemon recorded for the block named by `hash` and the
+    /// listed transactions it carries — the daemon's own account of how
+    /// full the block it built is.
     pub(super) async fn block_weight_of(&self, hash: &str) -> (u64, usize) {
-        let res: GetBlockResponse = self
-            .rpc
-            .json_rpc_call(
-                "get_block",
-                Some(
-                    serde_json::to_value(GetBlockRequest {
-                        hash: hash.to_owned(),
-                        height: 0,
-                        fill_pow_hash: false,
-                    })
-                    .expect("encode get_block request"),
-                ),
-            )
-            .await
-            .expect("get_block");
-        (res.block_header.block_weight, res.tx_hashes.len())
+        let block = self.block_by_hash(hash).await;
+        (block.header.weight.0, block.tx.len())
     }
 
-    /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
-    /// partition. The emission e2e samples it once, at epoch close, and
-    /// pins it to 0 (A6 pool-half disposition).
+    /// Cumulative fee burn — the destroyed half of the §9.5 fee partition.
+    /// The emission e2e samples it once, at epoch close, and pins it to 0
+    /// (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
-        self.rpc
-            .json_rpc_call::<GetInfoResponse>("get_info", None)
-            .await
-            .expect("get_info")
-            .economics
-            .total_burned
-    }
-
-    /// Inject an archival serve-credit bit for `(P, shard, E)` — the
-    /// FAKECHAIN-only regtest lever (`on_inject_archival_serve_credit`,
-    /// bits-only, **not** pop-symmetric: a pop below the injection height
-    /// desyncs the bit, so every reorg leg floors its depth above it). The
-    /// injected bit gives the epoch a non-zero `Σwork` and the persona a
-    /// positive claimant share at close.
-    ///
-    /// Returns the injector's **receipt**: the credit with the tip index
-    /// the daemon attributed it to, read under its lock with the write.
-    /// The height is the daemon's, never a `height()` read around the
-    /// call — that is the block count, one above (ARW-26) — and the
-    /// receipt is the `Injection` the chain-vector capture hands
-    /// `shekyl-chain-replay fetch --inject` and writes into the manifest
-    /// (DRS-E4 §3.8 item 3).
-    pub(super) async fn inject_serve_credit(
-        &self,
-        p_canonical_id: &shekyl_types::PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Injection {
-        #[derive(Debug, serde::Deserialize)]
-        struct Receipt {
-            height: u64,
-        }
-        let receipt = self
-            .rpc
-            .json_rpc_call::<Receipt>(
-                "inject_archival_serve_credit",
-                Some(json!({
-                    "p_canonical_id": hex::encode(p_canonical_id.to_bytes()),
-                    "shard_id": shard.to_raw(),
-                    "settlement_epoch": epoch.to_raw(),
-                })),
-            )
-            .await
-            .expect("inject_archival_serve_credit");
-        Injection {
-            at: BlockHeight::from_raw(receipt.height),
-            credit: ServeCredit {
-                persona: *p_canonical_id,
-                shard,
-                epoch,
-            },
-        }
+        self.status().await.burn_total.to_atomic_units()
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open
@@ -1188,11 +1124,6 @@ impl RegtestDaemon {
     /// proceeds, so a "see the log file" pointer would name a deleted file.
     pub(super) fn panic_with_log(&self, context: &str, err: impl std::fmt::Display) -> ! {
         panic!("{context}: {err}; daemon log tail:\n{}", self.log_tail());
-    }
-
-    /// The harness's RPC client, for tests that drive the daemon directly.
-    pub(super) fn rpc(&self) -> &HttpRpc {
-        &self.rpc
     }
 
     /// Run one §13 word through `shekyl-cli` against this daemon.
@@ -1291,76 +1222,69 @@ impl RegtestDaemon {
     /// shows, criterion 2), so it is not waited for: a linked node holds
     /// one through its embargo, and a block mined meanwhile leaves it in
     /// the pool.
+    ///
+    /// What the job lists is read from the template's own bytes (its
+    /// block's transaction ids); the shown pool and each entry's weight are
+    /// `txpool_list`'s (IG-Q46).
     async fn wait_shown_pool_in_template(&self) {
         const LIMIT: Duration = Duration::from_secs(30);
         let deadline = Instant::now() + LIMIT;
         loop {
-            let info = self
+            let shown = self
                 .rpc
-                .json_rpc_call::<GetInfoResponse>("get_info", None)
+                .call::<wire::TxpoolList>(NoParams)
                 .await
-                .expect("get_info");
-            let unbroadcast = info
-                .host
-                .shown()
-                .expect("the harness's listener is the host's, and is told the host-only part")
-                .tx_pool_unbroadcast_count
-                .expect("the harness's pool is live");
-            let shown = info
-                .pool
-                .tx_pool_size()
-                .expect("the harness's pool is live");
-            if shown == 0 {
+                .expect("txpool_list");
+            if shown.is_empty() {
                 return;
             }
             if Instant::now() >= deadline {
                 panic!(
                     "the posted job did not list the shown pool within {LIMIT:?} \
-                     (unbroadcast={unbroadcast}, shown={shown}); the relay's \
-                     fluff event must mark the entry shown and wake the tip \
-                     follower (DRS_X_STORE_FLIP.md Q9)"
+                     (shown={}); the relay's fluff event must mark the entry shown and \
+                     wake the tip follower (DRS_X_STORE_FLIP.md Q9)",
+                    shown.len()
                 );
             }
-            match self
-                .rpc
-                .json_rpc_call::<GetMinerDataResponse>("get_miner_data", None)
-                .await
-            {
-                Ok(data) if data.tx_backlog.len() as u64 == shown => return,
-                Ok(data) if job_is_full(&data) => return,
-                Ok(_) | Err(_) => {}
+            if let Ok(job) = self.rpc.call::<wire::BlockTemplate>(NoParams).await {
+                let listed = shekyl_wire::Block::from_bytes(&job.body.0)
+                    .expect("the posted job's body is a block")
+                    .transaction_hashes;
+                if listed.len() == shown.len() || job_is_full(&job, &listed, &shown) {
+                    return;
+                }
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    /// `get_archival_shard_coverage`: the shards a compact join can hold
-    /// as of the next connecting height — `ClosedUniverse::final_before`
-    /// under the in-force reorg cap, the predicate CEN-J15 applies at the
-    /// admitting block's parent (`read_methods.rs`; `store_read_facts.rs`
-    /// `shard_coverage`). The reply also carries the slash watermark
-    /// (`settled_epoch`) with the settled epoch's budget, which is how a
-    /// caller tells "epoch 0 settled" from "no pass yet": the wire epoch
-    /// is 0 in both cases, the budget only in the first.
-    pub(super) async fn shard_coverage(
-        &self,
-    ) -> shekyl_rpc_types::GetArchivalShardCoverageResponse {
-        let res: shekyl_rpc_types::GetArchivalShardCoverageResponse = self
-            .rpc
-            .json_rpc_call("get_archival_shard_coverage", None)
+    /// The curve tree at the tip (`curve_show`). Its daemon depth is
+    /// `layers - 1`.
+    pub(super) async fn curve(&self) -> wire::chain::Curve {
+        self.rpc
+            .call::<wire::CurveShow>(wire::chain::CurveSelect(Selector::Tip))
             .await
-            .expect("get_archival_shard_coverage");
-        assert!(
-            res.status.is_ok(),
-            "get_archival_shard_coverage refused: {}",
-            res.status.0
-        );
-        res
+            .expect("curve_show")
+    }
+
+    /// `shard_coverage`: the shards a compact join can hold as of the next
+    /// connecting height — `ClosedUniverse::final_before` under the in-force
+    /// reorg cap, the predicate CEN-J15 applies at the admitting block's
+    /// parent (`store_read_facts.rs` `shard_coverage`). The reply also
+    /// carries the slash watermark (`settled_epoch`) with the settled
+    /// epoch's budget, which is how a caller tells "epoch 0 settled" from
+    /// "no pass yet": the wire epoch is 0 in both cases, the budget `null`
+    /// only in the second.
+    pub(super) async fn shard_coverage(&self) -> wire::archival::Coverage {
+        self.rpc
+            .call::<wire::ShardCoverage>(NoParams)
+            .await
+            .expect("shard_coverage")
     }
 
     /// Stop the daemon and start it again on the same data directory,
     /// ports and rows: the chain it mined is the chain it comes back
-    /// with. The stop is the node's own (`/stop_daemon`), so the store
+    /// with. The stop is the node's own (`daemon_stop`), so the store
     /// closes as it does on an operator's stop, with a kill as the
     /// fallback if the process is still there after 30 s.
     ///
@@ -1372,11 +1296,7 @@ impl RegtestDaemon {
         let height_before = self.height().await;
         // The reply is sent before the node goes; a transport error here
         // means it went first, which is the same outcome.
-        drop(
-            self.rpc
-                .rpc_call::<serde_json::Value, serde_json::Value>("stop_daemon", None)
-                .await,
-        );
+        drop(self.rpc.call::<wire::DaemonStop>(NoParams).await);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self.child.try_wait() {
@@ -1385,7 +1305,7 @@ impl RegtestDaemon {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 Ok(None) => {
-                    eprintln!("the daemon did not stop on /stop_daemon within 30 s; killing it");
+                    eprintln!("the daemon did not stop on daemon_stop within 30 s; killing it");
                     drop(self.child.kill());
                     drop(self.child.wait());
                     break;
@@ -1410,84 +1330,59 @@ impl RegtestDaemon {
         );
     }
 
-    /// Roll the chain back `n` blocks (`/pop_blocks`, an armed test lever, a direct
-    /// route — not `json_rpc`). Exercises the daemon's `pop_block`
-    /// deferred-insertion tree rollback (popping `H` removes the leaves of
-    /// outputs created at `H − maturity`).
+    /// Roll the chain back `n` blocks (`dev_chain_pop`, an armed test
+    /// lever). Exercises the daemon's `pop_block` deferred-insertion tree
+    /// rollback (popping `H` removes the leaves of outputs created at
+    /// `H − maturity`).
     pub(super) async fn pop_blocks(&self, n: u64) {
         self.rpc
-            .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": n })))
+            .call::<wire::DevChainPop>(wire::block::PopCount { count: Count(n) })
             .await
-            .expect("pop_blocks");
+            .expect("dev_chain_pop");
     }
 
-    /// Whole-chain emission and fee legs of `get_coinbase_tx_sum`.
-    ///
-    /// The low 64 bits are the assertion. `fee_amount_top64` /
-    /// `emission_amount_top64` must be zero on a regtest chain this short;
-    /// a non-zero top half would mean the number being compared is not the
-    /// sum.
+    /// Whole-chain emission and fee legs of `chain_coinbase_sum`, in
+    /// atomic units.
     pub(super) async fn coinbase_tx_sum(&self) -> (u64, u64) {
-        let count = self.height().await;
-        let res: CoinbaseTxSumResp = self
+        let tip = self.status().await.height;
+        let sum = self
             .rpc
-            .json_rpc_call(
-                "get_coinbase_tx_sum",
-                Some(json!({ "height": 0u64, "count": count })),
-            )
+            .call::<wire::ChainCoinbaseSum>(wire::chain::CoinbaseSumRange {
+                from: shekyl_rpc_types::kinds::Height(0),
+                to: tip,
+            })
             .await
-            .expect("get_coinbase_tx_sum");
-        assert_eq!(
-            res.emission_amount_top64, 0,
-            "emission sum must fit the low 64 bits on this chain"
-        );
-        assert_eq!(
-            res.fee_amount_top64, 0,
-            "fee sum must fit the low 64 bits on this chain"
-        );
-        (res.emission_amount, res.fee_amount)
+            .expect("chain_coinbase_sum");
+        (
+            sum.emission.to_atomic_units().to_raw(),
+            sum.fee.to_atomic_units().to_raw(),
+        )
     }
 
-    /// `is_key_image_spent`, one status per image, in request order.
-    ///
-    /// 0 unspent, 1 spent in a block, 2 spent by a broadcast pool
-    /// transaction. A popped spend that returned to the pool is 2, not 0.
+    /// `chain_spent`, one state per image, in request order. A popped
+    /// spend that returned to the pool is `txpool`, not `unspent`.
     pub(super) async fn key_image_statuses(
         &self,
         key_images: &[[u8; 32]],
-    ) -> Vec<shekyl_rpc_types::KeyImageStatus> {
-        use shekyl_rpc_types::{IsKeyImageSpentRequest, IsKeyImageSpentResponse};
-        let req = IsKeyImageSpentRequest {
-            key_images: key_images.iter().map(hex::encode).collect(),
-        };
-        let res: IsKeyImageSpentResponse = self
+    ) -> Vec<wire::chain::Spent> {
+        let spent = self
             .rpc
-            .rpc_call(
-                "is_key_image_spent",
-                Some(serde_json::to_value(&req).expect("encode is_key_image_spent")),
-            )
+            .call::<wire::ChainSpent>(wire::chain::SpentQuery {
+                key_image: key_images
+                    .iter()
+                    .copied()
+                    .map(HashHex::from_bytes)
+                    .collect(),
+            })
             .await
-            .expect("is_key_image_spent");
-        assert!(
-            res.status.is_ok(),
-            "is_key_image_spent refused: {}",
-            res.status.0
-        );
+            .expect("chain_spent");
         assert_eq!(
-            res.spent_status.len(),
+            spent.len(),
             key_images.len(),
-            "spent_status is positional; a short reply is unreadable"
+            "chain_spent is positional; a short reply is unreadable"
         );
-        res.spent_status
+        spent
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct CoinbaseTxSumResp {
-    emission_amount: u64,
-    emission_amount_top64: u64,
-    fee_amount: u64,
-    fee_amount_top64: u64,
 }
 
 impl Drop for RegtestDaemon {
@@ -1666,30 +1561,40 @@ async fn maybe_capture_live_oracle(
 /// Whether the posted job is bounded by the fill policy rather than by the
 /// pool: one more of its lightest listed bodies would pass the median, which
 /// is where `Fill::admit` stops (the median-fill walk asserts the same bound
-/// on the mined block). The sum is of the listed bodies alone; the fill also
-/// counts the coinbase reserve, which `get_miner_data` does not report. The
-/// reserve is a few hundred bytes against spends of about 13 KB, so a job
-/// this predicate calls full is one the fill stopped, not one the follower
-/// has yet to rebuild.
-fn job_is_full(data: &GetMinerDataResponse) -> bool {
-    let listed: u64 = data.tx_backlog.iter().map(|body| body.weight).sum();
-    let lightest = data.tx_backlog.iter().map(|body| body.weight).min();
-    matches!(lightest, Some(lightest) if listed + lightest > data.median_weight)
+/// on the mined block). The sum is of the listed bodies' weights, read from
+/// `txpool_list`; the fill also counts the coinbase reserve, which no reply
+/// reports. The reserve is a few hundred bytes against spends of about
+/// 13 KB, so a job this predicate calls full is one the fill stopped, not
+/// one the follower has yet to rebuild.
+fn job_is_full(
+    job: &wire::block::BlockTemplate,
+    listed: &[TxHash],
+    pool: &[wire::tx::PoolEntry],
+) -> bool {
+    let weight_of = |id: &TxHash| {
+        pool.iter()
+            .find(|entry| entry.id.to_bytes() == id.to_bytes())
+            .map_or(0, |entry| entry.weight.0)
+    };
+    let listed_weight: u64 = listed.iter().map(weight_of).sum();
+    let lightest = pool.iter().map(|entry| entry.weight.0).min();
+    matches!(lightest, Some(lightest) if listed_weight + lightest > job.weight_median.0)
 }
 
-/// Mine `n` blocks. The daemon pays its configured `mine-address` (N2);
-/// the request is `{ count }` and names no address.
+/// Mine `n` blocks (`dev_block_generate`, an armed lever). The daemon pays
+/// its configured `mine-address` (N2); the request names no address.
 pub(super) async fn try_generate_blocks(
     rpc: &HttpRpc,
     n: u64,
 ) -> Result<GenerateBlocksResp, shekyl_rpc_client::RpcError> {
-    rpc.json_rpc_call::<GenerateBlocksResp>(
-        "generateblocks",
-        Some(json!({
-            "count": n,
-        })),
-    )
-    .await
+    let generated = rpc
+        .call::<wire::DevBlockGenerate>(wire::block::GenerateCount { count: Count(n) })
+        .await?;
+    Ok(GenerateBlocksResp {
+        // The chain's count after the blocks: the new tip plus one.
+        height: generated.height.0 + 1,
+        blocks: generated.hash.iter().map(ToString::to_string).collect(),
+    })
 }
 
 /// Send the daemon SIGTERM, the operator's stop, and wait for its exit.
@@ -1991,78 +1896,73 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
 /// The armed switch (`RPC_CHANNEL.md` §6.1, RT-O36). On regtest, the one
 /// network whose row permits `dev-rpc` (NI-R8; a testnet daemon given it is
 /// refused at load, `dev_rpc_is_refused_on_every_network_but_regtest`),
-/// `generateblocks` and `/pop_blocks` pass the armed gate and are served.
-/// The third lever the
-/// C++ served, `inject_archival_serve_credit`, was deleted with the C++
-/// chain (`DRS_X_STORE_FLIP.md` DX-Q3): the daemon knows no such method,
-/// armed or not.
+/// `dev_block_generate` and `dev_chain_pop` pass the armed gate and are
+/// served. The third lever the C++ served, `inject_archival_serve_credit`,
+/// was deleted with the C++ chain (`DRS_X_STORE_FLIP.md` DX-Q3): the daemon
+/// knows no such method, armed or not.
 ///
 /// Zero blocks keeps the probes cheap: the claim is about admission, not
-/// mining. A gate
-/// refusal would be the grant class (-32002); what is asserted is the
-/// handler's own answer, after the gate: `generateblocks` refuses a zero
-/// count as `BadParams` (-32602) with the diagnostic `block.count_zero`,
-/// before it reads the node's mining refusal, so the answer is the same
-/// on a daemon that is not synced or has no mine address
-/// (`mining_methods::generateblocks`). The setter's refusal is likewise
-/// the handler's own error.
+/// mining. A gate refusal would be the grant class (-32002); what is
+/// asserted is the handler's own answer, after the gate:
+/// `dev_block_generate` refuses a zero count as `BadParams` (-32602) with
+/// the diagnostic `block.count-zero`, before it reads the node's mining
+/// refusal, so the answer is the same on a daemon that is not synced or has
+/// no mine address (`mining_methods::dev_block_generate`).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn the_armed_switch_serves_two_levers_and_knows_no_third() {
-    const OUTSIDE_THE_GRANT: i64 = -32_002;
-    const BAD_PARAMS: i64 = -32_602;
-    const METHOD_NOT_FOUND: i64 = -32_601;
+    use shekyl_rpc_client::ErrorClass;
     let daemon = RegtestDaemon::start().await;
-    let call = |method: &'static str, params: serde_json::Value| {
-        let rpc = &daemon.rpc;
-        async move {
-            rpc.rpc_call::<_, serde_json::Value>(
-                "json_rpc",
-                Some(json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("{method}: {e:?}"))
-        }
-    };
 
-    let generated = call("generateblocks", json!({ "count": 0 })).await;
-    let error = &generated["error"];
-    assert_eq!(
-        error["code"], BAD_PARAMS,
-        "generateblocks is served on armed regtest and refuses a zero count as its own \
-         BadParams: {generated}"
-    );
-    assert_eq!(
-        error["message"], "count must be at least one",
-        "{generated}"
-    );
-    assert_eq!(error["data"]["code"], "block.count_zero", "{generated}");
-
-    let popped = daemon
+    let generated = daemon
         .rpc
-        .rpc_call::<_, serde_json::Value>("pop_blocks", Some(json!({ "nblocks": 0 })))
+        .call_or_refusal::<wire::DevBlockGenerate>(wire::block::GenerateCount { count: Count(0) })
         .await
-        .expect("pop_blocks");
-    assert!(
-        popped.get("error").is_none() && popped["status"] == "OK",
-        "/pop_blocks is served on armed regtest: {popped}"
+        .expect("dev_block_generate answers");
+    let refusal = generated.expect_err("a zero count is refused");
+    assert_eq!(
+        refusal.class,
+        ErrorClass::BadParams,
+        "dev_block_generate is served on armed regtest and refuses a zero count as its own \
+         BadParams: {refusal:?}"
     );
+    assert_eq!(refusal.diagnostic.code, "block.count-zero", "{refusal:?}");
 
-    let injected = call(
+    daemon
+        .rpc
+        .call::<wire::DevChainPop>(wire::block::PopCount { count: Count(0) })
+        .await
+        .expect("dev_chain_pop is served on armed regtest");
+
+    // The deleted lever, by its old name: no method, not a gate refusal.
+    let injected = raw_call(
+        &daemon.rpc,
         "inject_archival_serve_credit",
-        json!({ "p_canonical_id": "11".repeat(32), "shard_id": 0, "settlement_epoch": 0 }),
+        json!({ "persona": "11".repeat(32), "shard": 0, "epoch": 0 }),
     )
     .await;
-    let error = &injected["error"];
-    assert_eq!(
-        error["code"], METHOD_NOT_FOUND,
+    assert!(
+        shekyl_rpc_types::errors::is_method_not_found(&injected["error"]),
         "the deleted lever is unknown to the daemon, not gated: {injected}"
     );
-    assert_ne!(
-        error["code"].as_i64(),
-        Some(OUTSIDE_THE_GRANT),
-        "an unknown method is never answered as a grant refusal: {injected}"
-    );
+}
+
+/// One JSON-RPC request by a name this build's table does not hold — an
+/// old or deleted name a test probes — returning the reply envelope whole.
+pub(super) async fn raw_call(
+    rpc: &HttpRpc,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let body = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0", "id": 0, "method": method, "params": params,
+    }))
+    .expect("a request encodes");
+    let reply = rpc
+        .post(shekyl_rpc_client::json_rpc_route(), body)
+        .await
+        .unwrap_or_else(|e| panic!("{method}: {e:?}"));
+    serde_json::from_slice(&reply).unwrap_or_else(|e| panic!("{method} reply: {e}"))
 }
 
 /// Acceptance gate for the §8 step-4 scanner migration (shekyl-oxide → shekyl-wire
@@ -2347,7 +2247,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_rpc_types::KeyImageStatus;
+    use shekyl_rpc_types::wire::chain::Spent;
     use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
     use shekyl_wire::{Input, Transaction};
@@ -2470,7 +2370,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     assert_eq!(height_mined, height_before + 1);
     assert_eq!(
         daemon.key_image_statuses(&key_images).await,
-        vec![KeyImageStatus::SpentInBlockchain; key_images.len()],
+        vec![Spent::Chain; key_images.len()],
         "mining the spend must move its key images from the pool into the chain"
     );
     let (emission_mined, fee_mined) = daemon.coinbase_tx_sum().await;
@@ -2497,7 +2397,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     );
     assert_eq!(
         daemon.key_image_statuses(&key_images).await,
-        vec![KeyImageStatus::SpentInPool; key_images.len()],
+        vec![Spent::Txpool; key_images.len()],
         "the popped spend is back in the pool, so its key images stay reserved (status 2, not free)"
     );
     let (emission_popped, fee_popped) = daemon.coinbase_tx_sum().await;
@@ -2516,7 +2416,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     );
     assert_eq!(
         daemon.key_image_statuses(&key_images).await,
-        vec![KeyImageStatus::SpentInBlockchain; key_images.len()],
+        vec![Spent::Chain; key_images.len()],
         "re-mining the spend must mark its key images spent in the chain again"
     );
     let (emission_remined, fee_remined) = daemon.coinbase_tx_sum().await;
@@ -2642,19 +2542,11 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let mut tree_depth = 0u8;
     for _ in 0..MAX_MINE_BATCHES {
         daemon.generate_blocks(MINE_BATCH_BLOCKS).await;
-        let info: serde_json::Value = daemon
-            .rpc
-            .json_rpc_call("get_curve_tree_info", None)
-            .await
-            .expect("get_curve_tree_info");
-        tree_depth = info
-            .get("depth")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|d| u8::try_from(d).ok())
-            .unwrap_or(0);
+        let info = daemon.curve().await;
+        tree_depth = u8::try_from(info.layers.0.saturating_sub(1)).unwrap_or(u8::MAX);
         if tree_depth >= TARGET_DAEMON_DEPTH {
             eprintln!(
-                "curve tree reached daemon depth {tree_depth} (= {} layers): {info}",
+                "curve tree reached daemon depth {tree_depth} (= {} layers): {info:?}",
                 tree_depth + 1
             );
             break;
@@ -2941,7 +2833,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
-    use shekyl_rpc_types::{GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse};
     use shekyl_types::{AttestationRoot, BlockCount, BlockHeight, Timestamp};
     use shekyl_wire::{Block, Transaction};
     use zeroize::Zeroizing;
@@ -2956,83 +2847,71 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         weights: _,
     } = overfill_pool(&daemon, &arc, &address).await;
 
-    // --- the C++'s state for the next block, read rather than assumed ---
-    // The C++'s own template supplies the header a block at this height
+    // --- the daemon's state for the next block, read rather than assumed ---
+    // The daemon's own template supplies the header a block at this height
     // must carry: parent, curve-tree root (B5), attestation root, the
     // version pair, and a timestamp past the MTP (C2).
-    let cxx_template: serde_json::Value = daemon
+    let job = daemon
         .rpc
-        .json_rpc_call("get_block_template", Some(json!({})))
+        .call::<wire::BlockTemplate>(NoParams)
         .await
-        .expect("get_block_template");
-    let cxx_block = Block::from_bytes(&hex_decode(
-        cxx_template["blocktemplate_blob"]
-            .as_str()
-            .expect("blocktemplate_blob"),
-    ))
-    .expect("the C++ template parses");
-    let height = cxx_template["height"].as_u64().expect("height");
-    let miner_data: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call("get_miner_data", None)
-        .await
-        .expect("get_miner_data");
-    assert_eq!(miner_data["height"].as_u64(), Some(height));
+        .expect("block_template");
+    let cxx_block = Block::from_bytes(&job.body.0).expect("the daemon's template parses");
+    let height = job.height.0;
     assert_eq!(
-        miner_data["median_weight"].as_u64(),
-        Some(median),
-        "get_miner_data's median is get_info's"
+        job.weight_median.0, median,
+        "block_template's median is daemon_status's"
     );
-    // Two encodings of an amount meet here, on purpose for now.
-    // `get_miner_data` still writes this one as a JSON number; `get_info`
-    // writes its amounts as decimal strings since 3.53 (RK-Q2), and the
-    // `total_burned` read below comes through the shared type as
-    // `AtomicUnits`. `get_miner_data` moves when its own method migrates
-    // (FOLLOWUPS: "two encodings across methods").
-    let already_generated = miner_data["already_generated_coins"]
-        .as_u64()
-        .expect("already_generated_coins");
-    let total_burned = daemon
-        .rpc
-        .json_rpc_call::<GetInfoResponse>("get_info", None)
-        .await
-        .expect("get_info")
-        .economics
-        .total_burned;
-    // CEN-F20's operand over the C++'s headers: the listed-transaction
+    let already_generated = job.emission.to_atomic_units().to_raw();
+    let total_burned = daemon.total_burned().await;
+    // CEN-F20's operand over the daemon's headers: the listed-transaction
     // count over the prior `min(height, W)` blocks.
     let window = height.min(TX_VOLUME_WINDOW);
-    let headers: GetBlockHeadersRangeResponse = daemon
+    let headers = daemon
         .rpc
-        .json_rpc_call(
-            "get_block_headers_range",
-            Some(
-                serde_json::to_value(GetBlockHeadersRangeRequest {
-                    start_height: height - window,
-                    end_height: height - 1,
-                    fill_pow_hash: false,
-                })
-                .expect("encode"),
-            ),
-        )
+        .call::<wire::BlockHeaderList>(wire::block::HeaderRange {
+            select: wire::block::HeaderRangeSelect::Range {
+                from: shekyl_rpc_types::kinds::Height(height - window),
+                to: shekyl_rpc_types::kinds::Height(height - 1),
+            },
+            pow: false,
+        })
         .await
-        .expect("get_block_headers_range");
-    assert_eq!(headers.headers.len() as u64, window);
-    let tx_volume = TxVolume::window(headers.headers.iter().map(|h| h.num_txes).sum(), window);
+        .expect("block_header_list");
+    assert_eq!(headers.len() as u64, window);
+    let tx_volume = TxVolume::window(
+        headers
+            .iter()
+            .map(|slot| match slot {
+                wire::shared::Slot::Item(header) => header.tx_count.0,
+                other => panic!("a header below the tip is held: {other:?}"),
+            })
+            .sum(),
+        window,
+    );
 
-    // The pool's bodies, as the daemon holds them.
-    let pool: serde_json::Value = daemon
+    // The pool's bodies, as the daemon holds them: the ids from
+    // `txpool_list`, the bodies from `tx_list`.
+    let pool = daemon
         .rpc
-        .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+        .call::<wire::TxpoolList>(NoParams)
         .await
-        .expect("get_transaction_pool");
-    let mut bodies: Vec<Transaction> = pool["transactions"]
-        .as_array()
-        .expect("transactions")
-        .iter()
-        .map(|t| {
-            Transaction::from_bytes(&hex_decode(t["tx_blob"].as_str().expect("tx_blob")))
-                .expect("a pool body parses")
+        .expect("txpool_list");
+    let listed = daemon
+        .rpc
+        .call::<wire::TxList>(wire::tx::TxListQuery {
+            id: pool.iter().map(|entry| entry.id).collect(),
+            prune: false,
+        })
+        .await
+        .expect("tx_list");
+    let mut bodies: Vec<Transaction> = listed
+        .into_iter()
+        .map(|slot| match slot {
+            wire::shared::Slot::Item(entry) => {
+                Transaction::from_bytes(&entry.body.0).expect("a pool body parses")
+            }
+            other => panic!("a listed pool entry is held: {other:?}"),
         })
         .collect();
     // Heaviest first, so the block fills to the bound with the fewest
@@ -3147,12 +3026,11 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 
     // --- the C++ judges both, on the same parent ---
     let submit = |block: &Block| {
-        let hex = hex::encode(block.serialize());
+        let body = wire::block::BlockBody {
+            body: shekyl_rpc_types::kinds::Bytes(block.serialize()),
+        };
         let rpc = &daemon.rpc;
-        async move {
-            rpc.json_rpc_call::<serde_json::Value>("submit_block", Some(json!({ "body": hex })))
-                .await
-        }
+        async move { rpc.call::<wire::BlockSubmit>(body).await }
     };
     // The over-limit block first, so both are judged against one parent.
     let refused = submit(&over).await;
@@ -3169,7 +3047,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         )
     });
     assert_eq!(daemon.height().await, before + 1, "the block connected");
-    let block_id = accepted["block_id"].as_str().expect("block_id").to_owned();
+    let block_id = accepted.hash.to_string();
     let (recorded_weight, carried) = daemon.block_weight_of(&block_id).await;
     assert_eq!(
         recorded_weight, at_bound.block_weight,
@@ -3336,15 +3214,9 @@ async fn assert_template_reports_its_coinbase(
     // Between a tip change and the follower's next post there is no job
     // (one template per tip, N2): wait for the one built at this tip.
     let deadline = Instant::now() + Duration::from_secs(30);
-    let template: serde_json::Value = loop {
-        if let Ok(template) = daemon
-            .rpc
-            .json_rpc_call::<serde_json::Value>("get_block_template", Some(json!({})))
-            .await
-        {
-            if template["blocktemplate_blob"].as_str().is_some() {
-                break template;
-            }
+    let template = loop {
+        if let Ok(template) = daemon.rpc.call::<wire::BlockTemplate>(NoParams).await {
+            break template;
         }
         assert!(
             Instant::now() < deadline,
@@ -3352,12 +3224,7 @@ async fn assert_template_reports_its_coinbase(
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    let block = Block::from_bytes(&hex_decode(
-        template["blocktemplate_blob"]
-            .as_str()
-            .expect("blocktemplate_blob"),
-    ))
-    .expect("the C++ template parses");
+    let block = Block::from_bytes(&template.body.0).expect("the daemon's template parses");
     assert_eq!(
         !block.transaction_hashes.is_empty(),
         lists_transactions,
@@ -3373,9 +3240,9 @@ async fn assert_template_reports_its_coinbase(
         .sum();
     assert!(coinbase > 0, "a template pays its miner");
     assert_eq!(
-        template["expected_reward"].as_u64(),
-        Some(coinbase),
-        "expected_reward is the coinbase the template carries"
+        template.reward.to_atomic_units().to_raw(),
+        coinbase,
+        "reward is the coinbase the template carries"
     );
 }
 
@@ -3398,26 +3265,9 @@ async fn e2e_trim_curve_tree_restores_grow_root() {
     const MAX_MINE_BATCHES: usize = 30;
 
     async fn tree_info(daemon: &RegtestDaemon) -> (u8, u64, String) {
-        let info: serde_json::Value = daemon
-            .rpc
-            .json_rpc_call("get_curve_tree_info", None)
-            .await
-            .expect("get_curve_tree_info");
-        let depth = info
-            .get("depth")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|d| u8::try_from(d).ok())
-            .unwrap_or(0);
-        let leaf_count = info
-            .get("leaf_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let root = info
-            .get("root")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        (depth, leaf_count, root)
+        let info = daemon.curve().await;
+        let depth = u8::try_from(info.layers.0.saturating_sub(1)).unwrap_or(u8::MAX);
+        (depth, info.leaf_count.0, info.root.to_string())
     }
 
     let daemon =
@@ -4593,16 +4443,8 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "DECIDED_DARK: serve credit's production path goes live at SO-D12 4b (Rick, 2026-10-29: no inject lever); green on the flip through the daemon-closed shard, the market-bond join and the join-epoch read"]
 async fn e2e_emission_claim_accepted_and_applied() {
-    use super::bond_assembly::SpentRecordsDurablyPruned;
-    use super::claim_dispatch::EmissionClaimRequestError;
-    use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
-    use super::prpc::LocalNodeRpc;
     use super::stake_engine::PSlot;
-    use super::traits::DaemonEngine;
-    use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
-    use shekyl_engine_state::pscan_state::MintLineageOutput;
-    use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
     /// Settlement-epoch size under the lever. The join epoch is no longer
@@ -4788,492 +4630,17 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .count()
     );
 
-    // Injection room: the inject must precede the claim's reference block,
-    // which must precede `J + 1`'s close (the pinned ordering below), and
-    // the close-detect loop overshoots by up to 3 blocks. A join late in
-    // `J` leaves a whole epoch; a smaller `SEB` would not.
-    let target_close = (target_epoch + 1) * SEB;
-    let tip_before_inject = daemon.height().await;
-    assert!(
-        tip_before_inject + REF_ANCHOR_AGE.to_raw() + 8 < target_close,
-        "the inject at tip {tip_before_inject} needs REF_ANCHOR_AGE + 8 blocks before epoch \
-         {target_epoch} closes at {target_close}; raise SEB"
-    );
-
-    // (A2) Inject one serve-credit bit for (persona, shard 0, `J + 1`).
-    //
-    // DARK from here (Rick, 2026-10-29: no inject lever; test the
+    // (A2) DARK from here (Rick, 2026-10-29: no inject lever; test the
     // production path). The daemon has no `inject_archival_serve_credit`:
-    // DX-Q3 deleted it with the C++ chain. Serve credit's production path
-    // is SO-D12's bundles, live at 4b (`ARCHIVAL_SETTLEMENT_WRITER.md`
-    // §16.3 item 4), and 4b re-subjects this leg to it: the persona's
-    // wallet serves its shard on an onion service, the mining daemon's
-    // producer reads it over operator Tor and files the bundle, the bundle
-    // is admitted and the epoch credited, then the claim below. Everything
-    // above this line ran green on the flip binary: the shard filled and
-    // priced, the market bond admitted and confirmed, the join epoch read.
-    // The bit store is epoch-keyed and injection is height-free, but the
-    // height the daemon ATTRIBUTED the bit to is what the pop legs must
-    // stay above (the store is not pop-symmetric), so the injector's
-    // receipt is kept — the daemon's own index, not a `height()` read
-    // around the call, which is the block count one above it (ARW-26).
-    // Single claimant holding all Σwork ⇒ its share is the whole epoch
-    // budget.
-    let injection = daemon
-        .inject_serve_credit(
-            &fixture.persona_id,
-            ShardId::from_raw(SHARD_ID),
-            SettlementEpoch::from_raw(target_epoch),
-        )
-        .await;
-    let inject_height = injection.at.to_raw();
-    eprintln!("serve credit injected for epoch {target_epoch} at height {inject_height}");
-
-    // (A1 close) Mine until the daemon reports `J + 1` closed (budget row
-    // written), in 3-block steps so the tip overshoots the close by less
-    // than `REF_ANCHOR_AGE` — the pinned `referenceBlock < epoch_close`
-    // ordering depends on claiming inside that window.
-    let epoch_row = loop {
-        let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-            .await
-            .expect("claim-source fetch");
-        if let Some(row) = src
-            .epochs
-            .iter()
-            .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        {
-            break row.clone();
-        }
-        let h = daemon.height().await;
-        assert!(
-            h < (target_epoch + 1) * SEB + 64,
-            "epoch {target_epoch} never closed with a budget row by height {h} (SEB {SEB})"
-        );
-        daemon.generate_blocks(3).await;
-    };
-    let total_burned_at_close = daemon.total_burned().await;
-    eprintln!(
-        "epoch {target_epoch} closed at {}: budget {} atomic, sigma-work {} milli, \
-         {} credit pair(s); total_burned {}",
-        epoch_row.close_block_height,
-        epoch_row.budget_atomic,
-        epoch_row.sigma_work_milli,
-        epoch_row.credit_pairs.len(),
-        total_burned_at_close.to_raw(),
-    );
-    assert!(
-        !epoch_row.credit_pairs.is_empty(),
-        "the injected serve credit must surface in the closed epoch's credit pairs"
-    );
-    assert!(
-        epoch_row.sigma_work_milli > 0,
-        "the closed epoch must carry the injected work (membership from join+1)"
-    );
-    assert!(
-        epoch_row.budget_atomic > 0,
-        "the closed epoch must have accrued a positive budget"
-    );
-    assert!(
-        epoch_row.claimant_bond_idx.is_some(),
-        "the fixture's bond must be a claimant in the closed epoch"
-    );
-    // A6 pool-half disposition (module docs): at e2e activity the integer
-    // per-block volume mean floors to 0, a zero volume operand zeroes
-    // `burn_pct`, and `compute_burn_split` then yields a zero pool half AND
-    // a zero destroyed half from the same `burned` product — `total_burned`
-    // is the tied observable, pinned here so an operand-law change
-    // re-surfaces this disposition instead of silently shifting the budget.
-    assert_eq!(
-        total_burned_at_close,
-        shekyl_units::AtomicUnits::ZERO,
-        "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
-         (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
-    );
-    // The no-staker epoch: `J` (the join epoch) closed zero-work — its
-    // budget row exists but Σwork is 0, so nothing of it is claimable and
-    // its accrual never mints (never enters supply).
-    let src_now = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source fetch");
-    let join_epoch_row = src_now
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == join_epoch && e.has_budget_row)
-        .expect("the join epoch must have closed with a budget row");
-    assert_eq!(
-        join_epoch_row.sigma_work_milli, 0,
-        "the join epoch must close zero-work (onset stagger: no membership in the join epoch)"
-    );
-
-    // (A3) Build and dispatch the claim through the production CB-3 path.
-    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
-    // estimate over the claim's own production envelope — the ~48 KiB
-    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
-    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
-    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
-    // too small here — a claim carries TWO input proofs where the bond
-    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
-    // miner transfer, never a conservation term.
-    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
-    refresh(&fixture.arc).await;
-    let claim_fee = {
-        let estimates = fixture
-            .arc
-            .read()
-            .await
-            .daemon()
-            .get_fee_estimates()
-            .await
-            .expect("daemon fee estimates");
-        estimates
-            .economy
-            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
-    };
-    let claim_rpc = LocalNodeRpc::new(
-        format!("http://127.0.0.1:{}", daemon.rpc_port),
-        Duration::from_secs(10),
-    )
-    .await
-    .expect("loopback claim transport");
-    let pruning_landed = SpentRecordsDurablyPruned::for_test();
-    let mut receipt = None;
-    let mut tip_before_claim = 0;
-    for attempt in 0..4 {
-        tip_before_claim = daemon.height().await;
-        match super::Engine::submit_emission_claim(
-            fixture.arc.clone(),
-            &claim_rpc,
-            slot,
-            AtomicUnits::from_raw(claim_fee),
-            &pruning_landed,
-        )
-        .await
-        {
-            Ok(r) => {
-                receipt = Some(r);
-                break;
-            }
-            // Resync-and-retry arms (the wallet's own docs): the tree or
-            // header window lags the tip. Mine ONE block per retry — the
-            // pinned ordering needs the successful attempt's reference to
-            // stay below the close.
-            Err(EmissionClaimRequestError::Claim(
-                e @ (ClaimOrchestrationError::ReferenceUnanchorable { .. }
-                | ClaimOrchestrationError::MissingBlockHash { .. }),
-            )) => {
-                eprintln!("claim attempt {attempt}: {e}; resyncing");
-                daemon.generate_blocks(1).await;
-                refresh(&fixture.arc).await;
-            }
-            Err(e) => daemon.panic_with_log("submit_emission_claim", e),
-        }
-    }
-    let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
-    eprintln!(
-        "emission claim accepted: epochs {:?}, reward {}, {} fee input(s)",
-        receipt.claim.claimed_epochs,
-        receipt.claim.total_reward,
-        receipt.claim.fee_gindexes.len(),
-    );
-
-    // (A4/A6) The dispatched claim's shape: `J + 1` claimed, real ToKey fee
-    // inputs (not the Q11 zero-fee form), and the loud vout equal to the
-    // epoch's whole budget byte-exactly (single claimant holding all Σwork
-    // ⇒ `floor(budget·capped/Σwork) = budget`) — the staker-inflow
-    // conservation identity `inflow = staker_emission + staker_pool_amount`
-    // over real RPC.
-    assert_eq!(
-        receipt.claim.claimed_epochs,
-        vec![target_epoch],
-        "the claim must claim exactly the work-bearing epoch — the zero-work join epoch \
-         is EXCLUDED (the no-staker leg: unclaimable accrual never mints)"
-    );
-    assert!(
-        !receipt.claim.fee_gindexes.is_empty(),
-        "the claim must carry real ToKey fee inputs (A6)"
-    );
-    assert_eq!(
-        receipt.claim.total_reward, epoch_row.budget_atomic,
-        "single-claimant reward must equal the epoch's accrued budget byte-exactly \
-         (conservation, both inflow halves)"
-    );
-    // Pinned geography: inject < referenceBlock < epoch_close < claim tip.
-    // The wallet anchors at `synced_tip − REF_ANCHOR_AGE`; `tip_before_claim`
-    // is the daemon height the successful attempt saw.
-    let reference_est =
-        (shekyl_types::BlockHeight::from_raw(tip_before_claim) - REF_ANCHOR_AGE).to_raw();
-    assert!(
-        inject_height < reference_est,
-        "inject ({inject_height}) must precede the claim reference (~{reference_est})"
-    );
-    assert!(
-        reference_est < epoch_row.close_block_height,
-        "the claim reference (~{reference_est}) must precede the epoch close ({}) — \
-         the A5c pop-through-reference geometry",
-        epoch_row.close_block_height
-    );
-
-    // Applied: mine the claim in, then past the scan horizon; the daemon's
-    // claimed-set row must land and the production P-scan must re-discover
-    // the reward as the persona's rung-1 EmissionReward funding, amount
-    // equal to the loud vout.
-    mine_until_pool_drains(&daemon, "accepted emission claim", 1).await;
-    // Capture HERE, with the claim connected and before the A5 pops below —
-    // the chain the validator's fixtures need is the one that carries the
-    // claim, not the one that stranded it.
-    maybe_capture_chain_vector(
-        &daemon,
-        "emission-claim",
-        "e2e_emission_claim_accepted_and_applied",
-        None,
-        // The one row in this chain no block produced (A2 above): the
-        // serve credit the claim is priced on, as the injector's receipt.
-        // The fetch writes it into the corpus as an `Inject` at its
-        // height, so the replay reaches the archival state the claim was
-        // judged against (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1, §3.8 item 3).
-        &[injection],
-    )
-    .await;
-    let claim_mined_by_height = daemon.height().await;
-    assert!(
-        epoch_row.close_block_height < claim_mined_by_height,
-        "claim mined ({claim_mined_by_height}) after the close ({})",
-        epoch_row.close_block_height
-    );
-    let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source refetch");
-    let claimed = src
-        .bond
-        .as_ref()
-        .expect("bond context after claim")
-        .claimed_settlement_epochs
-        .clone();
-    assert!(
-        claimed.contains(&target_epoch),
-        "the daemon's claimed-set row for epoch {target_epoch} must land (got {claimed:?})"
-    );
-
-    // ── (A5a) Depth-1 pop: undo exactly the claim block ──
-    // The batch-1 drain left the claim block as the tip. Popping it must
-    // clear the daemon's claimed-set row and return the claim tx to the
-    // pool (`pop_block_from_blockchain` is tx-conserving), with the budget
-    // row untouched (the pop stays above the close); re-mining must
-    // re-include the identical bytes (popped txs re-enter at
-    // `relay_method::block`, broadcast-visible — no embargo) and re-apply
-    // the claimed-set row, the conservation operands byte-identical.
-    let tip_with_claim = daemon.height().await;
-    daemon.pop_blocks(1).await;
-    let src_popped = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after depth-1 pop");
-    let claimed_after_pop = &src_popped
-        .bond
-        .as_ref()
-        .expect("bond context after depth-1 pop")
-        .claimed_settlement_epochs;
-    assert!(
-        !claimed_after_pop.contains(&target_epoch),
-        "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
-    );
-    let row_popped = src_popped
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the budget row must survive a pop above the close");
-    assert_eq!(
-        row_popped.budget_atomic, epoch_row.budget_atomic,
-        "the budget row must be untouched by a pop above the close"
-    );
-    let pool_after_pop = daemon.tx_pool_size().await;
-    assert_eq!(
-        pool_after_pop, 1,
-        "the popped claim tx must return to the pool"
-    );
-    daemon.generate_blocks(1).await;
-    let pool_after_remine = daemon.tx_pool_size().await;
-    assert_eq!(
-        pool_after_remine, 0,
-        "the re-mined block must re-include the claim"
-    );
-    assert_eq!(daemon.height().await, tip_with_claim);
-    let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after depth-1 re-mine");
-    assert!(
-        src_remined
-            .bond
-            .as_ref()
-            .expect("bond context after re-mine")
-            .claimed_settlement_epochs
-            .contains(&target_epoch),
-        "re-mining the identical claim must re-apply the claimed-set row"
-    );
-    let row_remined = src_remined
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("budget row after re-mine");
-    assert_eq!(
-        (row_remined.budget_atomic, row_remined.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "conservation operands must hold byte-identically across pop + re-mine (A5a)"
-    );
-    eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
-
-    // ── (A5b) Epoch-straddling pop: undo the close itself ──
-    // Depth reaches the close block; the floor stays strictly above the
-    // injection height — the serve-credit store is NOT pop-symmetric, so a
-    // pop below the inject would desync the bits. The popped range holds
-    // the close and the post-close blocks that carry no epoch-1 serve
-    // credit (the zero-staker stretch). Undoing the close must delete the
-    // budget row and the claimed-set row together; re-mining must re-close
-    // `J + 1` from the pop-surviving credit bits byte-identically, then
-    // re-apply the claim (the drain loop tolerates the claim being
-    // template-skipped until the re-close lands).
-    let tip = daemon.height().await;
-    assert!(
-        inject_height < epoch_row.close_block_height,
-        "pop floor (close {}) must sit strictly above the inject ({inject_height})",
-        epoch_row.close_block_height
-    );
-    // Convention: `close_block_height` is the close OPERAND `(E+1)·SEB`;
-    // the close itself fires while CONNECTING the epoch's last block,
-    // index `close_block_height − 1` (blockchain_db.cpp: the accrual
-    // comment — "the close of epoch E fires while connecting E's last
-    // block (operand prev_height + 1)"), and `height()` is the chain
-    // LENGTH — so undoing the close means popping down to length
-    // `close_block_height − 1`.
-    let straddle_depth = tip - (epoch_row.close_block_height - 1);
-    daemon.pop_blocks(straddle_depth).await;
-    let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after straddling pop");
-    assert!(
-        !src_straddle
-            .epochs
-            .iter()
-            .any(|e| e.settlement_epoch == target_epoch && e.has_budget_row),
-        "the straddling pop must undo the close (budget row deleted)"
-    );
-    if let Some(bond) = src_straddle.bond.as_ref() {
-        assert!(
-            !bond.claimed_settlement_epochs.contains(&target_epoch),
-            "the straddling pop must clear the claimed-set row"
-        );
-    }
-    mine_until_pool_drains(&daemon, "re-applied emission claim (A5b)", 1).await;
-    let src_reclosed = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after re-close");
-    let row_reclosed = src_reclosed
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the epoch must re-close from the pop-surviving credit bits");
-    assert_eq!(
-        (row_reclosed.budget_atomic, row_reclosed.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "the re-closed epoch must be byte-identical (accrual blocks below the floor \
-         untouched; credit bits pop-surviving)"
-    );
-    assert!(
-        src_reclosed
-            .bond
-            .as_ref()
-            .expect("bond context after re-close")
-            .claimed_settlement_epochs
-            .contains(&target_epoch),
-        "the claim must re-apply after the re-close (A5b)"
-    );
-    eprintln!(
-        "A5b straddling pop (depth {straddle_depth}, floor {}): close undone and \
-         re-closed byte-identically, claim re-applied",
-        epoch_row.close_block_height
-    );
-
-    daemon.generate_blocks(PSCAN_TEST_REORG_DEPTH + 2).await;
-    refresh(&fixture.arc).await;
-    let expected_reward = receipt.claim.total_reward;
-    let state = pscan_until(
-        &fixture.arc,
-        &fixture.pscan_seal,
-        "the EmissionReward funding output",
-        |s| {
-            s.funding_outputs().iter().any(|r| {
-                r.p_slot == slot
-                    && r.lineage == MintLineageOutput::EmissionReward
-                    && r.amount.to_raw() == expected_reward
-            })
-        },
-    )
-    .await;
-    let rewards = state
-        .funding_outputs()
-        .iter()
-        .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::EmissionReward)
-        .count();
-    eprintln!(
-        "emission claim accepted-and-applied: claimed-set {claimed:?}; {rewards} \
-         EmissionReward output(s) of {expected_reward} atomic re-discovered by the \
-         production P-scan (inject {inject_height} < ref ~{reference_est} < close {} < \
-         claim ≤ {claim_mined_by_height})",
-        epoch_row.close_block_height,
-    );
-
-    // ── (A5c) Deep pop through the claim's reference block ──
-    // The pop floor sits just below the claim's reference anchor (still far
-    // above the inject), so the pop undoes the claim, both epoch closes,
-    // and the block the claim's FCMP++ membership proof anchors to.
-    // Re-mined blocks carry new hashes, so the popped claim tx is
-    // structurally stranded — its proof binds a reference root that no
-    // longer exists on the rebuilt chain. The correct terminal state: the
-    // chain re-converges to the same height (the stranded tx must never
-    // re-apply or wedge the miner), the claimed epoch re-closes
-    // byte-identically from the pop-surviving credit bits, and the
-    // claimed-set stays EMPTY. Building the replacement claim against the
-    // rebuilt root is the retire/resubmit slice (the named B2 follow-on,
-    // matching the bond precedent): the wallet's one-live-claim-per-persona
-    // rule holds the pending record until that slice retires it.
-    let tip_c = daemon.height().await;
-    let pop_floor_c = reference_est - 1;
-    assert!(
-        inject_height < pop_floor_c,
-        "the A5c floor ({pop_floor_c}) must stay above the inject ({inject_height})"
-    );
-    let depth_c = tip_c - pop_floor_c;
-    daemon.pop_blocks(depth_c).await;
-    daemon.generate_blocks(depth_c).await;
-    assert_eq!(
-        daemon.height().await,
-        tip_c,
-        "the chain must re-converge past the stranded claim (no miner wedge)"
-    );
-    let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after deep-pop re-mine");
-    let row_c = src_c
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the claimed epoch must re-close on the rebuilt chain");
-    assert_eq!(
-        (row_c.budget_atomic, row_c.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "the rebuilt close must be byte-identical (bits survive; accrual below the floor)"
-    );
-    if let Some(bond) = src_c.bond.as_ref() {
-        assert!(
-            !bond.claimed_settlement_epochs.contains(&target_epoch),
-            "the stranded claim must NOT re-apply against the rebuilt root (its proof \
-             binds a popped reference)"
-        );
-    }
-    eprintln!(
-        "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
-         epoch re-closed byte-identically, claimed-set empty (stranded claim inert) — \
-         replacement claim is the B2 retire/resubmit slice"
-    );
+    // DX-Q3 deleted it with the C++ chain, and RPC 4.0 deleted the
+    // harness's helper with it. Serve credit's production path is SO-D12's
+    // bundles, live at 4b (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 4),
+    // and 4b re-subjects this leg to it: the persona's wallet serves its
+    // shard on an onion service, the mining daemon's producer reads it over
+    // operator Tor and files the bundle, the bundle is admitted and the
+    // epoch credited, then the claim. Everything above this line ran green
+    // on the flip binary: the shard filled and priced, the market bond
+    // admitted and confirmed, the join epoch read. The leg ends here.
 }
 
 /// DS-PR-2 **T-DS-6 ∧ T-DS-7 composite wire-shape arm — the full
@@ -6523,33 +5890,14 @@ async fn maybe_capture_chain_vector(
     std::fs::create_dir_all(&txs_dir).expect("create txs dir");
     let mut tx_count = 0usize;
     for height in 0..=tip {
-        let block_resp: serde_json::Value = daemon
-            .rpc
-            .json_rpc_call("get_block", Some(json!({ "height": height })))
-            .await
-            .unwrap_or_else(|e| panic!("get_block {height}: {e:?}"));
-        let block =
-            shekyl_wire::Block::from_bytes(&hex_decode(block_resp["blob"].as_str().expect("blob")))
-                .unwrap_or_else(|e| panic!("parse block {height}: {e:?}"));
-        if block.transaction_hashes.is_empty() {
-            continue;
-        }
-        let hashes_hex: Vec<String> = block.transaction_hashes.iter().map(hex::encode).collect();
-        let resp: serde_json::Value = daemon
-            .rpc
-            .rpc_call(
-                "get_transactions",
-                Some(json!({ "txs_hashes": hashes_hex, "prune": false })),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("get_transactions @ {height}: {e:?}"));
-        for t in resp["txs"].as_array().expect("get_transactions txs array") {
-            let bytes = hex_decode(
-                t["as_hex"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .expect("full tx as_hex"),
-            );
+        let shown = daemon.block_at(height).await;
+        for slot in shown.tx {
+            let bytes = match slot {
+                wire::shared::OrArchived::Item(tx) => tx.body.0,
+                wire::shared::OrArchived::Archived(state) => {
+                    panic!("a capture chain discards no body: {state:?}")
+                }
+            };
             let tx = shekyl_wire::Transaction::from_bytes(&bytes)
                 .expect("a daemon-served full tx parses");
             std::fs::write(
@@ -6565,15 +5913,7 @@ async fn maybe_capture_chain_vector(
     // reports it, and the tree the daemon was built at. The replay test
     // holds the former to the genesis the current build pins BEFORE judging
     // any block, so a regeneration fails there, not as 1,979 refusals.
-    let genesis: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call("get_block", Some(json!({ "height": 0 })))
-        .await
-        .expect("get_block 0");
-    let genesis_hash = genesis["block_header"]["hash"]
-        .as_str()
-        .expect("block 0's hash")
-        .to_owned();
+    let genesis_hash = daemon.block_at(0).await.header.hash.to_string();
 
     // The schedule the chain was mined under — the daemon's levers when the
     // harness pulled them, the genesis pair otherwise. The replay opens
@@ -6704,49 +6044,24 @@ async fn maybe_capture_chain_vector(
 async fn capture_chain(daemon: &RegtestDaemon, name: &str, tip: u64) -> serde_json::Value {
     let mut blocks = Vec::new();
     for height in 0..=tip {
-        let block_resp: serde_json::Value = daemon
-            .rpc
-            .json_rpc_call("get_block", Some(json!({ "height": height })))
-            .await
-            .unwrap_or_else(|e| panic!("get_block {height}: {e:?}"));
-        let blob = block_resp["blob"].as_str().expect("get_block blob hex");
-        let block = shekyl_wire::Block::from_bytes(&hex_decode(blob))
+        let shown = daemon.block_at(height).await;
+        let block = shekyl_wire::Block::from_bytes(&shown.body.0)
             .unwrap_or_else(|e| panic!("parse block {height}: {e:?}"));
-
-        let regular = if block.transaction_hashes.is_empty() {
-            Vec::new()
-        } else {
-            let hashes_hex: Vec<String> =
-                block.transaction_hashes.iter().map(hex::encode).collect();
-            let resp: serde_json::Value = daemon
-                .rpc
-                .rpc_call(
-                    "get_transactions",
-                    Some(json!({ "txs_hashes": hashes_hex, "prune": false })),
-                )
-                .await
-                .unwrap_or_else(|e| panic!("get_transactions @ {height}: {e:?}"));
-            resp["txs"]
-                .as_array()
-                .expect("get_transactions txs array")
-                .iter()
-                .map(|t| {
-                    let hex_blob = t["as_hex"]
-                        .as_str()
-                        .filter(|s| !s.is_empty())
-                        .expect("full tx as_hex");
-                    shekyl_wire::Transaction::from_bytes(&hex_decode(hex_blob))
-                        .expect("parse full regular tx")
-                })
-                .collect()
-        };
+        let regular: Vec<shekyl_wire::Transaction> = shown
+            .tx
+            .into_iter()
+            .map(|slot| match slot {
+                wire::shared::OrArchived::Item(tx) => {
+                    shekyl_wire::Transaction::from_bytes(&tx.body.0).expect("parse full regular tx")
+                }
+                wire::shared::OrArchived::Archived(state) => {
+                    panic!("a capture chain discards no body: {state:?}")
+                }
+            })
+            .collect();
         blocks.push(capture_block(&block, &regular, height));
     }
     json!({ "name": name, "blocks": blocks })
-}
-
-fn hex_decode(s: &str) -> Vec<u8> {
-    hex::decode(s).expect("valid hex")
 }
 
 /// One block's deterministic projection: per-height root + every tx's outputs
@@ -6814,67 +6129,42 @@ fn capture_block(
     })
 }
 
-/// JSON-RPC 2.0 body for `POST json_rpc`. Shared by the origin-cap,
-/// result-envelope, and deleted-method tests so the three stay one request
-/// shape.
-fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
-    json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
-}
-
-/// `dispatch_jsonrpc_we` can carry a handler's non-OK `res.status` in the
-/// JSON-RPC *result* envelope, not only in `error`.
+/// A range past the tip is the method's refusal, an error object, never a
+/// result carrying a refusal word.
 ///
-/// No WE handler now refuses a *restricted* caller into `res.status`
-/// (`get_output_histogram` was the last). The remaining witness is a
-/// universal cap on the admin listener. This is not an origin check: if a
-/// WE handler grows a restricted `res.status` refusal, that leg belongs on
-/// `restricted_listener_is_withheld_status_and_capped_by_native_handlers`.
+/// `chain_coinbase_sum` over a range whose end is above the tip refuses
+/// `block.missing` (RefusedByMethod); the genesis block alone is summed.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {
-    const COINBASE_SUM_RANGE_REFUSAL: &str = "height or count is too large";
+async fn chain_coinbase_sum_refuses_a_range_past_the_tip() {
+    use shekyl_rpc_client::ErrorClass;
+    use shekyl_rpc_types::kinds::Height;
 
     let daemon = RegtestDaemon::start().await;
-    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
-        .await
-        .expect("admin rpc client");
+    let range = |to: u64| wire::chain::CoinbaseSumRange {
+        from: Height(0),
+        to: Height(to),
+    };
 
-    let over: serde_json::Value = admin
-        .rpc_call(
-            "json_rpc",
-            Some(jsonrpc_body(
-                "get_coinbase_tx_sum",
-                &json!({ "height": 0, "count": 1_000_000 }),
-            )),
-        )
+    let over = daemon
+        .rpc
+        .call_or_refusal::<wire::ChainCoinbaseSum>(range(1_000_000))
         .await
-        .expect("admin get_coinbase_tx_sum over the chain height");
-    assert_eq!(
-        over.pointer("/result/status").and_then(|s| s.as_str()),
-        Some(COINBASE_SUM_RANGE_REFUSAL),
-        "a count past the chain height must be refused through the result envelope"
-    );
+        .expect("chain_coinbase_sum answers")
+        .expect_err("a range past the tip is refused");
+    assert_eq!(over.class, ErrorClass::RefusedByMethod, "{over:?}");
+    assert_eq!(over.diagnostic.code, "block.missing", "{over:?}");
 
-    let ok: serde_json::Value = admin
-        .rpc_call(
-            "json_rpc",
-            Some(jsonrpc_body(
-                "get_coinbase_tx_sum",
-                &json!({ "height": 0, "count": 1 }),
-            )),
-        )
+    daemon
+        .rpc
+        .call::<wire::ChainCoinbaseSum>(range(0))
         .await
-        .expect("admin get_coinbase_tx_sum for the genesis block");
-    assert_eq!(
-        ok.pointer("/result/status").and_then(|s| s.as_str()),
-        Some("OK"),
-        "a well-formed request must remain distinguishable from the range refusal"
-    );
+        .expect("the genesis block alone is summed");
 }
 
 /// `get_output_histogram` stays unrouted on both listeners (SOK-Q3 B).
 ///
-/// A route re-minted under the old name turns this red before it can serve
+/// A method re-minted under the old name turns this red before it can serve
 /// a histogram (rule 47).
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
@@ -6890,39 +6180,26 @@ async fn get_output_histogram_stays_unrouted() {
         .expect("admin rpc client");
 
     for (name, listener) in [("restricted", &restricted), ("admin", &admin)] {
-        let gone: serde_json::Value = listener
-            .rpc_call(
-                "json_rpc",
-                Some(jsonrpc_body(DELETED_METHOD, &json!({ "amounts": [] }))),
-            )
-            .await
-            .expect(
-                "get_output_histogram must answer with an error envelope, not a transport failure",
-            );
-        assert_eq!(
-            gone.pointer("/error/message").and_then(|m| m.as_str()),
-            Some("Method not found: get_output_histogram"),
-            "{DELETED_METHOD} was deleted (SOK-Q3) and must stay unrouted on the {name} listener"
+        let gone = raw_call(listener, DELETED_METHOD, json!({ "amounts": [] })).await;
+        assert!(
+            shekyl_rpc_types::errors::is_method_not_found(&gone["error"]),
+            "{DELETED_METHOD} was deleted (SOK-Q3) and must stay unrouted on the {name} \
+             listener: {gone}"
         );
     }
 }
 
-/// The native handlers apply their own request caps.
-///
-/// These three legs were part of the bridge guard until RK-4c served
-/// `/get_transactions` and `/is_key_image_spent` from Rust. They are still
-/// worth asserting — the caps moved to Rust with the methods and nothing else
-/// checks them — but they no longer cross `dispatch_json`, so reverting a
-/// dispatcher to `nullptr` leaves them green. Split out under a name that says
-/// what they cover, because a reviewer counting assertions under the bridge
-/// guard's name would otherwise credit the bridge with subjects it does not
-/// have.
+/// The handlers apply their own request caps to a bounded caller
+/// (`RPC_CHANNEL.md` §6.3): `tx_list` at `bound.tx`, `chain_spent` at
+/// `bound.key-image`, each refused as OverResourceBound one past the cap
+/// and served at it; the host is not bounded.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn native_handlers_apply_their_own_request_caps() {
-    /// `RESTRICTED_TRANSACTIONS_COUNT`, now enforced by the native handler.
+async fn handlers_apply_their_own_request_caps() {
+    use shekyl_rpc_client::ErrorClass;
+    /// `RESTRICTED_TRANSACTIONS_COUNT`.
     const TX_CAP: usize = 100;
-    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`, likewise.
+    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`.
     const KI_CAP: usize = 5000;
 
     let daemon = RegtestDaemon::start_with_restricted_listener().await;
@@ -6933,82 +6210,54 @@ async fn native_handlers_apply_their_own_request_caps() {
         .await
         .expect("unrestricted rpc client");
 
-    // Hashes that resolve to nothing: the cap is a request-shape refusal and
+    // Ids that resolve to nothing: the cap is a request-shape refusal and
     // fires before any lookup, so the chain's contents are irrelevant.
-    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
-
-    let status = |v: &serde_json::Value| -> String {
-        v.get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("<missing status>")
-            .to_owned()
+    let ids = |n: usize| -> Vec<HashHex> {
+        (0..n)
+            .map(|i| {
+                let mut bytes = [0u8; 32];
+                bytes[24..].copy_from_slice(&(i as u64).to_be_bytes());
+                HashHex::from_bytes(bytes)
+            })
+            .collect()
+    };
+    let txs = |n: usize| wire::tx::TxListQuery {
+        id: ids(n),
+        prune: false,
     };
 
-    // Over the cap, restricted: refused. This is the REST half — it goes red if
-    // `dispatch_json` stops passing the origin. The JSON-RPC template has its
-    // own assertions further down; neither holds the other.
-    let over: serde_json::Value = restricted
-        .rpc_call(
-            "get_transactions",
-            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
-        )
+    let over = restricted
+        .call_or_refusal::<wire::TxList>(txs(TX_CAP + 1))
         .await
-        .expect("restricted /get_transactions over cap");
-    assert_eq!(
-        over.pointer("/error/code")
-            .and_then(serde_json::Value::as_i64),
-        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
-        "a bounded listener must refuse more than {TX_CAP} hashes; if this \
-         has no error the handler saw an unbounded caller and the cap is inert"
-    );
+        .expect("tx_list answers")
+        .expect_err("a bounded caller over the cap is refused");
+    assert_eq!(over.class, ErrorClass::OverResourceBound, "{over:?}");
+    assert_eq!(over.diagnostic.code, "bound.tx", "{over:?}");
 
-    // At the cap, restricted: served. Pins the boundary rather than "refuses
+    // At the cap: served. Pins the boundary rather than "refuses
     // everything", which a broken-in-the-other-direction change would pass.
-    let at: serde_json::Value = restricted
-        .rpc_call(
-            "get_transactions",
-            Some(json!({ "txs_hashes": hashes(TX_CAP) })),
-        )
+    restricted
+        .call::<wire::TxList>(txs(TX_CAP))
         .await
-        .expect("restricted /get_transactions at cap");
-    assert_eq!(
-        status(&at),
-        "OK",
-        "exactly {TX_CAP} hashes is within the cap"
-    );
+        .expect("exactly the cap is within it");
 
     // The key-image cap is a second, independently-numbered site.
-    let ki_over: serde_json::Value = restricted
-        .rpc_call(
-            "is_key_image_spent",
-            Some(json!({ "key_images": hashes(KI_CAP + 1) })),
-        )
+    let ki_over = restricted
+        .call_or_refusal::<wire::ChainSpent>(wire::chain::SpentQuery {
+            key_image: ids(KI_CAP + 1),
+        })
         .await
-        .expect("restricted /is_key_image_spent over cap");
-    assert_eq!(
-        ki_over
-            .pointer("/error/code")
-            .and_then(serde_json::Value::as_i64),
-        Some(shekyl_rpc_types::errors::ErrorClass::OverResourceBound.code()),
-        "a bounded listener must refuse more than {KI_CAP} key images"
-    );
+        .expect("chain_spent answers")
+        .expect_err("a bounded caller over the cap is refused");
+    assert_eq!(ki_over.class, ErrorClass::OverResourceBound, "{ki_over:?}");
+    assert_eq!(ki_over.diagnostic.code, "bound.key-image", "{ki_over:?}");
 
-    // Blast radius: the same over-cap request on the admin listener is served.
-    // `m_restricted` is false there, so the expression was false before the fix
-    // and is false after it — nothing about the admin listener narrowed.
-    let admin: serde_json::Value = unrestricted
-        .rpc_call(
-            "get_transactions",
-            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
-        )
+    // Blast radius: the same over-cap request from the host is served; the
+    // caps bound a caller, not the node.
+    unrestricted
+        .call::<wire::TxList>(txs(TX_CAP + 1))
         .await
-        .expect("unrestricted /get_transactions over cap");
-    assert_eq!(
-        status(&admin),
-        "OK",
-        "the unrestricted listener must still serve an over-cap request; the \
-         caps are the restricted posture, not a global limit"
-    );
+        .expect("the host is not bounded");
 }
 
 /// `tx show` and `chain spent` answer through `shekyl-cli`.
@@ -7023,16 +6272,7 @@ async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
 
     // The genesis coinbase is the one transaction a fresh regtest chain has,
     // and it is reachable without mining or spending.
-    let header: serde_json::Value = daemon
-        .rpc()
-        .json_rpc_call("get_block", Some(json!({ "height": 0 })))
-        .await
-        .expect("get_block");
-    let txid = header
-        .pointer("/block_header/miner_tx_hash")
-        .and_then(|v| v.as_str())
-        .expect("genesis header carries a miner_tx_hash")
-        .to_owned();
+    let txid = daemon.block_at(0).await.header.coinbase.to_string();
 
     let out = daemon.console(&format!("tx show {txid}"));
     assert!(

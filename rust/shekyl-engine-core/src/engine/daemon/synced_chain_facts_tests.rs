@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! [`SyncedChainFacts`] — the constructor's refusal, the unit it carries, and
-//! the `get_info` decode it shares with the watchdog's health snapshot.
+//! the `daemon_status` decode it shares with the watchdog's health snapshot.
 
 use super::*;
 use serde_json::json;
@@ -14,20 +14,20 @@ fn any_hash() -> BlockHash {
     BlockHash::from_bytes([0xAB; 32])
 }
 
-/// A `get_info` reply built by [`GetInfoDocument`], not a private schema.
-/// `target_height` follows the info surface's convention: `0` means the
-/// daemon considers itself synchronized.
-fn info(height: u64, target_height: Option<u64>) -> GetInfoResponse {
-    document(height, target_height).to_reply()
+/// A `daemon_status` reply built by [`DaemonStatusDocument`], not a private
+/// schema. `count` and `target_height` are block counts; the document writes
+/// their tips.
+fn info(count: u64, target_height: Option<u64>) -> DaemonStatus {
+    document(count, target_height).to_reply()
 }
 
-fn document(height: u64, target_height: Option<u64>) -> GetInfoDocument {
-    GetInfoDocument {
-        chain_count: ChainCount::from_raw(height),
+fn document(count: u64, target_height: Option<u64>) -> DaemonStatusDocument {
+    DaemonStatusDocument {
+        chain_count: ChainCount::from_raw(count),
         target_height,
         synchronized: true,
         top_hash: any_hash(),
-        has_peers: true,
+        peered: true,
     }
 }
 
@@ -46,7 +46,7 @@ fn info_json(over: &Value) -> Value {
     doc
 }
 
-/// A transport that answers `get_info` with one canned result, so the
+/// A transport that answers `daemon_status` with one canned result, so the
 /// decode is exercised where production does it: inside
 /// [`fetch_synced_chain_facts`].
 #[derive(Clone)]
@@ -107,26 +107,27 @@ fn a_peer_claimed_target_neither_withholds_nor_grants_the_facts() {
     ] {
         let synchronized = info(500, target);
         assert!(
-            SyncedChainFacts::from_health(health_from_get_info(&synchronized), any_hash())
+            SyncedChainFacts::from_health(health_from_daemon_status(&synchronized), any_hash())
                 .is_some(),
             "synchronized, target {target:?}",
         );
-        let climbing = GetInfoDocument {
+        let climbing = DaemonStatusDocument {
             synchronized: false,
             ..document(500, target)
         }
         .to_reply();
         assert!(
-            SyncedChainFacts::from_health(health_from_get_info(&climbing), any_hash()).is_none(),
+            SyncedChainFacts::from_health(health_from_daemon_status(&climbing), any_hash())
+                .is_none(),
             "not synchronized, target {target:?}",
         );
     }
 }
 
-/// The count/height distinction, pinned. `get_info.height` is the block
-/// **count** (the daemon reports the top block's height plus one), so the newest existing block sits one below it. A consumer doing
-/// epoch arithmetic on the count instead of the tip lands one block early at
-/// every boundary — invisible to any test that never crosses one.
+/// The count/height distinction, pinned. The facts carry the block
+/// **count**, so the newest existing block sits one below it. A consumer
+/// doing epoch arithmetic on the count instead of the tip lands one block
+/// early at every boundary — invisible to any test that never crosses one.
 #[test]
 fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
     let facts =
@@ -143,18 +144,17 @@ fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
 }
 
 /// **The mandatory members, as one property.** A reply missing `height`,
-/// `target_height`, `synchronized` or `top_block_hash`, or carrying one of
+/// `target_height`, `synchronized`, `peered` or `hash`, or carrying one of
 /// the wrong shape, does not become facts — it is a contract fault, and it
 /// is classified as one.
 ///
-/// Each of these had its own refusal in the hand-written decoder this
-/// replaced, and its own reason: no `height` would mint facts for a chain
-/// of length zero; a missing `synchronized` has no reading that is not a
-/// guess; there is no honest default for an identity. `target_height` is
-/// nullable and still required: `null` is "no target", a missing member is
-/// not this build's reply. The shared type
-/// decodes strictly, so the property now holds for every member, and it is
-/// tested through the read production makes.
+/// Each has its own reason: no `height` would mint facts for a chain of
+/// unknown length; a missing `synchronized` has no reading that is not a
+/// guess; there is no honest default for an identity. `target_height` and
+/// `peered` are nullable and still required: `null` is an answer, a missing
+/// member is not this build's reply. The shared type decodes strictly, so
+/// the property holds for every member, and it is tested through the read
+/// production makes.
 ///
 /// The edit that turns this red is a `#[serde(default)]` on any of them.
 #[tokio::test]
@@ -168,19 +168,11 @@ async fn a_reply_missing_or_misshaping_a_mandatory_member_yields_no_facts() {
             "a non-numeric target_height",
         ),
         (json!({ "synchronized": null }), "no synchronized"),
-        (json!({ "top_block_hash": null }), "no top_block_hash"),
-        (
-            json!({ "top_block_hash": 7 }),
-            "a top_block_hash that is not a string",
-        ),
-        (
-            json!({ "top_block_hash": "not hex" }),
-            "a top_block_hash that is not hex",
-        ),
-        (
-            json!({ "top_block_hash": "abcd" }),
-            "a top_block_hash that is not 32 bytes",
-        ),
+        (json!({ "peered": null }), "no peered"),
+        (json!({ "hash": null }), "no hash"),
+        (json!({ "hash": 7 }), "a hash that is not a string"),
+        (json!({ "hash": "not hex" }), "a hash that is not hex"),
+        (json!({ "hash": "abcd" }), "a hash that is not 32 bytes"),
     ] {
         let err = fetch_synced_chain_facts(&OneReply(info_json(&over)))
             .await
@@ -236,41 +228,78 @@ async fn a_reply_with_an_unknown_member_yields_no_facts() {
 }
 
 /// **Whether the daemon has peers is Health's word, and Status cannot
-/// change it** (RK-D14). The reply's Status counts are zero here, as a
-/// restricted daemon wrote them until 3.48, and then the whole Status part
-/// is withheld, as a restricted daemon sends it now (RK-Q8): `has_peers` reads the same through
-/// both. Before this the projection summed those counts, read a withheld
-/// part as zero, and called a restricted daemon peerless.
+/// change it** (RK-D14). The reply's Status counts are zero here, and then
+/// the whole Status part is withheld, as a daemon sends it to a caller
+/// without the `status` grant: `peered` reads the same through both. A
+/// projection that summed those counts would read a withheld part as zero
+/// and call the daemon peerless.
 ///
 /// The edit that turns this red is the projection reading Status again.
 #[test]
-fn has_peers_is_healths_word_whatever_status_says() {
-    for has_peers in [true, false] {
-        let mut reply = GetInfoDocument {
-            has_peers,
+fn peered_is_healths_word_whatever_status_says() {
+    for peered in [true, false] {
+        let reply = DaemonStatusDocument {
+            peered,
             ..document(77, None)
         }
         .to_reply();
-        let status = reply.node.shown().expect("the document shows Status");
         assert_eq!(
-            status.connections,
-            shekyl_rpc_types::StatusConnections::Running {
-                outgoing: 0,
-                incoming: 0
-            },
-            "the fixture's Status counts are zero, as a restricted daemon's are"
+            (
+                reply.peer_outbound_count.shown(),
+                reply.peer_inbound_count.shown()
+            ),
+            (
+                Some(shekyl_rpc_types::nullable::Nullable(Some(
+                    shekyl_rpc_types::kinds::Count(0)
+                ))),
+                Some(shekyl_rpc_types::nullable::Nullable(Some(
+                    shekyl_rpc_types::kinds::Count(0)
+                )))
+            ),
+            "the fixture's Status counts are zero"
         );
         assert_eq!(
-            health_from_get_info(&reply).p2p.has_peers(),
-            Some(has_peers)
+            health_from_daemon_status(&reply).p2p.has_peers(),
+            Some(peered)
         );
 
-        reply.node = shekyl_rpc_types::Hidden::Withheld;
-        reply.peers = shekyl_rpc_types::Hidden::Withheld;
-        let health = health_from_get_info(&reply);
-        assert_eq!(health.p2p.has_peers(), Some(has_peers), "Status withheld");
+        let reply = DaemonStatusDocument {
+            peered,
+            ..document(77, None)
+        }
+        .to_reply_status_withheld();
+        let health = health_from_daemon_status(&reply);
+        assert_eq!(health.p2p.has_peers(), Some(peered), "Status withheld");
         assert_eq!(health.height, 77);
     }
+}
+
+/// **The wire carries the tip; the health projection carries the count.**
+/// `daemon_status.height` is the tip's height (IG-Q45), and the count — what
+/// the facts and the watchdog read — is one more, computed at the decode.
+///
+/// The edit that turns this red is the projection carrying `height` as the
+/// count unconverted: every consumer would then read one block low.
+#[test]
+fn the_wire_height_is_the_tip_and_the_count_is_one_more() {
+    let reply: DaemonStatus =
+        serde_json::from_value(info_json(&json!({ "height": 41 }))).expect("a whole reply decodes");
+    assert_eq!(health_from_daemon_status(&reply).height, 42);
+}
+
+/// An offline daemon is a state of its own, not a daemon with no peers:
+/// `offline` with `peered: null` reads as offline.
+#[test]
+fn an_offline_daemon_is_offline_not_peerless() {
+    let mut doc = document(500, None).to_value();
+    doc["offline"] = json!(true);
+    doc["peered"] = Value::Null;
+    doc["peer_outbound_count"] = Value::Null;
+    doc["peer_inbound_count"] = Value::Null;
+    let reply: DaemonStatus = serde_json::from_value(doc).expect("an offline reply decodes");
+    let health = health_from_daemon_status(&reply);
+    assert!(health.p2p.is_offline());
+    assert_eq!(health.p2p.has_peers(), None);
 }
 
 /// The decode and the constructor compose: a synced reply yields facts at the
@@ -278,18 +307,20 @@ fn has_peers_is_healths_word_whatever_status_says() {
 #[test]
 fn the_decode_and_the_constructor_compose() {
     let reply = info(500, None);
-    let synced =
-        SyncedChainFacts::from_health(health_from_get_info(&reply), top_hash_from_get_info(&reply))
-            .expect("synced");
+    let synced = SyncedChainFacts::from_health(
+        health_from_daemon_status(&reply),
+        top_hash_from_daemon_status(&reply),
+    )
+    .expect("synced");
     assert_eq!(synced.tip(), BlockHeight::from_raw(499));
 
-    let climbing = GetInfoDocument {
+    let climbing = DaemonStatusDocument {
         synchronized: false,
         ..document(500, Some(900))
     }
     .to_reply();
     assert!(
-        SyncedChainFacts::from_health(health_from_get_info(&climbing), any_hash()).is_none(),
+        SyncedChainFacts::from_health(health_from_daemon_status(&climbing), any_hash()).is_none(),
         "a climbing daemon yields no facts to act on",
     );
 }
@@ -304,92 +335,71 @@ fn the_decode_and_the_constructor_compose() {
 #[test]
 fn a_peerless_fresh_daemon_is_not_synchronized() {
     assert!(SyncedChainFacts::new(ChainCount::from_raw(5), false, any_hash()).is_none());
-    let peerless = GetInfoDocument {
+    let peerless = DaemonStatusDocument {
         synchronized: false,
-        has_peers: false,
+        peered: false,
         ..document(5, None)
     }
     .to_reply();
     assert!(
-        SyncedChainFacts::from_health(health_from_get_info(&peerless), any_hash()).is_none(),
+        SyncedChainFacts::from_health(health_from_daemon_status(&peerless), any_hash()).is_none(),
         "the reply's own flag is carried through the decode",
     );
 }
 
 // ── CoherentChainView: the reconciliation the acting lanes rest on ──────
 
+/// A synchronized witness at `tip`.
+fn witness_at(tip: u64) -> SyncedChainFacts {
+    SyncedChainFacts::new(ChainCount::from_raw(tip + 1), true, any_hash()).expect("synced")
+}
+
+/// The block a record was gathered at: `tip`, under its own hash.
+fn record_at(tip: u64) -> ChainAnchor {
+    ChainAnchor {
+        height: BlockHeight::from_raw(tip),
+        hash: BlockHash::from_bytes([0xCD; 32]),
+    }
+}
+
 /// A view at `tip`, both reads agreeing.
 fn agreeing_view(tip: u64) -> CoherentChainView {
-    let synced =
-        SyncedChainFacts::new(ChainCount::from_raw(tip + 1), true, any_hash()).expect("synced");
-    CoherentChainView::reconcile(
-        &synced.bracket(synced.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(tip + 1),
-    )
+    CoherentChainView::reconcile(&witness_at(tip), record_at(tip))
 }
 
-/// **The sticky-flag hazard.** `synchronized` never returns to false, so a
-/// rollback between the sync read and the record read leaves a witness above
-/// the record. The clock must believe the lower read.
+/// **The clock is the record's own height.** The record names the block it
+/// was gathered at, so an observation drawn from it is stamped there. When
+/// the chain advanced between the reads, stamping at the earlier witness
+/// would date the observation before it was seen — the release-early
+/// direction. When the chain rolled back, the record's height is the lower
+/// one, and the view is refused for acting anyway.
 ///
-/// The edit that turns this red is `at()` returning `witness_tip`. It bites
-/// against the clock being set from a stale-high witness; it does **not**
-/// cover a daemon that lies about being synchronized.
+/// The edit that turns this red is `at()` returning the witness's tip.
 #[test]
-fn the_clock_believes_the_lower_of_two_disagreeing_reads() {
-    let stale_high =
-        SyncedChainFacts::new(ChainCount::from_raw(20_001), true, any_hash()).expect("synced");
-    let rolled_back = CoherentChainView::reconcile(
-        &stale_high
-            .bracket(stale_high.top_hash())
-            .expect("bracketed"),
-        ChainCount::from_raw(10_001),
-    );
-    assert_eq!(rolled_back.at(), BlockHeight::from_raw(10_000));
+fn the_clock_is_the_records_own_height() {
+    let advanced = CoherentChainView::reconcile(&witness_at(10_000), record_at(20_000));
+    assert_eq!(advanced.at(), BlockHeight::from_raw(20_000));
 
-    // The ordinary direction — chain advanced between the reads — takes the
-    // same rule and equally must not admit the newer height.
-    let witness =
-        SyncedChainFacts::new(ChainCount::from_raw(10_001), true, any_hash()).expect("synced");
-    let advanced = CoherentChainView::reconcile(
-        &witness.bracket(witness.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(20_001),
-    );
-    assert_eq!(advanced.at(), BlockHeight::from_raw(10_000));
+    let rolled_back = CoherentChainView::reconcile(&witness_at(20_000), record_at(10_000));
+    assert_eq!(rolled_back.at(), BlockHeight::from_raw(10_000));
 }
 
-/// **The signal `at()` alone would have destroyed.** Clocking conservatively
-/// is right for a consumer that merely counts time; a consumer that acts on
-/// the record's *contents* must know the two disagreed in the rollback
-/// direction, and a stored minimum cannot tell it.
+/// **A record below its witness is a rollback.** A consumer that acts on
+/// the record's *contents* must know the two disagreed in that direction.
 ///
-/// The edit that turns this red is collapsing the view to one height on
-/// construction — the shape this type had before the acting lanes needed it.
+/// The edit that turns this red is `rolled_back()` comparing anything but
+/// the record's height against the witness's.
 #[test]
 fn a_record_below_its_witness_is_reported_as_rolled_back() {
-    let stale_high =
-        SyncedChainFacts::new(ChainCount::from_raw(20_001), true, any_hash()).expect("synced");
     assert!(
-        CoherentChainView::reconcile(
-            &stale_high
-                .bracket(stale_high.top_hash())
-                .expect("bracketed"),
-            ChainCount::from_raw(10_001)
-        )
-        .rolled_back(),
+        CoherentChainView::reconcile(&witness_at(20_000), record_at(10_000)).rolled_back(),
         "a record below the witness read before it is the rollback signature"
     );
 
     // Equal, and the ordinary advance, are both NOT rollbacks — otherwise
     // every refresh on a live chain would read as one.
     assert!(!agreeing_view(10_000).rolled_back());
-    let witness =
-        SyncedChainFacts::new(ChainCount::from_raw(10_001), true, any_hash()).expect("synced");
-    assert!(!CoherentChainView::reconcile(
-        &witness.bracket(witness.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(20_001)
-    )
-    .rolled_back());
+    assert!(!CoherentChainView::reconcile(&witness_at(10_000), record_at(20_000)).rolled_back());
 }
 
 /// The failure classifier draws the contract-fault/transport line once, so
@@ -423,54 +433,40 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
 
 // ── Chain identity: the anchor and its decode ───────────────────────────
 
-/// `top_block_hash` is the chain's identity, carried as the reply's 32
-/// bytes. (A reply without one, or with one that is not 32 hex bytes, is
-/// refused where the other mandatory members are:
+/// `hash` is the chain's identity, carried as the reply's 32 bytes. (A
+/// reply without one, or with one that is not 32 hex bytes, is refused
+/// where the other mandatory members are:
 /// `a_reply_missing_or_misshaping_a_mandatory_member_yields_no_facts`.)
 #[test]
 fn the_top_hash_is_the_replys() {
-    assert_eq!(top_hash_from_get_info(&info(5, None)), any_hash());
+    assert_eq!(top_hash_from_daemon_status(&info(5, None)), any_hash());
 }
 
-/// **The anchor is at the observed height, and only a view that has one can
+/// **The anchor is the record's own block, and only a view that has one can
 /// be observed.** `anchored()` is the sole way to an `AnchoredView`; a
 /// rolled-back view has no anchor and is refused with `ChainRolledBack`, so
 /// the ledger cannot be handed evidence it could never continuity-check.
 ///
 /// The edit that turns this red is `anchored()` succeeding on a rolled-back
-/// view, or anchoring at the record's height instead of the witness's.
+/// view, or anchoring at the witness's block instead of the record's.
 #[test]
-fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
-    let witness =
-        SyncedChainFacts::new(ChainCount::from_raw(10_001), true, any_hash()).expect("synced");
-    let bracketed = witness.bracket(witness.top_hash()).expect("bracketed");
-    let agreeing = CoherentChainView::reconcile(&bracketed, ChainCount::from_raw(10_001))
+fn a_view_anchors_at_the_records_block_unless_rolled_back() {
+    let agreeing = agreeing_view(10_000)
         .anchored()
         .expect("agreeing reads are anchored");
-    assert_eq!(
-        agreeing.anchor(),
-        ChainAnchor {
-            height: BlockHeight::from_raw(10_000),
-            hash: witness.top_hash(),
-        }
-    );
-    let advanced = CoherentChainView::reconcile(&bracketed, ChainCount::from_raw(20_001))
+    assert_eq!(agreeing.anchor(), record_at(10_000));
+
+    let advanced = CoherentChainView::reconcile(&witness_at(10_000), record_at(20_000))
         .anchored()
-        .expect("advance is anchored at the witness");
+        .expect("advance is anchored at the record");
+    assert_eq!(advanced.anchor(), record_at(20_000));
     assert_eq!(
         advanced.anchor().height,
         advanced.at(),
-        "the anchor is at the observed height, not the record's"
+        "the anchor is at the observed height"
     );
 
-    let stale_high =
-        SyncedChainFacts::new(ChainCount::from_raw(20_001), true, any_hash()).expect("synced");
-    let rolled_back = CoherentChainView::reconcile(
-        &stale_high
-            .bracket(stale_high.top_hash())
-            .expect("bracketed"),
-        ChainCount::from_raw(10_001),
-    );
+    let rolled_back = CoherentChainView::reconcile(&witness_at(20_000), record_at(10_000));
     assert_eq!(
         rolled_back
             .anchored()

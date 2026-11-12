@@ -1969,7 +1969,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
     // unclamped claim. The height cannot park the ladder.
     let config = WatchdogConfig::production();
     let healthy = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 20,
         synchronized: true,
     };

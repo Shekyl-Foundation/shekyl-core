@@ -61,28 +61,22 @@ impl Rpc for ClaimSourceDaemon {
         route: &str,
         body: Vec<u8>,
     ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-        let is_get_info = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
-            .is_some_and(|m| m == "get_info");
-        let result = if is_get_info {
-            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
-                chain_count: shekyl_types::ChainCount::from_raw(
-                    self.0
-                        .get("chain_height")
-                        .and_then(serde_json::Value::as_u64)
-                        .expect("the fixture source carries a chain height"),
-                ),
+        let is_status = crate::engine::test_support::requested_method(&body)
+            == crate::engine::test_support::method_name::<shekyl_rpc_client::wire::DaemonStatus>();
+        let result = if is_status {
+            // The record's `height` is its tip; the witness stands on the
+            // same block.
+            let tip = self
+                .0
+                .get("height")
+                .and_then(serde_json::Value::as_u64)
+                .expect("the fixture source carries a height");
+            crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
+                chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
                 target_height: None,
                 synchronized: true,
-                top_hash: test_block_hash_at(
-                    self.0
-                        .get("chain_height")
-                        .and_then(serde_json::Value::as_u64)
-                        .expect("the fixture source carries a chain height")
-                        .saturating_sub(1),
-                ),
-                has_peers: true,
+                top_hash: test_block_hash_at(tip),
+                peered: true,
             }
             .to_value()
         } else {
@@ -123,6 +117,7 @@ fn daemon_of_kind(
 ) -> ClaimSourceDaemon {
     ClaimSourceDaemon(Arc::new(source_json(&EmissionClaimSource {
         chain_height: ChainCount::from_raw(chain_height),
+        tip_hash: crate::engine::test_support::test_block_hash_at(chain_height - 1),
         // The decoder cross-checks this against `chain_height` — the
         // daemon derives both from one `db.height()` read — so the
         // fixture derives it the same way rather than pinning a literal
@@ -408,14 +403,15 @@ async fn the_prefix_reports_the_store_cursor_and_redeclares_quietly() {
     );
 }
 
-/// An empty chain has no tip. `ChainCount(0).tip()` is `None`, and the
-/// stamp must land on 0 rather than underflow or refuse — 0 is also what
-/// an un-ingested store reports, so the host's lag reads zero and the
-/// tripwire correctly stays quiet on a wallet at genesis.
+/// A chain of the genesis block alone stamps height 0 — 0 is also what an
+/// un-ingested store reports, so the host's lag reads zero and the
+/// tripwire correctly stays quiet on a wallet at genesis. (The wire carries
+/// the tip's height, so a chain always has one: there is no empty chain to
+/// read.)
 #[tokio::test]
-async fn an_empty_chain_stamps_height_zero() {
+async fn a_genesis_only_chain_stamps_height_zero() {
     let (_dir, curve_tree) = handle();
-    let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32], test_bodies());
+    let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32], test_bodies());
 
     let report = pinner.pin_serve_set().await.expect("pin");
     assert_eq!(report.as_of_height, BlockHeight::from_raw(0));
@@ -594,32 +590,29 @@ impl Rpc for ScheduledDaemon {
         route: &str,
         body: Vec<u8>,
     ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-        let method = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
-            .unwrap_or_default();
-        let result = if method == "get_info" {
-            // `get_info.height` is the block COUNT (`top_block + 1`), and
-            // the schedule is written in tips — the same relation the
-            // claim source below reports, because both come off one
-            // `db.height()` read on the daemon.
+        let method = crate::engine::test_support::requested_method(&body);
+        let result = if method
+            == crate::engine::test_support::method_name::<shekyl_rpc_client::wire::DaemonStatus>()
+        {
+            // The schedule is written in tips; the witness's count is one
+            // more, as the record's is.
             let tip = self.step().tip;
-            crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+            crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
                 chain_count: shekyl_types::ChainCount::from_raw(tip + 1),
                 target_height: (!self.synchronized).then_some(1_000_000),
                 synchronized: self.synchronized,
                 top_hash: test_block_hash_at(tip),
-                has_peers: true,
+                peered: true,
             }
             .to_value()
         } else {
-            // `chain_height` is a COUNT; the schedule is expressed in
-            // tips, so the record answers one more than the tip — the
-            // same relation `get_info` carries (`top_block + 1`).
+            // The record's count is one more than its tip, as the
+            // witness's is.
             let step = self.current();
             let tip = step.record_tip.unwrap_or(step.tip);
             source_json(&EmissionClaimSource {
                 chain_height: ChainCount::from_raw(tip + 1),
+                tip_hash: test_block_hash_at(tip),
                 current_settled_epoch: settlement_epoch_at_height(tip + 1),
                 bond: Some(BondContext {
                     join_settlement_epoch: 0,

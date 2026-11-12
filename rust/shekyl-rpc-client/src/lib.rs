@@ -143,9 +143,9 @@ impl RpcError {
             // retry once it has restarted, or ask another daemon.
             Self::ConnectionError(_) | Self::TransactionsUnavailable(_) => DaemonFault::Unreachable,
             Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
-            Self::InvalidNode(_)
-            | Self::PrunedTransaction
-            | Self::InvalidTransaction(_) => DaemonFault::Protocol,
+            Self::InvalidNode(_) | Self::PrunedTransaction | Self::InvalidTransaction(_) => {
+                DaemonFault::Protocol
+            }
             Self::InvalidFee => DaemonFault::FeeResponse,
             Self::InternalError(_) | Self::InvalidPriority => DaemonFault::Internal,
             Self::NoSuchMethod(_) => DaemonFault::Protocol,
@@ -327,6 +327,15 @@ use shekyl_rpc_types::endpoint::JSON_RPC_PATH;
 use shekyl_rpc_types::kinds::{Bytes, Count, Height};
 use shekyl_units::wire::AtomicUnitsString;
 
+/// The route a call is posted on: [`JSON_RPC_PATH`] relative to the
+/// transport's base URL. A transport appends a route as `{url}/{route}`
+/// ([`Rpc::post`]), so the path's own leading slash would put `//json_rpc`
+/// on the wire, which no router matches.
+#[must_use]
+pub fn json_rpc_route() -> &'static str {
+    JSON_RPC_PATH.trim_start_matches('/')
+}
+
 /// An RPC connection to a Shekyl daemon.
 ///
 /// Abstract over the transport, so a caller chooses its HTTP library, a
@@ -338,7 +347,10 @@ use shekyl_units::wire::AtomicUnitsString;
 pub trait Rpc: Sync + Clone {
     /// POST `body` to `route` and return the response body.
     ///
-    /// The implementor is left to handle anything such as authentication.
+    /// `route` is relative to the transport's base URL, with no leading
+    /// slash ([`json_rpc_route`]); the transport appends it as
+    /// `{url}/{route}`. The implementor is left to handle anything such as
+    /// authentication.
     fn post(
         &self,
         route: &str,
@@ -366,7 +378,7 @@ pub trait Rpc: Sync + Clone {
                 "params": request,
             }))
             .map_err(|e| RpcError::InternalError(format!("{} params: {e}", M::NAME)))?;
-            let reply = self.post(JSON_RPC_PATH, body).await?;
+            let reply = self.post(json_rpc_route(), body).await?;
             let unreadable = |why: String| {
                 RpcError::InvalidNode(format!(
                     "{} reply is not this build's ({why}): {}",

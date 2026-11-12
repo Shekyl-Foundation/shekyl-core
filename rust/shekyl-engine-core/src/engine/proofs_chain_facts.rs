@@ -145,12 +145,9 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     rpc: &R,
     txid: [u8; 32],
 ) -> Result<FetchedTx, ProofsError> {
-    let entry = list_proof_txs(rpc, &[txid])
-        .await?
-        .pop()
-        .ok_or_else(|| {
-            ProofsError::Daemon(RpcError::InvalidNode("an empty tx_list reply".to_string()))
-        })?;
+    let entry = list_proof_txs(rpc, &[txid]).await?.pop().ok_or_else(|| {
+        ProofsError::Daemon(RpcError::InvalidNode("an empty tx_list reply".to_string()))
+    })?;
     let state = chain_state_of(&entry)?;
     let tx = bind_served(TxHash::from_bytes(txid), &Served::from(&entry))
         .map_err(ProofsError::Daemon)?

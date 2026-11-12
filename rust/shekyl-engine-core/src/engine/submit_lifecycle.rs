@@ -568,9 +568,9 @@ fn classify_probe(outcome: TxSubmitOutcome) -> ProbeVerdict {
             | Rejection::Unrecognized => ProbeVerdict::Kernel(ProbeOutcome::RejectedTerminal),
             // Retryable: needs a fresh reference — a human-authorized
             // rebuild, not an automatic one.
-            Rejection::StaleRoot
-            | Rejection::ReferenceTooRecent
-            | Rejection::ReferenceUnknown => ProbeVerdict::ReferenceStale,
+            Rejection::StaleRoot | Rejection::ReferenceTooRecent | Rejection::ReferenceUnknown => {
+                ProbeVerdict::ReferenceStale
+            }
         },
     }
 }

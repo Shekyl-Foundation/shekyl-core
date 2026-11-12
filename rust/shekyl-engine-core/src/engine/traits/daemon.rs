@@ -110,7 +110,7 @@ pub struct FeeEstimates {
 /// [`DaemonEngine::submit_transaction`].
 ///
 /// The wallet-side projection of the daemon's atomic
-/// [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict)
+/// [`Verdict`](shekyl_rpc_client::Verdict)
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1), plus the locally
 /// computed [`TxHash`] on the identity-bearing variants. The verdict is
 /// computed by the daemon's Rust admission engine with every mutable
@@ -124,7 +124,7 @@ pub struct FeeEstimates {
 /// generic rejection as a dedup hit via a local hash record) is retired:
 /// [`Self::AlreadyInPool`] / [`Self::AlreadyInChain`] are daemon-attested
 /// identity facts. The formerly-deferred `ProofStale` detection is now
-/// constructible as [`RejectCause::StaleRoot`], closing the
+/// constructible as [`Rejection::StaleRoot`](shekyl_rpc_client::Rejection::StaleRoot), closing the
 /// `fcmp_root_stale` FOLLOWUPS reopening criterion (its named reopen was
 /// exactly "a daemon-side stale-root signal").
 ///
@@ -151,7 +151,7 @@ pub struct FeeEstimates {
 /// resubmitting held bytes yields a definite verdict for every stable
 /// state (mined → [`Self::AlreadyInChain`]; pool-resident →
 /// [`Self::AlreadyInPool`], with **no** relay pulse per F31; competing
-/// spend → [`RejectCause::DoubleSpendConflict`]; dead → re-offered
+/// spend → [`Rejection::DoubleSpendConflict`](shekyl_rpc_client::Rejection::DoubleSpendConflict); dead → re-offered
 /// through full admission). Callers MAY retry on transient transport
 /// failures.
 #[non_exhaustive]
@@ -199,12 +199,9 @@ pub(crate) enum TxSubmitOutcome {
     /// is safe where the §2.5 disposition calls for it.
     Rejected {
         /// Why the daemon refused the transaction. Dispositions per
-        /// §2.5 are applied by the orchestrator.
+        /// §2.5 are applied by the orchestrator. A consensus refusal
+        /// carries its row inside the cause (IG-Q76).
         cause: shekyl_rpc_client::Rejection,
-        /// The consensus row that refused, for `ConsensusRule`: the reply's
-        /// diagnostic parameter, carried to the user's sentence. `None` for
-        /// every other cause, and for a row this wallet cannot carry whole.
-        row: Option<crate::engine::error::CenRowName>,
     },
 }
 

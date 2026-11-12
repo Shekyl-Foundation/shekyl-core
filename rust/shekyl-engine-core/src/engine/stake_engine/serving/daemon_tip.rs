@@ -343,7 +343,7 @@ mod tests {
     use shekyl_archival_retention::pass_anchor::PASS_ANCHOR_LAG_BLOCKS;
     use shekyl_rpc_client::{Rpc, RpcError};
 
-    /// A transport that answers every call with one canned result.
+    /// A transport that answers every call with one canned document.
     ///
     /// `PersonaIsolatedTransport`'s doc permits test implementations
     /// explicitly ("the pin is against production misuse, not test
@@ -357,9 +357,12 @@ mod tests {
     impl CannedRpc {
         /// A well-formed JSON-RPC reply carrying `result`.
         fn replying(result: &serde_json::Value) -> Self {
-            Self(std::sync::Arc::new(Ok(json!({ "result": result })
-                .to_string()
-                .into_bytes())))
+            Self::document(&json!({ "jsonrpc": "2.0", "id": 0, "result": result }))
+        }
+
+        /// Any document, as the daemon's bytes.
+        fn document(document: &serde_json::Value) -> Self {
+            Self(std::sync::Arc::new(Ok(document.to_string().into_bytes())))
         }
 
         /// A reply that is not the envelope the caller expects.
@@ -392,20 +395,21 @@ mod tests {
 
     impl PersonaIsolatedTransport for CannedRpc {}
 
-    /// A complete `get_info` reply with `over`'s members laid over it.
+    /// A complete `daemon_status` reply with `over`'s members laid over it.
     ///
     /// The shared type refuses a document missing any member, so a test
     /// states the members it is about and this supplies the rest: a
-    /// synchronized daemon at count 9_001 with eight outbound peers. A member
-    /// given as JSON `null` is **removed**, which is how a test builds a
-    /// reply that is missing one.
+    /// synchronized daemon whose tip is 9_000, with peers. A member given as
+    /// JSON `null` is **removed**, which is how a test builds a reply that
+    /// is missing one; [`offline_reply`] writes the `null`s an offline
+    /// daemon sends.
     fn reply(over: &serde_json::Value) -> serde_json::Value {
-        let mut doc = crate::engine::daemon::synced_chain_facts::GetInfoDocument {
+        let mut doc = crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
             chain_count: ChainCount::from_raw(9_001),
             target_height: None,
             synchronized: true,
             top_hash: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
-            has_peers: true,
+            peered: true,
         }
         .to_value();
         let members = doc.as_object_mut().expect("a reply is an object");
@@ -419,69 +423,76 @@ mod tests {
         doc
     }
 
-    /// The overlay that makes [`reply`]'s document an offline daemon's: the
-    /// daemon says so in Health, and its Peers part is the state offline
-    /// with no count (3.56), which the decoder holds equal to `offline`.
-    fn offline_overlay(height: u64) -> serde_json::Value {
-        json!({
-            "height": height, "status": "OK", "synchronized": true, "offline": true,
-            "p2p": "offline", "has_peers": null,
-            "outgoing_connections_count": null, "incoming_connections_count": null,
-            "connectors": null
+    /// An offline daemon's reply: it says so in Health, and `peered` and the
+    /// peer counts are `null`, as they are while P2P is off.
+    fn offline_reply(height: u64) -> serde_json::Value {
+        let mut doc = reply(&json!({ "height": height, "offline": true }));
+        doc["peered"] = serde_json::Value::Null;
+        doc["peer_outbound_count"] = serde_json::Value::Null;
+        doc["peer_inbound_count"] = serde_json::Value::Null;
+        doc
+    }
+
+    /// What [`refresh_tip_once`] reads from a reply: a document that does
+    /// not decode is `Unusable`, as it is there.
+    fn reading_of_document(document: serde_json::Value) -> TipReading {
+        serde_json::from_value::<DaemonStatus>(document).map_or(TipReading::Unusable, |status| {
+            tip_reading_from_status(&status)
         })
     }
 
-    /// What [`refresh_tip_once`] reads from the reply [`reply`] builds: a
-    /// document that does not decode is `Unusable`, as it is there.
+    /// [`reading_of_document`] over [`reply`] with `over` laid on it.
     fn reading_of(over: &serde_json::Value) -> TipReading {
-        serde_json::from_value::<GetInfoResponse>(reply(over))
-            .map_or(TipReading::Unusable, |info| tip_reading_from_info(&info))
+        reading_of_document(reply(over))
+    }
+
+    /// A refusal envelope of class not-ready.
+    fn not_ready() -> serde_json::Value {
+        json!({
+            "code": -32004, "message": "not ready",
+            "data": {"code": "daemon.unready", "parameter": {}, "message": "not ready"},
+        })
     }
 
     /// The block target this suite reasons in, matching the mainnet default.
     const BLOCK_TARGET: u64 = 120;
 
-    /// The conversion, pinned on its own axis.
+    /// The stamp, pinned on its own axis.
     ///
-    /// This is the most dangerous line in the module: `get_info.height` is
-    /// the CHAIN height (top block + 1), while admission centres its window
-    /// on `predecessor_height - 720`, a BLOCK height. An off-by-one here
+    /// This is the most dangerous line in the module: `daemon_status.height`
+    /// is the TIP's height, while the shared projection carries the chain's
+    /// count, one more. Admission centres its window on
+    /// `predecessor_height - 720`, a BLOCK height. An off-by-one here
     /// centres P's gate one block high and makes it sign anchors the daemon
     /// then refuses — silently, because every signature is still
     /// well-formed and every counter still reads zero.
     ///
-    /// Asserted in both directions so a later refactor that moves the `-1`
-    /// elsewhere, or drops it, cannot pass: the reading must equal the top
-    /// block height AND must not equal the chain height it was derived from.
+    /// Asserted in both directions so a later refactor that drops the
+    /// conversion back from the count cannot pass: the reading must equal the
+    /// wire's tip AND must not equal the count derived from it.
     #[test]
-    fn a_synced_daemon_reads_as_the_top_block_height_not_the_chain_height() {
-        const CHAIN_HEIGHT: u64 = 9_001;
-        const TOP_BLOCK: u64 = CHAIN_HEIGHT - 1;
+    fn a_synced_daemon_reads_as_its_tip_not_the_count() {
+        const TIP: u64 = 9_000;
 
-        let info = json!({
-            "height": CHAIN_HEIGHT, "status": "OK", "synchronized": true
-        });
-        let reading = reading_of(&info);
+        let reading = reading_of(&json!({ "height": TIP }));
         assert_eq!(
             reading,
-            TipReading::Synced(BlockHeight::from_raw(TOP_BLOCK)),
-            "the gate's height is the top block, not the chain height"
+            TipReading::Synced(BlockHeight::from_raw(TIP)),
+            "the gate's height is the tip"
         );
         assert_ne!(
             reading,
-            TipReading::Synced(BlockHeight::from_raw(CHAIN_HEIGHT)),
-            "stamping the chain height unconverted centres the gate one block high"
+            TipReading::Synced(BlockHeight::from_raw(TIP + 1)),
+            "stamping the count centres the gate one block high"
         );
     }
 
-    /// And the conversion survives the whole producer path, not just the
-    /// parse: what reaches the cache is the block height too.
+    /// And the stamp survives the whole producer path, not just the parse:
+    /// what reaches the cache is the block height too.
     #[tokio::test]
     async fn the_conversion_reaches_the_cache_not_only_the_reading() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "status": "OK", "synchronized": true
-        })));
+        let rpc = CannedRpc::replying(&reply(&json!({ "height": 9_000 })));
         refresh_tip_once(&rpc, &tip).await;
         assert_eq!(
             tip.height(),
@@ -493,32 +504,23 @@ mod tests {
     /// A daemon that has never caught up says so, and is not followed.
     #[test]
     fn a_daemon_that_never_synchronized_is_not_followed() {
-        let info = json!({
-            "height": 5, "status": "OK", "synchronized": false
-        });
         assert_eq!(
-            reading_of(&info),
+            reading_of(&json!({ "height": 4, "synchronized": false })),
             TipReading::NotFollowing(NotFollowing::NeverSynchronized)
         );
     }
 
     /// **A target a peer claimed does not stop this persona serving.** The
     /// daemon says it is synchronized; its target is whatever the tallest
-    /// claim in a handshake was. Until 3.46 a height below the target was
-    /// refused as `BehindItsTarget`, which a synchronized daemon could not
-    /// then report. Now that it can, the refusal would be a lever any peer
-    /// could pull, so the target decides nothing.
+    /// claim in a handshake was. A refusal on a height below the target
+    /// would be a lever any peer could pull, so the target decides nothing.
     ///
     /// The edit that turns this red is a height comparison coming back.
     #[test]
     fn a_target_above_the_height_does_not_stop_a_synchronized_daemon_being_followed() {
-        for target in [9_000u64, 9_001, 9_500, 12_000, u64::MAX] {
-            let info = json!({
-                "height": 9_000, "target_height": target, "status": "OK",
-                "synchronized": true
-            });
+        for target in [8_999u64, 9_000, 9_500, 12_000, u64::MAX] {
             assert_eq!(
-                reading_of(&info),
+                reading_of(&json!({ "height": 8_999, "target_height": target })),
                 TipReading::Synced(BlockHeight::from_raw(8_999)),
                 "target {target}"
             );
@@ -531,18 +533,15 @@ mod tests {
     #[test]
     fn the_sync_verdict_is_the_daemons_flag() {
         for (height, target, synchronized) in [
-            (5, None, false),
-            (9_000, Some(9_500), true),
-            (9_500, Some(9_500), true),
-            (9_001, None, true),
-            (10, Some(5), false),
-            (10, Some(50), false),
-            (7, Some(0), true),
+            (4, None, false),
+            (8_999, Some(9_499), true),
+            (9_499, Some(9_499), true),
+            (9_000, None, true),
+            (9, Some(4), false),
+            (9, Some(49), false),
+            (6, Some(0), true),
         ] {
-            let mut over = json!({
-                "height": height, "status": "OK",
-                "synchronized": synchronized
-            });
+            let mut over = json!({ "height": height, "synchronized": synchronized });
             if let Some(target) = target {
                 over["target_height"] = json!(target);
             }
@@ -576,21 +575,26 @@ mod tests {
              required and may be null; absent is neither (RK-D23)"
         );
         assert_eq!(
-            reading_of(&json!({"height": "nope", "status": "OK", "synchronized": true})),
+            reading_of(&json!({ "height": "nope" })),
             TipReading::Unusable,
             "an unparseable height is never silently defaulted"
         );
+    }
+
+    /// The genesis block is a tip: height 0 on the wire is a one-block
+    /// chain, stamped at 0.
+    #[test]
+    fn the_genesis_tip_is_stamped_at_zero() {
         assert_eq!(
-            reading_of(&json!({"height": 0, "status": "OK", "synchronized": true})),
-            TipReading::Unusable,
-            "chain height 0 has no top block to stamp"
+            reading_of(&json!({ "height": 0 })),
+            TipReading::Synced(BlockHeight::from_raw(0))
         );
     }
 
-    /// An `Unusable` reading leaves a held tip alone; a `Syncing` one clears
-    /// it. This is the distinction the whole no-slash-on-a-blip argument
-    /// rests on, asserted through the stamping path rather than the cache's
-    /// own unit tests.
+    /// An `Unusable` reading leaves a held tip alone; a `NotFollowing` one
+    /// clears it. This is the distinction the whole no-slash-on-a-blip
+    /// argument rests on, asserted through the stamping path rather than
+    /// the cache's own unit tests.
     #[test]
     fn unusable_holds_the_tip_and_syncing_clears_it() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
@@ -680,9 +684,7 @@ mod tests {
     #[tokio::test]
     async fn a_synced_reply_stamps_the_top_block_height() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
-        let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "status": "OK", "synchronized": true
-        })));
+        let rpc = CannedRpc::replying(&reply(&json!({ "height": 9_000 })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::Synced(BlockHeight::from_raw(9_000))
@@ -698,7 +700,7 @@ mod tests {
     async fn a_reply_that_stopped_following_clears_a_held_tip() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&reply(&offline_overlay(9_001)));
+        let rpc = CannedRpc::replying(&offline_reply(9_000));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::NotFollowing(NotFollowing::Offline)
@@ -747,97 +749,78 @@ mod tests {
         assert_eq!(tip.height(), None);
     }
 
-    // ── F2: the sticky `synchronized` flag is not sufficient ────────────
+    // ── `synchronized` is necessary, not sufficient ─────────────────────
     //
-    // `m_synchronized` is written once, one-way, and never cleared. Every
-    // case below presents `synchronized: true` — a reply the pre-F2
-    // predicate accepted unconditionally — and differs only in a fact that
-    // CAN revert.
+    // Every case below presents `synchronized: true` and differs only in a
+    // fact that CAN revert.
 
     /// The motivating case: a once-synced daemon that has lost every peer
     /// keeps claiming synchronization at a frozen height. Dropping the
-    /// `has_peers` arm turns this green again, which is the whole defect.
+    /// `peered` arm turns this green again, which is the whole defect.
     #[test]
     fn a_once_synced_daemon_with_no_peers_is_not_following() {
-        let info = json!({
-            "height": 9_001, "status": "OK", "synchronized": true, "has_peers": false
-        });
         assert_eq!(
-            reading_of(&info),
+            reading_of(&json!({ "peered": false })),
             TipReading::NotFollowing(NotFollowing::NoPeers)
         );
     }
 
-    /// **§3.1's defect, pinned shut on this side** (RK-D14). The reply is a
-    /// restricted daemon's, from a node with peers: `restricted: true`,
-    /// every Status count zero, `has_peers: true`. It is followed.
+    /// **§3.1's defect, pinned shut on this side** (RK-D14). The reply is
+    /// from a node with peers whose Status counts read zero: it is followed.
+    /// Then the same node behind a daemon that withholds Status altogether,
+    /// as it does for a caller without the `status` grant: still followed.
+    /// And the control: the same two replies from a node that really has no
+    /// peers are `NoPeers`.
     ///
-    /// Then the same node behind a daemon that withholds Status and Peers
-    /// altogether, which is what a restricted reply is since RK-Q8 (3.48): still
-    /// followed. And the control: the same two replies from a node that
-    /// really has no peers are `NoPeers`, restricted or not, so the check
-    /// is no longer one a restricted daemon is excused from.
-    ///
-    /// The edits that turn this red: reading the Status counts again, or
-    /// skipping the check when `restricted` is set.
+    /// The edit that turns this red: reading the Status counts again.
     #[test]
-    fn a_restricted_reply_from_a_node_with_peers_is_followed_and_one_without_is_not() {
-        for has_peers in [true, false] {
-            let expected = if has_peers {
+    fn a_node_with_peers_is_followed_whatever_status_shows() {
+        for peered in [true, false] {
+            let expected = if peered {
                 TipReading::Synced(BlockHeight::from_raw(9_000))
             } else {
                 TipReading::NotFollowing(NotFollowing::NoPeers)
             };
-            for restricted in [true, false] {
-                let stand_ins = reply(&json!({
-                    "height": 9_001, "status": "OK", "synchronized": true,
-                    "has_peers": has_peers, "restricted": restricted,
-                    "outgoing_connections_count": 0, "incoming_connections_count": 0
-                }));
-                let mut info: GetInfoResponse =
-                    serde_json::from_value(stand_ins).expect("a reply decodes");
-                assert_eq!(
-                    tip_reading_from_info(&info),
-                    expected,
-                    "has_peers {has_peers}, restricted {restricted}, Status zeroed"
-                );
-
-                info.node = shekyl_rpc_types::Hidden::Withheld;
-                info.peers = shekyl_rpc_types::Hidden::Withheld;
-                assert_eq!(
-                    tip_reading_from_info(&info),
-                    expected,
-                    "has_peers {has_peers}, restricted {restricted}, Status withheld"
-                );
-            }
+            let document = crate::engine::daemon::synced_chain_facts::DaemonStatusDocument {
+                chain_count: ChainCount::from_raw(9_001),
+                target_height: None,
+                synchronized: true,
+                top_hash: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
+                peered,
+            };
+            assert_eq!(
+                tip_reading_from_status(&document.to_reply()),
+                expected,
+                "peered {peered}, Status zeroed"
+            );
+            assert_eq!(
+                tip_reading_from_status(&document.to_reply_status_withheld()),
+                expected,
+                "peered {peered}, Status withheld"
+            );
         }
     }
 
     /// The Status counts decide nothing: twenty connections reported and
-    /// `has_peers: false` is a node with nobody through a handshake, and it
-    /// is not followed.
+    /// `peered: false` is a node with nobody through a handshake, and it is
+    /// not followed.
     #[test]
-    fn the_status_counts_do_not_stand_in_for_has_peers() {
-        let info = json!({
-            "height": 9_001, "status": "OK", "synchronized": true, "has_peers": false,
-            "outgoing_connections_count": 8, "incoming_connections_count": 12
-        });
+    fn the_status_counts_do_not_stand_in_for_peered() {
         assert_eq!(
-            reading_of(&info),
+            reading_of(&json!({
+                "peered": false, "peer_outbound_count": 8, "peer_inbound_count": 12
+            })),
             TipReading::NotFollowing(NotFollowing::NoPeers)
         );
     }
 
-    /// `following_degraded` is the daemon saying it knowingly is not on the
-    /// heaviest chain it has seen. It is one-way in C++ — which is the safe
-    /// direction here, because the refusal should latch until a resync.
+    /// `degraded` is the daemon saying it knowingly is not on the heaviest
+    /// chain it has seen. It is one-way — which is the safe direction here,
+    /// because the refusal should latch until a resync.
     #[test]
     fn a_degraded_daemon_is_not_following_however_synchronized_it_claims_to_be() {
-        let info = json!({
-            "height": 9_001, "status": "OK", "synchronized": true, "following_degraded": true
-        });
         assert_eq!(
-            reading_of(&info),
+            reading_of(&json!({ "degraded": true })),
             TipReading::NotFollowing(NotFollowing::Degraded)
         );
     }
@@ -845,16 +828,14 @@ mod tests {
     #[test]
     fn an_offline_daemon_is_not_following() {
         assert_eq!(
-            reading_of(&offline_overlay(9_001)),
+            reading_of_document(offline_reply(9_000)),
             TipReading::NotFollowing(NotFollowing::Offline)
         );
     }
 
     /// The refusal triggers, when false, do not refuse — and a reply that
-    /// omits one is not read as if it had said false. `restricted` is no
-    /// longer a trigger; it is still a member, so its absence is still a
-    /// reply of another version. A daemon whose
-    /// reply lacks a member is a daemon at another version: its reply is
+    /// omits one is not read as if it had said false. A daemon whose reply
+    /// lacks a member is a daemon at another version: its reply is
     /// `Unusable`, which holds the tip and lets it age out, and never
     /// `NotFollowing`, which would clear it. That keeps an upgrade skew from
     /// becoming a refusal on every poll without pretending to know a fact
@@ -862,13 +843,10 @@ mod tests {
     #[test]
     fn false_refusal_triggers_do_not_refuse_and_absent_ones_are_not_read() {
         assert_eq!(
-            reading_of(&json!({
-                "offline": false, "following_degraded": false, "has_peers": true,
-                "restricted": false
-            })),
+            reading_of(&json!({ "offline": false, "degraded": false, "peered": true })),
             TipReading::Synced(BlockHeight::from_raw(9_000)),
         );
-        for trigger in ["offline", "following_degraded", "has_peers", "restricted"] {
+        for trigger in ["offline", "degraded", "peered"] {
             assert_eq!(
                 reading_of(&json!({ trigger: null })),
                 TipReading::Unusable,
@@ -878,16 +856,13 @@ mod tests {
     }
 
     /// Through the real producer, not just the parse: a peerless daemon
-    /// CLEARS a held tip rather than refreshing it. This is the end-to-end
-    /// statement of F2 — the stale height must not be stamped fresh.
+    /// CLEARS a held tip rather than refreshing it. The stale height must
+    /// not be stamped fresh.
     #[tokio::test]
     async fn a_peerless_daemon_clears_the_tip_instead_of_restamping_it() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&reply(&json!({
-            "height": 9_001, "status": "OK", "synchronized": true,
-            "has_peers": false
-        })));
+        let rpc = CannedRpc::replying(&reply(&json!({ "peered": false })));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
             TipReading::NotFollowing(NotFollowing::NoPeers)
@@ -899,51 +874,40 @@ mod tests {
         );
     }
 
-    // ── The wire status is part of the contract, and it is tested ────────
+    // ── A refusal is not evidence ────────────────────────────────────────
 
-    /// A refusal carrying a plausible body. Every field below would read as
-    /// a healthy synced daemon at 9_000; the status says none of it is
-    /// evidence. Dropping the status check turns this green — with the
-    /// slash-sensitive cache refreshed from a `BUSY`.
-    #[test]
-    fn a_non_ok_status_makes_a_plausible_body_unusable() {
-        for status in ["BUSY", "Failed", "PAYMENT REQUIRED", "ok", ""] {
-            let info = json!({
-                "status": status, "height": 9_001,
-                "synchronized": true
-            });
-            assert_eq!(
-                reading_of(&info),
-                TipReading::Unusable,
-                "status {status:?} must not let its body be read as a tip"
-            );
-        }
-    }
-
-    /// The field being absent is not the contract either. A fixture that
-    /// omits it cannot fail on it, so a reply that omits it must not pass.
-    #[test]
-    fn an_absent_status_is_unusable_not_assumed_ok() {
-        assert_eq!(reading_of(&json!({ "status": null })), TipReading::Unusable);
-    }
-
-    /// Through the producer: a `BUSY` HOLDS a held tip rather than clearing
-    /// it. `check_core_ready()` is false at startup and briefly during some
-    /// reorgs; a refusal is the absence of a fact about the tip, so it takes
-    /// the dropped-poll path and ages out on schedule.
+    /// A refusal beside a plausible body. Every member of the body would
+    /// read as a healthy synced daemon; a document carrying both a result
+    /// and an error is neither, and nothing in it is evidence. Reading the
+    /// result out of it turns this green — with the slash-sensitive cache
+    /// refreshed from a refusal.
     #[tokio::test]
-    async fn a_busy_daemon_holds_the_tip_it_cannot_speak_to() {
+    async fn a_refusal_beside_a_plausible_body_is_unusable() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        let rpc = CannedRpc::document(&json!({
+            "jsonrpc": "2.0", "id": 0,
+            "result": reply(&json!({ "height": 12_345 })),
+            "error": not_ready(),
+        }));
+        assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);
+        assert_eq!(tip.height(), None, "nothing stamped from the body");
+    }
+
+    /// Through the producer: a not-ready refusal HOLDS a held tip rather
+    /// than clearing it. A refusal is the absence of a fact about the tip,
+    /// so it takes the dropped-poll path and ages out on schedule.
+    #[tokio::test]
+    async fn a_daemon_that_is_not_ready_holds_the_tip_it_cannot_speak_to() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(BlockHeight::from_raw(9_000));
-        let rpc = CannedRpc::replying(&reply(&json!({
-            "status": "BUSY", "height": 12_345,
-            "synchronized": true
-        })));
+        let rpc = CannedRpc::document(&json!({
+            "jsonrpc": "2.0", "id": 0, "error": not_ready(),
+        }));
         assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);
         assert_eq!(
             tip.height(),
             Some(BlockHeight::from_raw(9_000)),
-            "neither cleared by the refusal nor refreshed from its body"
+            "neither cleared by the refusal nor refreshed"
         );
     }
 }

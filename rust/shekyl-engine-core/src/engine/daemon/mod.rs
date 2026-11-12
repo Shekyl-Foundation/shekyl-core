@@ -23,7 +23,7 @@
 //! 2. **One audited site for daemon-bound calls.** The wallet's
 //!    daemon-touching operations (`get_fee_estimates` for fee-priority
 //!    resolution, transfer submission, the identity handshake on
-//!    `get_version`) ultimately go through this type.
+//!    `version`) ultimately go through this type.
 //! 3. **Keeps the cross-cutting lock 1 contract local.** The
 //!    "caller-provided multi-threaded `tokio` runtime" requirement
 //!    sits on a [`HttpRpc`] field rather than radiating through
@@ -31,10 +31,10 @@
 //!
 //! # Identity handshake (`VC-4`)
 //!
-//! [`DaemonClient::verifying`] compares the daemon's `get_version` tuple
+//! [`DaemonClient::verifying`] compares the daemon's `version` tuple
 //! to this build on first request, gated at [`Rpc::post`]. A mismatch is
 //! [`RpcError::IdentityMismatch`]. [`DaemonClient::new`] performs no check
-//! and exists for harnesses whose fake daemons serve no `get_version`.
+//! and exists for harnesses whose fake daemons serve no `version`.
 //! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
 //! (`{ wallet, expected }`); that is a different fact.
 
@@ -135,7 +135,7 @@ impl DaemonClient {
     /// Wrap an existing [`HttpRpc`] connection.
     ///
     /// **Performs no identity check.** For harnesses whose fake daemons serve
-    /// no `get_version`, and for callers that have verified by other means.
+    /// no `version`, and for callers that have verified by other means.
     /// Every shipped path uses [`DaemonClient::verifying`] instead.
     pub fn new(inner: HttpRpc) -> Self {
         Self {
@@ -148,7 +148,7 @@ impl DaemonClient {
     /// Wrap a connection and require the daemon to prove its identity before
     /// the first request (`VC-4`). **This is the constructor every shipped
     /// path uses**; [`DaemonClient::new`] performs no check and exists for
-    /// harnesses whose fake daemons serve no `get_version`.
+    /// harnesses whose fake daemons serve no `version`.
     #[must_use]
     pub fn verifying(inner: HttpRpc, expectation: DaemonExpectation) -> Self {
         Self {
@@ -188,7 +188,7 @@ impl DaemonClient {
         &self,
         expected: &DaemonExpectation,
     ) -> Result<(), HandshakeFail> {
-        let result = fetch_get_version(&self.inner).await?;
+        let result = fetch_version(&self.inner).await?;
         // One read for every client (`RK-D25`): the version first, then the
         // strict decode, then the rest of the tuple.
         expected
@@ -228,14 +228,14 @@ enum HandshakeFail {
     Mismatch(shekyl_rpc_types::IdentityMismatch),
 }
 
-/// Fetch `get_version`'s `result`, undecoded, without going through
+/// Fetch `version`'s `result`, undecoded, without going through
 /// [`DaemonClient::post`] (that would recurse into the handshake). A
 /// JSON-RPC **error** object is transport — the daemon is reachable but not
 /// ready — not a wire mismatch.
 ///
 /// The result is returned as it arrived because decoding it is
 /// `IdentityExpectation::read`'s: the version is read before anything else.
-async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
+async fn fetch_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": 0,
@@ -244,7 +244,7 @@ async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
     }))
     .map_err(|e| HandshakeFail::Transport(RpcError::InternalError(e.to_string())))?;
     let raw = inner
-        .post("json_rpc", body)
+        .post(shekyl_rpc_client::json_rpc_route(), body)
         .await
         .map_err(HandshakeFail::Transport)?;
     let envelope: Value = serde_json::from_slice(&raw).map_err(unreadable_reply)?;
@@ -319,7 +319,7 @@ impl DaemonEngine for DaemonClient {
     }
 
     /// Offer `tx_bytes` to the daemon over the typed submit route and
-    /// map its [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict) to a
+    /// map its [`Verdict`](shekyl_rpc_client::Verdict) to a
     /// [`TxSubmitOutcome`].
     ///
     /// 1. Parse `tx_bytes` back into a [`Transaction`]. A round-trip
@@ -357,7 +357,6 @@ impl DaemonEngine for DaemonClient {
                     );
                     return Ok(TxSubmitOutcome::Rejected {
                         cause: Rejection::Malformed,
-                        row: None,
                     });
                 }
             };
@@ -416,7 +415,7 @@ mod tests {
 
     use std::io::{Read as _, Write as _};
 
-    /// A one-request daemon that answers `get_version` with `reply`.
+    /// A daemon that answers `version` with `reply`, whatever it is asked.
     fn fake_daemon(reply: String) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
@@ -438,20 +437,21 @@ mod tests {
         address
     }
 
-    /// A `get_version` reply agreeing with this build except where `edit`
+    /// A `version` reply agreeing with this build except where `edit`
     /// says otherwise.
-    fn version_reply(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse)) -> String {
-        let mut reply = shekyl_rpc_types::GetVersionResponse {
-            status: shekyl_rpc_types::RpcStatus::ok(),
-            version: shekyl_rpc_types::CORE_RPC_VERSION,
-            release: false,
-            current_height: 1,
-            target_height: shekyl_rpc_types::Nullable::NULL,
-            consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: shekyl_rpc_types::Network::Mainnet,
-            genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
-                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Mainnet),
-            ),
+    fn version_reply(edit: impl FnOnce(&mut wire::chain::Version)) -> String {
+        let mut reply = wire::chain::Version {
+            version: shekyl_rpc_types::kinds::Integer(u64::from(
+                shekyl_rpc_types::CORE_RPC_VERSION,
+            )),
+            tagged: false,
+            height: shekyl_rpc_types::kinds::Height(0),
+            target_height: shekyl_rpc_types::nullable::Nullable(None),
+            consensus_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+            network: shekyl_rpc_types::Network::Mainnet,
+            genesis: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
+                shekyl_rpc_types::Network::Mainnet,
+            )),
         };
         edit(&mut reply);
         json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
@@ -504,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn a_wire_version_mismatch_refuses_and_names_the_older_side() {
         let err =
-            first_request_error(version_reply(|r| r.version -= 1), mainnet_expectation()).await;
+            first_request_error(version_reply(|r| r.version.0 -= 1), mainnet_expectation()).await;
         assert_eq!(
             refused_on(&err),
             shekyl_rpc_types::IdentityMismatch::Wire {
@@ -524,7 +524,7 @@ mod tests {
     async fn a_rules_digest_mismatch_refuses_without_inventing_an_ordering() {
         let err = first_request_error(
             version_reply(|r| {
-                r.consensus_constants_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
+                r.consensus_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
             }),
             mainnet_expectation(),
         )
@@ -547,7 +547,7 @@ mod tests {
     async fn a_foreign_genesis_daemon_is_refused() {
         let err = first_request_error(
             version_reply(|r| {
-                r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
+                r.genesis = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
             }),
             mainnet_expectation(),
         )
@@ -567,7 +567,7 @@ mod tests {
         // JSON for every network, so a testnet daemon from this same tree
         // carries the SAME digest and the SAME RPC version.
         let err = first_request_error(
-            version_reply(|r| r.nettype = shekyl_rpc_types::Network::Testnet),
+            version_reply(|r| r.network = shekyl_rpc_types::Network::Testnet),
             mainnet_expectation(),
         )
         .await;
@@ -592,8 +592,8 @@ mod tests {
     async fn a_regtest_daemon_is_refused_by_mainnet_and_taken_by_regtest() {
         let regtest = || {
             version_reply(|r| {
-                r.nettype = shekyl_rpc_types::Network::Regtest;
-                r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes(
+                r.network = shekyl_rpc_types::Network::Regtest;
+                r.genesis = shekyl_rpc_types::HashHex::from_bytes(
                     shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::Network::Regtest),
                 );
             })
@@ -617,13 +617,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
+    async fn a_version_reply_that_does_not_parse_is_reported_as_a_wire_mismatch() {
         // VC-D16: a reply with no readable version, and one that claims this
         // build's version and then answers in another shape, are the wire
         // axis disagreeing, and the operator must be told so.
         for result in [
-            json!({"status": "OK"}),
-            json!({"status": "OK", "version": shekyl_rpc_types::CORE_RPC_VERSION}),
+            json!({}),
+            json!({"version": shekyl_rpc_types::CORE_RPC_VERSION}),
         ] {
             let err = first_request_error(
                 json!({"jsonrpc": "2.0", "id": "0", "result": result}).to_string(),
@@ -646,6 +646,71 @@ mod tests {
     /// The version is read before the rest (RK-Q11): a daemon of another
     /// RPC version answers in a shape this build cannot decode, and is
     /// still named. Before, this was the unreadable case above.
+    /// **A 3.x daemon has no `version` method** (RW-Q6): the version read is
+    /// `version` from 4.0, and a daemon that answers method-not-found to it
+    /// is a daemon of another RPC major, refused as the wire axis — not a
+    /// transport fault a retry could clear.
+    ///
+    /// The edit that turns this red is reading method-not-found as a
+    /// connection error.
+    #[tokio::test]
+    async fn a_daemon_with_no_version_method_is_a_wire_mismatch() {
+        let err = first_request_error(
+            json!({"jsonrpc": "2.0", "id": 0, "error": {
+                "code": shekyl_rpc_types::errors::METHOD_NOT_FOUND,
+                "message": "Method not found",
+            }})
+            .to_string(),
+            mainnet_expectation(),
+        )
+        .await;
+        assert_eq!(
+            refused_on(&err),
+            shekyl_rpc_types::IdentityMismatch::unreadable()
+        );
+    }
+
+    /// **The handshake is posted on the daemon's one path.** The transport
+    /// appends the route to its base URL, so the request line must read
+    /// `POST /json_rpc` — a route carrying its own slash would put
+    /// `//json_rpc` on the wire, which the daemon's router does not match.
+    ///
+    /// The edit that turns this red is posting `JSON_RPC_PATH` as the route.
+    #[tokio::test]
+    async fn the_version_read_is_posted_on_the_daemons_one_path() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let reply = version_reply(|_| {});
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let Ok(n) = s.read(&mut buf) else { return };
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                drop(seen_tx.send(request.lines().next().unwrap_or_default().to_owned()));
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.len()
+                );
+                drop(s.write_all(head.as_bytes()));
+                drop(s.write_all(reply.as_bytes()));
+            }
+        });
+        let rpc = HttpRpc::new(format!("http://{address}"))
+            .await
+            .expect("loopback endpoint");
+        let client = DaemonClient::verifying(rpc, mainnet_expectation());
+        assert!(client.ensure_identity().await.is_ok());
+        let line = seen_rx.recv().expect("the daemon saw a request");
+        assert_eq!(
+            line,
+            format!(
+                "POST {} HTTP/1.1",
+                shekyl_rpc_types::endpoint::JSON_RPC_PATH
+            )
+        );
+    }
+
     #[tokio::test]
     async fn a_daemon_of_another_version_is_named_though_its_reply_does_not_decode() {
         let err = first_request_error(
@@ -669,11 +734,11 @@ mod tests {
     async fn the_verdict_is_computed_once_and_reused() {
         // The handshake is per connection, not per request: a wallet that
         // re-verified on every call would multiply every operation's round
-        // trips. The fake daemon answers `get_version` to ANY request, so a
+        // trips. The fake daemon answers `version` to ANY request, so a
         // second handshake would succeed — what this asserts is that the
         // second call does not repeat it, by observing that a refusal stays
         // refused rather than being re-derived.
-        let client = client_for(version_reply(|r| r.version -= 1), mainnet_expectation()).await;
+        let client = client_for(version_reply(|r| r.version.0 -= 1), mainnet_expectation()).await;
         let first = client.ensure_identity().await;
         let second = client.ensure_identity().await;
         assert!(
@@ -685,7 +750,7 @@ mod tests {
     #[tokio::test]
     async fn an_unverified_client_makes_no_handshake_at_all() {
         // `DaemonClient::new` is the harness constructor: it must not reach
-        // for `get_version`, or every existing fixture would need one.
+        // for `version`, or every existing fixture would need one.
         let rpc = HttpRpc::new(format!("http://{}", fake_daemon(String::new())))
             .await
             .expect("loopback endpoint");
@@ -770,27 +835,25 @@ mod tests {
         );
     }
 
-    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`.
+    /// The named tiers map onto `economy`, `standard` and `priority`.
     #[test]
-    fn fee_estimates_array_maps_the_three_priced_tiers() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200, 400],
-        });
-        let est = fee_estimates_from_value(&result).expect("well-formed fee array");
+    fn fee_estimates_map_the_three_named_tiers() {
+        let result = json!({ "economy": "100", "standard": "200", "high": "400" });
+        let est = fee_estimates_from_value(&result).expect("well-formed fee tiers");
         assert_eq!(est.economy, FeeRate::new(100).unwrap());
         assert_eq!(est.standard, FeeRate::new(200).unwrap());
         assert_eq!(est.priority, FeeRate::new(400).unwrap());
         assert_ne!(est.economy, est.priority);
     }
 
-    /// A reply carrying only the scalar `fee` is malformed, not a
-    /// legacy shape to synthesize tiers from.
+    /// A reply missing a tier, or carrying a scalar in their place, is
+    /// malformed, not a shape to synthesize tiers from.
     #[test]
-    fn fee_estimates_refuses_a_scalar_only_reply() {
+    fn fee_estimates_refuses_a_reply_without_its_tiers() {
         for reply in [
-            json!({"status": "OK", "fee": 10u64}),
-            json!({"status": "OK", "fees": null, "fee": 10u64}),
+            json!({ "fee": "10" }),
+            json!({ "economy": "100", "standard": "200" }),
+            json!({ "economy": 100, "standard": 200, "high": 400 }),
         ] {
             assert!(
                 matches!(fee_estimates_from_value(&reply), Err(RpcError::InvalidFee)),
@@ -799,69 +862,25 @@ mod tests {
         }
     }
 
+    /// A reply carrying a member the table does not define is refused:
+    /// the 3.x `status` word, the tier array, and the retired
+    /// `quantization_mask` (the lattice is
+    /// `shekyl_economics::FEE_QUANTIZATION_MASK`, a constant the wallet and
+    /// the daemon share, and a daemon that still serves one is a daemon
+    /// this wallet does not read a lattice from).
     #[test]
-    fn fee_estimates_rejects_non_ok_status() {
-        let result = json!({
-            "status": "BUSY",
-            "fees": [100u64, 200, 400],
-        });
-        assert!(matches!(
-            fee_estimates_from_value(&result),
-            Err(RpcError::InvalidFee)
-        ));
-    }
-
-    /// A count other than three is a parse error, including the four-slot
-    /// shape that used to be the contract. Reading four as a longer
-    /// three-slot answer would put priority on the old bridge slot.
-    #[test]
-    fn fee_estimates_rejects_the_wrong_tier_count() {
-        for fees in [
-            json!([100u64, 200]),
-            json!([100u64, 200, 300, 400]),
-            json!([100u64, 200, 300, 400, 500, 600]),
-            json!([]),
+    fn fee_estimates_refuse_a_member_the_table_does_not_define() {
+        for (member, value) in [
+            ("status", json!("OK")),
+            ("fees", json!([100u64, 200, 400])),
+            ("quantization_mask", json!(8u64)),
         ] {
-            let result = json!({
-                "status": "OK",
-                "fees": fees,
-            });
+            let mut result = json!({ "economy": "100", "standard": "200", "high": "400" });
+            result[member] = value;
             assert!(
                 matches!(fee_estimates_from_value(&result), Err(RpcError::InvalidFee)),
-                "a tier count other than three must not parse: {result}"
+                "a reply carrying `{member}` is not the table's: {result}"
             );
         }
-    }
-
-    /// A present-but-non-array `fees` (e.g. a string) is malformed, and
-    /// the neighbouring scalar `fee` does not rescue it.
-    #[test]
-    fn fee_estimates_rejects_non_array_fees() {
-        let result = json!({
-            "status": "OK",
-            "fees": "oops",
-            "fee": 10u64,
-        });
-        assert!(matches!(
-            fee_estimates_from_value(&result),
-            Err(RpcError::InvalidFee)
-        ));
-    }
-
-    /// A reply still carrying the retired `quantization_mask` is refused:
-    /// the lattice is `shekyl_economics::FEE_QUANTIZATION_MASK`, a
-    /// constant the wallet and the daemon share, and a daemon that still
-    /// serves one is a daemon this wallet does not read a lattice from.
-    #[test]
-    fn fee_estimates_refuses_a_reply_carrying_the_retired_mask() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200, 400],
-            "quantization_mask": 8u64,
-        });
-        assert!(matches!(
-            fee_estimates_from_value(&result),
-            Err(RpcError::InvalidFee)
-        ));
     }
 }

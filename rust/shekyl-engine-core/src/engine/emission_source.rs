@@ -444,9 +444,8 @@ impl EmissionClaimSource {
                         // (bound + duplicate-free) like every other holdings
                         // decoder. The ShardSetError carries the specific
                         // fault — surface it.
-                        shard_ids: ShardSet::new(integers(&reply.shard)).map_err(|e| {
-                            EmissionSourceError::Malformed(format!("shard: {e}"))
-                        })?,
+                        shard_ids: ShardSet::new(integers(&reply.shard))
+                            .map_err(|e| EmissionSourceError::Malformed(format!("shard: {e}")))?,
                     },
                     claimed_settlement_epochs,
                     bonded_total_atomic: amount(&reply.bond_total),
@@ -611,15 +610,6 @@ impl VouchedClaimSource {
         self.source
     }
 
-    /// The vouching as decided, for tests that assert *which* broken state
-    /// production reached. Production reads [`Self::actionable`], which is
-    /// the only question it asks; this hatch is test-only for the same
-    /// reason [`Self::for_test`] is.
-    #[cfg(test)]
-    pub(crate) fn vouching(&self) -> Vouching {
-        self.vouching
-    }
-
     /// The view to act on, or the reason there is none.
     ///
     /// For consumers that **act on the record's contents** — signing a claim
@@ -704,9 +694,7 @@ pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
     // The record names its own block, so it needs no re-read after it: the
     // witness is the sync gate and the height a record must not fall below.
     let vouching = match witness {
-        Ok(Some(facts)) => {
-            Vouching::Vouched(CoherentChainView::reconcile(&facts, source.anchor()))
-        }
+        Ok(Some(facts)) => Vouching::Vouched(CoherentChainView::reconcile(&facts, source.anchor())),
         Ok(None) => Vouching::Broken(TimelineBreak::DaemonSyncing),
         Err(e) => Vouching::Broken(TimelineBreak::from_facts_error(&e)),
     };
