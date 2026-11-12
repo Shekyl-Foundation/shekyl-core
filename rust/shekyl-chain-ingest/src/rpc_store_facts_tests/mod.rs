@@ -540,8 +540,14 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let info = daemon_status(&facts, &facts, Disclosure::FULL, 0)
-            .unwrap_or_else(|_| panic!("daemon_status"));
+        let info = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::FULL,
+            0,
+            tor_read(Disclosure::FULL),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
         assert_eq!(info.height.0, last.height.to_raw(), "the tip's height");
         assert_eq!(info.hash, hex(last.hash));
         assert!(info.synchronized);
@@ -590,8 +596,14 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
             Some(0),
             "a full disclosure shows Status"
         );
-        let restricted = daemon_status(&facts, &facts, Disclosure::VIEW, 0)
-            .unwrap_or_else(|_| panic!("daemon_status"));
+        let restricted = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::VIEW,
+            0,
+            tor_read(Disclosure::VIEW),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
         assert!(restricted.alt_count.is_withheld(), "Status is withheld");
         assert!(restricted.connector.is_withheld(), "Peers is withheld");
         drop(facts);
@@ -940,4 +952,24 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
          {coinbase_figure_wraps}"
     );
     assert!(differences.is_empty(), "{} differences", differences.len());
+}
+
+/// What the daemon's Tor supervisor answers `disclosure`, which a store
+/// test does not run: a Tor-off node's `hiding`, and its status only for a
+/// caller shown Status, as the handler asks it.
+fn tor_read(disclosure: Disclosure) -> shekyl_daemon_rpc::tor_facts::TorRead {
+    use shekyl_tor_status::{Clearnet, Origination, Posture, TorSetting, TorStatus};
+    shekyl_daemon_rpc::tor_facts::TorRead {
+        hiding: false,
+        status: disclosure.status().then(|| TorStatus {
+            posture: Posture {
+                tor: TorSetting::Off,
+                clearnet: Clearnet::On,
+            },
+            origination: Origination::ClearnetOnly,
+            sync_connector: vec![],
+            tor_quiet: None,
+            tor: None,
+        }),
+    }
 }

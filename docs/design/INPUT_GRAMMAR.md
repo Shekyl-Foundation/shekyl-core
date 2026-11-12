@@ -1284,7 +1284,7 @@ Existing terms that gain a parent. The §19 row gains the parent and states the 
 - `connector` gains `sync` on its §19 defining row, keeping "one-of `clearnet`, `tor`".
 - `count` gains `respawn` on its §19 gains row. `count` is defined in §11, so a second defining row would be a duplicate. The meaning stays "how many".
 
-These fields join the generated schema with the Tor supervisor lane's status PRs, and the walk then takes `hiding`, `posture`, `origination`, `sync_connector`, `tor` and `tor_quiet` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `cause`, `age`, `respawn_count`, `progress`, `flagged`, `fix`, `onion`, `bootstrap` and `carriage`. `tor_quiet` walks under `daemon` as a reference: `tor` then `quiet`.
+These fields are in the generated schema from `CORE_RPC_VERSION` 4.2, and the walk takes `hiding`, `posture`, `origination`, `sync_connector`, `tor` and `tor_quiet` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `cause`, `age`, `respawn_count`, `progress`, `flagged`, `fix`, `onion`, `bootstrap` and `carriage`. `tor_quiet` walks under `daemon` as a reference: `tor` then `quiet`.
 
 `offline` is already the term "P2P is off" (IG-Q3). The origination keyword uses it with that meaning: Tor off and clearnet off.
 

@@ -3859,6 +3859,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-thread-ledger",
  "shekyl-thread-priority",
+ "shekyl-tor-status",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",

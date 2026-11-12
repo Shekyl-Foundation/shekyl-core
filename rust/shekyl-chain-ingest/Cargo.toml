@@ -186,6 +186,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The Tor status a store test hands `daemon_status`, as the daemon's
+# supervisor would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # Each test store's own directory (`test_support::tmp`), which takes the
 # store's sidecar files with it when the test ends.
 tempfile = { workspace = true }
