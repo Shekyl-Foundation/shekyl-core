@@ -4,10 +4,14 @@
 //! The support schedule on a store chain (`SO-D12` 4b §5.1 item 3; S1).
 //!
 //! The chain is the slash witness's: its four joins are complete trees, and
-//! shard 0 closes in epoch 0, so the trees are support members of every
-//! epoch whose open sees the shard closed and final. The seats are the
-//! transition's, written by the store's connect, and read back through the
-//! store's own view.
+//! shard 0 closes before they join (height 131, the captured shard fill),
+//! so the trees are support members of every epoch whose open sees the
+//! shard closed and final. The seats are the transition's, written by the
+//! store's connect, and read back through the store's own view.
+//!
+//! Every epoch numbered in this file's prose is counted from the personas'
+//! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
+//! loads the captured shard-fill prefix first and the personas join after it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +30,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId};
 use crate::codec::Canonical;
 
 use super::super::super::StoreBundleView;
-use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
+use super::super::{shifted, SlashedChain, TestErr, Under, RULES, WITNESS_PERSONAS};
 use super::admission_chain_tests::{connect_committed, connect_plain};
 use super::block_draws_chain_tests::{compose, pop_back};
 use super::{h_open, no_draws};
@@ -101,8 +105,18 @@ fn carried_at(chain: &SlashedChain, h: u64) -> Carried {
 }
 
 fn seated(label: &str, through: u64) -> Seated {
-    let mut chain =
-        SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(shifted(1)) - 1, no_draws);
+    seated_under(label, through, Under::BENCH)
+}
+
+/// [`seated`] on a chain built and connected under `under`.
+fn seated_under(label: &str, through: u64, under: Under) -> Seated {
+    let mut chain = SlashedChain::build_under(
+        label,
+        WITNESS_PERSONAS,
+        h_open(shifted(1)) - 1,
+        no_draws,
+        under,
+    );
     let mut memo = DrawableMemo::new();
     let mut snapshots = BTreeMap::new();
     let mut rows = BTreeMap::new();
@@ -189,8 +203,12 @@ fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
 /// count moves).
 #[test]
 fn a_trees_seats_over_an_epoch_are_its_c_slots_and_their_carry_at_each_width() {
+    // Under the bench pair shard 0 (closed at height 131) is final at 181,
+    // before the members' first open (height 200), so every epoch with
+    // members has a closed shard. The late-final pair puts that open before
+    // shard 0 is final (221): members at width 0, then width 1 at 300.
     let through = h_open(shifted(4)) - 1;
-    let seated = seated("support-seats-epochs", through);
+    let seated = seated_under("support-seats-epochs", through, Under::LATE_FINAL);
     let trees: BTreeSet<PCanonicalId> = (0..WITNESS_PERSONAS)
         .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
         .collect();
@@ -448,7 +466,7 @@ fn a_support_row_that_is_not_one_step_of_the_carry_is_si_43() {
         // An SI-43 halts the writer, so each case has its chain.
         let Seated { chain, memo, .. } =
             seated(&format!("support-seats-si43-{n}"), h_open(shifted(2)) + 10);
-        let h = first_seated(&chain, 2);
+        let h = first_seated(&chain, shifted(2));
         let at = BlockHeight::from_raw(h);
         let row = chain
             .store
@@ -533,7 +551,7 @@ fn a_pop_removes_the_seat_row_and_the_reconnect_restores_it() {
         mut memo,
         ..
     } = seated("support-seats-pop", h_open(shifted(2)) + 40);
-    let h = first_seated(&chain, 2);
+    let h = first_seated(&chain, shifted(2));
     let tip = chain.grown.height().to_raw() - 1;
     let rows: Vec<Option<SupportSeats>> = (h..=tip).map(|at| seat_row(&chain, at)).collect();
     pop_back(&mut chain, tip - h + 1);

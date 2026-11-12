@@ -12,6 +12,10 @@
 //! at the open changes `D`. Releasing a complete tree does not. A warm
 //! memo, a miss, a switch, an aborted switch and a removed digest (SI-29)
 //! run on that chain.
+//!
+//! Every epoch numbered in this file's prose is counted from the personas'
+//! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
+//! loads the captured shard-fill prefix first and the personas join after it.
 
 use std::collections::BTreeMap;
 
@@ -28,7 +32,7 @@ use crate::codec::{BondRecord, Canonical};
 
 use super::super::super::{Popped, StoreError, StoreInvariant, WriteBatch};
 use super::super::{shifted, Listed, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
-use super::{h_open, no_draws, plant_compact_bond, BONDED, COMPACT, FIRST};
+use super::{h_open, join_compact_bond, no_draws, BONDED, COMPACT, FIRST};
 
 /// The count against a store chain with one compact pair in `D`.
 ///
@@ -49,13 +53,13 @@ use super::{h_open, no_draws, plant_compact_bond, BONDED, COMPACT, FIRST};
 fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     let open = h_open(shifted(2));
     let last = open + 11;
-    let mut chain = SlashedChain::build_with("count-set", WITNESS_PERSONAS, open - 1, no_draws);
+    let mut chain = SlashedChain::build_with("count-set", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     assert_eq!(
         draws_of(&chain, BlockHeight::from_raw(open - 1)),
         BlockDraws::ZERO,
-        "epoch 1's set is empty, so the block before the open is a zero row"
+        "the join's epoch has no compact pair, so the block before the open is a zero row"
     );
-    plant_compact_bond(&mut chain);
 
     let reference = {
         let mut cold = None;
@@ -222,10 +226,10 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
                 crate::schema::ARCHIVAL_DRAWABLE_DIGEST,
                 StoreInvariant::TipMismatch,
             )?
-            .remove(2)?;
+            .remove(shifted(2))?;
         let view = batch.chain_view();
         let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-            panic!("the count ran without epoch 2's digest");
+            panic!("the count ran without its open's digest");
         };
         assert_eq!(
             corrupt,
@@ -262,8 +266,8 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
 fn an_aborted_switch_does_not_change_the_next_row() {
     let open = h_open(shifted(2));
     let mut chain =
-        SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+        SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let reference = compose(1, open, open + 2);
     let mut memo = DrawableMemo::new();
     let committed = connect_span(&mut chain, open, open + 1, &mut Some(&mut memo));
@@ -318,8 +322,8 @@ fn an_aborted_switch_does_not_change_the_next_row() {
 /// carries one memo from the open; otherwise every block rebuilds.
 fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws> {
     let open = h_open(shifted(2));
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut slot = if with_memo { Some(&mut memo) } else { None };
     connect_span(&mut chain, open, through, &mut slot)
@@ -435,8 +439,8 @@ pub(super) fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraw
 #[test]
 fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     let open = h_open(shifted(2));
-    let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+    let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let admitted = late_bundle(open - 1);
     connect_admitting(&mut chain, &admitted);
     let prior = SettlementEpoch::from_raw(shifted(1));

@@ -69,6 +69,10 @@ pub(in super::super) enum Listed {
     /// ([`Grown::release`]). CEN-J16 judges it over the record the chain
     /// holds, so the persona must have joined in an earlier block.
     Release { slot: u32, bonded_total: u64 },
+    /// A **real compact join**: [`Listed::Join`] with the persona at
+    /// `slot` holding `shards` ([`Grown::join_shards`]). CEN-J15 judges
+    /// it: every shard must be closed, final and priced at the parent.
+    JoinShards { slot: u32, shards: Vec<u64> },
 }
 
 /// The endpoint every fixture join names. No landed rule reads a record's
@@ -261,6 +265,19 @@ impl Grown {
         self.spend_posting(coinbase, 0, Some(&bond))
     }
 
+    /// A real compact join for the block connecting next —
+    /// [`Listed::JoinShards`]: [`Self::join`] with the persona at `slot`
+    /// holding `shards` in place of the complete tree.
+    pub(in super::super) fn join_shards(&mut self, slot: u32, shards: &[u64]) -> Transaction {
+        let coinbase = self.next_coinbase();
+        let persona = Persona::at(slot);
+        let bond = persona.join(
+            shekyl_harness_spender::shard_set(shards.to_vec()),
+            JOIN_ENDPOINT,
+        );
+        self.spend_posting(coinbase, 0, Some(&bond))
+    }
+
     /// A real Release for the block connecting next — [`Listed::Release`]:
     /// the persona at `slot`'s production Release of `bonded_total`
     /// ([`Persona::release`]), riding a zero-fee spend of the lowest
@@ -394,6 +411,7 @@ impl Grown {
                 Listed::Spend { fee } => self.spend(*fee),
                 Listed::Join { slot } => self.join(*slot),
                 Listed::Release { slot, bonded_total } => self.release(*slot, *bonded_total),
+                Listed::JoinShards { slot, shards } => self.join_shards(*slot, shards),
             })
             .collect()
     }

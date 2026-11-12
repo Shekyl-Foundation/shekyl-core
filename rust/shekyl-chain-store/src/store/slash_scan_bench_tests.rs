@@ -149,6 +149,36 @@ const RETENTION: u64 = 50;
 /// spacing LWMA would floor the difficulty, and the fixture's zero longhash
 /// passes any fixed target.
 const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
+/// The rule set and undo retention a bench chain is built under, and the
+/// name its captured-prefix snapshots go by (`shard_fill::store_with_prefix`:
+/// one name, one pair).
+#[derive(Clone, Copy)]
+struct Under {
+    rules: RuleSet,
+    retention: u64,
+    schedule_key: &'static str,
+}
+
+impl Under {
+    /// [`RULES`] with [`RETENTION`]: every chain here unless a test says.
+    const BENCH: Self = Self {
+        rules: RULES,
+        retention: RETENTION,
+        schedule_key: "d7-seb100-cap50",
+    };
+
+    /// The bench pair with a 90-block reorg cap and retention: a shard is
+    /// final 90 blocks after it closes, so shard 0 (closed at height 131)
+    /// is final only at 221, after epoch 2 opens. A test that needs an
+    /// epoch whose members exist while its archive is still width 0 runs
+    /// here.
+    const LATE_FINAL: Self = Self {
+        rules: RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, 90)),
+        retention: 90,
+        schedule_key: "d7-seb100-cap90",
+    };
+}
+
 /// The witness's persona count: enough that the per-persona loop is a loop,
 /// few enough that the chain builds in the unit lane in debug.
 const WITNESS_PERSONAS: u64 = 4;
@@ -399,6 +429,11 @@ struct SlashedChain {
     shard_closed: u64,
     /// The chain as built, for a test that connects one more block by hand.
     grown: Grown,
+    /// The rule set the chain was built and is connected under: [`RULES`],
+    /// or a test's own pair ([`Self::build_under`]).
+    rules: RuleSet,
+    /// The undo retention its store was opened with.
+    retention: u64,
     timings: Vec<Timing>,
     built: Duration,
 }
@@ -408,11 +443,11 @@ impl SlashedChain {
     /// does. Nothing rules-side survives: a connector's drawable memo is
     /// not persisted, so the caller's next memo is cold.
     fn reopen(&mut self) {
-        let schedule = RULES.settlement_schedule();
+        let schedule = self.rules.settlement_schedule();
         let horizons = Horizons::new(
             schedule.blocks(),
-            BlockCount::from_raw(RETENTION),
-            RULES.reorg_cap(),
+            BlockCount::from_raw(self.retention),
+            self.rules.reorg_cap(),
         )
         .expect("cap ≤ retention < epoch");
         // The file's lock is held while the old handle lives, so a scratch
@@ -439,6 +474,20 @@ impl SlashedChain {
     /// `plan` once the epoch's blocks are connected — an epoch ahead of the
     /// deadline connect that settles it.
     fn build_with(label: &str, personas: u64, through: u64, plan: Plan) -> Self {
+        Self::build_under(label, personas, through, plan, Under::BENCH)
+    }
+
+    /// [`Self::build_with`] under `under`'s rule set and retention: a test
+    /// whose subject turns on the reorg cap (finality is the close height
+    /// plus the cap, `closed_and_final`) states its own pair. The epoch is
+    /// [`SEB`] whatever the pair.
+    fn build_under(label: &str, personas: u64, through: u64, plan: Plan, under: Under) -> Self {
+        let Under {
+            rules,
+            retention,
+            schedule_key,
+        } = under;
+        assert_eq!(rules.settlement_schedule().blocks().get(), SEB);
         assert!(
             SEB.is_multiple_of(PER_BATCH),
             "an epoch ends on a batch boundary"
@@ -448,7 +497,7 @@ impl SlashedChain {
             (1..=max).contains(&personas),
             "{personas} personas: the joins must land inside the join epoch (at most {max})"
         );
-        let schedule = RULES.settlement_schedule();
+        let schedule = rules.settlement_schedule();
         let m = SLASHING_EPOCH;
         let slashing_height = schedule.slash_deadline_height(m);
         let total = through + 1;
@@ -456,14 +505,14 @@ impl SlashedChain {
         let path = tmp(label);
         let horizons = Horizons::new(
             schedule.blocks(),
-            BlockCount::from_raw(RETENTION),
-            RULES.reorg_cap(),
+            BlockCount::from_raw(retention),
+            rules.reorg_cap(),
         )
         .expect("cap ≤ retention < epoch");
         // The captured prefix closes shard 0 (`shard_fill`); it is loaded,
         // not timed, and its slots in `timings` are zero.
         let (store, mut grown) =
-            shard_fill::store_with_prefix(&path, "d7-seb200", RULES, horizons, prefix());
+            shard_fill::store_with_prefix(&path, schedule_key, rules, horizons, prefix());
         let shard_closed = u64::try_from(prefix()).expect("small") - 1;
         assert_eq!(
             (
@@ -498,10 +547,10 @@ impl SlashedChain {
                     // `record` rides inside the judge interval. It is the
                     // wallet-tree insert, microseconds beside the proof
                     // `realise` already spent outside this timer.
-                    let judged = grown.judge_listing(&view, &RULES, &txs)?;
+                    let judged = grown.judge_listing(&view, &rules, &txs)?;
                     let judge = started.elapsed();
                     let started = Instant::now();
-                    batch.connect(judged, RULES)?;
+                    batch.connect(judged, rules)?;
                     timings.push(Timing {
                         judge,
                         connect: started.elapsed(),
@@ -525,6 +574,8 @@ impl SlashedChain {
             prefix_burned,
             shard_closed,
             grown,
+            rules,
+            retention,
             timings,
             built: wall.elapsed(),
         }
@@ -747,9 +798,9 @@ impl SlashedChain {
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 26 184 bytes, 60 rows — four
-/// bonds, the twenty-two padding credits, thirteen closed epochs' budget
-/// rows and the twelve settled epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
+/// under `RULES`, `WITNESS_PERSONAS` personas: 24 896 bytes, 40 rows — four
+/// bonds, fourteen closed epochs' budget rows and the thirteen settled
+/// epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
 /// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
@@ -815,9 +866,20 @@ impl SlashedChain {
 /// (`NI-R7` / `NI-R10`, 26 184 bytes, 60 rows, until the salt
 /// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04: again only the persona
 /// keys and ids moved, with the same size and row counts, and every
-/// family's section still equal to its own derivation above).
+/// family's section still equal to its own derivation above);
+/// `2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8`
+/// (the salt, 26 184 bytes, 60 rows, until the switch's C7). Re-pinned
+/// 2026-11-11 at the switch's C7, the last step of the bench's epoch shift
+/// (Rick's bench ruling, option 1): the serve-credit input and its
+/// `archival_serve_credit` family are deleted, so the twenty-two padding
+/// credits go — 22 × 60 = 1 320 bytes — with the family's eight-byte row
+/// count; the chain now starts from the captured shard fill and the joins
+/// land in epoch [`JOIN_EPOCH`], so the slashing tip is one epoch later
+/// and holds one more budget row and one more Σwork row, 2 × 20 = 40
+/// bytes. 26 184 − 1 320 − 8 + 40 = 24 896, the whole delta; 60 − 22 + 2
+/// = 40 rows. The slash families are spelled and asserted above.
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8";
+    "88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
@@ -836,7 +898,7 @@ fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
         }
         sections.push(start..at);
     }
-    assert_eq!(at, body.len(), "the ten families are the whole body");
+    assert_eq!(at, body.len(), "the families are the whole body");
     sections
 }
 

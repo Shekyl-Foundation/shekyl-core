@@ -774,7 +774,7 @@ mod archival_write_tests;
 /// the 9b slash-writes witness (unit lane) and the slash-scan bench
 /// (`#[ignore]`d; times the slashing deadline's connect against an
 /// ordinary one on whatever runs it) over one builder.
-#[cfg(any())]
+#[cfg(test)]
 #[path = "slash_scan_bench_tests.rs"]
 mod slash_scan_bench_tests;
 

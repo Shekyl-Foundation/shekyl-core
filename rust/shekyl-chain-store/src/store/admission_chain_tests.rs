@@ -8,6 +8,10 @@
 //! The bundle is the fixture producer's. The view that judges it is the
 //! store's, so the commitment, the hashes, `D` and the issued counts are
 //! the chain's.
+//!
+//! Every epoch numbered in this file's prose is counted from the personas'
+//! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
+//! loads the captured shard-fill prefix first and the personas join after it.
 
 use shekyl_archival_retention::{
     bundle_root, challenge_nonce, draw_commit, select_draw, BundleBody, BundleRef, DrawableEpoch,
@@ -34,7 +38,7 @@ use super::super::super::connect_fixtures::{
 };
 use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
 use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
-use super::{h_open, no_draws, plant_witness_shard_set, witness_shard_slots};
+use super::{h_open, join_witness_shard_set, no_draws, witness_shard_slots};
 
 /// Ten blocks after epoch 2 opens. With a shard set of the witness width,
 /// this harness's schedule draws once here.
@@ -68,11 +72,11 @@ struct Prepared {
 
 fn prepare(label: &str) -> Prepared {
     let open = h_open(shifted(2));
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 2, no_draws);
     // The joins are complete trees, so they are not in D. The planted set
     // has the witness width: the width this schedule draws once from, at
     // [`drawing_height`].
-    plant_witness_shard_set(&mut chain);
+    join_witness_shard_set(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut open_hash = None;
     let mut anchor_hash = chain.grown.tip();
@@ -116,12 +120,12 @@ pub(super) fn connect_plain(chain: &mut SlashedChain, memo: Option<&mut Drawable
         let view = batch.chain_view();
         let judged = chain
             .grown
-            .judge_listing_with_memo(&view, &RULES, &txs, memo)?;
+            .judge_listing_with_memo(&view, &chain.rules, &txs, memo)?;
         linked = Some(Linked {
             draws: judged.block().archival().draws(),
             hash: judged.block().block().hash(),
         });
-        batch.connect(judged, RULES)?;
+        batch.connect(judged, chain.rules)?;
         Ok(())
     });
     out.expect("the block connects");
@@ -142,14 +146,14 @@ pub(super) fn connect_committed(
         let mut candidate = candidate_over(root, height.to_raw(), previous, Vec::new());
         candidate.block.miner_transaction =
             with_commitment(candidate.block.miner_transaction, commitment);
-        let judged = judge_with_memo(&view, candidate, &RULES, Some(memo))?;
+        let judged = judge_with_memo(&view, candidate, &chain.rules, Some(memo))?;
         linked = Some(Linked {
             draws: judged.block().archival().draws(),
             hash: judged.block().block().hash(),
         });
         let block = judged.block().block().clone();
         chain.grown.record(&block, &[]);
-        batch.connect(judged, RULES)?;
+        batch.connect(judged, chain.rules)?;
         Ok(())
     });
     out.expect("the committed block connects");
@@ -525,21 +529,30 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
 }
 
 /// Genesis answers its commitment, and a bundle that does not open it is
-/// J33 rather than an unanswered view.
+/// J33 rather than an unanswered view. The memo is filed for the height the
+/// bundle is judged at, `2`, by admission's own filing step
+/// (`remember_window_epochs`): genesis's epoch, whatever epoch the chain's
+/// tip is in.
 #[test]
 fn a_bundle_for_genesis_is_refused_at_j33() {
-    let mut chain = SlashedChain::build_with(
+    let chain = SlashedChain::build_with(
         "admit-genesis",
         WITNESS_PERSONAS,
         h_open(shifted(1)) - 2,
         no_draws,
     );
     let mut memo = DrawableMemo::new();
-    connect_plain(&mut chain, Some(&mut memo));
     let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES);
     let (reference, body) = world.bundle(&[]);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
+        shekyl_chain_rules::remember_window_epochs(
+            &view,
+            BlockHeight::from_raw(2),
+            &RULES,
+            &mut memo,
+        )
+        .expect("genesis's epoch files");
         let bundle_view = StoreBundleView::new(
             &view,
             &memo,
@@ -699,8 +712,8 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
 
     let open = h_open(shifted(2));
     let mut chain =
-        SlashedChain::build_with("cold-memo-admit", WITNESS_PERSONAS, open - 1, no_draws);
-    plant_witness_shard_set(&mut chain);
+        SlashedChain::build_with("cold-memo-admit", WITNESS_PERSONAS, open - 2, no_draws);
+    join_witness_shard_set(&mut chain);
     let mut warm = DrawableMemo::new();
     while chain.grown.height() < h {
         connect_plain(&mut chain, Some(&mut warm));
