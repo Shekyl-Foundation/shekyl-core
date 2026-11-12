@@ -27,22 +27,22 @@ async fn the_inbound_shape_tells_a_submission_from_anything_else() {
     daemon.read_exact(&mut got[..9]).await.unwrap();
     assert!(!shape.ends_in_submission());
 
-    // A padded submission (one payload record, four padding).
+    // A padded submission (one payload record, the rest padding).
     mark.arm();
     client.write_all(&bytes(300)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..300]).await.unwrap();
     assert!(shape.ends_in_submission());
 
-    // A submission that fills all five records carries no padding. The
-    // padded frame that preceded it is the boundary the five are counted from.
+    // A submission that fills all its records carries no padding. The
+    // padded frame that preceded it is the boundary they are counted from.
     mark.arm();
     client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
     assert!(shape.ends_in_submission());
 
-    // The same bytes sent unarmed: five full ordinary records, after a
+    // The same bytes sent unarmed: full ordinary records, after a
     // message that ended on a full record. Not taken for a submission.
     client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
     client.flush().await.unwrap();

@@ -192,7 +192,7 @@ fn the_templates_refusals_evict_their_entries_and_images() {
     assert!(pool.record(&other).is_some());
 }
 
-/// `flush_txpool`'s verb: the named entries leave, tagged `Flushed` (not
+/// `txpool_flush`'s verb: the named entries leave, tagged `Flushed` (not
 /// a CEN-M10 refusal), their key images free again and their rows gone
 /// from the file; an id the pool does not hold, or one named twice, is
 /// flushed once or not at all; the rest stay.

@@ -32,7 +32,7 @@ use shekyl_miner::{
 };
 use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
-use shekyl_rpc_types::mining::MineSpeed;
+use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use tokio::sync::watch;
@@ -112,7 +112,7 @@ fn refusal_for_running(running: SearchBound, asked: SearchBound) -> MiningRefuse
     }
 }
 
-/// The posted job, as `mining_status` reports it.
+/// The posted job, as `mine_status` reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PostedJob {
     /// The height the job's block connects at.
@@ -123,7 +123,7 @@ pub struct PostedJob {
     pub reward: AtomicUnits,
 }
 
-/// What `mining_status` reports.
+/// What `mine_status` reports.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MiningStatus {
     /// The running miner's state; `None` when it is stopped.
@@ -504,7 +504,7 @@ impl MiningControl {
 /// A refused start, as the RPC's typed diagnostic.
 fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
     let code = match refused {
-        MiningRefused::NoAddress => codes::NO_ADDRESS,
+        MiningRefused::NoAddress => codes::ADDRESS_UNSET,
         MiningRefused::Running => codes::RUNNING,
         MiningRefused::Short { .. } => codes::BOUND_SHORT,
         MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
@@ -531,8 +531,8 @@ fn refusal_diagnostic(refused: &MiningRefused) -> Diagnostic {
 fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
     let code = match why {
         NoJob::Starting => codes::STARTING,
-        NoJob::NoAddress => codes::NO_ADDRESS,
-        NoJob::NotSynced(_) => codes::NOT_SYNCED,
+        NoJob::NoAddress => codes::ADDRESS_UNSET,
+        NoJob::NotSynced(_) => codes::SYNCING,
         NoJob::PoolRetired => codes::POOL_RETIRED,
         NoJob::Unbuilt(_) => codes::UNBUILT,
         NoJob::Stopped => codes::STOPPING,
@@ -625,7 +625,7 @@ impl MiningFacts for MiningControl {
         Ok(self.posting.borrow().refusal().map(no_job_diagnostic))
     }
 
-    /// Resolves when [`MiningFacts::refusal`] is `Some`: `generateblocks`
+    /// Resolves when [`MiningFacts::refusal`] is `Some`: `dev_block_generate`
     /// waits on the tip only while a miner can still make it move. A closed
     /// watch is a stop, as a withdrawal nobody will replace.
     fn withdrawn(&self) -> Pending<'_, Diagnostic> {
@@ -661,8 +661,8 @@ fn miner_state(miner: &MinerStatus) -> MinerState {
     MinerState {
         threads: u32::try_from(miner.threads).unwrap_or(u32::MAX),
         speed: MineSpeed {
-            count: miner.rate.hashes,
-            window: miner.rate.window.as_secs(),
+            count: shekyl_rpc_types::kinds::Count(miner.rate.hashes),
+            window: shekyl_rpc_types::kinds::Duration(miner.rate.window.as_secs()),
         },
     }
 }
@@ -671,7 +671,7 @@ fn miner_state(miner: &MinerStatus) -> MinerState {
 mod rate_tests {
     use super::{miner_state, MinerStatus};
     use shekyl_miner::HashRate;
-    use shekyl_rpc_types::mining::MineSpeed;
+    use shekyl_rpc_types::wire::node::MineSpeed;
     use std::time::Duration;
 
     /// Eight hashes in ten seconds stays eight hashes over ten seconds.
@@ -694,8 +694,8 @@ mod rate_tests {
         assert_eq!(
             state.speed,
             MineSpeed {
-                count: 8,
-                window: 10
+                count: shekyl_rpc_types::kinds::Count(8),
+                window: shekyl_rpc_types::kinds::Duration(10)
             }
         );
     }
@@ -707,7 +707,7 @@ mod diagnostic_tests {
     use shekyl_chain_ingest::follower::{Posting, Rebuild};
 
     /// A stuck build names itself and the reason that did not clear, so a
-    /// caller refused by `generateblocks` can tell a body lost twice from a
+    /// caller refused by `dev_block_generate` can tell a body lost twice from a
     /// pool judged at another tip twice. The stuck posting is a refusal;
     /// the same reason still on its one rebuild is a wait.
     #[test]
@@ -737,11 +737,13 @@ mod diagnostic_tests {
         });
         let diagnostic = no_job_diagnostic(&why);
         assert_eq!(
-            diagnostic.params,
-            vec![
-                ("kind".to_owned(), "stuck".to_owned()),
+            diagnostic.parameter,
+            [
                 ("after".to_owned(), "body_gone".to_owned()),
+                ("kind".to_owned(), "stuck".to_owned()),
             ]
+            .into_iter()
+            .collect()
         );
         assert!(
             diagnostic.message.contains("left the pool") && diagnostic.message.contains("again"),
@@ -807,11 +809,13 @@ mod bound_tests {
         });
         assert_eq!(diagnostic.code, codes::BOUND_SHORT);
         assert_eq!(
-            diagnostic.params,
-            vec![
-                ("until".to_owned(), "1".to_owned()),
+            diagnostic.parameter,
+            [
                 ("height".to_owned(), "2".to_owned()),
+                ("until".to_owned(), "1".to_owned()),
             ]
+            .into_iter()
+            .collect()
         );
         assert_eq!(
             diagnostic.message,

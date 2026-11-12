@@ -245,7 +245,7 @@ fn release_confirmed_absent_clears_only_the_named_tx() {
 
 fn healthy() -> DaemonHealth {
     DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 10_000,
         synchronized: true,
     }
@@ -343,7 +343,7 @@ fn the_status_probe_does_not_wait_for_the_ceiling() {
 fn health_gates_the_ladder() {
     let h = held(0);
     let behind = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 5_000,
         synchronized: false,
     };
@@ -363,7 +363,7 @@ fn health_gates_the_ladder() {
     );
 
     let peerless = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: false },
         height: 6_000,
         synchronized: true,
     };
@@ -377,7 +377,7 @@ fn health_gates_the_ladder() {
     // (Rick, 2026-10-14). It outranks the sync wait, as peerless does.
     for synchronized in [true, false] {
         let offline = DaemonHealth {
-            p2p: shekyl_rpc_types::HealthP2p::Offline,
+            p2p: crate::engine::traits::daemon::DaemonP2p::Offline,
             height: 6_000,
             synchronized,
         };
@@ -390,48 +390,54 @@ fn health_gates_the_ladder() {
 }
 
 /// **§3.1's defect, pinned shut** (RK-D14). A held send, past its
-/// horizon, against a restricted daemon whose node has peers: the reply
-/// says `restricted`, writes zero for both connection counts, and says
-/// `has_peers`. The ladder reaches its resubmit probe. Before
-/// `has_peers` the health projection summed those zeros, and this was a
-/// `DaemonPeerless` alarm that suppressed the probe — the recovery.
+/// horizon, against a daemon whose node has peers: the reply shows zero for
+/// both connection counts, and says `peered`. The ladder reaches its
+/// resubmit probe. A health projection that summed those zeros would raise
+/// a `DaemonPeerless` alarm that suppressed the probe — the recovery.
 ///
-/// The same holds when the daemon withholds Status altogether, as a
-/// restricted reply does since RK-Q8 (3.48). The control is the same reply from a
-/// node with no peers, which is still the alarm.
+/// The same holds when the daemon withholds Status altogether, as it does
+/// for a caller without the `status` grant. The control is the same reply
+/// from a node with no peers, which is still the alarm.
 #[test]
-fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
-    use crate::engine::daemon::synced_chain_facts::{health_from_get_info, GetInfoDocument};
+fn a_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
+    use crate::engine::daemon::synced_chain_facts::{
+        health_from_daemon_status, DaemonStatusDocument,
+    };
 
     let h = held(0);
     let past = cfg().probe_ceiling_blocks;
-    let reply = |has_peers: bool, status_withheld: bool| {
-        let mut reply = GetInfoDocument {
+    let reply = |peered: bool, status_withheld: bool| {
+        let document = DaemonStatusDocument {
             chain_count: shekyl_types::ChainCount::from_raw(10_000),
             target_height: None,
             synchronized: true,
             top_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
-            has_peers,
-        }
-        .to_reply();
-        reply.restricted = true;
-        let status = reply.node.shown().expect("the document shows Status");
-        assert_eq!(
-            status.connections,
-            shekyl_rpc_types::StatusConnections::Running {
-                outgoing: 0,
-                incoming: 0
-            },
-            "the reply's counts are zero, as a restricted daemon writes them"
-        );
+            peered,
+        };
         if status_withheld {
-            reply.node = shekyl_rpc_types::Hidden::Withheld;
-            reply.peers = shekyl_rpc_types::Hidden::Withheld;
+            document.to_reply_status_withheld()
+        } else {
+            let reply = document.to_reply();
+            assert_eq!(
+                (
+                    reply.peer_outbound_count.shown(),
+                    reply.peer_inbound_count.shown()
+                ),
+                (
+                    Some(shekyl_rpc_types::nullable::Nullable(Some(
+                        shekyl_rpc_types::kinds::Count(0)
+                    ))),
+                    Some(shekyl_rpc_types::nullable::Nullable(Some(
+                        shekyl_rpc_types::kinds::Count(0)
+                    )))
+                ),
+                "the reply's counts are zero"
+            );
+            reply
         }
-        reply
     };
-    let step = |has_peers: bool, status_withheld: bool| {
-        let health = health_from_get_info(&reply(has_peers, status_withheld));
+    let step = |peered: bool, status_withheld: bool| {
+        let health = health_from_daemon_status(&reply(peered, status_withheld));
         escape_ladder_step(
             &h,
             past,
@@ -464,7 +470,7 @@ fn a_restricted_daemon_with_peers_reaches_the_probe_not_the_peerless_alarm() {
 /// rejection releases.
 #[test]
 fn probe_outcome_presence_branching() {
-    use shekyl_rpc_types::PoolRelay;
+    use shekyl_rpc_client::Publication;
 
     let h = held(1_000);
     let record = |outcome, height| apply_probe_outcome(&h, outcome, height);
@@ -481,7 +487,7 @@ fn probe_outcome_presence_branching() {
         "a fresh hold is asked again on the next advance"
     );
 
-    let ProbeDisposition::Continue(next) = record(ProbeOutcome::InPool(PoolRelay::Held), 2_000)
+    let ProbeDisposition::Continue(next) = record(ProbeOutcome::InPool(Publication::Held), 2_000)
     else {
         panic!("held continues");
     };
@@ -492,7 +498,7 @@ fn probe_outcome_presence_branching() {
     );
 
     let ProbeDisposition::Continue(next) =
-        record(ProbeOutcome::InPool(PoolRelay::HeldOverdue), 1_000)
+        record(ProbeOutcome::InPool(Publication::Overdue), 1_000)
     else {
         panic!("overdue continues");
     };
@@ -503,7 +509,7 @@ fn probe_outcome_presence_branching() {
     );
 
     let ProbeDisposition::Continue(next) =
-        record(ProbeOutcome::InPool(PoolRelay::Untracked), 1_000)
+        record(ProbeOutcome::InPool(Publication::Untracked), 1_000)
     else {
         panic!("untracked continues");
     };
@@ -515,7 +521,7 @@ fn probe_outcome_presence_branching() {
 
     let observed = 1_030;
     let ProbeDisposition::Continue(first) =
-        record(ProbeOutcome::InPool(PoolRelay::Published), observed)
+        record(ProbeOutcome::InPool(Publication::Public), observed)
     else {
         panic!("published continues");
     };
@@ -527,7 +533,7 @@ fn probe_outcome_presence_branching() {
     );
     let later = observed + 1;
     let ProbeDisposition::Continue(kept) =
-        apply_probe_outcome(&first, ProbeOutcome::InPool(PoolRelay::Published), later)
+        apply_probe_outcome(&first, ProbeOutcome::InPool(Publication::Public), later)
     else {
         panic!("a later published answer continues");
     };
@@ -562,7 +568,7 @@ fn probe_outcome_presence_branching() {
 /// asks again. Held on that probe does not alarm. Held-overdue does.
 #[test]
 fn confirmed_in_chain_does_not_alarm_next_tick() {
-    use shekyl_rpc_types::PoolRelay;
+    use shekyl_rpc_client::Publication;
 
     let h = held(1_000);
     let probe_height = 1_000 + cfg().probe_ceiling_blocks;
@@ -584,7 +590,7 @@ fn confirmed_in_chain_does_not_alarm_next_tick() {
     );
 
     let ProbeDisposition::Continue(held_again) =
-        apply_probe_outcome(&next, ProbeOutcome::InPool(PoolRelay::Held), again)
+        apply_probe_outcome(&next, ProbeOutcome::InPool(Publication::Held), again)
     else {
         panic!("held continues");
     };
@@ -593,7 +599,7 @@ fn confirmed_in_chain_does_not_alarm_next_tick() {
         WatchdogStep::ProbeResubmitSameBytes
     );
     let ProbeDisposition::Continue(overdue) =
-        apply_probe_outcome(&next, ProbeOutcome::InPool(PoolRelay::HeldOverdue), again)
+        apply_probe_outcome(&next, ProbeOutcome::InPool(Publication::Overdue), again)
     else {
         panic!("overdue continues");
     };
@@ -680,7 +686,7 @@ fn the_ceiling_reprobes_an_in_chain_observation() {
 fn behind_and_peerless_alarms_peerless_not_syncing() {
     let h = held(0);
     let behind_and_peerless = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: false },
         height: 5_000,
         synchronized: false,
     };
@@ -713,7 +719,7 @@ fn the_ladder_and_the_constructor_read_the_same_flag() {
         (1_000_000, false),
     ] {
         let health = DaemonHealth {
-            p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+            p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
             height,
             synchronized,
         };
@@ -733,7 +739,7 @@ fn the_ladder_and_the_constructor_read_the_same_flag() {
 fn in_chain_under_the_ceiling_ignores_health() {
     let tx = sight(1_000, RelaySight::InChain);
     let peerless = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: false },
         height: 5_000,
         synchronized: false,
     };

@@ -116,12 +116,12 @@ fn a_runtime() -> tokio::runtime::Runtime {
 /// difficulty one, and submit it. Waits for the next template first,
 /// so the block extends the current tip.
 fn mine_one(node: &Node, above: u64) -> BlockHash {
-    use shekyl_daemon_rpc::mining_methods::{get_block_template, submit_block};
+    use shekyl_daemon_rpc::mining_methods::{block_submit, block_template};
     let handles = node.handles();
     let started = std::time::Instant::now();
     let reply = loop {
-        match get_block_template(&*handles.mining) {
-            Ok(reply) if reply.height > above => break reply,
+        match block_template(&*handles.mining) {
+            Ok(reply) if reply.height.0 > above => break reply,
             _ => {
                 assert!(
                     started.elapsed() < Duration::from_secs(60),
@@ -131,16 +131,13 @@ fn mine_one(node: &Node, above: u64) -> BlockHash {
             }
         }
     };
-    let blob = hex::decode(&reply.blocktemplate_blob).expect("hex");
     let made = a_runtime()
-        .block_on(submit_block(
+        .block_on(block_submit(
             &*handles.door,
-            shekyl_rpc_types::mining::SubmitBlockRequest {
-                body: hex::encode(&blob),
-            },
+            shekyl_rpc_types::wire::block::BlockBody { body: reply.body },
         ))
         .expect("it connects");
-    BlockHash::from_bytes(made.block_id.to_bytes())
+    BlockHash::from_bytes(made.hash.to_bytes())
 }
 /// A full address on `network`, from a fixed seed's keys derived on that
 /// network (the salt is the network's name, NI-R10).

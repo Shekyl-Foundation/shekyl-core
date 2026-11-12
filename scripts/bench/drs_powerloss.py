@@ -11,10 +11,10 @@
 # each flush and FUA boundary, and at points between them, and holds each
 # rebuilt store to PB-S1's condition.
 #
-# The oracle is the daemon's promise: once get_info has reported a tip, a
+# The oracle is the daemon's promise: once chain_height has reported a tip, a
 # crash after that report recovers the tip or a heavier chain it had seen
 # (design review, 2026-11-03). The capture writes a mark right after each
-# new tip get_info reports, so the mark sits at the report. Every point
+# new tip chain_height reports, so the mark sits at the report. Every point
 # from the mark onward must hold that tip or a known heavier chain. A point
 # before it may hold the tip or the one before, since nothing about the tip
 # had been reported. Every point is also held to the checks that need no
@@ -245,13 +245,9 @@ class Powerloss:
         deadline = time.time() + deadline_s
         while time.time() < deadline:
             try:
-                height = B._rpc(session.brpc, "get_info", timeout=2)["result"]["height"]
-                tip = R.published_tip(height)
-                if tip is None:
-                    time.sleep(0.05)
-                    continue
-                header = B._rpc(session.brpc, "get_block_header_by_height", {"height": tip},
-                                timeout=2)["result"]["block_header"]["hash"]
+                # One read: the tip's height and its hash together.
+                reply = B._rpc(session.brpc, "chain_height", timeout=2)["result"]
+                tip, header = reply["height"], reply["hash"]
             except (OSError, ValueError, KeyError, TypeError):
                 time.sleep(0.05)
                 continue

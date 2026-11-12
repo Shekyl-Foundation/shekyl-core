@@ -39,13 +39,8 @@ PROBE_TIMEOUT_S = 3
 GENESIS_TIMEOUT_S = 10
 STOP_TIMEOUT_S = 20
 
-# `get_info.height` of a chain that holds its genesis block and nothing
-# after it. The column refuses a height below this.
-GENESIS_CHAIN_HEIGHT = 1
-
-
 def _wait_ready(proc, base_url, console_log):
-    """The daemon's `get_info`, or a refusal that names the console log.
+    """The daemon's `daemon_status`, or a refusal that names the console log.
 
     A process that has already exited is not a timeout. The log is where
     a bind failure or a datadir the binary will not open was written.
@@ -55,18 +50,20 @@ def _wait_ready(proc, base_url, console_log):
         exited = proc.poll()
         if exited is not None:
             raise SystemExit(
-                f"the daemon exited {exited} before get_info; see {console_log}")
+                f"the daemon exited {exited} before daemon_status; see {console_log}")
         try:
-            info = C.json_rpc(base_url, "get_info", timeout=PROBE_TIMEOUT_S)
+            info = C.json_rpc(base_url, "daemon_status", timeout=PROBE_TIMEOUT_S)
         except (OSError, urllib.error.URLError, TimeoutError):
             time.sleep(READY_POLL_S)
             continue
         result = info.get("result") if isinstance(info, dict) else None
-        if isinstance(result, dict) and result.get("status") == "OK":
+        # A reply is a result or an error: no status member stands in for
+        # either. `NotReady` is the one refusal that waits.
+        if isinstance(result, dict):
             return result
         time.sleep(READY_POLL_S)
     raise SystemExit(
-        f"get_info did not answer within {READY_TIMEOUT_S}s; see {console_log}")
+        f"daemon_status did not answer within {READY_TIMEOUT_S}s; see {console_log}")
 
 
 def kept_datadir_refusal(path):
@@ -142,16 +139,16 @@ def main():
 
     try:
         result = _wait_ready(proc, base_url, console_log)
+        # The tip's height, an ordinal: genesis alone is height 0.
         height = result["height"]
-        if not isinstance(height, int) or isinstance(height, bool) \
-                or height < GENESIS_CHAIN_HEIGHT:
+        if not isinstance(height, int) or isinstance(height, bool) or height < 0:
             raise SystemExit(
-                f"get_info height {height!r} is not a chain; see {console_log}")
-        tip = result["top_block_hash"]
+                f"daemon_status height {height!r} is not a tip; see {console_log}")
+        tip = result["hash"]
         genesis = C.json_rpc(
-            base_url, "get_block_header_by_height", {"height": 0},
+            base_url, "block_header_show", {"height": 0},
             timeout=GENESIS_TIMEOUT_S)
-        genesis_hash = genesis["result"]["block_header"]["hash"]
+        genesis_hash = genesis["result"]["hash"]
         requests = C.chain_requests(height, tip, genesis_hash, tx)
         with open(os.path.join(args.out, "requests.json"), "w", encoding="utf-8") as fh:
             json.dump(requests, fh, indent=2)
@@ -159,11 +156,11 @@ def main():
         n = C.capture(base_url, requests, replies_dir)
         record = {
             "datadir": args.data,
-            "get_info_height": height,
-            "top_block_hash": tip,
+            "tip_height": height,
+            "tip_hash": tip,
             "genesis_hash": genesis_hash,
             "tx_hash": tx,
-            "version": result.get("version"),
+            "revision": result.get("revision"),
             "replies": n,
         }
         with open(os.path.join(args.out, "tip.json"), "w", encoding="utf-8") as fh:

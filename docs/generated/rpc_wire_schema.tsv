@@ -1,0 +1,468 @@
+# method	kind	holder	name	shown-to	shape
+version	method		version	authenticated	object (daemon)
+version	field	daemon	version	authenticated	integer
+version	field	daemon	tagged	authenticated	switch
+version	field	daemon	height	authenticated	height
+version	field	daemon	target_height	authenticated	height or null
+version	field	daemon	consensus_digest	authenticated	hash
+version	field	daemon	network	authenticated	one-of mainnet|testnet|stagenet|regtest
+version	field	daemon	genesis	authenticated	hash
+chain_height	method		chain_height	chain	object (chain)
+chain_height	field	chain	height	chain	height
+chain_height	field	chain	hash	chain	hash
+chain_height	field	chain	writer	chain	state live|halted
+chain_height	field	chain writer	height	chain	height
+chain_height	field	chain writer	invariant	chain	integer
+block_header_show	method		block_header_show	chain	object (block header)
+block_header_show	parameter	block header	pow	chain	switch, optional
+block_header_show	parameter	block	height	chain	height
+block_header_show	parameter	block	hash	chain	hash
+block_header_show	parameter	block	tip	chain	null
+block_header_show	field	block header	version_major	chain	integer
+block_header_show	field	block header	version_minor	chain	integer
+block_header_show	field	block header	time	chain	time
+block_header_show	field	block header	parent	chain	hash
+block_header_show	field	block header	nonce	chain	integer
+block_header_show	field	block header	orphan	chain	switch
+block_header_show	field	block header	height	chain	height
+block_header_show	field	block header	depth	chain	count
+block_header_show	field	block header	hash	chain	hash
+block_header_show	field	block header	difficulty	chain	hex128
+block_header_show	field	block header	difficulty_cumulative	chain	hex128
+block_header_show	field	block header	reward	chain	amount
+block_header_show	field	block header	weight	chain	size
+block_header_show	field	block header	weight_longterm	chain	size or null
+block_header_show	field	block header	tx_count	chain	count
+block_header_show	field	block header	pow	chain	hash or null
+block_header_show	field	block header	coinbase	chain	hash
+block_header_show	field	block header	curve_root	chain	hash
+block_header_show	field	block header	attestation_root	chain	hash
+block_header_list	method		block_header_list	chain	list of object (block header), or state missing|archived or null
+block_header_list	parameter	block header	pow	chain	switch, optional
+block_header_list	parameter	block	from	chain	height
+block_header_list	parameter	block	to	chain	height
+block_header_list	parameter	block	hash	chain	list of hash
+block_header_list	field	block header	version_major	chain	integer
+block_header_list	field	block header	version_minor	chain	integer
+block_header_list	field	block header	time	chain	time
+block_header_list	field	block header	parent	chain	hash
+block_header_list	field	block header	nonce	chain	integer
+block_header_list	field	block header	orphan	chain	switch
+block_header_list	field	block header	height	chain	height
+block_header_list	field	block header	depth	chain	count
+block_header_list	field	block header	hash	chain	hash
+block_header_list	field	block header	difficulty	chain	hex128
+block_header_list	field	block header	difficulty_cumulative	chain	hex128
+block_header_list	field	block header	reward	chain	amount
+block_header_list	field	block header	weight	chain	size
+block_header_list	field	block header	weight_longterm	chain	size or null
+block_header_list	field	block header	tx_count	chain	count
+block_header_list	field	block header	pow	chain	hash or null
+block_header_list	field	block header	coinbase	chain	hash
+block_header_list	field	block header	curve_root	chain	hash
+block_header_list	field	block header	attestation_root	chain	hash
+block_header_list	field	tx	id	chain	hash
+block_header_list	field	tx	shard	chain	integer
+block_show	method		block_show	chain	object (block)
+block_show	parameter	block header	pow	chain	switch, optional
+block_show	parameter	tx	prune	chain	switch, optional
+block_show	parameter	block	height	chain	height
+block_show	parameter	block	hash	chain	hash
+block_show	parameter	block	tip	chain	null
+block_show	field	block	header	chain	object (block header)
+block_show	field	block header	version_major	chain	integer
+block_show	field	block header	version_minor	chain	integer
+block_show	field	block header	time	chain	time
+block_show	field	block header	parent	chain	hash
+block_show	field	block header	nonce	chain	integer
+block_show	field	block header	orphan	chain	switch
+block_show	field	block header	height	chain	height
+block_show	field	block header	depth	chain	count
+block_show	field	block header	hash	chain	hash
+block_show	field	block header	difficulty	chain	hex128
+block_show	field	block header	difficulty_cumulative	chain	hex128
+block_show	field	block header	reward	chain	amount
+block_show	field	block header	weight	chain	size
+block_show	field	block header	weight_longterm	chain	size or null
+block_show	field	block header	tx_count	chain	count
+block_show	field	block header	pow	chain	hash or null
+block_show	field	block header	coinbase	chain	hash
+block_show	field	block header	curve_root	chain	hash
+block_show	field	block header	attestation_root	chain	hash
+block_show	field	block	body	chain	bytes
+block_show	field	block	tx	chain	list of object (tx), or state archived
+block_show	field	tx	id	chain	hash
+block_show	field	tx	body	chain	bytes
+block_show	field	tx	prunable_hash	chain	hash
+block_show	field	tx	pqc_auth_hash	chain	hash or null
+block_show	field	tx	archival_size	chain	size
+block_show	field	tx	id	chain	hash
+block_show	field	tx	shard	chain	integer
+block_show	field	block	output_index	chain	integer
+block_list	method		block_list	chain	list of object (block), or state missing|archived or null
+block_list	parameter	block	height	chain	list of height
+block_list	parameter	tx	prune	chain	switch, optional
+block_list	field	block	header	chain	object (block header)
+block_list	field	block header	version_major	chain	integer
+block_list	field	block header	version_minor	chain	integer
+block_list	field	block header	time	chain	time
+block_list	field	block header	parent	chain	hash
+block_list	field	block header	nonce	chain	integer
+block_list	field	block header	orphan	chain	switch
+block_list	field	block header	height	chain	height
+block_list	field	block header	depth	chain	count
+block_list	field	block header	hash	chain	hash
+block_list	field	block header	difficulty	chain	hex128
+block_list	field	block header	difficulty_cumulative	chain	hex128
+block_list	field	block header	reward	chain	amount
+block_list	field	block header	weight	chain	size
+block_list	field	block header	weight_longterm	chain	size or null
+block_list	field	block header	tx_count	chain	count
+block_list	field	block header	pow	chain	hash or null
+block_list	field	block header	coinbase	chain	hash
+block_list	field	block header	curve_root	chain	hash
+block_list	field	block header	attestation_root	chain	hash
+block_list	field	block	body	chain	bytes
+block_list	field	block	tx	chain	list of object (tx), or state archived
+block_list	field	tx	id	chain	hash
+block_list	field	tx	body	chain	bytes
+block_list	field	tx	prunable_hash	chain	hash
+block_list	field	tx	pqc_auth_hash	chain	hash or null
+block_list	field	tx	archival_size	chain	size
+block_list	field	tx	id	chain	hash
+block_list	field	tx	shard	chain	integer
+block_list	field	block	output_index	chain	integer
+block_list	field	tx	id	chain	hash
+block_list	field	tx	shard	chain	integer
+tx_show	method		tx_show	chain	object (tx), or state archived
+tx_show	parameter	tx	id	chain	hash
+tx_show	parameter	tx	prune	chain	switch, optional
+tx_show	field	tx	id	chain	hash
+tx_show	field	tx	body	chain	bytes
+tx_show	field	tx	prunable_hash	chain	hash
+tx_show	field	tx	pqc_auth_hash	chain	hash or null
+tx_show	field	tx	archival_size	chain	size
+tx_show	field	tx	pooled	chain	switch
+tx_show	field	tx	mined_height	chain	height or null
+tx_show	field	tx	confirmations	chain	count or null
+tx_show	field	tx	mined_time	chain	time or null
+tx_show	field	tx	output_index	chain	list of integer
+tx_show	field	tx	public	chain	switch or null
+tx_show	field	tx	id	chain	hash
+tx_show	field	tx	shard	chain	integer
+tx_list	method		tx_list	chain	list of object (tx), or state missing|archived or null
+tx_list	parameter	tx	id	chain	list of hash
+tx_list	parameter	tx	prune	chain	switch, optional
+tx_list	field	tx	id	chain	hash
+tx_list	field	tx	body	chain	bytes
+tx_list	field	tx	prunable_hash	chain	hash
+tx_list	field	tx	pqc_auth_hash	chain	hash or null
+tx_list	field	tx	archival_size	chain	size
+tx_list	field	tx	pooled	chain	switch
+tx_list	field	tx	mined_height	chain	height or null
+tx_list	field	tx	confirmations	chain	count or null
+tx_list	field	tx	mined_time	chain	time or null
+tx_list	field	tx	output_index	chain	list of integer
+tx_list	field	tx	public	chain	switch or null
+tx_list	field	tx	id	chain	hash
+tx_list	field	tx	shard	chain	integer
+chain_spent	method		chain_spent	chain	list of one-of unspent|chain|txpool
+chain_spent	parameter	chain spent	key_image	chain	list of hash
+fee	method		fee	chain	object (fee)
+fee	field	fee	economy	chain	amount
+fee	field	fee	standard	chain	amount
+fee	field	fee	high	chain	amount
+chain_coinbase_sum	method		chain_coinbase_sum	chain	object (chain coinbase sum)
+chain_coinbase_sum	parameter	chain coinbase sum	from	chain	height
+chain_coinbase_sum	parameter	chain coinbase sum	to	chain	height
+chain_coinbase_sum	field	chain coinbase sum	emission	chain	amount
+chain_coinbase_sum	field	chain coinbase sum	fee	chain	amount
+chain_alt	method		chain_alt	status	list of object (chain alt)
+chain_alt	field	chain alt	hash	status	hash
+chain_alt	field	chain alt	height	status	height
+chain_alt	field	chain alt	difficulty_cumulative	status	hex128
+chain_alt	field	chain alt	block	status	list of hash
+chain_alt	field	chain alt	parent	status	hash
+curve_show	method		curve_show	chain	object (curve)
+curve_show	parameter	curve	height	chain	height
+curve_show	parameter	curve	tip	chain	null
+curve_show	field	curve	root	chain	hash
+curve_show	field	curve	layers	chain	count
+curve_show	field	curve	leaf_count	chain	count
+curve_show	field	curve	height	chain	height
+archival_claim_show	method		archival_claim_show	chain	object (archival claim)
+archival_claim_show	parameter	archival	persona	chain	hash
+archival_claim_show	field	archival claim	height	chain	height
+archival_claim_show	field	archival claim	hash	chain	hash
+archival_claim_show	field	archival claim	settled_epoch	chain	integer
+archival_claim_show	field	archival claim	joined_epoch	chain	integer or null
+archival_claim_show	field	archival claim	holding	chain	one-of shards|complete-tree
+archival_claim_show	field	archival claim	shard	chain	list of integer
+archival_claim_show	field	archival claim	claimed	chain	list of integer
+archival_claim_show	field	archival claim	bond_total	chain	amount
+archival_claim_show	field	archival claim	failure_count	chain	count
+archival_claim_show	field	archival claim	served_epoch	chain	integer or null
+archival_claim_show	field	archival claim	slash_epoch	chain	integer or null
+archival_claim_show	field	archival claim	epoch	chain	list of object (epoch)
+archival_claim_show	field	epoch	id	chain	integer
+archival_claim_show	field	epoch	closing_height	chain	height
+archival_claim_show	field	epoch	work	chain	milli
+archival_claim_show	field	epoch	budget	chain	amount or null
+archival_claim_show	field	epoch	bond	chain	list of object (bond)
+archival_claim_show	field	bond	joined_epoch	chain	integer
+archival_claim_show	field	bond	complete_tree	chain	switch
+archival_claim_show	field	bond	failure	chain	list of object (bond failure)
+archival_claim_show	field	bond failure	from	chain	integer
+archival_claim_show	field	bond failure	to	chain	integer
+archival_claim_show	field	epoch	shard	chain	list of object (shard)
+archival_claim_show	field	shard	id	chain	integer
+archival_claim_show	field	shard	freeze_height	chain	height
+archival_claim_show	field	shard	segment	chain	switch
+archival_claim_show	field	epoch	credit	chain	list of object (credit)
+archival_claim_show	field	credit	bond	chain	integer
+archival_claim_show	field	credit	shard	chain	integer
+archival_claim_show	field	epoch	claimant	chain	integer or null
+shard_coverage	method		shard_coverage	chain	object (shard coverage)
+shard_coverage	field	shard coverage	height	chain	height
+shard_coverage	field	shard coverage	leaf_count	chain	count
+shard_coverage	field	shard coverage	frozen_count	chain	count
+shard_coverage	field	shard coverage	settled_epoch	chain	integer
+shard_coverage	field	shard coverage	budget	chain	amount or null
+shard_coverage	field	shard coverage	work	chain	milli or null
+shard_coverage	field	shard coverage	shard	chain	list of object (shard)
+shard_coverage	field	shard	id	chain	integer
+shard_coverage	field	shard	bonded_count	chain	count
+shard_coverage	field	shard	served_count	chain	count
+shard_coverage	field	shard	freeze_height	chain	height
+shard_coverage	field	shard	scarcity	chain	micro
+shard_coverage	field	shard	profit	chain	amount or null
+shard_fetch	method		shard_fetch	chain	object (shard)
+shard_fetch	parameter	shard	id	chain	integer
+shard_fetch	field	shard	id	chain	integer
+shard_fetch	field	shard	hash	chain	hash
+shard_fetch	field	shard	size	chain	size
+shard_fetch	field	shard	block_count	chain	count
+shard_fetch	field	shard	tx_count	chain	count
+shard_fetch	field	shard	output_count	chain	count
+shard_fetch	field	shard	coinbase_output_count	chain	count
+shard_fetch	field	shard	duration	chain	duration
+shard_fetch	field	shard	closing_height	chain	height
+daemon_status	method		daemon_status	health	object (daemon)
+daemon_status	field	daemon	height	health	height
+daemon_status	field	daemon	hash	health	hash
+daemon_status	field	daemon	target_height	health	height or null
+daemon_status	field	daemon	synchronized	health	switch
+daemon_status	field	daemon	syncing	health	switch
+daemon_status	field	daemon	offline	health	switch
+daemon_status	field	daemon	degraded	health	switch
+daemon_status	field	daemon	peered	health	switch or null
+daemon_status	field	daemon	writer	health	state live|halted
+daemon_status	field	chain writer	height	health	height
+daemon_status	field	chain writer	invariant	health	integer
+daemon_status	field	daemon	protocol_version	health	integer
+daemon_status	field	daemon	difficulty	health	hex128
+daemon_status	field	daemon	difficulty_cumulative	health	hex128
+daemon_status	field	daemon	block_spacing	health	duration
+daemon_status	field	daemon	tx_count	health	count
+daemon_status	field	daemon	block_weight_max	health	size
+daemon_status	field	daemon	block_weight_median	health	size
+daemon_status	field	daemon	time_adjusted	health	time
+daemon_status	field	daemon	emission	health	amount
+daemon_status	field	daemon	emission_multiplier	health	micro
+daemon_status	field	daemon	burn	health	micro
+daemon_status	field	daemon	burn_total	health	amount
+daemon_status	field	daemon	stake_share	health	micro
+daemon_status	field	daemon	txpool_count	health	count or null
+daemon_status	field	daemon	grant	health	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol
+daemon_status	field	daemon	started	status	time
+daemon_status	field	daemon	disk_free	status	size
+daemon_status	field	daemon	data_size	status	size
+daemon_status	field	daemon	revision	status	text
+daemon_status	field	daemon	peer_outbound_count	status	count or null
+daemon_status	field	daemon	peer_inbound_count	status	count or null
+daemon_status	field	daemon	alt_count	status	count
+daemon_status	field	daemon	rpc_connections	status	count
+daemon_status	field	daemon	txpool_retired	status	switch
+daemon_status	field	daemon	connector	peers	map clearnet|tor to object (connector)
+daemon_status	field	clearnet	inbound_count	peers	count
+daemon_status	field	clearnet	outbound_count	peers	count
+daemon_status	field	clearnet	peer_white_count	peers	count
+daemon_status	field	clearnet	peer_gray_count	peers	count
+daemon_status	field	tor	inbound_count	peers	count
+daemon_status	field	tor	outbound_count	peers	count
+daemon_status	field	tor	peer_white_count	peers	count
+daemon_status	field	tor	peer_gray_count	peers	count
+daemon_status	field	daemon	txpool_private_count	host-only	count or null
+sync_status	method		sync_status	peers	object (sync)
+sync_status	field	sync	height	peers	height
+sync_status	field	sync	target_height	peers	height
+sync_status	field	sync	state	peers	one-of unpeered|behind|following|synced
+sync_status	field	sync	stalled	peers	switch
+sync_status	field	sync	session	peers	list of object (sync session)
+sync_status	field	sync session	connection	peers	text
+sync_status	field	sync session	endpoint	peers	endpoint
+sync_status	field	sync session	height	peers	height or null
+sync_status	field	sync session	mode	peers	one-of idle|reachable|slot|challenging|past-cap|evidence-candidate|evidence
+sync_status	field	sync session	header	peers	object (sync session header) or null
+sync_status	field	sync session header	age	peers	duration
+sync_status	field	sync session header	due	peers	duration
+sync_status	field	sync session	span	peers	list of object (sync session span)
+sync_status	field	sync session span	from	peers	height
+sync_status	field	sync session span	blocks	peers	count
+sync_status	field	sync session span	size	peers	size
+sync_status	field	sync session span	age	peers	duration
+sync_status	field	sync session span	due	peers	duration
+sync_status	field	sync session	download_speed	peers	rate or null
+peer_connections	method		peer_connections	peers	list of object (peer connection)
+peer_connections	field	peer connection	inbound	peers	switch
+peer_connections	field	peer connection	local	peers	switch
+peer_connections	field	peer connection	endpoint	peers	endpoint
+peer_connections	field	peer connection	connector	peers	one-of clearnet|tor
+peer_connections	field	peer connection	download	peers	size
+peer_connections	field	peer connection	upload	peers	size
+peer_connections	field	peer connection	download_idle	peers	duration
+peer_connections	field	peer connection	upload_idle	peers	duration
+peer_connections	field	peer connection	mode	peers	one-of idle|reachable|slot|challenging|past-cap|evidence-candidate|evidence or null
+peer_connections	field	peer connection	age	peers	duration
+peer_connections	field	peer connection	download_speed_average	peers	rate
+peer_connections	field	peer connection	download_speed_current	peers	rate
+peer_connections	field	peer connection	upload_speed_average	peers	rate
+peer_connections	field	peer connection	upload_speed_current	peers	rate
+peer_connections	field	peer connection	id	peers	text
+peer_connections	field	peer connection	height	peers	height or null
+peer_list	method		peer_list	peers	list of object (peer)
+peer_list	parameter	peer	local	peers	switch, optional
+peer_list	field	peer	endpoint	peers	endpoint
+peer_list	field	peer	tier	peers	one-of white|gray
+p2p_stats	method		p2p_stats	status	object (p2p)
+p2p_stats	field	p2p	started	status	time
+p2p_stats	field	p2p	download	status	size
+p2p_stats	field	p2p	upload	status	size
+p2p_stats	field	p2p	download_packets	status	count
+p2p_stats	field	p2p	upload_packets	status	count
+option_set	method		option_set	node	list of object (option), or object (option)
+option_set	parameter	option	value	node	map to text
+option_set	field	option	name	node	text
+option_set	field	option	source	node	one-of default|file|cli|runtime
+option_set	field	option	runtime	node	switch
+option_set	field	option	secret	node	switch
+option_set	field	option	value	node	text or null
+option_set	field	option	name	node	text
+option_set	field	option	source	node	one-of default|file|cli|runtime
+option_set	field	option	runtime	node	switch
+option_set	field	option	secret	node	switch
+option_set	field	option	assigned	node	switch
+option_show	method		option_show	health	list of object (option), or object (option)
+option_show	parameter	option	name	health	list of text, optional
+option_show	field	option	name	health	text
+option_show	field	option	source	health	one-of default|file|cli|runtime
+option_show	field	option	runtime	health	switch
+option_show	field	option	secret	health	switch
+option_show	field	option	value	health	text or null
+option_show	field	option	name	health	text
+option_show	field	option	source	health	one-of default|file|cli|runtime
+option_show	field	option	runtime	health	switch
+option_show	field	option	secret	health	switch
+option_show	field	option	assigned	health	switch
+daemon_stop	method		daemon_stop	node	nothing
+txpool_list	method		txpool_list	pool	list of object (tx)
+txpool_list	field	tx	id	pool	hash
+txpool_list	field	tx	weight	pool	size
+txpool_list	field	tx	fee	pool	amount
+txpool_stats	method		txpool_stats	pool	object (txpool)
+txpool_stats	field	txpool	count	pool	count
+txpool_stats	field	txpool	weight_total	pool	size
+txpool_stats	field	txpool	weight_min	pool	size
+txpool_stats	field	txpool	weight_max	pool	size
+txpool_stats	field	txpool	weight_median	pool	size
+txpool_stats	field	txpool	fee_total	pool	amount
+txpool_stats	field	txpool	private_count	host-only	count
+txpool_flush	method		txpool_flush	node	list of hash, or state missing|archived or null
+txpool_flush	parameter	txpool	id	node	list of hash, optional
+txpool_flush	field	tx	id	node	hash
+txpool_flush	field	tx	shard	node	integer
+tx_relay	method		tx_relay	node	list of hash, or state missing|archived or null
+tx_relay	parameter	tx	id	node	list of hash
+tx_relay	field	tx	id	node	hash
+tx_relay	field	tx	shard	node	integer
+tx_submit	method		tx_submit	submit	object (tx) by verdict accepted|already-in-pool|already-in-chain|rejected
+tx_submit	parameter	tx	body	submit	bytes
+tx_submit	field	tx	verdict	submit	one-of 
+tx_submit	field	tx	publication	submit	one-of held|overdue|public|untracked
+tx_submit	field	tx	mined_height	submit	height
+tx_submit	field	tx	cause	submit	state malformed|fee-too-low|double-spend-conflict|stale-root|reference-too-recent|reference-unknown|consensus-rule
+block_template	method		block_template	mining-work	object (block template)
+block_template	field	block template	difficulty	mining-work	hex128
+block_template	field	block template	height	mining-work	height
+block_template	field	block template	extra_offset	mining-work	integer
+block_template	field	block template	nonce_offset	mining-work	integer
+block_template	field	block template	reward	mining-work	amount
+block_template	field	block template	parent	mining-work	hash
+block_template	field	block template	seed_height	mining-work	height
+block_template	field	block template	body	mining-work	bytes
+block_template	field	block template	hashing	mining-work	bytes
+block_template	field	block template	seed	mining-work	hash
+block_template	field	block template	seed_next	mining-work	hash or null
+block_template	field	block template	version_major	mining-work	integer
+block_template	field	block template	weight_median	mining-work	size
+block_template	field	block template	emission	mining-work	amount
+block_submit	method		block_submit	mining-work	object (block)
+block_submit	parameter	block	body	mining-work	bytes
+block_submit	field	block	hash	mining-work	hash
+pow	method		pow	mining-work	object (block)
+pow	parameter	pow	height	mining-work	height
+pow	parameter	pow	hashing	mining-work	bytes
+pow	parameter	pow	seed	mining-work	hash, optional
+pow	field	block	pow	mining-work	hash
+mine_start	method		mine_start	mining-control	nothing
+mine_start	parameter	mine	threads	mining-control	count, or one-of auto
+mine_stop	method		mine_stop	mining-control	nothing
+mine_status	method		mine_status	mining-control	object (mine)
+mine_status	field	mine	active	mining-control	switch
+mine_status	field	mine	speed	mining-control	object (mine speed)
+mine_status	field	mine speed	count	mining-control	count
+mine_status	field	mine speed	window	mining-control	duration
+mine_status	field	mine	threads	mining-control	count
+mine_status	field	mine	address	mining-control	address or null
+mine_status	field	mine	block_spacing	mining-control	duration
+mine_status	field	mine	height	mining-control	height or null
+mine_status	field	mine	reward	mining-control	amount or null
+mine_status	field	mine	difficulty	mining-control	hex128 or null
+mine_status	field	mine	cause	mining-control	object (diagnostic) or null
+mine_status	field	diagnostic	code	mining-control	text
+mine_status	field	diagnostic	parameter	mining-control	map to text
+mine_status	field	diagnostic	message	mining-control	text
+mine_status	field	mine	txpool_retired	mining-control	switch
+ban_add	method		ban_add	bans	nothing
+ban_add	parameter	ban	host	bans	text
+ban_add	parameter	ban	duration	bans	duration, optional
+ban_remove	method		ban_remove	bans	nothing
+ban_remove	parameter	ban	host	bans	text
+ban_list	method		ban_list	bans	list of object (ban)
+ban_list	field	ban	host	bans	text
+ban_list	field	ban	duration	bans	duration or null
+ban_list	field	ban	permanent	bans	switch
+ban_show	method		ban_show	bans	object (ban) or null
+ban_show	parameter	ban	host	bans	text
+ban_show	field	ban	host	bans	text
+ban_show	field	ban	duration	bans	duration or null
+ban_show	field	ban	permanent	bans	switch
+relay_stats	method		relay_stats	host-only	object (relay)
+relay_stats	field	relay	floor	host-only	list of object (relay floor)
+relay_stats	field	relay floor	connector	host-only	one-of clearnet|tor
+relay_stats	field	relay floor	outbound_count	host-only	count
+relay_stats	field	relay floor	outbound_min	host-only	count
+relay_stats	field	relay floor	below	host-only	switch
+relay_stats	field	relay	tally	host-only	list of object (relay tally)
+relay_stats	field	relay tally	connection	host-only	text
+relay_stats	field	relay tally	connector	host-only	one-of clearnet|tor or null
+relay_stats	field	relay tally	propagated	host-only	count
+relay_stats	field	relay tally	silent	host-only	count
+relay_stats	field	relay tally	sender_count	host-only	count
+dev_block_generate	method		dev_block_generate	armed	object (block)
+dev_block_generate	parameter	block	count	armed	count
+dev_block_generate	field	block	height	armed	height
+dev_block_generate	field	block	hash	armed	list of hash
+dev_chain_pop	method		dev_chain_pop	armed	object (chain)
+dev_chain_pop	parameter	chain	count	armed	count
+dev_chain_pop	field	chain	height	armed	height

@@ -167,7 +167,7 @@ impl Pool {
 
 impl Pool {
     /// Remove `ids` that the pool holds, at the host administrator's
-    /// request (`flush_txpool`): each tagged [`Evicted::Flushed`], an id the
+    /// request (`txpool_flush`): each tagged [`Evicted::Flushed`], an id the
     /// pool does not hold skipped. Writes every removal to the file in one
     /// batch, then drops the entries and their key images from the index.
     ///

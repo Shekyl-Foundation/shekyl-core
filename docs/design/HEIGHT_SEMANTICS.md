@@ -235,27 +235,31 @@ that name check.
 Conversion at decode, once. Raw `u64`s do not travel inland. C++
 producers cited at source.
 
-**JSON / JSON-RPC DTOs (`shekyl-rpc-types`):**
+**JSON-RPC DTOs (`shekyl-rpc-types`, `CORE_RPC_VERSION` 4.0).** One route,
+`POST /json_rpc`. A wire `Height` is an ordinal
+(`rust/shekyl-rpc-types/src/kinds.rs:37-39`). Inland
+`ChainTip.chain_height` stays a count
+(`rust/shekyl-daemon-rpc/src/chain_facts.rs:102-105`); a handler that
+names the tip calls `ChainCount::tip`.
 
 | Surface | Field | Quantity | Producer / decode |
 | --- | --- | --- | --- |
-| `GET /get_height` | `GetHeightResponse.height` (`rust/shekyl-rpc-types/src/chain.rs:179`) | COUNT | `StoreFacts::chain_tip` already `+1` (`count_at`, `rust/shekyl-daemon-rpc/src/store_facts.rs:253-255`, `:486`); handler copies (`rust/shekyl-daemon-rpc/src/methods.rs:102-108`). Wallet client documents "amount of blocks", genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`). |
-| `get_block_count` | `GetBlockCountResponse.count` (`rust/shekyl-rpc-types/src/chain.rs:197`) | COUNT | Same chain-height as `/get_height`, honest field name. |
-| `GET /get_info` | `height` | COUNT | Served from Rust since RK-5c. `StoreFacts::chain` carries the chain's count (`count_at(tip)`, `rust/shekyl-daemon-rpc/src/store_facts.rs:594`) as `ChainCount`; the handler writes its raw value (`rust/shekyl-daemon-rpc/src/info.rs:227`, `:227`). |
-| `GET /get_info` | `target_height` | COUNT or `null` | The core count, forwarded, synchronized or not; `null` when the core reports none (`rust/shekyl-daemon-rpc/src/info.rs:254-257`). The `0`-when-synchronized sentinel was retired at `CORE_RPC_VERSION` 3.46 (RK-D15). The core stores the peer-advertised count (`core::set_target_blockchain_height`, `src/cryptonote_core/cryptonote_core.cpp`), so it is information and no reader decides on it. |
-| `get_version`, `sync_info` | `target_height` | COUNT or `null` | The core count, forwarded; `null` when the core reported none (`rust/shekyl-daemon-rpc/src/methods.rs:115-116`, `rust/shekyl-daemon-rpc/src/methods.rs:132`, `rust/shekyl-daemon-rpc/src/methods.rs:1346-1348`). Inland: `Option<ChainCount>` (C5). The synchronized `0` was retired at `CORE_RPC_VERSION` 3.40, and the `0` (or omitted member) for "no target" at 3.46. |
-| `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:400`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:139`). |
-| `get_block_hash` number / `GetBlockRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:281`) / `GetBlockHeaderByHeightRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:325`) / `GetBlocksByHeightRequest.heights` (`rust/shekyl-rpc-types/src/bin_commands.rs:165`) | those fields | ORDINAL | Zero-indexed position (`rust/shekyl-rpc-client/src/lib.rs:410-413`). Bound vs COUNT: a lookup above the tip reads `AtHeight::AboveTip` from the store and answers no hash (`rust/shekyl-daemon-rpc/src/store_facts.rs:509-512`). |
-| `BlockHeader.height` (`rust/shekyl-rpc-types/src/chain.rs:356`) | `height` | ORDINAL | Header of that block. |
-| `BlockHeader.depth` (`rust/shekyl-rpc-types/src/chain.rs:358`) | `depth` | DIFFERENCE | `tip - height` (`rust/shekyl-daemon-rpc/src/store_facts.rs:340`), the same span as `chain_height - height - 1`. Inland: `BlockCount`. |
-| `GetBlockHeadersRangeRequest.start_height` / `end_height` (`rust/shekyl-rpc-types/src/headers.rs:116-118`) | those fields | ORDINAL inclusive | Range of header lookups. |
-| `ConnectionInfo.height` (`rust/shekyl-rpc-types/src/p2p.rs:240`) | `height` | COUNT | Peer's claimed blockchain height. |
-| `SyncInfoResponse.height` (`rust/shekyl-rpc-types/src/p2p.rs:289`) | `height` | COUNT | Local chain height. |
-| `SyncSpan.start_block_height` (`rust/shekyl-rpc-types/src/p2p.rs:270`) | `start_block_height` | ORDINAL | Span origin. |
-| `getblocktemplate.height` (`src/rpc/core_rpc_server_commands_defs.h`) | `height` | next-block ordinal (= COUNT numeric) | `height = m_db->height()` (`src/cryptonote_core/blockchain.cpp`); RPC writes `res.height` (`src/rpc/core_rpc_server.cpp`). Inland: `ChainCount::next_height()` (C6). |
-| `getblocktemplate.seed_height` | `seed_height` | ORDINAL | Seed block index. |
-| `get_curve_tree_info.height` | `height` | ORDINAL | `get_current_blockchain_height() - 1` (`src/rpc/core_rpc_server.cpp`) — already converted to the tip ordinal. |
-| `pop_blocks.height` | `height` | COUNT | `res.height = get_current_blockchain_height()` after the pop (`src/rpc/core_rpc_server.cpp`). |
+| `version` | `Version.height` (`rust/shekyl-rpc-types/src/wire/chain.rs:30`) | ORDINAL | `tip_of` (`rust/shekyl-daemon-rpc/src/reads.rs:69-73`) from the chain count. |
+| `version` | `Version.target_height` (`rust/shekyl-rpc-types/src/wire/chain.rs:31`) | ORDINAL or `null` | `target_of` (`rust/shekyl-daemon-rpc/src/reads.rs:77-81`). `null` when the core reports none. Inland: `Option<ChainCount>` (C5). |
+| `chain_height` | `ChainHeight.height` (`rust/shekyl-rpc-types/src/wire/chain.rs:62`) | ORDINAL | The same `tip_of` (`rust/shekyl-daemon-rpc/src/reads.rs:137-140`). |
+| `daemon_status` | `height` (`rust/shekyl-rpc-types/src/wire/daemon.rs:95`) | ORDINAL | `chain.chain_height.tip()` (`rust/shekyl-daemon-rpc/src/info.rs:241-246`). An empty chain writes `0`. |
+| `daemon_status` | `target_height` (`rust/shekyl-rpc-types/src/wire/daemon.rs:97`) | ORDINAL or `null` | `core_target_height` through `ChainCount::tip` (`rust/shekyl-daemon-rpc/src/info.rs:248-253`). |
+| `block_header_show`, `block_show` | selector `height` (`rust/shekyl-rpc-types/src/wire/block.rs:89`, `rust/shekyl-rpc-types/src/wire/block.rs:105`) | ORDINAL | Exactly one of `height`, `hash`, or `tip`. A height above the tip is refused. |
+| `block_header_list` | `from` / `to` (`rust/shekyl-rpc-types/src/wire/block.rs:128-132`) | ORDINAL inclusive | `from` and `to`, or `hash`, never both. |
+| `block_list` | `height` (`rust/shekyl-rpc-types/src/wire/block.rs:193`) | ORDINAL, a list | One slot per asked height. |
+| `BlockHeader.height` (`rust/shekyl-rpc-types/src/wire/block.rs:26`) | `height` | ORDINAL | `Height(facts.height.to_raw())` (`rust/shekyl-daemon-rpc/src/reads.rs:157`). |
+| `BlockHeader.depth` (`rust/shekyl-rpc-types/src/wire/block.rs:28`) | `depth` | DIFFERENCE | `Count(facts.depth.to_raw())` (`rust/shekyl-daemon-rpc/src/reads.rs:158`). Inland: `BlockCount`. |
+| `sync_status` | `height` / `target_height` (`rust/shekyl-rpc-types/src/wire/p2p.rs:86-87`) | ORDINAL | Local tip (`rust/shekyl-daemon-rpc/src/methods.rs:491-497`). The target is the best chain's count minus one (`rust/shekyl-daemon-rpc/src/sync_facts.rs:22-23`). |
+| `peer_connections`, a sync session | `height` (`rust/shekyl-rpc-types/src/wire/p2p.rs:115`, `rust/shekyl-rpc-types/src/wire/p2p.rs:73`) | ORDINAL or `null` | `claimed_tip` subtracts one from the peer's count (`rust/shekyl-daemon-rpc/src/methods.rs:311-316`). `null` before a claim. |
+| body span | `from` (`rust/shekyl-rpc-types/src/wire/p2p.rs:56`) | ORDINAL | `Height(span.start_height)` (`rust/shekyl-daemon-rpc/src/methods.rs:479`). |
+| `block_template` | `height` / `seed_height` (`rust/shekyl-rpc-types/src/wire/block.rs:208`, `rust/shekyl-rpc-types/src/wire/block.rs:215`) | ORDINAL | The posted job (`rust/shekyl-daemon-rpc/src/mining_methods.rs:114`, `rust/shekyl-daemon-rpc/src/mining_methods.rs:119`). `height` is where the block connects. |
+| `curve_show` | `Curve.height` (`rust/shekyl-rpc-types/src/wire/chain.rs:156`) | ORDINAL | The block the tree is after (`rust/shekyl-daemon-rpc/src/reads.rs:769-773`). |
+| `dev_chain_pop` | `Popped.height` (`rust/shekyl-rpc-types/src/wire/block.rs:292`) | ORDINAL | The tip after the pop (`rust/shekyl-daemon-rpc/src/mining_methods.rs:486-488`). |
 
 **FFI PODs — records-was.** The C facts PODs and their Rust twins left
 with the C++ host (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §3, PR #1272); the
@@ -274,8 +278,9 @@ directly. The rows are kept at the tree they describe, `e8838b0095`:
 **Levin:** `CORE_SYNC_DATA.current_height` (`rust/shekyl-levin/src/payload/types.rs:93-94`;
 the C++ definition it mirrored was line 70 of
 `src/cryptonote_protocol/cryptonote_protocol_defs.h` at `e8838b0095`) is COUNT
-("Chain height"). Stays `u64` on the wire (C1). Dual-stack fixtures
-copy `get_info.height`, which is COUNT.
+("Chain height"). Stays `u64` on the wire (C1). The dual-stack fixture
+reads `daemon_status.height`, the tip's ordinal, and adds one
+(`rust/shekyl-levin/tests/dual_stack.rs:199-221`).
 
 **C++ store primitives (the producers the names above rest on):**
 
@@ -296,7 +301,7 @@ one family. **Unclear: none.**
 | Wallet-ledger tip / reorg (`BlockchainTip.synced_height`, `LedgerBlock::height`, `LedgerEngine::synced_height`, `ReorgBlocks`, `LedgerSnapshot`) | ORDINAL (inclusive tip) | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2e); `LEDGER_BLOCK_VERSION` 11 → 12 and `WALLET_LEDGER_FORMAT_VERSION` 18 → 19; P-scan cursor same name is exclusive-end (C6), comments name the mix |
 | Bond-post offset (`PendingBondPost.bond_post_offset_blocks` + assemble carriers) | DIFFERENCE | `BlockCount` | `BlockCount` | RULED 2026-09-21 (height-semantics Phase 2e); `PENDING_POST_VERSION` 11 → 12; `due_count` uses the field directly |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
-| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: the core count, or absent) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; `get_version` and `sync_info` forward the core count (`0` only when the core reported none, `CORE_RPC_VERSION` 3.40); `get_info` still writes `0` when synchronized |
+| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height` / `BlockHeaderAt.chain_height` / `BlockAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs`) | COUNT (target: the core count, or absent) | `ChainCount` and `Option<ChainCount>` | `ChainCount` and `Option<ChainCount>` | RULED 2026-09-20 (height-semantics Phase 2c); handlers bound with `has_block` / name the top with `tip()`; `version`, `daemon_status` and `chain_height` write the tip ordinal (`ChainCount::tip`); a target the core does not report is `null` (`CORE_RPC_VERSION` 4.0) |
 | Wallet RPC client `Rpc::get_height` | COUNT | `ChainCount` | `ChainCount` at the client decode | RULED 2026-09-20 (height-semantics Phase 2c); name kept (C7) |
 | Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs`) | COUNT vs ORDINAL | `ChainCount` vs `BlockHeight` | `ChainCount` vs `BlockHeight` | RULED 2026-09-20 (height-semantics Phase 2c); comparison punched to raw at that one named site |
 | Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `BlockHeight` | `BlockHeight` | RULED 2026-09-21 (height-semantics Phase 2d); wire punch at encode/decode (C1) |

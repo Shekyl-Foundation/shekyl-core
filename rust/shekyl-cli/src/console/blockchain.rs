@@ -5,31 +5,41 @@
 
 //! `print_blockchain_info` and `print_blockchain_dynamic_stats`.
 
-use super::info::fetch_get_info;
-use super::{
-    human_readable_timestamp, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal,
-    wide_difficulty_value,
-};
+use super::info::{chain_count, fetch_status};
+use super::{human_readable_timestamp, trimmed};
 use crate::daemon::DaemonClient;
+use shekyl_rpc_client::wire;
+use shekyl_rpc_types::kinds::{Height, NoParams};
+use shekyl_rpc_types::wire::block::{BlockHeader, HeaderRange, HeaderRangeSelect};
+use shekyl_rpc_types::wire::shared::Slot;
 use shekyl_units::AtomicUnits;
 
-/// Fetch `get_block_headers_range` — native here, over `/json_rpc` remotely.
+/// `block_header_list` over `[from, to]`, inclusive. A height the daemon
+/// does not hold is an error naming it: every caller here asked for heights
+/// at or below the tip.
 fn fetch_block_headers_range(
     src: &DaemonClient,
-    start_height: u64,
-    end_height: u64,
-) -> Result<Vec<shekyl_rpc_types::BlockHeader>, String> {
-    let request = shekyl_rpc_types::GetBlockHeadersRangeRequest {
-        start_height,
-        end_height,
-        fill_pow_hash: false,
-    };
-    // In-process the console is the operator's own terminal, so the
-    // restricted rule does not apply — as `print_block` says.
-    let reply: shekyl_rpc_types::GetBlockHeadersRangeResponse =
-        native_json_rpc(src, "get_block_headers_range", &request)?;
-    require_ok(&reply.status)?;
-    Ok(reply.headers)
+    from: u64,
+    to: u64,
+) -> Result<Vec<BlockHeader>, String> {
+    let slots = super::call::<wire::BlockHeaderList>(
+        src,
+        &HeaderRange {
+            select: HeaderRangeSelect::Range {
+                from: Height(from),
+                to: Height(to),
+            },
+            pow: false,
+        },
+    )?;
+    slots
+        .into_iter()
+        .zip(from..)
+        .map(|(slot, height)| match slot {
+            Slot::Item(header) => Ok(header),
+            _ => Err(format!("the daemon holds no header at height {height}")),
+        })
+        .collect()
 }
 
 /// `block header list --from <height> --to <height>`, inclusive.
@@ -52,42 +62,33 @@ pub(super) fn print_blockchain_info(
 
 /// One header as `print_blockchain_info` listed it: four lines, and a blank
 /// line between entries supplied by the join above.
-fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
+fn render_blockchain_info_entry(h: &BlockHeader) -> String {
+    let longterm = h
+        .weight_longterm
+        .0
+        .map_or_else(|| "none".to_owned(), |w| w.0.to_string());
     [
         format!(
-            "height: {}, timestamp: {} ({}), size: {}, weight: {} (long term {}), transactions: {}",
-            h.height,
-            h.timestamp,
-            human_readable_timestamp(h.timestamp),
-            h.block_size,
-            h.block_weight,
-            h.long_term_weight,
-            h.num_txes
+            "height: {}, timestamp: {} ({}), weight: {} (long term {longterm}), transactions: {}",
+            h.height.0,
+            h.time.0,
+            human_readable_timestamp(h.time.0),
+            h.weight.0,
+            h.tx_count.0
         ),
         format!(
             "major version: {}, minor version: {}",
-            h.major_version, h.minor_version
+            h.version_major.0, h.version_minor.0
         ),
-        format!("block id: {}, previous block id: {}", h.hash, h.prev_hash),
+        format!("block id: {}, previous block id: {}", h.hash, h.parent),
         format!(
             "difficulty: {}, nonce {}, reward {}",
-            wide_difficulty_decimal(&h.wide_difficulty),
-            h.nonce,
-            AtomicUnits::from_raw(h.reward).to_skl_string()
+            h.difficulty.get(),
+            h.nonce.0,
+            h.reward.to_atomic_units().to_skl_string()
         ),
     ]
     .join("\n")
-}
-
-/// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
-fn fetch_fee_estimate(
-    src: &DaemonClient,
-) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
-    let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
-    let reply: shekyl_rpc_types::GetFeeEstimateResponse =
-        native_json_rpc(src, "get_fee_estimate", &request)?;
-    require_ok(&reply.status)?;
-    Ok(reply)
 }
 
 /// epee's `median`, which is what the C++ printed: the middle element of an
@@ -118,26 +119,25 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
 /// between `byte` and `kB` on a block-version test that is true from genesis
 /// on every chain this daemon can run — Shekyl is v3-from-genesis with no
 /// pre-v1 history for a `kB` arm to describe (rule 60) — so the unit is a
-/// literal and the command makes two calls, `get_info` and
-/// `get_fee_estimate`, before it reads any header.
+/// literal and the command makes two calls, `daemon_status` and `fee`,
+/// before it reads any header.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_blockchain_dynamic_stats(
     src: &DaemonClient,
     nblocks: u64,
 ) -> Result<String, String> {
-    let info = fetch_get_info(src)?;
-    let height = info.health.height;
-    let fees = fetch_fee_estimate(src)?;
-    // `res.fee = res.fees[0]` — `on_get_base_fee_estimate` set the scalar
-    // from the first tier, which is why RK-5b could retire it. The console
-    // read the scalar, so it reads tier 0.
-    let dynamic_fee =
-        AtomicUnits::from_raw(fees.fees.get(shekyl_rpc_types::FeeTier::Low)).to_skl_string();
+    let status = fetch_status(src)?;
+    let height = chain_count(&status);
+    let fees = super::call::<wire::Fee>(src, &NoParams)?;
+    // The console has always read the lowest tier.
+    let dynamic_fee = fees.economy.to_atomic_units().to_skl_string();
     let target = shekyl_economics::economic_params().daa_target_seconds;
     let mut out = Vec::new();
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
-        height, info.chain.difficulty, info.chain.cumulative_difficulty,
+        height,
+        status.difficulty.get(),
+        status.difficulty_cumulative.get(),
     ));
     if nblocks == 0 {
         return Ok(out.join("\n"));
@@ -165,7 +165,7 @@ pub(super) fn print_blockchain_dynamic_stats(
         || headers
             .iter()
             .zip(&expected)
-            .any(|(h, want)| h.height != *want)
+            .any(|(h, want)| h.height.0 != *want)
     {
         return Err(format!(
             "the daemon answered {} headers for the {} blocks of [{start}, {end}]{}",
@@ -173,7 +173,7 @@ pub(super) fn print_blockchain_dynamic_stats(
             expected.len(),
             headers.first().map_or(String::new(), |h| format!(
                 ", starting at height {}",
-                h.height
+                h.height.0
             ))
         ));
     }
@@ -198,16 +198,12 @@ pub(super) fn print_blockchain_dynamic_stats(
     let mut earliest = u64::MAX;
     let mut latest = 0u64;
     for h in &headers {
-        // An unreadable wide difficulty contributes nothing rather than
-        // failing the whole listing; `wide_difficulty_decimal` shows the raw
-        // string in the per-block view for the same reason.
-        difficulty_sum =
-            difficulty_sum.saturating_add(wide_difficulty_value(&h.wide_difficulty).unwrap_or(0));
-        tx_count = tx_count.saturating_add(h.num_txes);
-        reward_sum = reward_sum.saturating_add(h.reward);
-        weights.push(h.block_weight);
-        earliest = earliest.min(h.timestamp);
-        latest = latest.max(h.timestamp);
+        difficulty_sum = difficulty_sum.saturating_add(h.difficulty.get());
+        tx_count = tx_count.saturating_add(h.tx_count.0);
+        reward_sum = reward_sum.saturating_add(h.reward.to_atomic_units().to_raw());
+        weights.push(h.weight.0);
+        earliest = earliest.min(h.time.0);
+        latest = latest.max(h.time.0);
     }
     #[expect(
         clippy::cast_precision_loss,

@@ -82,8 +82,8 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 proptest = "1"
 tempfile = "3"
-# Console fixtures that build a reply the daemon would send
-# (`project_transactions`, a view-listener refusal).
+# A console fixture that builds a reply the daemon would send
+# (a view-listener refusal).
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # `tx show`'s regtest: a wallet that holds a coinbase, against a real daemon.
 shekyl-engine-core = { path = "../shekyl-engine-core" }

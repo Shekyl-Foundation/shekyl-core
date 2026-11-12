@@ -155,7 +155,7 @@ pub fn relay_floor_under<'id, V: ChainView<'id>>(
 /// off `view` through the same operands [`relay_floor_at`] prices the floor
 /// from, so the estimate a wallet is quoted and the floor a node admits
 /// against are one composition over one block's operands (FL-R6: the
-/// economy rung is the floor). `get_fee_estimate`'s store-backed answer at
+/// economy rung is the floor). `fee`'s store-backed answer at
 /// the connecting height (`DRS_X_STORE_FLIP.md` DX-Q10).
 ///
 /// # Errors

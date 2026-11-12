@@ -88,8 +88,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Maximum per-request response body size. ureq's default is 10 MiB — *below* the
-/// wallet's own accepted maximum (a `get_block` blob is up to `2×MAX_BLOCK_BLOB_SIZE`
-/// hex ≈ 66 MiB, and a `get_transactions` batch is up to `TXS_PER_REQUEST` pruned
+/// wallet's own accepted maximum (a `block_show` blob is up to `2×MAX_BLOCK_BLOB_SIZE`
+/// hex ≈ 66 MiB, and a `tx_list` batch is up to `TXS_PER_REQUEST` pruned
 /// txs), so the default would reject legitimate large blocks the local posture
 /// (unbounded `read_to_end`) syncs fine. This cap sits above the largest legitimate
 /// daemon response while still bounding a runaway/malicious (posture ③) response —

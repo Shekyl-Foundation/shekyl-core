@@ -5,14 +5,16 @@
 
 //! `show_status`.
 
-use super::info::{fetch_get_info, network_label};
+use super::info::{chain_count, fetch_status, network_label};
 use crate::daemon::{DaemonClient, DaemonError};
-use shekyl_rpc_types::mining::{MineSpeed, MiningStatusResponse};
+use shekyl_rpc_client::wire;
+use shekyl_rpc_types::kinds::NoParams;
+use shekyl_rpc_types::wire::node::MineSpeed;
 
 /// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
 const PREFIX_FROM_HASHES: u128 = 1_000;
 
-/// The two fields the status line prints from `MiningStatusResponse`.
+/// The two fields the status line prints from `mine_status`.
 struct MiningLine {
     active: bool,
     speed: MineSpeed,
@@ -20,52 +22,49 @@ struct MiningLine {
 
 /// What `show_status` could learn about mining.
 enum MiningReadout {
-    /// The daemon answered. `BUSY` is its own arm because a syncing daemon
-    /// answers the question with "ask me later", which is neither idle nor
-    /// mining.
+    /// The daemon answered.
     Ready(MiningLine),
+    /// The node posts no job because it is not synced (`mine.syncing`):
+    /// neither idle nor mining.
     Syncing,
-    /// The daemon would not say. A view listener answers `/mining_status`
-    /// with a grant refusal, and a daemon that does not serve the route
-    /// answers an empty body. See [`fetch_mining_status`].
+    /// The daemon would not say. A caller without the `mining-control`
+    /// grant is refused. See [`fetch_mining_status`].
     Unavailable,
 }
 
-/// Fetch `/mining_status`.
+/// Fetch `mine_status`.
 ///
-/// The handshake inside [`DaemonClient::post`] is a refusal of the whole
+/// The handshake inside [`DaemonClient::call`] is a refusal of the whole
 /// command: a daemon on another network is not a daemon whose height this
-/// line may print. A view listener answers `/mining_status`
-/// (`mining-control`) with a grant refusal, an absent route is an empty
-/// body, and a daemon that is not answering is the same. Any of those is
-/// an ordinary posture: the status line says mining info is unavailable
-/// and still prints everything else it knows.
+/// line may print. A caller without the `mining-control` grant is refused,
+/// and a daemon that is not answering is the same. Either is an ordinary
+/// posture: the status line says mining info is unavailable and still
+/// prints everything else it knows.
 fn fetch_mining_status(daemon: &DaemonClient) -> Result<MiningReadout, String> {
-    let path = crate::daemon::posted_rest("/mining_status").map_err(|error| error.to_string())?;
-    let raw = match daemon.post(path, b"{}".to_vec()) {
+    let status = match daemon.call::<wire::MineStatus>(&NoParams) {
+        Ok(status) => status,
         Err(DaemonError::Identity(line)) => return Err(line),
-        Ok(raw) if raw.is_empty() => return Ok(MiningReadout::Unavailable),
-        Ok(raw) => raw,
         Err(_) => return Ok(MiningReadout::Unavailable),
     };
-    if shekyl_rpc_types::errors::read_refusal(&raw)
-        .is_some_and(|error| error.class == shekyl_rpc_types::errors::ErrorClass::OutsideTheGrant)
+    // A node that is not synced posts no job and says why: neither idle
+    // nor mining.
+    if !status.active
+        && status
+            .cause
+            .0
+            .as_ref()
+            .is_some_and(|cause| cause.code == SYNCING)
     {
-        return Ok(MiningReadout::Unavailable);
-    }
-    let reply: MiningStatusResponse =
-        serde_json::from_slice(&raw).map_err(|e| format!("malformed mining_status reply: {e}"))?;
-    if reply.status.kind() == shekyl_rpc_types::StatusKind::Busy {
         return Ok(MiningReadout::Syncing);
     }
-    if !reply.status.is_ok() {
-        return Err(reply.status.0);
-    }
     Ok(MiningReadout::Ready(MiningLine {
-        active: reply.active,
-        speed: reply.speed,
+        active: status.active,
+        speed: status.speed,
     }))
 }
+
+/// The cause a node that is not synced gives for posting no job.
+const SYNCING: &str = "mine.syncing";
 
 /// A hash rate for a human: `get_metric_prefix` + `get_mining_speed`.
 ///
@@ -98,11 +97,11 @@ pub(super) fn mining_speed(rate: u128) -> String {
 /// The miner's rate for the status line. Below the prefix boundary the
 /// hundredths stay, so eight hashes in ten seconds reads `0.80 H/s`.
 fn mine_speed_text(speed: MineSpeed) -> String {
-    let whole = u128::from(speed.whole_hashes_per_second());
+    let whole = u128::from(speed.count.0.checked_div(speed.window.0).unwrap_or(0));
     if whole >= PREFIX_FROM_HASHES {
         mining_speed(whole)
     } else {
-        speed.hashes_per_second_text()
+        crate::commands::mine::hashes_per_second_text(speed)
     }
 }
 
@@ -130,44 +129,46 @@ pub(super) fn sync_percentage(height: u64, target_height: u64) -> f64 {
 /// `status` / `show_status`.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, String> {
-    let info = fetch_get_info(daemon)?;
+    let info = fetch_status(daemon)?;
     let mining = fetch_mining_status(daemon)?;
     let target = shekyl_economics::economic_params().daa_target_seconds;
 
-    let height = info.health.height;
+    // Block counts, as this line has always printed them: the tips plus
+    // one.
+    let height = chain_count(&info);
     // The core's target is shown, not judged. With none, or one this node
     // is already past, the line is measured against the node's own height.
     let net_height = info
-        .health
         .target_height
-        .into_option()
-        .map_or(height, |target| target.max(height));
-    // `get_info` does not name the network (RK-Q6). Remote, this is what
-    // the handshake before the request above already read; no second call.
-    // The handshake already required the daemon to report this network.
+        .0
+        .map_or(height, |target| target.0.saturating_add(1).max(height));
+    // `daemon_status` does not name the network (RK-Q6). Remote, this is
+    // what the handshake before the request above already read; no second
+    // call. The handshake already required the daemon to report this
+    // network.
     let network = network_label(daemon.network());
-    // Status is a part a daemon may withhold, and a restricted one does.
-    // A withheld part is not a node with no connections and no uptime: the
-    // line says the counts were not disclosed and leaves the uptime off.
-    // Offline is the state, not zero connections (Rick, 2026-10-14), and it
-    // is Health, which every caller is told: a daemon that withholds Status
-    // still says it is offline.
-    let status = info.node.shown();
-    // Not decodable: Health and Status are both read against the reply's
-    // `offline` (`P2pDisagreesWithOffline`, `ConnectionsDisagreeWithOffline`).
-    // The state wins over a count, so a running health with an offline
-    // connection block is still offline.
-    let connections = match (
-        info.health.p2p.is_offline(),
-        status.map(|status| &status.connections),
-    ) {
-        (true, _) | (false, Some(shekyl_rpc_types::StatusConnections::Offline)) => {
-            "P2P: offline".to_owned()
+    // Status is a part a daemon may withhold. A withheld part is not a node
+    // with no connections and no uptime: the line says the counts were not
+    // disclosed and leaves the uptime off. Offline is the state, not zero
+    // connections (Rick, 2026-10-14), and it is Health, which every caller
+    // is told: a daemon that withholds Status still says it is offline.
+    let started = info.started.shown();
+    let connections = if info.offline {
+        "P2P: offline".to_owned()
+    } else {
+        match (
+            info.peer_outbound_count.shown(),
+            info.peer_inbound_count.shown(),
+        ) {
+            (Some(outgoing), Some(incoming)) => match (outgoing.0, incoming.0) {
+                (Some(outgoing), Some(incoming)) => {
+                    format!("{}(out)+{}(in) connections", outgoing.0, incoming.0)
+                }
+                // Counts are `null` only while P2P is off.
+                _ => "P2P: offline".to_owned(),
+            },
+            _ => "connections not disclosed".to_owned(),
         }
-        (false, Some(shekyl_rpc_types::StatusConnections::Running { outgoing, incoming })) => {
-            format!("{outgoing}(out)+{incoming}(in) connections")
-        }
-        (false, None) => "connections not disclosed".to_owned(),
     };
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
@@ -181,8 +182,8 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
     // the same reason as everywhere else in this file: `T` is genesis-frozen
     // and generated; a zero would be a build defect, not a daemon value.
     let net_hash = info
-        .chain
         .difficulty
+        .get()
         .checked_div(u128::from(target))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
@@ -193,7 +194,7 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
     );
     // No Status, no start time, so no uptime clause: an uptime of zero
     // would be a claim. The C++ omitted the clause on the same grounds.
-    if let Some(start_time) = status.map(|status| status.start_time) {
+    if let Some(start_time) = started.map(|started| started.0) {
         let uptime = now.saturating_sub(start_time);
         line.push_str(&format!(
             ", uptime {}d {}h {}m {}s",

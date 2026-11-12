@@ -120,38 +120,33 @@ while read -r host port label; do
   # TWO readings, one round trip, measuring DIFFERENT quantities — not one
   # quantity twice.
   #
-  #   get_connections   ACHIEVED outbound anonymity links. This is what the
+  #   peer_connections  ACHIEVED outbound anonymity links. This is what the
   #                     F-8b floor is about: fluff first passage depends on how
   #                     many peers you actually send to.
-  #   /get_peer_list    STORED anonymity candidates. This is what RECOVERY is
+  #   peer_list         STORED anonymity candidates. This is what RECOVERY is
   #                     about: a node at 11 links with known-good candidates
   #                     recovers; the same node with every candidate burned
   #                     cannot, and the link count alone cannot tell them apart.
   #
-  # `/get_peer_list` is a PATH endpoint, not a json_rpc method — asking for it
-  # over json_rpc returns -32601. Onion entries carry the address in `host`
-  # with `ip`/`port` both 0, so `host` is the only usable key.
+  # Both are JSON-RPC 2.0 methods at /json_rpc, the only route the daemon
+  # serves. Each stored entry is `{endpoint, tier}`; an onion's endpoint is
+  # its onion and port.
   #
-  # `public_only: false` is sent EXPLICITLY, and it is load-bearing for what
-  # this script measures. It used to be implicit: the C++ bridge skipped
-  # deserialization entirely for an empty body, so a bare `curl` left the flag
-  # value-initialized to false and got the whole stored peerlist — while the
-  # same endpoint given `{}` ran the KV map, applied `OPT(public_only, true)`
-  # and answered the PUBLIC subset. One route, two questions, decided by
-  # whether the body was empty or `{}`. RK-5a removed that split (an absent
-  # body and an absent field now mean the same thing, the declared default),
-  # which would have silently narrowed this reading from stored candidates to
-  # the publicly shareable ones — the instrument changing what it counts
-  # without changing what it says. Asked for outright instead.
+  # `local: true` is sent EXPLICITLY, and it is load-bearing for what this
+  # script measures: the reading is the whole stored peerlist, not the
+  # publicly dialable subset the method answers by default. Leaving it to the
+  # default would narrow the reading from stored candidates to the publicly
+  # shareable ones — the instrument changing what it counts without changing
+  # what it says.
   out=$(timeout "$SSH_TIMEOUT" ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
-     -d '{\"jsonrpc\":\"2.0\",\"id\":\"0\",\"method\":\"get_connections\"}'
+     -d '{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"peer_connections\"}'
      echo '@@SPLIT@@'
-     curl -s -m 10 http://127.0.0.1:$port/get_peer_list \
-       -H 'Content-Type: application/json' -d '{\"public_only\":false}'" 2>/dev/null)
+     curl -s -m 10 http://127.0.0.1:$port/json_rpc -H 'Content-Type: application/json' \
+       -d '{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"peer_list\",\"params\":{\"local\":true}}'" 2>/dev/null)
 
-  # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `get_connections` is
-  # unavailable in restricted mode (-32601), and a `.get("result", {})` turns
+  # An RPC ERROR MUST NOT READ AS ZERO CONNECTIONS. `peer_connections` is
+  # refused outside the peers grant (OutsideTheGrant), and a `.get("result", {})` turns
   # that refusal into an empty list — reporting a healthy, well-connected node
   # as isolated. Zero is the most dangerous false value this script can produce,
   # because an isolated node IS the run's headline claim: the instrument would

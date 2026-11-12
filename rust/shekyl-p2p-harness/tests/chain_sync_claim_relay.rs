@@ -173,8 +173,8 @@ async fn a_block_fetched_by_sync_is_relayed_to_all_but_its_supplier() {
 
 /// A block this node mined is relayed to every established session (CS-5
 /// F1): no session supplied it, so none is skipped. The block enters by
-/// `offer_local`, the one path in for the miner's sink, `submit_block` and
-/// `generateblocks`, and the owner learns of it only from the new tip.
+/// `offer_local`, the one path in for the miner's sink, `block_submit` and
+/// `dev_block_generate`, and the owner learns of it only from the new tip.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_block_this_node_mined_is_relayed_to_every_session() {
     logs();

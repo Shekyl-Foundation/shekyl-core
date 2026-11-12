@@ -5,206 +5,202 @@
 
 //! The §13 words that had no renderer in the moved console.
 //!
-//! Each post uses the method table's name. A refusal is the error class
-//! and the diagnostic code (`json_rpc_result`).
+//! Each call names its method by type. A refusal is the error class and the
+//! diagnostic code.
 
-use super::{native_json_rpc, require_ok, rest_post};
+use super::call;
 use crate::daemon::DaemonClient;
-use shekyl_rpc_types::bans::{
-    BannedRequest, BannedResponse, GetBansResponse, SetBan, SetBansRequest,
-};
-use shekyl_rpc_types::mining::StatusOnlyResponse;
-use shekyl_rpc_types::options::{OptionPair, OptionSetRequest, OptionShowRequest, OptionsResponse};
-use shekyl_rpc_types::pool::{
-    FlushTxpoolRequest, GetTransactionPoolHashesResponse, GetTransactionPoolResponse,
-    RelayTxRequest,
-};
-use shekyl_rpc_types::{GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, HashHex};
-use shekyl_units::AtomicUnits;
+use shekyl_rpc_client::wire;
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::kinds::{Duration, Height, NoParams, Text};
+use shekyl_rpc_types::wire::node::{OptionRow, OptionSource};
+use shekyl_rpc_types::wire::shared::{OpenMap, Slot};
 
+/// `chain coinbase sum --from <height> --to <height>`, inclusive.
 pub(super) fn chain_coinbase_sum(src: &DaemonClient, from: u64, to: u64) -> Result<String, String> {
-    let count = to.saturating_sub(from).saturating_add(1);
-    let reply: GetCoinbaseTxSumResponse = native_json_rpc(
+    let reply = call::<wire::ChainCoinbaseSum>(
         src,
-        "get_coinbase_tx_sum",
-        &GetCoinbaseTxSumRequest {
-            height: from,
-            count,
+        &wire::chain::CoinbaseSumRange {
+            from: Height(from),
+            to: Height(to),
         },
     )?;
-    require_ok(&reply.status)?;
     Ok(format!(
         "emission: {} SKL\nfee: {} SKL",
-        AtomicUnits::from_raw(reply.emission_amount).to_skl_string(),
-        AtomicUnits::from_raw(reply.fee_amount).to_skl_string()
+        reply.emission.to_atomic_units().to_skl_string(),
+        reply.fee.to_atomic_units().to_skl_string()
     ))
 }
 
-pub(super) fn tx_relay(src: &DaemonClient, hash: &str) -> Result<String, String> {
-    let reply: StatusOnlyResponse = native_json_rpc(
-        src,
-        "relay_tx",
-        &RelayTxRequest {
-            txids: vec![HashHex::from_hex(hash).map_err(|error| error.to_string())?],
-        },
-    )?;
-    require_ok(&reply.status)?;
-    Ok(format!("relayed {hash}"))
+fn hash_of(hash: &str) -> Result<HashHex, String> {
+    HashHex::from_hex(hash).map_err(|error| error.to_string())
 }
 
-pub(super) fn txpool_list(src: &DaemonClient, short: bool) -> Result<String, String> {
-    if short {
-        let body = rest_post(src, "/get_transaction_pool_hashes", b"{}".to_vec())?;
-        let reply: GetTransactionPoolHashesResponse =
-            super::decode_reply(&body, "get_transaction_pool_hashes")?;
-        require_ok(&reply.status)?;
-        if reply.tx_hashes.is_empty() {
-            return Ok("The pool is empty.".to_owned());
-        }
-        return Ok(reply
-            .tx_hashes
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n"));
+/// What one named id's slot in an `Acted` reply says: acted on, or the
+/// pool this caller may see holds no such entry (IG-Q89).
+fn acted_on(reply: &[Slot<HashHex>], hash: &str, verb: &str) -> Result<String, String> {
+    match reply {
+        [Slot::Item(_)] => Ok(format!("{verb} {hash}")),
+        [_] => Err(format!("the pool holds no transaction {hash}")),
+        other => Err(format!(
+            "asked about 1 transaction, got {} slots",
+            other.len()
+        )),
     }
-    let body = rest_post(src, "/get_transaction_pool", b"{}".to_vec())?;
-    let reply: GetTransactionPoolResponse = super::decode_reply(&body, "get_transaction_pool")?;
-    require_ok(&reply.status)?;
-    if reply.transactions.is_empty() {
+}
+
+/// `tx relay <id>`: offer the node's own pool entry to the relay again.
+pub(super) fn tx_relay(src: &DaemonClient, hash: &str) -> Result<String, String> {
+    let reply = call::<wire::TxRelay>(
+        src,
+        &wire::tx::RelayIds {
+            id: vec![hash_of(hash)?],
+        },
+    )?;
+    acted_on(&reply, hash, "relayed")
+}
+
+/// `txpool list [--short]`.
+pub(super) fn txpool_list(src: &DaemonClient, short: bool) -> Result<String, String> {
+    let reply = call::<wire::TxpoolList>(src, &NoParams)?;
+    if reply.is_empty() {
         return Ok("The pool is empty.".to_owned());
     }
     Ok(reply
-        .transactions
         .iter()
         .map(|tx| {
-            format!(
-                "{}  {} bytes  {} SKL",
-                tx.id_hash,
-                tx.blob_size,
-                AtomicUnits::from_raw(tx.fee).to_skl_string()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
-}
-
-pub(super) fn txpool_flush(src: &DaemonClient, id: Option<&str>) -> Result<String, String> {
-    let txids = match id {
-        Some(hash) => vec![HashHex::from_hex(hash).map_err(|error| error.to_string())?],
-        None => Vec::new(),
-    };
-    let reply: StatusOnlyResponse =
-        native_json_rpc(src, "flush_txpool", &FlushTxpoolRequest { txids })?;
-    require_ok(&reply.status)?;
-    Ok(match id {
-        Some(hash) => format!("flushed {hash}"),
-        None => "flushed the pool".to_owned(),
-    })
-}
-
-pub(super) fn ban_list(src: &DaemonClient) -> Result<String, String> {
-    let reply: GetBansResponse = native_json_rpc(src, "get_bans", &serde_json::json!({}))?;
-    require_ok(&reply.status)?;
-    if reply.bans.is_empty() {
-        return Ok("No bans.".to_owned());
-    }
-    Ok(reply
-        .bans
-        .iter()
-        .map(|ban| {
-            if ban.permanent {
-                format!("{}  until lifted", ban.host)
+            if short {
+                tx.id.to_string()
             } else {
-                format!("{}  {} s", ban.host, ban.seconds)
+                format!(
+                    "{}  {} weight  {} SKL",
+                    tx.id,
+                    tx.weight.0,
+                    tx.fee.to_atomic_units().to_skl_string()
+                )
             }
         })
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
+/// `txpool flush [<id>]`: one entry, or every entry the caller may see.
+pub(super) fn txpool_flush(src: &DaemonClient, id: Option<&str>) -> Result<String, String> {
+    let ids = id.map(hash_of).transpose()?.map(|hash| vec![hash]);
+    let reply = call::<wire::TxpoolFlush>(src, &wire::tx::FlushIds { id: ids })?;
+    match id {
+        Some(hash) => acted_on(&reply, hash, "flushed"),
+        None => Ok("flushed the pool".to_owned()),
+    }
+}
+
+/// `ban list`.
+pub(super) fn ban_list(src: &DaemonClient) -> Result<String, String> {
+    let reply = call::<wire::BanList>(src, &NoParams)?;
+    if reply.is_empty() {
+        return Ok("No bans.".to_owned());
+    }
+    Ok(reply
+        .iter()
+        .map(|ban| match ban.duration.0 {
+            Some(left) if !ban.permanent => format!("{}  {} s", ban.host.0, left.0),
+            _ => format!("{}  until lifted", ban.host.0),
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// `ban add <host> [--duration <seconds>]`.
 pub(super) fn ban_add(
     src: &DaemonClient,
     ip: &str,
     duration: Option<u64>,
 ) -> Result<String, String> {
-    let reply: StatusOnlyResponse = native_json_rpc(
+    call::<wire::BanAdd>(
         src,
-        "set_bans",
-        &SetBansRequest {
-            bans: vec![SetBan {
-                host: ip.to_owned(),
-                ban: true,
-                seconds: duration,
-            }],
+        &wire::node::BanAdd {
+            host: Text(ip.to_owned()),
+            duration: duration.map(Duration),
         },
     )?;
-    require_ok(&reply.status)?;
     Ok(match duration {
         Some(seconds) => format!("banned {ip} for {seconds} s"),
         None => format!("banned {ip} until lifted"),
     })
 }
 
+/// `ban remove <host>`.
 pub(super) fn ban_remove(src: &DaemonClient, ip: &str) -> Result<String, String> {
-    let reply: StatusOnlyResponse = native_json_rpc(
+    call::<wire::BanRemove>(
         src,
-        "set_bans",
-        &SetBansRequest {
-            bans: vec![SetBan {
-                host: ip.to_owned(),
-                ban: false,
-                seconds: None,
-            }],
+        &wire::node::BanHost {
+            host: Text(ip.to_owned()),
         },
     )?;
-    require_ok(&reply.status)?;
     Ok(format!("lifted the ban on {ip}"))
 }
 
+/// `ban show <host>`: the ban, or `null` when the host is not banned.
 pub(super) fn ban_show(src: &DaemonClient, ip: &str) -> Result<String, String> {
-    let reply: BannedResponse = native_json_rpc(
+    let reply = call::<wire::BanShow>(
         src,
-        "banned",
-        &BannedRequest {
-            address: ip.to_owned(),
+        &wire::node::BanHost {
+            host: Text(ip.to_owned()),
         },
     )?;
-    require_ok(&reply.status)?;
-    if !reply.banned {
-        return Ok(format!("{ip} is not banned"));
-    }
-    if reply.permanent {
-        Ok(format!("{ip} is banned until lifted"))
-    } else {
-        Ok(format!("{ip} is banned for {} s", reply.seconds))
+    Ok(match reply.0 {
+        None => format!("{ip} is not banned"),
+        Some(ban) => match ban.duration.0 {
+            Some(left) if !ban.permanent => format!("{ip} is banned for {} s", left.0),
+            _ => format!("{ip} is banned until lifted"),
+        },
+    })
+}
+
+/// An option row's name, whether it holds a value or a secret.
+pub(super) fn row_name(row: &OptionRow) -> &str {
+    match row {
+        OptionRow::Value(value) => &value.name.0,
+        OptionRow::Secret(secret) => &secret.name.0,
     }
 }
 
-fn render_options(reply: &OptionsResponse) -> String {
-    if reply.options.is_empty() {
+const fn source_word(source: OptionSource) -> &'static str {
+    match source {
+        OptionSource::Default => "default",
+        OptionSource::File => "file",
+        OptionSource::Cli => "cli",
+        OptionSource::Runtime => "runtime",
+    }
+}
+
+fn render_options(rows: &[OptionRow]) -> String {
+    if rows.is_empty() {
         return "No options.".to_owned();
     }
-    reply
-        .options
-        .iter()
+    rows.iter()
         .map(|row| {
-            let value = match row.value() {
-                Some(Some(text)) => text.to_owned(),
-                Some(None) => "unset".to_owned(),
-                None => {
-                    if row.set() == Some(true) {
-                        "set".to_owned()
-                    } else {
-                        "unset".to_owned()
-                    }
-                }
+            let (source, runtime, value) = match row {
+                OptionRow::Value(row) => (
+                    row.source,
+                    row.runtime,
+                    row.value
+                        .0
+                        .as_ref()
+                        .map_or_else(|| "unset".to_owned(), |text| text.0.clone()),
+                ),
+                // A secret's value is never shown: only whether it has one.
+                OptionRow::Secret(row) => (
+                    row.source,
+                    row.runtime,
+                    if row.assigned { "set" } else { "unset" }.to_owned(),
+                ),
             };
             format!(
                 "{}  {}  {}  {}",
-                row.name(),
-                row.source(),
-                if row.runtime() { "runtime" } else { "startup" },
+                row_name(row),
+                source_word(source),
+                if runtime { "runtime" } else { "startup" },
                 value
             )
         })
@@ -212,29 +208,28 @@ fn render_options(reply: &OptionsResponse) -> String {
         .join("\n")
 }
 
+/// `option set <name> <value>`.
 pub(super) fn option_set(src: &DaemonClient, name: &str, value: &str) -> Result<String, String> {
-    let reply: OptionsResponse = native_json_rpc(
+    let mut values = std::collections::BTreeMap::new();
+    values.insert(name.to_owned(), Text(value.to_owned()));
+    let reply = call::<wire::OptionSet>(
         src,
-        "option_set",
-        &OptionSetRequest {
-            options: vec![OptionPair {
-                name: name.to_owned(),
-                value: value.to_owned(),
-            }],
+        &wire::node::OptionSet {
+            value: OpenMap(values),
         },
     )?;
     Ok(render_options(&reply))
 }
 
+/// `option show [<name>]`.
 pub(super) fn option_show(src: &DaemonClient, name: Option<&str>) -> Result<String, String> {
-    let names = name.map(|name| vec![name.to_owned()]);
-    let reply: OptionsResponse = native_json_rpc(src, "option_show", &OptionShowRequest { names })?;
+    let names = name.map(|name| vec![Text(name.to_owned())]);
+    let reply = call::<wire::OptionShow>(src, &wire::node::OptionShow { name: names })?;
     Ok(render_options(&reply))
 }
 
+/// `daemon stop`.
 pub(super) fn daemon_stop(src: &DaemonClient) -> Result<String, String> {
-    let body = rest_post(src, "/stop_daemon", b"{}".to_vec())?;
-    let reply: StatusOnlyResponse = super::decode_reply(&body, "stop_daemon")?;
-    require_ok(&reply.status)?;
+    call::<wire::DaemonStop>(src, &NoParams)?;
     Ok("The daemon is stopping.".to_owned())
 }

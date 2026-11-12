@@ -249,26 +249,26 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
     );
 }
 
-/// What a serving stand-in does to a `get_transactions` reply before it
-/// goes on the wire: nothing, or one edit a falsifier names.
-pub(super) type ReplyEdit =
-    Arc<dyn Fn(&mut shekyl_rpc_types::GetTransactionsResponse) + Send + Sync>;
+/// What a serving stand-in does to a `block_show` reply before it goes on
+/// the wire: nothing, or one edit a falsifier names.
+pub(super) type ReplyEdit = Arc<dyn Fn(&mut shekyl_rpc_types::wire::block::Block) + Send + Sync>;
 
-/// A local HTTP stand-in for the daemon that serves the wallet's block
-/// fetch from `facts`: `get_block` (JSON-RPC), `get_transactions` and
-/// `get_o_indexes.bin`, each by the store-backed handler, one request per
-/// connection.
+/// A local HTTP stand-in for the daemon that serves the wallet's reads
+/// from `facts`: `block_show` (the block fetch) and `tx_list` (the proof
+/// fetch), each by the store-backed handler, on `/json_rpc`, one request
+/// per connection.
 pub(super) async fn serve_the_block_fetch(facts: Arc<StoreFacts>) -> String {
     serve_the_block_fetch_editing(facts, Arc::new(|_| {})).await
 }
 
-/// [`serve_the_block_fetch`], with `edit` applied to every
-/// `get_transactions` reply: the lying daemon of `SB-Q2`'s falsifiers,
-/// which change one operand of one served skeleton.
+/// [`serve_the_block_fetch`], with `edit` applied to every `block_show`
+/// reply: the lying daemon of `SB-Q2`'s falsifiers, which change one
+/// operand of one served skeleton.
 pub(super) async fn serve_the_block_fetch_editing(
     facts: Arc<StoreFacts>,
     edit: ReplyEdit,
 ) -> String {
+    use shekyl_rpc_types::wire::Id;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -307,40 +307,36 @@ pub(super) async fn serve_the_block_fetch_editing(
                     .nth(1)
                     .expect("a request line")
                     .to_owned();
-                let reply: Vec<u8> = match path.as_str() {
-                    "/json_rpc" => {
-                        let call: serde_json::Value =
-                            serde_json::from_slice(&body).expect("a JSON-RPC call");
-                        assert_eq!(call["method"], "get_block");
-                        let request: shekyl_rpc_types::GetBlockRequest =
-                            serde_json::from_value(call["params"].clone()).expect("params");
-                        let block = shekyl_daemon_rpc::methods::get_block(&*facts, &request, false)
-                            .expect("the block");
-                        serde_json::to_vec(&serde_json::json!({
-                            "jsonrpc": "2.0", "id": 0, "result": block
-                        }))
-                        .expect("json")
+                assert_eq!(
+                    path,
+                    shekyl_rpc_types::endpoint::JSON_RPC_PATH,
+                    "every call is on one path"
+                );
+                let call: serde_json::Value =
+                    serde_json::from_slice(&body).expect("a JSON-RPC call");
+                let method = call["method"].as_str().expect("a method");
+                let params = call["params"].clone();
+                let result = match Id::of(method) {
+                    Some(Id::BlockShow) => {
+                        let request = serde_json::from_value(params).expect("params");
+                        let mut block =
+                            shekyl_daemon_rpc::reads::block_show(&*facts, &*facts, &request)
+                                .unwrap_or_else(|_| panic!("the block"));
+                        edit(&mut block);
+                        serde_json::to_value(block).expect("json")
                     }
-                    "/get_transactions" => {
-                        let request: shekyl_rpc_types::GetTransactionsRequest =
-                            serde_json::from_slice(&body).expect("a request");
-                        let mut reply = shekyl_daemon_rpc::read_methods::get_transactions(
-                            &*facts, &request, false,
-                        )
-                        .expect("the bodies");
-                        edit(&mut reply);
-                        serde_json::to_vec(&reply).expect("json")
+                    Some(Id::TxList) => {
+                        let request = serde_json::from_value(params).expect("params");
+                        let listed = shekyl_daemon_rpc::reads::tx_list(&*facts, &request, false)
+                            .unwrap_or_else(|_| panic!("the bodies"));
+                        serde_json::to_value(listed).expect("json")
                     }
-                    "/get_o_indexes.bin" => {
-                        let request = shekyl_rpc_types::GetOIndexesRequest::from_bin(&body)
-                            .expect("a request");
-                        shekyl_daemon_rpc::read_methods::get_o_indexes(&*facts, &request)
-                            .expect("the indices")
-                            .to_bin()
-                            .expect("bin")
-                    }
-                    other => panic!("the block fetch asked for {other}"),
+                    _ => panic!("the wallet asked for {method}"),
                 };
+                let reply = serde_json::to_vec(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": 0, "result": result
+                }))
+                .expect("json");
                 let mut out = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     reply.len()
@@ -355,9 +351,8 @@ pub(super) async fn serve_the_block_fetch_editing(
 }
 
 /// The wallet's block fetch reads a block and its spend from the
-/// store-backed handlers (the review of #1165, ruling 7): `get_block`,
-/// `get_transactions` in the pruned form the wallet asks for, and the
-/// first output index. The wallet binds each pruned
+/// store-backed handlers (the review of #1165, ruling 7): one `block_show`
+/// in the pruned form the wallet asks for, with the first output index. The wallet binds each pruned
 /// body to the hash it asked by (its `prunable_hash` and archival length),
 /// so a body served wrong fails here. A lone `Node` holds no spendable
 /// output, so the chain is the scenario's, read through the same
@@ -399,14 +394,15 @@ async fn the_wallets_block_fetch_reads_a_spend_from_the_store_backed_handlers() 
     assert!(fetched.first_output_index.is_some());
 }
 
-/// `get_transactions` over the store and a pool: a mined transaction
-/// carries its height and output indices; a pool entry is `in_pool`,
-/// relayed, with no receive time; an id held nowhere is missed; the full
-/// form carries each whole body and no `archived` state, since nothing is
+/// `tx_list` over the store and a pool: a mined transaction carries its
+/// height and output indices; a pool entry is `pooled`, public, with no
+/// receive time; an id held nowhere is `{"missing": null}`; the full form
+/// carries each whole body and no `archived` state, since nothing is
 /// discarded this side of the first boundary (`SB-Q2`). Red edit: the
 /// gather passes over the pool.
 #[tokio::test]
-async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
+async fn tx_list_answers_the_chain_the_pool_and_a_miss() {
+    use shekyl_rpc_types::wire::shared::{Slot, SlotState};
     let (mut scenario, mined) = crate::pool_door_tests::matured("rpc-get-transactions").await;
     let spend = crate::pool_door_tests::paying_the_floor(&mut scenario, &mined, 0).await;
     let landed = scenario
@@ -429,52 +425,38 @@ async fn get_transactions_answers_the_chain_the_pool_and_a_miss() {
                 Arc::new(CacheStore::new()),
                 shekyl_hash_budget::Budget::of_host(),
             );
-            let reply = shekyl_daemon_rpc::read_methods::get_transactions(
+            let reply = shekyl_daemon_rpc::reads::tx_list(
                 &facts,
-                &shekyl_rpc_types::GetTransactionsRequest {
-                    txs_hashes: vec![
-                        hex::encode(spend.hash().to_bytes()),
-                        hex::encode(pooled.hash().to_bytes()),
-                        hex::encode(nowhere),
+                &shekyl_rpc_types::wire::tx::TxListQuery {
+                    id: vec![
+                        HashHex::from_bytes(spend.hash().to_bytes()),
+                        HashHex::from_bytes(pooled.hash().to_bytes()),
+                        HashHex::from_bytes(nowhere),
                     ],
                     prune: false,
                 },
                 false,
             )
-            .expect("answered");
-            assert!(reply.status.is_ok());
-            assert_eq!(reply.txs.len(), 2);
+            .unwrap_or_else(|_| panic!("answered"));
+            let [Slot::Item(mined_entry), Slot::Item(pool_entry), missing] = reply.as_slice()
+            else {
+                panic!("the chain's and the pool's entries, then the miss: {reply:?}");
+            };
+            assert_eq!(missing, &Slot::State(SlotState::Missing(Null)));
+            assert_eq!(mined_entry.body.0, spend.serialize());
+            assert!(!mined_entry.pooled);
             assert_eq!(
-                reply.missed_tx,
-                vec![shekyl_rpc_types::HashHex::from_bytes(nowhere)]
+                mined_entry.mined_height.0.map(|h| h.0),
+                Some(landed.height.to_raw())
             );
-            let mined_entry = &reply.txs[0];
-            assert_eq!(mined_entry.as_hex, hex::encode(spend.serialize()));
-            match &mined_entry.location {
-                shekyl_rpc_types::TxLocation::Mined {
-                    block_height,
-                    output_indices,
-                    ..
-                } => {
-                    assert_eq!(*block_height, landed.height.to_raw());
-                    assert_eq!(output_indices.len(), spend.prefix.outputs.len());
-                }
-                other => panic!("mined: {other:?}"),
-            }
-            let pool_entry = &reply.txs[1];
-            assert!(pool_entry.location.in_pool());
-            assert_eq!(
-                pool_entry.location,
-                shekyl_rpc_types::TxLocation::Pooled {
-                    relayed: true,
-                    received_timestamp: None,
-                }
-            );
-            assert_eq!(pool_entry.as_hex, hex::encode(pooled.serialize()));
-            assert!(reply.archived.is_empty());
+            assert_eq!(mined_entry.output_index.len(), spend.prefix.outputs.len());
+            assert!(pool_entry.pooled);
+            assert_eq!(pool_entry.public.0, Some(true));
+            assert_eq!(pool_entry.mined_height.0, None);
+            assert_eq!(pool_entry.body.0, pooled.serialize());
             let wire = serde_json::to_string(&reply).expect("json");
-            assert!(!wire.contains("archived"), "absent, not empty: {wire}");
-            assert!(!wire.contains("received_timestamp"), "{wire}");
+            assert!(!wire.contains("archived"), "no archived state: {wire}");
+            assert!(!wire.contains("received"), "no receive time: {wire}");
         })
         .await;
     scenario.close().await;
@@ -493,20 +475,18 @@ fn key_image_of(tx: &shekyl_wire::Transaction) -> [u8; 32] {
 }
 
 /// Q1's reads over the store and the pool (DX-Q3): the blocks by height
-/// with their bodies whole, ending at the first height above the tip with
-/// C++'s error status; a transaction's output indices, and `Failed` for
-/// one the chain does not hold; a key image spent in the chain, one the
-/// pool shows, and one spent nowhere. Red edit: answer the pool before the
-/// chain, so a mined spend reads as a pool spend.
+/// with their bodies whole, a height above the tip `{"missing": null}`
+/// and the request not failed; a block's first output index; a key image
+/// spent in the chain, one the pool shows, and one spent nowhere. Red edit:
+/// answer the pool before the chain, so a mined spend reads as a pool
+/// spend.
 #[tokio::test]
 async fn the_q1_reads_answer_from_the_store_and_the_pool() {
-    use shekyl_daemon_rpc::read_methods::{
-        get_blocks_by_height, get_o_indexes, is_key_image_spent,
-    };
-    use shekyl_rpc_types::{
-        BlockTx, GetBlocksByHeightRequest, GetOIndexesRequest, IsKeyImageSpentRequest,
-        KeyImageStatus,
-    };
+    use shekyl_daemon_rpc::reads::{block_list, chain_spent};
+    use shekyl_rpc_types::kinds::Height;
+    use shekyl_rpc_types::wire::block::BlockListQuery;
+    use shekyl_rpc_types::wire::chain::{Spent, SpentQuery};
+    use shekyl_rpc_types::wire::shared::{OrArchived, Slot, SlotState};
     let (mut scenario, mined) = crate::pool_door_tests::matured("rpc-q1-reads").await;
     let spend = crate::pool_door_tests::paying_the_floor(&mut scenario, &mined, 0).await;
     let landed = scenario
@@ -529,98 +509,97 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                     shekyl_types::KeyImage::from_bytes(pooled_image),
                 ],
             );
-            let past = landed.height.to_raw() + 1;
-            let blocks = get_blocks_by_height(
+            let past = landed.height.saturating_add(shekyl_types::BlockCount::ONE);
+            let query = |heights: Vec<BlockHeight>, prune| BlockListQuery {
+                height: heights
+                    .into_iter()
+                    .map(|height| Height(height.to_raw()))
+                    .collect(),
+                prune,
+            };
+            let blocks = block_list(
                 &facts,
-                &GetBlocksByHeightRequest {
-                    heights: vec![0, landed.height.to_raw(), past],
-                    prune: false,
-                },
-                true,
+                &facts,
+                &query(vec![BlockHeight::ZERO, landed.height, past], false),
+                false,
             )
-            .expect("blocks");
+            .unwrap_or_else(|_| panic!("blocks"));
+            let [Slot::Item(genesis), Slot::Item(block), above] = blocks.as_slice() else {
+                panic!("two blocks, then the height above the tip: {blocks:?}");
+            };
             assert_eq!(
-                blocks.status.0,
-                format!("Error retrieving block at height {past}"),
-                "only a height above the tip fails the request"
+                above,
+                &Slot::State(SlotState::Missing(Null)),
+                "only the height above the tip is missing"
             );
-            assert_eq!(blocks.blocks.len(), 2, "the two below the tip");
-            assert_eq!(blocks.blocks[0].block, mined[0].template.block.serialize());
-            assert_eq!(blocks.blocks[1].block, landed.template.block.serialize());
+            assert_eq!(genesis.body.0, mined[0].template.block.serialize());
+            assert_eq!(block.body.0, landed.template.block.serialize());
+            let [OrArchived::Item(whole)] = block.tx.as_slice() else {
+                panic!("one listed body, whole: {:?}", block.tx);
+            };
             assert_eq!(
-                blocks.blocks[1].txs,
-                vec![BlockTx::Full(spend.serialize())],
+                whole.body.0,
+                spend.serialize(),
                 "the full form: the body, whole"
             );
 
             // The pruned form (SB-Q2): the slot is the skeleton, and it binds
             // to the id the block lists through `SkeletonTx::txid`.
-            let pruned = get_blocks_by_height(
-                &facts,
-                &GetBlocksByHeightRequest {
-                    heights: vec![landed.height.to_raw()],
-                    prune: true,
-                },
-                true,
-            )
-            .expect("blocks");
-            assert!(pruned.status.is_ok());
-            let [BlockTx::Skeleton(slot)] = pruned.blocks[0].txs.as_slice() else {
+            let pruned = block_list(&facts, &facts, &query(vec![landed.height], true), false)
+                .unwrap_or_else(|_| panic!("blocks"));
+            let [Slot::Item(pruned_block)] = pruned.as_slice() else {
+                panic!("one block: {pruned:?}");
+            };
+            let [OrArchived::Item(slot)] = pruned_block.tx.as_slice() else {
                 panic!("under prune the one listed body is a skeleton");
             };
             let parts = spend.txid_parts();
-            assert_eq!(slot.prunable_hash, parts.prunable_hash.to_bytes());
             assert_eq!(
-                slot.pqc_auth_hash,
+                slot.prunable_hash.to_bytes(),
+                parts.prunable_hash.to_bytes()
+            );
+            assert_eq!(
+                slot.pqc_auth_hash
+                    .0
+                    .map(shekyl_rpc_client::HashHex::to_bytes),
                 parts.pqc_auth_hash.map(shekyl_types::PqcAuthHash::to_bytes)
             );
             let skeleton = shekyl_wire::SkeletonTx {
-                unprunable: slot.unprunable.clone(),
-                prunable_hash: shekyl_types::PrunableHash::from_bytes(slot.prunable_hash),
+                unprunable: slot.body.0.clone(),
+                prunable_hash: shekyl_types::PrunableHash::from_bytes(
+                    slot.prunable_hash.to_bytes(),
+                ),
                 pqc_auth_hash: slot
                     .pqc_auth_hash
-                    .map(shekyl_types::PqcAuthHash::from_bytes),
-                archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_len),
+                    .0
+                    .map(|h| shekyl_types::PqcAuthHash::from_bytes(h.to_bytes())),
+                archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_size.0),
             };
             assert_eq!(
                 skeleton.txid().expect("the skeleton binds"),
                 spend_id,
                 "the skeleton rebinds the listed id"
             );
+            // The block's first output index, beside its bytes (RW-Q5).
+            assert_eq!(
+                pruned_block.output_index, block.output_index,
+                "one index whatever the form"
+            );
+            assert!(block.output_index.0 > genesis.output_index.0);
 
-            let indices = get_o_indexes(
+            let spent = chain_spent(
                 &facts,
-                &GetOIndexesRequest {
-                    txid: spend_id.to_bytes(),
-                },
-            )
-            .expect("indices");
-            assert_eq!(indices.status.0, "OK");
-            assert_eq!(indices.o_indexes.len(), spend.prefix.outputs.len());
-            let unknown =
-                get_o_indexes(&facts, &GetOIndexesRequest { txid: [0x77; 32] }).expect("answered");
-            assert_eq!(unknown.status.0, "Failed");
-
-            let spent = is_key_image_spent(
-                &facts,
-                &IsKeyImageSpentRequest {
-                    key_images: vec![
-                        hex::encode(mined_image),
-                        hex::encode(pooled_image),
-                        hex::encode(nowhere),
+                &SpentQuery {
+                    key_image: vec![
+                        HashHex::from_bytes(mined_image),
+                        HashHex::from_bytes(pooled_image),
+                        HashHex::from_bytes(nowhere),
                     ],
                 },
                 true,
             )
-            .expect("spent");
-            assert_eq!(
-                spent.spent_status,
-                vec![
-                    KeyImageStatus::SpentInBlockchain,
-                    KeyImageStatus::SpentInPool,
-                    KeyImageStatus::Unspent,
-                ]
-            );
+            .unwrap_or_else(|_| panic!("spent"));
+            assert_eq!(spent, vec![Spent::Chain, Spent::Txpool, Spent::Unspent]);
         })
         .await;
     scenario.close().await;

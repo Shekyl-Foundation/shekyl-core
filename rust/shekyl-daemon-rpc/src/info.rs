@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `get_info`, served natively (`docs/design/DAEMON_RPC_KV_GET_INFO.md`).
+//! `daemon_status` (`RPC_WIRE.md`).
 //!
 //! Like [`crate::methods`], this is the method with no Axum, no FFI and no
 //! JSON in it: facts in, a typed reply out.
@@ -17,25 +17,16 @@
 //! — the volume that cannot be queried for its free space, say — cannot
 //! refuse a caller who was never going to be told it.
 //!
-//! # Parity
+//! # What the reply carries
 //!
-//! The method first answered exactly what the C++ handler it replaced
-//! answered, and five oracle vectors captured from that handler's own
-//! computation held it to that. Each later commit moves one thing off
-//! parity, with a vector derived from its predecessor: the `target_height`
-//! sentinel went first (RK-D15, 3.46), then `has_peers` arrived (RK-D14,
-//! 3.47), then the restricted stand-ins went (RK-Q8, 3.48): a caller who is
-//! not shown Status or Peers gets a reply without those parts, where it got
-//! zeros, an empty version, `u64::MAX` of free space and the store's size
-//! rounded up. The connection counts went to the board at 3.49 (RK-Q3):
-//! handshaken sessions on every connector, one snapshot with `has_peers`,
-//! and no subtraction. The pool count was split at 3.50 (RK-Q10):
-//! `tx_pool_size` is the entries this node has broadcast, for every
-//! caller, and the entries it has not yet broadcast are a host-only part.
-//! A burn computation that refuses stopped being reported as zero at 3.51
-//! (RK-Q9): the store has contradicted itself, and the method refuses with
-//! a fault that says how. Nothing the C++ handler wrote for "not this
-//! value" is left in this reply.
+//! `txpool_count` is the entries this node has broadcast, for every caller;
+//! `txpool_private_count`, the entries it has not yet broadcast, is a
+//! host-only part. The connection counts are the board's handshaken
+//! sessions on every connector, from one snapshot. A store that holds more
+//! burned than generated has contradicted itself, and the method refuses
+//! with a fault that names the invariant and its operands. No member
+//! carries a stand-in for "no value": a part the caller is not shown is
+//! absent, and a value with no answer is `null`.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so
@@ -45,14 +36,17 @@
 //! what it returns.
 
 use shekyl_economics::{project_at_tip, TipOperands};
-use shekyl_rpc_types::{
-    GetInfoResponse, HashHex, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoHost,
-    InfoIdentity, InfoP2p, InfoPool, InfoStatus, RpcStatus, StatusConnections,
+use shekyl_rpc_types::hex128::HexU128;
+use shekyl_rpc_types::kinds::{
+    Count, Duration, Height, Integer, Micro, Size, Text, Time, Withheld,
 };
+use shekyl_rpc_types::wire::daemon::{ConnectorMap, DaemonStatus, GrantName};
+use shekyl_rpc_types::HashHex;
+use shekyl_units::wire::AtomicUnitsString;
 
-use shekyl_rpc_types::methods::{Grant, GrantSet, Preset};
+use shekyl_rpc_types::method::{Grant, GrantSet, Preset};
 
-use crate::chain_facts::FactsFault;
+use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
 
@@ -123,209 +117,185 @@ impl Disclosure {
     pub const fn host(self) -> bool {
         self.host
     }
+
+    /// The grants the caller holds.
+    #[must_use]
+    pub const fn grants(self) -> GrantSet {
+        self.grants
+    }
 }
 
-/// `get_info` (REST `/get_info`, `/getinfo`; JSON-RPC `get_info`).
+/// `value` to a caller shown the Status part; withheld otherwise.
+fn shown<T>(on: bool, value: T) -> Withheld<T> {
+    if on {
+        Withheld::Shown(value)
+    } else {
+        Withheld::Withheld
+    }
+}
+
+/// `daemon_status`: the node's state, each part to a caller its grant
+/// admits (`RPC_CHANNEL.md` §6.1). A part the caller is not shown is absent
+/// and none of its reads is made (RK-D24), so a failure in one cannot
+/// refuse a caller who was never going to be told it.
 ///
 /// `rpc_connections` is this server's live connection count, which the
-/// transport owns; it is a Status field, so a caller who is not shown
-/// Status is not told it.
+/// transport owns.
 ///
 /// # Errors
 ///
-/// [`RpcFault::Facts`] when a read made on this caller's behalf fails. A
-/// read that is not made cannot.
-///
-/// [`RpcFault::Store`] when the chain snapshot contradicts itself: more
-/// burned than generated. Every caller is refused, since the contradiction
-/// is in what every caller is told.
-pub fn get_info(
+/// [`RpcFault::Facts`] when a read made on this caller's behalf fails;
+/// [`RpcFault::Store`] when the chain snapshot contradicts itself (more
+/// burned than generated), for every caller, since every caller is told
+/// what it contradicts.
+pub fn daemon_status(
     facts: &dyn InfoFacts,
+    chain_facts: &dyn ChainFacts,
     disclosure: Disclosure,
     rpc_connections: u64,
-) -> Result<GetInfoResponse, RpcFault> {
+) -> Result<DaemonStatus, RpcFault> {
     let chain = facts.chain()?;
-    // The node's sessions, from one snapshot of the board. Health's
-    // `has_peers` needs it, and Health is every caller's, so it is read for
-    // every caller. The two connection counts in Status are the same read.
-    //
-    // An offline node is the one case where the board is not read. Offline
-    // is configuration: the p2p layer was told not to start, so it binds no
-    // hub, and "no sessions" is known without asking. That is a read
-    // avoided, not a fault mapped: the branch is on what the node was
-    // configured to be, and never on what the read returned.
-    //
-    // Everywhere else a hub that is not up is a fault and refuses the
-    // reply: `false` and zero would be answers nobody gave.
-    //
-    // Offline is then a state on every part (Rick, 2026-10-14): Health
-    // carries no `has_peers` and Status no connection count, because the
-    // node has neither by configuration.
+    let halt = chain_facts.chain_tip()?.halt;
+    // The board's sessions, one snapshot: Health's `peered` and Status's two
+    // counts. A node started offline binds no hub, so the board is not read;
+    // every other hub that is not up is a fault.
     let sessions = if chain.offline {
         None
     } else {
         Some(facts.sessions()?)
     };
-    let health_p2p = match sessions {
-        None => HealthP2p::Offline,
-        Some(sessions) => HealthP2p::Running {
-            has_peers: sessions.has_peers(),
-        },
-    };
-    let connections = match sessions {
-        None => StatusConnections::Offline,
-        Some(sessions) => StatusConnections::Running {
-            outgoing: sessions.outbound,
-            incoming: sessions.inbound,
-        },
-    };
-    // The pool. Every caller is told how many entries this node has
-    // broadcast. How many it holds and has not yet broadcast is host-only,
-    // so it is counted only on the host axis; both are then one pool state.
-    //
-    // A retired pool (its file faulted; the node holds none until restart)
-    // answers no count, so the reply says so and carries the chain's
-    // members as ever: the chain is still followed, and a reply refused
-    // whole for the pool's sake would black it out with it.
+    // The pool. Every caller is told how many entries the node has made
+    // public; how many it holds and has not is host-only. A retired pool
+    // has no count: `null`, and the chain's members as ever.
     let pool = facts.pool_counts(if disclosure.host {
         PoolScope::WithUnbroadcast
     } else {
         PoolScope::Broadcast
     })?;
-    let (pool, unbroadcast) = match pool {
-        PoolState::Live(counts) => (
-            InfoPool::Live {
-                tx_pool_size: counts.broadcast,
-            },
-            counts.unbroadcast,
-        ),
-        PoolState::Retired => (InfoPool::Retired, None),
+    let (txpool_count, txpool_retired, private) = match pool {
+        PoolState::Live(counts) => (Some(Count(counts.broadcast)), false, counts.unbroadcast),
+        PoolState::Retired => (None, true, None),
     };
-    let host = match (disclosure.host, &pool, unbroadcast) {
-        (true, InfoPool::Live { .. }, Some(count)) => Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count: Some(count),
-        }),
-        // Shown, with no answer: the pool is retired.
-        (true, InfoPool::Retired, _) => Hidden::Shown(InfoHost {
-            tx_pool_unbroadcast_count: None,
-        }),
-        // Asked for on the host axis and not answered: the facts layer did
-        // not make the count it was asked to. Not zero, and not withheld.
-        (true, InfoPool::Live { .. }, None) => {
-            return Err(RpcFault::Facts(FactsFault::Inconsistent))
+    let txpool_private_count = match (disclosure.host, txpool_retired, private) {
+        (true, false, Some(count)) => {
+            Withheld::Shown(shekyl_rpc_types::Nullable(Some(Count(count))))
         }
-        // Not host: withheld, whatever the facts layer returned.
-        (false, _, _) => Hidden::Withheld,
+        (true, true, _) => Withheld::Shown(shekyl_rpc_types::Nullable(None)),
+        // Asked for on the host axis and not counted: not zero, a fault.
+        (true, false, None) => return Err(RpcFault::Facts(FactsFault::Inconsistent)),
+        (false, _, _) => Withheld::Withheld,
     };
-    // A part the caller is not shown is withheld: absent from the reply,
-    // and none of its reads made (RK-D24, RK-Q8). No member is written with
-    // a value that means "not this value".
-    let node = if disclosure.status() {
+
+    let status = if disclosure.status() {
         let status = facts.status()?;
-        Hidden::Shown(InfoStatus {
-            start_time: status.start_time,
-            free_space: status.free_space,
-            database_size: facts.store_size()?,
-            version: status.version,
-            // Handshaken sessions on every connector, per direction: the
-            // same sessions `has_peers` is about, from the same snapshot.
-            // A socket before its handshake is in Peers' socket counts.
-            connections,
-            alt_blocks_count: status.alt_blocks_count,
-            rpc_connections_count: rpc_connections,
-        })
+        Some((status, facts.store_size()?))
     } else {
-        Hidden::Withheld
+        None
     };
 
-    // Peers says first whether P2P runs (Rick, 2026-10-14). A daemon
-    // started offline reports that state and no count. The state and
-    // Health's `offline` both come from the daemon's configuration, read
-    // in two places; if they disagree, one of the reads is wrong, and the
+    // Whether P2P runs, and its two reads, come from the configuration
+    // read in two places; if they disagree, one read is wrong, and the
     // reply refuses rather than carry both.
-    let peers = if disclosure.peers() {
-        let state = match facts.peers()? {
-            PeerFacts::Offline => InfoP2p::Offline,
-            PeerFacts::Running(peers) => InfoP2p::Running(peers),
-        };
-        if matches!(state, InfoP2p::Offline) != chain.offline {
-            tracing::error!(
-                offline = chain.offline,
-                "get_info refused: the P2P state disagrees with the core's offline flag"
-            );
-            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+    let connector = if disclosure.peers() {
+        match facts.peers()? {
+            PeerFacts::Offline if chain.offline => Withheld::Shown(ConnectorMap::default()),
+            PeerFacts::Running(map) if !chain.offline => Withheld::Shown(map),
+            _ => {
+                tracing::error!(
+                    offline = chain.offline,
+                    "daemon_status refused: the P2P state disagrees with the core's offline flag"
+                );
+                return Err(RpcFault::Facts(FactsFault::Inconsistent));
+            }
         }
-        Hidden::Shown(state)
     } else {
-        Hidden::Withheld
+        Withheld::Withheld
     };
 
-    let height = chain.chain_height.to_raw();
+    let count = chain.chain_height.to_raw();
     let tip = project_at_tip(
         &TipOperands {
             coins_generated: chain.already_generated_coins,
             total_burned: chain.total_burned,
             tx_volume: chain.tx_volume,
-            chain_height: height,
+            chain_height: count,
         },
         shekyl_economics::economic_params(),
     );
-    // More burned than generated is the store contradicting itself. `0` %
-    // is a legitimate burn, so it cannot stand for that: the method refuses,
-    // and the refusal carries the invariant and its operands. The same text
-    // is logged here, once, where it is found.
-    let burn_pct = tip.burn_pct.map_err(|violation| {
+    // More burned than generated is the store contradicting itself; a burn
+    // of zero is a value, so it cannot stand for that.
+    let burn = tip.burn_pct.map_err(|violation| {
         let fault = StoreFault::SupplyInvariant {
             coins_generated: violation.coins_generated,
             total_burned: violation.total_burned,
             chain_height: chain.chain_height,
         };
-        tracing::error!("get_info refused: {fault}");
+        tracing::error!("daemon_status refused: {fault}");
         RpcFault::Store(fault)
     })?;
-
-    Ok(GetInfoResponse {
-        status: RpcStatus::ok(),
-        health: InfoHealth {
-            height,
-            top_block_hash: HashHex::from_bytes(*chain.top_hash.as_bytes()),
-            // The core's target as the core reports it, synchronized or
-            // not, and `null` when it has none (RK-D15).
-            target_height: chain
-                .core_target_height
-                .map(shekyl_types::ChainCount::to_raw)
-                .into(),
-            synchronized: chain.synchronized,
-            busy_syncing: chain.busy_syncing,
-            following_degraded: chain.following_degraded,
-            p2p: health_p2p,
-        },
-        identity: InfoIdentity {
-            protocol_version: chain.protocol_version,
-        },
-        chain: InfoChain {
-            difficulty: chain.difficulty,
-            cumulative_difficulty: chain.cumulative_difficulty,
-            target: chain.difficulty_target,
-            // Coinbases excluded: one per block. Unsigned, as the C++
-            // handler computed it.
-            tx_count: chain.total_transactions.wrapping_sub(height),
-            block_weight_limit: chain.block_weight_limit,
-            block_weight_median: chain.block_weight_median,
-            adjusted_time: chain.adjusted_time,
-        },
-        economics: InfoEconomics {
-            already_generated_coins: tip.coins_generated,
-            release_multiplier: tip.release_multiplier,
-            burn_pct,
-            total_burned: tip.total_burned,
-            staker_emission_share_effective: tip.staker_emission_share,
-        },
-        pool,
-        node,
-        peers,
-        host,
-        restricted: !disclosure.host,
+    let on = disclosure.status();
+    let status_count = |pick: fn(crate::info_facts::SessionCounts) -> u64| {
+        shekyl_rpc_types::Nullable::from(sessions.map(|s| Count(pick(s))))
+    };
+    Ok(DaemonStatus {
+        height: Height(
+            chain
+                .chain_height
+                .tip()
+                .map_or(0, shekyl_types::BlockHeight::to_raw),
+        ),
+        hash: HashHex::from_bytes(*chain.top_hash.as_bytes()),
+        // The core's target as it reports it, `null` when it has none.
+        target_height: chain
+            .core_target_height
+            .and_then(shekyl_types::ChainCount::tip)
+            .map(|tip| Height(tip.to_raw()))
+            .into(),
+        synchronized: chain.synchronized,
+        syncing: chain.busy_syncing,
+        offline: chain.offline,
+        degraded: chain.following_degraded,
+        peered: sessions
+            .map(crate::info_facts::SessionCounts::has_peers)
+            .into(),
+        writer: crate::reads::writer_of(halt),
+        protocol_version: Integer(chain.protocol_version),
+        difficulty: HexU128(chain.difficulty),
+        difficulty_cumulative: HexU128(chain.cumulative_difficulty),
+        block_spacing: Duration(chain.difficulty_target),
+        // Coinbases excluded: one per block.
+        tx_count: Count(chain.total_transactions.wrapping_sub(count)),
+        block_weight_max: Size(chain.block_weight_limit),
+        block_weight_median: Size(chain.block_weight_median),
+        time_adjusted: Time(chain.adjusted_time),
+        emission: AtomicUnitsString::from(tip.coins_generated),
+        emission_multiplier: Micro(tip.release_multiplier),
+        burn: Micro(burn),
+        burn_total: AtomicUnitsString::from(tip.total_burned),
+        stake_share: Micro(tip.staker_emission_share),
+        txpool_count: txpool_count.into(),
+        grant: disclosure.grants().iter().map(GrantName::from).collect(),
+        started: shown(on, Time(status.as_ref().map_or(0, |(s, _)| s.start_time))),
+        disk_free: shown(on, Size(status.as_ref().map_or(0, |(s, _)| s.free_space))),
+        data_size: shown(on, Size(status.as_ref().map_or(0, |(_, size)| *size))),
+        revision: shown(
+            on,
+            Text(
+                status
+                    .as_ref()
+                    .map_or_else(String::new, |(s, _)| s.version.clone()),
+            ),
+        ),
+        peer_outbound_count: shown(on, status_count(|s| s.outbound)),
+        peer_inbound_count: shown(on, status_count(|s| s.inbound)),
+        alt_count: shown(
+            on,
+            Count(status.as_ref().map_or(0, |(s, _)| s.alt_blocks_count)),
+        ),
+        rpc_connections: shown(on, Count(rpc_connections)),
+        txpool_retired: shown(on, txpool_retired),
+        connector,
+        txpool_private_count,
     })
 }
 

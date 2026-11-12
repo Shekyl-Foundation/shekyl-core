@@ -5,9 +5,9 @@
 
 //! The shared hash budget for bounded RPC callers (`RPC_CHANNEL.md` §6.3).
 //!
-//! One bucket per daemon. A bounded `calc_pow` spends one hash, and only
-//! once the seed is one RandomX will hash. `fill_pow_hash` reads the hash
-//! recorded at validation and does not pay. The host's administrator does
+//! One bucket per daemon. A bounded `pow` spends one hash, and only
+//! once the seed is one RandomX will hash. A header read with `pow` reads the
+//! hash recorded at validation and does not pay. The host's administrator does
 //! not pay. The bucket bounds charges, not measured CPU, in the same shape
 //! as the handshake budget:
 //!
@@ -27,8 +27,9 @@ use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 
 /// One RandomX hash on the floor device, thread-CPU 99th percentile
 /// (RT-W10, `docs/benchmarks/rt_w10_request_cost_20261102.md`).
-/// `calc_pow` spends this once, after the seed's cache is held.
-/// `fill_pow_hash` does not: it reads the hash recorded at validation.
+/// `pow` spends this once, after the seed's cache is held.
+/// A header read with `pow` does not: it reads the hash recorded at
+/// validation.
 pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
 
 /// The share of one core the long-run charge rate allows, in thousandths.
@@ -36,7 +37,7 @@ pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
 pub const HASH_BUDGET_SHARE_PERMILLE: u64 = 250;
 
 /// Hashes one full bucket holds. The capacity is this many charges of
-/// [`HASH_CPU_NANOS`]. A `calc_pow` spends one; there is no request that
+/// [`HASH_CPU_NANOS`]. A `pow` spends one; there is no request that
 /// spends more.
 pub const HASH_BUDGET_BURST: u64 = 1;
 
@@ -92,7 +93,7 @@ impl HashBudget {
         budget
     }
 
-    /// Spend one hash for `method`, judged at `now`. A bucket that cannot
+    /// Spend one hash, judged at `now`. A bucket that cannot
     /// pay leaves its balance where the refill put it. `now` is the
     /// caller's clock, the same instant [`Self::new`] and [`Self::empty`]
     /// take, so a test can hold time still and a request can pass the
@@ -102,7 +103,7 @@ impl HashBudget {
     ///
     /// [`ErrorClass::OverResourceBound`] when the bucket cannot pay one
     /// hash at `now`.
-    pub fn spend(&self, method: &str, now: Instant) -> Result<(), RpcError> {
+    pub fn spend(&self, now: Instant) -> Result<(), RpcError> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let elapsed = nanos(now.saturating_duration_since(state.last));
         if now > state.last {
@@ -117,7 +118,7 @@ impl HashBudget {
             state.balance_ns -= HASH_CPU_NANOS;
             Ok(())
         } else {
-            Err(budget_empty(method))
+            Err(budget_empty())
         }
     }
 
@@ -136,18 +137,19 @@ fn nanos(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
-fn budget_empty(method: &str) -> RpcError {
+fn budget_empty() -> RpcError {
     RpcError::new(
         ErrorClass::OverResourceBound,
         Diagnostic::new(
-            "rpc.bound.budget",
+            crate::methods::codes::BOUND_HASH,
             format!(
-                "{method} needs a hash and this node's hash budget is empty; \
+                "the request needs a hash and this node's hash budget is empty; \
                  a bounded connection can spend one hash every {} ms",
                 HASH_EARNED_EVERY.as_millis()
             ),
         )
-        .param("method", method),
+        .param("bound", "1")
+        .param("asked", "1"),
     )
 }
 
@@ -163,11 +165,9 @@ mod tests {
     fn a_full_bucket_pays_one_hash_and_then_is_empty() {
         let now = Instant::now();
         let budget = HashBudget::new(now);
-        assert!(budget.spend("calc_pow", now).is_ok());
-        let err = budget
-            .spend("calc_pow", now)
-            .expect_err("the bucket holds one hash");
-        assert_eq!(err.diagnostic.code, "rpc.bound.budget");
+        assert!(budget.spend(now).is_ok());
+        let err = budget.spend(now).expect_err("the bucket holds one hash");
+        assert_eq!(err.diagnostic.code, "bound.hash");
         assert_eq!(
             budget.held_ns(),
             0,
@@ -179,8 +179,8 @@ mod tests {
     fn an_empty_bucket_refuses_and_keeps_only_what_it_earned() {
         let start = Instant::now();
         let budget = HashBudget::empty(start);
-        let err = budget.spend("calc_pow", start).unwrap_err();
-        assert_eq!(err.diagnostic.code, "rpc.bound.budget");
+        let err = budget.spend(start).unwrap_err();
+        assert_eq!(err.diagnostic.code, "bound.hash");
         assert_eq!(
             budget.held_ns(),
             0,
@@ -195,11 +195,11 @@ mod tests {
             .expect("earning one hash takes longer than a millisecond");
         let short_earned = earned(short);
         assert!(short_earned < HASH_CPU_NANOS);
-        assert!(budget.spend("calc_pow", start + short).is_err());
+        assert!(budget.spend(start + short).is_err());
         assert_eq!(budget.held_ns(), short_earned);
         let at_interval = short_earned + earned(Duration::from_millis(1));
         assert!(at_interval > HASH_CPU_NANOS);
-        assert!(budget.spend("calc_pow", start + HASH_EARNED_EVERY).is_ok());
+        assert!(budget.spend(start + HASH_EARNED_EVERY).is_ok());
         assert_eq!(budget.held_ns(), 0, "capacity is one hash");
     }
 

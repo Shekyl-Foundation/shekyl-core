@@ -30,7 +30,7 @@
 //!
 //! Whether the node has caught up is the daemon's call, and it makes that
 //! call with more context than the wallet has. So the wallet reads one
-//! source, `get_info.synchronized`, and [`SyncedChainFacts::new`] is where
+//! source, `daemon_status.synchronized`, and [`SyncedChainFacts::new`] is where
 //! it is read. The submit ladder reads that same member of the same
 //! [`DaemonHealth`]: there is no second health type to disagree with it.
 //!
@@ -62,18 +62,18 @@
 //!
 //! The type is wallet-side and is built from the engine's daemon client. A
 //! DRS change to the daemon's chain-facts response shape lands in
-//! [`health_from_get_info`], [`top_hash_from_get_info`] and
+//! [`health_from_daemon_status`], [`top_hash_from_daemon_status`] and
 //! [`fetch_synced_chain_facts`], which read the shared
-//! [`GetInfoResponse`] — the one definition of the reply, in
+//! [`DaemonStatus`] — the one definition of the reply, in
 //! `shekyl-rpc-types` — and nowhere else. Every consumer holds the type,
 //! not the response.
 //!
 //! # Units
 //!
-//! `get_info.height` is the block **count**, not the tip height:
-//! the daemon reads the top block's height and reports one more, the
-//! chain's length. It is
-//! therefore the same quantity as [`EmissionClaimSource::chain_height`]
+//! `daemon_status.height` is the tip's height, an ordinal (IG-Q45); the
+//! wallet keeps the block **count**, one more, the chain's length, computed
+//! at the decode ([`health_from_daemon_status`]). It is the same quantity
+//! as [`EmissionClaimSource::chain_height`]
 //! (`crate::engine::emission_source`), and it is stored here as a [`ChainCount`] so
 //! the count/height confusion cannot be made by a consumer. Consumers that
 //! want the newest existing block's height take [`SyncedChainFacts::tip`].
@@ -81,10 +81,10 @@
 #[cfg(test)]
 use serde_json::Value;
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_types::GetInfoResponse;
+use shekyl_rpc_types::wire::daemon::DaemonStatus;
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 
-use crate::engine::traits::daemon::DaemonHealth;
+use crate::engine::traits::daemon::{DaemonHealth, DaemonP2p};
 
 /// Chain facts from a daemon that reports itself synchronized.
 ///
@@ -112,7 +112,7 @@ pub(crate) struct SyncedChainFacts {
     /// below their fork, so a ledger that carried observations across
     /// refreshes on heights alone could not tell a reorg-and-catch-up from
     /// ordinary advance. This is the fact that makes the difference
-    /// observable, and it is read from the same `get_info` reply as the
+    /// observable, and it is read from the same `daemon_status` reply as the
     /// count, so it costs nothing.
     top_hash: BlockHash,
 }
@@ -142,7 +142,7 @@ impl SyncedChainFacts {
         })
     }
 
-    /// Build from the engine's [`DaemonHealth`] projection of `get_info`.
+    /// Build from the engine's [`DaemonHealth`] projection of `daemon_status`.
     ///
     /// `has_peers` is deliberately not carried: peerlessness is the
     /// watchdog's escalation axis, not a synchronization fact, and a type
@@ -158,6 +158,7 @@ impl SyncedChainFacts {
 
     /// The hash of the newest block at the moment the daemon reported
     /// synchronized — the identity of the chain this count belongs to.
+    #[cfg(test)]
     pub(crate) fn top_hash(&self) -> BlockHash {
         self.top_hash
     }
@@ -191,7 +192,7 @@ impl SyncedChainFacts {
     /// A witness read before a record proves only that the daemon was
     /// synchronized before the record was gathered. It does not prove the
     /// record was gathered on the chain the witness described: a reorg can
-    /// begin after `get_info`, replace the witness-tip block, and catch back
+    /// begin after `daemon_status`, replace the witness-tip block, and catch back
     /// up **above** that height before the record reply, and no relation
     /// between the two *heights* can see it — `record_tip >= witness_tip`
     /// reads as ordinary advance. Re-reading the block at the witness tip
@@ -208,114 +209,83 @@ impl SyncedChainFacts {
     ///
     /// It bounds the window; it does not make the reads atomic. A chain that
     /// leaves the witness block and returns to it inside the window is not
-    /// seen. Blocks **above** the witness tip that arrived inside the window
-    /// are not bracketed: the record may carry them, and the identity vouched
-    /// for stops at the witness tip. Both residuals close only when the
-    /// record carries the hash of its own gather tip — a daemon-side wire
-    /// change, filed in `docs/FOLLOWUPS.md`.
+    /// seen. Its consumer is the proofs workflow, whose transaction reads
+    /// carry a height and no block hash; a record that carries its own
+    /// block's hash needs no bracket ([`CoherentChainView`]).
     pub(crate) fn bracket(
         self,
         at_tip_now: BlockHash,
     ) -> Result<BracketedChainFacts, TimelineBreak> {
         if at_tip_now == self.top_hash {
-            Ok(BracketedChainFacts { facts: self })
+            Ok(BracketedChainFacts(()))
         } else {
             Err(TimelineBreak::WitnessBlockReplaced)
         }
     }
 }
 
-/// A sync witness re-read **after** the record it vouches for, and found to
+/// A sync witness re-read **after** the reads it vouches for, and found to
 /// stand on the same block.
 ///
-/// The only input [`CoherentChainView::reconcile`] accepts, so a vouched view
-/// cannot be minted from a witness and a record alone: the post-read is a
-/// type obligation, not a step a caller remembers. Obtained only from
-/// [`SyncedChainFacts::bracket`].
+/// The post-read is a type obligation, not a step a caller remembers.
+/// Obtained only from [`SyncedChainFacts::bracket`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BracketedChainFacts {
-    facts: SyncedChainFacts,
-}
-
-impl BracketedChainFacts {
-    /// The witness this bracket confirmed.
-    pub(crate) fn facts(&self) -> &SyncedChainFacts {
-        &self.facts
-    }
-}
+pub(crate) struct BracketedChainFacts(());
 
 /// The identity of a chain at one height: **which** block sits there.
 ///
 /// What the departure ledger rests its observations on, and what a caller
 /// must re-read from the daemon before the next observation may be carried
-/// across. Height alone cannot serve — see [`CoherentChainView::anchor`].
+/// across. Height alone cannot serve — see [`CoherentChainView::anchored`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ChainAnchor {
     pub(crate) height: BlockHeight,
     pub(crate) hash: BlockHash,
 }
 
-/// A chain reading the daemon's three reads vouch for together: the sync
-/// witness, the record, and the witness block re-read after the record.
+/// A record that carries its own chain identity, checked against the sync
+/// witness read before it.
 ///
-/// Built from the [bracketed](SyncedChainFacts::bracket) sync witness and
-/// the height a bond record was answered at — the bracket is what says the
-/// record was gathered on the chain the witness described, which the two
-/// heights alone cannot say. The heights then answer two further questions.
-/// It keeps **both** heights rather than collapsing them on construction,
-/// because the two questions consumers ask of this pair are different and a
-/// single number can only answer one of them:
+/// The record's reply names the block it was gathered at — its height and
+/// that block's hash, read in one snapshot (IG-Q84) — so the record vouches
+/// for **which** chain it describes on its own: no relation between the
+/// witness and the record is needed to say that, and no re-read after the
+/// record could say it better. The witness keeps the two jobs only it can
+/// do: the daemon's `synchronized` (an unsynchronized daemon mints no
+/// view), and the height a later record must not fall below.
 ///
 /// - [`Self::at`] — *what clock may I count elapsed obligation on?* The
-///   lower of the two. Under-counting costs retained disk; over-counting
-///   costs a slash (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5), so when
-///   the reads disagree the lower is the one to believe.
-/// - [`Self::rolled_back`] — *did they disagree in the direction that means
-///   the chain moved under me?* A record **below** the witness, which is the
-///   signature of a rollback between the two reads.
+///   record's own height: the record's contents are a reading of the chain
+///   at that block, so an observation drawn from them is stamped where it
+///   was observed, never earlier.
+/// - [`Self::rolled_back`] — *did the chain move backwards under me?* A
+///   record **below** the witness, which is the signature of a rollback
+///   between the two reads.
 ///
-/// Storing the minimum alone would have answered the first and silently
-/// destroyed the second, which is why a consumer that must refuse a
-/// rolled-back read (claim assembly, the exit path) could not be built on it.
+/// # Why the rollback check still needs the witness
 ///
-/// # Why the disagreement happens at all
-///
-/// The daemon's `synchronized` flag is **sticky**. The inherited C++ sets it
-/// `false → true` exactly once (`cryptonote_protocol_handler.inl:2465`, the
-/// only mutation; the constructor at `:219` is the only other write) and
-/// never clears it on a pop or reorg. So a rollback between the sync read
-/// and the record read leaves a witness whose height is *above* the record's
-/// while the flag still says synchronized.
-///
-/// That is why **reading the witness first is not sufficient**, and the
-/// point is worth stating because the ordering argument sounds like it
-/// covers this: ordering fixes which read is *older in wall-clock time*; the
-/// hazard is about which *height is larger*. A sticky flag severs the two.
-/// Ordering is still necessary — it makes the witness the earlier read, so a
-/// record below it is the rollback signature rather than ordinary chain
-/// advance — but it is the relation between the heights that carries the
-/// guarantee.
+/// The daemon's `synchronized` reads its chain-sync watch and does revert,
+/// but a rollback between the sync read and the record read can still
+/// leave a witness *above* the record while the flag says synchronized.
+/// Reading the witness first is necessary — it makes the witness the
+/// earlier read, so a record below it is the rollback signature rather than
+/// ordinary chain advance — and the relation between the heights is what
+/// carries the guarantee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CoherentChainView {
     witness_tip: BlockHeight,
-    witness_hash: BlockHash,
-    record_tip: BlockHeight,
+    record: ChainAnchor,
 }
 
 impl CoherentChainView {
-    /// Reconcile the sync witness with the height a record was answered at.
+    /// Reconcile the sync witness with the block a record was gathered at.
     ///
-    /// Takes the **bracketed** witness, and only that: a view exists only for
-    /// a record that was read between two identical readings of the witness
-    /// block ([`SyncedChainFacts::bracket`]). There is no way to reconcile an
-    /// unbracketed witness, which is what makes "vouched" mean the post-read
-    /// happened rather than that a caller remembered to do it.
-    pub(crate) fn reconcile(bracketed: &BracketedChainFacts, record_height: ChainCount) -> Self {
-        let synced = bracketed.facts();
+    /// Takes a [`SyncedChainFacts`], and only that: a view exists only for a
+    /// record read after the daemon said it was synchronized.
+    pub(crate) fn reconcile(witness: &SyncedChainFacts, record: ChainAnchor) -> Self {
         Self {
-            witness_tip: synced.tip(),
-            witness_hash: synced.top_hash(),
-            record_tip: tip_of(record_height),
+            witness_tip: witness.tip(),
+            record,
         }
     }
 
@@ -331,50 +301,40 @@ impl CoherentChainView {
     ///
     /// # Why height monotonicity is not a timeline
     ///
-    /// The ledger used to detect a broken timeline by the next sampled
-    /// height being *lower*. That catches a rollback the wallet happens to
-    /// refresh in the middle of, and nothing else. A reorg can rewind across
-    /// an epoch open and **catch back up above** the last observed height
-    /// before the next refresh — and if the replacement branch restored a
-    /// shard at that epoch open and dropped it again, the surviving absence
-    /// entry releases a shard that was held when it mattered. Two branches
-    /// share every height below their fork, so no relation between heights
-    /// can see this. The hash of the block at the observed height can: if
-    /// that block has been replaced, the observation is about a chain that
-    /// no longer exists.
+    /// A reorg can rewind across an epoch open and **catch back up above**
+    /// the last observed height before the next refresh — and if the
+    /// replacement branch restored a shard at that epoch open and dropped it
+    /// again, a surviving absence entry would release a shard that was held
+    /// when it mattered. Two branches share every height below their fork,
+    /// so no relation between heights can see this. The hash of the block at
+    /// the observed height can: if that block has been replaced, the
+    /// observation is about a chain that no longer exists.
     ///
-    /// The anchor is at the **observed** height, not the tip, deliberately.
-    /// The tip moves every refresh on a live chain, so a tip-to-tip
-    /// comparison would mismatch constantly and prove nothing. The question
-    /// is narrower: *is the block I anchored to still the block at that
+    /// The anchor is the record's own block, at the **observed** height. The
+    /// tip moves every refresh on a live chain, so a tip-to-tip comparison
+    /// would mismatch constantly and prove nothing. The question is
+    /// narrower: *is the block I anchored to still the block at that
     /// height?* A reorg entirely above it leaves the answer yes, and the
     /// observations correctly survive.
-    ///
-    /// On every path that proceeds, `at()` equals the witness tip — a record
-    /// above the witness is ordinary advance and the minimum picks the
-    /// witness — so the witness hash is the hash *at* `at()`, and the anchor
-    /// is exactly the pair the ledger needs.
     pub(crate) fn anchored(self) -> Result<AnchoredView, TimelineBreak> {
         if self.rolled_back() {
             return Err(TimelineBreak::ChainRolledBack);
         }
         Ok(AnchoredView {
             at: self.at(),
-            anchor: ChainAnchor {
-                height: self.witness_tip,
-                hash: self.witness_hash,
-            },
+            anchor: self.record,
         })
     }
 
-    /// The clock elapsed-obligation arithmetic may count on: the **lower** of
-    /// the two reads.
+    /// The clock elapsed-obligation arithmetic may count on: the height the
+    /// record was gathered at.
     ///
-    /// The only height accessor, deliberately. A consumer that could reach
-    /// the witness height alone could reintroduce the hazard this type exists
-    /// to close.
+    /// The only height accessor, deliberately: the witness height is the
+    /// earlier reading, and an observation drawn from the record stamped
+    /// there would be stamped before it was seen — the release-early
+    /// direction.
     pub(crate) fn at(self) -> BlockHeight {
-        self.witness_tip.min(self.record_tip)
+        self.record.height
     }
 
     /// The record sits **below** the witness — the chain moved backwards
@@ -386,7 +346,7 @@ impl CoherentChainView {
     /// cooldown — must refuse, because those contents are a rolled-back view
     /// of the chain and no choice of clock repairs them.
     pub(crate) fn rolled_back(self) -> bool {
-        self.record_tip < self.witness_tip
+        self.record.height < self.witness_tip
     }
 }
 
@@ -476,9 +436,10 @@ impl TimelineBreak {
         match err.fault() {
             DaemonFault::Unreachable => Self::DaemonUnreachable,
             DaemonFault::Identity(mismatch) => Self::IdentityRefused(mismatch),
-            DaemonFault::Protocol | DaemonFault::FeeResponse | DaemonFault::Internal => {
-                Self::FactsUnreadable
-            }
+            DaemonFault::Protocol
+            | DaemonFault::FeeResponse
+            | DaemonFault::Internal
+            | DaemonFault::NotPermitted => Self::FactsUnreadable,
         }
     }
 }
@@ -494,8 +455,7 @@ fn tip_of(count: ChainCount) -> BlockHeight {
     })
 }
 
-/// The `get_info` reply [`health_from_get_info`] and
-/// [`top_hash_from_get_info`] read, with the members a test chooses.
+/// A `daemon_status` reply whose wallet-read members a test chooses.
 ///
 /// Test daemons build the reply from this struct, so the choices live next
 /// to the reader. It produces a **complete** reply: the shared type refuses
@@ -504,143 +464,135 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 /// sends. Test-only: production reads the daemon's reply, it does not build
 /// one.
 #[cfg(test)]
-pub(crate) struct GetInfoDocument {
-    /// Block count (`get_info.height`), not the tip's index.
+pub(crate) struct DaemonStatusDocument {
+    /// The chain's block count; the wire carries the tip, one less.
     pub(crate) chain_count: ChainCount,
-    /// The core's target, `None` when it reports none.
+    /// The target's block count, `None` when the core reports none.
     pub(crate) target_height: Option<u64>,
     /// The daemon's own flag.
     pub(crate) synchronized: bool,
     /// Identity of the chain `chain_count` counts.
     pub(crate) top_hash: BlockHash,
-    /// Health's `has_peers`: whether the daemon has a handshaken session.
+    /// Health's `peered`: whether the daemon has a handshaken session.
     ///
-    /// The reply this builds writes **zero for every Status and Peers
-    /// count**, whatever this says. The wallet reads `has_peers` and may
-    /// not read those; a reader that went back to them would see a
+    /// The reply this builds shows the Status part with **zero for every
+    /// connection count**, whatever this says. The wallet reads `peered`
+    /// and may not read those; a reader that went back to them would see a
     /// peerless daemon in every test built on this document.
-    pub(crate) has_peers: bool,
+    pub(crate) peered: bool,
 }
 
 #[cfg(test)]
-impl GetInfoDocument {
-    /// The reply as the shared type. Every member this struct does not
-    /// choose holds a fixed, unremarkable value.
-    pub(crate) fn to_reply(&self) -> GetInfoResponse {
-        use shekyl_rpc_types::{
-            HashHex, Hidden, InfoChain, InfoEconomics, InfoHealth, InfoIdentity, InfoPeers,
-            InfoPool, InfoStatus, RpcStatus,
-        };
-        GetInfoResponse {
-            status: RpcStatus::ok(),
-            health: InfoHealth {
-                height: self.chain_count.to_raw(),
-                top_block_hash: HashHex::from_bytes(*self.top_hash.as_bytes()),
-                target_height: self.target_height.into(),
-                synchronized: self.synchronized,
-                busy_syncing: false,
-                following_degraded: false,
-                p2p: shekyl_rpc_types::HealthP2p::Running {
-                    has_peers: self.has_peers,
-                },
-            },
-            identity: InfoIdentity {
-                protocol_version: 3,
-            },
-            chain: InfoChain {
-                difficulty: 1,
-                cumulative_difficulty: u128::from(self.chain_count.to_raw()),
-                target: 120,
-                tx_count: 0,
-                block_weight_limit: 600_000,
-                block_weight_median: 300_000,
-                adjusted_time: 1_700_000_000,
-            },
-            economics: InfoEconomics {
-                already_generated_coins: shekyl_units::AtomicUnits::ZERO,
-                release_multiplier: 1_000_000,
-                burn_pct: 0,
-                total_burned: shekyl_units::AtomicUnits::ZERO,
-                staker_emission_share_effective: 0,
-            },
-            pool: InfoPool::Live { tx_pool_size: 0 },
-            node: Hidden::Shown(InfoStatus {
-                start_time: 1_700_000_000,
-                free_space: 1 << 40,
-                database_size: 1 << 30,
-                version: "test".to_owned(),
-                connections: shekyl_rpc_types::StatusConnections::Running {
-                    outgoing: 0,
-                    incoming: 0,
-                },
-                alt_blocks_count: 0,
-                rpc_connections_count: 1,
-            }),
-            peers: Hidden::Shown(shekyl_rpc_types::InfoP2p::Running(
-                InfoPeers::new(vec![shekyl_rpc_types::InfoConnectorPeers {
-                    connector: shekyl_rpc_types::InfoConnector::Clearnet,
-                    incoming_sockets: 0,
-                    outgoing_sockets: 0,
-                    white_peerlist_size: 0,
-                    gray_peerlist_size: 0,
-                }])
-                .expect("one row is in order"),
-            )),
-            // The wallet is never the daemon's host administrator.
-            host: Hidden::Withheld,
-            restricted: false,
-        }
+impl DaemonStatusDocument {
+    /// The JSON object a `daemon_status` result carries. Every member this
+    /// struct does not choose holds a fixed, unremarkable value.
+    pub(crate) fn to_value(&self) -> Value {
+        let count = self.chain_count.to_raw();
+        serde_json::json!({
+            "height": count.saturating_sub(1),
+            "hash": hex::encode(self.top_hash.as_bytes()),
+            "target_height": self.target_height.map(|target| target.saturating_sub(1)),
+            "synchronized": self.synchronized,
+            "syncing": false,
+            "offline": false,
+            "degraded": false,
+            "peered": self.peered,
+            "writer": {"live": null},
+            "protocol_version": 3,
+            "difficulty": "0x1",
+            "difficulty_cumulative": format!("{:#x}", count.max(1)),
+            "block_spacing": 120,
+            "tx_count": 0,
+            "block_weight_max": 600_000,
+            "block_weight_median": 300_000,
+            "time_adjusted": 1_700_000_000_u64,
+            "emission": "0",
+            "emission_multiplier": 1_000_000,
+            "burn": 0,
+            "burn_total": "0",
+            "stake_share": 0,
+            "txpool_count": 0,
+            "grant": ["health", "status", "chain"],
+            "started": 1_700_000_000_u64,
+            "disk_free": 1_u64 << 40,
+            "data_size": 1_u64 << 30,
+            "revision": "test",
+            "peer_outbound_count": 0,
+            "peer_inbound_count": 0,
+            "alt_count": 0,
+            "rpc_connections": 1,
+            "txpool_retired": false,
+        })
     }
 
-    /// The JSON object a `get_info` result carries.
-    pub(crate) fn to_value(&self) -> Value {
-        serde_json::to_value(self.to_reply()).expect("a get_info reply serializes")
+    /// The reply as the shared type.
+    pub(crate) fn to_reply(&self) -> DaemonStatus {
+        serde_json::from_value(self.to_value()).expect("a daemon_status reply decodes")
+    }
+
+    /// The reply as a caller without the `status` grant reads it: the
+    /// Status part absent whole (RK-D23).
+    pub(crate) fn to_reply_status_withheld(&self) -> DaemonStatus {
+        let mut value = self.to_value();
+        let members = value.as_object_mut().expect("a reply is an object");
+        for key in [
+            "started",
+            "disk_free",
+            "data_size",
+            "revision",
+            "peer_outbound_count",
+            "peer_inbound_count",
+            "alt_count",
+            "rpc_connections",
+            "txpool_retired",
+        ] {
+            members.remove(key);
+        }
+        members.insert("grant".to_owned(), serde_json::json!(["health", "chain"]));
+        serde_json::from_value(value).expect("a reply without Status decodes")
     }
 }
 
-/// Project the daemon's `get_info` reply onto [`DaemonHealth`].
+/// Project the daemon's `daemon_status` reply onto [`DaemonHealth`].
 ///
 /// The single place this reply is read for health, shared by
 /// [`DaemonEngine::get_health`](crate::engine::traits::daemon::DaemonEngine::get_health) and
 /// [`fetch_synced_chain_facts`], so the two cannot come to disagree about what
-/// the daemon said.
+/// the daemon said. The reply decodes strictly, so a document missing a
+/// member, or carrying one of the wrong shape, never reaches here.
 ///
-/// **There is nothing left to refuse here.** The reply is the shared
-/// [`GetInfoResponse`], and that type decodes strictly: a document missing
-/// `height`, `target_height`, `synchronized` or `top_block_hash`, or
-/// carrying one of the wrong shape, never becomes a value this function is
-/// handed. That is the property the hand-written decoder this replaces
-/// defended field by field. It now holds for every member, by construction.
+/// **The wire carries the tip's height, an ordinal; the wallet keeps the
+/// chain's count** (IG-Q45). The count is computed here, once: the tip's
+/// height plus one.
 ///
 /// `target_height` is decoded and not carried: nothing the wallet decides
 /// reads it (module docs).
 ///
-/// **Whether the daemon has peers is Health's `has_peers`, and only that**
-/// (RK-D14). This projection used to sum the two connection counts in the
-/// Status part and read a withheld Status as zero. A restricted daemon
-/// writes zero there, and one day withholds the part, so a public remote
-/// node with twenty peers read as peerless: the submit watchdog raised a
-/// false `DaemonPeerless` alarm in place of its resubmit probe. Status
-/// describes the node and is the daemon's to withhold. Health is told to
-/// every caller, and this reads nothing else.
-pub(crate) fn health_from_get_info(info: &GetInfoResponse) -> DaemonHealth {
+/// **Whether the daemon has peers is Health's `peered`, and only that**
+/// (RK-D14). Status's counts describe the node and are the daemon's to
+/// withhold; reading a withheld Status as zero once raised a false
+/// `DaemonPeerless` alarm. Health is told to every caller.
+pub(crate) fn health_from_daemon_status(status: &DaemonStatus) -> DaemonHealth {
     DaemonHealth {
-        p2p: info.health.p2p,
-        height: info.health.height,
-        synchronized: info.health.synchronized,
+        p2p: if status.offline {
+            DaemonP2p::Offline
+        } else {
+            DaemonP2p::Running {
+                has_peers: status.peered.0.unwrap_or(false),
+            }
+        },
+        height: status.height.0.saturating_add(1),
+        synchronized: status.synchronized,
     }
 }
 
-/// The chain's identity from the daemon's `get_info` reply.
-///
-/// Mandatory on the wire, and typed there: there is no honest default for
-/// an identity, and a reply without a 32-byte hex `top_block_hash` does not
-/// decode.
-pub(crate) fn top_hash_from_get_info(info: &GetInfoResponse) -> BlockHash {
-    BlockHash::from_bytes(info.health.top_block_hash.to_bytes())
+/// The chain's identity from the daemon's `daemon_status` reply: its tip's
+/// hash. Mandatory on the wire, and typed there.
+pub(crate) fn top_hash_from_daemon_status(status: &DaemonStatus) -> BlockHash {
+    BlockHash::from_bytes(status.hash.to_bytes())
 }
 
-/// One `get_info` read, yielding [`SyncedChainFacts`] only if the daemon says
+/// One `daemon_status` read, yielding [`SyncedChainFacts`] only if the daemon says
 /// it is synchronized.
 ///
 /// Bound on bare [`Rpc`] rather than on the engine's richer daemon trait so a
@@ -659,7 +611,7 @@ pub(crate) fn top_hash_from_get_info(info: &GetInfoResponse) -> BlockHash {
 ///
 /// A transport [`RpcError`] when the daemon did not answer; otherwise
 /// [`RpcError::InvalidNode`] — the reply arrived and is not a
-/// [`GetInfoResponse`]: a member absent or of the wrong shape, an unknown
+/// [`DaemonStatus`]: a member absent or of the wrong shape, an unknown
 /// member, or two names for one value disagreeing. The two classes are what
 /// [`TimelineBreak::from_facts_error`] separates, so a contract fault
 /// reaches an operator as "check the daemon's version", never as "check the
@@ -667,10 +619,12 @@ pub(crate) fn top_hash_from_get_info(info: &GetInfoResponse) -> BlockHash {
 pub(crate) async fn fetch_synced_chain_facts<R: Rpc>(
     rpc: &R,
 ) -> Result<Option<SyncedChainFacts>, RpcError> {
-    let info: GetInfoResponse = rpc.json_rpc_call("get_info", None).await?;
+    let status = rpc
+        .call::<shekyl_rpc_client::wire::DaemonStatus>(shekyl_rpc_types::kinds::NoParams)
+        .await?;
     Ok(SyncedChainFacts::from_health(
-        health_from_get_info(&info),
-        top_hash_from_get_info(&info),
+        health_from_daemon_status(&status),
+        top_hash_from_daemon_status(&status),
     ))
 }
 

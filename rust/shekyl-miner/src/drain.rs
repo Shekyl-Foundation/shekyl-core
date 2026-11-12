@@ -10,7 +10,7 @@
 //! it. The gate is what keeps the wait from becoming a pile of sets. A
 //! start joins the one draining set before it spawns. A stop joins the set
 //! it displaces before it returns. Both hold the gate across that join, so
-//! a caller that does not wait — `generateblocks` detaches its stop — still
+//! a caller that does not wait — `dev_block_generate` detaches its stop — still
 //! cannot spawn or park another generation until the join has returned.
 //! Shutdown parks without the gate ([`DrainGate::defer`]) and joins
 //! afterwards ([`DrainGate::join_outstanding`]), which takes the gate and

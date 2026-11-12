@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! RT-W10: what one `calc_pow` and one header hash cost on the floor device.
+//! RT-W10: what one `pow` and one header hash cost on the floor device.
 //!
 //! The registered method is
 //! `docs/benchmarks/rt_w10_request_cost_20261102.md`. This binary writes
@@ -53,7 +53,7 @@ mod linux {
 
     /// [`shekyl_wire::block::MAX_BLOCK_BLOB_SIZE`]: `MAX_TX_SIZE` +
     /// `READ_LEN_CAP * 32` + `MAX_BLOCK_HEADER_SIZE`. The longest blob
-    /// `calc_pow` hashes. Held by the same wire test.
+    /// `pow` hashes. Held by the same wire test.
     const MAX_BLOCK_BLOB_BYTES: usize = 33_000_128;
 
     /// Registered counts. The summary refuses any other length.

@@ -5,7 +5,7 @@
 
 //! The model's view (CS-5 §7): read-only rows the node's facts render.
 //!
-//! It answers what `sync_info` is for: whether the node is syncing, toward
+//! It answers what `sync_status` is for: whether the node is syncing, toward
 //! what, from whom and how fast, and whether it is stuck. The rows are the
 //! model's own state copied out; nothing here holds the tree.
 

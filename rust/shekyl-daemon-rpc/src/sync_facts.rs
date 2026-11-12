@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Chain sync's view, as the RPC reads it (CS-5 §7): what `sync_info`
-//! renders, and the claim and mode `get_connections` joins to each board
+//! Chain sync's view, as the RPC reads it (CS-5 §7): what `sync_status`
+//! renders, and the claim and mode `peer_connections` joins to each board
 //! row. The node fills it from the sync owner's published view; this crate
 //! does not depend on chain sync.
 
-use shekyl_rpc_types::{ChainSyncState, SyncMode};
+use shekyl_rpc_types::wire::p2p::{SyncMode, SyncState};
 
 use crate::chain_facts::FactsFault;
 
@@ -16,7 +16,7 @@ use crate::chain_facts::FactsFault;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncViewFacts {
     /// The derived state.
-    pub state: ChainSyncState,
+    pub state: SyncState,
     /// Behind, with nothing moving toward the target.
     pub stalled: bool,
     /// The best verified chain's block count.
@@ -75,7 +75,7 @@ pub struct BodySpanFacts {
     pub timing: RequestTiming,
 }
 
-/// The read behind `sync_info` and the claim half of `get_connections`.
+/// The read behind `sync_status` and the claim half of `peer_connections`.
 pub trait SyncViewRead: Send + Sync {
     /// Chain sync's view, as the owner last published it.
     ///

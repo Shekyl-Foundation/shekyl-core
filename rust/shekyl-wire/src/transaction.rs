@@ -1326,7 +1326,7 @@ pub enum Ct {
         /// pruned record; CEN-J10).
         pqc_auths: Vec<PqcAuth>,
         /// Prunable region. `None` only for a *spend* body parsed from a
-        /// skeleton's bytes (daemon `get_transactions prune:true`, `SB-Q2`)
+        /// skeleton's bytes (daemon `tx_list prune:true`, `SB-Q2`)
         /// or from the `serialize_base` framing. Serve-credit carries
         /// [`Some`] with only `serve_credit_pruned` populated.
         prunable: Option<Prunable>,
@@ -2451,7 +2451,7 @@ impl Transaction {
     /// Whether this is a coinbase (miner) transaction: a sole `gen` input (§2.5). The
     /// `Null`-ct coupling is enforced by [`Self::validate_context_free_pruned`]; this is
     /// the input-shape predicate the block parser and the non-miner ingestion path use
-    /// to classify a tx — e.g. to reject a coinbase served by `get_transactions`, where
+    /// to classify a tx — e.g. to reject a coinbase served by `tx_list`, where
     /// the coinbase is instead embedded in the block blob.
     pub fn is_coinbase(&self) -> bool {
         matches!(self.prefix.inputs.as_slice(), [Input::Gen(_)])

@@ -120,9 +120,10 @@ impl LocalRefreshError {
     pub(super) const fn from_daemon_fault(fault: DaemonFault) -> Self {
         match fault {
             DaemonFault::Unreachable => Self::DaemonUnreachable,
-            DaemonFault::Identity(_) | DaemonFault::Protocol | DaemonFault::FeeResponse => {
-                Self::DaemonProtocol
-            }
+            DaemonFault::Identity(_)
+            | DaemonFault::Protocol
+            | DaemonFault::FeeResponse
+            | DaemonFault::NotPermitted => Self::DaemonProtocol,
             DaemonFault::Internal => Self::Internal,
         }
     }
@@ -174,12 +175,9 @@ impl From<LocalRefreshError> for RefreshError {
 ///
 /// # Refresh-reachable mapping
 ///
-/// Refresh issues `get_height` and `fetch_scannable_block`, the
-/// latter composing the `Rpc` transport primitives `get_block` /
-/// `get_transactions` / `get_o_indexes` (the §8 step-4 `shekyl-wire`
-/// migration replaced the single-call `get_scannable_block_by_number`
-/// the Round 4 audit was written against). The refresh-reachable
-/// upstream variants and their tags:
+/// Refresh issues `chain_height` and `fetch_scannable_block`, one
+/// `block_show` per block. The refresh-reachable upstream variants and
+/// their tags:
 ///
 /// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
 /// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
@@ -189,41 +187,27 @@ impl From<LocalRefreshError> for RefreshError {
 /// - [`RpcError::IdentityMismatch`] → [`ProtocolErrorKind::IdentityMismatch`]
 ///   (settled by the orchestrator before the producer runs; tagged on its
 ///   own should one ever arrive)
-/// - [`RpcError::TransactionsUnavailable`] →
-///   [`ProtocolErrorKind::TransactionsUnavailable`] (the block fetch's
-///   `get_transactions` leg, against a daemon whose pool is retired)
-/// - [`RpcError::TransactionsNotFound`] → [`ProtocolErrorKind::InvalidNode`]
-///   (reachable via the `get_transactions` leg of the block fetch: a
-///   daemon that names transaction hashes in a block and then reports
-///   them missing is internally inconsistent, which from the refresh
-///   path is the "unexpected envelope" `InvalidNode` signal).
+/// - [`RpcError::NoSuchMethod`] → [`ProtocolErrorKind::IdentityMismatch`]:
+///   a daemon of another RPC version, which the identity handshake refuses
+///   first; tagged "wrong daemon", not "bad envelope"
+/// - [`RpcError::Refused`] → [`ProtocolErrorKind::Refused`] with the
+///   refusal's class, and only its class
 ///
 /// # Defensive mapping for non-refresh-reachable variants
 ///
-/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` are not
-/// reachable from refresh — they belong to the future
-/// `PendingTxEngine` send-tx path. If they nonetheless surface from
-/// this site (e.g., upstream RPC client behavior change), the
-/// defensive classification is [`ProtocolErrorKind::InvalidNode`] —
-/// "the daemon returned an envelope the producer did not expect from
-/// this RPC method." [`ProtocolErrorKind`] is `#[non_exhaustive]`;
-/// PR 5's `PendingTxEngine` extraction may grow the variant set
-/// additively.
+/// `RpcError::InvalidFee` / `RpcError::InvalidPriority` belong to the
+/// send-tx path, and `RpcError::TransactionsUnavailable` to the proofs
+/// workflow's `tx_list`. If one nonetheless surfaces from this site, the
+/// fee pair is [`ProtocolErrorKind::InvalidNode`] — "the daemon returned an
+/// envelope the producer did not expect from this RPC method" — and the
+/// last keeps its own tag.
 ///
 /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/completed/STAGE_1_PR_4_REFRESH_ENGINE.md
 //
-// `clippy::match_same_arms` would have us merge the
-// `InvalidNode(_)` arm with the
-// `TransactionsNotFound | InvalidFee | InvalidPriority` arm
-// because both map to `ProtocolErrorKind::InvalidNode`. Keeping
-// them separate preserves the rustdoc's reachability boundary:
-// the grouped arm carries `TransactionsNotFound` (refresh-reachable
-// via the block fetch's `get_transactions` leg — an inconsistent
-// daemon, mapped to `InvalidNode`) alongside the genuinely
-// non-refresh-reachable `InvalidFee` / `InvalidPriority` defensive
-// fallbacks (send-tx path). Merging would lose that boundary, which
-// future maintainers need when PR 5's `PendingTxEngine` extraction
-// reaches this site.
+// `clippy::match_same_arms` would have us merge the `InvalidNode(_)` arm
+// with the `InvalidFee | InvalidPriority` arm, and the `IdentityMismatch`
+// arm with `NoSuchMethod`. Keeping them separate preserves the rustdoc's
+// reachability boundary.
 #[allow(clippy::match_same_arms)]
 pub(super) const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
     match err {
@@ -232,14 +216,11 @@ pub(super) const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
         RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
         RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
         RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
-        // All map to `InvalidNode`: `TransactionsNotFound` is
-        // refresh-reachable (block fetch's `get_transactions` leg;
-        // inconsistent daemon), while `InvalidFee` / `InvalidPriority`
-        // are non-refresh-reachable defensive fallbacks. See rustdoc.
-        RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
-            ProtocolErrorKind::InvalidNode
-        }
+        // Non-refresh-reachable defensive fallbacks. See rustdoc.
+        RpcError::InvalidFee | RpcError::InvalidPriority => ProtocolErrorKind::InvalidNode,
         RpcError::IdentityMismatch(_) => ProtocolErrorKind::IdentityMismatch,
+        RpcError::NoSuchMethod(_) => ProtocolErrorKind::IdentityMismatch,
         RpcError::TransactionsUnavailable(_) => ProtocolErrorKind::TransactionsUnavailable,
+        RpcError::Refused(refusal) => ProtocolErrorKind::Refused(refusal.class),
     }
 }

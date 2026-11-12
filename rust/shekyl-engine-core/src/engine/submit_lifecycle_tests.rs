@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex};
 
 use super::super::submit_watchdog::{RelaySight, PROBE_CEILING_BLOCKS};
 use super::super::traits::FeeEstimates;
+use shekyl_rpc_client::Publication;
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_types::PoolRelay;
 
 /// The production block ceiling the driver runs at
 /// ([`PROBE_CEILING_BLOCKS`]), read rather than re-typed.
@@ -216,7 +216,7 @@ impl StubDaemon {
         Self {
             state: Arc::new(Mutex::new(DaemonState {
                 health: DaemonHealth {
-                    p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+                    p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
                     height: 10_000,
                     synchronized: true,
                 },
@@ -308,7 +308,7 @@ impl DaemonEngine for StubDaemon {
                 .pop_front()
                 .unwrap_or(Ok(TxSubmitOutcome::AlreadyInPool {
                     hash: txid(0),
-                    relay: PoolRelay::Held,
+                    relay: Publication::Held,
                 }))
         }
     }
@@ -380,7 +380,7 @@ async fn probe_precedes_the_held_overdue_alarm() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::HeldOverdue,
+        relay: Publication::Overdue,
     }));
     let mut d = driver();
 
@@ -412,11 +412,11 @@ async fn held_overdue_alarms_once_and_does_not_probe_again() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::HeldOverdue,
+        relay: Publication::Overdue,
     }));
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::HeldOverdue,
+        relay: Publication::Overdue,
     }));
     let mut d = driver();
 
@@ -450,7 +450,7 @@ async fn absent_reoffer_is_held_and_asked_again() {
     daemon.push_submit(Ok(TxSubmitOutcome::Submitted { hash: tx }));
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::Held,
+        relay: Publication::Held,
     }));
     let mut d = driver();
 
@@ -482,8 +482,7 @@ async fn terminal_probe_releases_confirmed_absent() {
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
-        cause: RejectCause::DoubleSpendConflict,
-        row: None,
+        cause: Rejection::DoubleSpendConflict,
     }));
     let mut d = driver();
 
@@ -535,8 +534,7 @@ async fn retryable_rejection_alarms_needs_rebuild() {
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
-        cause: RejectCause::StaleRoot,
-        row: None,
+        cause: Rejection::StaleRoot,
     }));
     let mut d = driver();
 
@@ -560,7 +558,7 @@ async fn peerless_daemon_alarms_without_probing() {
         .with_bytes(txid(1), vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: false },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: false },
         height: 10_000,
         synchronized: true,
     });
@@ -589,13 +587,13 @@ async fn syncing_daemon_still_probes() {
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     daemon.set_health(DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 5_000,
         synchronized: false,
     });
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::Held,
+        relay: Publication::Held,
     }));
     let mut d = driver();
 
@@ -673,7 +671,7 @@ async fn published_lookback_runs_from_the_first_observation() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::Published,
+        relay: Publication::Public,
     }));
     let mut d = driver();
 
@@ -687,7 +685,7 @@ async fn published_lookback_runs_from_the_first_observation() {
     host.set_synced(observed + lookback() - 1);
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::Published,
+        relay: Publication::Public,
     }));
     d.tick(&host, &daemon).await;
     assert_eq!(daemon.submit_calls(), 2);
@@ -719,7 +717,7 @@ async fn published_unmined_waits_while_unsynced() {
     let daemon = StubDaemon::new();
     daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
         hash: tx,
-        relay: PoolRelay::Published,
+        relay: Publication::Public,
     }));
     let mut d = driver();
     d.tick(&host, &daemon).await;
@@ -727,7 +725,7 @@ async fn published_unmined_waits_while_unsynced() {
 
     host.set_synced(observed + lookback());
     daemon.set_health(DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 5_000,
         synchronized: false,
     });
@@ -740,7 +738,7 @@ async fn published_unmined_waits_while_unsynced() {
     assert!(alarm_reasons(&host.events()).is_empty());
 
     daemon.set_health(DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 10_000,
         synchronized: true,
     });

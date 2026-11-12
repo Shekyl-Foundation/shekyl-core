@@ -19,7 +19,7 @@ use shekyl_wire::{BlobOffsets, Block};
 /// at, the seed its longhash is computed under (CEN-D3) and the difficulty
 /// its hash must meet (the validator's target, CEN-D4). The rest is what
 /// a miner outside the node reads from the same posting
-/// (`get_block_template`): where to write in the blob, the seed the chain
+/// (`block_template`): where to write in the blob, the seed the chain
 /// moves to next, and what the coinbase pays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {

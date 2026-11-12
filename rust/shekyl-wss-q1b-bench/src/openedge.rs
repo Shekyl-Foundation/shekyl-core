@@ -14,20 +14,15 @@
 //!
 //! [`shekyl_engine_core::DaemonClient::fetch_scannable_block`] resolves to
 //! `engine::block_fetch::default_fetch_scannable_block`, which is **strictly
-//! per-block** and issues, sequentially and with no pipelining:
+//! per-block** and issues one `block_show` under `prune` per block: the
+//! block, its transactions' skeletons and its first output index arrive in
+//! one reply, **base64-encoded**, with no pipelining across blocks.
 //!
-//! 1. `get_block` (JSON-RPC; the block arrives **hex-encoded**),
-//! 2. `get_transactions` — one call per [`TXS_PER_REQUEST`]-sized batch, so one
-//!    call for any realistic block, and none for an empty one,
-//! 3. `get_o_indexes`, inside `compute_first_output_index`.
-//!
-//! Over [`crate::corpus::HELD_BUFFER_BLOCKS`] that is roughly 1 600–2 400
+//! Over [`crate::corpus::HELD_BUFFER_BLOCKS`] that is roughly 800
 //! **serialized** round trips. On a Pi 4 driving a loopback daemon the fixed
-//! per-round-trip cost is very likely to dominate the byte cost, and a
-//! throughput model cannot see it at all: it would report a number that graded
-//! the wrong term.
-//!
-//! [`TXS_PER_REQUEST`]: https://github.com/Shekyl-Foundation/shekyl-core
+//! per-round-trip cost may still dominate the byte cost, and a throughput
+//! model cannot see it at all: it would report a number that graded the
+//! wrong term.
 //!
 //! ## Why the attribution is part of the measurement
 //!
@@ -131,11 +126,11 @@ pub struct BlockSample {
     pub height: u64,
     /// Sequential RPC round trips the fetch made.
     pub round_trips: u32,
-    /// Bytes as they crossed the wire — the block blob arrives hex-encoded, so
-    /// this is about twice the decoded size and is **not** interchangeable
-    /// with it.
-    pub wire_hex_bytes: u64,
-    /// Bytes after hex decode.
+    /// Bytes as they crossed the wire — the block and its bodies arrive
+    /// base64-encoded, so this is about 4/3 of the decoded size and is
+    /// **not** interchangeable with it.
+    pub wire_bytes: u64,
+    /// Bytes after base64 decode.
     pub decoded_bytes: u64,
     /// Wall seconds for the whole per-block fetch.
     pub seconds: f64,
@@ -144,7 +139,7 @@ pub struct BlockSample {
 /// The measured floor cost of a single round trip.
 ///
 /// Measured directly rather than regressed out of the block samples: round
-/// trips per block are nearly constant (2–3), so a two-parameter fit over them
+/// trips per block are constant (one), so a two-parameter fit over them
 /// is ill-conditioned and would report a confident number from an
 /// under-determined system. Timing the cheapest RPC repeatedly determines the
 /// term instead of inferring it.
@@ -188,8 +183,8 @@ pub struct Projection {
     pub floor_exceeds_total: bool,
     /// Which term dominates.
     pub attribution: Attribution,
-    /// Projected wire (hex) bytes.
-    pub projected_wire_hex_bytes: u64,
+    /// Projected wire (base64) bytes.
+    pub projected_wire_bytes: u64,
     /// Projected decoded bytes.
     pub projected_decoded_bytes: u64,
 }
@@ -213,7 +208,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
             volume_term_s: 0.0,
             attribution: Attribution::Mixed,
             floor_exceeds_total: false,
-            projected_wire_hex_bytes: 0,
+            projected_wire_bytes: 0,
             projected_decoded_bytes: 0,
         };
     }
@@ -229,7 +224,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
         .map(|s| f64::from(s.round_trips))
         .sum::<f64>()
         / n;
-    let mean_wire = samples.iter().map(|s| s.wire_hex_bytes as f64).sum::<f64>() / n;
+    let mean_wire = samples.iter().map(|s| s.wire_bytes as f64).sum::<f64>() / n;
     let mean_decoded = samples.iter().map(|s| s.decoded_bytes as f64).sum::<f64>() / n;
 
     let blocks = HELD_BUFFER_BLOCKS as f64;
@@ -276,7 +271,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
         volume_term_s,
         attribution,
         floor_exceeds_total,
-        projected_wire_hex_bytes: (mean_wire * blocks) as u64,
+        projected_wire_bytes: (mean_wire * blocks) as u64,
         projected_decoded_bytes: (mean_decoded * blocks) as u64,
     }
 }

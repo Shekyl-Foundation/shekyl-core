@@ -21,11 +21,10 @@
 //! Linked only from the `shekyld` binary crate (`SF-D4`; the dep-cut gate
 //! holds it). What the scheduler reads — the skeleton and the holder set —
 //! comes through two traits ([`ShardFacts`], [`HolderSource`]) whose
-//! production implementation is the daemon's store adapter
-//! (`shekyld::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
-//! The scheduler decides nothing it could not decide against in-memory
-//! facts. The running daemon still opens LMDB, so `ServerConfig` keeps
-//! `SkeletonAbsent` until the store flip (`DRS-X`) selects the adapter.
+//! production implementation is the node's store adapter
+//! (`shekyl_chain_ingest::shard_facts`, composed in `shekyl-node`;
+//! `SHARD_VIEW_FETCH.md` `SV-D9`). The scheduler decides nothing it could
+//! not decide against in-memory facts.
 //!
 //! A pass record is not built here. [`Read`] carries what one needs — the
 //! header, the delivery digest, `P`'s signature — and the caller that
@@ -51,7 +50,7 @@ pub use shekyl_p_fetch::{
     VerifiedTx, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
 };
 pub use shekyl_types::ShardView;
-pub use view::{ViewDesk, ViewRefusal};
+pub use view::{ViewCaller, ViewDesk, ViewRefusal, VIEW_SLOTS};
 
 #[cfg(test)]
 mod tests;

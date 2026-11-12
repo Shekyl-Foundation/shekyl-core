@@ -10,102 +10,80 @@
 //! agree byte-for-byte on these representations or they do not interoperate.
 //! A failing pin means the wire contract moved — which, once the contract is
 //! frozen (§8 freeze rule), is a coordinated wire-version bump per the §2.3
-//! schema-evolution rule, never an incidental edit.
+//! schema-evolution rule, never an incidental edit. Under 4.0 the tags and
+//! cause keys are kebab case, a cause is one key with its payload or
+//! `null`, and the bytes are base64 (IG-Q76, IG-Q86).
 
-use shekyl_rpc_types::{PoolRelay, RejectCause, SubmitTransactionRequest, SubmitVerdict};
+use shekyl_rpc_types::kinds::{Bytes, Height, Text};
+use shekyl_rpc_types::wire::tx::{Publication, Rejection, TxBody, Verdict};
+
+fn rejected(cause: Rejection) -> Verdict {
+    Verdict::Rejected { cause }
+}
 
 /// Every verdict variant, with its frozen wire representation.
-fn frozen_corpus() -> Vec<(SubmitVerdict, &'static str)> {
+fn frozen_corpus() -> Vec<(Verdict, &'static str)> {
     vec![
-        (SubmitVerdict::Accepted, r#"{"verdict":"accepted"}"#),
+        (Verdict::Accepted, r#"{"verdict":"accepted"}"#),
         (
-            SubmitVerdict::AlreadyInPool {
-                relay: PoolRelay::Held,
+            Verdict::AlreadyInPool {
+                publication: Publication::Held,
             },
-            r#"{"verdict":"already_in_pool","relay":"held"}"#,
+            r#"{"verdict":"already-in-pool","publication":"held"}"#,
         ),
         (
-            SubmitVerdict::AlreadyInPool {
-                relay: PoolRelay::HeldOverdue,
+            Verdict::AlreadyInPool {
+                publication: Publication::Overdue,
             },
-            r#"{"verdict":"already_in_pool","relay":"held_overdue"}"#,
+            r#"{"verdict":"already-in-pool","publication":"overdue"}"#,
         ),
         (
-            SubmitVerdict::AlreadyInPool {
-                relay: PoolRelay::Published,
+            Verdict::AlreadyInPool {
+                publication: Publication::Public,
             },
-            r#"{"verdict":"already_in_pool","relay":"published"}"#,
+            r#"{"verdict":"already-in-pool","publication":"public"}"#,
         ),
         (
-            SubmitVerdict::AlreadyInPool {
-                relay: PoolRelay::Untracked,
+            Verdict::AlreadyInPool {
+                publication: Publication::Untracked,
             },
-            r#"{"verdict":"already_in_pool","relay":"untracked"}"#,
+            r#"{"verdict":"already-in-pool","publication":"untracked"}"#,
         ),
         (
-            SubmitVerdict::AlreadyInChain { height: 1_234_567 },
-            r#"{"verdict":"already_in_chain","height":1234567}"#,
+            Verdict::AlreadyInChain {
+                mined_height: Height(1_234_567),
+            },
+            r#"{"verdict":"already-in-chain","mined_height":1234567}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::Malformed,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"malformed"}"#,
+            rejected(Rejection::Malformed),
+            r#"{"verdict":"rejected","cause":{"malformed":null}}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::FeeTooLow,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"fee_too_low"}"#,
+            rejected(Rejection::FeeTooLow),
+            r#"{"verdict":"rejected","cause":{"fee-too-low":null}}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::DoubleSpendConflict,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"double_spend_conflict"}"#,
+            rejected(Rejection::DoubleSpendConflict),
+            r#"{"verdict":"rejected","cause":{"double-spend-conflict":null}}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::StaleRoot,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"stale_root"}"#,
+            rejected(Rejection::StaleRoot),
+            r#"{"verdict":"rejected","cause":{"stale-root":null}}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::ReferenceTooRecent,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"reference_too_recent"}"#,
+            rejected(Rejection::ReferenceTooRecent),
+            r#"{"verdict":"rejected","cause":{"reference-too-recent":null}}"#,
         ),
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::ReferenceNotFound,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"reference_not_found"}"#,
+            rejected(Rejection::ReferenceUnknown),
+            r#"{"verdict":"rejected","cause":{"reference-unknown":null}}"#,
         ),
-        // 3.63: a consensus row refused at the pool's commit, the row as the
-        // reply's diagnostic parameter.
+        // A consensus row refused at the pool's commit: the row is the
+        // cause's payload.
         (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::ConsensusRule,
-                row: Some("CEN-J15".to_owned()),
-            },
-            r#"{"verdict":"rejected","cause":"consensus_rule","row":"CEN-J15"}"#,
-        ),
-        // `Unrecognized` is deserialize-side only in the protocol (a daemon
-        // never authors it), but the type can express it and its
-        // representation is part of the frozen surface.
-        (
-            SubmitVerdict::Rejected {
-                cause: RejectCause::Unrecognized,
-                row: None,
-            },
-            r#"{"verdict":"rejected","cause":"unrecognized"}"#,
+            rejected(Rejection::ConsensusRule(Text("CEN-J15".to_owned()))),
+            r#"{"verdict":"rejected","cause":{"consensus-rule":"CEN-J15"}}"#,
         ),
     ]
 }
@@ -121,10 +99,17 @@ fn every_verdict_serializes_to_its_frozen_representation() {
 #[test]
 fn every_verdict_round_trips_through_its_wire_bytes() {
     for (verdict, frozen) in frozen_corpus() {
-        let parsed: SubmitVerdict = serde_json::from_str(frozen)
+        let parsed: Verdict = serde_json::from_str(frozen)
             .unwrap_or_else(|e| panic!("frozen form of {verdict:?} must parse: {e}"));
         assert_eq!(parsed, verdict, "round-trip mismatch for {frozen}");
     }
+}
+
+#[test]
+fn unrecognized_has_no_wire_form() {
+    // `Unrecognized` is read-side only: a daemon never authors it, so the
+    // type refuses to write it rather than invent a key for it.
+    assert!(serde_json::to_string(&rejected(Rejection::Unrecognized)).is_err());
 }
 
 #[test]
@@ -133,21 +118,15 @@ fn tag_position_is_not_load_bearing() {
     // serializer that emits fields in a different order (a different JSON
     // library, a proxy re-encoding) still parses. The *canonical* order is
     // pinned by the frozen corpus; this pins tolerance of the other order.
-    let parsed: SubmitVerdict =
-        serde_json::from_str(r#"{"cause":"stale_root","verdict":"rejected"}"#)
+    let parsed: Verdict =
+        serde_json::from_str(r#"{"cause":{"stale-root":null},"verdict":"rejected"}"#)
             .expect("tag-last form must parse");
-    assert_eq!(
-        parsed,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::StaleRoot,
-            row: None,
-        }
-    );
+    assert_eq!(parsed, rejected(Rejection::StaleRoot));
 }
 
 #[test]
-fn already_in_pool_without_a_relay_is_a_deserialization_error() {
-    assert!(serde_json::from_str::<SubmitVerdict>(r#"{"verdict":"already_in_pool"}"#).is_err());
+fn already_in_pool_without_a_publication_is_a_deserialization_error() {
+    assert!(serde_json::from_str::<Verdict>(r#"{"verdict":"already-in-pool"}"#).is_err());
 }
 
 #[test]
@@ -155,19 +134,36 @@ fn rejected_without_a_cause_is_a_deserialization_error() {
     // A `rejected` with no cause is not actionable — the wallet cannot pick a
     // disposition row. It lands in the `Err` arm (transport-equivalent
     // ambiguity → TTL-resubmit), never in a default cause.
-    assert!(serde_json::from_str::<SubmitVerdict>(r#"{"verdict":"rejected"}"#).is_err());
+    assert!(serde_json::from_str::<Verdict>(r#"{"verdict":"rejected"}"#).is_err());
 }
 
 #[test]
-fn request_round_trips_and_requires_tx_blob() {
-    let req = SubmitTransactionRequest {
-        tx_blob: "00ff10".into(),
+fn a_cause_is_one_key_and_a_bare_cause_carries_no_payload() {
+    // Two keys is not a cause, a bare key is not a cause, and a payload on
+    // a cause that carries none is not that cause: each is an Err, the
+    // ambiguous arm, never a guess at which key was meant.
+    for json in [
+        r#"{"verdict":"rejected","cause":{"malformed":null,"stale-root":null}}"#,
+        r#"{"verdict":"rejected","cause":{}}"#,
+        r#"{"verdict":"rejected","cause":"fee-too-low"}"#,
+        r#"{"verdict":"rejected","cause":{"fee-too-low":1}}"#,
+    ] {
+        assert!(serde_json::from_str::<Verdict>(json).is_err(), "{json}");
+    }
+}
+
+#[test]
+fn request_round_trips_and_requires_its_body() {
+    let req = TxBody {
+        body: Bytes(vec![0x00, 0xff, 0x10]),
     };
     let json = serde_json::to_string(&req).expect("serialize request");
-    assert_eq!(json, r#"{"tx_blob":"00ff10"}"#, "request wire form drifted");
-    let parsed: SubmitTransactionRequest = serde_json::from_str(&json).expect("parse request");
+    assert_eq!(json, r#"{"body":"AP8Q"}"#, "request wire form drifted");
+    let parsed: TxBody = serde_json::from_str(&json).expect("parse request");
     assert_eq!(parsed, req);
 
-    // Missing tx_blob is a malformed request, not an empty submit.
-    assert!(serde_json::from_str::<SubmitTransactionRequest>("{}").is_err());
+    // A missing body is a malformed request, not an empty submit; hex is
+    // not the bytes' form.
+    assert!(serde_json::from_str::<TxBody>("{}").is_err());
+    assert!(serde_json::from_str::<TxBody>(r#"{"body":"00ff1"}"#).is_err());
 }
