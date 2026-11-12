@@ -8,12 +8,12 @@
 //! A tokio timer follows tokio's clock. On Windows that clock runs through
 //! a machine's sleep, so a wait armed before the sleep ends at the wake with
 //! whatever was left of it. These waits sleep on that timer and, each time
-//! it returns, read [`MonotonicClock`](shekyl_timing_engine::MonotonicClock).
+//! it returns, read [`MonotonicClock`].
 //! They end only once the deadline has passed on that clock, so a sleep
 //! counts for nothing.
 //!
 //! The timing engine's thread does not use them. It sleeps on
-//! [`Clock::wait_for`](shekyl_timing_engine::Clock::wait_for), and linking
+//! [`Clock::wait_for`], and linking
 //! tokio there would pull a runtime into the transport layer. This crate is
 //! the one both Tor supervisors already run their asks on. A production
 //! caller outside it that has to wait the same way is when this module
