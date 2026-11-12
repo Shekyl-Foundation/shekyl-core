@@ -28,16 +28,32 @@ fn list(window: &[u8], third: Option<(u8, Class)>) -> Ranked {
     .expect("distinct seeds")
 }
 
-/// The builder, driven by hand: claim, begin and finish every build the
-/// core queues, in its order.
-fn build_all(core: &mut Core) -> Vec<Decision> {
+/// The shell's drops, driven by hand: report every retiring cache dropped,
+/// and what that frees in turn.
+fn retire_all(core: &mut Core) -> Vec<Decision> {
     let mut out = Vec::new();
+    while let Some(seed) = core
+        .entries
+        .iter()
+        .find(|entry| entry.state == EntryState::Retiring)
+        .map(|entry| entry.seed)
+    {
+        out.extend(core.retired(seed));
+    }
+    out
+}
+
+/// The builder, driven by hand: drop what is retiring, then claim, begin
+/// and finish every build the core queues, in its order.
+fn build_all(core: &mut Core) -> Vec<Decision> {
+    let mut out = retire_all(core);
     for _ in 0..=4 * CAP {
         let Some(claimed) = core.claim() else {
             return out;
         };
         assert!(core.begin(claimed), "an uncontested claim begins");
         out.extend(core.built(claimed.0));
+        out.extend(retire_all(core));
     }
     panic!("more builds than places: the core keeps rebuilding what it frees");
 }
@@ -167,6 +183,7 @@ fn a_list_that_grows_while_outside_leases_are_out_holds_the_place_for_the_window
         "no outside job joins a resident seed while the window waits"
     );
     core.returned(x);
+    retire_all(&mut core);
     assert!(
         core.entry(&s(2)).is_some(),
         "the first return goes to the window seed"
@@ -185,13 +202,15 @@ fn evidence_while_the_third_is_warm_frees_it_and_the_refill_is_paid_at_evidence(
     build_all(&mut core);
     assert_eq!(entries(&core), seeds(&[1, 2, 3]));
     let ticket = request(&mut core, 20, Class::Evidence);
-    assert!(
-        core.entry(&s(3)).is_none(),
+    assert_eq!(
+        core.entry(&s(3)).map(|entry| entry.state),
+        Some(EntryState::Retiring),
         "the warm third gives its place"
     );
     build_all(&mut core);
     let lease = core.take_grant(ticket).expect("granted");
     core.returned(lease);
+    retire_all(&mut core);
     assert_eq!(core.claim(), Some((s(3), Class::Evidence)));
 }
 
@@ -263,6 +282,81 @@ fn a_warm_lease_is_cancelled_when_its_seed_leaves_the_list_and_freed_on_return()
     assert_eq!(freed(&out), vec![s(1)]);
 }
 
+/// HA-R2 is a memory cap: a freed place is taken again only once its cache
+/// is dropped, never in the step that frees it.
+#[test]
+fn a_freed_place_is_not_reused_until_its_cache_is_dropped() {
+    let mut core = Core::default();
+    core.rank(list(&[1, 2], Some((3, Class::HeaderPow))));
+    build_all(&mut core);
+    let (ticket, out) = core.request(s(20), Class::Evidence).expect("open");
+    assert_eq!(freed(&out), vec![s(3)], "the warm third is freed");
+    assert!(
+        !out.contains(&Decision::Schedule { seed: s(20) }),
+        "no build while the third's cache is still held: {out:?}"
+    );
+    assert_eq!(
+        core.entries.len(),
+        CAP,
+        "the retiring third holds its place"
+    );
+    assert_eq!(core.claim(), None);
+    let out = core.retired(s(3));
+    assert!(out.contains(&Decision::Schedule { seed: s(20) }), "{out:?}");
+    build_all(&mut core);
+    assert!(core.take_grant(ticket).is_some());
+}
+
+/// A warm loan on the third would hold the place a window seed waits for;
+/// overlapping loans would hold it for ever. The third is not lent while
+/// the window is short.
+#[test]
+fn a_warm_request_on_the_third_while_the_window_waits_for_a_place_is_refused() {
+    let mut core = Core::default();
+    core.rank(list(&[1], Some((3, Class::CalcPow))));
+    build_all(&mut core);
+    let warm = core.request_warm(s(3)).expect("the warm third");
+    let x = granted(&mut core, 10, Class::HeaderPow);
+    let out = core.rank(list(&[1, 2], Some((3, Class::CalcPow))));
+    assert!(core.window_short(), "the new window seed has no place");
+    assert!(core.fifo.is_empty(), "no job queues");
+    assert!(out.contains(&Decision::Cancel { lease: warm }), "{out:?}");
+    assert_eq!(
+        core.request_warm(s(3)),
+        Err(WarmRefused::NotWarm),
+        "a second loan would keep the third held"
+    );
+    core.returned(warm);
+    build_all(&mut core);
+    assert!(
+        core.entry(&s(2)).is_some(),
+        "the window seed takes the place"
+    );
+    core.returned(x);
+}
+
+/// A close drops every request not yet granted: a derive that finishes
+/// after it grants nothing, so no job starts during a stop.
+#[test]
+fn a_request_parked_on_a_building_seed_is_not_granted_after_close() {
+    let mut core = Core::default();
+    core.rank(list(&[1], None));
+    let ticket = request(&mut core, 1, Class::Chain);
+    let claimed = core.claim().expect("the window build");
+    assert!(core.begin(claimed));
+    core.close();
+    let out = core.built(claimed.0);
+    assert!(
+        !out.iter().any(|d| matches!(d, Decision::Grant { .. })),
+        "{out:?}"
+    );
+    assert_eq!(core.take_grant(ticket), None);
+    assert!(
+        freed(&out).contains(&s(1)),
+        "the cache goes: nothing holds it"
+    );
+}
+
 #[test]
 fn a_second_job_on_a_resident_seed_schedules_no_build() {
     let mut core = Core::default();
@@ -302,6 +396,9 @@ enum Op {
     Claim,
     Begin,
     Built,
+    /// The shell reports one freed cache dropped.
+    Retire(usize),
+    Close,
 }
 
 fn class() -> impl Strategy<Value = Class> {
@@ -310,16 +407,20 @@ fn class() -> impl Strategy<Value = Class> {
 
 fn op() -> impl Strategy<Value = Op> {
     let seed = 0u8..6;
+    // Weights in tenths, so a close can be rare: about one sequence in five
+    // closes, most of them late.
     prop_oneof![
-        1 => (prop::collection::vec(0u8..6, 1..=2), prop::option::of((0u8..6, class())))
+        10 => (prop::collection::vec(0u8..6, 1..=2), prop::option::of((0u8..6, class())))
             .prop_map(|(w, t)| Op::Rank(w, t)),
-        4 => (seed.clone(), class()).prop_map(|(s, c)| Op::Request(s, c)),
-        1 => seed.prop_map(Op::Warm),
-        3 => any::<usize>().prop_map(Op::Return),
-        1 => any::<usize>().prop_map(Op::Leave),
-        2 => Just(Op::Claim),
-        2 => Just(Op::Begin),
-        2 => Just(Op::Built),
+        40 => (seed.clone(), class()).prop_map(|(s, c)| Op::Request(s, c)),
+        10 => seed.prop_map(Op::Warm),
+        30 => any::<usize>().prop_map(Op::Return),
+        10 => any::<usize>().prop_map(Op::Leave),
+        20 => Just(Op::Claim),
+        20 => Just(Op::Begin),
+        20 => Just(Op::Built),
+        30 => any::<usize>().prop_map(Op::Retire),
+        1 => Just(Op::Close),
     ]
 }
 
@@ -331,6 +432,9 @@ struct World {
     held: Vec<LeaseId>,
     claimed: Option<(Seedhash, Class)>,
     deriving: Option<Seedhash>,
+    /// Caches the core freed whose drop the shell has not reported: the
+    /// model's own ledger, so I1 does not rest on the core's count.
+    freed: Vec<Seedhash>,
 }
 
 impl World {
@@ -346,8 +450,29 @@ impl World {
         self.pending = still;
     }
 
+    fn record(&mut self, out: &[Decision]) {
+        for decision in out {
+            if let Decision::Free { seed } = decision {
+                self.freed.push(*seed);
+            }
+        }
+    }
+
+    /// Entries the core holds that are not freed, plus caches freed and
+    /// not yet dropped: what is in memory, or about to be.
+    fn places(&self) -> usize {
+        let live = self
+            .core
+            .entries
+            .iter()
+            .filter(|entry| !self.freed.contains(&entry.seed))
+            .count();
+        live + self.freed.len()
+    }
+
     fn quiet(&self) -> bool {
-        self.core.waiters.is_empty()
+        self.freed.is_empty()
+            && self.core.waiters.is_empty()
             && self.core.leases.is_empty()
             && self
                 .core
@@ -378,7 +503,13 @@ fn apply(world: &mut World, op: &Op) -> Option<Vec<Decision>> {
         }
         Op::Warm(seed) => {
             let before = world.core.entries.len();
+            let outside = !world.core.in_window(&s(*seed));
+            let contested = !world.core.fifo.is_empty() || world.core.window_short();
             if let Ok(lease) = world.core.request_warm(s(*seed)) {
+                assert!(
+                    !(outside && contested),
+                    "I7: a warm lease on an outside seed while a job or a window seed waits for a place"
+                );
                 world.held.push(lease);
             }
             assert_eq!(
@@ -421,19 +552,30 @@ fn apply(world: &mut World, op: &Op) -> Option<Vec<Decision>> {
             let seed = world.deriving.take()?;
             world.core.built(seed)
         }
+        Op::Retire(pick) => {
+            if world.freed.is_empty() {
+                return None;
+            }
+            let seed = world.freed.swap_remove(pick % world.freed.len());
+            world.core.retired(seed)
+        }
+        Op::Close => {
+            // Every request not yet granted returns stopped.
+            let out = world.core.close();
+            world.take_grants();
+            world.left.extend(world.pending.drain(..));
+            out
+        }
     };
+    world.record(&out);
     world.take_grants();
     Some(out)
 }
 
 fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
     let core = &world.core;
-    // I1: the cap, a build in progress counted.
-    assert!(
-        core.entries.len() <= CAP,
-        "I1: {} entries",
-        core.entries.len()
-    );
+    // I1: the cap, a build in progress and a cache not yet dropped counted.
+    assert!(world.places() <= CAP, "I1: {} places", world.places());
     // I6: one entry per seed.
     let unique: BTreeSet<[u8; 32]> = entries(core);
     assert_eq!(
@@ -442,9 +584,32 @@ fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
         "I6: two entries for one seed"
     );
     for decision in out {
+        if let Decision::Grant { lease, .. } = decision {
+            // A grant is made on a built cache, never one being dropped,
+            // and never after a close.
+            assert!(!before.closed, "a grant after close");
+            let seed = core
+                .leases
+                .iter()
+                .find(|held| held.id == *lease)
+                .expect("a granted lease is held")
+                .seed;
+            assert!(
+                !world.freed.contains(&seed),
+                "a grant on a cache being dropped"
+            );
+            assert_eq!(
+                core.entry(&seed).map(|entry| entry.state),
+                Some(EntryState::Resident),
+                "a grant on a cache not built"
+            );
+        }
         if let Decision::Free { seed } = decision {
             // I2: a window seed is never freed while the hasher is open.
-            assert!(!core.in_window(seed), "I2: freed window seed {seed}");
+            assert!(
+                core.closed || !core.in_window(seed),
+                "I2: freed window seed {seed}"
+            );
             // I4: nothing freed with a lease on it.
             assert_eq!(core.leases_on(seed), 0, "I4: freed {seed} with a lease");
         }
@@ -483,11 +648,18 @@ fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
     }
 }
 
-/// Finish every build and return every lease until nothing is left to do.
+/// Finish every build, drop every freed cache and return every lease until
+/// nothing is left to do.
 fn drain(world: &mut World) {
     for _ in 0..10_000 {
+        if let Some(seed) = world.freed.pop() {
+            let out = world.core.retired(seed);
+            world.record(&out);
+            continue;
+        }
         if let Some(seed) = world.deriving.take() {
-            world.core.built(seed);
+            let out = world.core.built(seed);
+            world.record(&out);
         }
         if let Some(claimed) = world.claimed.take() {
             if world.core.begin(claimed) {
@@ -497,7 +669,8 @@ fn drain(world: &mut World) {
         }
         world.take_grants();
         if let Some(lease) = world.held.pop() {
-            world.core.returned(lease);
+            let out = world.core.returned(lease);
+            world.record(&out);
             continue;
         }
         if let Some(claimed) = world.core.claim() {
@@ -505,7 +678,11 @@ fn drain(world: &mut World) {
             continue;
         }
         world.take_grants();
-        if world.held.is_empty() && world.claimed.is_none() && world.deriving.is_none() {
+        if world.held.is_empty()
+            && world.claimed.is_none()
+            && world.deriving.is_none()
+            && world.freed.is_empty()
+        {
             return;
         }
     }
@@ -540,6 +717,7 @@ proptest! {
                 waiters: world.core.waiters.clone(),
                 fifo: world.core.fifo.clone(),
                 leases: world.core.leases.clone(),
+                closed: world.core.closed,
                 ..Core::default()
             };
             let Some(out) = apply(&mut world, op) else { continue };
@@ -547,7 +725,9 @@ proptest! {
             // HA-R5: at quiescence the entries are the list, and a fresh
             // core fed the same list reaches the same entries.
             if world.quiet() && world.claimed.is_none() && world.deriving.is_none() {
-                if let Some(list) = world.core.list.clone() {
+                if world.core.closed {
+                    prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
+                } else if let Some(list) = world.core.list.clone() {
                     prop_assert_eq!(entries(&world.core), listed(&world.core));
                     prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
                 }
@@ -557,7 +737,9 @@ proptest! {
         drain(&mut world);
         prop_assert!(world.pending.is_empty(), "never granted: {:?}", world.pending);
         prop_assert!(world.core.waiters.is_empty());
-        if let Some(list) = world.core.list.clone() {
+        if world.core.closed {
+            prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
+        } else if let Some(list) = world.core.list.clone() {
             prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
         }
     }

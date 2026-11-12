@@ -335,6 +335,162 @@ fn a_warm_loan_builds_nothing() {
     owner.stop();
 }
 
+/// A cancel ends a warm loan's permit wait. On a one-permit budget held by
+/// a chain job, a `calc_pow` loan on the third is parked for its permit
+/// when an evidence check needs the third's place: the loan returns
+/// cancelled while the permit is still held. Waiting for a permit instead
+/// would make the evidence check wait on the warm loan's class (HA-R8).
+///
+/// Red edit: have `Loan::hash` wait in `acquire_unless(self.class,
+/// self.stop)` for a warm loan too.
+#[test]
+fn a_cancelled_warm_loan_parked_for_a_permit_returns_while_the_permit_is_held() {
+    let _serial = serial();
+    let pool = budget(1);
+    let (hasher, owner) = started(Hasher::start(pool.clone()));
+    hasher.rank(Ranked::new(s(1), Some(s(2)), Some((s(3), Class::CalcPow))).expect("distinct"));
+    until(&hasher, "the window and the third built", |r| {
+        [s(1), s(2), s(3)]
+            .iter()
+            .all(|seed| holds(r, *seed, Residency::Warm))
+    });
+    let (running_tx, running) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let chain = {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            hasher.run(Class::Chain, s(1), &stop, move |lent| {
+                let _hash = lent.hash(b"chain");
+                let _sent = running_tx.send(());
+                let _released = release_rx.recv();
+            })
+        })
+    };
+    running
+        .recv_timeout(PATIENCE)
+        .expect("the chain job holds the permit");
+    let (warm_tx, warm) = mpsc::channel();
+    {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            let _sent = warm_tx
+                .send(hasher.lend_warm(Class::CalcPow, s(3), &stop, |loan| loan.hash(b"warm")));
+        });
+    }
+    let deadline = Instant::now() + PATIENCE;
+    while pool.waiting(Class::CalcPow) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the warm loan parks for a permit"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let evidence = {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            hasher.lend(Class::Evidence, s(20), &stop, |loan| {
+                loan.hash(b"evidence").is_ok()
+            })
+        })
+    };
+    let outcome = warm
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the cancel ended the permit wait");
+    assert_eq!(outcome, Ok(Err(Unhashed::Cancelled)));
+    assert_eq!(
+        pool.held(Class::Chain),
+        1,
+        "the only permit is still the chain job's"
+    );
+    drop(release);
+    assert_eq!(chain.join().expect("the chain job returns"), Some(()));
+    assert_eq!(
+        evidence.join().expect("the evidence check returns"),
+        Some(true),
+        "the evidence check takes the third's place and hashes"
+    );
+    owner.stop();
+}
+
+/// The process's resident memory in KiB (Linux `/proc/self/status`).
+#[cfg(target_os = "linux")]
+fn resident_kib() -> u64 {
+    let status = std::fs::read_to_string("/proc/self/status").expect("procfs is mounted");
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+        .expect("VmRSS is reported")
+}
+
+/// HA-R2 is a memory cap, not a count. A job on an unlisted seed while the
+/// third is warm frees the third, and the job's build begins only once the
+/// third's 256 MiB is returned: the process never holds four caches. Read
+/// from the published residency and from the process's resident memory,
+/// both sampled through the new build. Linux only: the memory is read from
+/// procfs, and the core's side of the rule is the property test's I1 on
+/// every target.
+///
+/// Red edits: have `Shared::lease` keep what its request freed until its
+/// grant, as the head before this fix did (the job then waits on its own
+/// drop: the deadline fails); at that head, where the core also reused the
+/// place at once, the sampled memory passes three caches by a fourth.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_job_that_frees_the_third_builds_only_once_the_thirds_memory_is_returned() {
+    /// One cache is 256 MiB; half of one is far above what a hash and the
+    /// test's own threads add, and far below a fourth cache.
+    const SLACK_KIB: u64 = 128 * 1024;
+    let _serial = serial();
+    let (hasher, owner) = start(4);
+    hasher.rank(Ranked::new(s(1), Some(s(2)), Some((s(3), Class::HeaderPow))).expect("distinct"));
+    until(&hasher, "the window and the third built", |r| {
+        [s(1), s(2), s(3)]
+            .iter()
+            .all(|seed| holds(r, *seed, Residency::Warm))
+    });
+    let three = resident_kib();
+    let done = Arc::new(AtomicBool::new(false));
+    let sampler = {
+        let (done, resident) = (Arc::clone(&done), hasher.resident());
+        std::thread::spawn(move || {
+            let (mut peak, mut places) = (0u64, 0usize);
+            while !done.load(Ordering::Acquire) {
+                peak = peak.max(resident_kib());
+                places = places.max(resident.borrow().caches.len());
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            (peak, places)
+        })
+    };
+    let (ran_tx, ran) = mpsc::channel();
+    {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            let _sent = ran_tx.send(hasher.lend(Class::Evidence, s(20), &stop, |loan| {
+                loan.hash(b"evidence").is_ok()
+            }));
+        });
+    }
+    let outcome = ran
+        .recv_timeout(PATIENCE)
+        .expect("the job is granted: its request's own drop is not what it waits for");
+    done.store(true, Ordering::Release);
+    let (peak, places) = sampler.join().expect("the sampler returns");
+    assert_eq!(outcome, Some(true));
+    assert!(places <= crate::CAP, "{places} places published");
+    assert!(
+        peak < three + SLACK_KIB,
+        "resident memory reached {peak} KiB from {three} KiB with three caches: \
+         the new cache was built while the third's was still held"
+    );
+    owner.stop();
+}
+
 /// HA-R5 with real caches: after jobs on several seeds and two lists, the
 /// quiet hasher holds what a fresh hasher holds for the same list.
 ///

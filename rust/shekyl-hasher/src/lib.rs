@@ -14,7 +14,9 @@
 //! # Places
 //!
 //! [`CAP`] places in all, counting warm caches, caches a job hashes under,
-//! and a build in progress. The ranked list's window, its first one or two
+//! a build in progress, and a cache being dropped: a freed place is free
+//! again only once its 256 MiB is returned, so the cap is the memory, not a
+//! count. The ranked list's window, its first one or two
 //! seeds, has a place reserved for each seed whether it is built or not,
 //! and a job never frees one (HA-R7). The other places go to jobs whose
 //! seed is outside the window, first in, first out (HA-R8); class orders
@@ -32,7 +34,8 @@
 //!   switch's plan, a header-proof command, the evidence check.
 //! - [`Hasher::lend_warm`] builds nothing and never waits for a place: the
 //!   miner and `calc_pow`. Its lease is cancelled when its seed leaves the
-//!   list.
+//!   list, or when a queued job or a window build needs its place; a
+//!   cancel ends a permit wait at once.
 //!
 //! [`Lent`] and [`Loan`] hand out hashes, never the cache. Neither is
 //! `Clone`, and the `for<'job>` bound on each job keeps both from leaving
@@ -42,6 +45,14 @@
 //! a place behind itself. `run`, `lend` and `lend_warm` panic when called
 //! from inside a job's closure on the same thread. A thread the job spawns
 //! inside its closure is not covered.
+//!
+//! # Deadlock
+//!
+//! Never ask for a job while holding a budget permit. The builder takes a
+//! permit to build the cache the job waits for; on a one-permit budget the
+//! caller's own permit is the one it waits for. The crate cannot see this:
+//! a permit belongs to no thread. Every consumer takes its permits through
+//! the hasher (`run`, [`Loan::hash`]) and holds none of its own (doc §5.3).
 //!
 //! # Builds
 //!
@@ -148,6 +159,9 @@ pub enum Residency {
     Leased,
     /// Reserved for a build, or being derived.
     Building,
+    /// Freed: its cache is being dropped. The place stays counted until the
+    /// 256 MiB is returned.
+    Retiring,
 }
 
 /// What is resident (doc §5.6), published after every change.
@@ -167,7 +181,8 @@ pub struct Resident {
 pub enum Unhashed {
     /// The caller's stop flag was set during the permit wait.
     Stopped,
-    /// A warm loan's seed left the ranked list, or a job needs its place.
+    /// A warm loan's seed left the ranked list, or a queued job or a window
+    /// build needs its place.
     Cancelled,
 }
 
@@ -175,7 +190,9 @@ impl fmt::Display for Unhashed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Stopped => "the caller stopped before a permit was granted",
-            Self::Cancelled => "the warm loan was cancelled: its seed left the list",
+            Self::Cancelled => {
+                "the warm loan was cancelled: its seed left the list, or a job needs its place"
+            }
         })
     }
 }
@@ -266,18 +283,29 @@ impl Loan<'_> {
     ///
     /// # Errors
     ///
-    /// [`Unhashed::Cancelled`] for a warm loan whose seed left the list,
-    /// checked before the permit wait and again after it.
+    /// [`Unhashed::Cancelled`] for a warm loan that was cancelled: before
+    /// the permit wait, during it (the cancel ends the wait), or after it.
     /// [`Unhashed::Stopped`] when the caller's stop flag ended the wait.
+    /// When both are set, the cancel is reported: the loan is over either
+    /// way, and the cancel is the hasher's news to the caller.
     pub fn hash(&self, blob: &[u8]) -> Result<[u8; 32], Unhashed> {
         let cancelled = || self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
         if cancelled() {
             return Err(Unhashed::Cancelled);
         }
-        let permit = self
-            .budget
-            .acquire_unless(self.class, self.stop)
-            .ok_or(Unhashed::Stopped)?;
+        let permit = match self.cancel {
+            Some(cancel) => self
+                .budget
+                .acquire_unless_either(self.class, self.stop, cancel),
+            None => self.budget.acquire_unless(self.class, self.stop),
+        };
+        let Some(permit) = permit else {
+            return Err(if cancelled() {
+                Unhashed::Cancelled
+            } else {
+                Unhashed::Stopped
+            });
+        };
         if cancelled() {
             return Err(Unhashed::Cancelled);
         }
@@ -330,21 +358,27 @@ impl Shared {
     }
 
     /// Act on `decisions` under the lock, publish the residency and wake
-    /// every waiter. The caches it frees are returned, to be dropped after
-    /// the lock is released.
-    #[must_use = "a freed cache is dropped after the lock"]
-    fn apply(&self, state: &mut State, decisions: Vec<Decision>) -> Vec<Arc<PreparedCache>> {
+    /// every waiter. The caches it frees are returned, for
+    /// [`retire`](Self::retire) after the lock is released: each place
+    /// stays taken until then.
+    #[must_use = "a freed cache's place is free only once retire reports its drop"]
+    fn apply(&self, state: &mut State, decisions: Vec<Decision>) -> Freed {
         let mut freed = Vec::new();
+        let mut cancelled = false;
         for decision in decisions {
             match decision {
                 Decision::Free { seed } => {
-                    if let Some(at) = state.caches.iter().position(|(held, _)| *held == seed) {
-                        freed.push(state.caches.swap_remove(at).1);
-                    }
+                    let at = state
+                        .caches
+                        .iter()
+                        .position(|(held, _)| *held == seed)
+                        .expect("the core frees only a resident cache");
+                    freed.push(state.caches.swap_remove(at));
                 }
                 Decision::Cancel { lease } => {
                     if let Some((_, flag)) = state.cancels.iter().find(|(id, _)| *id == lease) {
                         flag.store(true, Ordering::Release);
+                        cancelled = true;
                     }
                 }
                 Decision::WakeBuilder => {
@@ -354,9 +388,42 @@ impl Shared {
                 Decision::Grant { .. } | Decision::Schedule { .. } => {}
             }
         }
+        // After every flag is stored: a loan parked for a permit reads its
+        // cancel under the budget's lock.
+        if cancelled {
+            self.budget.wake();
+        }
         self.publish(state);
         self.changed.notify_all();
         freed
+    }
+
+    /// Drop each freed cache with no lock held, then report the drops to
+    /// the core, which frees their places; what that frees in turn is
+    /// dropped the same way. Called with no lock held, by every path that
+    /// applies decisions.
+    fn retire(&self, mut freed: Freed) {
+        while !freed.is_empty() {
+            let seeds: Vec<Seedhash> = freed.iter().map(|(seed, _)| *seed).collect();
+            for (_, cache) in freed {
+                // Each is the last holder: every lease's clone went back
+                // before its return reached the core.
+                debug_assert_eq!(
+                    Arc::strong_count(&cache),
+                    1,
+                    "a freed cache is still held: a lease kept its clone past its return"
+                );
+                drop(cache);
+            }
+            let mut state = self.lock();
+            let mut decisions = Vec::new();
+            for seed in seeds {
+                decisions.extend(state.core.retired(seed));
+            }
+            let more = self.apply(&mut state, decisions);
+            drop(state);
+            freed = more;
+        }
     }
 
     fn publish(&self, state: &State) {
@@ -393,8 +460,17 @@ impl Shared {
             return None;
         }
         let (ticket, decisions) = state.core.request(seed, class)?;
-        let freed = self.apply(&mut state, decisions);
+        let mut freed = self.apply(&mut state, decisions);
         let lease = loop {
+            // What this request freed is dropped before it waits: the place
+            // it waits for may be that cache's.
+            if !freed.is_empty() {
+                drop(state);
+                self.retire(std::mem::take(&mut freed));
+                state = self.lock();
+                continue;
+            }
+            // A grant made before a close stands: the stop waits for it.
             if let Some(lease) = state.core.take_grant(ticket) {
                 break lease;
             }
@@ -402,15 +478,13 @@ impl Shared {
                 let decisions = state.core.leave(ticket);
                 let more = self.apply(&mut state, decisions);
                 drop(state);
-                drop_freed(freed);
-                drop_freed(more);
+                self.retire(more);
                 return None;
             }
             state = self.wait(state);
         };
         let cache = Self::cache(&state, seed);
         drop(state);
-        drop_freed(freed);
         Some(Lease {
             shared: Arc::clone(self),
             id: lease,
@@ -424,23 +498,12 @@ impl Shared {
         let decisions = state.core.returned(lease);
         let freed = self.apply(&mut state, decisions);
         drop(state);
-        drop_freed(freed);
+        self.retire(freed);
     }
 }
 
-/// Drop caches the core freed, after the lock. Each is the last holder:
-/// every lease's clone went back before its return reached the core, so
-/// this is where the 256 MiB is returned.
-fn drop_freed(freed: Vec<Arc<PreparedCache>>) {
-    for cache in freed {
-        debug_assert_eq!(
-            Arc::strong_count(&cache),
-            1,
-            "a freed cache is still held: a lease kept its clone past its return"
-        );
-        drop(cache);
-    }
-}
+/// Caches the core freed, with their seeds, to drop after the lock.
+type Freed = Vec<(Seedhash, Arc<PreparedCache>)>;
 
 /// One granted lease. Its clone of the cache goes before its return
 /// reaches the core, so the core frees only caches nothing else holds.
@@ -504,13 +567,19 @@ impl Hasher {
         let decisions = state.core.rank(list);
         let freed = self.shared.apply(&mut state, decisions);
         drop(state);
-        drop_freed(freed);
+        self.shared.retire(freed);
     }
 
     /// Run `job` under `seed`'s cache and one permit of `class` held for the
     /// whole job, building the cache when it is not warm. The lease is
     /// taken first, then the permit. `None` when `stop` was set first, or
     /// the hasher is stopping.
+    ///
+    /// # Deadlock
+    ///
+    /// Do not call this while holding a budget permit: the build this job
+    /// may wait for takes a permit, and on a one-permit budget that is the
+    /// caller's (crate docs, *Deadlock*).
     ///
     /// # Panics
     ///
@@ -540,6 +609,12 @@ impl Hasher {
     /// [`Loan::hash`] takes one of `class`. Builds the cache when it is not
     /// warm. `None` when `stop` was set first, or the hasher is stopping.
     ///
+    /// # Deadlock
+    ///
+    /// Do not call this while holding a budget permit: the build this job
+    /// may wait for takes a permit, and on a one-permit budget that is the
+    /// caller's (crate docs, *Deadlock*).
+    ///
     /// # Panics
     ///
     /// When called from inside another job's closure on this thread.
@@ -568,13 +643,21 @@ impl Hasher {
 
     /// [`lend`](Self::lend) that builds nothing and never waits for a
     /// place: the miner and `calc_pow`. Its loan is cancelled when `seed`
-    /// leaves the ranked list, or when a job needs its place.
+    /// leaves the ranked list, or when a queued job or a window build needs
+    /// its place.
     ///
     /// # Errors
     ///
     /// [`Declined::NotWarm`] when `seed` is not listed, not built, or is
-    /// the third while a job waits for a place. [`Declined::Stopped`] when
-    /// `stop` was set first, or the hasher is stopping.
+    /// the third while a job or a window seed waits for a place.
+    /// [`Declined::Stopped`] when `stop` was set first, or the hasher is
+    /// stopping.
+    ///
+    /// # Deadlock
+    ///
+    /// Do not call this while holding a budget permit. Each
+    /// [`Loan::hash`] takes one; a caller that already holds the only one
+    /// waits on itself (crate docs, *Deadlock*).
     ///
     /// # Panics
     ///
@@ -640,9 +723,9 @@ impl Hasher {
 }
 
 impl Owner {
-    /// Refuse new jobs, wake every waiter, wait for every lease out to
-    /// return, let a running derive finish, free every cache, and join the
-    /// builder.
+    /// Refuse new jobs, drop every request not yet granted (its caller
+    /// returns stopped), wait for every lease already granted to return,
+    /// let a running derive finish, free every cache, and join the builder.
     pub fn stop(self) {
         drop(self);
     }
@@ -653,8 +736,11 @@ impl Owner {
         };
         let mut state = self.shared.lock();
         let decisions = state.core.close();
-        let mut freed = self.shared.apply(&mut state, decisions);
+        let freed = self.shared.apply(&mut state, decisions);
         self.shared.budget.wake();
+        drop(state);
+        self.shared.retire(freed);
+        let mut state = self.shared.lock();
         while !state.core.drained() {
             state = self.shared.wait(state);
         }
@@ -668,9 +754,9 @@ impl Owner {
         // nothing holds it.
         let mut state = self.shared.lock();
         let decisions = state.core.close();
-        freed.extend(self.shared.apply(&mut state, decisions));
+        let freed = self.shared.apply(&mut state, decisions);
         drop(state);
-        drop_freed(freed);
+        self.shared.retire(freed);
     }
 }
 
@@ -720,7 +806,7 @@ fn build_loop(shared: &Shared) {
         let decisions = state.core.built(claimed.0);
         let freed = shared.apply(&mut state, decisions);
         drop(state);
-        drop_freed(freed);
+        shared.retire(freed);
     }
 }
 

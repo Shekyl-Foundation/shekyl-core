@@ -17,7 +17,11 @@
 //! - **W**, the window: the ranked list's first one or two seeds. Each has a
 //!   place reserved whether or not it is built.
 //! - **The third:** the list's third seed, with the class its jobs hash at.
-//! - **An entry:** a seed that is resident, or has a build reserved for it.
+//! - **An entry:** a seed that is resident, has a build reserved for it, or
+//!   is retiring: freed by the core, its cache not yet dropped by the shell.
+//!   A retiring entry still takes its place (HA-R2 is a memory cap), is
+//!   never granted and never rebuilt; the place is free once the shell
+//!   reports the drop ([`Core::retired`]).
 //! - **Outside:** an entry or a job whose seed is not in W. The outside
 //!   places are [`CAP`] minus the window's length.
 //! - **A lease:** a granted job. A warm lease (`lend_warm`) can be
@@ -47,9 +51,13 @@ pub(crate) enum Decision {
     /// A build of `seed` was reserved. The builder takes it with
     /// [`Core::claim`].
     Schedule { seed: Seedhash },
-    /// `seed`'s cache is no longer held: drop it.
+    /// `seed`'s cache is no longer held: drop it with no lock held, then
+    /// report the drop with [`Core::retired`]. Until then its place stays
+    /// taken.
     Free { seed: Seedhash },
-    /// The warm lease's seed left the list: its next hash is refused.
+    /// The warm lease's seed left the list, or a queued job or a window
+    /// build needs its place: its permit wait ends and its next hash is
+    /// refused.
     Cancel { lease: LeaseId },
     /// The build the builder claimed is no longer the next one, or its class
     /// rose: stop its permit wait and ask again.
@@ -73,6 +81,24 @@ enum EntryState {
     Deriving,
     /// Built and held.
     Resident,
+    /// Freed: the shell drops the cache and reports it. Takes its place
+    /// until then.
+    Retiring,
+}
+
+/// What [`Core::place_outside`] did with an outside job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placed {
+    /// Granted, joined a build, or reserved one.
+    Taken,
+    /// It freed an idle outside entry: the place is free once that cache is
+    /// dropped. The job waits.
+    Freeing,
+    /// A place is already on its way back (an outside entry, or the job's
+    /// own seed, is retiring). The job waits.
+    Waits,
+    /// No place is free or freeing: only a warm lease's return can make one.
+    Short,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -230,7 +256,7 @@ impl Core {
             // A stream for one seed must not pass a job waiting for another:
             // a non-empty queue takes every newcomer.
             if self.fifo.is_empty() && !self.window_short() {
-                if !self.place_outside(waiter, &mut out) {
+                if self.place_outside(waiter, &mut out) != Placed::Taken {
                     self.enqueue(waiter);
                 }
             } else {
@@ -242,7 +268,10 @@ impl Core {
     }
 
     /// A `lend_warm` request: granted only on a warm cache, never a build or
-    /// a wait (the brief's §4.4).
+    /// a wait (the brief's §4.4). An outside seed (the third) is lent only
+    /// while nothing waits for a place: no queued job, and no window seed
+    /// short of one. A lease there would hold the place they wait for, and a
+    /// stream of overlapping warm loans would hold it for ever.
     pub(crate) fn request_warm(&mut self, seed: Seedhash) -> Result<LeaseId, WarmRefused> {
         if self.closed {
             return Err(WarmRefused::Closed);
@@ -251,7 +280,7 @@ impl Core {
             && self
                 .entry(&seed)
                 .is_some_and(|entry| entry.state == EntryState::Resident)
-            && (self.in_window(&seed) || self.fifo.is_empty());
+            && (self.in_window(&seed) || (self.fifo.is_empty() && !self.window_short()));
         if !warm {
             return Err(WarmRefused::NotWarm);
         }
@@ -310,32 +339,48 @@ impl Core {
             }
         }
         // A queued job whose seed joined W leaves the queue: a window seed's
-        // job never waits for an outside place. A window job whose seed left
-        // W with nothing built is now an outside job without a place, and
-        // joins the queue in its arrival order.
+        // job never waits for an outside place.
         for at in 0..self.waiters.len() {
             let waiter = self.waiters[at];
-            let in_window = self.in_window(&waiter.seed);
-            match waiter.wait {
-                WaitFor::Fifo if in_window => {
-                    self.fifo.retain(|queued| *queued != waiter.ticket);
-                    self.waiters[at].wait = WaitFor::Seed;
-                }
-                WaitFor::Seed if !in_window && self.entry(&waiter.seed).is_none() => {
-                    self.waiters[at].wait = WaitFor::Fifo;
-                    self.insert_in_order(waiter.ticket, waiter.seq);
-                }
-                _ => {}
+            if waiter.wait == WaitFor::Fifo && self.in_window(&waiter.seed) {
+                self.fifo.retain(|queued| *queued != waiter.ticket);
+                self.waiters[at].wait = WaitFor::Seed;
             }
         }
+        self.requeue_unbacked();
         self.settle(&mut out);
         out
     }
 
-    /// Refuse new requests and stop scheduling builds. A build in progress
+    /// The shell dropped `seed`'s cache, which [`Decision::Free`] named:
+    /// its place is free.
+    ///
+    /// # Panics
+    ///
+    /// When `seed` is not retiring: the shell reports only what the core
+    /// freed, once.
+    pub(crate) fn retired(&mut self, seed: Seedhash) -> Vec<Decision> {
+        let at = self
+            .entries
+            .iter()
+            .position(|entry| entry.seed == seed && entry.state == EntryState::Retiring)
+            .expect("the shell reports the drop of a cache the core freed, once");
+        self.entries.remove(at);
+        self.requeue_unbacked();
+        let mut out = Vec::new();
+        self.settle(&mut out);
+        out
+    }
+
+    /// Refuse new requests and stop scheduling builds. Every request not
+    /// yet granted is dropped: its thread sees the close and returns
+    /// stopped, and no build that finishes later grants it. A lease already
+    /// granted stands, and the stop waits for it. A build in progress
     /// finishes; every cache goes once no lease holds it.
     pub(crate) fn close(&mut self) -> Vec<Decision> {
         self.closed = true;
+        self.waiters.clear();
+        self.fifo.clear();
         let mut out = Vec::new();
         self.settle(&mut out);
         out
@@ -389,10 +434,16 @@ impl Core {
         out
     }
 
-    /// Whether the hasher is stopping and no lease or waiter is left: a
-    /// stop may join the builder.
+    /// Whether the hasher is stopping, no lease or waiter is left, and every
+    /// freed cache has been dropped: a stop may join the builder.
     pub(crate) fn drained(&self) -> bool {
-        self.closed && self.leases.is_empty() && self.waiters.is_empty()
+        self.closed
+            && self.leases.is_empty()
+            && self.waiters.is_empty()
+            && self
+                .entries
+                .iter()
+                .all(|entry| entry.state != EntryState::Retiring)
     }
 
     /// Whether the hasher is stopping.
@@ -412,6 +463,7 @@ impl Core {
                         crate::Residency::Leased
                     }
                     EntryState::Resident => crate::Residency::Warm,
+                    EntryState::Retiring => crate::Residency::Retiring,
                 };
                 (entry.seed, residency)
             })
@@ -421,6 +473,10 @@ impl Core {
     // ----- inside -----------------------------------------------------------
 
     fn grant(&mut self, ticket: Ticket, seed: Seedhash, warm: bool, out: &mut Vec<Decision>) {
+        debug_assert!(
+            !self.closed,
+            "a grant after close: close drops every waiter"
+        );
         let lease = LeaseId(self.next());
         self.leases.push(Lease {
             id: lease,
@@ -438,6 +494,23 @@ impl Core {
         self.fifo.push_back(waiter.ticket);
     }
 
+    /// A job that waits for its seed's build, whose seed is not in W and
+    /// has no build or cache to wait for (its seed left W before anything
+    /// was built, or its cache is retiring), is an outside job without a
+    /// place: it joins the queue in its arrival order.
+    fn requeue_unbacked(&mut self) {
+        for at in 0..self.waiters.len() {
+            let waiter = self.waiters[at];
+            let backed = self
+                .entry(&waiter.seed)
+                .is_some_and(|entry| entry.state != EntryState::Retiring);
+            if waiter.wait == WaitFor::Seed && !self.in_window(&waiter.seed) && !backed {
+                self.waiters[at].wait = WaitFor::Fifo;
+                self.insert_in_order(waiter.ticket, waiter.seq);
+            }
+        }
+    }
+
     fn insert_in_order(&mut self, ticket: Ticket, seq: u64) {
         let at = self
             .fifo
@@ -453,10 +526,11 @@ impl Core {
     }
 
     /// Rule 2 without its first step: join the seed's entry, take a free
-    /// outside place, or free the lowest-ranked idle outside entry. `false`
-    /// when none of the three is open. A waiter not yet in `self.waiters`
+    /// outside place, or free the lowest-ranked idle outside entry, whose
+    /// place is free once its cache is dropped. A freed place is never
+    /// taken in the step that frees it. A waiter not yet in `self.waiters`
     /// is added when it must wait for a build.
-    fn place_outside(&mut self, waiter: Waiter, out: &mut Vec<Decision>) -> bool {
+    fn place_outside(&mut self, waiter: Waiter, out: &mut Vec<Decision>) -> Placed {
         let seed_wait = |core: &mut Self| {
             let mut waiter = waiter;
             waiter.wait = WaitFor::Seed;
@@ -469,22 +543,34 @@ impl Core {
             Some(EntryState::Resident) => {
                 self.waiters.retain(|w| w.ticket != waiter.ticket);
                 self.grant(waiter.ticket, waiter.seed, false, out);
-                return true;
+                return Placed::Taken;
             }
             Some(EntryState::Queued | EntryState::Deriving) => {
                 seed_wait(self);
-                return true;
+                return Placed::Taken;
             }
+            Some(EntryState::Retiring) => return Placed::Waits,
             None => {}
         }
-        if self.outside_count() >= self.outside_places()
-            && !self.free_one_outside(Some(waiter.class), out)
-        {
-            return false;
+        if self.outside_count() < self.outside_places() {
+            self.reserve(waiter.seed, out);
+            seed_wait(self);
+            return Placed::Taken;
         }
-        self.reserve(waiter.seed, out);
-        seed_wait(self);
-        true
+        if self.outside_retiring() {
+            return Placed::Waits;
+        }
+        if self.free_one_outside(Some(waiter.class), out) {
+            return Placed::Freeing;
+        }
+        Placed::Short
+    }
+
+    /// An outside entry is retiring: an outside place is on its way back.
+    fn outside_retiring(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.state == EntryState::Retiring && !self.in_window(&entry.seed))
     }
 
     /// Free the lowest-ranked idle outside entry: unlisted before the
@@ -508,11 +594,24 @@ impl Core {
         true
     }
 
+    /// A resident entry retires: its place stays taken until the shell
+    /// drops the cache. A reserved build that has not begun has no cache,
+    /// and goes at once.
     fn free(&mut self, seed: Seedhash, out: &mut Vec<Decision>) {
-        let state = self.entry(&seed).map(|entry| entry.state);
-        self.entries.retain(|entry| entry.seed != seed);
-        if state == Some(EntryState::Resident) {
-            out.push(Decision::Free { seed });
+        let Some(at) = self.entries.iter().position(|entry| entry.seed == seed) else {
+            return;
+        };
+        match self.entries[at].state {
+            EntryState::Resident => {
+                self.entries[at].state = EntryState::Retiring;
+                out.push(Decision::Free { seed });
+            }
+            EntryState::Queued => {
+                self.entries.remove(at);
+            }
+            EntryState::Deriving | EntryState::Retiring => {
+                unreachable!("only a resident entry or an unbegun build is freed")
+            }
         }
     }
 
@@ -590,14 +689,26 @@ impl Core {
 
     /// Bring the state to what the list and the jobs ask for, after every
     /// event (the brief's §4.3 and §4.6).
+    ///
+    /// # Panics
+    ///
+    /// When the passes run out with the last one still moving something.
+    /// Each pass changes an entry or the queue, and both are finite, so this
+    /// is a core fault; a silent return would leave a waiter that nothing
+    /// wakes.
     fn settle(&mut self, out: &mut Vec<Decision>) {
-        // Each pass either changes an entry or the queue, or stops; the
-        // entries, the queue and the waiters are finite.
-        for _ in 0..(CAP + self.fifo.len() + self.waiters.len() + 4) * 4 {
+        let bound = (CAP + self.fifo.len() + self.waiters.len() + 4) * 4;
+        let mut settled = false;
+        for _ in 0..bound {
             if !self.settle_once(out) {
+                settled = true;
                 break;
             }
         }
+        assert!(
+            settled,
+            "settle reaches a fixpoint: {bound} passes each moved something"
+        );
         if let Some(claim) = self.claim {
             if self.next_build() != Some(claim) && !self.builder_woken {
                 self.builder_woken = true;
@@ -635,7 +746,7 @@ impl Core {
                     let third_gives_way = !self.in_window(&entry.seed) && !self.fifo.is_empty();
                     !asked && (!listed || third_gives_way)
                 }
-                EntryState::Deriving => false,
+                EntryState::Deriving | EntryState::Retiring => false,
             })
             .map(|entry| entry.seed)
             .collect();
@@ -651,6 +762,8 @@ impl Core {
         //    were out), the lowest-ranked idle outside entry is freed; when
         //    none is idle, the build waits for the first outside lease to
         //    come back, and no outside job takes that place meanwhile.
+        //    A place that is retiring comes back when its cache is dropped,
+        //    and nothing else is freed meanwhile.
         let missing = self
             .window()
             .iter()
@@ -661,10 +774,16 @@ impl Core {
                 self.reserve(seed, out);
                 return true;
             }
-            if self.free_one_outside(None, out) {
-                return true;
+            let retiring = self
+                .entries
+                .iter()
+                .any(|entry| entry.state == EntryState::Retiring);
+            if !retiring {
+                if self.free_one_outside(None, out) {
+                    return true;
+                }
+                self.cancel_warm_outside(out);
             }
-            self.cancel_warm_outside(out);
         }
         // 3. The queue's head, judged by rule 2 without its first step.
         if !self.window_short() {
@@ -675,12 +794,18 @@ impl Core {
                     .copied()
                     .find(|waiter| waiter.ticket == head)
                     .expect("a queued ticket has its waiter");
-                if self.place_outside(waiter, out) {
-                    self.fifo.pop_front();
-                    return true;
+                match self.place_outside(waiter, out) {
+                    Placed::Taken => {
+                        self.fifo.pop_front();
+                        return true;
+                    }
+                    Placed::Freeing => return true,
+                    Placed::Waits => return false,
+                    Placed::Short => {
+                        self.cancel_warm_outside(out);
+                        return false;
+                    }
                 }
-                self.cancel_warm_outside(out);
-                return false;
             }
         }
         // 4. The third, once no job waits for a place (HA-R3).
