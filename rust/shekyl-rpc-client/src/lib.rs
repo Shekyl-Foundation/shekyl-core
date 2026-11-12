@@ -371,11 +371,17 @@ pub trait Rpc: Sync + Clone {
         M::Request: Send,
     {
         async move {
+            let params = serde_json::to_value(&request)
+                .map_err(|e| RpcError::InternalError(format!("{} params: {e}", M::NAME)))?;
+            let reply_shape = <M::Reply as shekyl_rpc_types::schema::Schema>::shape();
+            // The switches this request turned on: the reply carries the
+            // fields they select, and no field a switch left off (RW-Q4).
+            let on = shekyl_rpc_types::schema::switches_on(&params, &reply_shape);
             let body = serde_json::to_vec(&json!({
                 "jsonrpc": "2.0",
                 "id": 0,
                 "method": M::NAME,
-                "params": request,
+                "params": params,
             }))
             .map_err(|e| RpcError::InternalError(format!("{} params: {e}", M::NAME)))?;
             let reply = self.post(json_rpc_route(), body).await?;
@@ -392,9 +398,13 @@ pub trait Rpc: Sync + Clone {
             let mut envelope: serde_json::Map<String, Value> =
                 serde_json::from_slice(&reply).map_err(|e| unreadable(e.to_string()))?;
             match (envelope.remove("result"), envelope.remove("error")) {
-                (Some(result), None) => serde_json::from_value::<M::Reply>(result)
-                    .map(Ok)
-                    .map_err(|e| unreadable(e.to_string())),
+                (Some(result), None) => {
+                    shekyl_rpc_types::schema::asked_faults(&result, &reply_shape, &on)
+                        .map_err(&unreadable)?;
+                    serde_json::from_value::<M::Reply>(result)
+                        .map(Ok)
+                        .map_err(|e| unreadable(e.to_string()))
+                }
                 (None, Some(error)) => {
                     if shekyl_rpc_types::errors::is_method_not_found(&error) {
                         return Err(RpcError::NoSuchMethod(M::NAME));

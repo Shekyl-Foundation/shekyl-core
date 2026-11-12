@@ -178,14 +178,20 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
         }
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
-    // Network hash rate as difficulty per target second. `checked_div` for
-    // the same reason as everywhere else in this file: `T` is genesis-frozen
-    // and generated; a zero would be a build defect, not a daemon value.
-    let net_hash = info
-        .difficulty
-        .get()
-        .checked_div(u128::from(target))
-        .map_or_else(|| "unknown".to_owned(), mining_speed);
+    // Network hash rate as difficulty per target second, from the chain's
+    // part; a daemon that does not show it is "not disclosed", never a
+    // zero. `checked_div` for the same reason as everywhere else in this
+    // file: `T` is genesis-frozen and generated; a zero would be a build
+    // defect, not a daemon value.
+    let net_hash = info.difficulty.shown().map_or_else(
+        || "not disclosed".to_owned(),
+        |difficulty| {
+            difficulty
+                .get()
+                .checked_div(u128::from(target))
+                .map_or_else(|| "unknown".to_owned(), mining_speed)
+        },
+    );
     let mut line = format!(
         "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
          {connections}",

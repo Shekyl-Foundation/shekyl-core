@@ -1026,6 +1026,8 @@ impl RegtestDaemon {
             .0;
         status
             .txpool_count
+            .shown()
+            .expect("the harness is the host, and is told the pool part")
             .0
             .expect("the harness's pool is live")
             .0
@@ -1037,7 +1039,18 @@ impl RegtestDaemon {
     /// `daemon_status` reports them.
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let status = self.status().await;
-        (status.block_weight_median.0, status.block_weight_max.0)
+        (
+            status
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            status
+                .block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+        )
     }
 
     /// The block at `height`, whole.
@@ -1102,7 +1115,12 @@ impl RegtestDaemon {
     /// The emission e2e samples it once, at epoch close, and pins it to 0
     /// (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
-        self.status().await.burn_total.to_atomic_units()
+        self.status()
+            .await
+            .burn_total
+            .shown()
+            .expect("the chain part is shown")
+            .to_atomic_units()
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open

@@ -671,7 +671,19 @@ impl SyncDaemon {
         &self,
         request: &M::Request,
     ) -> Result<M::Reply, JsonRpcError> {
-        self.json_rpc(M::NAME, request)
+        let params = serde_json::to_value(request)
+            .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+        let reply_shape = <M::Reply as shekyl_rpc_types::schema::Schema>::shape();
+        // The switches this request turned on: the reply carries the fields
+        // they select, and no field a switch left off (RW-Q4).
+        let on = shekyl_rpc_types::schema::switches_on(&params, &reply_shape);
+        let result = self.json_rpc_result(M::NAME, &params)?;
+        shekyl_rpc_types::schema::asked_faults(&result, &reply_shape, &on).map_err(|why| {
+            JsonRpcError::Malformed(format!("malformed {} reply: {why}", M::NAME))
+        })?;
+        serde_json::from_value(result).map_err(|error| {
+            JsonRpcError::Malformed(format!("malformed {} reply: {error}", M::NAME))
+        })
     }
 
     /// One JSON-RPC call by name: the table's calls go through
@@ -686,6 +698,17 @@ impl SyncDaemon {
         Req: serde::Serialize,
         Reply: serde::de::DeserializeOwned,
     {
+        let result = self.json_rpc_result(method, request)?;
+        serde_json::from_value(result)
+            .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
+    }
+
+    /// One JSON-RPC call's `result`, undecoded.
+    fn json_rpc_result<Req: serde::Serialize>(
+        &self,
+        method: &str,
+        request: &Req,
+    ) -> Result<serde_json::Value, JsonRpcError> {
         let body = serde_json::to_vec(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 0,
@@ -707,11 +730,10 @@ impl SyncDaemon {
                 None => JsonRpcError::Malformed(format!("{method} failed")),
             });
         }
-        let result = envelope.get("result").cloned().ok_or_else(|| {
-            JsonRpcError::Malformed(format!("malformed {method} reply: no result"))
-        })?;
-        serde_json::from_value(result)
-            .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
+        envelope
+            .get("result")
+            .cloned()
+            .ok_or_else(|| JsonRpcError::Malformed(format!("malformed {method} reply: no result")))
     }
 }
 

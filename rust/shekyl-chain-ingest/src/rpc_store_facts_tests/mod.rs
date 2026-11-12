@@ -356,7 +356,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 m.height.to_raw()
             );
             assert_eq!(
-                header.pow.0,
+                header.pow.present(),
                 Some(HashHex::from_bytes(keccak_pow(&block.pow_blob(), &m.seed))),
                 "the recorded PoW is this block's own hash under its seed"
             );
@@ -369,7 +369,11 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             sum += m.target.difficulty().to_raw();
             let header = at_height(m.height, false).expect("in range");
             assert_eq!(header.difficulty_cumulative.0, sum);
-            assert_eq!(header.pow.0, None, "not requested, not filled");
+            assert_eq!(
+                header.pow,
+                shekyl_rpc_types::kinds::Asked::Unasked,
+                "not requested, not in the reply"
+            );
         }
 
         // By hash and at the tip, the same header.
@@ -483,7 +487,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         // The recorded hash is a store read.
         let paid =
             block_header_show(&facts, &select(Selector::Tip, true)).expect("the recorded hash");
-        assert!(paid.pow.0.is_some());
+        assert!(paid.pow.present().is_some());
         drop(facts);
         drop(store);
     })
@@ -543,23 +547,41 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
         assert!(info.synchronized);
         assert!(!info.degraded);
         assert_eq!(
-            info.tx_count.0, listed,
+            info.tx_count.shown().expect("the chain part is shown").0,
+            listed,
             "every listed body, coinbases excluded"
         );
         assert_eq!(
-            info.emission.to_atomic_units(),
+            info.emission
+                .shown()
+                .expect("the chain part is shown")
+                .to_atomic_units(),
             last.emission.coins_generated,
             "the accumulator through the tip"
         );
         // The scenario's fixed difficulty is the next block's too.
-        assert_eq!(info.difficulty.0, 1);
         assert_eq!(
-            info.block_weight_max.0,
-            2 * info.block_weight_median.0,
+            info.difficulty.shown().expect("the chain part is shown").0,
+            1
+        );
+        assert_eq!(
+            info.block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            2 * info
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
             "the limit is twice the effective median (CEN-G6b)"
         );
         assert_eq!(
-            info.txpool_count.0.map(|count| count.0),
+            info.txpool_count
+                .shown()
+                .expect("the pool part is shown")
+                .0
+                .map(|count| count.0),
             Some(3),
             "the pool's broadcast count is the node's"
         );
@@ -622,7 +644,7 @@ async fn an_alt_block_by_hash_is_described_by_its_own_row() {
         );
         assert_eq!(alt_header.difficulty.0, alt.target.difficulty().to_raw());
         assert_eq!(
-            alt_header.pow.0,
+            alt_header.pow.present(),
             Some(HashHex::from_bytes(keccak_pow(
                 &alt.template.block.pow_blob(),
                 &alt.seed

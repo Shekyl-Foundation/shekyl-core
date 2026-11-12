@@ -617,8 +617,8 @@ fn timestamps_render_as_the_cpp_did() {
 }
 
 /// Every line of `print_block_header`, in its order and wording. `reward`
-/// is SKL with nine fractional digits, `is orphan` is 0/1, an unfilled
-/// `pow` prints as nothing after the colon, and a long-term weight off the
+/// is SKL with nine fractional digits, `is orphan` is 0/1, a `pow` the
+/// request did not ask for prints as nothing after the colon, and a long-term weight off the
 /// main chain is `none`.
 #[test]
 fn the_block_header_renders_line_for_line() {
@@ -628,7 +628,7 @@ fn the_block_header_renders_line_for_line() {
         "height": 0, "depth": 0, "hash": "07".repeat(32),
         "difficulty": "0x1", "difficulty_cumulative": "0x1",
         "reward": "100000000000000", "weight": 6263, "weight_longterm": 176_470,
-        "tx_count": 0, "pow": null, "coinbase": "09".repeat(32),
+        "tx_count": 0, "coinbase": "09".repeat(32),
         "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
     }))
     .expect("a header decodes");
@@ -1012,7 +1012,7 @@ fn header_at(height: u64) -> serde_json::Value {
         "height": height, "depth": 0, "hash": hex::encode([u8::try_from(height % 256).unwrap(); 32]),
         "difficulty": "0x3e8", "difficulty_cumulative": "0x3e8",
         "reward": "600000000000", "weight": 100, "weight_longterm": 100,
-        "tx_count": 1, "pow": null, "coinbase": "00".repeat(32),
+        "tx_count": 1, "coinbase": "00".repeat(32),
         "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
     })
 }

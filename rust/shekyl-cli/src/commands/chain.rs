@@ -30,14 +30,20 @@ pub fn cmd_chain_health(daemon: Option<&DaemonClient>) -> CommandResult {
                 // as the height is.
                 "synchronized": status.synchronized,
                 "target_height": status.target_height.0.map(|tip| tip.0.saturating_add(1)),
-                // The whole 128-bit value, in the wire's own encoding:
-                // `0x` hex. A JSON number cannot hold it.
-                "wide_difficulty": status.difficulty,
-                "tx_count": status.tx_count.0,
                 // Whether the daemon runs P2P at all: its configuration,
                 // told to every caller (Rick, 2026-10-14).
                 "p2p": if status.offline { "offline" } else { "running" },
             });
+            // The chain's part: shown to a caller holding `chain`, and off the
+            // object otherwise, as the Status part below is. The difficulty
+            // is the whole 128-bit value in the wire's own encoding, `0x`
+            // hex: a JSON number cannot hold it.
+            if let (Some(difficulty), Some(tx_count)) =
+                (status.difficulty.shown(), status.tx_count.shown())
+            {
+                body["wide_difficulty"] = json!(difficulty);
+                body["tx_count"] = json!(tx_count.0);
+            }
             // Status is wholly shown or wholly absent, and a caller without
             // the `status` grant is not shown it. A withheld part is not a
             // zero, so the keys stay off the object and the line below says

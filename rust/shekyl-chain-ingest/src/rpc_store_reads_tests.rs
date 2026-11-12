@@ -766,8 +766,8 @@ async fn pow_hashes_under_the_caches_the_validator_holds() {
             )
             .unwrap_or_else(|_| panic!("in range"))
             .pow
-            .0
-            .expect("filled");
+            .present()
+            .expect("asked with pow");
             assert_eq!(
                 ask(m.height, &blob, None),
                 Ok(hex::encode(compute_hash(&held, &blob))),

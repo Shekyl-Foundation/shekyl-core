@@ -198,3 +198,57 @@ fn a_null_result_is_an_answer() {
     .expect("an answer");
     assert_eq!(ban.0, None);
 }
+
+/// A block header as a daemon writes it, with `pow` when `pow` is given.
+fn header(pow: Option<&str>) -> Value {
+    let mut header = json!({
+        "version_major": 3, "version_minor": 3, "time": 1_700_000_000,
+        "parent": "11".repeat(32), "nonce": 7, "orphan": false, "height": 9,
+        "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
+        "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
+        "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
+        "curve_root": "44".repeat(32), "attestation_root": "55".repeat(32),
+    });
+    if let Some(pow) = pow {
+        header["pow"] = json!(pow);
+    }
+    header
+}
+
+fn tip(pow: bool) -> shekyl_rpc_types::wire::block::HeaderSelect {
+    use shekyl_rpc_types::wire::block::{BlockSelect, HeaderSelect};
+    use shekyl_rpc_types::wire::shared::Selector;
+    HeaderSelect(BlockSelect {
+        select: Selector::Tip,
+        pow,
+        prune: None,
+    })
+}
+
+/// A reply carries the fields the request's switches selected and no
+/// other (RW-Q4, 4.1): `pow` asked for and missing, or present though not
+/// asked for, is the daemon answering a request this client did not send,
+/// refused before the decode. Red edit: skip `asked_faults` in the client.
+#[test]
+fn a_reply_holds_exactly_the_fields_the_request_selected() {
+    let call = |reply: Value, pow: bool| {
+        block_on(Canned::new(&result(&reply)).call_or_refusal::<wire::BlockHeaderShow>(tip(pow)))
+    };
+    let pow = "66".repeat(32);
+    assert!(matches!(call(header(Some(&pow)), true), Ok(Ok(_))));
+    assert!(matches!(call(header(None), false), Ok(Ok(_))));
+    for (reply, asked, why) in [
+        (header(None), true, "missing"),
+        (header(Some(&pow)), false, "present"),
+    ] {
+        match call(reply, asked) {
+            Err(RpcError::InvalidNode(message)) => {
+                assert!(
+                    message.contains("`pow`") && message.contains(why),
+                    "{message}"
+                );
+            }
+            other => panic!("pow {why} with the switch {asked}: {other:?}"),
+        }
+    }
+}

@@ -98,6 +98,14 @@ pub enum Shape {
         /// What it holds when shown.
         inner: Box<Shape>,
     },
+    /// A reply field present exactly when the request turned `switch` on,
+    /// and absent otherwise (`RPC_WIRE.md` RW-Q4, amended 2026-11-12).
+    Asked {
+        /// The request's switch that selects it.
+        switch: &'static str,
+        /// What it holds when selected.
+        inner: Box<Shape>,
+    },
     /// An object with no key: a method with no parameters, or a reply
     /// that says only that the call succeeded.
     Empty,
@@ -235,6 +243,7 @@ pub fn describe(shape: &Shape) -> String {
         }
         Shape::Either(item, slot) => format!("{}, or {}", describe(item), describe(slot)),
         Shape::Hidden { inner, .. } => describe(inner),
+        Shape::Asked { switch, inner } => format!("{}, when asked by {switch}", describe(inner)),
         Shape::Empty => "nothing".to_owned(),
         Shape::Null => "null".to_owned(),
     }
@@ -248,7 +257,8 @@ fn scalar_kind(shape: &Shape) -> Option<&'static str> {
         | Shape::Nullable(inner)
         | Shape::Optional(inner)
         | Shape::Either(inner, _)
-        | Shape::Hidden { inner, .. } => scalar_kind(inner),
+        | Shape::Hidden { inner, .. }
+        | Shape::Asked { inner, .. } => scalar_kind(inner),
         _ => None,
     }
 }
@@ -336,6 +346,7 @@ fn walk(w: &mut Walk<'_>, kind: NameKind, shown_to: Policy, shape: &Shape) {
             walk(w, kind, shown_to, inner);
         }
         Shape::Hidden { shown_to, inner } => walk(w, kind, *shown_to, inner),
+        Shape::Asked { inner, .. } => walk(w, kind, shown_to, inner),
         Shape::States(states) => {
             for (_, payload) in states {
                 if let Some(payload) = payload {
@@ -468,6 +479,13 @@ pub fn kind_faults(rows: &[crate::method::Row]) -> Vec<String> {
         if name.kind == NameKind::Method {
             continue;
         }
+        if !name.in_reply && matches!(name.shape, Shape::Asked { .. }) {
+            faults.push(format!(
+                "{}: `{}` (under `{}`) is selected by a switch in a request; only a reply's fields are selected (RW-Q4)",
+                name.method, name.name, name.holder
+            ));
+            continue;
+        }
         if name.in_reply && matches!(name.shape, Shape::Optional(_)) {
             faults.push(format!(
                 "{}: `{}` (under `{}`) is optional in a reply; a reply field is always present (RW-Q4)",
@@ -540,20 +558,46 @@ fn conforms_fields(
     object: &serde_json::Map<String, serde_json::Value>,
     fields: &[Field],
     seen: &mut Vec<&'static str>,
+    asked: Option<&[&str]>,
 ) -> Result<(), String> {
     for field in fields {
         seen.push(field.name);
         match (object.get(field.name), &field.shape) {
-            // A hidden field is absent to a caller it is not shown to, and
-            // an optional parameter may be left out.
-            (None, Shape::Hidden { .. } | Shape::Optional(_)) => {}
+            // A field selected by a switch the request turned on is
+            // required, and one it left off is absent (RW-Q4).
+            (None, Shape::Asked { switch, .. }) if is_on(asked, switch) => {
+                return Err(format!(
+                    "`{}` is missing: the request asked for it with `{switch}`",
+                    field.name
+                ));
+            }
+            (Some(_), Shape::Asked { switch, .. }) if is_off(asked, switch) => {
+                return Err(format!(
+                    "`{}` is present: the request did not ask for it with `{switch}`",
+                    field.name
+                ));
+            }
+            // A hidden field is absent to a caller it is not shown to, an
+            // optional parameter may be left out, and with no request to
+            // read, a selected field may be absent.
+            (None, Shape::Hidden { .. } | Shape::Optional(_) | Shape::Asked { .. }) => {}
             (None, _) => return Err(format!("`{}` is missing", field.name)),
             (Some(value), shape) => {
-                conforms(value, shape).map_err(|e| format!("`{}`: {e}", field.name))?;
+                conforms_in(value, shape, asked).map_err(|e| format!("`{}`: {e}", field.name))?;
             }
         }
     }
     Ok(())
+}
+
+/// Whether the request turned `switch` on; `false` with no request.
+fn is_on(asked: Option<&[&str]>, switch: &str) -> bool {
+    asked.is_some_and(|on| on.contains(&switch))
+}
+
+/// Whether the request left `switch` off; `false` with no request.
+fn is_off(asked: Option<&[&str]>, switch: &str) -> bool {
+    asked.is_some_and(|on| !on.contains(&switch))
 }
 
 /// How much of one alternative a document carries.
@@ -627,18 +671,46 @@ pub(crate) fn format_alternatives(groups: &[&[&str]]) -> String {
 ///
 /// The first place `value` departs from `shape`, as a path and a reason.
 pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> {
+    conforms_in(value, shape, None)
+}
+
+/// [`conforms`], against the switches a request turned on: a field the
+/// request selected must be present, and one it did not select must be
+/// absent (`RPC_WIRE.md` RW-Q4, amended 2026-11-12). `asked` names the
+/// switches that were on.
+///
+/// # Errors
+///
+/// The first place `value` departs from `shape` read for that request.
+pub fn conforms_asked(
+    value: &serde_json::Value,
+    shape: &Shape,
+    asked: &[&str],
+) -> Result<(), String> {
+    conforms_in(value, shape, Some(asked))
+}
+
+fn conforms_in(
+    value: &serde_json::Value,
+    shape: &Shape,
+    asked: Option<&[&str]>,
+) -> Result<(), String> {
     use serde_json::Value;
     match (shape, value) {
         (Shape::Scalar(kind), _) => conforms_scalar(kind, value),
         (Shape::OneOf(words), Value::String(text)) if words.contains(&text.as_str()) => Ok(()),
         (Shape::OneOf(words), _) => Err(format!("{value} is not one of {}", words.join("|"))),
         (Shape::Null | Shape::Nullable(_), Value::Null) => Ok(()),
-        (Shape::Nullable(inner) | Shape::Hidden { inner, .. } | Shape::Optional(inner), _) => {
-            conforms(value, inner)
-        }
+        (
+            Shape::Nullable(inner)
+            | Shape::Hidden { inner, .. }
+            | Shape::Optional(inner)
+            | Shape::Asked { inner, .. },
+            _,
+        ) => conforms_in(value, inner, asked),
         (Shape::List(inner), Value::Array(items)) => {
             for (index, item) in items.iter().enumerate() {
-                conforms(item, inner).map_err(|e| format!("[{index}]: {e}"))?;
+                conforms_in(item, inner, asked).map_err(|e| format!("[{index}]: {e}"))?;
             }
             Ok(())
         }
@@ -648,7 +720,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
                 if keys.is_some_and(|keys| !keys.contains(&key.as_str())) {
                     return Err(format!("`{key}` is not a key of this map"));
                 }
-                conforms(item, inner).map_err(|e| format!("`{key}`: {e}"))?;
+                conforms_in(item, inner, asked).map_err(|e| format!("`{key}`: {e}"))?;
             }
             Ok(())
         }
@@ -660,11 +732,14 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
             match (shape, payload) {
                 (None, Value::Null) => Ok(()),
                 (None, _) => Err(format!("`{key}` carries no payload")),
-                (Some(shape), _) => conforms(payload, shape).map_err(|e| format!("`{key}`: {e}")),
+                (Some(shape), _) => {
+                    conforms_in(payload, shape, asked).map_err(|e| format!("`{key}`: {e}"))
+                }
             }
         }
-        (Shape::Either(item, slot), _) => conforms(value, item).or_else(|first| {
-            conforms(value, slot).map_err(|second| format!("neither ({first}) nor ({second})"))
+        (Shape::Either(item, slot), _) => conforms_in(value, item, asked).or_else(|first| {
+            conforms_in(value, slot, asked)
+                .map_err(|second| format!("neither ({first}) nor ({second})"))
         }),
         (
             Shape::Object {
@@ -676,7 +751,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
             Value::Object(object),
         ) => {
             let mut seen = Vec::new();
-            conforms_fields(object, fields, &mut seen)?;
+            conforms_fields(object, fields, &mut seen, asked)?;
             if !choice.is_empty() {
                 let states: Vec<GroupPresence> = choice
                     .iter()
@@ -701,7 +776,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
                 };
                 for field in &choice[index] {
                     seen.push(field.name);
-                    conforms(&object[field.name], &field.shape)
+                    conforms_in(&object[field.name], &field.shape, asked)
                         .map_err(|e| format!("`{}`: {e}", field.name))?;
                 }
                 for group in choice {
@@ -721,7 +796,7 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
                 if present == 0 {
                     seen.extend(part.fields.iter().map(|field| field.name));
                 } else if present == part.fields.len() {
-                    conforms_fields(object, &part.fields, &mut seen)?;
+                    conforms_fields(object, &part.fields, &mut seen, asked)?;
                 } else {
                     return Err(format!(
                         "the part shown to {} is partly present",
@@ -742,13 +817,189 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
                 return Err(format!("`{name}` is not a {tag}"));
             };
             let mut seen = vec![*tag];
-            conforms_fields(object, fields, &mut seen)?;
+            conforms_fields(object, fields, &mut seen, asked)?;
             match object.keys().find(|key| !seen.contains(&key.as_str())) {
                 Some(key) => Err(format!("`{key}` is not a field of `{name}`")),
                 None => Ok(()),
             }
         }
         _ => Err(format!("{value} is not {}", describe(shape))),
+    }
+}
+
+/// The switches a request turned on that select fields of `reply`
+/// (RW-Q4): each [`Shape::Asked`] names a request switch, and it is on when
+/// the request carries it as `true`. A switch the request leaves out is
+/// off: every switch defaults off.
+#[must_use]
+pub fn switches_on(request: &serde_json::Value, reply: &Shape) -> Vec<&'static str> {
+    let mut on = switches(reply);
+    on.retain(|switch| request.get(*switch) == Some(&serde_json::Value::Bool(true)));
+    on
+}
+
+/// The switches a method's request takes that select fields of its
+/// `reply`: a field selected by a switch the request does not take is
+/// never in that method's reply (`block_list`'s headers carry no `pow`).
+#[must_use]
+pub fn request_switches(request: &Shape, reply: &Shape) -> Vec<&'static str> {
+    let taken: Vec<&'static str> = match request {
+        Shape::Object { fields, choice, .. } => fields
+            .iter()
+            .chain(choice.iter().flatten())
+            .map(|field| field.name)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut on = switches(reply);
+    on.retain(|switch| taken.contains(switch));
+    on
+}
+
+/// Every switch that selects a field of `reply`, sorted, each once.
+#[must_use]
+pub fn switches(reply: &Shape) -> Vec<&'static str> {
+    let mut switches = Vec::new();
+    collect_switches(reply, &mut switches);
+    switches.sort_unstable();
+    switches.dedup();
+    switches
+}
+
+fn collect_switches(shape: &Shape, out: &mut Vec<&'static str>) {
+    match shape {
+        Shape::Asked { switch, inner } => {
+            out.push(switch);
+            collect_switches(inner, out);
+        }
+        Shape::Object {
+            fields,
+            parts,
+            choice,
+            ..
+        } => {
+            for field in fields
+                .iter()
+                .chain(parts.iter().flat_map(|part| &part.fields))
+                .chain(choice.iter().flatten())
+            {
+                collect_switches(&field.shape, out);
+            }
+        }
+        Shape::Tagged { variants, .. } => {
+            for field in variants.iter().flat_map(|(_, fields)| fields) {
+                collect_switches(&field.shape, out);
+            }
+        }
+        Shape::List(inner)
+        | Shape::Nullable(inner)
+        | Shape::Optional(inner)
+        | Shape::Hidden { inner, .. }
+        | Shape::Map { value: inner, .. } => collect_switches(inner, out),
+        Shape::Either(item, slot) => {
+            collect_switches(item, out);
+            collect_switches(slot, out);
+        }
+        Shape::States(states) => {
+            for payload in states.iter().filter_map(|(_, payload)| payload.as_ref()) {
+                collect_switches(payload, out);
+            }
+        }
+        Shape::Scalar(_) | Shape::OneOf(_) | Shape::Null | Shape::Empty => {}
+    }
+}
+
+/// Whether every field of `value` that a switch selects is present exactly
+/// when `on` holds that switch (RW-Q4). Presence only: no scalar is read,
+/// so a client checks a large reply against its request without decoding
+/// it twice. [`conforms_asked`] is the full check.
+///
+/// # Errors
+///
+/// The first selected field present unasked, or asked and missing.
+pub fn asked_faults(value: &serde_json::Value, shape: &Shape, on: &[&str]) -> Result<(), String> {
+    use serde_json::Value;
+    match (shape, value) {
+        (
+            Shape::Object {
+                fields,
+                parts,
+                choice,
+                ..
+            },
+            Value::Object(object),
+        ) => {
+            for field in fields
+                .iter()
+                .chain(parts.iter().flat_map(|part| &part.fields))
+                .chain(choice.iter().flatten())
+            {
+                match (&field.shape, object.get(field.name)) {
+                    (Shape::Asked { switch, .. }, None) if on.contains(switch) => {
+                        return Err(format!(
+                            "`{}` is missing: the request asked for it with `{switch}`",
+                            field.name
+                        ));
+                    }
+                    (Shape::Asked { switch, .. }, Some(_)) if !on.contains(switch) => {
+                        return Err(format!(
+                            "`{}` is present: the request did not ask for it with `{switch}`",
+                            field.name
+                        ));
+                    }
+                    (shape, Some(value)) => asked_faults(value, shape, on)
+                        .map_err(|e| format!("`{}`: {e}", field.name))?,
+                    (_, None) => {}
+                }
+            }
+            Ok(())
+        }
+        (Shape::Tagged { tag, variants, .. }, Value::Object(object)) => {
+            let Some(Value::String(name)) = object.get(*tag) else {
+                return Ok(());
+            };
+            let fields = variants
+                .iter()
+                .find(|(variant, _)| variant == name)
+                .map_or(&[][..], |(_, fields)| fields.as_slice());
+            for field in fields {
+                if let Some(value) = object.get(field.name) {
+                    asked_faults(value, &field.shape, on)
+                        .map_err(|e| format!("`{}`: {e}", field.name))?;
+                }
+            }
+            Ok(())
+        }
+        (Shape::List(inner), Value::Array(items)) => {
+            for (index, item) in items.iter().enumerate() {
+                asked_faults(item, inner, on).map_err(|e| format!("[{index}]: {e}"))?;
+            }
+            Ok(())
+        }
+        (Shape::Map { value: inner, .. }, Value::Object(object)) => {
+            for (key, item) in object {
+                asked_faults(item, inner, on).map_err(|e| format!("`{key}`: {e}"))?;
+            }
+            Ok(())
+        }
+        (Shape::States(states), Value::Object(object)) => {
+            for (key, payload) in object {
+                if let Some((_, Some(shape))) = states.iter().find(|(state, _)| state == key) {
+                    asked_faults(payload, shape, on).map_err(|e| format!("`{key}`: {e}"))?;
+                }
+            }
+            Ok(())
+        }
+        (Shape::Either(item, slot), _) => asked_faults(value, item, on)
+            .or_else(|first| asked_faults(value, slot, on).map_err(|_| first)),
+        (
+            Shape::Nullable(inner)
+            | Shape::Optional(inner)
+            | Shape::Hidden { inner, .. }
+            | Shape::Asked { inner, .. },
+            _,
+        ) if !value.is_null() => asked_faults(value, inner, on),
+        _ => Ok(()),
     }
 }
 
@@ -762,6 +1013,10 @@ pub fn conforms(value: &serde_json::Value, shape: &Shape) -> Result<(), String> 
 /// - `[optional]` or `[optional "tx"]`: a request parameter that may be
 ///   left out. Its type is `Option<T>`, or `bool` with `#[serde(default)]`
 ///   for a switch that defaults off. Refused in a reply ([`kind_faults`]).
+/// - `[asked "switch"]`: a reply field present exactly when the request
+///   turned `switch` on (RW-Q4). Its type is [`Asked<T>`](crate::kinds::Asked),
+///   and it carries `#[serde(default, skip_serializing_if =
+///   "Asked::is_unasked")]`.
 /// - `[shown POLICY]`: the field is shown only to a caller that policy
 ///   admits. Its type is [`Withheld<T>`](crate::kinds::Withheld), and it
 ///   carries `#[serde(default, skip_serializing_if =
@@ -850,6 +1105,7 @@ macro_rules! wire_object {
     (@under) => { ::core::option::Option::None };
     (@under $under:literal) => { ::core::option::Option::Some($under) };
     (@under shown $policy:expr) => { ::core::option::Option::None };
+    (@under asked $switch:literal) => { ::core::option::Option::None };
     (@under optional) => { ::core::option::Option::None };
     (@under optional $under:literal) => { ::core::option::Option::Some($under) };
     (@shape $fty:ty;) => { <$fty as $crate::schema::Schema>::shape() };
@@ -858,6 +1114,14 @@ macro_rules! wire_object {
         $crate::schema::Shape::Optional(::std::boxed::Box::new(
             <$fty as $crate::kinds::OptionalShape>::inner_shape(),
         ))
+    };
+    (@shape $fty:ty; asked $switch:literal) => {
+        $crate::schema::Shape::Asked {
+            switch: $switch,
+            inner: ::std::boxed::Box::new(
+                <$fty as $crate::kinds::AskedShape>::inner_shape(),
+            ),
+        }
     };
     (@shape $fty:ty; shown $policy:expr) => {
         $crate::schema::Shape::Hidden {
