@@ -201,6 +201,14 @@ mod source {
                 .saturating_sub(self.0)
                 .saturating_mul(100)
         }
+
+        /// The unbiased units stored at this reading. The Windows clock
+        /// test reads them, so an origin that is an `Instant` does not
+        /// compile: an `Instant` has no unbiased units.
+        #[cfg(test)]
+        pub(super) fn units(&self) -> u64 {
+            self.0
+        }
     }
 
     /// The unbiased interrupt time, in 100 ns units.

@@ -50,20 +50,32 @@ fn an_awake_span_keeps_its_length_and_resolution() {
     );
 }
 
-/// **On Windows the clock is the unbiased interrupt time.** It moves with
-/// that count, read beside it, to within 1 ms over a 100 ms wait, so it is
-/// the count that leaves sleep and hibernation out, not `Instant`'s
-/// performance counter, which counts through them. Fails if the clock
-/// reads `Instant` on Windows.
+/// **On Windows the origin is an unbiased reading.** The test reads the
+/// units that reading stored. An origin of `Instant` has none, so this
+/// does not compile against that source.
+///
+/// The 100 ms comparison is the awake rate and the scale, not a suspend.
+/// This thread sleeping does not suspend the machine, so `Instant` and
+/// the unbiased counter advance together and the comparison alone would
+/// still pass if the clock read `Instant`. It fails if the clock stops
+/// tracking that counter, or drops the conversion from its 100 ns units.
+/// A suspend staying out of the clock is a real sleep (`TSR-M8`).
 #[cfg(windows)]
 #[test]
-fn on_windows_the_clock_is_the_unbiased_interrupt_time() {
+fn on_windows_the_origin_is_an_unbiased_reading() {
     let clock = MonotonicClock::new();
+    let origin = clock.origin.units();
     let counted = super::source::unbiased_interrupt_time();
+    assert!(
+        origin <= counted,
+        "the origin {origin} is ahead of the unbiased counter {counted}"
+    );
     let from = clock.now().get();
     std::thread::sleep(Duration::from_millis(100));
     let moved = clock.now().get() - from;
-    let count = (super::source::unbiased_interrupt_time() - counted) * 100;
+    let count = super::source::unbiased_interrupt_time()
+        .saturating_sub(counted)
+        .saturating_mul(100);
     assert!(
         moved.abs_diff(count) < 1_000_000,
         "the clock moved {moved} ns and the unbiased count {count} ns"
