@@ -10,8 +10,9 @@
 //! the sender holds it: 2008 carries references alone, and a 2014 server
 //! sends the bodies it holds. A bound body whose section names a body it
 //! did not carry is not offered. It waits here while the owner answers what
-//! this node's body store holds and asks the sender for the rest (2016,
-//! [`Command::RequestBundleBodies`]). When every reference has its body the
+//! this node's body store holds ([`Event::HeldBundleBodies`](crate::protocol::Event::HeldBundleBodies)) and asks the
+//! sender for the rest (2016, [`Command::RequestBundleBodies`]), whose 2017
+//! is [`Event::BundleBodies`](crate::protocol::Event::BundleBodies). When every reference has its body the
 //! arrival is held and offered like any other.
 //!
 //! **No verdict while waiting.** A block waiting on its bodies is never
@@ -28,19 +29,28 @@
 //! Each waiting entry pins one bound block body, so the memory the set can
 //! hold is [`AWAITING_TOTAL`] block bodies.
 //!
-//! **A bound holds back the new block; it never evicts a wait.** Every
-//! wait has an ask out, and the owner closes a session that has
-//! [`AWAITING_PER_SESSION`] asks unanswered when it is asked again. A wait
-//! dropped while its ask is still out would let this model ask that
-//! session once more than the owner allows, so one 2014 answer carrying
-//! five such blocks would close an honest server. Held back instead, a
-//! session's asks never outnumber its waits, and a wait is dropped with its
-//! ask unanswered only at [`AWAITING_AGE`]: the owner closes a session only
-//! for an ask it left that long. A span's lowest blocks, which connect
-//! first, keep their waits. A waiting block is not put in another body
-//! span while its bundle bodies are asked for, and a copy that carries
-//! them, announced while it waits, is held at once; the wait stays until
-//! its ask is answered, and its answer then offers nothing twice.
+//! **A bound holds back the new block; it never evicts a wait.** The owner
+//! closes a session that has [`AWAITING_PER_SESSION`] asks unanswered when
+//! it is asked again, so this model counts a session's asks itself, on the
+//! session's [`crate::peer::Peer`], apart from the waits. An ask is
+//! counted from its 2016 until the owner matches its 2017, whether or not
+//! the block still waits: another sender may have completed it, or the
+//! wait may have expired while a later sender's ask was young. It stops
+//! being counted early only when the owner sent no 2016 for it (the store
+//! held every body, or the session was gone), and stops counting toward
+//! the bound at [`AWAITING_AGE`], after which the owner may close the
+//! session for it. A session at the bound, in waits or in asks younger
+//! than that, is not asked again, so one 2014 answer carrying five such
+//! blocks never closes an honest server. A span's lowest blocks, which
+//! connect first, keep their waits. A waiting block is not put in another
+//! body span while its bundle bodies are asked for, and a copy that
+//! carries them, announced while it waits, is held at once; the wait stays
+//! until its ask is answered, and its answer then offers nothing twice.
+//!
+//! **The store's part is not an answer.** What this node's body store held
+//! completes a wait like any body, but it marks no sender as having sent
+//! one: an announcer whose 2016 the store's part did not cover is still
+//! silent until it answers.
 //!
 //! **Only a proven header waits.** A wait holds a [`BoundArrival`], whose
 //! header is a `HeaderJudged`: the validator's token for a header whose
@@ -155,6 +165,16 @@ impl Sender {
 /// The waiting blocks, by hash.
 pub(crate) type Awaiting<K> = BTreeMap<BlockHash, Waiting<K>>;
 
+/// One 2016 a session was sent and has not answered (module docs). Kept on
+/// the session's [`crate::peer::Peer`], so it goes when the session does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AskOut {
+    /// The block it asked for.
+    pub(crate) block: BlockHash,
+    /// When it was asked.
+    pub(crate) at: Instant,
+}
+
 /// The references of `body`'s section that no carried body answers, in
 /// section order and undecoded. A body answers a reference when it hashes
 /// to its prunable hash and is the reference's length (§7.5). Each carried
@@ -206,11 +226,9 @@ where
         }
         let block = arrival.header.hash();
         let session = arrival.session;
-        let of_session = self
-            .awaiting
-            .values()
-            .filter(|waiting| waiting.asked.contains_key(&session))
-            .count();
+        if self.at_ask_bound(session, now) {
+            return;
+        }
         let ask = Ask {
             sender: Sender::of(&arrival),
             at: now,
@@ -219,25 +237,18 @@ where
         if let Some(waiting) = self.awaiting.get_mut(&block) {
             // The wait may hold bodies this copy did not carry: ask for
             // what the wait still lacks.
-            if waiting.asked.contains_key(&session) || of_session >= AWAITING_PER_SESSION {
+            if waiting.asked.contains_key(&session) {
                 return;
             }
             waiting.asked.insert(session, ask);
-            out.push(Command::RequestBundleBodies {
-                session,
-                block,
-                references: unanswered(&waiting.arrival.body),
-            });
+            let references = unanswered(&waiting.arrival.body);
+            self.ask(session, block, references, now, out);
             return;
         }
-        if of_session >= AWAITING_PER_SESSION || self.awaiting.len() >= AWAITING_TOTAL {
+        if self.awaiting.len() >= AWAITING_TOTAL {
             return;
         }
-        out.push(Command::RequestBundleBodies {
-            session,
-            block,
-            references: missing,
-        });
+        self.ask(session, block, missing, now, out);
         self.awaiting.insert(
             block,
             Waiting {
@@ -248,11 +259,119 @@ where
         );
     }
 
-    /// Bodies for a waiting block (module docs). They complete it, and it is
-    /// held and offered; or they are part of what it waits for, and it keeps
-    /// waiting; or the session answered with nothing, and it is closed when
-    /// it announced the block. The wait is then the other senders', and is
-    /// dropped when there is none.
+    /// Whether `session` may not be asked for another block's bodies now:
+    /// it is in [`AWAITING_PER_SESSION`] waits, or has that many 2016s out
+    /// younger than [`AWAITING_AGE`]. An older ask stays until its answer
+    /// but no longer counts: the owner closes a session for an ask left
+    /// that long (module docs). A session this model does not hold is never
+    /// asked.
+    fn at_ask_bound(&self, session: K, now: Instant) -> bool {
+        let Some(peer) = self.peers.get(&session) else {
+            return true;
+        };
+        let waits = self
+            .awaiting
+            .values()
+            .filter(|waiting| waiting.asked.contains_key(&session))
+            .count();
+        let young = peer
+            .bundle_asks
+            .iter()
+            .filter(|ask| now.saturating_duration_since(ask.at) < AWAITING_AGE)
+            .count();
+        waits >= AWAITING_PER_SESSION || young >= AWAITING_PER_SESSION
+    }
+
+    /// Ask `session` for `block`'s bodies, and count the ask until it is
+    /// answered.
+    fn ask(
+        &mut self,
+        session: K,
+        block: BlockHash,
+        references: Vec<Vec<u8>>,
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.bundle_asks.push(AskOut { block, at: now });
+        }
+        out.push(Command::RequestBundleBodies {
+            session,
+            block,
+            references,
+        });
+    }
+
+    /// `session`'s ask for `block` is settled: its oldest, when its 2017
+    /// answered (the owner answers asks in the order it sent them), or its
+    /// newest, when the owner sent no 2016 for the command just issued.
+    /// Nothing when no such ask is counted.
+    fn settle_ask(&mut self, session: K, block: BlockHash, oldest: bool) {
+        let Some(peer) = self.peers.get_mut(&session) else {
+            return;
+        };
+        let asks = &mut peer.bundle_asks;
+        let found = if oldest {
+            asks.iter().position(|ask| ask.block == block)
+        } else {
+            asks.iter().rposition(|ask| ask.block == block)
+        };
+        if let Some(index) = found {
+            asks.remove(index);
+        }
+    }
+
+    /// What this node's body store held of a block's bodies, read when the
+    /// owner took the ask (module docs). Not the session's answer: it marks
+    /// no sender as having sent a body. When no 2016 went out, the session
+    /// was not asked after all, so its ask is settled and it leaves the
+    /// wait.
+    pub(crate) fn on_held_bundle_bodies(
+        &mut self,
+        session: K,
+        block: BlockHash,
+        bodies: Vec<Vec<u8>>,
+        asked: bool,
+        out: &mut Vec<Command<K>>,
+    ) {
+        if !asked {
+            self.settle_ask(session, block, false);
+        }
+        let Some(mut waiting) = self.awaiting.remove(&block) else {
+            return;
+        };
+        waiting.arrival.body.bundle_bodies.extend(bodies);
+        if unanswered(&waiting.arrival.body).is_empty() {
+            self.complete(block, waiting, out);
+            return;
+        }
+        if !asked {
+            waiting.asked.remove(&session);
+            if !waiting.pass_to_another_sender(session) {
+                return;
+            }
+        }
+        self.awaiting.insert(block, waiting);
+    }
+
+    /// Every reference of a waiting block has its body: hold it for the
+    /// entry and offer.
+    fn complete(&mut self, block: BlockHash, waiting: Waiting<K>, out: &mut Vec<Command<K>>) {
+        // A whole copy announced while this waited is already on its way
+        // to the entry, or through it.
+        if !self.accepted.contains(&block) && !self.outstanding.contains(block) {
+            self.held.insert(waiting.arrival);
+        }
+        self.flush_offers(out);
+    }
+
+    /// A session's 2017 for a waiting block (module docs). It settles that
+    /// session's ask whether or not the block still waits: another sender
+    /// may have completed it, or it may have expired. Its bodies complete
+    /// the block, and it is held and offered; or they are part of what it
+    /// waits for, and it keeps waiting; or the session answered with
+    /// nothing, and it is closed when it announced the block. The wait is
+    /// then the other senders', and is dropped when there is none.
     pub(crate) fn on_bundle_bodies(
         &mut self,
         session: K,
@@ -260,6 +379,7 @@ where
         bodies: Vec<Vec<u8>>,
         out: &mut Vec<Command<K>>,
     ) {
+        self.settle_ask(session, block, true);
         let Some(mut waiting) = self.awaiting.remove(&block) else {
             return;
         };
@@ -271,12 +391,7 @@ where
         ask.answered |= !answered_nothing;
         waiting.arrival.body.bundle_bodies.extend(bodies);
         if unanswered(&waiting.arrival.body).is_empty() {
-            // A whole copy announced while this waited is already on its
-            // way to the entry, or through it.
-            if !self.accepted.contains(&block) && !self.outstanding.contains(block) {
-                self.held.insert(waiting.arrival);
-            }
-            self.flush_offers(out);
+            self.complete(block, waiting, out);
             return;
         }
         if answered_nothing {

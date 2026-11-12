@@ -163,6 +163,42 @@ impl World {
         }
     }
 
+    /// A block on main's tip whose section names two bundles, for heights
+    /// 6 and 7: its body as sent (references only), its hash, and the two
+    /// bodies in section order.
+    fn block_with_two_bundles(&self, nonce: u32) -> (BlockBody, BlockHash, [BundleBody; 2]) {
+        let fixture = chain_of(8);
+        let mut block: Block = candidate_on(&fixture, Vec::new()).block;
+        let top = self.records.last().expect("eight");
+        block.header.previous = top.hash;
+        block.header.timestamp = top.header.timestamp.saturating_add(120);
+        block.header.nonce = nonce;
+        let bundle_at = |h: u64| {
+            BundleWorld::with(
+                BlockHeight::from_raw(h),
+                BundleWorld::SEED,
+                0,
+                &fixed(1, 64),
+            )
+            .bundle(&[])
+        };
+        let (low_ref, low) = bundle_at(6);
+        let (high_ref, high) = bundle_at(7);
+        let references = [low_ref, high_ref];
+        let root = section_root(&references).expect("two references");
+        block.header.section_root = SectionRoot::from_bytes(root);
+        let hash = PowBlob::read(&block.pow_blob())
+            .expect("preimage")
+            .identity();
+        let body = BlockBody {
+            block: serialized(&block),
+            txs: Vec::new(),
+            bundle_references: references.iter().map(BundleRef::encode).collect(),
+            bundle_bodies: Vec::new(),
+        };
+        (body, hash, [low, high])
+    }
+
     /// Open `session` beside session 1, with the same claim to main.
     fn open(&mut self, session: u8) {
         let mut out = self.drive(
@@ -191,12 +227,23 @@ impl World {
 
     /// Announce `announced` from session 1 and stop at its proof job.
     fn announce_unproven(&mut self, announced: &Announced) -> (crate::model::Job, ProveItem) {
+        self.announce_unproven_by(1, announced, Duration::ZERO)
+    }
+
+    /// Announce `announced` from `session` at `after` and stop at its
+    /// proof job.
+    fn announce_unproven_by(
+        &mut self,
+        session: u8,
+        announced: &Announced,
+        after: Duration,
+    ) -> (crate::model::Job, ProveItem) {
         let out = self.drive(
             Event::Announce {
-                session: 1,
+                session,
                 body: announced.body.clone(),
             },
-            Duration::ZERO,
+            after,
         );
         assert!(asked(&out).is_empty(), "nothing is asked before the proof");
         out.iter()
@@ -215,7 +262,18 @@ impl World {
     /// Announce `announced` from session 1 and prove it: the commands the
     /// proof's landing emitted.
     fn announce(&mut self, announced: &Announced) -> Vec<Command<u8>> {
-        let (job, item) = self.announce_unproven(announced);
+        self.announce_by(1, announced, Duration::ZERO)
+    }
+
+    /// Announce `announced` from `session` at `after` and prove it: the
+    /// commands the proof's landing emitted.
+    fn announce_by(
+        &mut self,
+        session: u8,
+        announced: &Announced,
+        after: Duration,
+    ) -> Vec<Command<u8>> {
+        let (job, item) = self.announce_unproven_by(session, announced, after);
         let pow = PowBlob::read(&item.pow).expect("preimage");
         let formed = form_header(
             &pow,
@@ -232,7 +290,7 @@ impl World {
                 job,
                 results: vec![Proved::Formed(Box::new(formed))],
             },
-            Duration::ZERO,
+            after,
         )
     }
 }
@@ -709,5 +767,197 @@ fn a_withholders_empty_answer_leaves_the_wait_to_the_other_sender() {
         sessions,
         vec![2],
         "offered as the remaining sender's: {out:?}"
+    );
+}
+
+/// Copilot's case on #1327. Session 1 has [`AWAITING_PER_SESSION`] asks
+/// out, and session 2 completes one of those blocks. The wait ends, but
+/// session 1's 2016 for it is still unanswered, and the owner counts it.
+/// Asked once more, the owner would close session 1 before any of its asks
+/// is [`AWAITING_AGE`] old. Its late answer then frees the slot. Red edit:
+/// count a session's asks by the waits it is in, so the next block is
+/// asked for.
+#[test]
+fn an_ask_another_sender_answered_still_counts_until_its_own_answer() {
+    let mut world = World::new();
+    world.open(2);
+    let blocks: Vec<Announced> = (0..=AWAITING_PER_SESSION)
+        .map(|n| world.block_with_section(800 + u32::try_from(n).expect("small")))
+        .collect();
+    let (within, past) = blocks.split_at(AWAITING_PER_SESSION);
+    for block in within {
+        assert_eq!(asked(&world.announce(block)).len(), 1);
+    }
+    let shared = &within[0];
+    world.drive(
+        Event::Announce {
+            session: 2,
+            body: shared.body.clone(),
+        },
+        Duration::from_secs(1),
+    );
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 2,
+            block: shared.hash,
+            bodies: vec![shared.bundle.as_bytes().to_vec()],
+        },
+        Duration::from_secs(2),
+    );
+    assert!(closed(&out).is_empty());
+    assert!(
+        !world.sync.awaiting.contains_key(&shared.hash),
+        "session 2 completed the wait"
+    );
+    let out = world.announce(&past[0]);
+    assert!(
+        asked(&out).is_empty(),
+        "session 1's four 2016s are all unanswered: {out:?}"
+    );
+    let out = world.drive(
+        Event::BundleBodies {
+            session: 1,
+            block: shared.hash,
+            bodies: vec![shared.bundle.as_bytes().to_vec()],
+        },
+        Duration::from_secs(3),
+    );
+    assert!(offered(&out).is_empty(), "the late answer offers nothing");
+    assert!(closed(&out).is_empty());
+    let next = world.block_with_section(900);
+    assert_eq!(
+        asked(&world.announce(&next)),
+        vec![(1, next.hash, 1)],
+        "the answer freed a slot"
+    );
+}
+
+/// A wait ends at its own age, which a later sender's ask has not
+/// reached. That ask is still the owner's to match, so it still counts:
+/// the sender is not asked again until the ask is [`AWAITING_AGE`] old.
+/// After that the owner's bound is the one that closes. Red edit: count a
+/// session's asks by the waits it is in, so an expired wait frees a slot
+/// its young ask still holds.
+#[test]
+fn an_expired_wait_keeps_a_young_ask_counted() {
+    let mut world = World::new();
+    world.open(2);
+    let first = world.block_with_section(1000);
+    world.announce(&first);
+    let joined = Duration::from_secs(20);
+    let out = world.drive(
+        Event::Announce {
+            session: 2,
+            body: first.body.clone(),
+        },
+        joined,
+    );
+    assert_eq!(asked(&out), vec![(2, first.hash, 1)]);
+    for n in 1..AWAITING_PER_SESSION {
+        let block = world.block_with_section(1000 + u32::try_from(n).expect("small"));
+        world.announce(&block);
+        let out = world.drive(
+            Event::Announce {
+                session: 2,
+                body: block.body.clone(),
+            },
+            joined,
+        );
+        assert_eq!(asked(&out), vec![(2, block.hash, 1)]);
+        let out = world.drive(
+            Event::BundleBodies {
+                session: 1,
+                block: block.hash,
+                bodies: vec![block.bundle.as_bytes().to_vec()],
+            },
+            joined,
+        );
+        assert!(closed(&out).is_empty());
+        assert!(!world.sync.awaiting.contains_key(&block.hash));
+    }
+    let expired = world.drive(Event::Room { seats: 4 }, AWAITING_AGE);
+    assert!(!world.sync.awaiting.contains_key(&first.hash));
+    assert_eq!(
+        closed(&expired),
+        vec![(1, &CloseCause::BundleBodiesWithheld)]
+    );
+    let late = world.block_with_section(1100);
+    let out = world.announce_by(2, &late, AWAITING_AGE + Duration::from_secs(1));
+    assert!(
+        asked(&out).is_empty(),
+        "session 2's four asks are younger than the age: {out:?}"
+    );
+    let aged = joined + AWAITING_AGE;
+    world.drive(Event::Room { seats: 4 }, aged);
+    let again = world.block_with_section(1101);
+    assert_eq!(
+        asked(&world.announce_by(2, &again, aged)),
+        vec![(2, again.hash, 1)],
+        "at the age the owner's bound decides"
+    );
+}
+
+/// The store held one of a block's two bodies, and the other went to the
+/// announcer as a 2016. The store's part is not the announcer's answer:
+/// silent until [`AWAITING_AGE`], the announcer is closed as a withholder.
+/// Red edit: take the store's bodies as the asked session's answer, so the
+/// silent announcer is marked answered and stays.
+#[test]
+fn bodies_the_store_held_are_not_the_announcers_answer() {
+    let mut world = World::new();
+    let (body, hash, [low, _high]) = world.block_with_two_bundles(1200);
+    let out = world.announce(&Announced {
+        body,
+        hash,
+        bundle: low.clone(),
+    });
+    assert_eq!(asked(&out), vec![(1, hash, 2)]);
+    let out = world.drive(
+        Event::HeldBundleBodies {
+            session: 1,
+            block: hash,
+            bodies: vec![low.as_bytes().to_vec()],
+            asked: true,
+        },
+        Duration::from_secs(1),
+    );
+    assert!(closed(&out).is_empty());
+    assert!(
+        world.sync.awaiting.contains_key(&hash),
+        "one body is still asked for"
+    );
+    let out = world.drive(Event::Room { seats: 4 }, AWAITING_AGE);
+    assert_eq!(closed(&out), vec![(1, &CloseCause::BundleBodiesWithheld)]);
+}
+
+/// The store held every body a block names, so the owner sent no 2016:
+/// the block is complete and the ask it would have been is settled, so it
+/// does not hold a slot. Red edit: settle no ask on the store's answer —
+/// a session at its bound is not asked for the next block.
+#[test]
+fn a_block_the_store_completed_frees_its_ask() {
+    let mut world = World::new();
+    let blocks: Vec<Announced> = (0..=AWAITING_PER_SESSION)
+        .map(|n| world.block_with_section(1300 + u32::try_from(n).expect("small")))
+        .collect();
+    let (within, past) = blocks.split_at(AWAITING_PER_SESSION);
+    for block in within {
+        assert_eq!(asked(&world.announce(block)).len(), 1);
+    }
+    let out = world.drive(
+        Event::HeldBundleBodies {
+            session: 1,
+            block: within[0].hash,
+            bodies: vec![within[0].bundle.as_bytes().to_vec()],
+            asked: false,
+        },
+        Duration::ZERO,
+    );
+    assert!(closed(&out).is_empty());
+    assert!(!world.sync.awaiting.contains_key(&within[0].hash));
+    assert_eq!(
+        asked(&world.announce(&past[0])),
+        vec![(1, past[0].hash, 1)],
+        "the store's answer left a slot free"
     );
 }

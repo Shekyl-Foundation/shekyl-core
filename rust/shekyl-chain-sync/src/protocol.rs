@@ -102,18 +102,32 @@ pub enum Event<K> {
         /// The block, its transactions, and its bundle references.
         body: BlockBody,
     },
-    /// Bundle bodies for a block awaiting them
-    /// ([`Command::RequestBundleBodies`]): what this node's body store held,
-    /// or a session's 2017 answer, each already held to the reference it
-    /// answers (length and hash, §7.5). Empty when the session answered
-    /// with nothing.
+    /// A session's 2017: its answer to a 2016 the owner sent it for a block
+    /// awaiting bundle bodies ([`Command::RequestBundleBodies`]). Each body
+    /// is already held to the reference it answers (length and hash, §7.5).
+    /// Empty when the session answered with nothing.
     BundleBodies {
-        /// The session the bodies were asked of.
+        /// The session that answered.
         session: K,
         /// The block awaiting them.
         block: BlockHash,
         /// The bodies, encoded.
         bodies: Vec<Vec<u8>>,
+    },
+    /// What this node's body store held of a
+    /// [`Command::RequestBundleBodies`], read when the owner took it. Not
+    /// the session's answer: that is [`Event::BundleBodies`], and follows
+    /// only when `asked`.
+    HeldBundleBodies {
+        /// The session the command named.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies the store held, encoded. May be empty.
+        bodies: Vec<Vec<u8>>,
+        /// Whether the rest went to `session` as a 2016. `false` when the
+        /// store held every body, or the session was gone.
+        asked: bool,
     },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
@@ -275,8 +289,9 @@ pub enum Command<K> {
         from: Option<K>,
     },
     /// A block's section names bundle bodies this node was not sent (2016).
-    /// The owner answers what its body store holds and asks `session` for
-    /// the rest; either comes back as [`Event::BundleBodies`].
+    /// The owner answers what its body store holds
+    /// ([`Event::HeldBundleBodies`]) and asks `session` for the rest, whose
+    /// answer is [`Event::BundleBodies`].
     RequestBundleBodies {
         /// The session that sent the block.
         session: K,

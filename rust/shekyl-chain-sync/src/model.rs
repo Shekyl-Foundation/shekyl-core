@@ -576,6 +576,12 @@ where
                 block,
                 bodies,
             } => self.on_bundle_bodies(session, block, bodies, out),
+            Event::HeldBundleBodies {
+                session,
+                block,
+                bodies,
+                asked,
+            } => self.on_held_bundle_bodies(session, block, bodies, asked, out),
         }
         self.settle_opening();
         let after = self.state();

@@ -1039,21 +1039,23 @@ where
 
     /// A block's section names bodies its sender did not send (the model's
     /// `RequestBundleBodies`). What this node's body store holds is
-    /// returned, for the model after the batch; the rest is asked of
-    /// `session` (2016), one block per request.
+    /// returned, for the model after the batch, with whether the rest was
+    /// asked of `session` (2016, one block per request). The model reads
+    /// the store's part as the store's, never as the session's answer, and
+    /// counts the ask until that answer or until no 2016 went out.
     ///
     /// **The asks a session may leave unanswered are bounded**, at the
     /// model's own per-session bound ([`shekyl_chain_sync::AWAITING_PER_SESSION`]).
     /// A session answers every 2016, if only with nothing (`SCS-P27`), and
     /// the transport keeps its answers in order, so matching a 2017 to the
-    /// oldest ask is sound. The model holds a block back rather than evict a
-    /// wait whose ask is out, so it asks a session past the bound only after
-    /// one of its asks has gone unanswered for
-    /// [`shekyl_chain_sync::AWAITING_AGE`]. A session that already has that
-    /// many asks unanswered is then not keeping up its side and is closed;
-    /// dropping one ask instead would match its next answer to the wrong
-    /// block. Over every session the asks are at most that bound times the
-    /// sessions open.
+    /// oldest ask is sound. The model counts each ask until this owner
+    /// matches its 2017, whether or not the block still waits, so it asks a
+    /// session past the bound only after one of its asks has gone
+    /// unanswered for [`shekyl_chain_sync::AWAITING_AGE`]. A session that
+    /// already has that many asks unanswered is then not keeping up its
+    /// side and is closed; dropping one ask instead would match its next
+    /// answer to the wrong block. Over every session the asks are at most
+    /// that bound times the sessions open.
     fn ask_bundle_bodies(
         &mut self,
         session: Session,
@@ -1061,7 +1063,7 @@ where
         references: &[Vec<u8>],
     ) -> Option<Event<Session>> {
         let mut held = Vec::new();
-        let mut asked = Vec::new();
+        let mut rest = Vec::new();
         let snapshot = self.store.begin_read();
         for (position, bytes) in references.iter().enumerate() {
             let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
@@ -1073,26 +1075,45 @@ where
                 .and_then(|snap| snap.bundle_body(reference.prunable_hash()).ok().flatten());
             match stored {
                 Some(body) => held.push(body.as_bytes().to_vec()),
-                None => asked.push(reference),
+                None => rest.push(reference),
             }
         }
         drop(snapshot);
-        let answered = (!held.is_empty()).then_some(Event::BundleBodies {
+        let asked = !rest.is_empty() && self.send_bundle_ask(session, block, rest);
+        // Asked with nothing held, the session's 2017 is all the model
+        // hears of this command.
+        if asked && held.is_empty() {
+            return None;
+        }
+        Some(Event::HeldBundleBodies {
             session,
             block,
             bodies: held,
-        });
-        if asked.is_empty() || !self.sessions.contains_key(&session) {
-            return answered;
+            asked,
+        })
+    }
+
+    /// Send `session` a 2016 for `references`, `block`'s bodies the store
+    /// does not hold, and queue it for its 2017. `false` when no 2016 went
+    /// out: the session is gone, or is closed at the bound
+    /// ([`Self::ask_bundle_bodies`]).
+    fn send_bundle_ask(
+        &mut self,
+        session: Session,
+        block: BlockHash,
+        references: Vec<shekyl_archival_retention::BundleRef>,
+    ) -> bool {
+        if !self.sessions.contains_key(&session) {
+            return false;
         }
         let outstanding = self.bundle_asks.get(&session).map_or(0, VecDeque::len);
         if outstanding >= shekyl_chain_sync::AWAITING_PER_SESSION {
             tracing::debug!(%session, outstanding, "a session left its bundle body requests unanswered");
             self.close(session);
-            return answered;
+            return false;
         }
         let request = RequestBundleBodies {
-            hashes: asked
+            hashes: references
                 .iter()
                 .map(|reference| *reference.prunable_hash())
                 .collect(),
@@ -1101,11 +1122,8 @@ where
         self.bundle_asks
             .entry(session)
             .or_default()
-            .push_back(BundleAsk {
-                block,
-                references: asked,
-            });
-        answered
+            .push_back(BundleAsk { block, references });
+        true
     }
 
     /// A session's 2017. It answers the oldest 2016 this owner sent it; a
