@@ -32,11 +32,14 @@ fn list(window: &[u8], third: Option<(u8, Class)>) -> Ranked {
 /// core queues, in its order.
 fn build_all(core: &mut Core) -> Vec<Decision> {
     let mut out = Vec::new();
-    while let Some(claimed) = core.claim() {
+    for _ in 0..=4 * CAP {
+        let Some(claimed) = core.claim() else {
+            return out;
+        };
         assert!(core.begin(claimed), "an uncontested claim begins");
         out.extend(core.built(claimed.0));
     }
-    out
+    panic!("more builds than places: the core keeps rebuilding what it frees");
 }
 
 fn entries(core: &Core) -> BTreeSet<[u8; 32]> {
@@ -140,6 +143,10 @@ fn two_outside_jobs_while_the_window_names_two_seeds_free_no_window_seed() {
     assert_eq!(entries(&core), seeds(&[1, 2, 10]));
 }
 
+/// The list grows while outside leases hold every place. The window seed
+/// waits for the first lease back, and meanwhile no outside job takes or
+/// joins a place, even on a seed that is resident: a stream of joins would
+/// hold the place the window waits for.
 #[test]
 fn a_list_that_grows_while_outside_leases_are_out_holds_the_place_for_the_window() {
     let mut core = Core::default();
@@ -152,19 +159,21 @@ fn a_list_that_grows_while_outside_leases_are_out_holds_the_place_for_the_window
         core.window_short(),
         "three places held, the new window seed waits"
     );
-    let z = request(&mut core, 12, Class::Chain);
+    let joiner = request(&mut core, 11, Class::HeaderPow);
     build_all(&mut core);
-    assert_eq!(core.take_grant(z), None);
+    assert_eq!(
+        core.take_grant(joiner),
+        None,
+        "no outside job joins a resident seed while the window waits"
+    );
     core.returned(x);
     assert!(
-        core.entry(&s(2)).is_some() && core.entry(&s(12)).is_none(),
-        "the first return goes to the window seed, not the outside job"
+        core.entry(&s(2)).is_some(),
+        "the first return goes to the window seed"
     );
     build_all(&mut core);
-    assert_eq!(core.take_grant(z), None, "z still waits for y");
+    assert!(core.take_grant(joiner).is_some(), "then the queue moves");
     core.returned(y);
-    build_all(&mut core);
-    assert!(core.take_grant(z).is_some());
 }
 
 /// HA-R3 and §5.4: evidence pushes out the warm third, and the third's
@@ -209,7 +218,7 @@ fn a_refill_whose_class_rises_wakes_the_builder_and_is_claimed_at_the_new_class(
 #[test]
 fn warm_only_declines_an_unlisted_a_building_or_a_contested_third_seed() {
     let mut core = Core::default();
-    core.rank(list(&[1, 2], Some((3, Class::HeaderPow))));
+    core.rank(list(&[1], Some((3, Class::HeaderPow))));
     assert_eq!(
         core.request_warm(s(1)),
         Err(WarmRefused::NotWarm),
@@ -222,13 +231,22 @@ fn warm_only_declines_an_unlisted_a_building_or_a_contested_third_seed() {
         Err(WarmRefused::NotWarm),
         "unlisted"
     );
+    assert!(
+        core.request_warm(s(3)).is_ok(),
+        "the warm third, with no job queued"
+    );
+    // A job holds the third and another the second outside place, so a
+    // third job queues for a place.
+    let third = granted(&mut core, 3, Class::HeaderPow);
     let x = granted(&mut core, 10, Class::HeaderPow);
-    let _waiting = request(&mut core, 11, Class::Evidence);
+    let _queued = request(&mut core, 11, Class::Evidence);
+    assert!(!core.fifo.is_empty(), "a job queues");
     assert_eq!(
         core.request_warm(s(3)),
         Err(WarmRefused::NotWarm),
         "the third while a job waits for a place"
     );
+    core.returned(third);
     core.returned(x);
 }
 
