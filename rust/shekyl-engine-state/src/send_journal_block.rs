@@ -60,7 +60,12 @@ use shekyl_types::BlockHeight;
 /// address string with [`SendDestination`], so a `stake_in` row records
 /// that it funded this wallet's own persona; a persona has no address.
 /// Strict-equality gating, pre-genesis, no migration.
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 5;
+/// Version `6` (2026-11-12, A19): [`SendRecord::tx_bytes`] — the signed,
+/// network-exposed bytes, saved with the row at dispatch so a send whose
+/// verdict a restart crossed can still be resent, by the user's decision
+/// (`DAEMON_SUBMIT_VERDICT.md` §5.3). Strict-equality gating, pre-genesis,
+/// no migration.
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 6;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
 /// `global_output_index`: for each, a transaction spending it is already
@@ -323,6 +328,22 @@ pub struct SendRecord {
     pub lock_baseline: Option<u64>,
     /// Lifecycle state.
     pub state: SendState,
+    /// The signed transaction exactly as it left for the daemon, kept so
+    /// the same bytes can be offered again: automatically within the
+    /// session that dispatched them (the watchdog's resubmit-same-bytes
+    /// probe), and only on the user's decision after a restart
+    /// (`resend_held_send`; `DAEMON_SUBMIT_VERDICT.md` §5.3).
+    ///
+    /// `Some` from dispatch while the send can still need them; `None`
+    /// once the row has settled ([`SendJournalBlock::prune_settled_tx_bytes`])
+    /// or the daemon refused it terminally. Deliberately not a load-time
+    /// invariant: a `PresumedDead` row abandoned afterwards, or a reorg
+    /// deeper than the margin, can leave a row that locks without bytes,
+    /// and refusing to open the wallet over it would be worse than the
+    /// watchdog's named alarm for it. The bytes are public once relayed;
+    /// they sit in the sealed wallet file beside the tx secret, which is
+    /// the more sensitive of the two.
+    pub tx_bytes: Option<Vec<u8>>,
 }
 
 impl SendRecord {
@@ -390,6 +411,8 @@ impl SendJournalBlock {
     /// leave for the daemon). `change_amount` is the exact remainder
     /// `Σ inputs − Σ recipients − fee`; a wallet-built send that does
     /// not balance is a build-path defect, not a runtime condition.
+    /// `tx_bytes` are the signed bytes about to leave
+    /// ([`SendRecord::tx_bytes`]).
     pub fn record_dispatched(
         &mut self,
         txid: [u8; 32],
@@ -397,6 +420,7 @@ impl SendJournalBlock {
         fee: u64,
         recipients: Vec<SendRecipient>,
         inputs: Vec<SendInputRef>,
+        tx_bytes: Vec<u8>,
     ) {
         let sent =
             sum_recipient_amounts(&recipients).expect("recipient amounts sum without overflow");
@@ -419,8 +443,76 @@ impl SendJournalBlock {
                 inputs,
                 lock_baseline: None,
                 state: SendState::Dispatched,
+                tx_bytes: Some(tx_bytes),
             },
         );
+    }
+
+    /// The saved bytes of the send `txid`, while it still holds them.
+    #[must_use]
+    pub fn tx_bytes(&self, txid: &[u8; 32]) -> Option<&[u8]> {
+        self.rows.get(txid)?.tx_bytes.as_deref()
+    }
+
+    /// Place the F14 lock on every `Dispatched` row that has none: a
+    /// dispatch whose verdict was never recorded, because the process
+    /// ended between the dispatch save and the verdict (a crash, a kill,
+    /// or an ambiguous verdict nobody resolved before close).
+    ///
+    /// Called once when the wallet opens, before anything can submit, so
+    /// no row stamped here is in flight in this session. The bytes may
+    /// already be on the network, so the inputs are locked as an accept
+    /// would have locked them (§2.6 fund safety first: no selectable
+    /// window for a same-key-image second spend, §7.1), baselined at the
+    /// row's own dispatch height. The watchdog then sees the row as held
+    /// and, because it was dispatched before this session, asks the user
+    /// rather than resending (§5.3). Returns the number of rows stamped.
+    pub fn lock_unverdicted_dispatches(&mut self) -> usize {
+        let mut stamped = 0;
+        for row in self.rows.values_mut() {
+            if matches!(row.state, SendState::Dispatched) && row.lock_baseline.is_none() {
+                row.lock_baseline = Some(row.dispatched_at_height.to_raw());
+                stamped += 1;
+            }
+        }
+        stamped
+    }
+
+    /// Drop the saved bytes of every row that can no longer need them,
+    /// returning how many were dropped.
+    ///
+    /// A row keeps its bytes while its state [locks its
+    /// inputs](SendState::locks_carried_inputs) — `Dispatched` (in
+    /// flight, held, or verdict unknown) and `Abandoned` (the probe that
+    /// can release an abandoned row's locks needs them) — and while it is
+    /// confirmed less than `reorg_margin` blocks deep, since a reorg past
+    /// its block returns it to `Dispatched` ([`crate::WalletLedger::reconcile_send_journal`]).
+    /// `TerminalRejected` and `PresumedDead` rows have a definite answer
+    /// and drop them.
+    ///
+    /// The rule reads the row's state, never membership of a projection:
+    /// a dispatched row has no baseline until its verdict lands, and a
+    /// prune keyed on the held projection would drop the bytes of a send
+    /// still awaiting its verdict.
+    pub fn prune_settled_tx_bytes(&mut self, synced: BlockHeight, reorg_margin: u64) -> usize {
+        let mut dropped = 0;
+        for row in self.rows.values_mut() {
+            if row.tx_bytes.is_none() {
+                continue;
+            }
+            let settled = match row.state {
+                SendState::Dispatched | SendState::Abandoned => false,
+                SendState::Confirmed { height } => {
+                    synced.to_raw().saturating_sub(height.to_raw()) >= reorg_margin
+                }
+                SendState::TerminalRejected | SendState::PresumedDead => true,
+            };
+            if settled {
+                row.tx_bytes = None;
+                dropped += 1;
+            }
+        }
+        dropped
     }
 
     /// Record the F14 lock baseline on the owning row. Returns `false`
@@ -437,6 +529,9 @@ impl SendJournalBlock {
     pub fn mark_terminal_rejected(&mut self, txid: &[u8; 32]) {
         if let Some(row) = self.rows.get_mut(txid) {
             row.state = SendState::TerminalRejected;
+            // Refused and never relayed (single-egress): nothing will
+            // ever offer these bytes again.
+            row.tx_bytes = None;
         }
     }
 
@@ -581,6 +676,7 @@ mod tests {
             }],
             lock_baseline,
             state,
+            tx_bytes: None,
         }
     }
 
@@ -733,6 +829,7 @@ mod tests {
                 gindex: 11,
                 amount: 30_000,
             }],
+            vec![0xAA],
         );
         let row = &block.rows[&txid];
         assert_eq!(row.change_amount, 22_300);
@@ -947,9 +1044,119 @@ mod tests {
                 gindex: 1,
                 amount: 0,
             }],
+            vec![0xAA],
         );
         block.mark_terminal_rejected(&txid);
         assert_eq!(block.rows[&txid].state, SendState::TerminalRejected);
         assert!(block.rows.contains_key(&txid));
+        // Refused and never relayed: the saved bytes go with the verdict.
+        assert_eq!(block.tx_bytes(&txid), None);
+    }
+
+    /// The row is born holding the exact bytes that leave for the daemon.
+    #[test]
+    fn record_dispatched_keeps_the_signed_bytes() {
+        let mut block = SendJournalBlock::empty();
+        let txid = [9u8; 32];
+        block.record_dispatched(
+            txid,
+            BlockHeight::from_raw(3),
+            0,
+            Vec::new(),
+            Vec::new(),
+            vec![1, 2, 3],
+        );
+        assert_eq!(block.tx_bytes(&txid), Some(&[1u8, 2, 3][..]));
+        assert_eq!(block.tx_bytes(&[0u8; 32]), None);
+    }
+
+    /// A `Dispatched` row with no verdict (the process ended between the
+    /// dispatch save and the verdict) is locked at its dispatch height;
+    /// rows that already carry a baseline, and rows in any other state,
+    /// are untouched.
+    #[test]
+    fn lock_unverdicted_dispatches_locks_only_baseline_less_dispatches() {
+        let mut block = SendJournalBlock::empty();
+        let mut unverdicted = sample_record(SendState::Dispatched, None);
+        unverdicted.dispatched_at_height = BlockHeight::from_raw(17);
+        block.rows.insert([1; 32], unverdicted);
+        block
+            .rows
+            .insert([2; 32], sample_record(SendState::Dispatched, Some(30)));
+        block
+            .rows
+            .insert([3; 32], sample_record(SendState::PresumedDead, None));
+        block
+            .rows
+            .insert([4; 32], sample_record(SendState::Abandoned, None));
+
+        assert_eq!(block.lock_unverdicted_dispatches(), 1);
+        assert_eq!(block.rows[&[1; 32]].lock_baseline, Some(17));
+        assert_eq!(block.rows[&[2; 32]].lock_baseline, Some(30));
+        assert_eq!(block.rows[&[3; 32]].lock_baseline, None);
+        assert_eq!(block.rows[&[4; 32]].lock_baseline, None);
+        // The stamped row's inputs are now locked.
+        assert!(block
+            .spend_locks()
+            .contains(shekyl_types::GlobalOutputIndex::from_raw(11)));
+        // Idempotent: a second open stamps nothing.
+        assert_eq!(block.lock_unverdicted_dispatches(), 0);
+    }
+
+    /// Pruning reads the row's state. A dispatched row with no baseline
+    /// (verdict pending) keeps its bytes, as does an abandoned one and a
+    /// confirmation shallower than the reorg margin.
+    #[test]
+    fn prune_settled_tx_bytes_follows_row_state() {
+        let with_bytes = |state, baseline| {
+            let mut row = sample_record(state, baseline);
+            row.tx_bytes = Some(vec![0xBB]);
+            row
+        };
+        let mut block = SendJournalBlock::empty();
+        block
+            .rows
+            .insert([1; 32], with_bytes(SendState::Dispatched, None));
+        block
+            .rows
+            .insert([2; 32], with_bytes(SendState::Dispatched, Some(5)));
+        block
+            .rows
+            .insert([3; 32], with_bytes(SendState::Abandoned, Some(5)));
+        block.rows.insert(
+            [4; 32],
+            with_bytes(
+                SendState::Confirmed {
+                    height: BlockHeight::from_raw(95),
+                },
+                Some(5),
+            ),
+        );
+        block.rows.insert(
+            [5; 32],
+            with_bytes(
+                SendState::Confirmed {
+                    height: BlockHeight::from_raw(90),
+                },
+                Some(5),
+            ),
+        );
+        block
+            .rows
+            .insert([6; 32], with_bytes(SendState::PresumedDead, None));
+        block
+            .rows
+            .insert([7; 32], with_bytes(SendState::TerminalRejected, None));
+
+        // Synced at 100, margin 10: the row confirmed at 90 is 10 deep
+        // (settled), the one at 95 is 5 deep (a reorg can still undo it).
+        let dropped = block.prune_settled_tx_bytes(BlockHeight::from_raw(100), 10);
+        assert_eq!(dropped, 3);
+        for kept in [[1; 32], [2; 32], [3; 32], [4; 32]] {
+            assert!(block.tx_bytes(&kept).is_some(), "{:?} kept", kept[0]);
+        }
+        for gone in [[5; 32], [6; 32], [7; 32]] {
+            assert!(block.tx_bytes(&gone).is_none(), "{:?} dropped", gone[0]);
+        }
     }
 }

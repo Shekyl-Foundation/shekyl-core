@@ -554,6 +554,7 @@ mod tests {
             inputs: Vec::new(),
             lock_baseline: None,
             state,
+            tx_bytes: None,
         };
         w.send_journal.rows.insert(txid, row(SendState::Abandoned));
         w.check_invariants()
@@ -671,6 +672,7 @@ mod tests {
                     }],
                     lock_baseline: Some(25),
                     state: SendState::Dispatched,
+                    tx_bytes: None,
                 },
             );
         }
