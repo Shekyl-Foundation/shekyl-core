@@ -161,10 +161,12 @@ ARMED=(
   # SHEKYL_SMALL_DISK (checked below). Observed red 2026-11-11, twice,
   # each against a rebuilt daemon: with the fault line at warn it
   # panicked at "the fault is recorded below `error`" (122 s); with the
-  # run loop not reading the node's end it panicked at "the daemon is
-  # still up", at the gate's 30-minute bound. Green 110 s, local debug
-  # daemon.
-  engine::regtest_e2e::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit
+  # run loop not reading the node's end it panicked at "the daemon has
+  # refused to mine for 120s ... and is still up: a half-up node"
+  # (reconstructed run, 223 s). That 223 s is the measurement, not the
+  # 34 minutes the node stayed up on 2026-11-02. The bound covers the
+  # call in flight. Green 110 s, local debug daemon.
+  engine::regtest_e2e::full_disk::a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit
   # The other half (#1346): a SIGTERM after three mined blocks logs
   # nothing at error and exits 0. Observed red 2026-11-11 against a
   # daemon rebuilt to log an error line in its teardown: panicked at "a
