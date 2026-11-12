@@ -63,6 +63,8 @@ Where a value has several forms, each file shows one or two:
   item and `{"missing": null}`. `tx_list` shows all four slot states: an
   item, `missing`, `archived` and `null`.
 - `chain_height` and `daemon_status` show `writer` as `{"live": null}`.
+- `daemon_status` shows a usable managed Tor with a reachable onion and no
+  quiet line. Every other Tor state is in `tor/`, below.
 - `tx_submit` shows `already-in-pool` with publication `public`. The other
   verdicts and causes are pinned in `tests/wire_contract.rs` and
   `tests/skew.rs`.
@@ -100,3 +102,34 @@ reply fields. Then add its arm to `row_faults`. If a file the grammar admits
 does not read through the type, either the grammar or the type is wrong.
 Settle that in the PR that adds the row, and never by editing the vector to
 match the type.
+
+## The Tor status vectors (`tor/`)
+
+`daemon_status`'s Tor fields (4.2), written by hand from `INPUT_GRAMMAR.md`
+§23 as Part G and Rick's rulings of 2026-11-12 amend it, so that every
+one-key object's hand-written decoder in `shekyl-tor-status` is proved
+against the RPC's reading, the reply type and its schema, not only the
+crate's own JSON (Rick, 2026-11-12). Each file is the Status part's five
+Tor fields, `posture`, `origination`, `sync_connector`, `tor_quiet` and
+`tor`. `tests/tor_vectors.rs` splices each into `wire/daemon_status.reply.json`
+and reads the whole reply as `DaemonStatus`.
+
+- `known/` (27): every `tor.cause` key, `clock-skew` with each of its
+  three payloads, `unusable` with each of its three and `exited` with a
+  code and `null`; every `tor.onion.cause` key and the `publishing` onion;
+  both quiet lines; an operator's Tor and Tor off. Each conforms to the
+  schema, decodes, holds nothing unknown and encodes back to the same
+  document.
+- `unknown/` (14): a key or keyword this build does not know, in each closed
+  set: the cause, `clock-skew`'s and `unusable`'s payloads, the onion's
+  cause and state, the quiet line, `origination`, both halves of
+  `posture`, `tor.state`, the bootstrap's `pace`, a fix, `carriage` and a
+  sync connector. The schema refuses each, since it lists this build's
+  sets; the reply type reads each, the status reports that it holds
+  something unknown, the send flow's one accessor reads it as not
+  address-hiding, and the renderer says once to update.
+- `refused/` (4): a one-key object with no key or two (the cause, the quiet
+  line, the onion's cause), which the reply type refuses.
+
+`shekyl-cli` reads the same set through its daemon client, over HTTP and
+the JSON-RPC envelope (`console/tests.rs`).

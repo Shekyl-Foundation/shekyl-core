@@ -204,7 +204,27 @@ pub(super) fn status(
         &crate::methods::tests::facts(true, 0),
         disclosure,
         rpc_connections,
+        tor_read(disclosure),
     )
+}
+
+/// What the supervisor answers `disclosure`: `hiding`, and an operator's
+/// Tor's status only for a caller shown Status, as the handler asks it.
+pub(super) fn tor_read(disclosure: Disclosure) -> crate::tor_facts::TorRead {
+    use shekyl_tor_status::{Clearnet, Connector, Origination, Posture, TorSetting, TorStatus};
+    crate::tor_facts::TorRead {
+        hiding: true,
+        status: disclosure.status().then(|| TorStatus {
+            posture: Posture {
+                tor: TorSetting::Operator,
+                clearnet: Clearnet::Off,
+            },
+            origination: Origination::AddressHiding,
+            sync_connector: vec![Connector::Tor],
+            tor_quiet: None,
+            tor: None,
+        }),
+    }
 }
 
 pub(super) fn ours(facts: &FakeInfoFacts, disclosure: Disclosure) -> serde_json::Value {
@@ -213,7 +233,7 @@ pub(super) fn ours(facts: &FakeInfoFacts, disclosure: Disclosure) -> serde_json:
 }
 
 /// The keys the Status part carries.
-const STATUS_KEYS: [&str; 9] = [
+const STATUS_KEYS: [&str; 14] = [
     "started",
     "disk_free",
     "data_size",
@@ -223,6 +243,11 @@ const STATUS_KEYS: [&str; 9] = [
     "alt_count",
     "rpc_connections",
     "txpool_retired",
+    "posture",
+    "origination",
+    "sync_connector",
+    "tor_quiet",
+    "tor",
 ];
 
 // ── what a synchronized node is told ───────────────────────────────────
@@ -319,7 +344,14 @@ fn a_syncing_degraded_node_says_so() {
 fn a_halted_writer_is_told_to_every_caller() {
     let mut chain = crate::methods::tests::facts(true, 0);
     chain.tip.as_mut().expect("a tip").halt = Some((shekyl_types::BlockHeight::from_raw(5), 3));
-    let reply = daemon_status(&synced_facts(), &chain, Disclosure::VIEW, 0).expect("answered");
+    let reply = daemon_status(
+        &synced_facts(),
+        &chain,
+        Disclosure::VIEW,
+        0,
+        tor_read(Disclosure::VIEW),
+    )
+    .expect("answered");
     assert_eq!(
         serde_json::to_value(reply).unwrap()["writer"],
         serde_json::json!({"halted": {"height": 5, "invariant": 3}})
@@ -731,6 +763,7 @@ fn a_health_only_caller_is_told_liveness_and_nothing_more() {
         "grant",
         "hash",
         "height",
+        "hiding",
         "offline",
         "peered",
         "protocol_version",

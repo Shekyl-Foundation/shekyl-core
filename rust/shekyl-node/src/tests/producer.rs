@@ -86,7 +86,7 @@ fn the_fetch_client_holds_its_lanes_descriptors_only_under_a_tor() {
 fn a_node_with_tor_off_refuses_a_shard_fetch_as_tor_off() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let answers: Vec<_> = [false, true]
         .into_iter()
         .map(|bounded| {
@@ -128,7 +128,7 @@ fn a_node_with_a_tor_answers_a_shard_fetch_through_its_desk() {
         plan: test_plan(&config),
     })
     .expect("node");
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let answer = a_runtime().block_on(shard_fetch(
         &*handles.shard_view,
         ShardId { id: Integer(3) },

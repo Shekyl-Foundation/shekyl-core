@@ -1024,6 +1024,14 @@ impl Core {
         self.step(now, actions)
     }
 
+    /// Health's one boolean, `hiding`: an address-hiding session exists
+    /// now, the relay's verdict with no pin state (IG-Q67). Its own read, so
+    /// a caller shown only Health causes no status read.
+    #[must_use]
+    pub fn hiding(&self) -> bool {
+        self.origin.hides_address()
+    }
+
     /// The typed read.
     #[must_use]
     pub fn status(&self) -> Status {

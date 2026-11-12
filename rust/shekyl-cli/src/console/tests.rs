@@ -319,7 +319,7 @@ fn console_spend_skeleton() -> shekyl_wire::SkeletonTx {
 /// wire carries its tip, `count - 1`), every part shown. A test removes or
 /// alters the members it is about.
 pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "height": count - 1,
         "hash": "5a".repeat(32),
         "target_height": null,
@@ -328,6 +328,7 @@ pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
         "offline": false,
         "degraded": false,
         "peered": true,
+        "hiding": false,
         "writer": {"live": null},
         "protocol_version": 3,
         "difficulty": "0x1e240",
@@ -359,7 +360,15 @@ pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
             "peer_white_count": 10, "peer_gray_count": 20
         }},
         "txpool_private_count": 0,
-    })
+    });
+    // Status's Tor fields: a node with Tor off. Set after the literal, which
+    // is at `json!`'s recursion limit.
+    value["posture"] = serde_json::json!({"tor": "off", "clearnet": "on"});
+    value["origination"] = serde_json::json!("clearnet-only");
+    value["sync_connector"] = serde_json::json!(["clearnet"]);
+    value["tor_quiet"] = serde_json::Value::Null;
+    value["tor"] = serde_json::Value::Null;
+    value
 }
 
 /// [`daemon_status_value`] for a chain of 100 blocks, for the client's own
@@ -384,6 +393,11 @@ const STATUS_PART_KEYS: &[&str] = &[
     "alt_count",
     "rpc_connections",
     "txpool_retired",
+    "posture",
+    "origination",
+    "sync_connector",
+    "tor_quiet",
+    "tor",
 ];
 
 /// [`daemon_status_value`] with the Status part withheld, as a caller
@@ -1971,5 +1985,201 @@ fn the_status_fixture_decodes_with_every_part_shown() {
         Time(0),
         BlockHash::NULL,
         TxHash::from_bytes([0; 32]),
+    );
+}
+
+// ── the Tor status ─────────────────────────────────────────────────────
+
+/// The Tor oracle vectors of `kind` (`shekyl-rpc-types`'
+/// `tests/vectors/rpc/tor/`), each spliced into this fixture's reply.
+fn tor_vectors(kind: &str) -> Vec<(String, serde_json::Value)> {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../shekyl-rpc-types/tests/vectors/rpc/tor")
+        .join(kind);
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+        .map(|entry| entry.expect("an entry").path())
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| {
+            let tor: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("readable"))
+                    .expect("JSON");
+            let mut value = daemon_status_value(100);
+            for key in [
+                "posture",
+                "origination",
+                "sync_connector",
+                "tor_quiet",
+                "tor",
+            ] {
+                value[key] = tor[key].clone();
+            }
+            (path.display().to_string(), value)
+        })
+        .collect()
+}
+
+/// **The Tor vectors read through this client as the daemon would send
+/// them**: over HTTP, in the JSON-RPC envelope, through the reply checks
+/// and the reply type (Rick, 2026-11-12). A known state reads; a value this
+/// build does not know reads, is reported unknown and is never
+/// address-hiding; a one-key object with no key or two is refused. Fails if
+/// the client refuses a newer daemon's keyword, losing the whole reply.
+#[test]
+fn the_tor_vectors_read_through_the_client() {
+    let read = |value: serde_json::Value| {
+        let address = route_server(vec![(rpc::<wire::DaemonStatus>(), rpc_result(value))]);
+        let daemon = DaemonClient::new(
+            &format!("http://{address}"),
+            None,
+            None,
+            shekyl_rpc_types::Network::Mainnet,
+        )
+        .expect("a client");
+        daemon.daemon_status()
+    };
+    let known = tor_vectors("known");
+    assert_eq!(known.len(), 27);
+    for (name, value) in known {
+        let status = read(value).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let tor = status.tor_status().expect("Status is shown");
+        assert!(!tor.has_unknown(), "{name}: {tor:?}");
+    }
+    let unknown = tor_vectors("unknown");
+    assert_eq!(unknown.len(), 14);
+    for (name, value) in unknown {
+        let status =
+            read(value).unwrap_or_else(|error| panic!("{name}: the reply is lost: {error}"));
+        let tor = status.tor_status().expect("Status is shown");
+        assert!(tor.has_unknown(), "{name}: {tor:?}");
+        assert!(
+            !tor.own_tx_hides_address(),
+            "{name}: read as address-hiding"
+        );
+    }
+    let refused = tor_vectors("refused");
+    assert_eq!(refused.len(), 4);
+    for (name, value) in refused {
+        assert!(read(value).is_err(), "{name}: read");
+    }
+}
+
+/// **`status` says what the daemon's log says**: the Tor sentence is the
+/// one renderer's, over the reply's Tor fields. Fails if the console
+/// writes a Tor sentence of its own, or drops it.
+#[test]
+fn the_status_line_says_the_tor_status_in_the_renderers_words() {
+    let address = route_server(vec![
+        (rpc::<wire::DaemonStatus>(), status_reply(100)),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
+    ]);
+    let out = run(&["daemon", "status"], Some(&address)).expect("renders");
+    let status: shekyl_rpc_types::wire::daemon::DaemonStatus =
+        serde_json::from_value(daemon_status_value(100)).expect("the fixture decodes");
+    let said = shekyl_tor_status::render(&status.tor_status().expect("shown"), None);
+    assert!(!said.is_empty());
+    assert!(out.ends_with(&format!("\n{said}")), "{out}");
+}
+
+/// A managed Tor held because its data directory is short of space.
+fn short_of_space(grant: &[&str]) -> serde_json::Value {
+    let mut value = daemon_status_value(100);
+    value["grant"] = serde_json::json!(grant);
+    value["posture"] = serde_json::json!({"tor": "managed", "clearnet": "off"});
+    value["origination"] = serde_json::json!("connecting");
+    value["tor"] = serde_json::json!({
+        "state": "waiting", "cause": {"unusable": {"exhausted": {"free": 0, "needed": 35000000}}},
+        "age": 9, "respawn_count": 0, "progress": null, "flagged": false, "fix": [],
+        "onion": null, "bootstrap": null, "carriage": "gone"
+    });
+    value
+}
+
+/// **The data directory is named only for a connection holding `config`,
+/// and printed without control characters** (IG-Q97; Rick, 2026-11-12: it
+/// is a string the daemon supplies). Without `config` the console does not
+/// ask for it and the sentence says "Tor's data directory". Fails if the
+/// path is asked for or named without the grant, or if an escape sequence
+/// in it reaches the terminal.
+#[test]
+fn the_data_directory_is_named_only_with_config_and_printed_without_control_characters() {
+    let all = [
+        "health",
+        "status",
+        "chain",
+        "pool",
+        "peers",
+        "submit",
+        "mining-work",
+        "mining-control",
+        "bans",
+        "node",
+        "config",
+    ];
+    let rows = serde_json::json!([{
+        "name": "data-dir", "source": "file", "runtime": false, "secret": false,
+        "value": "/var/lib/shek\u{1b}[2Jyl\u{7}"
+    }]);
+    let (address, log) = route_server_recording(vec![
+        (
+            rpc::<wire::DaemonStatus>(),
+            rpc_result(short_of_space(&all)),
+        ),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
+        (rpc::<wire::OptionShow>(), rpc_result(rows)),
+    ]);
+    let out = run(&["daemon", "status"], Some(&address)).expect("renders");
+    assert!(out.contains("/var/lib/shek[2Jyl"), "{out}");
+    assert!(!out.contains('\u{1b}') && !out.contains('\u{7}'), "{out:?}");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|(_, body)| method_of(body).as_deref()
+                == Some(<wire::OptionShow as RpcMethod>::NAME)),
+        "the path was asked for"
+    );
+
+    let (address, log) = route_server_recording(vec![
+        (
+            rpc::<wire::DaemonStatus>(),
+            rpc_result(short_of_space(&["health", "status", "mining-control"])),
+        ),
+        (
+            rpc::<wire::MineStatus>(),
+            mining_reply(false, speed(0, 0), None),
+        ),
+    ]);
+    let out = run(&["daemon", "status"], Some(&address)).expect("renders");
+    assert!(
+        out.contains("Tor's data directory has 0 bytes free"),
+        "{out}"
+    );
+    assert!(!out.contains("/var/lib"), "{out}");
+    assert!(
+        !log.lock()
+            .unwrap()
+            .iter()
+            .any(|(_, body)| method_of(body).as_deref()
+                == Some(<wire::OptionShow as RpcMethod>::NAME)),
+        "a connection without `config` asked for the path"
+    );
+}
+
+/// Control characters are removed; everything else is kept.
+#[test]
+fn printable_removes_control_characters_only() {
+    assert_eq!(
+        super::status::printable("/a\u{1b}[31mb\nc\td\u{7f}é"),
+        "/a[31mbcdé"
     );
 }

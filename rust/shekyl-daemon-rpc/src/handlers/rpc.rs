@@ -365,6 +365,11 @@ async fn dispatch(
             request::<wire::DaemonStatus>(params)?;
             let disclosure = authority.disclosure();
             let rpc_connections = state.conn_tracker.active_total();
+            // The supervisor's asks, off the chain worker: `hiding` for
+            // every caller, the status only for one shown Status (RK-D24).
+            let tor = crate::tor_facts::read(state.handles.tor.as_ref(), disclosure.status())
+                .await
+                .map_err(RpcFault::Facts)?;
             framed(
                 on_chain(state, move |c| {
                     crate::info::daemon_status(
@@ -372,6 +377,7 @@ async fn dispatch(
                         c.as_chain_facts(),
                         disclosure,
                         rpc_connections,
+                        tor,
                     )
                 })
                 .await?,

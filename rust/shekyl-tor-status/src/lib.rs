@@ -48,6 +48,10 @@ macro_rules! keywords {
         }
 
         impl $name {
+            /// Every keyword this build knows, in declaration order: what a
+            /// schema lists for the set.
+            pub const KEYWORDS: &'static [&'static str] = &[$($word),+];
+
             /// The keyword on the wire.
             #[must_use]
             pub fn keyword(&self) -> &str {

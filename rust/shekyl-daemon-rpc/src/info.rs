@@ -49,6 +49,8 @@ use shekyl_rpc_types::method::{Grant, GrantSet, Preset};
 use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
+use crate::tor_facts::TorRead;
+use shekyl_tor_status::TorStatus;
 
 /// What a caller is shown: which parts its grants select, and whether it is
 /// the host's administrator.
@@ -153,6 +155,7 @@ pub fn daemon_status(
     chain_facts: &dyn ChainFacts,
     disclosure: Disclosure,
     rpc_connections: u64,
+    tor: TorRead,
 ) -> Result<DaemonStatus, RpcFault> {
     let chain = facts.chain()?;
     let halt = chain_facts.chain_tip()?.halt;
@@ -235,6 +238,43 @@ pub fn daemon_status(
     })?;
     let on = disclosure.status();
     let on_chain = disclosure.shows(Grant::Chain);
+    // The Tor status is read only for a caller shown Status (RK-D24); one
+    // read for a caller who is not, or none for one who is, is the handler
+    // and the disclosure disagreeing.
+    let tor_status = match (on, tor.status) {
+        (true, Some(status)) => Some(status),
+        (false, None) => None,
+        (shown_status, read) => {
+            tracing::error!(
+                shown_status,
+                read = read.is_some(),
+                "daemon_status refused: the Tor read and the caller's Status disclosure disagree"
+            );
+            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+        }
+    };
+    let (posture, origination, sync_connector, tor_quiet, managed) = match tor_status {
+        Some(TorStatus {
+            posture,
+            origination,
+            sync_connector,
+            tor_quiet,
+            tor,
+        }) => (
+            Withheld::Shown(posture),
+            Withheld::Shown(origination),
+            Withheld::Shown(sync_connector),
+            Withheld::Shown(shekyl_rpc_types::Nullable(tor_quiet)),
+            Withheld::Shown(shekyl_rpc_types::Nullable(tor)),
+        ),
+        None => (
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+        ),
+    };
     let status_count = |pick: fn(crate::info_facts::SessionCounts) -> u64| {
         shekyl_rpc_types::Nullable::from(sessions.map(|s| Count(pick(s))))
     };
@@ -259,6 +299,7 @@ pub fn daemon_status(
         peered: sessions
             .map(crate::info_facts::SessionCounts::has_peers)
             .into(),
+        hiding: tor.hiding,
         writer: crate::reads::writer_of(halt),
         protocol_version: Integer(chain.protocol_version),
         difficulty: shown(on_chain, HexU128(chain.difficulty)),
@@ -298,6 +339,11 @@ pub fn daemon_status(
         ),
         rpc_connections: shown(on, Count(rpc_connections)),
         txpool_retired: shown(on, txpool_retired),
+        posture,
+        origination,
+        sync_connector,
+        tor_quiet,
+        tor: managed,
         connector,
         txpool_private_count,
     })

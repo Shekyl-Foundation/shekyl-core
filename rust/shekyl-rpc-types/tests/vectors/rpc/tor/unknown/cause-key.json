@@ -1,0 +1,25 @@
+{
+  "posture": {
+    "tor": "managed",
+    "clearnet": "off"
+  },
+  "origination": "connecting",
+  "sync_connector": [],
+  "tor_quiet": null,
+  "tor": {
+    "state": "usable",
+    "cause": {
+      "bridge-refused": {
+        "reason": 7
+      }
+    },
+    "age": 75,
+    "respawn_count": 0,
+    "progress": null,
+    "flagged": false,
+    "fix": [],
+    "onion": null,
+    "bootstrap": null,
+    "carriage": "carries"
+  }
+}

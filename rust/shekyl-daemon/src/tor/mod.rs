@@ -29,6 +29,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_daemon_rpc::chain_facts::FactsFault;
+use shekyl_daemon_rpc::tor_facts::{TorFacts, TorFuture, TorHandle};
 use shekyl_node::Network;
 use shekyl_p2p::{
     dial_profile, ConnectorId, DownCause, OriginVerdict, PerConnector, SupervisorFeeds, TorCensus,
@@ -46,13 +48,13 @@ use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
     Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy,
-    Sessions, Space, Status, Step, TorCensus as QuietCensus, TorSetting,
+    Sessions, Space, Step, TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
-use shekyl_tor_status::{held_at_start_sentence, install_sentence, render};
+use shekyl_tor_status::{held_at_start_sentence, install_sentence, render, TorStatus};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -120,6 +122,41 @@ pub struct Prepared {
     inbox: Inbox,
 }
 
+impl Prepared {
+    /// The RPC's two asks of this supervisor (`daemon_status`'s `hiding`
+    /// and Tor status). Taken before the RPC starts: an ask posted before
+    /// the loop runs is answered by its first pass, and one after the stop
+    /// is refused as not ready. Holding it never holds off the stop.
+    #[must_use]
+    pub fn asks(&self) -> TorHandle {
+        Arc::new(TorAsks(self.owner.asker()))
+    }
+}
+
+/// The supervisor's asks, as `daemon_status` reads them.
+struct TorAsks(Option<inbox::Asker>);
+
+impl TorFacts for TorAsks {
+    fn hiding(&self) -> TorFuture<'_, bool> {
+        let answer = self.0.as_ref().and_then(inbox::Asker::ask_hiding);
+        Box::pin(async move { answered(answer).await })
+    }
+
+    fn status(&self) -> TorFuture<'_, TorStatus> {
+        let answer = self.0.as_ref().and_then(inbox::Asker::ask_status);
+        Box::pin(async move { answered(answer).await })
+    }
+}
+
+/// An ask's answer: not ready when the inbox is gone, or the loop ended
+/// before it answered.
+async fn answered<T>(answer: Option<tokio::sync::oneshot::Receiver<T>>) -> Result<T, FactsFault> {
+    answer
+        .ok_or(FactsFault::NotReady)?
+        .await
+        .map_err(|_| FactsFault::NotReady)
+}
+
 /// The supervisor's inbox, and the feeds the network publishes into, under
 /// every `tor` setting: the supervisor answers the node's status whether
 /// or not it runs the Tor (Rick, 2026-11-10).
@@ -156,7 +193,7 @@ impl Supervisor {
     /// from the one place that holds the state: it never waits on Tor, so
     /// a Tor that does not answer does not hold this (Rick, 2026-11-10).
     /// `None` once the loop has stopped.
-    pub async fn status(&self) -> Option<Status> {
+    pub async fn status(&self) -> Option<TorStatus> {
         self.owner.ask_status()?.await.ok()
     }
 
@@ -854,9 +891,10 @@ impl Drive {
             Arrival::Reply { number, answer } => inputs.extend(self.answered(number, *answer)),
             Arrival::Status(reply) => {
                 // Answered from the one place that holds the state, at once:
-                // nothing on this loop waits on Tor.
-                drop(reply.send(self.core.status()));
+                // nothing on this loop waits on Tor. Every age is taken now.
+                drop(reply.send(self.core.view(self.now())));
             }
+            Arrival::Hiding(reply) => drop(reply.send(self.core.hiding())),
             Arrival::Stop => inputs.push(Input::Shutdown),
         }
         self.fold_at(inputs, woke);

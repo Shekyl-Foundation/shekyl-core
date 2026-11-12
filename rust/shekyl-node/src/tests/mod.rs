@@ -117,7 +117,7 @@ fn a_runtime() -> tokio::runtime::Runtime {
 /// so the block extends the current tip.
 fn mine_one(node: &Node, above: u64) -> BlockHash {
     use shekyl_daemon_rpc::mining_methods::{block_submit, block_template};
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let started = std::time::Instant::now();
     let reply = loop {
         match block_template(&*handles.mining) {

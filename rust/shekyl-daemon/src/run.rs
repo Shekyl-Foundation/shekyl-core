@@ -294,14 +294,16 @@ fn supervise(
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
     // failed start: the node is torn down the one way.
-    let rpc =
-        match shekyl_daemon_rpc::run::start(&config.rpc, options, node.handles(), config.dev.rpc) {
-            Ok(rpc) => Some(rpc),
-            Err(refusal) => {
-                tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-                None
-            }
-        };
+    // The RPC asks the supervisor for `daemon_status`'s Tor fields. Its
+    // inbox is made already, so an ask before the loop starts waits for it.
+    let handles = node.handles(tor_inbox.asks());
+    let rpc = match shekyl_daemon_rpc::run::start(&config.rpc, options, handles, config.dev.rpc) {
+        Ok(rpc) => Some(rpc),
+        Err(refusal) => {
+            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
+            None
+        }
+    };
     // The notify runner, pushed from the chain's tip watch; its children
     // run on the signal owner's runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));

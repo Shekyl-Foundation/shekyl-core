@@ -20,7 +20,7 @@ fn a_block_made_from_the_template_connects_through_block_submit() {
     use shekyl_daemon_rpc::mining_methods::{block_submit, block_template};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let reply = block_template(&*handles.mining).expect("a template");
     assert_eq!(reply.height.0, 1);
     let genesis = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
@@ -60,7 +60,7 @@ fn a_submitted_block_with_a_missing_body_names_its_index() {
     use shekyl_daemon_rpc::mining_methods::{block_submit, block_template, codes};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let reply = block_template(&*handles.mining).expect("a template");
     let mut block = shekyl_wire::Block::from_bytes(&reply.body.0).expect("a block");
     block
@@ -100,7 +100,7 @@ fn with_no_address_the_template_reads_say_why() {
     let node = open_at(dir.path(), Arc::new(|| {}));
     let mut posting = node.posting();
     wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let refused = block_template(&*handles.mining).expect_err("no template");
     assert_eq!(refused.class, ErrorClass::NotReady);
     assert_eq!(refused.diagnostic.code, codes::ADDRESS_UNSET);
@@ -130,7 +130,7 @@ fn the_miner_starts_reports_and_stops_through_the_handlers() {
     use shekyl_daemon_rpc::mining_methods::{codes, mine_start, mine_status, mine_stop};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let one = wnode::MineStart {
         threads: wnode::Threads::Count(Count(1)),
     };
@@ -177,7 +177,7 @@ fn dev_block_generate_reaches_three_more_and_is_refused_unarmed() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &["--dev-rpc"]);
     let armed = admit_armed(row, node.armed_levers()).expect("armed");
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let generated = a_runtime().block_on(dev_block_generate(
         &handles.mining,
         &*handles.door,
@@ -211,7 +211,7 @@ fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
     use shekyl_rpc_types::errors::ErrorClass;
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let past = wnode::MineStart {
         threads: wnode::Threads::Count(Count(u64::try_from(host + 1).expect("fits"))),
@@ -268,7 +268,7 @@ fn mine_on_mines_a_real_block_with_no_rpc_call() {
         node.mining().running(),
         "the configured row started the miner"
     );
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let started = std::time::Instant::now();
     loop {
         let count = handles
@@ -300,7 +300,7 @@ fn mine_off_with_an_address_mines_nothing_until_mine_start() {
     let node = open_posted(dir.path(), &["--mine", "off", "--mine-threads", "1"]);
     assert!(!node.mining().running(), "an address alone starts nothing");
     std::thread::sleep(Duration::from_millis(300));
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let count = handles
         .chain
         .chain_tip()
@@ -371,7 +371,7 @@ fn dev_block_generate_on_a_node_that_is_not_synced_is_refused_at_once() {
         &Posting::Withdrawn(NoJob::NotSynced(SyncState::NoView)),
     );
     let row = wire::Id::DevBlockGenerate.row();
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let answered = a_runtime().block_on(async {
         tokio::time::timeout(
             Duration::from_secs(10),
@@ -404,7 +404,7 @@ fn a_job_withdrawn_mid_wait_ends_dev_block_generate() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
     let row = wire::Id::DevBlockGenerate.row();
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let answered = a_runtime().block_on(async {
         let withdraw = async {
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -445,7 +445,7 @@ fn dropping_dev_block_generate_stops_the_miner_it_started() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &[]);
     let row = wire::Id::DevBlockGenerate.row();
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let mining = node.mining();
     let saw_running = a_runtime().block_on(async {
         let call = dev_block_generate(
@@ -538,7 +538,7 @@ fn dev_chain_pop_refuses_genesis_pops_one_and_the_node_stays_up() {
         admit_armed(row, false).is_err(),
         "unarmed, it is outside the grant"
     );
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     mine_one(&node, 0);
     mine_one(&node, 1);
     assert_eq!(
@@ -605,7 +605,7 @@ fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
     assert_eq!(status.job.map(|posted| posted.height), Some(job.height));
     assert!(status.miner.is_none(), "the miner starts on request only");
     assert!(node
-        .handles()
+        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
         .chain
         .chain_tip()
         .is_ok_and(|tip| tip.synchronized));
@@ -632,7 +632,7 @@ fn a_node_on_an_open_network_posts_nothing_until_chain_sync_says_synced() {
         "no template: not synced (no view of the network yet)"
     );
     assert!(node
-        .handles()
+        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
         .chain
         .chain_tip()
         .is_ok_and(|tip| !tip.synchronized));
@@ -678,7 +678,11 @@ fn stopping_the_miner_from_a_task_leaves_the_node_running() {
     assert!(stopped, "it was running");
     assert!(!node.mining().running());
     assert!(
-        node.handles().door.room().expect("door") > 0,
+        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
+            .door
+            .room()
+            .expect("door")
+            > 0,
         "the node is still up"
     );
     node.stop();
@@ -695,7 +699,7 @@ fn dev_block_generate_after_dev_chain_pop_completes_on_a_lone_node() {
     let pop = wire::Id::DevChainPop.row();
     let dir = tempfile::tempdir().expect("temp");
     let node = open_posted(dir.path(), &["--dev-rpc"]);
-    let handles = node.handles();
+    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
     let run = |count| {
         a_runtime().block_on(async {
             tokio::time::timeout(

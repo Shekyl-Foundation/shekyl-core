@@ -116,6 +116,32 @@ async fn the_owners_stop_is_said_once() {
     assert!(pending_a_minute(&mut inbox).await.is_none(), "it spun");
 }
 
+/// **The RPC's asking end posts asks and never holds off the stop**: a
+/// `hiding` ask and a status ask arrive as asks, the owner's stop still
+/// closes the queue though the asker is held, and an ask after it is
+/// refused. Fails if the asker keeps the queue open (the stop would never
+/// come) or posts after the inbox is gone.
+#[tokio::test(start_paused = true)]
+async fn the_rpcs_asker_never_holds_off_the_stop() {
+    let (mut owner, mut inbox, _feeds) = inbox();
+    let asker = owner.asker().expect("the queue is open");
+    let _hiding = asker.ask_hiding().expect("posted");
+    assert!(matches!(
+        inbox.wait().await,
+        Woken::Arrived(Arrival::Hiding(_))
+    ));
+    let _status = asker.ask_status().expect("posted");
+    assert!(matches!(
+        inbox.wait().await,
+        Woken::Arrived(Arrival::Status(_))
+    ));
+    owner.stop();
+    assert!(matches!(inbox.wait().await, Woken::Arrived(Arrival::Stop)));
+    drop(inbox);
+    assert!(asker.ask_hiding().is_none(), "an ask after the stop");
+    assert!(asker.ask_status().is_none(), "an ask after the stop");
+}
+
 /// **An owner dropped without a stop closes the queue, which is the
 /// stop**: said once, then nothing. Treating the close as nothing would
 /// leave a loop that never stops; reading it again would spin.

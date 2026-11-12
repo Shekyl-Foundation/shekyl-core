@@ -17,6 +17,9 @@ crate-type = ["lib"]
 # The network id a submission's signatures are judged under
 # (NETWORK_IDENTITY.md NI-Q4).
 shekyl-network = { path = "../shekyl-network" }
+# The Tor status's one shape (`TOR_STATUS_CRATE.md`): what the Tor
+# supervisor answers `daemon_status`'s Status ask with. serde only.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 serde = { workspace = true }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

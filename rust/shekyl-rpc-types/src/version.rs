@@ -41,7 +41,14 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// header's proof-of-work hash, never `null`; `prune` selects a
 /// transaction's skeleton entry, the pruned body with the txid's operands,
 /// where without it the entry is `{id, body}` (IG-Q55, IG-Q56).
-pub const CORE_RPC_VERSION_MINOR: u32 = 1;
+///
+/// 4.2: `daemon_status` carries the Tor status (`INPUT_GRAMMAR.md` §23 as
+/// Part G and Rick's rulings of 2026-11-12 amend it). `hiding` joins the
+/// base fields; `posture`, `origination`, `sync_connector`, `tor_quiet` and
+/// `tor` are a part shown to `status`, in `shekyl-tor-status`'s types. Every
+/// closed set there decodes a keyword this build does not know, and the
+/// send flow reads such a value as not address-hiding.
+pub const CORE_RPC_VERSION_MINOR: u32 = 2;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -55,15 +62,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 1)` is `(4 << 16) | 1` = 262145. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 2)` is `(4 << 16) | 2` = 262146. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_145);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 1);
+        assert_eq!(CORE_RPC_VERSION, 262_146);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 2);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 1);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.1");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 2);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.2");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

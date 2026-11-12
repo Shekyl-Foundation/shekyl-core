@@ -91,8 +91,9 @@ crate::wire_parted! {
     /// whether this node is usable now. Each part is shown whole to a caller
     /// its grant admits, and absent otherwise (RK-D23): the chain's facts to
     /// `chain`, the relayed pool's count to `pool` (`RPC_CHANNEL.md` §6.1).
-    /// Part E's and Part G's Tor fields join when the Tor lane's status PRs
-    /// land.
+    /// The Tor status is `INPUT_GRAMMAR.md` §23 as Part G amends it:
+    /// `hiding` is `health`'s, and the rest is a part shown to `status`,
+    /// in `shekyl-tor-status`'s types (`TOR_STATUS_CRATE.md`).
     ["daemon"]
     pub struct DaemonStatus {
         height: Height,
@@ -104,6 +105,10 @@ crate::wire_parted! {
         degraded: bool,
         /// `null` while P2P is off.
         peered: Nullable<bool>,
+        /// An address-hiding session exists now: the relay's verdict, the
+        /// class part, with no pin state (IG-Q67). Clients decide sends from
+        /// `origination`, never from this.
+        hiding: bool,
         writer: Writer,
         protocol_version: Integer,
         grant: Vec<GrantName>;
@@ -138,6 +143,17 @@ crate::wire_parted! {
             alt_count: Count,
             rpc_connections: Count,
             txpool_retired: bool,
+            /// The `tor` and `clearnet` settings (`TSR-Q12`).
+            posture: shekyl_tor_status::Posture,
+            /// What happens to this node's own transactions (IG-Q68).
+            origination: shekyl_tor_status::Origination,
+            /// The connectors the node syncs over now.
+            sync_connector: Vec<shekyl_tor_status::Connector>,
+            /// The quiet line, under every `tor` setting (IG-Q99).
+            tor_quiet: Nullable<shekyl_tor_status::TorQuiet>,
+            /// The managed supervisor's projection; `null` unless
+            /// `posture.tor` is `managed`.
+            tor: Nullable<shekyl_tor_status::ManagedTor>,
         }
         part Policy::Grant(Grant::Peers) => {
             connector: ConnectorMap,
@@ -146,6 +162,23 @@ crate::wire_parted! {
             /// `null` while the pool is retired.
             txpool_private_count: Nullable<Count>,
         }
+    }
+}
+
+impl DaemonStatus {
+    /// The Tor status the Status part carries, in `shekyl-tor-status`'s
+    /// shape, for its one renderer and the send flow's one accessor.
+    /// `None` for a caller not shown Status: the part is absent whole, so
+    /// no Tor field stands in for it (RK-D23).
+    #[must_use]
+    pub fn tor_status(&self) -> Option<shekyl_tor_status::TorStatus> {
+        Some(shekyl_tor_status::TorStatus {
+            posture: self.posture.clone().shown()?,
+            origination: self.origination.clone().shown()?,
+            sync_connector: self.sync_connector.clone().shown()?,
+            tor_quiet: self.tor_quiet.clone().shown()?.0,
+            tor: self.tor.clone().shown()?.0,
+        })
     }
 }
 
