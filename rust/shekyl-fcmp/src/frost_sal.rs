@@ -333,11 +333,35 @@ pub enum FrostSalError {
     /// `y_kem` is not the canonical encoding of a scalar.
     #[error("the output tweak y_kem is not a canonical scalar")]
     OutputTweak,
+    /// The commitment mask `z` is not the canonical encoding of a scalar.
+    #[error("the commitment mask is not a canonical scalar")]
+    CommitmentMask,
+    /// The pseudo-out blind `a` is not the canonical encoding of a scalar.
+    #[error("the pseudo-out blind is not a canonical scalar")]
+    PseudoOutBlind,
     /// The keys, offset for this output, are not the `T` part of the
     /// rerandomized output key: `x`, `y_kem` or the keys belong to some
     /// other output or group.
     #[error("these keys do not open this output's rerandomized key")]
     KeysDoNotOpenOutput,
+}
+
+/// One group output being spent, as every member knows it from its own
+/// scan: the output key and commitment (public), and the group-plaintext
+/// secrets `x = ho + b` (`shekyl_crypto_pq::output::compute_output_key_image`),
+/// `y_kem` (the `y` the output's group secret derives) and the commitment
+/// mask `z`.
+pub struct SpentOutput<'a> {
+    /// `O`, compressed.
+    pub output_key: &'a [u8; 32],
+    /// `C`, compressed.
+    pub commitment: &'a [u8; 32],
+    /// `x = ho + b`.
+    pub spend_scalar: &'a [u8; 32],
+    /// The output's per-output tweak `y_kem`.
+    pub y_kem: &'a [u8; 32],
+    /// The commitment mask `z` (`C = z·G + amount·H`).
+    pub commitment_mask: &'a [u8; 32],
 }
 
 /// What the proposer fixes for one input. Every signer signs from the same
@@ -367,41 +391,54 @@ impl fmt::Debug for SalSigningParams {
 }
 
 impl SalSigningParams {
-    /// The proposer's parameters for spending `output_key`/`commitment`: a
-    /// fresh rerandomization from `rng`, the transaction's `signable`, the
-    /// spend scalar `x = ho + b` (as `shekyl_crypto_pq::output::compute_output_key_image`
-    /// returns it) and the output's `y_kem` (the `y` its group secret
-    /// derives). The key-image generator is `Hp(O)`.
+    /// The proposer's parameters for spending `spent` as one input of a
+    /// transaction whose message is `signable`, with pseudo-out blind
+    /// `pseudo_out_blind` (`a`).
+    ///
+    /// The rerandomization's commitment blind is `r_c = a − z`, so the
+    /// input's pseudo-out is `C~ = C + r_c·G = a·G + amount·H`: the
+    /// assembler picks every `a` and balances the last one, exactly as the
+    /// solo prover does. The other three blinds are drawn from `rng`. The
+    /// key-image generator is `Hp(O)`.
     ///
     /// # Errors
     ///
     /// [`FrostSalError`] for a point or scalar that does not decode.
     pub fn propose(
         rng: &mut (impl RngCore + CryptoRng),
-        output_key: &[u8; 32],
-        commitment: &[u8; 32],
+        spent: &SpentOutput<'_>,
+        pseudo_out_blind: &[u8; 32],
         signable: TxSignableHash,
-        x: &[u8; 32],
-        y_kem: &[u8; 32],
     ) -> Result<Self, FrostSalError> {
-        let o = decode_point(output_key).ok_or(FrostSalError::OutputKey)?;
-        let c = decode_point(commitment).ok_or(FrostSalError::Commitment)?;
-        let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(*output_key));
+        let o = decode_point(spent.output_key).ok_or(FrostSalError::OutputKey)?;
+        let c = decode_point(spent.commitment).ok_or(FrostSalError::Commitment)?;
+        let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(
+            *spent.output_key,
+        ));
         let output = Output::new(o, i, c).map_err(|_| FrostSalError::OutputKey)?;
+        let z = Zeroizing::new(
+            Option::<Scalar>::from(Scalar::from_repr(*spent.commitment_mask))
+                .ok_or(FrostSalError::CommitmentMask)?,
+        );
+        let a = Zeroizing::new(
+            Option::<Scalar>::from(Scalar::from_repr(*pseudo_out_blind))
+                .ok_or(FrostSalError::PseudoOutBlind)?,
+        );
+        let r_c = Zeroizing::new(*a - *z);
         // The wipe-on-drop owner exists before either secret is decoded, and
         // each decodes straight into its field: a refusal of `y_kem` drops
         // the params, which wipes `x`.
         let mut params = Self {
             output,
-            rerandomized: RerandomizedOutput::new(rng, output),
+            rerandomized: RerandomizedOutput::with_commitment_blind(rng, output, *r_c),
             signable,
             x: Scalar::ZERO,
             y_kem: Scalar::ZERO,
         };
-        params.x =
-            Option::<Scalar>::from(Scalar::from_repr(*x)).ok_or(FrostSalError::SpendScalar)?;
-        params.y_kem =
-            Option::<Scalar>::from(Scalar::from_repr(*y_kem)).ok_or(FrostSalError::OutputTweak)?;
+        params.x = Option::<Scalar>::from(Scalar::from_repr(*spent.spend_scalar))
+            .ok_or(FrostSalError::SpendScalar)?;
+        params.y_kem = Option::<Scalar>::from(Scalar::from_repr(*spent.y_kem))
+            .ok_or(FrostSalError::OutputTweak)?;
         Ok(params)
     }
 
