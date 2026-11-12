@@ -260,20 +260,20 @@ daemon_status	field	daemon	writer	health	state live|halted
 daemon_status	field	chain writer	height	health	height
 daemon_status	field	chain writer	invariant	health	integer
 daemon_status	field	daemon	protocol_version	health	integer
-daemon_status	field	daemon	difficulty	health	hex128
-daemon_status	field	daemon	difficulty_cumulative	health	hex128
-daemon_status	field	daemon	block_spacing	health	duration
-daemon_status	field	daemon	tx_count	health	count
-daemon_status	field	daemon	block_weight_max	health	size
-daemon_status	field	daemon	block_weight_median	health	size
-daemon_status	field	daemon	time_adjusted	health	time
-daemon_status	field	daemon	emission	health	amount
-daemon_status	field	daemon	emission_multiplier	health	micro
-daemon_status	field	daemon	burn	health	micro
-daemon_status	field	daemon	burn_total	health	amount
-daemon_status	field	daemon	stake_share	health	micro
-daemon_status	field	daemon	txpool_count	health	count or null
 daemon_status	field	daemon	grant	health	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol
+daemon_status	field	daemon	difficulty	chain	hex128
+daemon_status	field	daemon	difficulty_cumulative	chain	hex128
+daemon_status	field	daemon	block_spacing	chain	duration
+daemon_status	field	daemon	tx_count	chain	count
+daemon_status	field	daemon	block_weight_max	chain	size
+daemon_status	field	daemon	block_weight_median	chain	size
+daemon_status	field	daemon	time_adjusted	chain	time
+daemon_status	field	daemon	emission	chain	amount
+daemon_status	field	daemon	emission_multiplier	chain	micro
+daemon_status	field	daemon	burn	chain	micro
+daemon_status	field	daemon	burn_total	chain	amount
+daemon_status	field	daemon	stake_share	chain	micro
+daemon_status	field	daemon	txpool_count	pool	count or null
 daemon_status	field	daemon	started	status	time
 daemon_status	field	daemon	disk_free	status	size
 daemon_status	field	daemon	data_size	status	size

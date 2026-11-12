@@ -31,7 +31,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// are unchanged (RK-D25, RW-Q6). A 3.x reader of any 4.0 reply refuses it
 /// after the version read reports the daemon newer. The method table and
 /// its schema are `wire::TABLE` and `docs/generated/rpc_wire_schema.tsv`.
-pub const CORE_RPC_VERSION_MINOR: u32 = 0;
+///
+/// 4.1: `daemon_status` follows `RPC_CHANNEL.md` §6.1 (Rick, 2026-11-12).
+/// Its base fields are `health`'s, liveness only; the chain's facts are a
+/// part shown to `chain`, and `txpool_count` a part shown to `pool`. A
+/// caller without the grant finds the part absent, never zero (RK-D23).
+pub const CORE_RPC_VERSION_MINOR: u32 = 1;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -45,15 +50,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 0)` is `(4 << 16) | 0` = 262144. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 1)` is `(4 << 16) | 1` = 262145. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_144);
-        assert_eq!(CORE_RPC_VERSION, 4 << 16, "minor 0 packs to nothing");
+        assert_eq!(CORE_RPC_VERSION, 262_145);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 1);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 0);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.0");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 1);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.1");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

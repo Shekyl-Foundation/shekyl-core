@@ -543,23 +543,41 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
         assert!(info.synchronized);
         assert!(!info.degraded);
         assert_eq!(
-            info.tx_count.0, listed,
+            info.tx_count.shown().expect("the chain part is shown").0,
+            listed,
             "every listed body, coinbases excluded"
         );
         assert_eq!(
-            info.emission.to_atomic_units(),
+            info.emission
+                .shown()
+                .expect("the chain part is shown")
+                .to_atomic_units(),
             last.emission.coins_generated,
             "the accumulator through the tip"
         );
         // The scenario's fixed difficulty is the next block's too.
-        assert_eq!(info.difficulty.0, 1);
         assert_eq!(
-            info.block_weight_max.0,
-            2 * info.block_weight_median.0,
+            info.difficulty.shown().expect("the chain part is shown").0,
+            1
+        );
+        assert_eq!(
+            info.block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            2 * info
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
             "the limit is twice the effective median (CEN-G6b)"
         );
         assert_eq!(
-            info.txpool_count.0.map(|count| count.0),
+            info.txpool_count
+                .shown()
+                .expect("the pool part is shown")
+                .0
+                .map(|count| count.0),
             Some(3),
             "the pool's broadcast count is the node's"
         );

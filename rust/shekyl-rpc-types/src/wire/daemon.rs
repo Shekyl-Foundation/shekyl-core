@@ -87,9 +87,12 @@ impl From<Grant> for GrantName {
 }
 
 crate::wire_parted! {
-    /// The daemon's state (`daemon_status`). Each part is shown whole to a
-    /// caller its grant admits, and absent otherwise (RK-D23). Part E's and
-    /// Part G's Tor fields join when the Tor lane's status PRs land.
+    /// The daemon's state (`daemon_status`). The base fields are `health`'s:
+    /// whether this node is usable now. Each part is shown whole to a caller
+    /// its grant admits, and absent otherwise (RK-D23): the chain's facts to
+    /// `chain`, the relayed pool's count to `pool` (`RPC_CHANNEL.md` §6.1).
+    /// Part E's and Part G's Tor fields join when the Tor lane's status PRs
+    /// land.
     ["daemon"]
     pub struct DaemonStatus {
         height: Height,
@@ -103,21 +106,26 @@ crate::wire_parted! {
         peered: Nullable<bool>,
         writer: Writer,
         protocol_version: Integer,
-        difficulty: HexU128,
-        difficulty_cumulative: HexU128,
-        block_spacing: Duration,
-        tx_count: Count,
-        block_weight_max: Size,
-        block_weight_median: Size,
-        time_adjusted: Time,
-        emission: Amount,
-        emission_multiplier: Micro,
-        burn: Micro,
-        burn_total: Amount,
-        stake_share: Micro,
-        /// `null` while the pool is retired.
-        txpool_count: Nullable<Count>,
         grant: Vec<GrantName>;
+        part Policy::Grant(Grant::Chain) => {
+            difficulty: HexU128,
+            difficulty_cumulative: HexU128,
+            block_spacing: Duration,
+            tx_count: Count,
+            block_weight_max: Size,
+            block_weight_median: Size,
+            time_adjusted: Time,
+            emission: Amount,
+            emission_multiplier: Micro,
+            burn: Micro,
+            burn_total: Amount,
+            stake_share: Micro,
+        }
+        part Policy::Grant(Grant::Pool) => {
+            /// The entries this node has made public; `null` while the pool
+            /// is retired.
+            txpool_count: Nullable<Count>,
+        }
         part Policy::Grant(Grant::Status) => {
             started: Time,
             disk_free: Size,

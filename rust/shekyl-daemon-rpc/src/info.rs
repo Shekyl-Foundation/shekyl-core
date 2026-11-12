@@ -234,6 +234,7 @@ pub fn daemon_status(
         RpcFault::Store(fault)
     })?;
     let on = disclosure.status();
+    let on_chain = disclosure.shows(Grant::Chain);
     let status_count = |pick: fn(crate::info_facts::SessionCounts) -> u64| {
         shekyl_rpc_types::Nullable::from(sessions.map(|s| Count(pick(s))))
     };
@@ -260,20 +261,23 @@ pub fn daemon_status(
             .into(),
         writer: crate::reads::writer_of(halt),
         protocol_version: Integer(chain.protocol_version),
-        difficulty: HexU128(chain.difficulty),
-        difficulty_cumulative: HexU128(chain.cumulative_difficulty),
-        block_spacing: Duration(chain.difficulty_target),
+        difficulty: shown(on_chain, HexU128(chain.difficulty)),
+        difficulty_cumulative: shown(on_chain, HexU128(chain.cumulative_difficulty)),
+        block_spacing: shown(on_chain, Duration(chain.difficulty_target)),
         // Coinbases excluded: one per block.
-        tx_count: Count(chain.total_transactions.wrapping_sub(count)),
-        block_weight_max: Size(chain.block_weight_limit),
-        block_weight_median: Size(chain.block_weight_median),
-        time_adjusted: Time(chain.adjusted_time),
-        emission: AtomicUnitsString::from(tip.coins_generated),
-        emission_multiplier: Micro(tip.release_multiplier),
-        burn: Micro(burn),
-        burn_total: AtomicUnitsString::from(tip.total_burned),
-        stake_share: Micro(tip.staker_emission_share),
-        txpool_count: txpool_count.into(),
+        tx_count: shown(
+            on_chain,
+            Count(chain.total_transactions.wrapping_sub(count)),
+        ),
+        block_weight_max: shown(on_chain, Size(chain.block_weight_limit)),
+        block_weight_median: shown(on_chain, Size(chain.block_weight_median)),
+        time_adjusted: shown(on_chain, Time(chain.adjusted_time)),
+        emission: shown(on_chain, AtomicUnitsString::from(tip.coins_generated)),
+        emission_multiplier: shown(on_chain, Micro(tip.release_multiplier)),
+        burn: shown(on_chain, Micro(burn)),
+        burn_total: shown(on_chain, AtomicUnitsString::from(tip.total_burned)),
+        stake_share: shown(on_chain, Micro(tip.staker_emission_share)),
+        txpool_count: shown(disclosure.shows(Grant::Pool), txpool_count.into()),
         grant: disclosure.grants().iter().map(GrantName::from).collect(),
         started: shown(on, Time(status.as_ref().map_or(0, |(s, _)| s.start_time))),
         disk_free: shown(on, Size(status.as_ref().map_or(0, |(s, _)| s.free_space))),
