@@ -98,7 +98,7 @@ fn the_liveness_sample_ends_with_the_running_phase() {
 #[test]
 fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch and its subscription. The progress line is not said from
     // behind a request this test has already left behind.
@@ -157,7 +157,7 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
 #[test]
 fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(
         Input::DirectorySample {
@@ -180,7 +180,7 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
 #[test]
 fn a_blocked_bootstrap_is_said_by_its_cause_not_by_the_progress_line() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     let first = core.on(Input::ExternalBlocked, 1);
     assert_eq!(
@@ -214,7 +214,7 @@ fn a_blocked_bootstrap_is_said_by_its_cause_not_by_the_progress_line() {
 #[test]
 fn the_progress_line_measures_the_span_it_names() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     replied(&mut core, 0);
     replied(&mut core, 0);
@@ -257,7 +257,7 @@ fn the_progress_line_measures_the_span_it_names() {
 #[test]
 fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch, then the subscription; its `Replied` sends the first
     // sample, answered here.
@@ -320,7 +320,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
 #[test]
 fn an_origin_hold_during_bootstrap_is_announced_not_said_as_progress() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     let up = core.on(carrying(), 0);
     assert_eq!(announces(&up), 1, "a recovery is the posture line");

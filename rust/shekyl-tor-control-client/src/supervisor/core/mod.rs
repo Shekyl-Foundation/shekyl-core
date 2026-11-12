@@ -30,6 +30,7 @@ mod requests;
 mod resume;
 mod running;
 
+use crate::binary::VerifiedTorBinary;
 use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
@@ -227,6 +228,10 @@ pub enum Action {
     Spawn {
         /// Take a new data directory.
         fresh_directory: bool,
+        /// The binary the pin accepted for this launch. A launch exists only
+        /// with one, so the driver holds no binary of its own and cannot be
+        /// asked to launch without one (Rick, 2026-11-12).
+        binary: VerifiedTorBinary,
     },
     /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
     /// `traffic/read`. While Running the same reply also carries Tor's
@@ -337,8 +342,11 @@ impl ManagedRunning {
 /// What the driver observed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Input {
-    /// The pin accepted the binary.
-    PinAccepted,
+    /// The pin accepted the binary: the witness the next launch spawns.
+    PinAccepted {
+        /// What the pin verified.
+        binary: VerifiedTorBinary,
+    },
     /// The pin refused it.
     PinRefused,
     /// No bundle was found.
@@ -784,7 +792,7 @@ impl Core {
     #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
         let actions = match input {
-            Input::PinAccepted => self.pin_accepted(),
+            Input::PinAccepted { binary } => self.pin_accepted(binary),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
@@ -1041,12 +1049,15 @@ impl Core {
         .min()
     }
 
-    fn pin_accepted(&mut self) -> Vec<Action> {
+    /// The pin accepted `binary`: the launch carries it, so every spawn is
+    /// of the binary its own pin check accepted (`TSR-F5`).
+    fn pin_accepted(&mut self, binary: VerifiedTorBinary) -> Vec<Action> {
         self.phase = Phase::Launching;
         let fresh =
             self.launch_failures >= self.policy.fresh_directory_after && self.launch_failures > 0;
         vec![Action::Spawn {
             fresh_directory: fresh,
+            binary,
         }]
     }
 

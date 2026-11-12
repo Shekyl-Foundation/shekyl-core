@@ -66,7 +66,7 @@ impl Tor {
 /// answers it at its start, as every other.
 fn bootstrapping() -> Core {
     let (mut core, _) = Core::start(policy(), managed(false), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     replied(&mut core, 0);
     let subscribed = replied(&mut core, 0);

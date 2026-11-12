@@ -24,7 +24,7 @@ fn bound() -> u64 {
 /// A core whose launch is in flight, sent at 0.
 fn launching() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    let step = core.on(Input::PinAccepted, 0);
+    let step = core.on(Input::accepted(), 0);
     assert!(
         step.actions
             .iter()
@@ -193,7 +193,7 @@ fn an_ended_tor_is_reaped_before_the_next_launch() {
     assert!(ended.actions.contains(&Action::Reap), "{:?}", ended.actions);
     let due = core.deadline().expect("the respawn wait");
     core.on_deadline(due);
-    let pinned = core.on(Input::PinAccepted, due);
+    let pinned = core.on(Input::accepted(), due);
     assert!(
         !pinned
             .actions

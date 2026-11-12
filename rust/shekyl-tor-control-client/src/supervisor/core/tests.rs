@@ -16,6 +16,18 @@ use super::super::posture::{
 };
 use super::{duration_ns, Action, Core, Input, Policy, Step};
 
+impl Input {
+    /// The pin's acceptance, carrying a witness no test spawns: the core
+    /// hands it to the launch and never reads it.
+    pub(in crate::supervisor::core) fn accepted() -> Self {
+        Self::PinAccepted {
+            binary: crate::binary::VerifiedTorBinary::unchecked_for_test(std::path::PathBuf::from(
+                "/opt/shekyl/tor/tor",
+            )),
+        }
+    }
+}
+
 fn policy() -> Policy {
     Policy {
         base: Duration::from_secs(1),
@@ -102,10 +114,55 @@ fn fresh_directory(step: &Step) -> bool {
     step.actions
         .iter()
         .find_map(|action| match action {
-            Action::Spawn { fresh_directory } => Some(*fresh_directory),
+            Action::Spawn {
+                fresh_directory, ..
+            } => Some(*fresh_directory),
             _ => None,
         })
         .expect("a passed pin spawns")
+}
+
+/// **A launch is of the binary its own pin accepted** (Rick, 2026-11-12):
+/// the witness the pin hands the core is the one the spawn carries, and a
+/// re-pin's witness replaces it. The driver holds no binary, so no launch
+/// can be asked for without one. Fails if the core drops the witness, or a
+/// later launch carries an earlier pin's.
+#[test]
+fn a_launch_carries_the_binary_its_pin_accepted() {
+    use crate::binary::VerifiedTorBinary;
+    let launched = |step: &Step| {
+        step.actions.iter().find_map(|action| match action {
+            Action::Spawn { binary, .. } => Some(binary.clone()),
+            _ => None,
+        })
+    };
+    let first = VerifiedTorBinary::unchecked_for_test(std::path::PathBuf::from("/opt/a/tor"));
+    let second = VerifiedTorBinary::unchecked_for_test(std::path::PathBuf::from("/opt/b/tor"));
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let step = core.on(
+        Input::PinAccepted {
+            binary: first.clone(),
+        },
+        0,
+    );
+    assert_eq!(launched(&step), Some(first));
+    let mut step = core.on(Input::SpawnFailed, 0);
+    let mut now = 0;
+    while !step
+        .actions
+        .iter()
+        .any(|action| matches!(action, Action::CheckPin))
+    {
+        now = step.deadline.expect("a retry is armed");
+        step = core.on_deadline(now);
+    }
+    let step = core.on(
+        Input::PinAccepted {
+            binary: second.clone(),
+        },
+        now,
+    );
+    assert_eq!(launched(&step), Some(second));
 }
 
 /// The last input of a reply, as the driver folds it: [`Input::Replied`]
@@ -125,7 +182,7 @@ fn replied(core: &mut Core, at: u64) -> Step {
 /// Each request is answered as the driver answers it: the launch, then the
 /// event subscription, then the first sample.
 fn bring_up(core: &mut Core) -> Step {
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     replied(core, 0);
     let subscribed = replied(core, 0);
@@ -207,11 +264,12 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
     let clock = clock();
     let (mut core, step) = Core::start(policy(), managed(true), ns(&clock));
     assert!(matches!(step.actions[0], Action::CheckPin));
-    let mut step = core.on(Input::PinAccepted, ns(&clock));
+    let mut step = core.on(Input::accepted(), ns(&clock));
     assert!(matches!(
         step.actions[0],
         Action::Spawn {
-            fresh_directory: false
+            fresh_directory: false,
+            ..
         }
     ));
     step = core.on(Input::SpawnFailed, ns(&clock));
@@ -230,7 +288,7 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
             .any(|action| matches!(action, Action::CheckPin))
         {
             pin_at.push(due);
-            step = core.on(Input::PinAccepted, ns(&clock));
+            step = core.on(Input::accepted(), ns(&clock));
             fresh.push(fresh_directory(&step));
             step = core.on(Input::SpawnFailed, ns(&clock));
             said += announces(&step);
@@ -270,7 +328,7 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
 #[test]
 fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch, then its subscription. The sample is what the directory
     // replies answer.
@@ -319,7 +377,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
     assert_eq!(core.status().fixes, Vec::<ManagedTorFix>::new());
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch is in flight and Tor never answers: one bound later.
     let step = core.on_deadline(duration_ns(policy().reply_bound));
@@ -599,7 +657,7 @@ fn a_repeated_death_names_the_last_exit_code() {
     );
     let step = replied(&mut core, due);
     assert!(matches!(step.actions.first(), Some(Action::CheckPin)));
-    core.on(Input::PinAccepted, due);
+    core.on(Input::accepted(), due);
     core.on(Input::Spawned, due);
     core.on(
         Input::DirectorySample {
@@ -681,7 +739,7 @@ fn a_state_file_defers_writes_and_ends_the_sample() {
 #[test]
 fn a_ready_gate_without_a_listener_waits_for_the_sample() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch, the subscription, and the first sample are answered
     // before the bootstrap ends; that sample names no listener yet.
@@ -843,7 +901,7 @@ fn a_held_repeat_yields_to_its_pin_check_and_ends_with_the_spawn() {
         step.actions
     );
     assert_eq!(announces(&step), 0, "the check speaks for itself");
-    core.on(Input::PinAccepted, cap);
+    core.on(Input::accepted(), cap);
     core.on(Input::Spawned, cap);
     assert!(
         core.announcements.pending().is_none(),
@@ -857,7 +915,7 @@ fn a_held_repeat_yields_to_its_pin_check_and_ends_with_the_spawn() {
 fn a_repeat_armed_before_spawn_is_not_said_into_the_bootstrap() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     for _ in 0..3 {
-        core.on(Input::PinAccepted, 0);
+        core.on(Input::accepted(), 0);
         core.on(Input::SpawnFailed, 0);
     }
     let pin_at = core.pin_at.expect("the third fault arms a pin");
@@ -866,7 +924,7 @@ fn a_repeat_armed_before_spawn_is_not_said_into_the_bootstrap() {
     let step = core.on_deadline(pin_at);
     assert!(step.actions.contains(&Action::CheckPin), "{step:?}");
     assert_eq!(announces(&step), 0);
-    core.on(Input::PinAccepted, pin_at);
+    core.on(Input::accepted(), pin_at);
     core.on(Input::Spawned, pin_at);
     assert_eq!(announces(&core.on_deadline(cap)), 0);
 }
@@ -877,10 +935,10 @@ fn a_repeat_armed_before_spawn_is_not_said_into_the_bootstrap() {
 fn wait_after_death(usable_at: u64, degraded_at: Option<u64>, death_at: u64) -> u64 {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     for _ in 0..3 {
-        core.on(Input::PinAccepted, 0);
+        core.on(Input::accepted(), 0);
         core.on(Input::SpawnFailed, 0);
     }
-    core.on(Input::PinAccepted, usable_at);
+    core.on(Input::accepted(), usable_at);
     core.on(Input::Spawned, usable_at);
     core.on(
         Input::DirectorySample {

@@ -36,7 +36,7 @@ use shekyl_p2p::{
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass};
 use shekyl_tor_control_client::binary::{
-    discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
+    discover_and_verify, discover_and_verify_at, TorBinaryError,
 };
 use shekyl_tor_control_client::control::{
     parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
@@ -373,7 +373,7 @@ enum PinSource {
     Discover(Option<PathBuf>),
     /// A binary a test names, not checked (`unpinned-tor-for-tests`).
     #[cfg(all(test, unix))]
-    Unchecked(VerifiedTorBinary),
+    Unchecked(shekyl_tor_control_client::binary::VerifiedTorBinary),
 }
 
 async fn drive(
@@ -466,7 +466,6 @@ impl Drive {
             network_view: NetworkView::default(),
             control: None,
             kept: None,
-            pinned: None,
             incarnation: None,
             generation: 0,
             held: None,
@@ -526,7 +525,6 @@ struct Drive {
     network_view: NetworkView,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
-    pinned: Option<VerifiedTorBinary>,
     incarnation: Option<u64>,
     /// The incarnation a death or a bootstrap transition must name to be
     /// folded. It moves at each spawn and each reap, so the stop's own
@@ -904,10 +902,7 @@ impl Drive {
             PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
         match verified {
-            Ok(binary) => {
-                self.pinned = Some(binary);
-                Input::PinAccepted
-            }
+            Ok(binary) => Input::PinAccepted { binary },
             Err(error) => classify_pin(&error).input,
         }
     }

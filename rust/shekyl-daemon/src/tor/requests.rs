@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_consensus_valid_after, parse_network_view,
     parse_service_descriptor, parse_socks_listeners, parse_traffic_read, Command, ControlReply,
@@ -145,7 +146,10 @@ impl Drive {
         };
         let answered = match action {
             Action::Reap => self.send_reap(number),
-            Action::Spawn { fresh_directory } => self.send_launch(number, *fresh_directory),
+            Action::Spawn {
+                fresh_directory,
+                binary,
+            } => self.send_launch(number, *fresh_directory, binary.clone()),
             Action::SubscribeEvents => self.send_subscribe(number),
             Action::Sample => self.send_sample(number),
             Action::SetConfAvoidDiskWrites => self.send_defer(number),
@@ -252,7 +256,12 @@ impl Drive {
     /// driver abandons the launch, and the task then stops that Tor and
     /// retires its directory itself, so the next launch, which waits for
     /// this task, finds nothing of it.
-    fn send_launch(&mut self, number: u64, fresh_directory: bool) -> Option<Vec<Input>> {
+    fn send_launch(
+        &mut self,
+        number: u64,
+        fresh_directory: bool,
+        binary: VerifiedTorBinary,
+    ) -> Option<Vec<Input>> {
         // The core reaps an incarnation before the next launch, so none is
         // held here; one that is would be lost by the launch, so it is
         // stopped first, in the same order.
@@ -262,9 +271,6 @@ impl Drive {
                 say_retirement(&stray.stop_for_respawn().await.retire().await);
             });
         }
-        let Some(binary) = self.pinned.clone() else {
-            return Some(vec![Input::PinRefused]);
-        };
         let fresh = fresh_directory || self.kept.is_none();
         let old = if fresh_directory {
             self.kept.take()
