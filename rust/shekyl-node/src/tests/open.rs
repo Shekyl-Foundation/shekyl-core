@@ -180,7 +180,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
         .collect();
     assert!(
         budget.try_acquire(Class::CalcPow).is_none(),
-        "a calc_pow permit was still free"
+        "a pow permit was still free"
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);

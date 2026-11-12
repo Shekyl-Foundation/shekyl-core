@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `daemon_status` (`RPC_WIRE.md`; the 3.x `get_info`).
+//! `daemon_status` (`RPC_WIRE.md`).
 //!
 //! Like [`crate::methods`], this is the method with no Axum, no FFI and no
 //! JSON in it: facts in, a typed reply out.
@@ -17,25 +17,16 @@
 //! — the volume that cannot be queried for its free space, say — cannot
 //! refuse a caller who was never going to be told it.
 //!
-//! # Parity
+//! # What the reply carries
 //!
-//! The method first answered exactly what the C++ handler it replaced
-//! answered, and five oracle vectors captured from that handler's own
-//! computation held it to that. Each later commit moves one thing off
-//! parity, with a vector derived from its predecessor: the `target_height`
-//! sentinel went first (RK-D15, 3.46), then `has_peers` arrived (RK-D14,
-//! 3.47), then the restricted stand-ins went (RK-Q8, 3.48): a caller who is
-//! not shown Status or Peers gets a reply without those parts, where it got
-//! zeros, an empty version, `u64::MAX` of free space and the store's size
-//! rounded up. The connection counts went to the board at 3.49 (RK-Q3):
-//! handshaken sessions on every connector, one snapshot with `has_peers`,
-//! and no subtraction. The pool count was split at 3.50 (RK-Q10):
-//! `tx_pool_size` is the entries this node has broadcast, for every
-//! caller, and the entries it has not yet broadcast are a host-only part.
-//! A burn computation that refuses stopped being reported as zero at 3.51
-//! (RK-Q9): the store has contradicted itself, and the method refuses with
-//! a fault that says how. Nothing the C++ handler wrote for "not this
-//! value" is left in this reply.
+//! `txpool_count` is the entries this node has broadcast, for every caller;
+//! `txpool_private_count`, the entries it has not yet broadcast, is a
+//! host-only part. The connection counts are the board's handshaken
+//! sessions on every connector, from one snapshot. A store that holds more
+//! burned than generated has contradicted itself, and the method refuses
+//! with a fault that names the invariant and its operands. No member
+//! carries a stand-in for "no value": a part the caller is not shown is
+//! absent, and a value with no answer is `null`.
 //!
 //! **The store's size is a Status member and is read with Status.** While
 //! a restricted reply carried it rounded, it was read for every caller, so

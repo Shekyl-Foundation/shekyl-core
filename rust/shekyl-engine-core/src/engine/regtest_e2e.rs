@@ -172,12 +172,12 @@ pub(super) struct RegtestDaemon {
     /// production one).
     schedule: Option<RegtestSchedule>,
     /// Whether this daemon was started offline (both connectors off). Its
-    /// `get_info` must then report that state, not a count of zero.
+    /// `daemon_status` must then report that state, not a count of zero.
     offline: bool,
     /// Whether this daemon posts a template at open: an offline daemon is
     /// synced from open on any network (`Declaration::Offline`, CS-Q2 step
     /// 8) and posts once its follower has looped. Readiness then includes
-    /// that post: a `generateblocks` sent before it is honestly refused by
+    /// that post: a `dev_block_generate` sent before it is honestly refused by
     /// a daemon whose RPC is already up.
     posts_at_open: bool,
     /// When true, `Drop` leaves `data_dir` in place. Set only by
@@ -570,11 +570,11 @@ impl RegtestDaemon {
         panic!("could not obtain a port distinct from {taken:?}");
     }
 
-    /// Spawn the daemon and wait until its RPC answers `get_info`.
+    /// Spawn the daemon and wait until its RPC answers `daemon_status`.
     ///
     /// Coinbase goes to a dummy address. A walk that funds a wallet
     /// uses [`Self::start_for_seed`]: N2 pays `--mine-address`, not the
-    /// `generateblocks` request's address.
+    /// `dev_block_generate` request's address.
     pub(super) async fn start() -> RegtestDaemon {
         Self::start_with_regtest_schedule(None).await
     }
@@ -744,7 +744,7 @@ impl RegtestDaemon {
         // every spawn: regtest's default is the managed Tor, and a test
         // daemon has no business launching one.
         //
-        // The armed test levers (`generateblocks`, `pop_blocks`) are
+        // The armed test levers (`dev_block_generate`, `dev_chain_pop`) are
         // served only with `--dev-rpc` set (`RPC_CHANNEL.md` §6.1), and only
         // regtest's row permits it (NI-R8): a testnet daemon given it
         // refuses to start, so a testnet spawn never passes it. The daemon
@@ -1197,7 +1197,7 @@ impl RegtestDaemon {
             let chunk = (n - mined).min(Self::MINE_CHUNK);
             let resp = try_generate_blocks(&self.rpc, chunk)
                 .await
-                .expect("generateblocks");
+                .expect("dev_block_generate");
             blocks.extend(resp.blocks);
             mined += chunk;
             if mined >= n {
@@ -1209,7 +1209,7 @@ impl RegtestDaemon {
         }
     }
 
-    /// Blocks per `generateblocks` call in [`Self::generate_blocks`].
+    /// Blocks per `dev_block_generate` call in [`Self::generate_blocks`].
     const MINE_CHUNK: u64 = 32;
 
     /// Q9: once the relay marks the pool shown, the next template lists
@@ -1420,7 +1420,7 @@ impl Drop for RegtestDaemon {
 /// The directory is the product; remove it when the capture is done. The
 /// path is printed as the daemon drops.
 ///
-/// `get_info.height` counts the genesis block as 1. That chain is what the
+/// `RegtestDaemon::height` counts the genesis block as 1. That chain is what the
 /// column's reads ask for. The generator does not mine past it.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "DX-Q8 chain generator: requires SHEKYLD_BIN; keeps the datadir"]
@@ -1475,7 +1475,7 @@ async fn assert_tx_confirmed(daemon: &RegtestDaemon, txid: TxHash) -> u64 {
     assert_eq!(
         mined.blocks.len(),
         1,
-        "generateblocks must report the one block it connected, got {:?}",
+        "dev_block_generate must report the one block it connected, got {:?}",
         mined.blocks
     );
     assert_eq!(
@@ -1491,7 +1491,7 @@ async fn assert_tx_confirmed(daemon: &RegtestDaemon, txid: TxHash) -> u64 {
          connected at height {after}; that block carries {carried:?}"
     );
 
-    // `generateblocks` answers when the connector's tip reaches the
+    // `dev_block_generate` answers when the connector's tip reaches the
     // target; the tip follower reconciles the pool after that commit, so
     // the pool is read until it drains, within a bound.
     let reconciled = Instant::now() + Duration::from_secs(30);
@@ -1733,7 +1733,7 @@ const SMALL_DISK_AT_MOST_KIB: u64 = 2 * 1024;
 /// **A full disk stops the daemon, and it says so when it happens**
 /// (the CS-5 rehearsal of 2026-11-02). There a store commit met
 /// `ENOSPC`, the ingest service stopped, and the daemon stayed up: nothing
-/// was logged, `get_info` answered from the old height, and the one record
+/// was logged, `daemon_status` answered from the old height, and the one record
 /// printed 34 minutes later at SIGTERM.
 ///
 /// The daemon's chain is on a small filesystem and its log is not. The
@@ -1824,7 +1824,7 @@ async fn a_full_disk_stops_the_daemon_with_an_error_line_and_a_failed_exit() {
 }
 
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
-/// and `generateblocks` advances the chain. De-risks the Phase-0 foundation
+/// and `dev_block_generate` advances the chain. De-risks the Phase-0 foundation
 /// (spawn, RPC, wallet creation, address-format match) before layering the spend
 /// path on top.
 #[tokio::test(flavor = "multi_thread")]
@@ -1880,7 +1880,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let resp = daemon.generate_blocks(3).await;
     let after = daemon.height().await;
     eprintln!(
-        "height {before} -> {after}; generateblocks returned height={}, {} blocks",
+        "height {before} -> {after}; dev_block_generate returned height={}, {} blocks",
         resp.height,
         resp.blocks.len()
     );
@@ -1888,7 +1888,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     assert_eq!(
         resp.blocks.len(),
         3,
-        "generateblocks should return 3 hashes"
+        "dev_block_generate should return 3 hashes"
     );
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
 }
@@ -2224,14 +2224,14 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 ///
 /// This bites the live daemon across one tx-conserving pop: the spend's
 /// key images go 1 (in a block) → 2 (back in the pool) → 1, and
-/// `get_coinbase_tx_sum`'s fee leg moves by the spend's `txnFee` and
+/// `chain_coinbase_sum`'s fee leg moves by the spend's `txnFee` and
 /// back. It does NOT cover the image going free (that needs a pool
 /// flush), an integer-overflow amount, an alt-chain split, E2 grading,
 /// or the Rust validator. Those census rows are still `pending`; this
 /// test is the holder they can cite, not their implementation.
 ///
 /// It also does not assert pool-spent *before* the first mine.
-/// `is_key_image_spent` reports a pool image only for
+/// `chain_spent` reports a pool image only for
 /// `relay_category::broadcasted` (`tx_pool::check_for_key_images`). A
 /// wallet submit lands at `relay_method::local` until the fire-and-forget
 /// relay nudge promotes it, so that status races. A pop puts the spend
@@ -2495,7 +2495,7 @@ async fn create_wallet(
 /// grows the curve tree past depth-2 — to a real **Selene** branch layer — and
 /// proves a wallet-built spend over it is accepted by the daemon's consensus verify.
 ///
-/// Drives by the daemon's **observed tree depth** (`get_curve_tree_info.depth`,
+/// Drives by the daemon's **observed tree depth** (`curve_show.layers`,
 /// which is `fcmp_layers - 1`, so depth-3 = daemon depth 2), not a hardcoded
 /// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 18`… in
 /// practice ~684–701 drained leaves (~750 blocks, several minutes — a slow gate).
@@ -2657,7 +2657,7 @@ struct Overfilled {
     /// The C++'s effective median in force for the next block.
     median: u64,
     /// The C++'s consensus limit for it — `2 · M`
-    /// (`blockchain.cpp:6099`), read back from `get_info`.
+    /// (`blockchain.cpp:6099`), read back from `daemon_status`.
     limit: u64,
     /// Each pool spend's wire weight (`Transaction::weight`).
     weights: Vec<u64>,
@@ -2774,7 +2774,7 @@ async fn overfill_pool(
 /// **The bound is a relationship, not a figure.** `2 · M` is the C++'s
 /// `m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median
 /// * 2` (`blockchain.cpp:6099`; `:1718` and `:4330` read it back as
-/// `limit / 2`), read here from `get_info` rather than computed, and its
+/// `limit / 2`), read here from `daemon_status` rather than computed, and its
 /// value follows the zone and the penalty rulings —
 /// `CONSENSUS_C2_R2_WEIGHT_FEES.md` treats the zone, the surge factor and
 /// the quadratic penalty as one control system (`:214–215`) and examined
@@ -2789,7 +2789,7 @@ async fn overfill_pool(
 /// at its fee/penalty equilibrium just past `M`, so a block at the bound
 /// exists only as a Rust-built one. The Rust template is built against the
 /// C++'s own state — its template's header (parent, curve-tree root,
-/// attestation root, versions, timestamp), `get_miner_data`'s median and
+/// attestation root, versions, timestamp), `block_template`'s median and
 /// accumulator, the pool's bodies, the F20 volume window from the headers
 /// — so the only thing that differs between the two blocks submitted is
 /// one listed hash, and the only rule that can tell them apart is F14.
@@ -3089,7 +3089,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 ///
 /// The pool is overfilled with daemon-accepted spends (each ≈ 13.2 KB at
 /// one input, the I4 measurement) to more than the C++'s consensus limit
-/// (`get_info.block_weight_limit` = 2 × the effective median = 600 000 on
+/// (`daemon_status.block_weight_max` = 2 × the effective median = 600 000 on
 /// a young chain, the zone's floor arm), then one block is mined.
 ///
 /// **What the first run found (2026-09-28), and what this therefore
@@ -3133,7 +3133,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
         weights,
     } = overfill_pool(&daemon, &arc, &address).await;
 
-    // `get_block_template` reports what the template pays its miner. With
+    // `block_template` reports what the template pays its miner. With
     // the pool full the template lists transactions, and the figure is the
     // coinbase the template carries: not zero, and not the pre-split
     // emission.
@@ -3199,7 +3199,7 @@ async fn e2e_cxx_template_fills_to_its_median() {
     .await;
 }
 
-/// `get_block_template.expected_reward` is the sum of the coinbase outputs of
+/// `block_template.reward` is the sum of the coinbase outputs of
 /// the template it returns. `lists_transactions` states which template the
 /// caller set up, so a pool that did not fill (or did not drain) fails here
 /// and not as a vacuous pass.
@@ -4931,7 +4931,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// persist-before-dispatch seal, and the posture→submitter choke point —
 /// against a real daemon over real RPC. Two assertions ARE the proposition:
 ///
-/// - **submit-accept**: native `/submit_transaction` (the §8.7.1.1 UB
+/// - **submit-accept**: native `tx_submit` (the §8.7.1.1 UB
 ///   battery, `verify_release_bond_post` — the same function the block path
 ///   calls) admits the wallet-built exit;
 /// - **block-connect**: after mining, the daemon's bond-record row is
@@ -5768,7 +5768,7 @@ fn a_version_line_names_its_last_nine_hex_digits() {
 /// own tools rather than a layout minted here (RD-Q1: nothing lives only in
 /// a binary; RD-F15: the corpus writer verifies every body against its
 /// header). `shekyl-chain-replay fetch` builds the corpus from the live
-/// daemon over `/get_blocks_by_height.bin` — every block and every listed
+/// daemon over `block_list` — every block and every listed
 /// transaction's **full** bytes. `shekyl-chain-replay baseline` replays
 /// that corpus against a fresh store and writes the trace from the rows
 /// the store recorded (`DAEMON_REDB_STORE.md` §12.1). The binary is located
@@ -5841,7 +5841,7 @@ async fn maybe_capture_chain_vector(
         }
     };
     let replay_bin = tool("SHEKYL_CHAIN_REPLAY_BIN");
-    // `get_info.height` is the block COUNT; the top block is one below it.
+    // `height()` is the block COUNT; the top block is one below it.
     let count = daemon.height().await;
     let tip = count.checked_sub(1).expect("a chain with a genesis");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

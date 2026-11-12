@@ -41,12 +41,12 @@ use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead {
     /// This object as the chain-facts trait the method functions take.
     fn as_chain_facts(&self) -> &dyn ChainFacts;
-    /// This object as the info-facts trait `get_info` takes.
+    /// This object as the info-facts trait `daemon_status` takes.
     fn as_info_facts(&self) -> &dyn InfoFacts;
     /// This object as the read-facts trait the store methods take.
     fn as_read_facts(&self) -> &dyn ChainReadFacts;
-    /// This object as chain sync's view, which `sync_info` and
-    /// `get_connections` take.
+    /// This object as chain sync's view, which `sync_status` and
+    /// `peer_connections` take.
     fn as_sync_view(&self) -> &dyn SyncViewRead;
 }
 
@@ -133,7 +133,7 @@ pub trait PoolFacts: Send + Sync {
     fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
 
     /// Remove `ids` from the pool, or every entry when `ids` is empty
-    /// (`flush_txpool`); the removed ids. It writes the pool file, so it
+    /// (`txpool_flush`); the removed ids. It writes the pool file, so it
     /// waits: the node runs it on a blocking thread.
     ///
     /// # Errors
@@ -178,7 +178,7 @@ pub trait DoorFacts: Send + Sync {
     fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
 
     /// Pop `count` blocks from the tip, returning their bodies to the pool
-    /// (`pop_blocks`, DX-Q3, Q7). A pop below the lowest poppable height is
+    /// (`dev_chain_pop`, DX-Q3, Q7). A pop below the lowest poppable height is
     /// refused before any pop.
     ///
     /// # Errors

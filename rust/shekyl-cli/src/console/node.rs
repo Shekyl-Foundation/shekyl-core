@@ -58,9 +58,9 @@ const VERSION_UNAVAILABLE: &str = "The daemon software version is not available.
 /// answer:
 ///
 /// - **The versions differ.** The reply names both and says which side is
-///   older, and that is all: `get_info` is not read, because its shape is
+///   older, and that is all: `daemon_status` is not read, because its shape is
 ///   another version's and this build decodes it strictly or not at all.
-/// - **The versions agree.** `get_info` is decoded as every other reader
+/// - **The versions agree.** `daemon_status` is decoded as every other reader
 ///   decodes it, and the software version is printed.
 ///
 /// A daemon that does not disclose its version withholds the Status part,
@@ -76,7 +76,7 @@ pub(super) fn version(daemon: &DaemonClient) -> Result<String, String> {
     if theirs != CORE_RPC_VERSION {
         return Err(rpc_version_difference(CORE_RPC_VERSION, theirs));
     }
-    // `/get_info` without the handshake: this word exists to name a daemon
+    // `daemon_status` without the handshake: this word exists to name a daemon
     // the handshake would refuse.
     let status = daemon
         .call_unchecked::<wire::DaemonStatus>(&NoParams)
@@ -113,7 +113,7 @@ fn money(atomic: u64) -> String {
 
 /// `print_pool_stats`.
 ///
-/// Two reads: the pool's statistics, and `get_info` for the block weight
+/// Two reads: the pool's statistics, and `daemon_status` for the block weight
 /// limit the backlog estimate is measured against.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn print_transaction_pool_stats(daemon: &DaemonClient) -> Result<String, String> {

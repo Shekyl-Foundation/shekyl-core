@@ -254,12 +254,12 @@ pub struct MineAddress {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mine {
     /// `mine = on`: the node starts the miner once it has opened, to
-    /// `address`, with `threads`. Off, the miner starts on `start_mining`.
+    /// `address`, with `threads`. Off, the miner starts on `mine_start`.
     /// On without an address is refused at parse (Rick, 2026-11-02).
     pub start: bool,
     /// The address the miner pays. It starts nothing by itself.
     pub address: Option<MineAddress>,
-    /// The thread count for the start-time miner and for a `start_mining`
+    /// The thread count for the start-time miner and for a `mine_start`
     /// that names none; `None` is `auto`, the host's parallelism. A count
     /// above the host's is the configuration check's refusal.
     pub threads: Option<NonZeroU32>,
@@ -276,7 +276,7 @@ pub struct Dev {
     pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
-    /// Serve the armed test levers (`generateblocks`, `pop_blocks`) to the
+    /// Serve the armed test levers (`dev_block_generate`, `dev_chain_pop`) to the
     /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
     /// DX-Q3, Q8).
     pub rpc: bool,

@@ -96,7 +96,7 @@ impl NodeFacts for TestNode {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
         Ok(self.sync)
     }
-    /// These reads never render `sync_info`: the view is not ready.
+    /// These reads never render `sync_status`: the view is not ready.
     fn sync_view(&self) -> Result<shekyl_daemon_rpc::sync_facts::SyncViewFacts, FactsFault> {
         Err(FactsFault::NotReady)
     }
@@ -183,7 +183,7 @@ pub(crate) fn facts_over(
     facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
 }
 
-/// [`facts_over`], hashing `calc_pow` under the caches `caches` holds —
+/// [`facts_over`], hashing `pow` under the caches `caches` holds —
 /// the store a test's production substrate derived into, or an empty one.
 pub(crate) fn facts_with_caches(
     store: Arc<ChainStore>,
@@ -200,7 +200,7 @@ pub(crate) fn facts_with_caches(
     )
 }
 
-/// [`facts_with_caches`], hashing `calc_pow` under permits from `budget`.
+/// [`facts_with_caches`], hashing `pow` under permits from `budget`.
 pub(crate) fn facts_with_budget(
     store: Arc<ChainStore>,
     path: &Path,
@@ -910,7 +910,7 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
         differences.len()
     );
     eprintln!(
-        "get_coinbase_tx_sum: the coinbase-less-fees figure differs from the coins \
+        "chain_coinbase_sum: the coinbase-less-fees figure differs from the coins \
          minted at {coinbase_figure_differs} of {heights_read} heights; it would wrap below zero at \
          {coinbase_figure_wraps}"
     );

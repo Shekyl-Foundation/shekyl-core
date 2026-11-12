@@ -565,7 +565,7 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
 /// The coinbase sum over a chain with two listed spends: the emission is
 /// what each block's verdict paid (CEN-G12's growth of the supply), the
 /// fees are what the spends paid, and the whole chain's emission is the
-/// supply accumulator `get_info` reports. The C++'s emission figure —
+/// supply accumulator `daemon_status` reports. The C++'s emission figure —
 /// each coinbase less the block's fees — is printed beside it: on the
 /// spending block it is not what was minted.
 /// `pow` hashes under a permit from the daemon's one hasher budget,

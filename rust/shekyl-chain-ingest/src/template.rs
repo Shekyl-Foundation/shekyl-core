@@ -6,7 +6,7 @@
 //! The node's one block template (`DRS_X_STORE_FLIP.md` DX-Q3, N2).
 //!
 //! The tip follower builds it for the block after the tip, and the miner
-//! and `get_block_template` read the job it posts. Nothing else builds a
+//! and `block_template` read the job it posts. Nothing else builds a
 //! block for this node.
 //!
 //! **One snapshot.** [`produce`] takes a [`ReadSnapshot`] and no store, so
@@ -31,7 +31,7 @@
 //! the block it went into is filed or is never going to be. Neither is
 //! derived from anything another template shares. The witness is the
 //! daemon that served the template, whether its built-in miner found the
-//! block or an external one on `get_block_template` did.
+//! block or an external one on `block_template` did.
 //!
 //! **The extra nonce.** Every coinbase reserves its eight bytes, zeroed;
 //! the job carries their offset and the header nonce's.
@@ -225,7 +225,7 @@ struct Listing {
 /// between the two locks evicts nothing. A listed body the pool stopped
 /// showing between them — a make-room eviction, a same-tip reconcile, a
 /// flush — posts nothing and evicts nothing ([`NoTemplate::BodyGone`]): a
-/// job must not name a body an outside miner's `submit_block` cannot find,
+/// job must not name a body an outside miner's `block_submit` cannot find,
 /// and the follower builds again without it.
 fn list(
     snap: &ReadSnapshot<'_>,

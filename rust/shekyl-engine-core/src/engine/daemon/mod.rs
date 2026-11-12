@@ -47,7 +47,7 @@
 ///
 /// It lives **inside** this module rather than beside it because the design
 /// record's `R1` seam says the type is *built from the engine's daemon
-/// client*: the `get_info` decode it shares with [`DaemonEngine::get_health`]
+/// client*: the `daemon_status` decode it shares with [`DaemonEngine::get_health`]
 /// has exactly one other caller, in this file. Keeping the response vocabulary
 /// in one directory is what makes "a DRS response-shape change touches the
 /// constructor and nothing else" a property of the tree rather than a promise
@@ -303,7 +303,7 @@ impl DaemonEngine for DaemonClient {
 
     /// Atomic single-RPC fee snapshot (§3.3).
     ///
-    /// Issues **one** `get_fee_estimate` JSON-RPC call and maps its
+    /// Issues **one** `fee` JSON-RPC call and maps its
     /// response onto all three non-`Custom`
     /// [`FeePriority`](super::FeePriority) tiers via
     /// [`GetFeeEstimateResponse`] — not three
@@ -368,7 +368,7 @@ impl DaemonEngine for DaemonClient {
         }
     }
 
-    /// Snapshot daemon health via **one** `get_info` JSON-RPC read
+    /// Snapshot daemon health via **one** `daemon_status` JSON-RPC read
     /// (§5.2 item 3). Identity is already gated at [`Rpc::post`].
     ///
     /// Whether the daemon has peers and whether it is synchronized feed the

@@ -513,7 +513,7 @@ impl ReadSnapshot<'_> {
 
     /// **K1.** Whether `key_image` is spent on the committed chain — the
     /// chain half of CEN-I7, served to the pool's admission check, the
-    /// submit verdict and `is_key_image_spent` from one snapshot. Replaces
+    /// submit verdict and `chain_spent` from one snapshot. Replaces
     /// `has_key_image` **and** `has_key_images`: the batch form existed to
     /// hold one LMDB `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`), and
     /// this snapshot *is* that transaction — N calls on it are the batch

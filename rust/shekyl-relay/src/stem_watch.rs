@@ -53,7 +53,7 @@
 //! Nothing on this side chooses which connectors are observed; the caller
 //! does. A stem records the connector it was forwarded on, and the tally
 //! keeps the first one, because a connection id is one session.
-//! `/get_stem_tallies` carries that connector on the row.
+//! `relay_stats` carries that connector on the row.
 //!
 //! ```text
 //! shekyl-relay      owner::actor  (a stem forwarded to a successor)

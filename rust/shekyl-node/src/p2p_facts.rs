@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The RPC's p2p facts, read from the network
-//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, "RPC facts"): `get_connections`
+//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, "RPC facts"): `peer_connections`
 //! and `net_stats` from the session board and the link gate, the peer list
 //! from the peers owner, the stem tallies from the relay snapshot. An
 //! offline node answers [`P2pRead::Offline`] where the read has that answer.

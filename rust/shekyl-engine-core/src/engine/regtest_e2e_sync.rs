@@ -152,7 +152,7 @@ async fn sync_from_a_peer(blocks: u64, seed: [u8; shekyl_crypto_pq::account::SEE
 /// `MINED` blocks,
 /// then **restarts on its own data directory**: the new process has no
 /// session, reads its tip from the store, publishes it once at start,
-/// and dials `B`. `B`'s `get_connections` must then show an **incoming**
+/// and dials `B`. `B`'s `peer_connections` must then show an **incoming**
 /// connection it did not have before the restart whose `height` is
 /// `MINED + 1`, the block count `A` came back with. The connection id
 /// is what makes it a fresh handshake rather than the old session's row
@@ -200,7 +200,7 @@ async fn a_dialing_node_hands_its_tip_to_the_peer_it_dials() {
 
     // `A` is closed, so it is synced; its miner posts a job one follower
     // pass after the state, so the miner is asked rather than the flag
-    // (`get_info` said synchronized while the posting still read
+    // (`daemon_status` said synchronized while the posting still read
     // `no_view`, observed 2026-10-29). The refusal retried is the
     // wire-pinned `mine.syncing`, for the moment `B`'s session opens
     // and its claim has not yet arrived (the opening, CS-Q2 step 8).
@@ -354,7 +354,7 @@ async fn a_node_and_an_alpha_11_node_refuse_each_other_cleanly() {
 /// block there is not a test with a deadline.
 ///
 /// Red before the declaration was built: the node read `NoView` forever,
-/// `get_info` reported it unsynchronized and it posted no template.
+/// `daemon_status` reported it unsynchronized and it posted no template.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one testnet daemon"]
 async fn an_offline_testnet_node_is_synced_at_open() {
@@ -377,10 +377,10 @@ async fn an_offline_testnet_node_is_synced_at_open() {
 /// other half of the test above, on the network whose `dev-difficulty`
 /// makes one block a few milliseconds of work. The declaration is read by
 /// network-independent code (`Declaration::state_without_sessions`), so
-/// what this proves of `generateblocks` on an offline node holds on
+/// what this proves of `dev_block_generate` on an offline node holds on
 /// testnet too.
 ///
-/// Red before the declaration was built: `generateblocks` was refused
+/// Red before the declaration was built: `dev_block_generate` was refused
 /// `mine.syncing` past the window.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; one regtest daemon"]
@@ -403,7 +403,7 @@ async fn an_offline_regtest_node_mines() {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             Err(e) => daemon.panic_with_log(
-                "generateblocks on an offline regtest node",
+                "dev_block_generate on an offline regtest node",
                 format!("{e:?}"),
             ),
         }
@@ -426,7 +426,7 @@ async fn an_offline_regtest_node_mines() {
 /// node's network is up again, and it is synced.
 ///
 /// Red before the declaration was built: when its last peer left, the
-/// node published `NoView` and `generateblocks` was refused
+/// node published `NoView` and `dev_block_generate` was refused
 /// `mine.syncing`. A regtest node opened `Synced` then, by network, so
 /// the first leg alone does not tell the two apart.
 #[tokio::test(flavor = "multi_thread")]
@@ -542,8 +542,8 @@ async fn a_closed_node_whose_peer_is_down_mines_and_opens_when_it_arrives() {
 /// synced at open: `A` dials `B`, and `B` listens and requests nothing
 /// (`--dev-sync off`): a timed sync cannot fetch the block for it, so a
 /// tip it takes was announced. Once their session is open, `A` mines one
-/// block with `generateblocks`, then submits one built from its own
-/// template with `submit_block`. Each time `B` must take `A`'s new tip
+/// block with `dev_block_generate`, then submits one built from its own
+/// template with `block_submit`. Each time `B` must take `A`'s new tip
 /// within `RELAYED_WITHIN`.
 ///
 /// Red: with the relay of a tip no entry reply connected removed from the
@@ -611,7 +611,7 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
-    // generateblocks. The follower posts its first job one pass after the
+    // dev_block_generate. The follower posts its first job one pass after the
     // state at open, so the first answers can be `starting`.
     let posted = Instant::now() + Duration::from_secs(60);
     loop {
@@ -629,9 +629,9 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
         }
     }
     let generated = a.last_block_hash().await;
-    takes_tip(&b, &generated, "generateblocks made").await;
+    takes_tip(&b, &generated, "dev_block_generate made").await;
 
-    // submit_block, from the template at the new tip. Regtest's fixed
+    // block_submit, from the template at the new tip. Regtest's fixed
     // difficulty takes the template as it is posted.
     let next = a.height().await;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -659,5 +659,5 @@ async fn a_block_a_node_mines_reaches_its_peer_by_relay() {
         submitted,
         "the block connected on A"
     );
-    takes_tip(&b, &submitted, "submit_block took").await;
+    takes_tip(&b, &submitted, "block_submit took").await;
 }

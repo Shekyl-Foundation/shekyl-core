@@ -16,9 +16,8 @@
 //!
 //! A core-reported `0` target is C5's
 //! sentinel and decodes as `None` — never [`ChainCount::from_raw`]`(0)`.
-//! `get_version` and `sync_info` forward that count, so `0` on their wire is
-//! only `None`. `get_info` still writes `0` when the node is synchronized,
-//! and that rule lives in the C++ handler, not here.
+//! `version` and `sync_status` forward that count, so `0` on their wire is
+//! only `None`.
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `ChainTip.chain_height` is COUNT, not ordinal.
@@ -96,7 +95,7 @@ pub struct DaemonIdentity {
 }
 
 /// What the chain tip looks like right now, plus the one build fact
-/// (`release_build`) that rides the same POD because `get_version` reports
+/// (`release_build`) that rides the same POD because `version` reports
 /// it and C++'s build system is its only owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainTip {
@@ -108,8 +107,8 @@ pub struct ChainTip {
     pub top_hash: BlockHash,
     /// The core's target count. `None` when the core reported `0`: that
     /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
-    /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
-    /// count, and write `None` as `null`; `get_info` reports the same fact
+    /// is [`Self::synchronized`]. `version` and `sync_status` forward this
+    /// count, and write `None` as `null`; `daemon_status` reports the same fact
     /// from its own snapshot.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
@@ -247,7 +246,7 @@ pub trait ChainFacts: Send + Sync {
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
-    /// The whole header projection at `height`. `fill_pow_hash` is both the
+    /// The whole header projection at `height`. The `pow` switch is both the
     /// request and the entitlement — the caller has already applied the
     /// restricted-listener rule — and computing it is the expensive part.
     fn block_header_at(
@@ -286,7 +285,7 @@ pub struct BlockAt {
     pub chain_height: ChainCount,
 }
 
-/// The block itself: RK-3's header projection plus what only `get_block`
+/// The block itself: RK-3's header projection plus what only `block_show`
 /// carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockFacts {
@@ -301,12 +300,12 @@ pub struct BlockFacts {
     pub tx_hashes: Vec<TxHash>,
 }
 
-/// The facts the p2p handlers consume (`sync_info`, `/get_net_stats`,
-/// `/get_peer_list`, `get_connections`).
+/// The facts the p2p handlers consume (`sync_status`, `p2p_stats`,
+/// `peer_list`, `peer_connections`).
 ///
 /// Separate from [`ChainFacts`] because the two have no overlap and no shared
 /// lock domain: these read the network's board, link totals and peer lists,
-/// and none of them touches the blockchain. `sync_info` needs both and
+/// and none of them touches the blockchain. `sync_status` needs both and
 /// takes both, which makes the fact that it reads two unsynchronised
 /// sources visible at its signature rather than buried in a handler.
 ///

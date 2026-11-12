@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! What the relay task publishes for readers on other threads: the RPC's
-//! `get_stem_tallies` and the node's health. One value, replaced whole
+//! `relay_stats` and the node's health. One value, replaced whole
 //! after each change; a reader takes the `Arc` and reads a consistent
 //! copy. Nothing here is written by a reader (§18.5).
 

@@ -49,7 +49,7 @@ pub(super) struct ClosedShard {
 ///    (`SHARD_LENGTH`, 3 000 000 bytes). The wallet's own byte count only
 ///    decides when to stop building; the exit is the daemon's.
 /// 2. **Final.** `reorg_cap` more blocks, after which the daemon's
-///    `get_archival_shard_coverage` — `ClosedUniverse::final_before` at
+///    `shard_coverage` — `ClosedUniverse::final_before` at
 ///    the next connecting height, the predicate J15 applies at the
 ///    parent — lists the shard. That listing is the loop's exit, and its
 ///    `freeze_height` is held to the block the wallet's count crossed in.
@@ -77,7 +77,7 @@ pub(super) struct ClosedShard {
 /// discards a closed shard's bodies — the prunable regions and the hybrid
 /// auths, the archival good itself — at the epoch boundary two epochs
 /// after the shard's close epoch, `(close_epoch + 2) · SEB`, and this
-/// node then answers `/get_transactions` for them as `archived` in the
+/// node then answers `tx_list` for them as `archived` in the
 /// full form and as a skeleton under `prune` (`SB-Q2`). Until the wallet
 /// fetches with `prune` and binds the skeleton (`SB-Q2` item 8), a wallet
 /// opened after that cannot scan the fill from this node: its refresh is

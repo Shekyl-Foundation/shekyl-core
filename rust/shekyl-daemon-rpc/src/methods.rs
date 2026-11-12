@@ -535,7 +535,7 @@ pub(crate) mod tests {
         /// height — the state only a hash lookup can reach, and the one the
         /// height arm's bound makes unrepresentable.
         pub alt_declared_height: Option<BlockHeight>,
-        /// The last `fill_pow_hash` `block_header_at` was asked for.
+        /// The last `pow` switch `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
         /// The hash `block_at` was asked for, when it was asked by hash.
         pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
@@ -544,14 +544,14 @@ pub(crate) mod tests {
         /// How many times `block_header_at` was called.
         ///
         /// A *count*, not a last-value, because the property
-        /// `get_block_headers_range` owes is about work not done: a range
+        /// `block_header_list` owes is about work not done: a range
         /// past the tip must be refused before any per-height read. An
         /// assertion on the error code alone cannot tell an O(1) refusal
         /// from one that walked the chain first and refused at the end.
         pub header_reads: AtomicU64,
         /// How many more header reads see the chain grow by one block first.
         ///
-        /// **The input a fixed-height double cannot express.** `get_last_block_header`
+        /// **The input a fixed-height double cannot express.** `block_header_show`
         /// picks a height from one lock acquisition and projects it under
         /// another, so its defect only exists while the chain moves *between*
         /// them — a double whose height is constant makes that state

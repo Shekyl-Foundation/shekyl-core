@@ -218,7 +218,7 @@ async fn fetch_proof_txs<R: Rpc>(
 /// against the tip it read once for the whole gather, which is the same
 /// arithmetic this function used to perform. Doing it again here meant a
 /// second `get_height`, and subtracting a block height captured in the
-/// *earlier* `get_transactions` from a tip read *later* — two snapshots
+/// *earlier* `tx_list` from a tip read *later* — two snapshots
 /// for one answer, so a block arriving between them inflated the count
 /// and a reorg could make it describe a chain the block is no longer on.
 /// The one-lock gather exists precisely so that pairing cannot happen;

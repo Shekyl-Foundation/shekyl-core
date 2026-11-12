@@ -5,9 +5,8 @@
 
 //! [`ChainReadFacts`]: the chain reads behind the eight methods the store
 //! flip moves off the C++ table (`DRS_X_STORE_FLIP.md` DX-Q3, PR 3) —
-//! `get_alt_blocks_hashes`, `get_alternate_chains`, `get_coinbase_tx_sum`,
-//! `calc_pow`, `get_curve_tree_info`, `get_curve_tree_checkpoint`,
-//! `get_archival_emission_claim_source` and `get_archival_shard_coverage`.
+//! `chain_alt`, `chain_coinbase_sum`, `pow`, `curve_show`,
+//! `archival_claim_show` and `shard_coverage`.
 //!
 //! **Staged.** One implementor, [`StoreFacts`](crate::store_facts::StoreFacts),
 //! over the Rust chain store; the handlers in [`crate::read_methods`] are
@@ -76,7 +75,7 @@ pub struct CoinbaseSum {
     pub fees: u128,
 }
 
-/// A range `get_coinbase_tx_sum` sums, or the refusal it answers with.
+/// A range `chain_coinbase_sum` sums, or the refusal it answers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoinbaseRange {
     /// The range is inside the chain; here is its sum.
@@ -85,7 +84,7 @@ pub enum CoinbaseRange {
     TooLarge,
 }
 
-/// The seed a `calc_pow` hash is computed under.
+/// The seed a `pow` hash is computed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowSeed {
     /// The caller named it.
@@ -94,7 +93,7 @@ pub enum PowSeed {
     AtHeight(BlockHeight),
 }
 
-/// Why `calc_pow` will not hash. Neither variant spends a hash.
+/// Why `pow` will not hash. Neither variant spends a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowDecline {
     /// The seed height is above the tip: the chain has no block there, so
@@ -106,7 +105,7 @@ pub enum PowDecline {
         tip: BlockHeight,
     },
     /// The daemon's cache store does not hold this seed's cache.
-    /// `calc_pow` hashes only under a held cache and never derives one
+    /// `pow` hashes only under a held cache and never derives one
     /// (ruled 2026-10-17): a derivation is a 256 MiB fill that would
     /// evict the validator's spare cache, and an RPC caller names the
     /// seed.
@@ -116,7 +115,7 @@ pub enum PowDecline {
     },
 }
 
-/// A cache the daemon already holds, admitted for one `calc_pow` hash.
+/// A cache the daemon already holds, admitted for one `pow` hash.
 ///
 /// Only [`ChainReadFacts::admit_pow`] mints one. The caller spends its
 /// hash budget against this value, then [`ChainReadFacts::hash_admitted`]
@@ -208,7 +207,7 @@ pub struct ListedTx {
     pub body: crate::core::TxBody,
 }
 
-/// One block of `get_blocks_by_height.bin`: its bytes and its listed
+/// One block of `block_list`: its bytes and its listed
 /// transactions, in list order. The projection chooses each body's form
 /// from the request (`SB-Q2`); a discarded good is a slot state there,
 /// never a reason this read fails.
@@ -232,7 +231,7 @@ pub struct BlocksAt {
     pub failed: Option<BlockHeight>,
 }
 
-/// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
+/// What [`ChainReadFacts::transactions`] gathered for `tx_list`:
 /// one slot per id asked, and the chain height confirmations count from,
 /// both read off one snapshot. A body this node has discarded is a slot
 /// like any other — [`crate::core::ArchivalGood::Discarded`] when it carries
@@ -262,7 +261,7 @@ pub enum SpentAt {
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
     /// The blocks at `heights`, each with its listed transactions as the
-    /// store holds them (`get_blocks_by_height.bin`).
+    /// store holds them (`block_list`).
     ///
     /// # Errors
     ///
@@ -272,7 +271,7 @@ pub trait ChainReadFacts: Send + Sync {
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault>;
 
     /// Each of `ids` from the chain, or else from the pool as `scope` may
-    /// see it, or missed (`get_transactions`). The pool is read before the
+    /// see it, or missed (`tx_list`). The pool is read before the
     /// chain's snapshot is begun, so a transaction mined between the two is
     /// found in the chain.
     ///
@@ -294,7 +293,7 @@ pub trait ChainReadFacts: Send + Sync {
     /// The store's faults.
     fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault>;
 
-    /// Where each of `key_images` is spent, in order (`is_key_image_spent`).
+    /// Where each of `key_images` is spent, in order (`chain_spent`).
     ///
     /// # Errors
     ///
@@ -353,7 +352,7 @@ pub trait ChainReadFacts: Send + Sync {
 
     /// RandomX over `pow_blob` on the cache `admitted` holds.
     ///
-    /// Takes one permit in the calc_pow hasher class, then hashes. The
+    /// Takes one permit in the `pow` hasher class (`Class::CalcPow`), then hashes. The
     /// hash does not fail. [`FactsFault::NotReady`] is the handle: a
     /// chain that is not open never admits, and hashing on it is that
     /// fault rather than a zero.

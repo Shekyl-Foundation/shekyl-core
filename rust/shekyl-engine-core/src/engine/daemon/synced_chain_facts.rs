@@ -30,7 +30,7 @@
 //!
 //! Whether the node has caught up is the daemon's call, and it makes that
 //! call with more context than the wallet has. So the wallet reads one
-//! source, `get_info.synchronized`, and [`SyncedChainFacts::new`] is where
+//! source, `daemon_status.synchronized`, and [`SyncedChainFacts::new`] is where
 //! it is read. The submit ladder reads that same member of the same
 //! [`DaemonHealth`]: there is no second health type to disagree with it.
 //!
@@ -112,7 +112,7 @@ pub(crate) struct SyncedChainFacts {
     /// below their fork, so a ledger that carried observations across
     /// refreshes on heights alone could not tell a reorg-and-catch-up from
     /// ordinary advance. This is the fact that makes the difference
-    /// observable, and it is read from the same `get_info` reply as the
+    /// observable, and it is read from the same `daemon_status` reply as the
     /// count, so it costs nothing.
     top_hash: BlockHash,
 }
@@ -142,7 +142,7 @@ impl SyncedChainFacts {
         })
     }
 
-    /// Build from the engine's [`DaemonHealth`] projection of `get_info`.
+    /// Build from the engine's [`DaemonHealth`] projection of `daemon_status`.
     ///
     /// `has_peers` is deliberately not carried: peerlessness is the
     /// watchdog's escalation axis, not a synchronization fact, and a type
@@ -192,7 +192,7 @@ impl SyncedChainFacts {
     /// A witness read before a record proves only that the daemon was
     /// synchronized before the record was gathered. It does not prove the
     /// record was gathered on the chain the witness described: a reorg can
-    /// begin after `get_info`, replace the witness-tip block, and catch back
+    /// begin after `daemon_status`, replace the witness-tip block, and catch back
     /// up **above** that height before the record reply, and no relation
     /// between the two *heights* can see it — `record_tip >= witness_tip`
     /// reads as ordinary advance. Re-reading the block at the witness tip

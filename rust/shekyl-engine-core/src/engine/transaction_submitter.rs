@@ -191,7 +191,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// A 1:1 structural mapping by design: the daemon's Rust admission
 /// engine computes the verdict atomically at commit-check time, so
 /// there is no client-side flag triage left to do (the legacy
-/// `send_raw_transaction` boolean-flag collapse this function used to
+/// `tx_submit` boolean-flag collapse this function used to
 /// perform is deleted with that endpoint). The per-cause *dispositions*
 /// (§2.5) are applied downstream via [`outcome_to_result`] and the
 /// orchestrator's finalizers, keeping mapping and policy separable.

@@ -17,14 +17,14 @@
 //!   the Rust/Axum RPC surface neither caps N (the dead epee `per_private_ip`
 //!   default) nor exposes a connection-count field.
 //! - **M-timing** — the cross-persona timing coupling on **both** read paths:
-//!   the lock-taking JSON `get_block` (`m_blockchain_lock`) and the lock-free
-//!   `get_blocks_by_height.bin` (`get_block_from_height`, MVCC, no lock). The
+//!   the lock-taking JSON `block_show` (`m_blockchain_lock`) and the lock-free
+//!   `block_list` (`get_block_from_height`, MVCC, no lock). The
 //!   load-bearing output is the **coupling-magnitude distribution** — how far a
 //!   probe persona's latency shifts under N contending personas, in absolute
 //!   time — and the **delta** between paths, which isolates the lock.
 //! - **M-consistency** — the correctness gate on the "serve lock-free" rung: a
 //!   latency-only harness would greenlight it without testing what makes it
-//!   *safe*. Under a concurrent writer (`generateblocks` + `pop_blocks`
+//!   *safe*. Under a concurrent writer (`dev_block_generate` + `dev_chain_pop`
 //!   churning the tip), the lock-free path must return, for the *same stable
 //!   height*, the **same block** the locked path does — i.e. it must not expose
 //!   a consistency window the lock closes. Tip-race reads are additionally
@@ -633,7 +633,7 @@ async fn measure_consistency(daemon: Arc<RegtestDaemon>, tip: u64) {
         r.await.expect("harness reader task panicked");
     }
     stop.store(true, Ordering::Relaxed);
-    // Surface a churn-writer failure honestly. `generate_blocks`/`pop_blocks`
+    // Surface a churn-writer failure honestly. `generate_blocks`/`dev_chain_pop`
     // .expect()-panic on a transient RPC error; swallowing that panic into
     // cycles=0 would fail the `cycles > 0` invariant below with a misleading
     // "writer never churned" message when the writer *did* churn and then hit a
@@ -683,7 +683,7 @@ async fn measure_consistency(daemon: Arc<RegtestDaemon>, tip: u64) {
             "  never presents an inconsistent adjacent pair, so a real competing-chain reorg"
         );
         eprintln!(
-            "  (not stageable via generateblocks) is needed to force it. Rung-1 confirms the"
+            "  (not stageable via dev_block_generate) is needed to force it. Rung-1 confirms the"
         );
         eprintln!("  single-height mechanism; the straddle stays source-established + avoided by");
         eprintln!("  construction (one height per call).\n");
@@ -730,7 +730,7 @@ async fn measure_consistency(daemon: Arc<RegtestDaemon>, tip: u64) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "SP-T2 observability: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn daemon_observability_round0() {
-    // ~2s/block on this rig; keep the single generateblocks call well under the
+    // ~2s/block on this rig; keep the single dev_block_generate call well under the
     // RPC client's 180s timeout while leaving a stable zone below the churn tip.
     const MINE: u64 = 40;
 

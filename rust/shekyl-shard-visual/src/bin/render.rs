@@ -7,7 +7,7 @@
 //!
 //! The web viewer (`SHARD_VIEW_FETCH.md` SV-D) runs on a host whose site is
 //! not Rust. Its server route asks the site's own daemon for a shard's view
-//! (`request_archival_shard` on the unrestricted listener), then hands the
+//! (`shard_fetch` on the unrestricted listener), then hands the
 //! answer to this binary, which is deployed beside the site:
 //!
 //! ```text

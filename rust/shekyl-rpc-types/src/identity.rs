@@ -5,7 +5,7 @@
 
 //! Connect-time identity tuple: one comparison, every client (`VC-2`…`VC-4`).
 //!
-//! [`IdentityExpectation::read`] is the only place a `get_version` reply is
+//! [`IdentityExpectation::read`] is the only place a `version` reply is
 //! decoded and compared to this build. The wallet (`VC-4`) and the remote
 //! console (`VC-3`) fetch over their own transports and format the refusal in
 //! their own voice; they do not reimplement the axes.
@@ -81,7 +81,7 @@ impl IdentityExpectation {
         self.network
     }
 
-    /// Decode a `get_version` result and compare it to this build's pins.
+    /// Decode a `version` result and compare it to this build's pins.
     ///
     /// `result` is the JSON-RPC `result` member. Wire first, through
     /// [`daemon_rpc_version`], **before** the rest is decoded: a version
@@ -155,7 +155,7 @@ impl IdentityExpectation {
 /// The frozen key (`RK-D25`).
 const VERSION_KEY: &str = "version";
 
-/// A `get_version` result with no readable `version` member.
+/// A `version` result with no readable `version` member.
 ///
 /// Holds the parse failure, which is the daemon's own text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +169,7 @@ impl std::fmt::Display for VersionUnreadable {
 
 impl std::error::Error for VersionUnreadable {}
 
-/// The packed RPC version a daemon reports, read from a `get_version`
+/// The packed RPC version a daemon reports, read from a `version`
 /// result on its own (`RK-D25`).
 ///
 /// `result` is the JSON-RPC `result` member. Only `version` is read: a
@@ -222,7 +222,7 @@ impl<'de> serde::de::Visitor<'de> for VersionVisitor {
     }
 }
 
-/// A refused `get_version` reply: which axis, and what failed to parse.
+/// A refused `version` reply: which axis, and what failed to parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityRefusal {
     /// Why the reply is not this build.
@@ -232,7 +232,7 @@ pub struct IdentityRefusal {
     pub evidence: Option<String>,
 }
 
-/// Why a `get_version` reply is not this build.
+/// Why a `version` reply is not this build.
 ///
 /// A fixed-size value with no text from the reply in it, so every error type
 /// on the way up can carry it, including the refresh producer's `Copy`-only
@@ -280,7 +280,7 @@ pub enum IdentityMismatch {
 }
 
 impl IdentityMismatch {
-    /// A reply that did not parse as this build's `get_version` shape. The
+    /// A reply that did not parse as this build's `version` shape. The
     /// caller logs what failed to parse; see [`Self::WireUnreadable`].
     #[must_use]
     pub const fn unreadable() -> Self {

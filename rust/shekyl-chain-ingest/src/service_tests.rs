@@ -1979,7 +1979,7 @@ async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
 
 /// Two builds in a row lose a listed body at one tip: the one rebuild
 /// withdraws for the same reason, and the board rests on `Stuck`, which
-/// `generateblocks` refuses. The next wake, whose first build loses a
+/// `dev_block_generate` refuses. The next wake, whose first build loses a
 /// body again, gets its own rebuild and posts. Red edit: leave the budget
 /// spent, so that wake rests on `Stuck` at once.
 #[tokio::test(flavor = "multi_thread")]

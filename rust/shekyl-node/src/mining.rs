@@ -112,7 +112,7 @@ fn refusal_for_running(running: SearchBound, asked: SearchBound) -> MiningRefuse
     }
 }
 
-/// The posted job, as `mining_status` reports it.
+/// The posted job, as `mine_status` reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PostedJob {
     /// The height the job's block connects at.
@@ -123,7 +123,7 @@ pub struct PostedJob {
     pub reward: AtomicUnits,
 }
 
-/// What `mining_status` reports.
+/// What `mine_status` reports.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MiningStatus {
     /// The running miner's state; `None` when it is stopped.
@@ -625,7 +625,7 @@ impl MiningFacts for MiningControl {
         Ok(self.posting.borrow().refusal().map(no_job_diagnostic))
     }
 
-    /// Resolves when [`MiningFacts::refusal`] is `Some`: `generateblocks`
+    /// Resolves when [`MiningFacts::refusal`] is `Some`: `dev_block_generate`
     /// waits on the tip only while a miner can still make it move. A closed
     /// watch is a stop, as a withdrawal nobody will replace.
     fn withdrawn(&self) -> Pending<'_, Diagnostic> {
@@ -707,7 +707,7 @@ mod diagnostic_tests {
     use shekyl_chain_ingest::follower::{Posting, Rebuild};
 
     /// A stuck build names itself and the reason that did not clear, so a
-    /// caller refused by `generateblocks` can tell a body lost twice from a
+    /// caller refused by `dev_block_generate` can tell a body lost twice from a
     /// pool judged at another tip twice. The stuck posting is a refusal;
     /// the same reason still on its one rebuild is a wait.
     #[test]

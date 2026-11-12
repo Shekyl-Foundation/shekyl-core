@@ -5,9 +5,9 @@
 
 //! The shared hash budget for bounded RPC callers (`RPC_CHANNEL.md` §6.3).
 //!
-//! One bucket per daemon. A bounded `calc_pow` spends one hash, and only
-//! once the seed is one RandomX will hash. `fill_pow_hash` reads the hash
-//! recorded at validation and does not pay. The host's administrator does
+//! One bucket per daemon. A bounded `pow` spends one hash, and only
+//! once the seed is one RandomX will hash. A header read with `pow` reads the
+//! hash recorded at validation and does not pay. The host's administrator does
 //! not pay. The bucket bounds charges, not measured CPU, in the same shape
 //! as the handshake budget:
 //!
@@ -27,8 +27,9 @@ use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 
 /// One RandomX hash on the floor device, thread-CPU 99th percentile
 /// (RT-W10, `docs/benchmarks/rt_w10_request_cost_20261102.md`).
-/// `calc_pow` spends this once, after the seed's cache is held.
-/// `fill_pow_hash` does not: it reads the hash recorded at validation.
+/// `pow` spends this once, after the seed's cache is held.
+/// A header read with `pow` does not: it reads the hash recorded at
+/// validation.
 pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
 
 /// The share of one core the long-run charge rate allows, in thousandths.
@@ -36,7 +37,7 @@ pub const HASH_CPU_NANOS: u64 = 1_290_885_199;
 pub const HASH_BUDGET_SHARE_PERMILLE: u64 = 250;
 
 /// Hashes one full bucket holds. The capacity is this many charges of
-/// [`HASH_CPU_NANOS`]. A `calc_pow` spends one; there is no request that
+/// [`HASH_CPU_NANOS`]. A `pow` spends one; there is no request that
 /// spends more.
 pub const HASH_BUDGET_BURST: u64 = 1;
 

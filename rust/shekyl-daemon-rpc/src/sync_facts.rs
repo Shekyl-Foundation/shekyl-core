@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Chain sync's view, as the RPC reads it (CS-5 §7): what `sync_info`
-//! renders, and the claim and mode `get_connections` joins to each board
+//! Chain sync's view, as the RPC reads it (CS-5 §7): what `sync_status`
+//! renders, and the claim and mode `peer_connections` joins to each board
 //! row. The node fills it from the sync owner's published view; this crate
 //! does not depend on chain sync.
 
@@ -75,7 +75,7 @@ pub struct BodySpanFacts {
     pub timing: RequestTiming,
 }
 
-/// The read behind `sync_info` and the claim half of `get_connections`.
+/// The read behind `sync_status` and the claim half of `peer_connections`.
 pub trait SyncViewRead: Send + Sync {
     /// Chain sync's view, as the owner last published it.
     ///

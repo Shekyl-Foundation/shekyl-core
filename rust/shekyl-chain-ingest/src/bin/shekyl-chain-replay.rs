@@ -9,7 +9,7 @@
 //! Three commands, the two artifacts and the baseline between them:
 //!
 //! - `fetch` — build a corpus from an **unpruned** daemon over
-//!   `/get_blocks_by_height.bin` (zero C++; the writer verifies every
+//!   `block_list` (zero C++; the writer verifies every
 //!   record and refuses a pruned answer by height, RD-F15);
 //! - `replay` — run a corpus through `form → validate → connect` against a
 //!   redb store and hold it to the baseline trace; `--fixed-difficulty n`
@@ -69,7 +69,7 @@ use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_types::{BlockCount, BlockHeight};
 
-/// Heights per `/get_blocks_by_height.bin` request: a 2301-block regtest
+/// Heights per `block_list` request: a 2301-block regtest
 /// fetch is a few dozen round trips, and one reply stays well under the
 /// daemon's response cap at mainnet block weights.
 const DEFAULT_FETCH_BATCH: NonZeroUsize = match NonZeroUsize::new(100) {

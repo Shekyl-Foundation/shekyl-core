@@ -189,7 +189,7 @@ pub enum P2pRead<T> {
 
 /// One peer-list entry, as the node read it. No clock: the lists carry
 /// none (3.55). Named apart from
-/// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
+/// [`crate::info_facts::PeerFacts`], `daemon_status`'s Peers state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {
     /// Already resolved per address arm by the adapter.

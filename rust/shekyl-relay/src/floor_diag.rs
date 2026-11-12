@@ -44,7 +44,7 @@ pub enum FloorTransition {
     Recovered = 2,
 }
 
-/// Admin-surface state for one zone (`/get_stem_tallies`, AdminOnly — a
+/// Admin-surface state for one zone (`relay_stats`, AdminOnly — a
 /// below-floor bit on the public listener would be a free targeting oracle,
 /// §16.3, and a census input, §16.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

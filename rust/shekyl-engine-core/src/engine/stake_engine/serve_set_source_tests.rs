@@ -50,7 +50,7 @@ impl Rpc for ClaimSourceDaemon {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
-    /// Answers `get_info` as a **synchronized** daemon at the same chain
+    /// Answers `daemon_status` as a **synchronized** daemon at the same chain
     /// count its claim source reports, so these fixtures keep exactly the
     /// semantics they had before `SyncedChainFacts` (`WSS-Q14`) — the
     /// unsynchronized timeline is `ScheduledDaemon`'s to exercise, and a
@@ -486,7 +486,7 @@ async fn pins_in_store(curve_tree: &CurveTreeHandle) -> Vec<u64> {
 /// One height schedule drives **both** answers, which is the point: the
 /// resync hazard is that the record answers at a pre-bond height *while*
 /// the daemon's own height climbs past epoch boundaries, so a fixture that
-/// let the two drift apart would be testing something else. `get_info`
+/// let the two drift apart would be testing something else. `daemon_status`
 /// advances the cursor and the claim source reads it, matching production
 /// order (health first, then the record).
 ///
@@ -545,7 +545,7 @@ impl Step {
 struct ScheduledDaemon {
     schedule: Arc<Vec<Step>>,
     cursor: Arc<std::sync::atomic::AtomicUsize>,
-    /// The step the current refresh answers from, written by `get_info`.
+    /// The step the current refresh answers from, written by `daemon_status`.
     current: Arc<std::sync::Mutex<usize>>,
     /// The daemon's flag.
     synchronized: bool,

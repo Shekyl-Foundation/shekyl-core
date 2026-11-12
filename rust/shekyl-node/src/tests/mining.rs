@@ -580,7 +580,7 @@ fn dev_chain_pop_refuses_genesis_pops_one_and_the_node_stays_up() {
 }
 /// Regtest is synced at open (DX-Q3, Q13), so a node with an address
 /// posts the template for the block after genesis with no session at
-/// all, and `mining_status` reports the job. Red edit: open regtest at
+/// all, and `mine_status` reports the job. Red edit: open regtest at
 /// `NoView`.
 #[test]
 fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {

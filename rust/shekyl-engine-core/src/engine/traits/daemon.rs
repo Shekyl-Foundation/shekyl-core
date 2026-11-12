@@ -10,7 +10,7 @@
 //! orchestrator binds against for daemon-bound calls. It is a
 //! supertrait extension of [`shekyl_rpc_client::Rpc`] (the
 //! upstream-vendored RPC trait that covers the transport primitives —
-//! `get_height` / `get_block` / `get_transactions` / `get_o_indexes` /
+//! `get_height` / `block_show` / `tx_list` / `get_o_indexes` /
 //! etc.), adding the wallet-specific methods that have no place on
 //! `Rpc`: [`DaemonEngine::fetch_scannable_block`] — which composes
 //! those transport primitives into a `shekyl-wire`-parsed
@@ -78,7 +78,7 @@ use crate::engine::pending::TxHash;
 /// # Atomic single-RPC snapshot (§3.3)
 ///
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
-/// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
+/// **one** `fee` JSON-RPC call (not three per-tier
 /// `get_fee_rate` calls): the response's fee array maps to the three
 /// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`). This
 /// guarantees the tier band derives from one daemon view, with no
@@ -116,7 +116,7 @@ pub struct FeeEstimates {
 /// computed by the daemon's Rust admission engine with every mutable
 /// premise re-checked under one lock scope, so the variants are mutually
 /// consistent facts — never the racy multi-flag snapshot the deleted
-/// `send_raw_transaction` reply carried. Per-cause wallet dispositions
+/// `tx_submit` reply carried. Per-cause wallet dispositions
 /// are specified in §2.5 and applied by the orchestrator
 /// (`LocalPendingTx`), not here.
 ///
@@ -256,7 +256,7 @@ impl DaemonP2p {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
     /// Whether the daemon runs P2P, and when it does, whether it has a peer
-    /// it can relay through: `get_info`'s Health (`offline`, `has_peers`).
+    /// it can relay through: `daemon_status`'s Health (`offline`, `has_peers`).
     /// Not a count, and not derived from one: the counts are Status, which
     /// a daemon may withhold. An offline daemon is a state of its own, not
     /// a daemon with no peers (Rick, 2026-10-14).
@@ -264,7 +264,7 @@ pub(crate) struct DaemonHealth {
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as
-    /// `get_info` reports it, and the wallet's one source for whether the
+    /// `daemon_status` reports it, and the wallet's one source for whether the
     /// daemon has caught up.
     ///
     /// The daemon's target height is deliberately not here. It comes from
@@ -308,7 +308,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ///
     /// This is the engine-native replacement for the legacy
     /// `shekyl_rpc_client::Rpc::get_scannable_block_by_number`. The transport is the
-    /// inherited [`Rpc`] surface (`get_block` / `get_transactions` /
+    /// inherited [`Rpc`] surface (`block_show` / `tx_list` /
     /// `get_o_indexes`), but parsing is `shekyl_wire`, which reads the coinbase
     /// `Null` committed base correctly (`GENESIS_TX_WIRE_FORMAT.md` §9.6/§9.9)
     /// where the legacy parse dropped it and rejected live coinbase blocks as
@@ -413,7 +413,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// Snapshot the daemon's health facts for the §5.3 watchdog escape
     /// ladder (§5.2 item 3): whether the daemon has peers and its sync
     /// position, which distinguish "tx stuck" from "daemon has no
-    /// peers to relay to" and "daemon is behind." One `get_info` read;
+    /// peers to relay to" and "daemon is behind." One `daemon_status` read;
     /// **no new RPC method** — the fields already exist on the info
     /// surface the wallet queries for network verification.
     ///

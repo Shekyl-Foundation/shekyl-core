@@ -565,9 +565,12 @@ async fn every_tx_submit_upload_is_the_fixed_record_count() {
             "a {tx_len}-byte transaction's upload"
         );
 
-        let request = Request::get("/get_info")
+        let request = Request::post(shekyl_rpc_types::endpoint::JSON_RPC_PATH)
             .header("host", "node")
-            .body(Full::new(Bytes::new()))
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","id":1,"method":"version"}"#,
+            )))
             .unwrap();
         sender.send_request(request).await.unwrap();
         assert_eq!(

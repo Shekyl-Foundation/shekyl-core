@@ -9,7 +9,7 @@
 //! ([`codes`]).
 //!
 //! `block_template` reads the job the node posted; it builds nothing (N2),
-//! and `get_miner_data` folded into it (IG-Q46). The methods that wait or
+//! and `block_template` folded into it (IG-Q46). The methods that wait or
 //! join are `async`: `block_submit` and `dev_block_generate` wait on the
 //! node, and `mine_start`, `mine_stop` and `dev_block_generate` run the
 //! miner's start and stop, which spawn and join threads, on a blocking
@@ -101,7 +101,7 @@ fn amount(raw: u64) -> AtomicUnitsString {
 }
 
 /// `block_template`: the job the node posted, with its offsets and the
-/// chain facts `get_miner_data` carried (N2; IG-Q46). One posted job, one
+/// chain facts `block_template` carried (N2; IG-Q46). One posted job, one
 /// chain state: every field is read from it.
 ///
 /// # Errors
@@ -320,7 +320,7 @@ pub async fn block_submit(
     }
 }
 
-/// Stops, on drop, a miner `generateblocks` started: a caller that goes
+/// Stops, on drop, a miner `dev_block_generate` started: a caller that goes
 /// away mid-wait leaves no miner running. It is built inside the blocking
 /// start, so a caller that goes away while that start is still joining
 /// drops this when the start finishes, and the miner the start goes on to
@@ -346,7 +346,7 @@ impl Drop for StartedMiner {
         };
         let stop = move || {
             if let Err(fault) = mining.stop() {
-                tracing::error!("generateblocks: the miner it started did not stop: {fault:?}");
+                tracing::error!("dev_block_generate: the miner it started did not stop: {fault:?}");
             }
         };
         match tokio::runtime::Handle::try_current() {
@@ -367,7 +367,7 @@ impl Drop for StartedMiner {
 /// no worker searches a job above it, and the block a worker could
 /// otherwise find between the target connecting and the stop does not
 /// exist. A miner already running is left running. When it searches a job
-/// at the target — `start_mining`, or a bound at least that high — this
+/// at the target — `mine_start`, or a bound at least that high — this
 /// call waits and does not stop it: the tip is then at least `count`
 /// higher, and the reply's `height` says where it is. When that miner's
 /// bound stops short of the target, the call is refused
@@ -616,7 +616,7 @@ mod tests {
             Ok(true)
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
-            unreachable!("generateblocks reads no status")
+            unreachable!("dev_block_generate reads no status")
         }
         fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
             Ok(None)
@@ -630,13 +630,13 @@ mod tests {
 
     impl DoorFacts for Reached {
         fn room(&self) -> Result<usize, FactsFault> {
-            unreachable!("generateblocks takes no room")
+            unreachable!("dev_block_generate takes no room")
         }
         fn offer_local(&self, _block: Vec<u8>) -> crate::mining_facts::Pending<'_, LocalOutcome> {
-            unreachable!("generateblocks offers nothing")
+            unreachable!("dev_block_generate offers nothing")
         }
         fn pop(&self, _count: u64) -> crate::mining_facts::Pending<'_, PopOutcome> {
-            unreachable!("generateblocks pops nothing")
+            unreachable!("dev_block_generate pops nothing")
         }
         fn tip_at_least(
             &self,
@@ -661,7 +661,7 @@ mod tests {
             })
         }
         fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
-            unreachable!("generateblocks reads no identity")
+            unreachable!("dev_block_generate reads no identity")
         }
         fn block_hash_at(
             &self,
@@ -677,21 +677,21 @@ mod tests {
             _at: crate::chain_facts::BlockLookup,
             _fill_pow_hash: bool,
         ) -> Result<crate::chain_facts::BlockHeaderAt, FactsFault> {
-            unreachable!("generateblocks reads no header")
+            unreachable!("dev_block_generate reads no header")
         }
         fn fee_estimate(&self) -> Result<crate::chain_facts::FeeEstimate, FactsFault> {
-            unreachable!("generateblocks reads no fee")
+            unreachable!("dev_block_generate reads no fee")
         }
         fn block_at(
             &self,
             _at: crate::chain_facts::BlockLookup,
             _fill_pow_hash: bool,
         ) -> Result<crate::chain_facts::BlockAt, FactsFault> {
-            unreachable!("generateblocks reads no block")
+            unreachable!("dev_block_generate reads no block")
         }
     }
 
-    /// `generateblocks` on a node whose job is withdrawn for a reason that
+    /// `dev_block_generate` on a node whose job is withdrawn for a reason that
     /// clears itself (starting, or between two tips) waits it out instead
     /// of refusing, and stops the miner it started (the landing review of
     /// #1165, N4). Red edit: refuse whenever no job is posted.
@@ -716,13 +716,13 @@ mod tests {
         fn template(
             &self,
         ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
-            unreachable!("generateblocks reads no template")
+            unreachable!("dev_block_generate reads no template")
         }
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
-            unreachable!("generateblocks bounds the miner it starts")
+            unreachable!("dev_block_generate bounds the miner it starts")
         }
         fn start_until(
             &self,
@@ -734,7 +734,7 @@ mod tests {
             Ok(true)
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
-            unreachable!("generateblocks reads no status")
+            unreachable!("dev_block_generate reads no status")
         }
         fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
             Ok(None)
@@ -749,13 +749,13 @@ mod tests {
 
     impl DoorFacts for Unwoken {
         fn room(&self) -> Result<usize, FactsFault> {
-            unreachable!("generateblocks takes no room")
+            unreachable!("dev_block_generate takes no room")
         }
         fn offer_local(&self, _block: Vec<u8>) -> crate::mining_facts::Pending<'_, LocalOutcome> {
-            unreachable!("generateblocks offers nothing")
+            unreachable!("dev_block_generate offers nothing")
         }
         fn pop(&self, _count: u64) -> crate::mining_facts::Pending<'_, PopOutcome> {
-            unreachable!("generateblocks pops nothing")
+            unreachable!("dev_block_generate pops nothing")
         }
         fn tip_at_least(
             &self,
@@ -796,7 +796,7 @@ mod tests {
             })
         }
         fn identity(&self) -> Result<crate::chain_facts::DaemonIdentity, FactsFault> {
-            unreachable!("generateblocks reads no identity")
+            unreachable!("dev_block_generate reads no identity")
         }
         fn block_hash_at(
             &self,
@@ -812,17 +812,17 @@ mod tests {
             _at: crate::chain_facts::BlockLookup,
             _fill_pow_hash: bool,
         ) -> Result<crate::chain_facts::BlockHeaderAt, FactsFault> {
-            unreachable!("generateblocks reads no header")
+            unreachable!("dev_block_generate reads no header")
         }
         fn fee_estimate(&self) -> Result<crate::chain_facts::FeeEstimate, FactsFault> {
-            unreachable!("generateblocks reads no fee")
+            unreachable!("dev_block_generate reads no fee")
         }
         fn block_at(
             &self,
             _at: crate::chain_facts::BlockLookup,
             _fill_pow_hash: bool,
         ) -> Result<crate::chain_facts::BlockAt, FactsFault> {
-            unreachable!("generateblocks reads no block")
+            unreachable!("dev_block_generate reads no block")
         }
     }
 
@@ -847,7 +847,7 @@ mod tests {
         assert_eq!(refused.class, ErrorClass::NotReady);
     }
 
-    /// The miner `generateblocks` starts searches no block above the target.
+    /// The miner `dev_block_generate` starts searches no block above the target.
     /// On a chain of one block, `count` 3 calls [`MiningFacts::start_until`]
     /// once, at height 3, the tip the call waits for. That bound is what
     /// makes the count exact (`SearchBound::Until`); an unbounded start can
@@ -878,13 +878,13 @@ mod tests {
         fn template(
             &self,
         ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
-            unreachable!("generateblocks reads no template before it starts")
+            unreachable!("dev_block_generate reads no template before it starts")
         }
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
-            unreachable!("generateblocks bounds the miner it starts")
+            unreachable!("dev_block_generate bounds the miner it starts")
         }
         fn start_until(
             &self,
@@ -899,7 +899,7 @@ mod tests {
             unreachable!("a refused start stops nothing")
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
-            unreachable!("generateblocks reads no status")
+            unreachable!("dev_block_generate reads no status")
         }
         fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
             Ok(None)
@@ -915,13 +915,13 @@ mod tests {
 
     impl DoorFacts for Unreached {
         fn room(&self) -> Result<usize, FactsFault> {
-            unreachable!("generateblocks takes no room")
+            unreachable!("dev_block_generate takes no room")
         }
         fn offer_local(&self, _block: Vec<u8>) -> crate::mining_facts::Pending<'_, LocalOutcome> {
-            unreachable!("generateblocks offers nothing")
+            unreachable!("dev_block_generate offers nothing")
         }
         fn pop(&self, _count: u64) -> crate::mining_facts::Pending<'_, PopOutcome> {
-            unreachable!("generateblocks pops nothing")
+            unreachable!("dev_block_generate pops nothing")
         }
         fn tip_at_least(
             &self,
@@ -943,7 +943,7 @@ mod tests {
         assert_eq!(refused.diagnostic.code, codes::BOUND_SHORT);
     }
 
-    /// `start_until` blocks until released. Dropping `generateblocks` while
+    /// `start_until` blocks until released. Dropping `dev_block_generate` while
     /// it is there detaches the blocking task; the guard has to be that
     /// task's value, or the miner it goes on to start is never stopped.
     struct HoldStart {
@@ -959,13 +959,13 @@ mod tests {
         fn template(
             &self,
         ) -> Result<Result<crate::mining_facts::PostedTemplate, Diagnostic>, FactsFault> {
-            unreachable!("generateblocks reads no template before it starts")
+            unreachable!("dev_block_generate reads no template before it starts")
         }
         fn start(
             &self,
             _threads: Option<NonZeroUsize>,
         ) -> Result<Result<(), Diagnostic>, FactsFault> {
-            unreachable!("generateblocks bounds the miner it starts")
+            unreachable!("dev_block_generate bounds the miner it starts")
         }
         fn start_until(
             &self,
@@ -987,7 +987,7 @@ mod tests {
             Ok(true)
         }
         fn status(&self) -> Result<crate::mining_facts::MiningState, FactsFault> {
-            unreachable!("generateblocks reads no status")
+            unreachable!("dev_block_generate reads no status")
         }
         fn refusal(&self) -> Result<Option<Diagnostic>, FactsFault> {
             Ok(None)
@@ -997,7 +997,7 @@ mod tests {
         }
     }
 
-    /// Dropping `generateblocks` while its start is still blocked stops the
+    /// Dropping `dev_block_generate` while its start is still blocked stops the
     /// miner that start goes on to spawn. Red edit: build `StartedMiner`
     /// after `on_a_blocking_thread` returns.
     #[tokio::test]

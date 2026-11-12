@@ -6,7 +6,7 @@
 //! `option_set` and `option_show` (`RPC_CHANNEL.md` §6.4, RT-O23…RT-O27;
 //! `DAEMON_CONFIG_CUTOVER.md` §2.7): the two runtime option methods,
 //! served natively over an options handle the composition root supplies
-//! ([`OptionsFacts`]), in the shape `request_archival_shard`'s facts have.
+//! ([`OptionsFacts`]), in the shape `shard_fetch`'s facts have.
 //! This crate depends on the interface, never on the grammar or the
 //! subsystems. The wire types live in `shekyl-rpc-types::options` (RK-D1)
 //! and are re-exported here; the root converts.

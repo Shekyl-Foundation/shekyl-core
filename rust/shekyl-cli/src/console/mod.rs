@@ -139,7 +139,7 @@ fn print_height(src: &DaemonClient) -> Result<String, String> {
 }
 
 /// `print_transaction <hash> [+meta] [+hex]` — RK-4c. Reads
-/// `get_transactions` and nothing else, which is why it migrates with it
+/// `tx_list` and nothing else, which is why it migrates with it
 /// (§2.1). Its `+json` went with epee's rendering (IG-Q55; `tx show`'s
 /// `--json` is the session's).
 /// What the daemon said about one transaction.
