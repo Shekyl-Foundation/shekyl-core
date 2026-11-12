@@ -7,7 +7,7 @@
 # Selftest for `drs_bench.py`. Needs no daemon and no measurement.
 #
 # The synthetic artifact is `drs_fixture.valid_artifact`. The readback
-# cases and `--seed-daemon` live in `test_drs_readback.py`.
+# cases live in `test_drs_readback.py`.
 #
 # A GREEN ASSERTION IS THE WEAK ONE. "the artifact was accepted" says the
 # validator accepted this input, not that it accepted it for the right reason —
@@ -881,26 +881,6 @@ class Preflight(unittest.TestCase):
         self.assertTrue(any("is not a file" in x for x in r), r)
         self.assertTrue(any("another tree" in x for x in r), r)
 
-    def test_a_missing_seed_binary_is_named_once(self):
-        """Directories are checked once. The seed's missing file is its
-        own sentence: it serves the chain, which is what a second binary
-        is for."""
-        missing = os.path.join(tempfile.mkdtemp(), "no-such-seed")
-        r = D.measurement_preflight(
-            daemon=__file__, work_dir=".", seed_dir=".",
-            disk_class="ssd_or_nvme", seed_daemon=missing)
-        files = [x for x in r if "is not a file" in x]
-        self.assertEqual(files, [x for x in files if "serves the chain" in x], r)
-        self.assertEqual(len(files), 1, r)
-        self.assertFalse(any("another tree" in x for x in r), r)
-        self.assertEqual(len(r), len(set(r)), r)
-
-    def test_the_same_file_is_checked_once(self):
-        r = D.measurement_preflight(
-            daemon=__file__, work_dir=".", seed_dir=".",
-            disk_class="ssd_or_nvme", seed_daemon=__file__)
-        self.assertFalse(any("is not a file" in x for x in r), r)
-
     def test_control_a_sane_lmdb_preflight_is_empty(self):
         r = D.measurement_preflight(
             daemon=__file__, work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
@@ -945,35 +925,17 @@ class RunnerImport(unittest.TestCase):
 
 
 class GeneratingSeedShape(unittest.TestCase):
-    """The generating seed's argv and body follow the binary and the readback.
+    """The generating seed is this binary: its argv takes `--mine-address`,
+    its body is `{count}`, and its readback is redb.
 
-    The defect is a named archived seed started with `--mine-address`, or
-    posted `{count}`: the archived daemon rejects the flag and does not
-    read that body. The other way, this binary posted the archived trio,
-    puts the address back on a wire that no longer carries it.
+    The defect is the address put back on a wire that no longer carries
+    it, or a seed whose store is not the Rust store.
     """
 
-    def test_a_named_archived_seed_is_not_this_binary(self):
-        self.assertFalse(R.seed_uses_this_binary("/usr/bin/shekyld", "/opt/archive/shekyld"))
-        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", None))
-        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", ""))
-        self.assertTrue(R.seed_uses_this_binary("/usr/bin/shekyld", "/usr/bin/shekyld"))
-
-    def test_an_archived_seed_is_not_passed_mine_address_and_posts_the_old_body(self):
-        argv = R.seed_generation_argv(False, "--dev-rpc", "addr")
-        self.assertEqual(argv, ["--dev-rpc"])
-        self.assertNotIn("--mine-address", argv)
-        method, body = R.generate_request("lmdb", 3, "addr")
-        self.assertEqual(method, "generateblocks")
-        self.assertEqual(body["amount_of_blocks"], 3)
-        self.assertEqual(body["wallet_address"], "addr")
-        self.assertEqual(body["starting_nonce"], 0)
-        self.assertNotIn("count", body)
-
-    def test_this_binary_posts_count_only_and_takes_mine_address(self):
-        argv = R.seed_generation_argv(True, "--dev-rpc", "addr")
+    def test_the_seed_posts_count_only_and_takes_mine_address(self):
+        argv = R.seed_generation_argv("--dev-rpc", "addr")
         self.assertEqual(argv, ["--dev-rpc", "--mine-address", "addr"])
-        method, body = R.generate_request("redb", 3, "addr")
+        method, body = R.generate_request(3)
         self.assertEqual(body, {"count": 3})
         # The method is the table's armed lever that mines: its reply names
         # the blocks' hashes (docs/generated/rpc_wire_schema.tsv).
@@ -984,25 +946,16 @@ class GeneratingSeedShape(unittest.TestCase):
         mines = {r[0] for r in rows if r[1] == "field" and r[2] == "block" and r[3] == "hash"}
         self.assertIn(method, armed & mines)
 
-    def test_each_binary_reads_its_own_generating_reply(self):
-        # This binary: a result is the blocks mined, an error is a refusal.
-        self.assertTrue(R.generated("redb", {"result": {"height": 3, "hash": []}}))
-        self.assertFalse(R.generated("redb", {"error": {"code": -32001}}))
-        # The archived daemon: its result says OK, or it did not mine.
-        self.assertTrue(R.generated("lmdb", {"result": {"status": "OK"}}))
-        self.assertFalse(R.generated("lmdb", {"result": {"status": "BUSY"}}))
-        self.assertFalse(R.generated("lmdb", {"result": {"height": 3, "hash": []}}))
+    def test_a_result_is_blocks_mined_and_an_error_is_a_refusal(self):
+        self.assertTrue(R.generated({"result": {"height": 3, "hash": []}}))
+        self.assertFalse(R.generated({"error": {"code": -32001}}))
+        self.assertFalse(R.generated({}))
 
-    def test_a_readback_from_the_wrong_binary_is_refused(self):
-        named_redb = R.generation_shape_refusal(False, "redb")
-        self.assertIsNotNone(named_redb)
-        self.assertIn("redb", named_redb)
-        self.assertIsNone(R.generation_shape_refusal(False, "lmdb"))
-        this_lmdb = R.generation_shape_refusal(True, "lmdb")
-        self.assertIsNotNone(this_lmdb)
-        self.assertIn("lmdb", this_lmdb)
-        self.assertIsNone(R.generation_shape_refusal(True, "redb"))
-
+    def test_a_seed_that_is_not_the_rust_store_is_refused(self):
+        lmdb = R.generation_shape_refusal("lmdb")
+        self.assertIsNotNone(lmdb)
+        self.assertIn("lmdb", lmdb)
+        self.assertIsNone(R.generation_shape_refusal("redb"))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

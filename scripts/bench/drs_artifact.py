@@ -306,8 +306,8 @@ def durability_readback_note(same_binary) -> str:
     """The artifact's account of which binary's readback was checked.
 
     `same_binary` is true when the seed daemon and the subject daemon are
-    one file. The flip leg's seed is the archived binary that serves the
-    chain, and the note says so.
+    one file, as every run now is. A recorded flip-leg artifact's seed was
+    the archived binary, and its note says so.
     """
     subject = "the subject daemon's own startup report of the flags it resolved"
     if same_binary:
@@ -1090,14 +1090,12 @@ def hardware_fingerprint(path, declared_disk_class=None):
     return out
 
 
-def _binary_file_refusal(path, role):
-    """A missing binary, named by the role it plays in the run."""
+def _binary_file_refusal(path):
+    """A missing daemon binary."""
     if os.path.isfile(path):
         return []
-    if role == "subject":
-        return [f"{path} is not a file — build the subject daemon in THIS worktree; "
-                "a subject binary from another tree measures another tree"]
-    return [f"{path} is not a file — the seed binary is the file that serves the chain"]
+    return [f"{path} is not a file — build the subject daemon in THIS worktree; "
+            "a subject binary from another tree measures another tree"]
 
 
 def _directory_preflight(work_dir, seed_dir, disk_class):
@@ -1122,7 +1120,7 @@ def _directory_preflight(work_dir, seed_dir, disk_class):
     return r
 
 
-def measurement_preflight(daemon, work_dir, seed_dir, disk_class, seed_daemon=None):
+def measurement_preflight(daemon, work_dir, seed_dir, disk_class):
     """Refusals that must fire before any daemon starts or cargo runs.
 
     Same conditions `artifact_refusals` will apply to the finished record, so
@@ -1130,12 +1128,9 @@ def measurement_preflight(daemon, work_dir, seed_dir, disk_class, seed_daemon=No
     durability itself is not known until a daemon reports it; `measure` reads
     each spawn's report before that spawn's work is spent.
 
-    Directories are checked once. Each binary is checked as a file. The
-    subject is this tree's daemon. The seed may be another tree's file:
-    it serves the chain, and it is not the measurement.
+    Directories are checked once. The binary is checked as a file: this
+    tree's daemon, which is both the seed and the subject.
     """
-    r = _binary_file_refusal(daemon, "subject")
-    if seed_daemon is not None and os.path.abspath(seed_daemon) != os.path.abspath(daemon):
-        r += _binary_file_refusal(seed_daemon, "seed")
+    r = _binary_file_refusal(daemon)
     r += _directory_preflight(work_dir, seed_dir, disk_class)
     return r
