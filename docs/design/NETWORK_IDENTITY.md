@@ -353,7 +353,7 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl-prefs-hmac-v1 | `rust/shekyl-engine-prefs/src/hmac_key.rs` | prefs HMAC key from file_kek | B | local file |
 | shekyl-region1-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 1 key | B | local |
 | shekyl-region2-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 2 key | B | local |
-| nonce | `rust/shekyl-multisig/src/encryption.rs` | AEAD nonce for multisig group messages | B | secret shared only within the group |
+| shekyl/multisig-blob-key-v1 (info) | `rust/shekyl-crypto-pq/src/multisig_blob.rs` | the ceremony blob key for one (intent, message type, sender) | A | ikm = the group transport secret, derived under `salt_for(network)` |
 
 ### A.3 Mechanism 3: FROST transcript
 

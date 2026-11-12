@@ -306,10 +306,11 @@ For the protocol specification of these properties, see
    - All 7 invariants correctly enforced at their specified points
    - Assembly consensus (I6) rejects mixed commitments
 
-7. **AEAD message encryption** (`encryption.rs`)
-   - ChaCha20-Poly1305 with HKDF-derived per-message keys and nonces
-   - Key zeroization after use
-   - No nonce reuse across message types, senders, or counters
+7. **Ceremony blob AEAD** (`shekyl-crypto-pq/src/multisig_blob.rs`)
+   - XChaCha20-Poly1305 under an HKDF-SHA-512 key per (intent, message
+     type, sender), from the group transport secret
+   - A random 24-byte nonce per blob, so a restored wallet cannot repeat one
+   - Key and plaintext zeroization after use
 
 8. **CounterProof verification** (SS13.4)
    - 8-rule verification pipeline prevents forged advancement

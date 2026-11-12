@@ -254,7 +254,7 @@
 2	shekyl-prefs-hmac-v1	rust/shekyl-engine-prefs/src/hmac_key.rs	HKDF_INFO_LABEL	shekyl-live	local:wallet-file-key	-	plain		info
 2	shekyl-region1-aead-v2	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION1_AEAD_V2	shekyl-live	local:wallet-file-key	-	plain		info
 2	shekyl-region2-aead-v2	rust/shekyl-crypto-pq/src/wallet_envelope.rs	HKDF_INFO_REGION2_AEAD_V2	shekyl-live	local:wallet-file-key	-	plain		info
-2	nonce	rust/shekyl-multisig/src/encryption.rs	(inline info prefix)	shekyl-live	input:SaltForKey	-	auth		info; also a schnorr sub-label elsewhere (cross-mechanism reuse, safe: different mechanism)
+2	shekyl/multisig-blob-key-v1	rust/shekyl-crypto-pq/src/multisig_blob.rs	LABEL_MULTISIG_BLOB_KEY	shekyl-live	input:SaltForKey	-	auth		info; the ceremony blob key: HKDF-SHA-512(ikm = the group transport secret, a key derived under salt_for) expanded for one (intent, message type, sender); keys the XChaCha20-Poly1305 seal of every ceremony blob, whose 24-byte nonce is random (R-4, slice 3)
 #
 # ── Mechanism 3 — FROST transcript label ───────────────────────────────
 3	Shekyl FROST SAL v1	rust/shekyl-fcmp/src/frost_sal.rs	(RecommendedTranscript::new)	shekyl-live	input:TxSignableHash	-	auth		LIVE Shekyl domain — through-line rule applies (not frozen: absent from upstream monero-oxide)

@@ -1310,26 +1310,23 @@ whether their own state disagrees.
 
 ### 12.3 Encryption
 
-Per-message symmetric key derivation:
+Every ceremony blob's payload is sealed with XChaCha20-Poly1305
+(`shekyl_crypto_pq::multisig_blob`; Round 0 ruling R-4):
 
 ```
-message_key = HKDF_Expand(
-    group_shared_secret,
-    intent_hash || u8(message_type) || u8(sender_index),
-    32
-)
+key    = HKDF-SHA-512(ikm = transport_secret).expand(
+             "shekyl/multisig-blob-key-v1" ‖ intent_hash ‖ u8(message_type) ‖ u8(sender_index), 32)
+sealed = nonce(24, random) ‖ XChaCha20-Poly1305(key, nonce, aad = the blob header, payload) ‖ tag(16)
 ```
 
-`group_shared_secret` is the DKG-derived 32-byte value from §5.2.
-
-AEAD: ChaCha20-Poly1305 with 96-bit nonce:
-```
-nonce = HKDF_Expand(
-    group_shared_secret,
-    b"nonce" || u8(sender_index) || u64_le(message_counter),
-    12
-)
-```
+`transport_secret` is the group transport secret every member file holds
+(§6.6), derived by the dealer under `salt_for`. The nonce is drawn at random
+for every blob: a nonce derived from a persisted counter would repeat after a
+wallet is restored from a backup, and a repeated nonce under this AEAD leaks
+the XOR of two payloads and the Poly1305 key. A ceremony's message counter
+orders blobs and refuses replays; it no longer keeps the AEAD safe. A blob
+sealed for one intent, message type or sender, or with another header, does
+not open as another.
 
 ### 12.4 Multi-relay with operator uniqueness (mandatory)
 
@@ -1864,7 +1861,6 @@ rust/shekyl-multisig/src/
 │                            SpendRequest / SpendResponse blob newtypes
 ├── intent.rs              — SpendIntent type, canonical serialization
 ├── messages.rs            — envelope + E′ message types (Option-D discriminants excised)
-├── encryption.rs          — group_shared_secret + AEAD
 ├── invariants.rs          — honest-signer invariant checks
 ├── group_descriptor.rs    — public group identity (no share, no KEM secret)
 └── build.rs               — FCMP reference-block consts from config JSON

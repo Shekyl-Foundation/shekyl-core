@@ -46,7 +46,11 @@ use crate::kem::X25519_KEM_CT_LEN;
 use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment, PQC_LEAF_ENTRY_LEN};
 use crate::multisig::{multisig_key_hash, MultisigCommittedForm, MULTISIG_KEY_HASH_LEN};
 use crate::output::{construct_output_core, encapsulate_deterministic, recover_combined_ss};
-use crate::signature::{HybridPublicKey, HybridSecretKey};
+use crate::signature::{
+    HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
+    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+};
+use shekyl_types::SigningPayloadHash;
 
 /// The HKDF info label a member's per-output hybrid signing seed expands
 /// under, from that member's KEM shared secret `ss_i`
@@ -66,10 +70,14 @@ const HASHES_NONCE: [u8; 12] = [0u8; 12];
 /// its first half the Ed25519 seed and its second the ML-DSA-65 seed, the
 /// same two-seed shape as a solo output's per-output key.
 ///
+/// Crate-private: the secret half never leaves this crate. A member signs
+/// through [`sign_multisig_member_auth`], which derives, signs and drops it
+/// in one call.
+///
 /// # Errors
 ///
 /// [`CryptoError`] if ML-DSA key generation fails.
-pub fn derive_multisig_member_keypair(
+pub(crate) fn derive_multisig_member_keypair(
     member_combined_ss: &[u8; 64],
 ) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
     use ed25519_dalek::SigningKey;
@@ -424,6 +432,80 @@ pub fn open_multisig_entry(
         return Err(MultisigReceiveError::LeafMismatch);
     }
     Ok(committed)
+}
+
+/// Why a member cannot sign for an output its group owns.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MultisigSignError {
+    /// The entry's member count is not the group's, or this member's index
+    /// is not below it.
+    #[error("the multisig entry is not for a group of this size")]
+    GroupSize,
+    /// This member's own ciphertext does not decapsulate.
+    #[error("this member's multisig ciphertext does not decapsulate")]
+    MemberDecap,
+    /// The per-output keypair could not be derived from the shared secret.
+    #[error("this member's per-output key could not be derived: {0}")]
+    KeyDerivation(String),
+    /// The hybrid signer refused.
+    #[error("the hybrid signature failed: {0}")]
+    Sign(String),
+}
+
+/// One member's signature on one input of a multisig spend: the per-output
+/// public key it signed with, which the spend's key blob reveals, and the
+/// hybrid signature, which goes into the signature container at the same
+/// signer index.
+#[derive(Debug, Clone)]
+pub struct MultisigMemberSignature {
+    /// The member's index, `0..n`.
+    pub member_index: u8,
+    /// The member's per-output hybrid public key.
+    pub public_key: HybridPublicKey,
+    /// The hybrid signature over the input's signed hash.
+    pub signature: HybridSignature,
+}
+
+/// Sign, as one member, input `i` of a spend of an output the group owns:
+/// recover this member's `ss_i` from its own `0x0D` ciphertext, derive its
+/// per-output hybrid key, and sign `message` (the input's `signed_hash(i)`,
+/// CEN-I17) under [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`], the domain
+/// [`crate::multisig::verify_multisig`] checks. The shared secret and the
+/// secret key exist only inside this call.
+///
+/// # Errors
+///
+/// [`MultisigSignError`], naming the step that failed.
+pub fn sign_multisig_member_auth(
+    member: &MultisigMemberView<'_>,
+    entry: &MultisigEntryView<'_>,
+    message: &SigningPayloadHash,
+) -> Result<MultisigMemberSignature, MultisigSignError> {
+    if entry.n != member.n_total || member.member_index >= member.n_total {
+        return Err(MultisigSignError::GroupSize);
+    }
+    let member_ss = recover_combined_ss(
+        member.member_x25519_sk,
+        member.member_ml_kem_dk,
+        entry.own_x25519_ct,
+        entry.own_ml_kem_ct,
+    )
+    .map_err(|_| MultisigSignError::MemberDecap)?;
+    let (public_key, secret_key) = derive_multisig_member_keypair(&member_ss.0)
+        .map_err(|e| MultisigSignError::KeyDerivation(e.to_string()))?;
+    let signature = HybridEd25519MlDsa
+        .sign(
+            &secret_key,
+            SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+            message.as_bytes(),
+        )
+        .map_err(|e| MultisigSignError::Sign(e.to_string()))?;
+    // `member_ss` and `secret_key` drop here, wiped.
+    Ok(MultisigMemberSignature {
+        member_index: member.member_index,
+        public_key,
+        signature,
+    })
 }
 
 #[cfg(test)]

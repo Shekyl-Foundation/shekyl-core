@@ -5,10 +5,10 @@
 //! the V3.1 multisig protocol flow.
 
 use crate::{
-    encryption::{decrypt_payload, encrypt_payload},
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::{DecryptedPayload, MessageType, MultisigEnvelope, ENVELOPE_VERSION},
 };
+use shekyl_crypto_pq::multisig_blob::{open_blob, seal_blob, BlobContext};
 use shekyl_units::AtomicUnits;
 
 #[test]
@@ -43,25 +43,20 @@ fn intent_roundtrip_through_encryption() {
     };
     let plaintext = payload.encode();
 
-    let ct = encrypt_payload(
+    let context = BlobContext {
+        intent_hash,
+        message_type: MessageType::SpendIntent as u8,
+        sender_index: 0,
+    };
+    let ct = seal_blob(
         &group_secret,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
+        &context,
+        &[],
         &plaintext,
+        &mut rand::rngs::OsRng,
     )
     .unwrap();
-
-    let pt = decrypt_payload(
-        &group_secret,
-        &intent_hash,
-        MessageType::SpendIntent,
-        0,
-        1,
-        &ct,
-    )
-    .unwrap();
+    let pt = open_blob(&group_secret, &context, &[], &ct).unwrap();
 
     let decoded = DecryptedPayload::decode(&pt).unwrap();
     assert_eq!(decoded.message_type, MessageType::SpendIntent);
@@ -74,13 +69,17 @@ fn envelope_wraps_encrypted_payload() {
     let intent_hash = [0xBB; 32];
     let plaintext = b"test payload content";
 
-    let ct = encrypt_payload(
+    let context = BlobContext {
+        intent_hash,
+        message_type: MessageType::SignatureShare as u8,
+        sender_index: 1,
+    };
+    let ct = seal_blob(
         &group_secret,
-        &intent_hash,
-        MessageType::SignatureShare,
-        1,
-        0,
+        &context,
+        &[],
         plaintext,
+        &mut rand::rngs::OsRng,
     )
     .unwrap();
 
@@ -97,16 +96,8 @@ fn envelope_wraps_encrypted_payload() {
     let parsed = MultisigEnvelope::from_bytes(&bytes).unwrap();
     assert_eq!(parsed.encrypted_payload, ct);
 
-    let pt = decrypt_payload(
-        &group_secret,
-        &intent_hash,
-        MessageType::SignatureShare,
-        1,
-        0,
-        &parsed.encrypted_payload,
-    )
-    .unwrap();
-    assert_eq!(pt, plaintext);
+    let pt = open_blob(&group_secret, &context, &[], &parsed.encrypted_payload).unwrap();
+    assert_eq!(pt.as_slice(), plaintext);
 }
 
 #[test]

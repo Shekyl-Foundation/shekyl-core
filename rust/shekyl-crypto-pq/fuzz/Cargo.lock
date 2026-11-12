@@ -1126,6 +1126,7 @@ name = "shekyl-crypto-pq-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "rand",
  "shekyl-crypto-pq",
  "shekyl-types",
 ]

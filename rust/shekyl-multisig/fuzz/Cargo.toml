@@ -27,13 +27,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "fuzz_encrypt_decrypt_roundtrip"
-path = "fuzz_targets/fuzz_encrypt_decrypt_roundtrip.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "fuzz_intent_validation"
 path = "fuzz_targets/fuzz_intent_validation.rs"
 test = false
