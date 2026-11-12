@@ -116,7 +116,7 @@ one anyway); `shekyl-types::
   under rule 94 §6; the E6 lane re-verified at `dev` = `51d7f2416` the same
   day: coverage record unchanged, crate tests green, stamp moved in
   [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).)*
-- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, bundle_root: BundleRoot }`.
+- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, section_root: SectionRoot }`.
 - `Transaction::hash() -> TxHash`, `prefix_hash() -> PrefixHash`, `pqc_signing_payload_hashes() -> Vec<[u8; 32]>` (per-input signing messages, not identities — allowlisted in `check_wire_raw_hash_surface.py`).
 - `Input` is an `enum` — L5's whitelist dissolves into match exhaustiveness.
 - Dependency graph: `shekyl-crypto-hash`, `shekyl-curve-generators` directly.
@@ -137,7 +137,7 @@ problem for the crate (exhaustive `match` is the point), recorded so the
 handoff's count is not copied into a doc.
 
 **Delta 2 — bare arrays at the wire edge.** `previous`, `curve_tree_root`,
-`bundle_root`, `transaction_hashes[i]`, `Input::ToKey.key_image` are
+`section_root`, `transaction_hashes[i]`, `Input::ToKey.key_image` are
 `[u8; 32]`, and `timestamp` is `u64`. The crate lifts them into the typed
 domain at *its* edge (`BlockHash::from_bytes`, `TxHash::from_bytes`,
 `KeyImage::from_canonical_bytes`, `CurveTreeRoot::from_bytes`) and never passes
@@ -1069,9 +1069,9 @@ slot, then CEN-H19's batch; `validate` verifies the claims (the rule set,
 D3's seed, and the target — a mismatch is `Stale::Target`, not a second
 D1), derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
 the **bundle section** (CEN-J29–J37, `rules::bundle_admission::admit`
-over the header's `bundle_root` and `Candidate::bundle_references`, in the
+over the header's `section_root` and `Candidate::bundle_references`, in the
 slot the deleted CEN-B4 held — a block with no references is checked
-against `empty_bundle_root()`, never a vacuous pass and never a gap; a
+against `empty_section_root()`, never a vacuous pass and never a gap; a
 non-empty root with nothing supplied refuses as J29, which is why CEN-A3
 has no Rust rule of its own), E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
 reading (`judged_at`) — **the

@@ -495,7 +495,7 @@ falsifier is the census, not a date (rule 22).
 | `HeaderVersion` | `major_version` bumped past the set's admitted version | **CEN-B1** | `form` | Implemented | — |
 | `Orphan` | `previous` = a hash the chain never held | **CEN-A2** | `validate` | Implemented | — |
 | `WrongRoot` | `curve_tree_root` replaced by a root the tree never had | **CEN-B5** | `validate` | Implemented | — |
-| `WrongBundleRoot` | `bundle_root` replaced, nothing else: the block carries no references, so its section is empty and the mined root is not the empty section's | **CEN-J29** (the root check over the empty section) | `validate` | Implemented | — (applies on every captured chain: the mutation needs no shard, bond or claim, so the corpus census is unchanged) |
+| `WrongSectionRoot` | `section_root` replaced, nothing else: the block carries no references, so its section is empty and the mined root is not the empty section's | **CEN-J29** (the root check over the empty section) | `validate` | Implemented | — (applies on every captured chain: the mutation needs no shard, bond or claim, so the corpus census is unchanged) |
 | `FutureTimestamp` | `timestamp` = `clock + FTL + 1` — **closes §5's FTL row** | **CEN-C1** | `validate` | Implemented | — |
 | `StaleTimestamp` | `timestamp` = `0`, at or below every MTP median | **CEN-C2** | `validate` | Implemented | — |
 | `PowUnderWrongSeed` | nonce re-mined so the longhash **satisfies the target under a wrong seed and fails it under the true seed** (D1b's `check_hash`, both legs); the pipeline claims the true seed (RD-Q5), so D2 hashes under it and D1 refuses. The seed is not in the block — "bad seed" is a block *mined* against the wrong one | **CEN-D1** | `validate` | Implemented | — |
@@ -530,12 +530,12 @@ clock the substrate will report (C1's bound is computed from it, not
 guessed), and for `PowUnderWrongSeed` the longhash function, the target and
 the two seeds. Nothing else: `StaleTimestamp` needs no median (`0` is below
 any), `DoubleSpend` takes its key image from the `Extend`s the wrapper has
-already passed through, `Orphan`/`WrongRoot`/`WrongBundleRoot` use named
-constants no chain holds (`UNHELD_ROOT`, `UNHELD_BUNDLE_ROOT`).
+already passed through, `Orphan`/`WrongRoot`/`WrongSectionRoot` use named
+constants no chain holds (`UNHELD_ROOT`, `UNHELD_SECTION_ROOT`).
 
 **Place.** `Mutation::expected` is the row. `Mutation::expected_place` is
 where that row points: `Block` for the six rows implemented at the pin
-(and `WrongBundleRoot`, J29 at the block),
+(and `WrongSectionRoot`, J29 at the block),
 `Input` for `DoubleSpend` (the I7 refusal this table names), `Listed` for
 `UnknownReference` and `ReferenceTooRecent` (I10/I11 name the transaction,
 `Locus::Tx { slot: Listed(_) }`), `Miner` for

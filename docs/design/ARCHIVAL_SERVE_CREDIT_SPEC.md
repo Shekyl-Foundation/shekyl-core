@@ -641,7 +641,7 @@ one network verifies on no other.
   signature is not fixed-width breaks this construction**, and needs
   frames or a different commitment along with its version bump.
 - **The header field is renamed** (`SCS-P34`): the block header's
-  `attestation_root` becomes `bundle_root`, in the same rule-42 bump that
+  `attestation_root` becomes `section_root`, in the same rule-42 bump that
   changes what it commits to. The field keeps its place; it does not keep
   a name for a value it no longer holds.
 - **The prunable hash and the header root**, fixed with the verifier's
@@ -1505,10 +1505,10 @@ because its replacement is live; the reason stands beside it.
 
 | Deleted | Why |
 | --- | --- |
-| The attestation path's pass records, witness and record | The pass is carried by the bundle (`SCS-P16`). The attestation record is not reused for it. The header field survives, renamed `bundle_root` (`SCS-P34`) |
+| The attestation path's pass records, witness and record | The pass is carried by the bundle (`SCS-P16`). The attestation record is not reused for it. The header field survives, renamed `section_root` (`SCS-P34`) |
 | The serve-credit input (input tag `0x02`, now unassigned), the `serve_credit_only` class and the serve-credit table | `SCS-P16`. Credit comes only from an admitted bundle. CEN-J1–J3 and J7–J10 are retired by ruling, each naming its successors among CEN-J29–J37 |
 | The C++ sidecar path | No reuse and no FFI for bundles (`SCS-P24`) |
-| CEN-B4 and its operand: the block's attestation witness, its root in the header and its verify path | The attestation record is gone, so the rule has no operand. The bundle section's root takes the header field, renamed `bundle_root`, and CEN-J29–J37 judge it (`SCS-P34`) |
+| CEN-B4 and its operand: the block's attestation witness, its root in the header and its verify path | The attestation record is gone, so the rule has no operand. The bundle section's root takes the header field, renamed `section_root`, and CEN-J29–J37 judge it (`SCS-P34`) |
 | The anchor window | Admission checks no anchor *window*: no lower bound, and for the upper one a single comparison, `anchor_height < h` (§9.1, `SCS-P32`). The anchor hash is one lookup by height |
 | The public urn | Replaced by the secret draw. `DrawablePair` is in `drawable_pair.rs` |
 | The serve-credit input's leaf-path preimage, its segment path and its split signature legs | The receipt signs the delivery transcript and rides in the bundle (§7.2) |
@@ -1723,7 +1723,7 @@ Found while writing the bundle into §7 and §9, and the contracts into
 | --- | --- | --- |
 | `SCS-P32` | `SCS-P15` says a bundle's validity depends on nothing above `h`, but the receipt's anchor was held below `h` only by today's constants | **Admission checks `anchor_height < h`, and `W₂ + L ≤` anchor depth is asserted on every rule set**, as rule-set data. Recorded as an **amendment to `SCS-P7`**, not a reversal: P7's reason for no lower bound stands (§9.1) |
 | `SCS-P33` | The budget's integer form: `c · 9·D / SEB` floors to zero below about 555 pairs; a bundle from the previous epoch was counted against the new `D`; a block can have `count(h) = 0` | **Budget = `c · (⌊9·D / SEB⌋ + 1)`, with `D` the largest `D` among the epochs of the bundles in the section.** *Adjusted wording:* one rule, not a two-epoch exception. **A `count(h) = 0` bundle is admissible**, which keeps the rule uniform; not filing it is challenger policy (§7.1, §7.4) |
-| `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `bundle_root`, in the same rule-42 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
+| `SCS-P34` | Whether the header root is the existing `attestation_root` field, and CEN-B4's fate | **Reuse the field and rename it**, `section_root` (the root commits the block's section, one reference per admitted bundle; `INPUT_GRAMMAR.md` IG-Q102), in the same rule-42 bump. *Adjusted:* the rename; a field does not keep a name for a value it no longer holds (rule 93). **B4 is retired by ruling for a new row**, through the census arm. `SCS-F19` is smaller than it read: DRS-E5 has nothing to reopen (§14) |
 | `SCS-P35` | The bundle's bytes | **The commitment of §7.3 under a new label; the bitmap least significant bit first with zero padding, checked.** *Stated outright:* records follow in ascending `j` over the set bits and their number equals the popcount, or the bundle is refused; and "no frame" rests on fixed-width records, which rests on FN-DSA-1024's padded signature and the fixed canonical encoding, written down where a scheme change will meet it (§7.2, §7.3). `…-batch-v1` and its registry row are superseded; *re-ruled 2026-10-12*, they are not deleted (§11.1) |
 | `SCS-P36` | What a backfill verifies | **Hash equality against the header root's term is the acceptance rule.** Re-verifying receipts is optional and bounded by the bond journals' horizon. This corrects `SCS-P22`'s "can be re-verified" (§8) |
 | `SCS-P37` | Whether the verifier returns the derived draws | **Yes.** `Admitted::draws` is part of the contract between the verifier and the writer, in §9.6 beside the view trait, and the settlement lane sees it before it builds its cutover increment |
@@ -1922,7 +1922,7 @@ One row at least for each item of §13.5 to §13.8.
 | `SCS-P32` | On a short-epoch rule set, a reorg above `h` changes an anchor's hash and voids an honest bundle | Not constructible: `anchor_height < h` is checked, and every rule set asserts `W₂ + L ≤` anchor depth |
 | `SCS-P33` | A network with few pairs can never admit a bundle, so it never observes and never pays | The budget is `c` bundles at the count cap for any `D` |
 | `SCS-P33` | A producer files bundles for its zero-draw blocks to use up other blocks' sections | Each is charged one unit of the budget (`SCS-P40`), and there is one per `h`, so they cannot fill a section for free; the `SCS-P40` row gives the bound |
-| `SCS-P34` | One header field read as an attestation root by old code and as a bundle root by new | The field is renamed in the bump that changes its meaning, and B4 is retired for a new row; no code path reads the old name |
+| `SCS-P34` | One header field read as an attestation root by old code and as a section root by new | The field is renamed in the bump that changes its meaning, and B4 is retired for a new row; no code path reads the old name |
 | `SCS-P35` | Two different bundles with one commitment | `count` fixes the bitmap, the popcount fixes the number of records, each record is 1,397 bytes; padding bits are checked. A scheme with variable-width signatures would break this, and §7.3 says so |
 | `SCS-P36` | A node refuses to backfill an old bundle because it cannot rebuild the snapshot | Hash equality is the acceptance rule; nothing requires the snapshot |
 | `SCS-P31` | Two lanes each build their own reading of what the verifier needs, and the store's view answers a different question from the one the verifier asks | The view trait and the kept projection are fixed in §9.6 before either is built; the verifier is tested against a fixture view, so it cannot lean on a store type |

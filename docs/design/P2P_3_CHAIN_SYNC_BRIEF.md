@@ -588,7 +588,7 @@ ingest deciding forks.**
      check, `rules/body.rs:123-139`, run by sync first; a skeleton's
      txid is computed from its supplied components);
    - the bundle references beside the block rebuild to the header's
-     `bundle_root`: each reference parses, the references ascend, and
+     `section_root`: each reference parses, the references ascend, and
      each names a block whose window the including block is inside. The
      references travel beside the block and are not covered by its
      identity. This is the section's stateless half, CEN-J29 and J31's
