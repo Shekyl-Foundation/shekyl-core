@@ -579,7 +579,36 @@ again. There were 392 low-memory events, and the kernel killed the relay
 was not among the processes the kernel named, and the cause is not
 established.
 
-### 7. What these say, and what they do not
+### 7. Comparison
+
+This compares the daemon's bytes with the relay's. The figures come from
+`_final_obs.tsv`, reduced by the same script into
+[`_final_comparison.tsv`](trc1_carried_traffic_20261012_final_comparison.tsv).
+Originated bytes are counted before Tor pads them into 514-byte cells, so
+the share on the wire is somewhat higher than these figures. They are
+per-minute totals over all of the relay's connections. The daemon's cells
+leave on one of them, the connection to its first hop.
+
+| | All rows (41,322) | Rows with a live daemon (27,129) |
+| --- | --- | --- |
+| Originated bytes as a share of carried bytes | 0.18 % | 0.29 % |
+| Share per minute, median / 95th percentile | 0.03 % / 1.10 % | 0.08 % / 1.79 % |
+| Median outbound bytes per second | 390,306 | 336,190 |
+| One 17-cell stem (8,738 bytes) against that second | 2.2 % | 2.6 % |
+| Minutes with outbound under 17 cells/s | 0.039 % | 0.055 % |
+| Minutes with outbound under 170 cells/s | 6.4 % | 9.2 % |
+
+"Rows with a live daemon" leaves out the frozen alpha.10 daemon and the
+two minutes with no daemon. Rows in which the relay carried nothing are
+left out of the share per minute: 15 of all rows, 14 of the live-daemon
+rows. The figures given when this comparison was asked for were 0.19 %,
+0.08 % / 1.8 %, 2.2 %, 0.04 % and 6.4 %. The script's figures stand, and
+two of them differ:
+- the overall share is 0.18 %;
+- the per-minute share is 0.03 % / 1.10 % over all rows. The figures
+  asked about match the live-daemon rows instead.
+
+### 8. What these say, and what they do not
 
 - **Volume does not follow weight in one direction here.** The relay
   carried as much at weight 1 as at 310, and less at 210 to 290 than at
