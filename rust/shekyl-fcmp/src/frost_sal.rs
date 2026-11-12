@@ -395,11 +395,12 @@ impl SalSigningParams {
     /// transaction whose message is `signable`, with pseudo-out blind
     /// `pseudo_out_blind` (`a`).
     ///
-    /// The rerandomization's commitment blind is `r_c = a − z`, so the
-    /// input's pseudo-out is `C~ = C + r_c·G = a·G + amount·H`: the
-    /// assembler picks every `a` and balances the last one, exactly as the
-    /// solo prover does. The other three blinds are drawn from `rng`. The
-    /// key-image generator is `Hp(O)`.
+    /// The rerandomization comes from
+    /// [`RerandomizedOutput::for_pseudo_out`]: `r_c = a − z`, so the
+    /// input's pseudo-out is `C~ = a·G + amount·H`. The assembler picks
+    /// every `a` and balances the last one, through the same constructor
+    /// the solo prover uses. The other three blinds are drawn from `rng`.
+    /// The key-image generator is `Hp(O)`.
     ///
     /// # Errors
     ///
@@ -424,13 +425,13 @@ impl SalSigningParams {
             Option::<Scalar>::from(Scalar::from_repr(*pseudo_out_blind))
                 .ok_or(FrostSalError::PseudoOutBlind)?,
         );
-        let r_c = Zeroizing::new(*a - *z);
         // The wipe-on-drop owner exists before either secret is decoded, and
         // each decodes straight into its field: a refusal of `y_kem` drops
-        // the params, which wipes `x`.
+        // the params, which wipes `x`. `a` and `z` drop with this frame,
+        // wiped, after `for_pseudo_out` has stored `a − z` in the rerandomization.
         let mut params = Self {
             output,
-            rerandomized: RerandomizedOutput::with_commitment_blind(rng, output, *r_c),
+            rerandomized: RerandomizedOutput::for_pseudo_out(rng, output, *z, *a),
             signable,
             x: Scalar::ZERO,
             y_kem: Scalar::ZERO,
