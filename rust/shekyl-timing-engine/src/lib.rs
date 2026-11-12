@@ -885,6 +885,7 @@ impl<C: Clock> Engine<C> {
 }
 
 mod service;
+pub mod wait;
 
 pub use service::{EngineService, Handle, OwnerHandle, WakeWait};
 

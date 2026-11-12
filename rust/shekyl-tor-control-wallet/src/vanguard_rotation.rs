@@ -1123,9 +1123,11 @@ async fn fetch_consensus(
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
 ) -> Result<ConsensusView, VanguardsAbort> {
+    // Awake time: a wait a machine slept through is not Tor's silence.
+    let clock = shekyl_timing_engine::MonotonicClock::new();
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = shekyl_timing_engine::wait::sleep(&clock, reply_deadline) => {
             return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
         }
         r = actor.ask(Command::GetInfo(vec!["ns/all".to_owned()])) => r,
@@ -1169,9 +1171,11 @@ async fn apply_pins(
             needed: NUM_LAYER2_GUARDS + NUM_LAYER3_GUARDS,
         }))
     })?;
+    // Awake time: a wait a machine slept through is not Tor's silence.
+    let clock = shekyl_timing_engine::MonotonicClock::new();
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(VanguardsAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = shekyl_timing_engine::wait::sleep(&clock, reply_deadline) => {
             return Err(VanguardsAbort::Failed(VanguardsError::Control(ControlError::Timeout)));
         }
         r = actor.ask(Command::SetConf(pins)) => r,

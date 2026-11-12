@@ -46,6 +46,7 @@
 //! survives supervision — restarting must not decide DQ-T0.7's guard-rotation
 //! posture by accident.
 
+use shekyl_timing_engine::{wait, MonotonicClock};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -750,7 +751,10 @@ async fn drive_incarnation(
     ctx: &mut IncarnationCtx<'_>,
     mut ready_rx: watch::Receiver<BootstrapState>,
 ) -> IncarnationEnd {
-    let deadline = tokio::time::Instant::now() + ctx.policy.bootstrap_deadline;
+    // The incarnation's waits count awake time: a machine that slept through
+    // one has not given Tor that long (`shekyl_timing_engine::wait`).
+    let clock = MonotonicClock::new();
+    let deadline = wait::deadline_after(&clock, ctx.policy.bootstrap_deadline);
     // Phase 1: to Ready (or death/deadline/shutdown).
     loop {
         tokio::select! {
@@ -758,7 +762,7 @@ async fn drive_incarnation(
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
             }
-            () = tokio::time::sleep_until(deadline) => {
+            () = wait::sleep_until(&clock, deadline) => {
                 return IncarnationEnd::Failed(ServiceFailure::BootstrapTimeout);
             }
             changed = ready_rx.changed() => {
@@ -795,7 +799,7 @@ async fn drive_incarnation(
     // control error is preserved rather than collapsed into a generic exit.
     let reply = tokio::select! {
         _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
-        () = tokio::time::sleep(ctx.policy.socks_discovery_deadline) => {
+        () = wait::sleep(&clock, ctx.policy.socks_discovery_deadline) => {
             return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
         }
         r = ctx.actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,

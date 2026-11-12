@@ -26,6 +26,10 @@ publish = false
 unpinned-tor-for-tests = []
 
 [dependencies]
+# The process clock and its awake-time waits: the managed launch's handshake
+# read and the readiness wait end on awake time, not at a machine's wake
+# (Rick, 2026-11-11). Also the supervisor core's tests' clocks.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 # The onion keypair. Its RFC 8032 expansion and public key are secret-byte
@@ -70,7 +74,6 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hex-literal = "1"
 tempfile = "3"
 # `test-util`: the reply bound's resume tests pause time and jump it, as

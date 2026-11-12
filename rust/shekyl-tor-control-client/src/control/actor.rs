@@ -1797,12 +1797,20 @@ async fn next_reply(
     }
 }
 
-/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT`.
+/// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT` of awake
+/// time: a machine that slept mid-handshake has not given Tor that long.
 async fn read_reply(
     reader: &mut ControlRead,
     framer: &mut ReplyFramer,
 ) -> Result<ControlReply, ControlError> {
-    match timeout(HANDSHAKE_READ_TIMEOUT, next_reply(reader, framer)).await {
+    let clock = shekyl_timing_engine::MonotonicClock::new();
+    match shekyl_timing_engine::wait::timeout(
+        &clock,
+        HANDSHAKE_READ_TIMEOUT,
+        next_reply(reader, framer),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => Err(ControlError::Timeout),
     }

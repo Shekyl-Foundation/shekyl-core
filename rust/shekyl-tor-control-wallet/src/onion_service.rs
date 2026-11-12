@@ -247,9 +247,11 @@ pub(crate) async fn publish_onion(
         .with_flags(OnionFlags { discard_pk: true })
         .with_pow(spec.pow);
 
+    // Awake time: a wait a machine slept through is not Tor's silence.
+    let clock = shekyl_timing_engine::MonotonicClock::new();
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(OnionPublishAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = shekyl_timing_engine::wait::sleep(&clock, reply_deadline) => {
             return Err(OnionPublishAbort::Failed(OnionPublishError::Control(
                 ControlError::Timeout,
             )));
