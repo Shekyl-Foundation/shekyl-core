@@ -262,11 +262,11 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
 /// definition here to constrain and its floor moved with the fold. The
 /// class table names the host table, not this LMDB spelling.
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
-    "archival_alt_attestation_witness",
+    "archival_alt_bundle_references",
     "alt_blocks",
-    "the alt block's sidecar is an attribute of the alt block it is keyed by \
-     (ARCHIVAL_CREDIT_WIRE.md §3 CW-2: written beside it, removed with it, never outliving \
-     it), so it is a field of `AltBlock` rather than a second hash-keyed table (DRS-E1 S-ALT, \
+    "an alt block's bundle references are an attribute of the alt block they are keyed by \
+     (written beside the block, removed with it, never outliving it), so they are a field \
+     of `AltBlock` rather than a second hash-keyed table (DRS-E1 S-ALT, \
      `SAR-Q5`, `SAL-Q2`): `AltBlock::bundle_references`",
 )];
 

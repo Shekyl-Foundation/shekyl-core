@@ -6,11 +6,12 @@
 //! The alternative-chain store's record (DRS-E1 S-ALT, `DRS_E1_SALT.md`
 //! §3.4): `alt_blocks[hash] → Coded<AltBlock>`.
 //!
-//! The C++ `alt_block_data_t` (`blockchain_db.h:206`) is five `u64` words
-//! followed by the block blob in one LMDB value, with the reorg-survival
-//! attestation witness in a **second** table keyed by the same hash
-//! (`archival_alt_attestation_witness`, `ARCHIVAL_CREDIT_WIRE.md` §3 CW-2).
-//! This record re-specifies that along its seams rather than porting it:
+//! The C++ `alt_block_data_t` (`blockchain_db.h:206`) was five `u64` words
+//! followed by the block blob in one LMDB value, with the block's sidecar in
+//! a **second** table keyed by the same hash. This record re-specifies that
+//! along its seams rather than porting it, and the alt block's bundle
+//! references are a field of it (the family `archival_alt_bundle_references`,
+//! folded into `alt_blocks`):
 //!
 //! - `cumulative_difficulty` is **one** `u128`, the encoding the chain
 //!   codec already uses for `block_info` (`chain.rs`), not the two `u64`

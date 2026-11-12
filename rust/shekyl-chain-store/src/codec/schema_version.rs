@@ -419,7 +419,9 @@ use super::{Canonical, CodecError};
 ///   table after it moves up one ordinal, and `tables.snap` re-pins. The
 ///   `ServeCredit` archival family goes too, so each later family's bit in
 ///   a stored `family_set` moves down one and `family_set.snap` re-pins.
-///   A `35` file is refused at open. Rebuild from the block corpus, as at
+///   The alt-chain family is named for what it holds:
+///   `archival_alt_attestation_witness` is `archival_alt_bundle_references`,
+///   its bit unchanged. A `35` file is refused at open. Rebuild from the block corpus, as at
 ///   every bump.
 ///
 /// [`FamilySet`]: crate::family_set::FamilySet
