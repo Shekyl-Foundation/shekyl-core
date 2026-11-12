@@ -59,34 +59,26 @@ pub(crate) mod synced_chain_facts;
 use std::future::Future;
 
 use serde_json::{json, Value};
-use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
+use shekyl_rpc_client::{wire, FeeRate, Rejection, Rpc, RpcError, RpcMethod};
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::{FeeTier, GetFeeEstimateResponse};
+use shekyl_rpc_types::kinds::NoParams;
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
 
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
-/// Map a daemon `get_fee_estimate` reply onto the three-tier
-/// [`FeeEstimates`] snapshot, deriving every tier from this **one**
-/// response.
-///
-/// Parses through [`GetFeeEstimateResponse`] so a wire-arity change is a
-/// type error here rather than a local JSON destructure the shared
-/// contract cannot see. Tiers are [`FeeTier::Low`] / [`FeeTier::Normal`]
-/// / [`FeeTier::High`] — one slot each, `[economy, standard, priority]`.
-///
-/// A missing `fees` array is malformed, not a legacy scalar to synthesize
-/// tiers from: the daemon serves the three-rung ladder from genesis.
-fn fee_estimates_from_reply(reply: &GetFeeEstimateResponse) -> Result<FeeEstimates, RpcError> {
-    if !reply.status.is_ok() {
-        return Err(RpcError::InvalidFee);
-    }
+/// Map the daemon's `fee` reply onto the three-tier [`FeeEstimates`]
+/// snapshot, every tier from this **one** reply. The tiers are named on
+/// the wire (IG-Q52), each an amount per unit of weight.
+fn fee_estimates_from_reply(reply: &wire::chain::Fee) -> Result<FeeEstimates, RpcError> {
+    let rate = |tier: &shekyl_units::wire::AtomicUnitsString| {
+        FeeRate::new(tier.to_atomic_units().to_raw())
+    };
     Ok(FeeEstimates {
-        economy: FeeRate::new(reply.fees.get(FeeTier::Low))?,
-        standard: FeeRate::new(reply.fees.get(FeeTier::Normal))?,
-        priority: FeeRate::new(reply.fees.get(FeeTier::High))?,
+        economy: rate(&reply.economy)?,
+        standard: rate(&reply.standard)?,
+        priority: rate(&reply.high)?,
     })
 }
 
@@ -207,7 +199,7 @@ impl DaemonClient {
                 if let Some(evidence) = &refusal.evidence {
                     // The daemon's own text: logged here, not carried in the
                     // mismatch, which stays a fixed-size value.
-                    tracing::warn!(%evidence, "daemon get_version reply unreadable");
+                    tracing::warn!(%evidence, "daemon version read unreadable");
                 }
                 HandshakeFail::Mismatch(refusal.mismatch)
             })
@@ -247,7 +239,7 @@ async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
     let body = serde_json::to_vec(&json!({
         "jsonrpc": "2.0",
         "id": 0,
-        "method": "get_version",
+        "method": <wire::Version as RpcMethod>::NAME,
         "params": {},
     }))
     .map_err(|e| HandshakeFail::Transport(RpcError::InternalError(e.to_string())))?;
@@ -257,25 +249,32 @@ async fn fetch_get_version(inner: &HttpRpc) -> Result<Value, HandshakeFail> {
         .map_err(HandshakeFail::Transport)?;
     let envelope: Value = serde_json::from_slice(&raw).map_err(unreadable_reply)?;
     if let Some(error) = envelope.get("error") {
+        // A daemon of another RPC major has no method by this name: the
+        // version read is `version` from 4.0 (RW-Q6). That is the
+        // version difference itself, said as one, not a transport fault.
+        if shekyl_rpc_types::errors::is_method_not_found(error) {
+            return Err(unreadable_reply("the daemon has no `version` method"));
+        }
         let message = error
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("no reason given");
         return Err(HandshakeFail::Transport(RpcError::ConnectionError(
-            format!("get_version: {message}"),
+            format!("version: {message}"),
         )));
     }
     envelope
         .get("result")
         .cloned()
-        .ok_or_else(|| unreadable_reply("malformed get_version reply: no result"))
+        .ok_or_else(|| unreadable_reply("malformed version reply: no result"))
 }
 
-/// A `get_version` response with no JSON-RPC envelope this build can read.
+/// A version read with no JSON-RPC envelope this build can read, or a
+/// daemon with no `version` method.
 /// What failed to parse is the daemon's text: it goes to the log here and is
 /// not carried in the mismatch, which stays a fixed-size value.
 fn unreadable_reply(evidence: impl std::fmt::Display) -> HandshakeFail {
-    tracing::warn!(%evidence, "daemon get_version reply unreadable");
+    tracing::warn!(%evidence, "daemon version read unreadable");
     HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable())
 }
 
@@ -313,9 +312,8 @@ impl DaemonEngine for DaemonClient {
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
             // No parameters: the ladder is a function of chain state alone
-            // (FL-R20, FL-R26; wire 3.57).
-            let reply: GetFeeEstimateResponse =
-                self.json_rpc_call("get_fee_estimate", None).await?;
+            // (FL-R20, FL-R26).
+            let reply = self.call::<wire::Fee>(NoParams).await?;
             fee_estimates_from_reply(&reply)
         }
     }
@@ -358,7 +356,7 @@ impl DaemonEngine for DaemonClient {
                          refused locally as Malformed, no RPC issued"
                     );
                     return Ok(TxSubmitOutcome::Rejected {
-                        cause: RejectCause::Malformed,
+                        cause: Rejection::Malformed,
                         row: None,
                     });
                 }
@@ -386,9 +384,8 @@ impl DaemonEngine for DaemonClient {
     /// defensive-parsing rationale moved with it.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
-            let info: shekyl_rpc_types::GetInfoResponse =
-                self.json_rpc_call("get_info", None).await?;
-            Ok(synced_chain_facts::health_from_get_info(&info))
+            let status = self.call::<wire::DaemonStatus>(NoParams).await?;
+            Ok(synced_chain_facts::health_from_daemon_status(&status))
         }
     }
 }

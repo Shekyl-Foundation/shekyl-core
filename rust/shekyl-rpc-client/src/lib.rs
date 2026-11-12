@@ -39,12 +39,9 @@ pub enum RpcError {
     /// The node is invalid per the expected protocol.
     #[error("invalid node ({0})")]
     InvalidNode(String),
-    /// Requested transactions weren't found.
-    #[error("transactions not found")]
-    TransactionsNotFound(Vec<[u8; 32]>),
     /// Requested transactions are not in the daemon's chain, and its pool
-    /// cannot be read until it restarts (`unavailable_tx`): whether they
-    /// exist has no answer from this daemon. Not "not found".
+    /// cannot be read until it restarts (a `null` slot in `tx_list`, IG-Q73):
+    /// whether they exist has no answer from this daemon. Not "not found".
     #[error("transactions unavailable: not in the daemon's chain, and its pool is retired")]
     TransactionsUnavailable(Vec<[u8; 32]>),
     /// The transaction was pruned.
@@ -147,7 +144,6 @@ impl RpcError {
             Self::ConnectionError(_) | Self::TransactionsUnavailable(_) => DaemonFault::Unreachable,
             Self::IdentityMismatch(mismatch) => DaemonFault::Identity(*mismatch),
             Self::InvalidNode(_)
-            | Self::TransactionsNotFound(_)
             | Self::PrunedTransaction
             | Self::InvalidTransaction(_) => DaemonFault::Protocol,
             Self::InvalidFee => DaemonFault::FeeResponse,
@@ -585,10 +581,6 @@ mod tests {
                 DaemonFault::Identity(wrong_network),
             ),
             (RpcError::InvalidNode("bad".into()), DaemonFault::Protocol),
-            (
-                RpcError::TransactionsNotFound(vec![[0; 32]]),
-                DaemonFault::Protocol,
-            ),
             (
                 RpcError::TransactionsUnavailable(vec![[0; 32]]),
                 DaemonFault::Unreachable,

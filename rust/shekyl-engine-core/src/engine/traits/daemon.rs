@@ -155,7 +155,7 @@ pub struct FeeEstimates {
 /// through full admission). Callers MAY retry on transient transport
 /// failures.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TxSubmitOutcome {
     /// Admitted to the daemon's pool at commit-check time; relay is
     /// daemon-owned from here. The pending-tx enters awaiting
@@ -177,7 +177,7 @@ pub(crate) enum TxSubmitOutcome {
         /// The daemon's relay state. `held_overdue` is judged when the
         /// state is read, on the daemon's clock. A missing origin row
         /// is `untracked`. This outcome does not carry a duration.
-        relay: shekyl_rpc_types::PoolRelay,
+        relay: shekyl_rpc_client::Publication,
     },
 
     /// Identity fact: this txid is in the main chain. Confirmation
@@ -200,7 +200,7 @@ pub(crate) enum TxSubmitOutcome {
     Rejected {
         /// Why the daemon refused the transaction. Dispositions per
         /// §2.5 are applied by the orchestrator.
-        cause: shekyl_rpc_client::RejectCause,
+        cause: shekyl_rpc_client::Rejection,
         /// The consensus row that refused, for `ConsensusRule`: the reply's
         /// diagnostic parameter, carried to the user's sentence. `None` for
         /// every other cause, and for a row this wallet cannot carry whole.
@@ -208,7 +208,37 @@ pub(crate) enum TxSubmitOutcome {
     },
 }
 
-/// Daemon health facts the wallet reads from `get_info`.
+/// Whether the daemon runs P2P, and when it does, whether it has a peer:
+/// `daemon_status`' `offline` and `peered`, read together. An offline
+/// daemon is a state of its own, not a daemon with no peers (Rick,
+/// 2026-10-14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DaemonP2p {
+    /// P2P is off by configuration.
+    Offline,
+    /// P2P runs.
+    Running {
+        /// At least one handshaken session.
+        has_peers: bool,
+    },
+}
+
+impl DaemonP2p {
+    /// P2P is off by configuration.
+    pub(crate) const fn is_offline(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+
+    /// Whether the daemon has a peer; `None` while P2P is off.
+    pub(crate) const fn has_peers(self) -> Option<bool> {
+        match self {
+            Self::Offline => None,
+            Self::Running { has_peers } => Some(has_peers),
+        }
+    }
+}
+
+/// Daemon health facts the wallet reads from `daemon_status`.
 ///
 /// Whether the daemon has a peer it can relay through, its chain height,
 /// and whether it is synchronized. No new RPC
@@ -233,7 +263,7 @@ pub(crate) struct DaemonHealth {
     /// Not a count, and not derived from one: the counts are Status, which
     /// a daemon may withhold. An offline daemon is a state of its own, not
     /// a daemon with no peers (Rick, 2026-10-14).
-    pub p2p: shekyl_rpc_types::HealthP2p,
+    pub p2p: DaemonP2p,
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as

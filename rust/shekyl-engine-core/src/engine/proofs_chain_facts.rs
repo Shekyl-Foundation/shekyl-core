@@ -26,15 +26,15 @@
 
 use shekyl_crypto_pq::kem::{HYBRID_KEM_CT_LEN, X25519_KEM_CT_LEN};
 use shekyl_proofs::tx_proof::OnChainOutput;
-use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_rpc_types::{
-    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
-    IsKeyImageSpentResponse, KeyImageStatus, TxLocation,
-};
+use shekyl_rpc_client::{wire, Rpc, RpcError};
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::wire::chain::{Spent, SpentQuery};
+use shekyl_rpc_types::wire::shared::{Slot, SlotState};
+use shekyl_rpc_types::wire::tx::{TxEntry, TxListQuery};
 use shekyl_scanner::extra::Extra;
 use shekyl_wire::{Ct, Transaction};
 
-use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TXS_PER_REQUEST};
+use super::block_fetch::{bind_served, Served, TXS_PER_REQUEST};
 use super::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use super::proofs::ProofsError;
 use shekyl_types::TxHash;
@@ -67,6 +67,75 @@ pub(crate) struct FetchedTx {
     pub(crate) state: TxChainState,
 }
 
+/// One `tx_list` under `prune` for `txids`, each slot read: the entry, or
+/// the reason there is none.
+///
+/// `{"missing": null}` is [`ProofsError::TxNotFound`] naming the first
+/// missing txid in request order; a `null` slot (the pool could not be
+/// asked) is no answer, not "not found"; an `archived` slot is the whole
+/// form's answer, never the skeleton's, and refuses the daemon.
+async fn list_proof_txs<R: Rpc>(rpc: &R, txids: &[[u8; 32]]) -> Result<Vec<TxEntry>, ProofsError> {
+    let reply = rpc
+        .call::<wire::TxList>(TxListQuery {
+            id: txids.iter().copied().map(HashHex::from_bytes).collect(),
+            prune: true,
+        })
+        .await
+        .map_err(ProofsError::Daemon)?;
+    if reply.len() != txids.len() {
+        return Err(ProofsError::Daemon(RpcError::InvalidNode(
+            "daemon returned a different number of transactions than requested".to_string(),
+        )));
+    }
+    if let Some((txid, _)) = txids
+        .iter()
+        .zip(&reply)
+        .find(|(_, slot)| matches!(slot, Slot::State(SlotState::Missing(_))))
+    {
+        return Err(ProofsError::TxNotFound(hex::encode(txid)));
+    }
+    let unasked: Vec<[u8; 32]> = txids
+        .iter()
+        .zip(&reply)
+        .filter(|(_, slot)| matches!(slot, Slot::Unasked))
+        .map(|(txid, _)| *txid)
+        .collect();
+    if !unasked.is_empty() {
+        return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
+            unasked,
+        )));
+    }
+    reply
+        .into_iter()
+        .map(|slot| match slot {
+            Slot::Item(entry) => Ok(entry),
+            _ => Err(ProofsError::Daemon(RpcError::InvalidNode(
+                "daemon answered a prune request with an archived slot: every transaction has \
+                 a skeleton, so the archive is never the pruned form's answer"
+                    .to_string(),
+            ))),
+        })
+        .collect()
+}
+
+/// Where the daemon found an entry. A pooled entry carries no height; a
+/// mined one carries both its height and its depth, or the entry does not
+/// obey its own shape.
+fn chain_state_of(entry: &TxEntry) -> Result<TxChainState, ProofsError> {
+    if entry.pooled {
+        return Ok(TxChainState::Pooled);
+    }
+    match (entry.mined_height.0, entry.confirmations.0) {
+        (Some(height), Some(confirmations)) => Ok(TxChainState::Mined {
+            block_height: height.0,
+            confirmations: confirmations.0,
+        }),
+        _ => Err(ProofsError::Daemon(RpcError::InvalidNode(
+            "a mined transaction without its height or confirmations".to_string(),
+        ))),
+    }
+}
+
 /// Fetch one tx by hash as the skeleton it is (`SB-Q2`): everything the
 /// proof verifications need — output keys, commitments, encrypted
 /// amounts, `tx_extra` KEM ciphertexts — lives in the pruned segment,
@@ -76,77 +145,28 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
     rpc: &R,
     txid: [u8; 32],
 ) -> Result<FetchedTx, ProofsError> {
-    let txid_hex = hex::encode(txid);
-    let resp: GetTransactionsResponse = rpc
-        .rpc_call(
-            "get_transactions",
-            Some(
-                serde_json::to_value(GetTransactionsRequest {
-                    txs_hashes: vec![txid_hex],
-                    prune: true,
-                })
-                .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
-            ),
-        )
-        .await
-        .map_err(|e| match e {
-            RpcError::TransactionsNotFound(_) => ProofsError::TxNotFound(hex::encode(txid)),
-            other => ProofsError::Daemon(other),
-        })?;
-    refuse_unless_ok(&resp.status, "get_transactions").map_err(ProofsError::Daemon)?;
-
-    if !resp.missed_tx.is_empty() {
-        return Err(ProofsError::TxNotFound(hex::encode(txid)));
-    }
-    // The daemon could not look in its pool: no answer, not "not found".
-    if !resp.unavailable_tx.is_empty() {
-        return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
-            vec![txid],
-        )));
-    }
-
-    // Where it was found comes from the arm, not from two independently
-    // optional fields: `block_height` cannot be read off a pooled entry
-    // because a pooled entry does not carry one.
-    let state = match resp.txs.first().map(|t| &t.location) {
-        Some(TxLocation::Mined {
-            block_height,
-            confirmations,
-            ..
-        }) => TxChainState::Mined {
-            block_height: *block_height,
-            confirmations: *confirmations,
-        },
-        // No entry is not "pooled", but `parse_tx_batch` below refuses an
-        // empty batch for a requested hash, so this arm never reaches a
-        // caller; it is written as the pooled shape rather than a panic.
-        Some(TxLocation::Pooled { .. }) | None => TxChainState::Pooled,
-    };
-
-    // Proof payloads carry txids as bytes (their own format); the typed world
-    // starts at the batch parser.
-    let mut parsed =
-        parse_tx_batch(&[TxHash::from_bytes(txid)], &resp).map_err(ProofsError::Daemon)?;
-    let tx = parsed
+    let entry = list_proof_txs(rpc, &[txid])
+        .await?
         .pop()
-        .expect("parse_tx_batch returns exactly one tx per requested hash")
+        .ok_or_else(|| {
+            ProofsError::Daemon(RpcError::InvalidNode("an empty tx_list reply".to_string()))
+        })?;
+    let state = chain_state_of(&entry)?;
+    let tx = bind_served(TxHash::from_bytes(txid), &Served::from(&entry))
+        .map_err(ProofsError::Daemon)?
         .into_tx();
-
     Ok(FetchedTx { tx, state })
 }
 
 /// Fetch the pruned bodies of `txids` (unique, in first-seen order) in
-/// batched `get_transactions` calls of [`TXS_PER_REQUEST`] hashes — the
-/// daemon's restricted-RPC cap, the same chunking `block_fetch` uses —
-/// rather than one round trip per txid (a 4096-locator reserve proof
-/// would otherwise cost up to 4096 sequential daemon calls). Returns
-/// the parsed bodies positionally aligned with `txids`.
+/// batched `tx_list` calls of [`TXS_PER_REQUEST`] ids — the daemon's cap
+/// for a caller that is not the host — rather than one round trip per
+/// txid (a 4096-locator reserve proof would otherwise cost up to 4096
+/// sequential daemon calls). Returns the bound bodies positionally
+/// aligned with `txids`.
 ///
 /// Error semantics match [`fetch_proof_tx`] with one deliberate
-/// addition: a txid the daemon does not know is
-/// [`ProofsError::TxNotFound`] carrying the first missing txid in
-/// request order; a malformed body or batch is [`ProofsError::Daemon`];
-/// and a txid the daemon serves **from its pool** is
+/// addition: a txid the daemon serves **from its pool** is
 /// [`ProofsError::TxUnconfirmed`]. The single-tx fetch above accepts
 /// pooled entries because its consumers (the tx-proof checks) report
 /// `in_pool` / `confirmations` honestly in their result; this batch
@@ -164,83 +184,32 @@ async fn fetch_proof_txs<R: Rpc>(
 ) -> Result<Vec<Transaction>, ProofsError> {
     let mut bodies = Vec::with_capacity(txids.len());
     for batch in txids.chunks(TXS_PER_REQUEST) {
-        let hashes_hex: Vec<String> = batch.iter().map(hex::encode).collect();
-        let resp: GetTransactionsResponse = rpc
-            .rpc_call(
-                "get_transactions",
-                Some(
-                    serde_json::to_value(GetTransactionsRequest {
-                        txs_hashes: hashes_hex,
-                        prune: true,
-                    })
-                    .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
-                ),
-            )
-            .await
-            .map_err(|e| match e {
-                RpcError::TransactionsNotFound(missed) => {
-                    tx_not_found_in_request_order(batch, &missed)
-                }
-                other => ProofsError::Daemon(other),
-            })?;
-        refuse_unless_ok(&resp.status, "get_transactions").map_err(ProofsError::Daemon)?;
-
-        if !resp.missed_tx.is_empty() {
-            let missed_hashes: Vec<[u8; 32]> = resp
-                .missed_tx
-                .iter()
-                .copied()
-                .map(shekyl_rpc_types::HashHex::to_bytes)
-                .collect();
-            return Err(tx_not_found_in_request_order(batch, &missed_hashes));
-        }
-        if !resp.unavailable_tx.is_empty() {
-            return Err(ProofsError::Daemon(RpcError::TransactionsUnavailable(
-                resp.unavailable_tx
-                    .iter()
-                    .copied()
-                    .map(shekyl_rpc_types::HashHex::to_bytes)
-                    .collect(),
-            )));
-        }
-        // Refuse pooled entries before parsing. `resp.txs` is indexed by
-        // request position (RK-4c's export), so `batch[i]` names the tx the
-        // verifier asked about at slot `i` — the honest name for the error.
-        // A daemon lying about `location` can only cause a spurious refusal
-        // here, never a false acceptance.
-        for (requested, entry) in batch.iter().zip(&resp.txs) {
-            match &entry.location {
-                TxLocation::Pooled { .. } => {
+        let entries = list_proof_txs(rpc, batch).await?;
+        // Refuse pooled entries before binding. The reply is indexed by
+        // request position, so `batch[i]` names the tx the verifier asked
+        // about at slot `i` — the honest name for the error. A daemon lying
+        // about `pooled` can only cause a spurious refusal here, never a
+        // false acceptance.
+        for (requested, entry) in batch.iter().zip(&entries) {
+            match chain_state_of(entry)? {
+                TxChainState::Pooled => {
                     return Err(ProofsError::TxUnconfirmed(hex::encode(requested)));
                 }
-                TxLocation::Mined {
+                TxChainState::Mined {
                     block_height,
                     confirmations,
-                    ..
-                } => admit_mined_against_witness(witness, *block_height, *confirmations)?,
+                } => admit_mined_against_witness(witness, block_height, confirmations)?,
             }
         }
-        let typed: Vec<TxHash> = batch.iter().copied().map(TxHash::from_bytes).collect();
-        bodies.extend(
-            parse_tx_batch(&typed, &resp)
-                .map_err(ProofsError::Daemon)?
-                .into_iter()
-                .map(shekyl_wire::BoundTx::into_tx),
-        );
+        for (requested, entry) in batch.iter().zip(&entries) {
+            bodies.push(
+                bind_served(TxHash::from_bytes(*requested), &Served::from(entry))
+                    .map_err(ProofsError::Daemon)?
+                    .into_tx(),
+            );
+        }
     }
     Ok(bodies)
-}
-
-/// [`ProofsError::TxNotFound`] for the first txid of `batch` (request
-/// order) that the daemon reported missing — the same txid the
-/// sequential per-tx fetch this batching replaced would have named.
-fn tx_not_found_in_request_order(batch: &[[u8; 32]], missed: &[[u8; 32]]) -> ProofsError {
-    let first = batch
-        .iter()
-        .find(|txid| missed.contains(txid))
-        .or_else(|| missed.first())
-        .expect("callers pass a non-empty missed set");
-    ProofsError::TxNotFound(hex::encode(first))
 }
 
 /// The contract's confirmations pin: daemon chain height (block COUNT)
@@ -397,7 +366,7 @@ impl ProofChainView {
     /// # Errors
     ///
     /// [`ProofsError::DaemonSyncing`] when the daemon is not synchronized.
-    /// [`ProofsError::Daemon`] when `get_info` could not be read.
+    /// [`ProofsError::Daemon`] when `daemon_status` could not be read.
     pub(crate) async fn open<R: Rpc>(rpc: &R) -> Result<Self, ProofsError> {
         match fetch_synced_chain_facts(rpc).await {
             Ok(Some(witness)) => Ok(Self { witness }),
@@ -443,7 +412,7 @@ impl ProofChainView {
         fetch_proof_txs(&self.witness, rpc, txids).await
     }
 
-    /// `is_key_image_spent` for `key_images`, in request order.
+    /// `chain_spent` for `key_images`, in request order.
     ///
     /// The receiver is the opened view, so this query cannot be issued
     /// before [`Self::open`]. The spent set carries no height, so it is
@@ -456,30 +425,25 @@ impl ProofChainView {
     ///
     /// # Errors
     ///
-    /// [`ProofsError::Daemon`] on transport failure, a non-OK status, or a
+    /// [`ProofsError::Daemon`] on transport failure, a refusal, or a
     /// length mismatch.
     pub(crate) async fn key_image_status<R: Rpc>(
         &self,
         rpc: &R,
-        key_images: Vec<String>,
-    ) -> Result<Vec<KeyImageStatus>, ProofsError> {
+        key_images: Vec<HashHex>,
+    ) -> Result<Vec<Spent>, ProofsError> {
         let asked = key_images.len();
-        let resp: IsKeyImageSpentResponse = rpc
-            .rpc_call(
-                "is_key_image_spent",
-                Some(
-                    serde_json::to_value(IsKeyImageSpentRequest { key_images })
-                        .map_err(|e| RpcError::InternalError(format!("encode request: {e}")))?,
-                ),
-            )
+        let spent = rpc
+            .call::<wire::ChainSpent>(SpentQuery {
+                key_image: key_images,
+            })
             .await?;
-        refuse_unless_ok(&resp.status, "is_key_image_spent").map_err(ProofsError::Daemon)?;
-        if resp.spent_status.len() != asked {
+        if spent.len() != asked {
             return Err(ProofsError::Daemon(RpcError::InvalidNode(
-                "is_key_image_spent returned a different count than requested".to_string(),
+                "chain_spent returned a different count than requested".to_string(),
             )));
         }
-        Ok(resp.spent_status)
+        Ok(spent)
     }
 
     /// Confirm the witness block still stands, now that the reads are in hand.

@@ -68,7 +68,9 @@
 use std::collections::HashSet;
 
 use shekyl_curve_tree::DISPATCHED_PROOF_LIFE;
-use shekyl_rpc_types::PoolRelay;
+use shekyl_rpc_client::Publication;
+
+use crate::engine::traits::daemon::DaemonP2p;
 use shekyl_types::TxHash;
 
 use super::traits::DaemonHealth;
@@ -322,13 +324,13 @@ fn blocks_since(synced_height: u64, observed_at: u64) -> u64 {
 /// masked by "syncing" — a daemon with no peers cannot sync either.
 fn relay_impossible(health: DaemonHealth) -> Option<WatchdogStep> {
     match health.p2p {
-        shekyl_rpc_types::HealthP2p::Offline => {
+        DaemonP2p::Offline => {
             Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonOffline))
         }
-        shekyl_rpc_types::HealthP2p::Running { has_peers: false } => {
+        DaemonP2p::Running { has_peers: false } => {
             Some(WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless))
         }
-        shekyl_rpc_types::HealthP2p::Running { has_peers: true } => None,
+        DaemonP2p::Running { has_peers: true } => None,
     }
 }
 
@@ -372,7 +374,7 @@ pub(crate) enum ProbeOutcome {
     /// and fresh relay.
     ReofferedAfterAbsence,
     /// `AlreadyInPool`. The relay state is the daemon's.
-    InPool(PoolRelay),
+    InPool(Publication),
     /// `AlreadyInChain`: confirmation observed by verdict; refresh
     /// remains the settlement authority (§2.5).
     ConfirmedInChain,
@@ -424,12 +426,12 @@ pub(crate) fn apply_probe_outcome(
 ///
 /// A published answer keeps the first observation height. Every other
 /// relay state replaces the sight.
-fn sight_after_pool(previous: RelaySight, relay: PoolRelay, probe_height: u64) -> RelaySight {
+fn sight_after_pool(previous: RelaySight, relay: Publication, probe_height: u64) -> RelaySight {
     match relay {
-        PoolRelay::Held => RelaySight::Held,
-        PoolRelay::HeldOverdue => RelaySight::HeldOverdue,
-        PoolRelay::Untracked => RelaySight::Untracked,
-        PoolRelay::Published => RelaySight::Published {
+        Publication::Held => RelaySight::Held,
+        Publication::Overdue => RelaySight::HeldOverdue,
+        Publication::Untracked => RelaySight::Untracked,
+        Publication::Public => RelaySight::Published {
             at: match previous {
                 RelaySight::Published { at } => at,
                 RelaySight::Unread

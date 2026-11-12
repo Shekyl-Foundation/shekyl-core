@@ -285,7 +285,7 @@ pub enum WatchdogProbeOutcome {
     ReofferedAfterAbsence,
 
     /// `AlreadyInPool`. The relay state is the daemon's, passed through.
-    InPool(shekyl_rpc_types::PoolRelay),
+    InPool(shekyl_rpc_client::Publication),
 
     /// `AlreadyInChain`: confirmation observed by verdict. Refresh
     /// remains the settlement authority; the wait epoch restarts.

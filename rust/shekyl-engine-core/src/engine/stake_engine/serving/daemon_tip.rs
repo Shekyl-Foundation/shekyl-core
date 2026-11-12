@@ -25,47 +25,47 @@
 //! persona will be slashed against; sourcing it from a drawn peer would let
 //! whoever answers choose which challenges `P` refuses.
 //!
-//! # The seam, now that `get_info` is served from Rust
+//! # The seam
 //!
-//! The reply this module reads is the daemon's `get_info`, served natively
-//! since RK-5c and defined once, as `shekyl_rpc_types::GetInfoResponse`.
+//! The reply this module reads is the daemon's `daemon_status`, defined
+//! once, as `shekyl_rpc_types::wire::daemon::DaemonStatus`.
 //!
 //! Daemon elements still in flux stay behind a seam the wallet owns
 //! (standing ruling, 2026-09-19). That is what [`PersonaIsolatedTransport`]
 //! and [`TipReading`] are here — the wallet's own transport type and its
 //! own typed reading. The reply is read in two places by design: the
 //! members the submit watchdog and the sync witness also read are projected
-//! in the shared `health_from_get_info` (`WSS-Q14`), and the serving-only
-//! flags in [`tip_reading_from_info`]. When the reply's shape moves — the
-//! later commits of RK-5c move it on purpose — these two functions change
-//! while the gate, the cache, and every test above them do not. The seam is
-//! load-bearing, not incidental.
+//! in the shared `health_from_daemon_status` (`WSS-Q14`), and the
+//! serving-only flags in [`tip_reading_from_status`]. When the reply's shape
+//! moves, these two functions change while the gate, the cache, and every
+//! test above them do not. The seam is load-bearing, not incidental.
 //!
-//! # Chain height is converted to block height here
+//! # The stamp is a block height
 //!
-//! `get_info.height` is the chain height — the top block's height **plus one**
-//! (the daemon reports the chain's length). Admission centres its window on `predecessor_height − 720`,
-//! a block height, so stamping the chain height unconverted would centre `P`'s
-//! gate one block high and let it sign anchors admission then refuses. The
-//! `−1` happens once, here, through `ChainCount::tip`, at the only place the
-//! RPC's convention is in view for this gate.
+//! `daemon_status.height` is the tip's height, an ordinal (IG-Q45); the
+//! shared projection keeps the chain's count, one more. Admission centres
+//! its window on `predecessor_height − 720`, a block height, so stamping the
+//! count unconverted would centre `P`'s gate one block high and let it sign
+//! anchors admission then refuses. The count goes back to the tip through
+//! `ChainCount::tip`, here.
 
 use std::sync::Weak;
 use std::time::Duration;
 
 use shekyl_p_host::DaemonTipCache;
-use shekyl_rpc_types::GetInfoResponse;
+use shekyl_rpc_client::wire;
+use shekyl_rpc_types::kinds::NoParams;
+use shekyl_rpc_types::wire::daemon::DaemonStatus;
 use shekyl_types::{BlockHeight, ChainCount};
 
-use crate::engine::daemon::synced_chain_facts::health_from_get_info;
+use crate::engine::daemon::synced_chain_facts::health_from_daemon_status;
 
-use crate::engine::block_fetch::refuse_unless_ok;
 use crate::engine::prpc::PersonaIsolatedTransport;
 
 /// How often the tip is re-read, as a divisor of [`tip_max_age`].
 ///
 /// Four reads per age bound, so three consecutive failed polls still leave
-/// the gate answering. A loopback `get_info` is cheap; the cost of being
+/// the gate answering. A loopback `daemon_status` is cheap; the cost of being
 /// wrong here is a slash.
 pub(crate) const TIP_REFRESH_INTERVAL_DIVISOR: u32 = 4;
 
@@ -163,7 +163,7 @@ pub(crate) enum NotFollowing {
     NoPeers,
 }
 
-/// What one `get_info` read says about the daemon's tip.
+/// What one `daemon_status` read says about the daemon's tip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TipReading {
     /// The daemon is following the chain and its top block is at this height.
@@ -177,7 +177,7 @@ pub(crate) enum TipReading {
     Unusable,
 }
 
-/// Read one `get_info` reply into a [`TipReading`].
+/// Read one `daemon_status` reply into a [`TipReading`].
 ///
 /// # The sync predicate, and why one flag is not enough
 ///
@@ -203,8 +203,8 @@ pub(crate) enum TipReading {
 /// |---|---|
 /// | `synchronized` | on the Rust daemon, yes; the wallet does not rely on it |
 /// | `offline` | yes |
-/// | `following_degraded` | never (one-way, refusing) |
-/// | `has_peers` | yes |
+/// | `degraded` | never (one-way, refusing) |
+/// | `peered` | yes |
 ///
 /// All four are Health, which the daemon tells every caller, so none
 /// depends on what this connection has been granted.
@@ -223,54 +223,29 @@ pub(crate) enum TipReading {
 /// sentinel rather than become a lever (`daemon/synced_chain_facts.rs`,
 /// module docs).
 ///
-/// # The peer check reads `has_peers`, and not `restricted`
+/// # The peer check reads `peered`
 ///
-/// Until `CORE_RPC_VERSION` 3.47 "has peers" was the sum of two connection
-/// counts in the Status part. A restricted daemon writes zero for both, so
-/// "no peers" and "not telling you" were the same bytes, and this reading
-/// stepped around that by also reading `restricted` and skipping the check
-/// when it was set: on a restricted daemon the peer check was simply
-/// unavailable. `has_peers` is in Health, a handshaken session on any
-/// connector, told to every caller (RK-D14). The check now holds on every
-/// daemon, and `restricted` is not read here. That member stays on the
-/// wire until the channel's grants replace it (RK-Q5); this module has
-/// stopped depending on it first.
+/// `peered` is in Health, a handshaken session on any connector, told to
+/// every caller (RK-D14), so the check holds on every daemon whatever this
+/// connection was granted. The Status part's connection counts are the
+/// daemon's to withhold, and a withheld count is not a zero; they are not
+/// read here.
 ///
 /// # Untrusted input
 ///
-/// Each absence has a named direction, and none of them is the convenient
-/// one by accident:
-///
-/// The reply is the shared [`GetInfoResponse`], which decodes strictly: a
+/// The reply is the shared [`DaemonStatus`], which decodes strictly: a
 /// document missing a member, carrying one of the wrong shape, or carrying
 /// one this build does not know is not a reply, and [`refresh_tip_once`]
 /// reads it as [`TipReading::Unusable`] — the held tip ages out as for a
-/// dropped poll. That covers every absence the hand-written decoder this
-/// replaces gave a direction to, and in the one direction that cannot
-/// manufacture a claim: no `height`, no `synchronized`, no refusal trigger.
-///
-/// What is left to decide here is what a well-formed reply *says*:
-///
-/// - `status` not `OK` ⇒ [`TipReading::Unusable`], **checked before any
-///   other member is read**. `Rpc::json_rpc_call` only unwraps `result`; it
-///   does not enforce the wire's `status`, so a daemon may answer `BUSY`
-///   and a plausible body in one document. Nothing in that document is then
-///   evidence. The check is [`refuse_unless_ok`] — the one shared refusal
-///   every typed RPC consumer here reaches for — and the outcome is
-///   *Unusable* rather than *NotFollowing* on purpose: a refusal says nothing
-///   about the tip either way, so the held one ages out as for a dropped
-///   poll instead of being cleared by a `BUSY` at startup.
-/// - `height == 0` ⇒ [`TipReading::Unusable`]: no top block to stamp, and a
-///   chain always has genesis, so this is a broken reply rather than a young
-///   chain.
-pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
-    // Status first, before any member becomes evidence.
-    if refuse_unless_ok(&info.status, "get_info").is_err() {
-        return TipReading::Unusable;
-    }
+/// dropped poll. A refusal is an error object, never a body beside a status
+/// word, so there is no refused document whose members could be read as
+/// evidence; it too is [`TipReading::Unusable`] — it says nothing about the
+/// tip either way, so the held one ages out instead of being cleared by a
+/// refusal at startup.
+pub(crate) fn tip_reading_from_status(status: &DaemonStatus) -> TipReading {
     // The members the watchdog and the sync witness also read are projected
     // in the one shared place.
-    let health = health_from_get_info(info);
+    let health = health_from_daemon_status(status);
     let chain_height = ChainCount::from_raw(health.height);
 
     // Ordered most-specific first, so the reported cause is the one an
@@ -278,7 +253,7 @@ pub(crate) fn tip_reading_from_info(info: &GetInfoResponse) -> TipReading {
     // the symptom it would also produce.
     let cause = if health.p2p.is_offline() {
         Some(NotFollowing::Offline)
-    } else if info.health.following_degraded {
+    } else if status.degraded {
         Some(NotFollowing::Degraded)
     } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
@@ -308,8 +283,8 @@ pub(crate) async fn refresh_tip_once<R>(rpc: &R, tip: &DaemonTipCache) -> TipRea
 where
     R: PersonaIsolatedTransport,
 {
-    let reading = match rpc.json_rpc_call::<GetInfoResponse>("get_info", None).await {
-        Ok(info) => tip_reading_from_info(&info),
+    let reading = match rpc.call::<wire::DaemonStatus>(NoParams).await {
+        Ok(status) => tip_reading_from_status(&status),
         // An unreachable daemon is absence of a fact, not a fact — and so is
         // a reply that is not the contract: stamp nothing and let the held
         // tip age out (`DaemonTipCache`'s contract).

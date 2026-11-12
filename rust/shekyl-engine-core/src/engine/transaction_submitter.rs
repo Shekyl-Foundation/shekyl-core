@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use shekyl_p_transport::{PTorClient, PTransportError, TorSocksEndpoint};
-use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
+use shekyl_rpc_client::{Rejection, Rpc, Verdict};
 use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
@@ -200,22 +200,26 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon verdict is
 /// interpreted the same regardless of which circuit carried it.
 pub(crate) fn submit_outcome_from_verdict(
-    verdict: &SubmitVerdict,
+    verdict: &Verdict,
     hash: TxHash,
 ) -> TxSubmitOutcome {
     match verdict {
-        SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
-        SubmitVerdict::AlreadyInPool { relay } => TxSubmitOutcome::AlreadyInPool {
+        Verdict::Accepted => TxSubmitOutcome::Submitted { hash },
+        Verdict::AlreadyInPool { publication } => TxSubmitOutcome::AlreadyInPool {
             hash,
-            relay: *relay,
+            relay: *publication,
         },
-        SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
+        Verdict::AlreadyInChain { mined_height } => TxSubmitOutcome::AlreadyInChain {
             hash,
-            height: *height,
+            height: mined_height.0,
         },
-        SubmitVerdict::Rejected { cause, row } => TxSubmitOutcome::Rejected {
-            cause: *cause,
-            row: row.as_deref().and_then(CenRowName::parse),
+        Verdict::Rejected { cause } => TxSubmitOutcome::Rejected {
+            cause: cause.clone(),
+            // The consensus row rides inside its cause (IG-Q76).
+            row: match cause {
+                Rejection::ConsensusRule(row) => CenRowName::parse(&row.0),
+                _ => None,
+            },
         },
     }
 }
@@ -261,26 +265,26 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
     }
 }
 
-/// Split a [`RejectCause`] into the terminal / retryable error classes
+/// Split a [`Rejection`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submitter_error_from_cause(cause: RejectCause, row: Option<CenRowName>) -> SubmitterError {
+fn submitter_error_from_cause(cause: Rejection, row: Option<CenRowName>) -> SubmitterError {
     let terminal = |kind| SubmitterError::RejectedTerminal { kind };
     let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
-        RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
+        Rejection::Malformed => terminal(TerminalErrorKind::Malformed),
         // Terminal with its row. A reply that names no row, or one this
         // wallet cannot carry whole, takes the fail-safe disposition.
-        RejectCause::ConsensusRule => match row {
+        Rejection::ConsensusRule(_) => match row {
             Some(row) => terminal(TerminalErrorKind::ConsensusRule { row }),
             None => terminal(TerminalErrorKind::Unrecognized),
         },
-        RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
-        RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
-        RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
-        RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
-        RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
-        RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
+        Rejection::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
+        Rejection::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
+        Rejection::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
+        Rejection::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
+        Rejection::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
+        Rejection::ReferenceUnknown => retryable(RetryableRejectCause::ReferenceNotFound),
     }
 }
 

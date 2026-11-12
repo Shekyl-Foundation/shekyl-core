@@ -80,7 +80,7 @@ use super::proofs_chain_facts::{
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
-use shekyl_rpc_types::KeyImageStatus;
+use shekyl_rpc_types::wire::chain::Spent;
 
 // ── Wire-framing constants (contract "Proofs" section) ──────────────
 
@@ -875,11 +875,11 @@ pub async fn check_reserve_proof<R: Rpc>(
     // Spent-set query: a proof over spent outputs verifies
     // cryptographically, but the spent portion is reported so the
     // verifier can subtract it.
-    let key_images_hex: Vec<String> = verified
+    let key_images = verified
         .iter()
-        .map(|v| hex::encode(v.key_image.as_bytes()))
+        .map(|v| shekyl_rpc_types::hash::HashHex::from_bytes(*v.key_image.as_bytes()))
         .collect();
-    let statuses = chain.key_image_status(rpc, key_images_hex).await?;
+    let statuses = chain.key_image_status(rpc, key_images).await?;
 
     let mut total = AtomicUnits::ZERO;
     let mut spent = AtomicUnits::ZERO;
@@ -890,7 +890,7 @@ pub async fn check_reserve_proof<R: Rpc>(
             .ok_or(ProofsError::AmountOverflow)?;
         // Typed: a fourth value is a malformed reply refused at the boundary,
         // not an integer this comparison has to guess about.
-        if status != KeyImageStatus::Unspent {
+        if status != Spent::Unspent {
             spent = spent
                 .checked_add(amount)
                 .ok_or(ProofsError::AmountOverflow)?;
