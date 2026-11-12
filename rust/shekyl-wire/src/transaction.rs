@@ -612,8 +612,8 @@ pub enum BondPostKind {
     },
     /// Any non-JoinMarket post kind — no `bond_spend_pk`, no receipt key and
     /// no endpoint on the wire. The byte must not be the JoinMarket tag
-    /// (`0x05`) nor the retired keyless one (`0x00`): `write` and `validate`
-    /// reject both, and `read` yields neither.
+    /// (`0x05`): `write` and `validate` reject it, and `read` never yields
+    /// it as `Other`.
     Other(u8),
 }
 
@@ -661,9 +661,9 @@ impl BondPost {
                 // `Other` is non-JoinMarket by contract; carrying the JoinMarket
                 // tag (`0x05`) would make `write` emit a key-less, endpoint-less
                 // blob that `read` would then try to parse as JoinMarket
-                // (consuming the holdings bytes as the key), and carrying the
-                // retired keyless tag (`0x00`) one that `read` refuses. Reject
-                // the misconstruction rather than emit it.
+                // (consuming the holdings bytes as the key). Reject the
+                // misconstruction rather than emit it. Every other byte is
+                // written as given.
                 if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
@@ -734,8 +734,8 @@ impl BondPost {
             }
             // `Other` must not carry the JoinMarket tag (`0x05`) — `write` would
             // emit a key-less, endpoint-less blob that re-parses as JoinMarket (a
-            // mis-parse) — nor the retired keyless one (`0x00`), which `read`
-            // refuses.
+            // mis-parse). Every other byte is a kind the parser reads as `Other`;
+            // whether a rule admits it is retention's (§9.11).
             BondPostKind::Other(post_kind) => {
                 if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
