@@ -54,11 +54,6 @@ pub(in super::super) enum Listed {
     /// `FIRST_SPEND_HEIGHT` there is one, and each block above it matures
     /// one more ([`prefix_maturing`]).
     Spend { fee: u64 },
-    /// `n` matured coinbases in **one** transaction, paying `fee`
-    /// ([`Grown::spend_many`]). A block that keeps adding spends until a
-    /// measured length is crossed realises one of these at a time
-    /// ([`Grown::stage`]).
-    Spends { n: usize, fee: u64 },
     /// A **real join**: the zero-fee spend [`Listed::Spend`] makes, with
     /// the `JoinMarket` post of the persona at `slot` ([`Persona::at`])
     /// riding it ([`Grown::join`]) — a complete-tree bond at
@@ -67,19 +62,13 @@ pub(in super::super) enum Listed {
     /// CEN-J27 judges that spend as CEN-I13/I15 judge any other, so a
     /// join's reference and proof are the chain's to make as a spend's are
     /// — it is listed, never held. It opens the persona's `archival_bond`
-    /// row; the credit for it is [`serve_credit`]'s ([`credited`] pairs
-    /// them).
+    /// row.
     Join { slot: u32 },
     /// A **real Release** of the persona at `slot`'s whole bond,
     /// `bonded_total`, riding the zero-fee spend a join rides
     /// ([`Grown::release`]). CEN-J16 judges it over the record the chain
     /// holds, so the persona must have joined in an earlier block.
     Release { slot: u32, bonded_total: u64 },
-    /// A body listed as given, anchored for its height ([`anchor`]): a
-    /// serve credit, an emission. Never a spend or a join — their
-    /// reference and proof are the chain's to make, not a value a test
-    /// holds before the chain exists.
-    Body(Transaction),
 }
 
 /// The endpoint every fixture join names. No landed rule reads a record's
@@ -99,16 +88,6 @@ pub(in super::super) const fn spend() -> Listed {
 /// coinbase.
 pub(in super::super) const fn spend_paying(fee: u64) -> Listed {
     Listed::Spend { fee }
-}
-
-/// [`Listed::Spends`]: `n` coinbases in one transaction, paying `fee`.
-pub(in super::super) const fn spends(n: usize, fee: u64) -> Listed {
-    Listed::Spends { n, fee }
-}
-
-/// A [`Listed::Body`].
-pub(in super::super) fn body(tx: Transaction) -> Listed {
-    Listed::Body(tx)
 }
 
 /// The first height at which a block may list a spend: the spender crate's
@@ -326,44 +305,6 @@ impl Grown {
         self.spend_posting(coinbase, fee, None)
     }
 
-    /// One real spend of the `n` lowest matured coinbases no block spent
-    /// and no spend built for this block took — the multi-input shape
-    /// ([`Spender::spend_coinbases`]), each input its own `pqc_auths`
-    /// slot, so a body's archival length grows by a hybrid key and
-    /// signature per input. This is how a chain reaches a shard boundary
-    /// with bytes every landed rule verifies; the prune tests' padded
-    /// serve-credit records are the cheap stand-in, and the `#[ignore]`d
-    /// nightly twin in `prune_tests` is this method's caller. Not
-    /// memoised: its chains are not shared across tests. Panics when fewer
-    /// than `n` have matured.
-    pub(in super::super) fn spend_many(&mut self, n: usize, fee: u64) -> Transaction {
-        let coinbases: Vec<u64> = self
-            .matured()
-            .into_iter()
-            .filter(|h| !self.building.values().any(|b| b == h))
-            .take(n)
-            .collect();
-        assert_eq!(
-            coinbases.len(),
-            n,
-            "{n} coinbases have matured unspent for height {}",
-            self.height()
-        );
-        let heights: Vec<BlockHeight> = coinbases
-            .iter()
-            .map(|&c| BlockHeight::from_raw(c))
-            .collect();
-        // The spender yields the coinbases in the body's input order
-        // (sorted by key image, CEN-I5), the order `key_images` reads.
-        let (tx, in_input_order) =
-            self.spender
-                .spend_coinbases(MinerWallet::harness(), &heights, self.height(), fee);
-        for (image, coinbase) in key_images(&tx).into_iter().zip(in_input_order) {
-            self.building.insert(image, coinbase.to_raw());
-        }
-        tx
-    }
-
     /// Watch `output_key`: when a block this chain records lists it, the
     /// spender registers it ([`Spender::own`]) and
     /// [`Self::spend_watched`] can spend it. Call before the block that
@@ -444,28 +385,17 @@ impl Grown {
 
     /// `listed` realised for the block connecting next: each
     /// [`Listed::Spend`] built ([`Self::spend`]), each [`Listed::Join`]
-    /// built ([`Self::join`]), each [`Listed::Body`] anchored
-    /// ([`anchor`]).
+    /// built ([`Self::join`]), each [`Listed::Release`] built
+    /// ([`Self::release`]).
     pub(in super::super) fn realise(&mut self, listed: &[Listed]) -> Vec<Transaction> {
-        let height = self.height();
         listed
             .iter()
             .map(|entry| match entry {
                 Listed::Spend { fee } => self.spend(*fee),
-                Listed::Spends { n, fee } => self.spend_many(*n, *fee),
                 Listed::Join { slot } => self.join(*slot),
                 Listed::Release { slot, bonded_total } => self.release(*slot, *bonded_total),
-                Listed::Body(tx) => anchor(&self.hashes, height, tx.clone()),
             })
             .collect()
-    }
-
-    /// Realise one listing entry. A block that decides whether to add
-    /// another spend after measuring the one it just built uses this,
-    /// then [`Self::judge_listing`] once for the block.
-    pub(in super::super) fn stage(&mut self, entry: &Listed) -> Transaction {
-        let mut txs = self.realise(std::slice::from_ref(entry));
-        txs.pop().expect("one listing realises one body")
     }
 
     /// The candidate for the block connecting next on the committed

@@ -730,7 +730,7 @@ mod pop_tests;
 #[path = "edge_tests.rs"]
 mod edge_tests;
 
-#[cfg(any())]
+#[cfg(test)]
 #[path = "prune_tests.rs"]
 mod prune_tests;
 

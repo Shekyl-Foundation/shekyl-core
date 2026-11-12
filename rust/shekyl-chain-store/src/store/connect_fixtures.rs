@@ -38,9 +38,9 @@ use crate::schema::SPENT_KEYS;
 mod grown;
 
 pub(super) use grown::{
-    anchor, at, body, connect_chain, connect_chain_anchored, connect_chain_burning, endow_genesis,
+    anchor, at, connect_chain, connect_chain_anchored, connect_chain_burning, endow_genesis,
     grown_over, height_maturing, key_images, output_of, prefix_to, spend, spend_paying,
-    spendable_prefix, spends, Grown, Listed, FIRST_SPEND_HEIGHT,
+    spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 
 /// The coinbase for `height`: the rules harness's, which satisfies every

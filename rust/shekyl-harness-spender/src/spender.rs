@@ -24,13 +24,13 @@ use shekyl_tx_builder::{
     open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
     InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
 };
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, parse, pqc_kem_per_output, pqc_leaf_entries_per_output, serialize,
     TxExtraField,
 };
-use shekyl_wire::{Ct, Input, Transaction};
+use shekyl_wire::{Ct, Transaction};
 
 use crate::bond::PostedBond;
 use crate::{MinedBlock, MinerWallet, Owner, Recipient};
@@ -548,75 +548,6 @@ impl Spender {
     ) -> Transaction {
         assert!(!sourced.is_empty(), "a spend has an input");
         Self::spend_sourced(sourced, connecting, fee, None, recipient, Twist::default())
-    }
-
-    /// A spend of several blocks' coinbases in **one** transaction, listed
-    /// in the block connecting at `connecting`, paying `fee` and the rest
-    /// back to the miner in two outputs — the multi-input shape, up to the
-    /// prover's `shekyl_fcmp::MAX_INPUTS` (CEN-I4's cap). Each input
-    /// carries its own `pqc_auths` slot, so the body's archival length
-    /// grows by a hybrid key and signature per input; this is how a
-    /// fixture chain reaches an archival length with bytes every landed
-    /// rule verifies, rather than by padding a region none does.
-    ///
-    /// Yields the body and the coinbase heights **in the body's input
-    /// order** — the inputs are sorted by key image (CEN-I5), not listed
-    /// as asked — so a caller pairing each input's key image with the
-    /// coinbase it spends reads the pairing here rather than deriving it.
-    #[must_use]
-    pub fn spend_coinbases(
-        &self,
-        wallet: &MinerWallet,
-        heights: &[BlockHeight],
-        connecting: BlockHeight,
-        fee: u64,
-    ) -> (Transaction, Vec<BlockHeight>) {
-        assert!(!heights.is_empty(), "a spend has an input");
-        let pairs: Vec<(BlockHeight, Sourced)> = heights
-            .iter()
-            .map(|&height| (height, self.source_coinbase(wallet, height, connecting)))
-            .collect();
-        // `spend_sourced` is the one CEN-I5 sort. Heights come back from the
-        // encoded body's key images, so a sort here would have to stay
-        // identical to that one or the pairing would describe a different order.
-        let height_of: BTreeMap<KeyImage, BlockHeight> = pairs
-            .iter()
-            .map(|(height, source)| (source.key_image, *height))
-            .collect();
-        assert_eq!(
-            height_of.len(),
-            pairs.len(),
-            "each spent coinbase has its own key image"
-        );
-        let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
-        let tx = Self::spend_sourced(
-            inputs,
-            connecting,
-            fee,
-            None,
-            wallet.recipient(),
-            Twist::default(),
-        );
-        let spent_heights: Vec<BlockHeight> = tx
-            .prefix
-            .inputs
-            .iter()
-            .filter_map(|input| match input {
-                Input::ToKey { key_image, .. } => Some(
-                    height_of
-                        .get(&KeyImage::from_bytes(*key_image))
-                        .copied()
-                        .expect("the body's key image is one of the spent coinbases"),
-                ),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            spent_heights.len(),
-            height_of.len(),
-            "a coinbase spend lists only the spent coinbases"
-        );
-        (tx, spent_heights)
     }
 
     /// Block `height`'s coinbase sourced for the miner, for a spend

@@ -213,35 +213,6 @@ pub(super) fn blocks_closing(chain: &CapturedChain, k: u64) -> usize {
     panic!("the captured chain closes {SHARDS} shards; shard {k} is not among them")
 }
 
-/// Connect the first `blocks` of `chain` on `store` under `rules`, each as
-/// captured: the listing is judged as recorded, and the block the judge
-/// prices is the captured block, or the chain drifted from its capture.
-pub(super) fn connect_prefix(
-    store: &ChainStore,
-    rules: &RuleSet,
-    chain: &CapturedChain,
-    blocks: usize,
-) -> Grown {
-    let mut grown = Grown::new();
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        for captured in &chain.blocks[..blocks] {
-            let judged = grown.judge_listing(&view, rules, &captured.listed)?;
-            batch.connect(judged, *rules)?;
-            let h = grown.height().to_raw() - 1;
-            assert_eq!(
-                grown.hashes.last(),
-                Some(&captured.block.hash()),
-                "block {h} is the captured block (capture {})",
-                chain.capture_rev
-            );
-        }
-        Ok(())
-    });
-    out.expect("the captured prefix connects");
-    grown
-}
-
 /// Write `chain` as the checked-in vector, once the invocation cites the
 /// decision that moves it and the checkout is clean but for the vector.
 /// The revision recorded is the checkout's.
@@ -296,4 +267,109 @@ fn capture_the_shard_fill_chain() {
     let store = capture_store(&path);
     let (grown, listings) = build_capture(&store);
     write_capture(&grown, &listings);
+}
+
+/// The stores the tests start from, connected once per process: for each
+/// schedule, the store file after each prefix of the captured chain a test
+/// asked for. Verifying the capture is the cost of these tests (about 65 s
+/// in the debug test profile for the whole chain), so a schedule pays it
+/// once and every test copies the file it needs. A prefix with no file yet
+/// is built from the longest shorter one, so the chain is verified once per
+/// schedule whatever order the tests ask in.
+struct Snapshots {
+    /// The directory the files live in, for the life of the process.
+    dir: crate::test_paths::TestPath,
+    /// Each prefix's store file, by its block count.
+    files: std::collections::BTreeMap<usize, std::path::PathBuf>,
+}
+
+/// One schedule's snapshots, keyed by the caller's name for the schedule.
+fn snapshots() -> &'static std::sync::Mutex<std::collections::BTreeMap<&'static str, Snapshots>> {
+    static ALL: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<&'static str, Snapshots>>,
+    > = std::sync::OnceLock::new();
+    ALL.get_or_init(Default::default)
+}
+
+/// A store at `path` holding the captured chain's first `blocks` blocks
+/// under `rules` and `horizons`, and the chain over it. `schedule` names
+/// the pair for the process-wide snapshots: one name, one pair.
+pub(super) fn store_with_prefix(
+    path: impl AsRef<std::path::Path>,
+    schedule: &'static str,
+    rules: RuleSet,
+    horizons: Horizons,
+    blocks: usize,
+) -> (ChainStore, Grown) {
+    let chain = shard_fill();
+    let file = {
+        let mut all = snapshots()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snaps = all.entry(schedule).or_insert_with(|| Snapshots {
+            dir: crate::test_paths::tmp(&format!("shard-fill-{schedule}")),
+            files: std::collections::BTreeMap::new(),
+        });
+        if let Some(file) = snaps.files.get(&blocks) {
+            file.clone()
+        } else {
+            let from = snaps
+                .files
+                .range(..blocks)
+                .next_back()
+                .map(|(&n, file)| (n, file.clone()));
+            let file = snaps
+                .dir
+                .path()
+                .with_file_name(format!("prefix-{blocks}.redb"));
+            let have = match from {
+                Some((n, earlier)) => {
+                    std::fs::copy(earlier, &file).expect("copy the shorter prefix");
+                    n
+                }
+                None => 0,
+            };
+            let store = ChainStore::with_horizons(
+                &file,
+                crate::apply_policy::ApplyPolicy::default(),
+                horizons,
+            )
+            .expect("open the prefix store");
+            let mut grown = regrown(chain, have);
+            let out: Result<(), TestErr> = store.write(|batch| {
+                let view = batch.chain_view();
+                for captured in &chain.blocks[have..blocks] {
+                    let judged = grown.judge_listing(&view, &rules, &captured.listed)?;
+                    batch.connect(judged, rules)?;
+                    assert_eq!(
+                        grown.hashes.last(),
+                        Some(&captured.block.hash()),
+                        "the captured block (capture {})",
+                        chain.capture_rev
+                    );
+                }
+                Ok(())
+            });
+            out.expect("the captured prefix connects");
+            drop(store);
+            snaps.files.insert(blocks, file.clone());
+            file
+        }
+    };
+    let path: &std::path::Path = path.as_ref();
+    std::fs::copy(&file, path).expect("copy the prefix store");
+    let store =
+        ChainStore::with_horizons(path, crate::apply_policy::ApplyPolicy::default(), horizons)
+            .expect("open the copied store");
+    (store, regrown(chain, blocks))
+}
+
+/// The chain record over the captured chain's first `blocks` blocks, as
+/// connected: each block recorded on the wallet-side tree, nothing judged.
+pub(super) fn regrown(chain: &CapturedChain, blocks: usize) -> Grown {
+    let mut grown = Grown::new();
+    for captured in &chain.blocks[..blocks] {
+        grown.record(&captured.block, &captured.listed);
+    }
+    grown
 }
