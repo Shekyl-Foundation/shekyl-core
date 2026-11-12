@@ -88,7 +88,7 @@ use crate::emission_assembly::{
 use crate::scenario::{FreeHash, Scenario};
 use crate::scenario_archival::{shard_set, Persona};
 use crate::scenario_shard::{
-    close_shards, first_admissible_compact_join, inside_one_epoch_of, mine_to,
+    close_shards, first_admissible_compact_join, inside_one_epoch_of, load_shard_fill, mine_to,
     settled_epoch_blocks, settled_rules, settled_schedule, FILL_FROM_COINBASE,
 };
 use crate::support_trees::{drive_support_trees, price_trees_claim};
@@ -619,8 +619,9 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     // only on it (`settled_epoch_blocks`).
     let rules = settled_rules();
     let mut scenario = Scenario::open_under("scenario-emission-support-trees", FreeHash, rules);
-    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
-    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    // The shard is closed by the captured chain (`load_shard_fill`): its
+    // spends were proved once, and every rule judges them as they connect.
+    let (mut mined, filled) = load_shard_fill(&mut scenario, 1).await;
     let [closed] = filled.closed.as_slice() else {
         panic!("one shard closed");
     };

@@ -41,6 +41,11 @@ const MAGIC: &[u8; 8] = b"SKLSHFIL";
 /// The format this module reads and writes. A change to the layout bumps it.
 pub const FORMAT: u32 = 1;
 
+/// Coinbases the shard-fill chain never spends: a consumer's own bond
+/// posts spend these (the ingest's `FILL_FROM_COINBASE` names the same
+/// count).
+pub const SHARD_FILL_RESERVED_COINBASES: u64 = 10;
+
 /// One connected block and the bodies it lists.
 #[derive(Clone, Debug)]
 pub struct CapturedBlock {
@@ -150,6 +155,24 @@ impl CapturedChain {
                     .collect()
             })
             .collect()
+    }
+}
+
+impl CapturedChain {
+    /// How many blocks, from genesis, close shard `k`: the prefix through
+    /// the first block whose cumulative listed archival length reaches
+    /// `(k + 1)·W`. `None` when the chain does not close it.
+    #[must_use]
+    pub fn blocks_closing(&self, k: u64) -> Option<usize> {
+        let w = shekyl_types::SHARD_LENGTH.to_raw();
+        let mut total = 0u64;
+        for (h, lens) in self.archival_lengths().iter().enumerate() {
+            total += lens.iter().sum::<u64>();
+            if total >= (k + 1) * w {
+                return Some(h + 1);
+            }
+        }
+        None
     }
 }
 

@@ -36,7 +36,8 @@ pub(super) const BLOCK_TARGET: usize = 280_000;
 /// Coinbases the builder never spends: the ingest's scenarios post their
 /// bonds from these (`shekyl-chain-ingest`, `FILL_FROM_COINBASE`), so a
 /// chain that loads this one can still spend them.
-pub(super) const RESERVED_COINBASES: u64 = 10;
+pub(super) const RESERVED_COINBASES: u64 =
+    shekyl_harness_spender::captured::SHARD_FILL_RESERVED_COINBASES;
 
 /// The fee each spend pays. Not a consensus figure: the chain only needs
 /// one every spent output can pay.
@@ -202,15 +203,9 @@ pub(super) fn shard_fill() -> &'static CapturedChain {
 /// prefix through the first block whose cumulative listed archival length
 /// reaches `(k + 1)·W`.
 pub(super) fn blocks_closing(chain: &CapturedChain, k: u64) -> usize {
-    let w = shekyl_types::SHARD_LENGTH.to_raw();
-    let mut total = 0u64;
-    for (h, lens) in chain.archival_lengths().iter().enumerate() {
-        total += lens.iter().sum::<u64>();
-        if total >= (k + 1) * w {
-            return h + 1;
-        }
-    }
-    panic!("the captured chain closes {SHARDS} shards; shard {k} is not among them")
+    chain.blocks_closing(k).unwrap_or_else(|| {
+        panic!("the captured chain closes {SHARDS} shards; shard {k} is not among them")
+    })
 }
 
 /// Write `chain` as the checked-in vector, once the invocation cites the
