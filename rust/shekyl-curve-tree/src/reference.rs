@@ -8,10 +8,22 @@
 //!
 //! A membership proof is anchored to a *reference block* — a recent
 //! block whose header-committed curve-tree root the proof is built
-//! against. The daemon accepts a spend iff the reference block's age
-//! (`tip − reference_height`) is in `[MIN_AGE, MAX_AGE]`
-//! (`shekyl-engine-core`'s `SpendIntent::validate_temporal`, mirrored
-//! here). This module owns the wallet-side arithmetic for:
+//! against. Consensus admits a spend into the block connecting at height
+//! `C` iff the reference block's age *from that connecting height*
+//! (`C − reference_height`) is in `[MIN_AGE, MAX_AGE]` (CEN-I11,
+//! `shekyl_chain_rules::admissible_references`). Seen from a wallet whose
+//! tip is `tip`, the next block connects at `tip + 1`.
+//!
+//! Two clocks live here, and each function says which it reads:
+//!
+//! - **Connecting age** (`tip + 1 − reference_height`), what consensus
+//!   measures: [`proof_submittable`] and [`proof_expired`].
+//! - **Tip age** (`tip − reference_height`, [`reference_block_age`]), the
+//!   wallet's own clock: [`select_reference_height`] ([`REF_ANCHOR_AGE`],
+//!   privacy-canonical — it is the on-wire age every honest wallet shows)
+//!   and [`should_reanchor`] ([`REBUILD_AT`], wallet hygiene).
+//!
+//! This module owns the wallet-side arithmetic for:
 //!
 //! 1. **Selecting** the canonical reference height for a fresh proof
 //!    (`tip − REF_ANCHOR_AGE`, §5.1). Every honest wallet uses the same
@@ -45,18 +57,21 @@ include!(concat!(
     "/consensus_constants_generated.rs"
 ));
 
-/// Minimum reference-block age the daemon accepts (`tip − reference_height
-/// ≥ MIN_AGE`). Re-exported from the JSON authority under a doc-rich name.
+/// Minimum reference-block age consensus admits, measured from the
+/// connecting height (`connecting − reference_height ≥ MIN_AGE`, CEN-I11).
+/// Re-exported from the JSON authority under a doc-rich name.
 pub const REFERENCE_BLOCK_MIN_AGE: shekyl_types::BlockCount =
     shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MIN_AGE);
 
-/// Maximum reference-block age the daemon accepts (`tip − reference_height
-/// ≤ MAX_AGE`). Past this the daemon rejects the spend as too stale.
+/// Maximum reference-block age consensus admits, measured from the
+/// connecting height (`connecting − reference_height ≤ MAX_AGE`, CEN-I11).
+/// Past this the spend is refused as too stale, at relay, at inclusion and
+/// by pool eviction (CEN-M10).
 pub const REFERENCE_BLOCK_MAX_AGE: shekyl_types::BlockCount =
     shekyl_types::BlockCount::from_raw(FCMP_REFERENCE_BLOCK_MAX_AGE);
 
-// Sentinel against silent drift (mirrors `shekyl-engine-core`'s
-// `multisig::v31::intent`): a JSON edit that moves these recomputes the
+// Sentinel against silent drift (the same baseline CEN-I11's own
+// sentinels pin in `shekyl-chain-rules`): a JSON edit that moves these recomputes the
 // derived constants below, and these const-evaluated asserts force the
 // editor to review the privacy/consensus implications before bumping the
 // sentinel rather than letting the change land silently.
@@ -74,8 +89,9 @@ const _: () = assert!(
 /// Canonical age offset for the reference block of a freshly built proof:
 /// `reference_height = tip − REF_ANCHOR_AGE` (§5.1).
 ///
-/// `MIN_AGE + 1`: one block deeper than the bare `MIN_AGE` floor for reorg
-/// safety. (It was also the anchor the daemon's per-output path RPC used
+/// `MIN_AGE + 1` below the tip, for reorg safety. The block that lists the
+/// spend connects at `tip + 1`, so it sees a connecting age of `MIN_AGE + 2`:
+/// two blocks deeper than the newest reference CEN-I11 admits. (It was also the anchor the daemon's per-output path RPC used
 /// before that RPC was removed as spend-revealing — `SOK-10` Q7; the wallet
 /// is now the only path assembler.) **Privacy-canonical, not a per-wallet knob:** every
 /// honest wallet uses this exact offset so the on-wire reference age does
@@ -90,14 +106,13 @@ pub const REF_ANCHOR_AGE: shekyl_types::BlockCount =
 
 /// Submittable lifetime of a proof, in blocks past build time
 /// (§5.2): `MAX_AGE − REF_ANCHOR_AGE`. Built at `reference_height =
-/// tip_build − REF_ANCHOR_AGE`, the reference age is `REF_ANCHOR_AGE + N`
-/// after `N` blocks, so the proof stays submittable through
-/// `tip_build + PROOF_VALIDITY_HORIZON` **inclusive** (where the age is
-/// exactly `MAX_AGE`, still accepted), and is rejected as too stale only
-/// at `tip_build + PROOF_VALIDITY_HORIZON + 1` (age `MAX_AGE + 1`). I.e.
-/// the daemon's acceptance window is inclusive at both ends. This is the
-/// proactive bound `PHASE_2A_SEND_PATH.md` §9 #5 left unbounded in
-/// Round 0.
+/// tip_build − REF_ANCHOR_AGE`, the proof can be listed in any of the
+/// `PROOF_VALIDITY_HORIZON` blocks that connect at `tip_build + 1` through
+/// `tip_build + PROOF_VALIDITY_HORIZON` (the last is where the connecting
+/// age is exactly `MAX_AGE`). The last wallet tip that can still submit it
+/// is therefore `tip_build + PROOF_VALIDITY_HORIZON − 1`; at the next tip
+/// [`proof_expired`] holds. This is the proactive bound
+/// `PHASE_2A_SEND_PATH.md` §9 #5 left unbounded in Round 0.
 pub const PROOF_VALIDITY_HORIZON: shekyl_types::BlockCount =
     match REFERENCE_BLOCK_MAX_AGE.checked_sub(REF_ANCHOR_AGE) {
         Some(span) => span,
@@ -120,13 +135,14 @@ pub const REBUILD_AT: shekyl_types::BlockCount =
 /// counted from its dispatch: `MAX_AGE − REBUILD_AT`.
 ///
 /// The wallet re-anchors before it sends whenever [`should_reanchor`]
-/// holds, so a dispatched proof's reference age is at most
-/// `REBUILD_AT − 1`, and the daemon accepts it while the age is at most
-/// `MAX_AGE` (inclusive). That leaves `MAX_AGE − REBUILD_AT + 1` blocks;
-/// the `+ 1` is left out as margin for the blocks that can land between
-/// the wallet's staleness check and the daemon's verdict. The most a
-/// proof can have is [`PROOF_VALIDITY_HORIZON`], when it is sent at
-/// [`REF_ANCHOR_AGE`].
+/// holds, so a dispatched proof's tip age is at most `REBUILD_AT − 1`.
+/// Consensus admits it while its connecting age (`tip + 1 −
+/// reference_height`) is at most `MAX_AGE`, that is while the tip age is
+/// at most `MAX_AGE − 1`. That leaves exactly `MAX_AGE − REBUILD_AT`
+/// blocks after dispatch in which the proof is still submittable, with no
+/// margin: at `DISPATCHED_PROOF_LIFE + 1` blocks past dispatch
+/// [`proof_expired`] holds. The most a proof can have is
+/// [`PROOF_VALIDITY_HORIZON`], when it is sent at [`REF_ANCHOR_AGE`].
 ///
 /// Past this many blocks a dispatched transaction may no longer be
 /// mineable: the pool removes an entry whose reference has left the
@@ -250,9 +266,11 @@ pub fn two_sided_reference_height(
     Ok(reference_height)
 }
 
-/// The age of a reference block as seen from `tip_now`:
+/// The tip age of a reference block, the wallet's own clock:
 /// `tip_now − reference_height`.
 ///
+/// This is not the age consensus judges: CEN-I11 measures from the
+/// connecting height, one block above the tip ([`proof_submittable`]).
 /// `None` when `reference_height > tip_now` — the reference block is above
 /// the current tip, only possible across a reorg that dropped the chain
 /// below it (§5.3). Callers treat `None` as "re-anchor required".
@@ -264,52 +282,61 @@ pub fn reference_block_age(
     tip_now.checked_sub(reference_height)
 }
 
-/// Whether a proof anchored at `reference_height` is still within the
-/// daemon's acceptance window at `tip_now`: `MIN_AGE ≤ age ≤ MAX_AGE`.
-///
-/// Mirrors `shekyl-engine-core`'s `SpendIntent::validate_temporal` window
-/// (too-fresh below `MIN_AGE`, too-stale above `MAX_AGE`). A reference
-/// height above the tip (reorg, age `None`) is not submittable.
+/// The age consensus judges for a spend submitted at `tip_now`: measured
+/// from the height the next block connects at, `tip_now + 1 −
+/// reference_height` (CEN-I11). `None` when the reference block is above
+/// the tip (reorg, §5.3).
+fn connecting_age(
+    tip_now: shekyl_types::BlockHeight,
+    reference_height: shekyl_types::BlockHeight,
+) -> Option<shekyl_types::BlockCount> {
+    reference_block_age(tip_now, reference_height)?.checked_add(shekyl_types::BlockCount::ONE)
+}
+
+/// Whether a proof anchored at `reference_height` can be listed in the
+/// block that connects on top of `tip_now`: its connecting age is in
+/// `[MIN_AGE, MAX_AGE]`, exactly CEN-I11's window
+/// (`shekyl_chain_rules::admissible_references(tip_now + 1)`, pinned by
+/// `tests::the_window_is_cen_i11`). A reference height above the tip
+/// (reorg) is not submittable.
 #[must_use]
 pub fn proof_submittable(
     tip_now: shekyl_types::BlockHeight,
     reference_height: shekyl_types::BlockHeight,
 ) -> bool {
     matches!(
-        reference_block_age(tip_now, reference_height),
+        connecting_age(tip_now, reference_height),
         Some(age) if (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&age)
     )
 }
 
-/// Whether a proof has aged out of the daemon's acceptance window — its
-/// reference age exceeds `MAX_AGE` (the validity horizon), so the daemon
-/// will reject it as too stale.
+/// Whether a proof has aged out of CEN-I11's window for good: its
+/// connecting age exceeds `MAX_AGE`, so no later block can list it.
 ///
-/// `true` also when the reference block is above the tip (age `None`,
-/// reorg §5.3): the anchor is no longer on the chain, so the proof cannot
-/// be submitted as-is. Distinct from "too fresh" (age below `MIN_AGE`),
+/// `true` also when the reference block is above the tip (reorg §5.3):
+/// the anchor is no longer on the chain, so the proof cannot be submitted
+/// as-is. Distinct from "too fresh" (connecting age below `MIN_AGE`),
 /// which is **not** expiry — `proof_expired` stays `false`. A built proof
-/// starts at age [`REF_ANCHOR_AGE`] (above `MIN_AGE`), but "too fresh"
-/// can still arise at runtime after a shallow reorg that lowers `tip_now`
-/// while the reference block remains canonical: age drops below `MIN_AGE`,
-/// [`proof_submittable`] goes `false` transiently, and the wallet waits
-/// for the chain to grow back past the anchor rather than treating it as
-/// expired.
+/// starts at tip age [`REF_ANCHOR_AGE`], inside the window, but "too
+/// fresh" can still arise after a shallow reorg that lowers `tip_now`
+/// while the reference block remains canonical: [`proof_submittable`]
+/// goes `false` transiently, and the wallet waits for the chain to grow
+/// back past the anchor rather than treating it as expired.
 #[must_use]
 pub fn proof_expired(
     tip_now: shekyl_types::BlockHeight,
     reference_height: shekyl_types::BlockHeight,
 ) -> bool {
-    match reference_block_age(tip_now, reference_height) {
+    match connecting_age(tip_now, reference_height) {
         Some(age) => age > REFERENCE_BLOCK_MAX_AGE,
         None => true,
     }
 }
 
 /// Whether the wallet should proactively re-anchor an in-flight,
-/// still-unconfirmed proof (§5.2): its reference age has reached
-/// [`REBUILD_AT`], or the reference block is no longer on the chain
-/// (age `None`, reorg §5.3).
+/// still-unconfirmed proof (§5.2): its tip age ([`reference_block_age`])
+/// has reached [`REBUILD_AT`], or the reference block is no longer on the
+/// chain (age `None`, reorg §5.3).
 ///
 /// This is the proactive companion to the reactive `ProofStale` signal
 /// (2A §3.6): reactive catches a root that went stale unexpectedly; this
@@ -441,31 +468,93 @@ mod tests {
         assert!(!should_reanchor(tip, r));
     }
 
+    /// The window's edges as seen from a wallet tip: the next block
+    /// connects at `tip + 1`, so a tip age of `MIN_AGE − 1` is the newest
+    /// admissible reference and a tip age of `MAX_AGE − 1` the oldest.
     #[test]
     fn acceptance_window_boundaries() {
-        // Build the reference height so age == target exactly.
+        // Build the reference height so the tip age is `age` exactly.
         let tip = h(1_000);
         let at = |age: BlockCount| tip.checked_sub_count(age).unwrap();
+        let one = BlockCount::ONE;
 
-        // Too fresh: age below MIN_AGE is not submittable (cannot arise
-        // for a wallet-built proof, but the predicate is total).
+        // Too fresh: one block younger than the newest admissible.
         assert!(!proof_submittable(
             tip,
-            at(REFERENCE_BLOCK_MIN_AGE - BlockCount::ONE)
+            at(REFERENCE_BLOCK_MIN_AGE - one - one)
         ));
-        // MIN_AGE and MAX_AGE inclusive bounds are submittable.
-        assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MIN_AGE)));
-        assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MAX_AGE)));
-        // One past MAX_AGE is expired, not submittable.
-        assert!(!proof_submittable(
-            tip,
-            at(REFERENCE_BLOCK_MAX_AGE + BlockCount::ONE)
-        ));
-        assert!(proof_expired(
-            tip,
-            at(REFERENCE_BLOCK_MAX_AGE + BlockCount::ONE)
-        ));
-        assert!(!proof_expired(tip, at(REFERENCE_BLOCK_MAX_AGE)));
+        assert!(!proof_expired(tip, at(REFERENCE_BLOCK_MIN_AGE - one - one)));
+        // Both edges are inclusive, in connecting age.
+        assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MIN_AGE - one)));
+        assert!(proof_submittable(tip, at(REFERENCE_BLOCK_MAX_AGE - one)));
+        assert!(!proof_expired(tip, at(REFERENCE_BLOCK_MAX_AGE - one)));
+        // A tip age of MAX_AGE is a connecting age of MAX_AGE + 1: expired.
+        assert!(!proof_submittable(tip, at(REFERENCE_BLOCK_MAX_AGE)));
+        assert!(proof_expired(tip, at(REFERENCE_BLOCK_MAX_AGE)));
+    }
+
+    /// CEN-I11 is the judge: for every tip below a few window-widths
+    /// (covering the chain too young to carry a spend, the window clamped
+    /// at genesis, and the steady state) and every reference up to two
+    /// above the tip, [`proof_submittable`] is exactly membership of
+    /// `shekyl_chain_rules::admissible_references(tip + 1)`, and
+    /// [`proof_expired`] is exactly "the reference is off the chain, or
+    /// below the window's oldest edge with no clamp". The two never hold
+    /// together.
+    #[test]
+    fn the_window_is_cen_i11() {
+        let span = 2 * REFERENCE_BLOCK_MAX_AGE.to_raw() + 50;
+        for t in 0..=span {
+            let tip = h(t);
+            let connecting = h(t + 1);
+            let window = shekyl_chain_rules::admissible_references(connecting);
+            for r in 0..=t + 2 {
+                let reference = h(r);
+                let admitted = window
+                    .is_some_and(|(oldest, newest)| oldest <= reference && reference <= newest);
+                assert_eq!(
+                    proof_submittable(tip, reference),
+                    admitted,
+                    "submittable, tip {t}, reference {r}"
+                );
+                let below_oldest = connecting
+                    .checked_sub_count(REFERENCE_BLOCK_MAX_AGE)
+                    .is_some_and(|oldest| reference < oldest);
+                assert_eq!(
+                    proof_expired(tip, reference),
+                    r > t || below_oldest,
+                    "expired, tip {t}, reference {r}"
+                );
+                assert!(
+                    !(proof_submittable(tip, reference) && proof_expired(tip, reference)),
+                    "tip {t}, reference {r}"
+                );
+            }
+        }
+        assert_eq!(
+            shekyl_chain_rules::REFERENCE_BLOCK_MIN_AGE.to_raw(),
+            REFERENCE_BLOCK_MIN_AGE.to_raw()
+        );
+        assert_eq!(
+            shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE.to_raw(),
+            REFERENCE_BLOCK_MAX_AGE.to_raw()
+        );
+    }
+
+    /// [`PROOF_VALIDITY_HORIZON`]'s claim, walked: a proof built at
+    /// `tip_build` can be listed in each of the next
+    /// `PROOF_VALIDITY_HORIZON` blocks, so the last tip that can submit it
+    /// is `tip_build + PROOF_VALIDITY_HORIZON − 1`.
+    #[test]
+    fn a_fresh_proof_lives_the_validity_horizon() {
+        let tip_build = h(10_000);
+        let reference = select_reference_height(tip_build).unwrap();
+        let later = |blocks: u64| h(tip_build.to_raw() + blocks);
+        let horizon = PROOF_VALIDITY_HORIZON.to_raw();
+        for blocks in 0..horizon {
+            assert!(proof_submittable(later(blocks), reference), "{blocks}");
+        }
+        assert!(proof_expired(later(horizon), reference));
     }
 
     #[test]
@@ -482,9 +571,9 @@ mod tests {
     }
 
     /// [`DISPATCHED_PROOF_LIFE`]'s claim, walked: the oldest proof a wallet
-    /// sends (age `REBUILD_AT − 1`, one short of re-anchor) is still
-    /// submittable `DISPATCHED_PROOF_LIFE` blocks later, and expires one
-    /// block after the `+ 1` margin the constant leaves out.
+    /// sends (tip age `REBUILD_AT − 1`, one short of re-anchor) is still
+    /// submittable `DISPATCHED_PROOF_LIFE` blocks later and expired one
+    /// block after that. The constant is exact; it carries no margin.
     #[test]
     fn oldest_dispatched_proof_lives_dispatched_proof_life() {
         let dispatch_tip = h(10_000);
@@ -495,12 +584,8 @@ mod tests {
 
         let later = |blocks: BlockCount| h(dispatch_tip.to_raw() + blocks.to_raw());
         assert!(proof_submittable(later(DISPATCHED_PROOF_LIFE), reference));
-        assert!(proof_submittable(
-            later(DISPATCHED_PROOF_LIFE + BlockCount::ONE),
-            reference
-        ));
         assert!(proof_expired(
-            later(DISPATCHED_PROOF_LIFE + BlockCount::ONE + BlockCount::ONE),
+            later(DISPATCHED_PROOF_LIFE + BlockCount::ONE),
             reference
         ));
         // The freshest proof lives the whole validity horizon.
@@ -509,20 +594,23 @@ mod tests {
 
     #[test]
     fn proof_aging_progression() {
-        // Walk a single proof's reference age from build to expiry and
-        // assert each predicate flips at its documented boundary.
+        // Walk a single proof's tip age from build to expiry and assert
+        // each predicate flips at its documented boundary: the consensus
+        // predicates on the connecting age (`age + 1`), re-anchor on the
+        // tip age.
         let reference_height = h(10_000);
         for age in 0..=(REFERENCE_BLOCK_MAX_AGE.to_raw() + 5) {
             let tip_now = h(reference_height.to_raw() + age);
             let span = BlockCount::from_raw(age);
+            let connecting = BlockCount::from_raw(age + 1);
             assert_eq!(
                 proof_submittable(tip_now, reference_height),
-                (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&span),
+                (REFERENCE_BLOCK_MIN_AGE..=REFERENCE_BLOCK_MAX_AGE).contains(&connecting),
                 "submittable mismatch at age {age}"
             );
             assert_eq!(
                 proof_expired(tip_now, reference_height),
-                span > REFERENCE_BLOCK_MAX_AGE,
+                connecting > REFERENCE_BLOCK_MAX_AGE,
                 "expired mismatch at age {age}"
             );
             assert_eq!(

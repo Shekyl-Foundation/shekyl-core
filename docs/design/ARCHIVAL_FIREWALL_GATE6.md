@@ -1997,9 +1997,9 @@ finding — that `fcmp_reference_block_max_age = 100` made a claim "verifiable o
 `≥ SEB` hold was impossible. **That was a reviewer construction resting on an unverified premise —
 the constant's semantics were asserted from its name, not traced to its consumer** (the exact failure
 mode this track holds the line against). Traced at source: `REFERENCE_BLOCK_MAX_AGE` is a **daemon
-inclusion-freshness window** (`proof_submittable`, `reference.rs:181`), **not** a verifiability
+inclusion-freshness window** (`proof_submittable` in `shekyl-curve-tree`'s `reference.rs`), **not** a verifiability
 expiry — a mined claim is validated once at inclusion and stands; `PROOF_VALIDITY_HORIZON = 94`,
-`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`reference.rs:102-106`). The
+`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`REBUILD_AT`'s doc in `reference.rs`). The
 "infeasible / 100 ≪ SEB / ~200-rebuilds-observable" claims are **withdrawn**. What survives is the
 narrow, correct pin below.
 

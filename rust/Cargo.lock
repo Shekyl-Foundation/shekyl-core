@@ -4150,6 +4150,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "redb",
  "serde_json",
+ "shekyl-chain-rules",
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-fcmp",

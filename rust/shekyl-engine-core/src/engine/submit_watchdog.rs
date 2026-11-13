@@ -82,10 +82,12 @@ use super::traits::DaemonHealth;
 /// Blocks spared at the end of [`DISPATCHED_PROOF_LIFE`] so the probe is
 /// in flight while the same bytes are still submittable.
 ///
-/// **Assumption — never measured.** The proof-life derivation leaves one
-/// block out of the theoretical span for blocks that can land between the
-/// wallet's staleness check and the daemon's verdict. This margin spends
-/// that block. It is not a measured refresh lag, and it is not a duration.
+/// **Assumption — never measured.** [`DISPATCHED_PROOF_LIFE`] is exact:
+/// the same bytes are submittable through that many blocks after dispatch
+/// and expired one block later, with no slack of its own. This margin is
+/// the slack, for blocks that can land between the wallet's check and the
+/// daemon's verdict. It is not a measured refresh lag, and it is not a
+/// duration.
 pub(crate) const PROBE_REFRESH_LAG_BLOCKS: u64 = 1;
 
 /// Blocks after an in-chain observation before the kernel asks again.

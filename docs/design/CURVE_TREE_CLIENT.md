@@ -311,11 +311,12 @@ mod reference {
     /// Canonical reference height for a proof built at `tip`:
     /// `tip − REF_ANCHOR_AGE` (§5.1). `None` in the pre-maturity window.
     pub fn select_reference_height(tip: u64) -> Option<u64>;
-    /// `tip_now − reference_height`; `None` if the ref is above the tip (reorg).
+    /// Tip age `tip_now − reference_height`; `None` if the ref is above the tip (reorg).
     pub fn reference_block_age(tip_now: u64, reference_height: u64) -> Option<u64>;
-    /// In the daemon acceptance window `MIN_AGE ≤ age ≤ MAX_AGE` (§5.2).
+    /// In CEN-I11's window: connecting age `tip_now + 1 − reference_height`
+    /// in `[MIN_AGE, MAX_AGE]` (§5.2).
     pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool;
-    /// Aged past `MAX_AGE` (or ref above tip) — daemon rejects as too stale.
+    /// Connecting age past `MAX_AGE` (or ref above tip) — no later block can list it.
     pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool;
     /// Reached `REBUILD_AT` (or ref above tip) — re-anchor proactively (§5.2).
     pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool;
@@ -544,9 +545,13 @@ A leaf is in the tree at the reference block iff its insertion (drain) height
 side-effect-free arithmetic over heights (`select_reference_height`,
 `reference_block_age`, `proof_submittable`, `proof_expired`,
 `should_reanchor`) plus the constants `REF_ANCHOR_AGE` (6),
-`PROOF_VALIDITY_HORIZON` (94 — the proof stays submittable through
-`tip_build + 94` inclusive, where the age is exactly `MAX_AGE`), and
-`REBUILD_AT` (50).
+`PROOF_VALIDITY_HORIZON` (94 — the proof can be listed in the blocks
+connecting at `tip_build + 1` through `tip_build + 94`), and
+`REBUILD_AT` (50). The consensus predicates (`proof_submittable`,
+`proof_expired`) measure the reference's age from the connecting height,
+as CEN-I11 does, and a test sweeps them against
+`shekyl_chain_rules::admissible_references`; `select_reference_height`
+and `should_reanchor` read the wallet's tip age.
 `REFERENCE_BLOCK_{MIN,MAX}_AGE` are emitted from
 `config/consensus_constants.json` by the crate's `build.rs` (same JSON
 authority as the C++ header), with const-eval sentinels guarding the
@@ -561,13 +566,15 @@ binding a height to a consensus root stays the caller's responsibility
 **Rule:** `reference_height = tip − REF_ANCHOR_AGE`, with
 `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`.
 
-- One block deeper than the bare `MIN_AGE` floor. (It also matched the anchor the
+- Six blocks below the tip, so the block that lists the spend sees a
+  connecting age of 7: two blocks deeper than the newest reference CEN-I11
+  admits (`MIN_AGE`, measured from the connecting height). (It also matched the anchor the
   daemon's `get_curve_tree_path` used before that RPC was removed — `SOK-10` Q7 →
   A, 2026-09-18; there is no daemon-assembled path to agree with any more, and
   the offset stands on its own reorg-safety and privacy-canonical grounds.)
 - Reorg-safe: ≥ `MIN_AGE` deep, so the reference block is unlikely to be
   reorged out (and §5.3 handles the residual).
-- Maximizes the submit window (§5.2): closest legal block to the tip.
+- Leaves all but two blocks of the window as submit time (§5.2).
 
 **Why canonical, not free choice (privacy).** The reference-block age is
 observable on every tx (the verifier sees `reference_height`). If wallets chose
@@ -575,7 +582,8 @@ different offsets, the offset would **fingerprint the wallet** — the same
 uniformity logic as dust `K_DUST` and the `enc_label` slot
 (`PHASE_2A_SEND_PATH.md` §3.8.5, §3.10.2). So every honest wallet computes the
 **identical** offset. This **cannot** be consensus-enforced (the daemon accepts
-any `reference_height ∈ [tip−MAX_AGE, tip−MIN_AGE]`); the strongest available
+any `reference_height ∈ [C−MAX_AGE, C−MIN_AGE]` for the connecting height
+`C = tip + 1`); the strongest available
 form is canonical convention — the ceiling privacy sets, not a gap to close.
 
 **Reversion clause:** `REF_ANCHOR_AGE` is re-derived only if the observed reorg
@@ -585,12 +593,14 @@ event). Not a per-wallet knob.
 
 ### 5.2 Proof validity horizon (the proactive bound)
 
-A built proof is submittable while its reference block satisfies
-`tip_now − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)` (inclusive).
-Built at `tip_build` with `reference_height = tip_build − 6`, the reference
-age is `6 + N` after `N` blocks, so the proof stays submittable **through**
-`tip_build + 94` inclusive (age exactly `MAX_AGE`) and is rejected as too
-stale only at `tip_build + 95` (age `101`):
+Consensus measures the reference block's age from the height of the block
+that lists the spend (CEN-I11): a block connecting at `C` admits
+`C − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)` (inclusive).
+Built at `tip_build` with `reference_height = tip_build − 6`, the proof can
+be listed in the blocks connecting at `tip_build + 1` through
+`tip_build + 94` (connecting age exactly `MAX_AGE`), so the last wallet tip
+that can submit it is `tip_build + 93`; at tip `tip_build + 94` it is
+expired:
 
 ```text
 horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
@@ -600,7 +610,7 @@ horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
 §9 #5 of 2A left "unbounded in Round 0."
 
 **Proactive rebuild rule:** if a built-but-unconfirmed tx reaches a **rebuild
-threshold** of `REBUILD_AT = MAX_AGE / 2 = 50` blocks of reference-block age, the
+threshold** of `REBUILD_AT = MAX_AGE / 2 = 50` blocks of tip age, the
 wallet **re-anchors** (re-selects the reference block at the current tip,
 re-assembles paths, re-proves) rather than risk a `MAX_AGE` rejection mid-flight.
 The half-`MAX_AGE` margin leaves room for propagation + a confirmation attempt.
