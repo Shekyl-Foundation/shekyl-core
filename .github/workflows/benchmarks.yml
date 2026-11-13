@@ -492,6 +492,20 @@ jobs:
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
 
+      - name: keep the baseline this capture replaces
+        id: previous
+        run: |
+          set -euo pipefail
+          # The drift alarm below compares this capture with the one it
+          # replaces. Read here, before the push moves the branch.
+          if git ls-remote --exit-code --heads origin bench-baseline >/dev/null 2>&1; then
+            git fetch origin bench-baseline
+            git show FETCH_HEAD:baseline.json > /tmp/previous-baseline.json
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: push updated baseline to bench-baseline branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -548,3 +562,22 @@ jobs:
 
           git -C "$WORK" commit -m "bench-baseline: refresh from ${CAPTURE_SOURCE_SHA:0:12}"
           git -C "$WORK" push origin bench-baseline
+
+      - name: drift alarm
+        # The same comparison as the nightly full-weight capture's
+        # (nightly.yml, bench-full-drift): this capture against the
+        # baseline it replaced, through compare.py's thresholds. A pull
+        # request's capture is scoped to the rows its change can reach, and
+        # its warn band passes; this is where every row is counted on the
+        # merged tree, so a row that moved under a scoped-out pull request,
+        # or by several warns in a row, is red here.
+        #
+        # After the push, never before it: the baseline moves whatever this
+        # step concludes, so a count moved on purpose is red on one push
+        # and is then the figure the next is held to. A red that froze the
+        # baseline would hold every later pull request to a stale one.
+        if: steps.previous.outputs.present == 'true'
+        run: |
+          ./scripts/bench/drift_report.sh "dev baseline" \
+            /tmp/previous-baseline.json docs/benchmarks/shekyl_rust_v0.json \
+            "the baseline this push replaced"
