@@ -26,9 +26,13 @@ use shekyl_pow_randomx::{PreparedCache, Seedhash};
 /// two rows measure the same derive.
 const SEED: [u8; 32] = *b"shekyl-randomx-v2-bench-Cache-00";
 
+// A named case, so the row reports a run id like every other row: the
+// capture refuses a header without one (`scripts/bench/iai_parse.py`).
+// (A plain comment: gungraun refuses a doc attribute here.)
 #[library_benchmark]
-fn hot_path_bench_cache_derive() -> PreparedCache {
-    black_box(PreparedCache::derive(black_box(Seedhash::from_bytes(SEED))))
+#[bench::fixed_seed(Seedhash::from_bytes(SEED))]
+fn hot_path_bench_cache_derive(seed: Seedhash) -> PreparedCache {
+    black_box(PreparedCache::derive(black_box(seed)))
 }
 
 library_benchmark_group!(name = cache_derive_group; benchmarks = hot_path_bench_cache_derive);

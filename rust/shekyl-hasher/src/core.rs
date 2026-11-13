@@ -276,12 +276,7 @@ impl Core {
         if self.closed {
             return Err(WarmRefused::Closed);
         }
-        let warm = self.listed(&seed)
-            && self
-                .entry(&seed)
-                .is_some_and(|entry| entry.state == EntryState::Resident)
-            && (self.in_window(&seed) || (self.fifo.is_empty() && !self.window_short()));
-        if !warm {
+        if !self.warm_lendable(&seed) {
             return Err(WarmRefused::NotWarm);
         }
         let lease = LeaseId(self.next());
@@ -294,6 +289,17 @@ impl Core {
             cancelled: false,
         });
         Ok(lease)
+    }
+
+    /// Whether [`request_warm`](Self::request_warm) would lend on `seed`
+    /// now: listed and resident, and, outside the window, nothing waiting
+    /// for a place.
+    fn warm_lendable(&self, seed: &Seedhash) -> bool {
+        self.listed(seed)
+            && self
+                .entry(seed)
+                .is_some_and(|entry| entry.state == EntryState::Resident)
+            && (self.in_window(seed) || (self.fifo.is_empty() && !self.window_short()))
     }
 
     /// The lease `ticket` was granted, if it has been. Taken once.

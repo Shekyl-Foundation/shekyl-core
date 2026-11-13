@@ -574,6 +574,17 @@ fn apply(world: &mut World, op: &Op) -> Option<Vec<Decision>> {
 
 fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
     let core = &world.core;
+    // I7: no warm lease is lendable on an outside seed while a job queues
+    // or a window seed is short of a place. Checked after every event, not
+    // only on a warm request, so the rare state is seen when it occurs.
+    if !core.fifo.is_empty() || core.window_short() {
+        if let Some((third, _)) = core.third() {
+            assert!(
+                !core.warm_lendable(&third),
+                "I7: a warm lease on an outside seed while a job or a window seed waits for a place"
+            );
+        }
+    }
     // I1: the cap, a build in progress and a cache not yet dropped counted.
     assert!(world.places() <= CAP, "I1: {} places", world.places());
     // I6: one entry per seed.
@@ -704,7 +715,32 @@ fn fresh_quiet(list: &Ranked) -> BTreeSet<[u8; 32]> {
     entries(&core)
 }
 
+/// Ordinary runs use 2,048 cases (about 5 s in a debug build).
+/// `PROPTEST_CASES` replaces that number; the nightly runs 8,192.
+///
+/// Not proptest's default of 256: I7's state (the window grows while the
+/// third and the other outside place are both leased, and no job queues)
+/// is rare, and 256 cases missed the warm rule's red edit where 1,024 and
+/// 2,048 caught it on every run. Set here, not left to
+/// [`ProptestConfig::default`], which reads the variable once per process
+/// and caches it.
+fn proptest_config() -> ProptestConfig {
+    let cases = match std::env::var("PROPTEST_CASES") {
+        Ok(raw) => raw
+            .parse()
+            .unwrap_or_else(|_| panic!("PROPTEST_CASES must be a u32, got {raw}")),
+        Err(std::env::VarError::NotPresent) => 2_048,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("PROPTEST_CASES is not Unicode"),
+    };
+    ProptestConfig {
+        cases,
+        ..ProptestConfig::default()
+    }
+}
+
 proptest! {
+    #![proptest_config(proptest_config())]
+
     #[test]
     fn random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request(
         ops in prop::collection::vec(op(), 1..80)

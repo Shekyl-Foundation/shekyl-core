@@ -258,7 +258,11 @@ echo "[capture_rust_baseline] wrote ${OUT_IAI_SNAP}"
 
 # ---- JSON envelope (python3) -----------------------------------------------
 
-export RUST_ROOT IAI_STDOUT_TMP OUT_JSON \
+# Every registered row, so the parse can refuse a row that left no entry.
+BENCH_ROWS="$(printf '%s\n' "${BENCHES[@]}")"
+BENCH_SCRIPTS="${REPO_ROOT}/scripts/bench"
+
+export RUST_ROOT IAI_STDOUT_TMP OUT_JSON BENCH_ROWS BENCH_SCRIPTS \
   GIT_REV GIT_DIRTY KERNEL CPU_MODEL \
   RUSTC_VER CARGO_VER VALGRIND_VER GUNGRAUN_RUNNER_VER
 
@@ -311,73 +315,25 @@ if criterion_root.exists():
 
 # ── 2. Parse gungraun stdout ─────────────────────────────────────────
 #
-# Sections are separated by our own `==== <crate>::<bench> ====` markers
-# so we know which crate owns each iai entry. Within a section:
-#
-#   <bench_binary>::<group>::<function> <run_id>:<setup>
-#     Instructions:    <n>|...
-#     L1 Hits:         <n>|...
-#     LL Hits:         <n>|...
-#     RAM Hits:        <n>|...
-#     Total read+write:<n>|...
-#     Estimated Cycles:<n>|...
+# `iai_parse.py` reads each registered row's section and refuses, rather
+# than drops, what it cannot read: a function header with no run id, a
+# row whose section yields no entry, a row with no section (rule 50: a
+# measurement the envelope never holds is a gate that cannot fail). No
+# envelope is written on a refusal; the raw snapshot above is kept.
+
+sys.path.insert(0, os.environ["BENCH_SCRIPTS"])
+import iai_parse  # noqa: E402
 
 iai_text = iai_stdout_path.read_text(errors="replace")
-# Defensive ANSI strip: even with IAI_CALLGRIND_COLOR=never, nothing on
-# PATH should be coloring; this keeps the parser robust.
-iai_text = re.sub(r"\x1b\[[0-9;]*m", "", iai_text)
-
-section_marker = re.compile(
-    r"^==== (?P<crate>[\w-]+)::(?P<bench>[\w_]+) ====$", re.MULTILINE)
-header_re = re.compile(
-    r"^(?P<bin>[A-Za-z_][\w]*)::(?P<group>[A-Za-z_][\w]*)::"
-    r"(?P<function>[A-Za-z_][\w]*)\s+(?P<run_id>[^:\s]+):(?P<setup>.+)$")
-metric_re = re.compile(
-    r"^\s{2}(?P<name>[A-Za-z][A-Za-z0-9+ ]*?):\s+(?P<value>\d+)\|")
-
-metric_key_map = {
-    "Instructions": "instructions",
-    "L1 Hits": "l1_hits",
-    "LL Hits": "ll_hits",
-    "RAM Hits": "ram_hits",
-    "Total read+write": "total_read_write",
-    "Estimated Cycles": "estimated_cycles",
-}
-
-iai_entries = []
-
-# Slice the text into (crate, bench, section_body) tuples.
-section_starts = [(m.start(), m.group("crate"), m.group("bench"))
-                  for m in section_marker.finditer(iai_text)]
-section_starts.append((len(iai_text), None, None))
-for i in range(len(section_starts) - 1):
-    body_start, crate, bench = section_starts[i]
-    body_end = section_starts[i + 1][0]
-    body = iai_text[body_start:body_end]
-    current = None
-    for line in body.splitlines():
-        hm = header_re.match(line)
-        if hm is not None:
-            if current is not None:
-                iai_entries.append(current)
-            current = {
-                "crate": crate,
-                "bench_target": bench,
-                "bin": hm.group("bin"),
-                "group": hm.group("group"),
-                "function": hm.group("function"),
-                "run_id": hm.group("run_id"),
-                "setup": hm.group("setup").strip(),
-                "metrics": {},
-            }
-            continue
-        mm = metric_re.match(line)
-        if mm is not None and current is not None:
-            key = metric_key_map.get(mm.group("name").strip())
-            if key is not None:
-                current["metrics"][key] = int(mm.group("value"))
-    if current is not None:
-        iai_entries.append(current)
+rows = iai_parse.rows_from_benches(os.environ["BENCH_ROWS"].splitlines())
+try:
+    iai_entries = iai_parse.parse(iai_text, rows)
+except iai_parse.CaptureError as refused:
+    for problem in refused.problems:
+        print(f"[capture_rust_baseline] REFUSED: {problem}", file=sys.stderr)
+    print(f"[capture_rust_baseline] canonical {out_json.name} NOT written",
+          file=sys.stderr)
+    sys.exit(3)
 
 # ── 3. Producer-side capture guard ────────────────────────────────────────
 #

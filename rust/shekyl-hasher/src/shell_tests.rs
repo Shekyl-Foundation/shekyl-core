@@ -243,6 +243,13 @@ fn two_outside_jobs_share_the_one_outside_place_and_free_no_window_seed() {
     x.wait_started();
     let y = hold(&hasher, Class::HeaderPow, s(11));
     assert!(!y.started(), "the second outside job waits");
+    // A window seed freed for it would be rebuilt at once (it is the
+    // window's), so the count is what shows one was freed.
+    assert_eq!(
+        hasher.resident().borrow().builds,
+        3,
+        "the window's two builds and the first job's: no window seed rebuilt"
+    );
     let held = hasher.resident().borrow().clone();
     assert!(
         held.caches.iter().any(|(seed, _)| *seed == s(1)),
@@ -263,6 +270,7 @@ fn two_outside_jobs_share_the_one_outside_place_and_free_no_window_seed() {
         held.caches.iter().any(|(seed, _)| *seed == s(2)),
         "{held:?}"
     );
+    assert_eq!(held.builds, 4, "one more build: the second job's");
     y.finish();
     owner.stop();
 }
