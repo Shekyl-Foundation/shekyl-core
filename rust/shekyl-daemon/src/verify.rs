@@ -472,11 +472,14 @@ mod tests {
         assert!(idle.is_empty(), "{idle:?}");
     }
 
-    /// A non-service account that gives `service` is refused before the
-    /// start touches anything, with this machine's own rendezvous directory
-    /// (`/run/shekyl` on Linux), which is not this account's (Rick,
-    /// 2026-11-12). Red edit: drop the walk's rendezvous check and the
-    /// refusal is the data directory's, or none.
+    /// A start that gives `service` from an account that is not the
+    /// service's is refused before it touches anything, with this machine's
+    /// own rendezvous directory (`/run/shekyl` on Linux). An ordinary account
+    /// is refused because the directory is not its own; a root runner, as CI
+    /// is, because a service never runs as root. Either way the refusal is
+    /// the rendezvous directory's (Rick, 2026-11-12). Red edit: drop the
+    /// walk's rendezvous check and the refusal is the data directory's, or
+    /// none.
     #[cfg(unix)]
     #[test]
     fn a_non_service_account_giving_service_is_refused_on_this_machine() {
@@ -489,14 +492,15 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         // This account: the owner of a directory it just made.
         let me = std::fs::metadata(d.path()).unwrap().uid();
-        assert_ne!(me, 0, "run the tests as an ordinary account");
-        if let Ok(meta) = std::fs::metadata(&dir) {
-            assert_ne!(
-                meta.uid(),
-                me,
-                "{} is this account's: this host runs its service as the test account",
-                dir.display()
-            );
+        if me != 0 {
+            if let Ok(meta) = std::fs::metadata(&dir) {
+                assert_ne!(
+                    meta.uid(),
+                    me,
+                    "{} is this account's: this host runs its service as the test account",
+                    dir.display()
+                );
+            }
         }
         let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
         a.push(OsString::from("--service"));

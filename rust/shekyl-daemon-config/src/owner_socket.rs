@@ -177,6 +177,18 @@ pub fn service_rendezvous(
     config: &DaemonConfig,
     platform: &Platform,
 ) -> Result<Option<PathBuf>, Diagnostic> {
+    service_rendezvous_as(config, platform, rustix::process::geteuid().as_raw())
+}
+
+/// [`service_rendezvous`] for the account `me`: the account is an input, so
+/// each case is tested as the account it is about, whatever account runs
+/// the tests.
+#[cfg(unix)]
+fn service_rendezvous_as(
+    config: &DaemonConfig,
+    platform: &Platform,
+    me: u32,
+) -> Result<Option<PathBuf>, Diagnostic> {
     if config.run_mode != RunMode::Service {
         return Ok(None);
     }
@@ -192,7 +204,7 @@ pub fn service_rendezvous(
             "this platform names no service rendezvous directory".to_owned(),
         ));
     };
-    check_service_dir(dir, rustix::process::geteuid().as_raw())
+    check_service_dir(dir, me)
         .map(|()| Some(dir.clone()))
         .map_err(|found| refuse(&dir.display().to_string(), found))
 }
@@ -274,6 +286,12 @@ fn session_dir_description() -> &'static str {
 /// in the operator's words.
 #[cfg(unix)]
 pub fn assert_dir(dir: &std::path::Path) -> Result<u32, String> {
+    assert_dir_as(dir, rustix::process::geteuid().as_raw())
+}
+
+/// [`assert_dir`] for the account `me`.
+#[cfg(unix)]
+fn assert_dir_as(dir: &std::path::Path, me: u32) -> Result<u32, String> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let meta = std::fs::symlink_metadata(dir).map_err(|e| match e.kind() {
@@ -286,7 +304,6 @@ pub fn assert_dir(dir: &std::path::Path) -> Result<u32, String> {
     if !meta.is_dir() {
         return Err("it is not a directory".to_owned());
     }
-    let me = rustix::process::geteuid().as_raw();
     if meta.uid() != me {
         return Err(format!(
             "it is owned by uid {}, not this account (uid {me})",
@@ -534,6 +551,24 @@ mod tests {
         ])
     }
 
+    /// A uid that is not root and not, in practice, the account running
+    /// the tests.
+    const ORDINARY: u32 = 4242;
+
+    /// The owner of `dir` once it is an ordinary account's: the tests'
+    /// account when that is not root; run as root, `dir` is given to
+    /// [`ORDINARY`]. Either way the case is an ordinary account's own
+    /// directory, whoever runs the tests.
+    fn ordinary_owner(dir: &Path) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        let uid = std::fs::metadata(dir).unwrap().uid();
+        if uid != 0 {
+            return uid;
+        }
+        std::os::unix::fs::chown(dir, Some(ORDINARY), None).unwrap();
+        ORDINARY
+    }
+
     fn with_rendezvous(dir: &Path) -> Platform {
         Platform {
             service_rendezvous: Some(dir.to_path_buf()),
@@ -547,15 +582,17 @@ mod tests {
     fn a_service_accepts_its_own_closed_rendezvous_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let me = ordinary_owner(dir.path());
         assert_eq!(
-            service_rendezvous(&service_config(), &with_rendezvous(dir.path())),
+            service_rendezvous_as(&service_config(), &with_rendezvous(dir.path()), me),
             Ok(Some(dir.path().to_path_buf()))
         );
         let session = private_dir();
         assert_eq!(
-            service_rendezvous(
+            service_rendezvous_as(
                 &config(&["--network", "regtest"]),
-                &with_rendezvous(session.path())
+                &with_rendezvous(session.path()),
+                me
             ),
             Ok(None)
         );
@@ -566,8 +603,9 @@ mod tests {
     /// case is accepted.
     #[test]
     fn a_service_rendezvous_directory_is_refused_by_condition() {
-        let found = |dir: &Path| {
-            let d = service_rendezvous(&service_config(), &with_rendezvous(dir)).unwrap_err();
+        let found = |dir: &Path, me: u32| {
+            let d =
+                service_rendezvous_as(&service_config(), &with_rendezvous(dir), me).unwrap_err();
             assert_eq!(d.code, Code::ServiceRendezvous);
             assert_eq!(d.option.as_deref(), Some("service"));
             d.params
@@ -577,24 +615,25 @@ mod tests {
                 .unwrap()
         };
         let base = tempfile::tempdir().unwrap();
-        assert!(found(&base.path().join("absent")).contains("does not exist"));
+        assert!(found(&base.path().join("absent"), ORDINARY).contains("does not exist"));
 
         let open = base.path().join("open");
         std::fs::create_dir(&open).unwrap();
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o775)).unwrap();
-        assert!(found(&open).contains("writable by its group or by others"));
+        let me = ordinary_owner(&open);
+        assert!(found(&open, me).contains("writable by its group or by others"));
 
         let target = base.path().join("target");
         std::fs::create_dir(&target).unwrap();
         let link = base.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(found(&link).contains("symbolic link"));
+        assert!(found(&link, ORDINARY).contains("symbolic link"));
 
         let none = Platform {
             service_rendezvous: None,
             ..platform(None)
         };
-        let d = service_rendezvous(&service_config(), &none).unwrap_err();
+        let d = service_rendezvous_as(&service_config(), &none, ORDINARY).unwrap_err();
         assert_eq!(d.code, Code::ServiceRendezvous);
     }
 
@@ -610,15 +649,15 @@ mod tests {
 
     /// A non-service account that gives `service` is refused: the
     /// directory is not its own. `/` stands for a directory the service
-    /// manager gave another account. Runs as an ordinary account.
+    /// manager gave another account, here root, checked as an ordinary one.
     #[test]
     fn a_non_service_account_giving_service_is_refused() {
-        assert!(
-            !rustix::process::geteuid().is_root(),
-            "run the tests as an ordinary account"
-        );
-        let d =
-            service_rendezvous(&service_config(), &with_rendezvous(Path::new("/"))).unwrap_err();
+        let d = service_rendezvous_as(
+            &service_config(),
+            &with_rendezvous(Path::new("/")),
+            ORDINARY,
+        )
+        .unwrap_err();
         let found = &d.params.iter().find(|(k, _)| *k == "found").unwrap().1;
         // The refusal names the owner's uid; the assertion message does not
         // repeat it (CodeQL rust/cleartext-logging, alert 199).
@@ -628,17 +667,11 @@ mod tests {
         );
     }
 
-    /// A directory owned by another account is refused. The test must run
-    /// as an ordinary account: as root, `/` is the test's own directory and
-    /// the case it checks does not exist.
+    /// A directory owned by another account is refused: `/`, root's on
+    /// every Unix the tests run on, checked as an ordinary account.
     #[test]
     fn a_directory_owned_by_another_account_is_refused() {
-        assert!(
-            !rustix::process::geteuid().is_root(),
-            "run the tests as an ordinary account"
-        );
-        // `/` is root's on every Unix the tests run on.
-        let found = assert_dir(Path::new("/")).unwrap_err();
+        let found = assert_dir_as(Path::new("/"), ORDINARY).unwrap_err();
         // The refusal names the owner's uid; the assertion message does not
         // repeat it (CodeQL rust/cleartext-logging, alert 199).
         assert!(
