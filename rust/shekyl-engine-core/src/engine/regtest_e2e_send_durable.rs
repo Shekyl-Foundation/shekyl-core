@@ -65,8 +65,8 @@ impl WalletServer {
         let log = log_dir.join(format!("wallet-rpc-{tag}.log"));
         let out = std::fs::File::create(log_dir.join(format!("wallet-rpc-{tag}.out")))
             .expect("stdout file");
-        let child = Command::new(bin)
-            .arg("--wallet-dir")
+        let mut cmd = Command::new(bin);
+        cmd.arg("--wallet-dir")
             .arg(wallet_dir)
             .arg("--rpc-bind")
             .arg(format!("127.0.0.1:{port}"))
@@ -78,8 +78,8 @@ impl WalletServer {
             .arg("--log-file")
             .arg(&log)
             .stdout(out.try_clone().expect("dup"))
-            .stderr(out)
-            .spawn()
+            .stderr(out);
+        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
             .expect("spawn shekyl-wallet-rpc");
         let mut server = Self {
             child: Some(child),
@@ -169,11 +169,9 @@ impl WalletServer {
 
     /// Send `signal` (a `kill` name: KILL, TERM, INT, HUP) to the process.
     fn signal(&self, signal: &str) {
-        let status = Command::new("kill")
-            .arg(format!("-{signal}"))
-            .arg(self.pid().to_string())
-            .status()
-            .expect("run kill");
+        let mut kill = Command::new("kill");
+        kill.arg(format!("-{signal}")).arg(self.pid().to_string());
+        let status = shekyl_tor_control_client::spawn_lock::status(&mut kill).expect("run kill");
         assert!(status.success(), "kill -{signal} failed: {status}");
     }
 
@@ -478,16 +476,15 @@ async fn each_stop_signal_closes_the_wallet() {
     assert!(outgoing_state(&last, &txid).is_some());
 }
 
-/// A send whose record cannot be saved is not sent: with the wallet
-/// directory unwritable the submit is refused `-29120` and the daemon's
-/// pool stays empty; with the directory writable again, the kept
+/// A send whose record cannot be saved is not sent: with every save of the
+/// wallet refused ([`BlockedStateSave`](super::super::test_support::BlockedStateSave),
+/// which holds for root too) the submit is refused `-29120` and the
+/// daemon's pool stays empty; with saves possible again, the kept
 /// reservation submits and is accepted.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
 async fn a_send_that_cannot_be_saved_is_not_sent() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (daemon, wallet_dir, logs) = wallet_and_daemon(0x65).await;
     let recipient = mine_address_from_seed(
         &[0x66; shekyl_crypto_pq::account::SEED_BYTES],
@@ -505,18 +502,14 @@ async fn a_send_that_cannot_be_saved_is_not_sent() {
         "an empty pool before the submit"
     );
 
-    let dir = wallet_dir.path();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).expect("chmod 555");
-    assert!(
-        std::fs::write(dir.join("probe"), b"x").is_err(),
-        "the wallet directory must refuse writes for this gate to mean anything \
-         (running as root?)"
+    let blocked = super::super::test_support::BlockedStateSave::block(
+        &wallet_dir.path().join(format!("{NAME}.wallet")),
     );
     let refused = server.call(
         "submit_pending_tx",
         json!({"pending_tx_id": id, "seen_gen": gen}),
     );
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).expect("chmod 755");
+    drop(blocked);
 
     let refused = refused.expect_err("a send that cannot be saved is refused");
     assert_eq!(refused.code, -29120, "SEND_NOT_SAVED: {refused:?}");

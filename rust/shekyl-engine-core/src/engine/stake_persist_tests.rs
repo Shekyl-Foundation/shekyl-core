@@ -481,15 +481,10 @@ fn fixed_seed() -> [u8; SEED_BYTES] {
 /// cursor).
 /// A19 audit: a bond record whose save fails mints no ticket **and** is
 /// restored in memory, so no later unrelated save writes a bond record no
-/// bond was signed for. The save is made to fail for real: the wallet
-/// directory is made unwritable, and the test first proves a write there
-/// fails (a run as root, which ignores the mode, is refused rather than
-/// passing on a save that never failed — rule 47).
-#[cfg(unix)]
+/// bond was signed for. The save is made to fail for real, for any user
+/// ([`BlockedStateSave`](crate::engine::test_support::BlockedStateSave)).
 #[tokio::test(flavor = "multi_thread")]
 async fn persist_bond_record_save_failure_restores_the_record() {
-    use std::os::unix::fs::PermissionsExt;
-
     let tmp = tempdir().expect("tempdir");
     let base_path = tmp.path().join("wallet");
     let password: &[u8] = b"correct horse battery staple";
@@ -498,17 +493,9 @@ async fn persist_bond_record_save_failure_restores_the_record() {
     let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
     let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
 
-    let dir = tmp.path();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).expect("chmod 555");
-    let probe = std::fs::write(dir.join("probe"), b"x");
-    assert!(
-        probe.is_err(),
-        "the wallet directory must refuse writes for this test to mean anything \
-         (running as root?)"
-    );
-
+    let blocked = crate::engine::test_support::BlockedStateSave::block(&base_path);
     let result = engine.persist_bond_record(PSlot::from_raw(7));
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).expect("chmod 755");
+    drop(blocked);
 
     assert!(result.is_err(), "a failed save mints no ticket");
     let g = engine.ledger.read();

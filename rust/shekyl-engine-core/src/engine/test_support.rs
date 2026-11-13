@@ -1577,3 +1577,47 @@ mod tests {
         );
     }
 }
+
+/// Makes every save of the wallet whose state file is `state` fail, for any
+/// user, root included, until dropped.
+///
+/// A non-empty directory stands where the state file was, so the save's
+/// last step — `rename(2)` of the staged file onto the state path — is
+/// refused (`EISDIR`). A mode on the wallet directory would stop an
+/// ordinary user and not root, and CI runs these tests as root; the rename
+/// fails for both. [`Self::block`] proves the refusal before returning
+/// (rule 47: a probe file renamed onto the state path must fail), so a test
+/// built on it cannot pass on a save that never failed. Dropping it puts
+/// the state file back, also on a panic.
+pub(crate) struct BlockedStateSave {
+    state: std::path::PathBuf,
+    aside: std::path::PathBuf,
+}
+
+impl BlockedStateSave {
+    pub(crate) fn block(state: &std::path::Path) -> Self {
+        let aside = state.with_extension("blocked-aside");
+        std::fs::rename(state, &aside).expect("move the state file aside");
+        std::fs::create_dir(state).expect("a directory where the state file was");
+        std::fs::write(state.join("occupied"), b"").expect("make the directory non-empty");
+        let probe = state.with_extension("blocked-probe");
+        std::fs::write(&probe, b"").expect("write the probe");
+        let renamed = std::fs::rename(&probe, state);
+        std::fs::remove_file(&probe).expect("remove the probe");
+        assert!(
+            renamed.is_err(),
+            "a rename onto the blocked state path must fail, or the save would not"
+        );
+        Self {
+            state: state.to_path_buf(),
+            aside,
+        }
+    }
+}
+
+impl Drop for BlockedStateSave {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.state).expect("remove the blocking directory");
+        std::fs::rename(&self.aside, &self.state).expect("put the state file back");
+    }
+}
