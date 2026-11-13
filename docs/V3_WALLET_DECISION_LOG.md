@@ -6980,3 +6980,48 @@ commit, so a pinned asset loses nothing the tree needs. A cargo example
 keeps every edge into the test-only driver and seeds a dev edge, which
 the test-only feature gate already enforces. Splitting CF-1 keeps each
 change reviewable on one validation surface.
+
+## 2026-11-12 — Chain forge Round 0: the seedable-RNG gate's site list, the home of each chain file, the hosting repository
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R12`…`CF-R14`).
+
+- **The seedable-RNG gate lists sites, not groups** (`CF-R12`). Each
+  allowed site is listed by path and function, with its group and one
+  line on where its seed comes from; naming a group allows nothing on its
+  own. The allowed seed sources, and only these: G0, a seed drawn from
+  `OsRng` on the spot (listed anyway, so the gate never has to guess);
+  G1, the output of a key-derivation function over a secret key or seed;
+  G2, verifier batch weights from a domain-separated transcript, weights
+  only, never a value that is published or signed; G3, multisig values
+  every participant must derive identically, from a transcript that
+  already binds every participant's commitments. Always refused: a
+  constant seed, a seed the caller chooses, or a seed built from public
+  data alone, at any signing or proving nonce; a fixed seed is available
+  only through the test-only `seeded-rng` feature. No grandfathering: at
+  `CF-1b` every current hit is listed with its justification or changed,
+  a later site needs a reviewed change to the list, and a file move drops
+  a listing on purpose.
+- **The SAL multisig is allowed under G3.** α, β, δ, μ, r_z, r_p and
+  r_r_p cover parameters that are not secret within the signing group,
+  the upstream FCMP++ SAL design; only `y` is the threshold secret, and
+  its nonce comes from FROST's hedged preprocess step. Two conditions, in
+  `CF-1b`: a test that fails if the `y` nonce ever comes from the
+  `deterministic_nonces` stream, and a confirmation in code, with its line
+  recorded, that the transcript binds every preprocess commitment before
+  `rng_seed` is called.
+- **Which repository holds what** (`CF-R13`, rules `CF-Q5`). shekyl-core
+  keeps each chain's plan and `blocks.txt`. `shekyl-test-chains` keeps
+  the published manifests and release notes. The chain, its trace and its
+  manifest go to GHCR as layers pinned by digest; the digest in
+  shekyl-core is the source of truth, and a mismatch fails.
+- **The `shekyl-test-chains` setup is accepted** (`CF-R14`). Making the
+  package public cannot be undone, so it waits until `CF-4`, after the
+  first artifact has been reviewed, and only on Rick's explicit approval.
+  Rick checks the organization's public-package setting by hand before
+  `CF-4`.
+
+**Why.** A group named in the gate would allow every future site that
+claims it; a site list makes each one a reviewed decision with its seed
+source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
+keeps regeneration at one commit and puts the first differing block in a
+consensus PR's own diff.
