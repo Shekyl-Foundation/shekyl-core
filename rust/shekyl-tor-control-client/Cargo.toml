@@ -26,6 +26,10 @@ publish = false
 unpinned-tor-for-tests = []
 
 [dependencies]
+# The managed tor's launch: the process's one spawn lock, the child's
+# descriptor hygiene, and the pair with its spawn window (`TSR-Q7`), shared
+# with the GUI's launch of the daemon.
+shekyl-spawn = { path = "../shekyl-spawn" }
 # The status's wire shape and its one renderer: the supervisor's snapshot
 # is in that shape, and its words are that crate's (TOR_STATUS_CRATE.md).
 shekyl-tor-status = { path = "../shekyl-tor-status" }

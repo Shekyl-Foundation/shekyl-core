@@ -21,12 +21,13 @@
 //! leaves the channel working and the program sees the same table, because
 //! `exec` closes every marked descriptor.
 //!
-//! A descriptor the child must keep (the managed Tor's control end) is cleared
-//! again after [`StdioOnly::apply`], in the same `pre_exec`.
+//! A descriptor the child must keep (its end of a pair) is cleared again
+//! after [`StdioOnly::apply`], in the same `pre_exec`
+//! ([`crate::pair::ChildKeeps`]).
 //!
 //! On Windows there is nothing to add: a child inherits only handles marked
-//! inheritable, and the one this process marks (the managed Tor's end) is
-//! covered by [`crate::spawn_lock`].
+//! inheritable, and the one this process marks (a child's end of a pair,
+//! [`crate::pair`]) is covered by [`crate::spawn_lock`].
 
 /// Descriptors below this are standard input, output and error.
 #[cfg(unix)]
@@ -97,7 +98,8 @@ impl StdioOnly {
 /// error. A launch that keeps a descriptor calls [`StdioOnly::apply`] in its
 /// own `pre_exec` and clears that descriptor after it.
 #[cfg(unix)]
-pub fn stdio_only(cmd: &mut tokio::process::Command) {
+pub fn stdio_only(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
     let stdio_only = StdioOnly::prepare();
     // SAFETY: the closure runs in the child between `fork` and `exec`, and
     // [`StdioOnly::apply`] is async-signal-safe.
@@ -108,7 +110,7 @@ pub fn stdio_only(cmd: &mut tokio::process::Command) {
 
 /// Windows: a child inherits only handles marked inheritable (module docs).
 #[cfg(windows)]
-pub fn stdio_only(_cmd: &mut tokio::process::Command) {}
+pub fn stdio_only(_cmd: &mut std::process::Command) {}
 
 /// Linux 5.11 and later: one call marks the whole range. `false` on a kernel
 /// that predates the call (`ENOSYS`) or its close-on-exec flag (`EINVAL`), or

@@ -30,8 +30,8 @@ use std::path::Path;
 use std::process::{Command, ExitStatus};
 
 #[cfg(unix)]
-use crate::inherit;
-use crate::spawn_lock;
+use shekyl_spawn::inherit;
+use shekyl_spawn::spawn_lock;
 
 /// `pkill`'s exit status when nothing was killed.
 #[cfg(unix)]

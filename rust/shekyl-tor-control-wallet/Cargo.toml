@@ -26,6 +26,8 @@ kameo = { workspace = true }
 getrandom = "0.2"
 
 [dev-dependencies]
+# The circuit-isolation test's spawns take the process's one spawn lock.
+shekyl-spawn = { path = "../shekyl-spawn" }
 # The SP-T0c gate's bypass, for the lifecycle tests that inject an arbitrary
 # (unpinned) tor via `TorBinarySource::UncheckedForTest`. A **dev**-dependency
 # edge deliberately: `resolver = "2"` keeps dev-dep features out of normal

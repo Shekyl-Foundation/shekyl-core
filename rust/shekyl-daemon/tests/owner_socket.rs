@@ -120,8 +120,8 @@ impl Node {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr));
-        let child = shekyl_tor_control_client::spawn_lock::with(|| command.spawn())
-            .expect("the daemon child starts");
+        let child =
+            shekyl_spawn::spawn_lock::with(|| command.spawn()).expect("the daemon child starts");
         Self {
             child,
             dir: dir.to_path_buf(),

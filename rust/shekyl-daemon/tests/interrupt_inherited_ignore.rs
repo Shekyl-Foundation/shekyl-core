@@ -150,8 +150,8 @@ impl Node {
                 Ok(())
             });
         }
-        let child = shekyl_tor_control_client::spawn_lock::with(|| command.spawn())
-            .expect("the daemon child starts");
+        let child =
+            shekyl_spawn::spawn_lock::with(|| command.spawn()).expect("the daemon child starts");
         let mut node = Self { child, dir, port };
         node.wait_for_rpc();
         node
@@ -215,7 +215,7 @@ impl Node {
         let pid = self.child.id().to_string();
         let mut kill = Command::new("kill");
         kill.args([&format!("-{signal}"), pid.as_str()]);
-        let status = shekyl_tor_control_client::spawn_lock::status(&mut kill).expect("kill starts");
+        let status = shekyl_spawn::spawn_lock::status(&mut kill).expect("kill starts");
         assert!(status.success(), "kill -{signal} {pid}: {status}");
     }
 

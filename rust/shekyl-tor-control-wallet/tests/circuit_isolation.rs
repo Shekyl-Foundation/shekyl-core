@@ -574,7 +574,7 @@ mod live {
             for a in auths {
                 let d = root.join(a);
                 std::fs::create_dir_all(d.join("keys")).expect("auth keydir");
-                let out = shekyl_tor_control_client::spawn_lock::output(
+                let out = shekyl_spawn::spawn_lock::output(
                     Command::new(&tor).arg("--datadirectory").arg(&d).args([
                         "--orport",
                         "1",
@@ -617,8 +617,8 @@ mod live {
                     .stdin(Stdio::piped())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
-                let mut child = shekyl_tor_control_client::spawn_lock::spawn(&mut gencert_cmd)
-                    .expect("spawn tor-gencert");
+                let mut child =
+                    shekyl_spawn::spawn_lock::spawn(&mut gencert_cmd).expect("spawn tor-gencert");
                 child
                     .stdin
                     .take()
@@ -750,7 +750,7 @@ mod live {
         }
 
         fn start_tor(tor: &Path, d: &Path) -> Child {
-            shekyl_tor_control_client::spawn_lock::spawn(
+            shekyl_spawn::spawn_lock::spawn(
                 Command::new(tor)
                     .arg("-f")
                     .arg(d.join("torrc"))

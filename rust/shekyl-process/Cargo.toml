@@ -38,7 +38,7 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 # The acceptance tests re-exec this binary into a child that faults; the
 # spawn lock keeps a fork from inheriting another test's descriptors.
-shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-spawn = { path = "../shekyl-spawn" }
 tempfile = "3"
 
 [target.'cfg(windows)'.dev-dependencies]

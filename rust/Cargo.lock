@@ -4013,7 +4013,7 @@ dependencies = [
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-shard-visual",
- "shekyl-tor-control-client",
+ "shekyl-spawn",
  "shekyl-tor-status",
  "shekyl-types",
  "shekyl-units",
@@ -4181,6 +4181,7 @@ dependencies = [
  "shekyl-process",
  "shekyl-runtime",
  "shekyl-socks",
+ "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
@@ -4404,9 +4405,9 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-scanner",
+ "shekyl-spawn",
  "shekyl-standoff",
  "shekyl-thread-priority",
- "shekyl-tor-control-client",
  "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
  "shekyl-tx-weight",
@@ -5054,7 +5055,7 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "shekyl-daemon-config",
- "shekyl-tor-control-client",
+ "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",
  "tracing",
@@ -5330,6 +5331,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-spawn"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "shekyl-staking-sim"
 version = "3.1.0"
 dependencies = [
@@ -5419,6 +5428,7 @@ dependencies = [
  "sha2",
  "shekyl-onion-key",
  "shekyl-onion-v3",
+ "shekyl-spawn",
  "shekyl-timing-engine",
  "shekyl-tor-status",
  "shekyl-win-sec",
@@ -5450,6 +5460,7 @@ dependencies = [
  "kameo",
  "shekyl-onion-key",
  "shekyl-p-transport",
+ "shekyl-spawn",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",

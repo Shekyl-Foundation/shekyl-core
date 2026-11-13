@@ -1,0 +1,24 @@
+[package]
+name = "shekyl-spawn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Spawning a child that inherits one end of a connected pair, and nothing else: the process's one spawn lock, the child's descriptor hygiene, and the pair with its spawn window"
+publish = false
+
+# A leaf: std, libc and windows-sys only (Rick, 2026-11-13). The managed Tor's
+# launcher, the daemon's owning connection and a GUI that starts the daemon all
+# depend on it, so it pulls nothing else into any of them.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+] }
+
+[lints]
+workspace = true
