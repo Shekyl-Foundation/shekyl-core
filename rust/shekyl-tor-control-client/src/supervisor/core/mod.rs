@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::posture::{
     fixes, own_tx, BootstrapLine, Carriage, Cause, Connectors, Inbound, OriginVerdict,
-    ProgressWindow, ReportedSkew, Sessions, Shown, Space, Status,
+    ProgressWindow, ReportedSkew, Sessions, Shown, Space, Status, TorSetting,
 };
 
 mod announce;
@@ -558,6 +558,23 @@ pub enum Input {
     ExternalCleared,
 }
 
+impl Input {
+    /// An answer to the pin check or a launch: what only a supervisor that
+    /// runs its Tor asks for.
+    fn answers_a_launch(&self) -> bool {
+        matches!(
+            self,
+            Self::PinAccepted
+                | Self::PinRefused
+                | Self::BundleMissing
+                | Self::Unavailable
+                | Self::DirectoryUnusable { .. }
+                | Self::Spawned
+                | Self::SpawnFailed
+        )
+    }
+}
+
 /// How one upload round ended (§4.5). The three counts are one fact: how
 /// many reached a directory, how many of the uploads that began were
 /// refused, and how many began. A refused majority is read from `begun`,
@@ -600,6 +617,11 @@ enum AbsentDuty {
     Held,
     /// This build has no managed Tor. Nothing is spawned.
     Fixed,
+    /// Tor is not this node's to run: `tor = off`, or an operator's Tor.
+    /// Nothing is spawned and nothing is announced. The core folds the
+    /// relay's verdict, the sessions and the dialer's tally, so the status
+    /// it answers carries them under every setting (Rick, 2026-11-10).
+    Unmanaged,
 }
 
 /// A publish the running Tor still owes the driver.
@@ -739,7 +761,11 @@ impl Core {
             origin: OriginVerdict::Absent,
             sessions: Sessions::default(),
             phase: Phase::Absent {
-                duty: AbsentDuty::Retry,
+                duty: if connectors.tor == TorSetting::Managed {
+                    AbsentDuty::Retry
+                } else {
+                    AbsentDuty::Unmanaged
+                },
             },
             cause: Cause::None,
             posted: Shown::Restarting,
@@ -771,7 +797,12 @@ impl Core {
             service_republish: false,
             requests: requests::Requests::default(),
         };
-        let step = core.step(now, vec![Action::CheckPin]);
+        let first = if core.managed() {
+            vec![Action::CheckPin]
+        } else {
+            Vec::new()
+        };
+        let step = core.step(now, first);
         (core, step)
     }
 
@@ -781,6 +812,12 @@ impl Core {
     /// not keep it, and a reference would only clone the fields out.
     #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
+        // A Tor this node does not run has no pin and no launch, so their
+        // answers are not this core's: one folded would show an install or
+        // launch cause, and its fixes, against a Tor the operator runs.
+        if !self.managed() && input.answers_a_launch() {
+            return self.step(now, Vec::new());
+        }
         let actions = match input {
             Input::PinAccepted => self.pin_accepted(),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
@@ -985,6 +1022,14 @@ impl Core {
             actions.extend(self.on_republish_deadline(now));
         }
         self.step(now, actions)
+    }
+
+    /// Health's one boolean, `hiding`: an address-hiding session exists
+    /// now, the relay's verdict with no pin state (IG-Q67). Its own read, so
+    /// a caller shown only Health causes no status read.
+    #[must_use]
+    pub fn hiding(&self) -> bool {
+        self.origin.hides_address()
     }
 
     /// The typed read.
@@ -1315,7 +1360,7 @@ impl Core {
         self.sample_at = None;
         self.alive_at = None;
         self.pin_at = match duty {
-            AbsentDuty::Fixed => None,
+            AbsentDuty::Fixed | AbsentDuty::Unmanaged => None,
             AbsentDuty::Held | AbsentDuty::Retry => Some(now.saturating_add(self.cap())),
         };
         self.set_cause(cause);
@@ -1387,6 +1432,9 @@ impl Core {
     }
 
     fn say(&mut self, now: u64, cadence: Cadence) -> Vec<Action> {
+        if !self.managed() {
+            return Vec::new();
+        }
         if self.announcements.say(
             now,
             cadence,
@@ -1488,7 +1536,7 @@ impl Core {
             } => Shown::Usable,
             Phase::Bootstrapping { .. } | Phase::Running { .. } => Shown::Bootstrapping,
             Phase::Absent {
-                duty: AbsentDuty::Held | AbsentDuty::Fixed,
+                duty: AbsentDuty::Held | AbsentDuty::Fixed | AbsentDuty::Unmanaged,
             } => Shown::RestartingHeld,
             Phase::Absent { .. } | Phase::Launching | Phase::Stopping => Shown::Restarting,
         }
@@ -1595,6 +1643,11 @@ impl Core {
 
     fn base(&self) -> u64 {
         duration_ns(self.policy.base)
+    }
+
+    /// Whether this node runs its Tor (`tor = managed`).
+    fn managed(&self) -> bool {
+        self.connectors.tor == TorSetting::Managed
     }
 
     fn cap(&self) -> u64 {

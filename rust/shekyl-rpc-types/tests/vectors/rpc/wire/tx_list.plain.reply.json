@@ -2,9 +2,6 @@
   {
     "id": "4444444444444444444444444444444444444444444444444444444444444444",
     "body": "AwBkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8=",
-    "prunable_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-    "pqc_auth_hash": "3333333333333333333333333333333333333333333333333333333333333333",
-    "archival_size": 3120,
     "pooled": true,
     "mined_height": null,
     "confirmations": null,

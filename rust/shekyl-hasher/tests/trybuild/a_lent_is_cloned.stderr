@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `Lent<'_>: Clone` is not satisfied
+  --> tests/trybuild/a_lent_is_cloned.rs:15:44
+   |
+15 |         let _copy: Lent<'_> = Clone::clone(lent);
+   |                               ------------ ^^^^ the trait `Clone` is not implemented for `Lent<'_>`
+   |                               |
+   |                               required by a bound introduced by this call

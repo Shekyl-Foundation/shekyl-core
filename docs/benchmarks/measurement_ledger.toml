@@ -1261,6 +1261,7 @@ cleared = [
   { through = "3c8ed9e03", reason = "Crate documentation and checked instants in a retry test; no code the daemon runs changed." },
   { through = "f7c1a94de7", reason = "RT-W9 close-out review: the handshake still splits into a SendDirection and a RecvDirection and runs the same AEAD. The direction state is private to its module, and a dead direction refuses before it frames, which seal and open already did once the direction was dead. The budget charge stays 2,163,800 ns. The RT-P9 deadlines are unchanged." },
   { through = "661087ac08", reason = "The mac1 key is typed: the daemon derives it once with its keypair (it was derived once with its bundle), and its check recomputes the mac1 and compares it in constant time, the work verify_slice did. A busy reply MACs the same 34 bytes. A client derives the key at each start, one BLAKE2s over the 1,216-byte bundle, outside every step the daemon charges. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
+  { through = "46a22c877", reason = "InstanceNameError gains rule(), the static text of the instance-name rule its Display already wrote, so the daemon's option table can quote it. The instance name is parsed at start and hashed into the rendezvous; no handshake step RT-P6 or RT-P9 timed changes. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
   { through = "188850a00d", reason = "The mac1 tag borrows the key that proved it, and a busy reply is that tag's method. The daemon still derives the key once from its bundle, recomputes the mac1 and compares it in constant time; a refusal then MACs the same 34 bytes. A client still derives the key once per start, one BLAKE2s over the 1,216-byte bundle, outside every step the daemon charges. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
 ]
 
@@ -1398,6 +1399,21 @@ spec = [
 bench = "shekyl-pow-randomx::verify_header_iai"
 measured_by = ["BA-T42"]
 path_set = "randomx-header-verify"
+
+# One PreparedCache::derive in instructions: the hashing actor's rebuild
+# bound (RANDOMX_CACHE_ACTOR.md §5.8). BA-T14 is the cache derivation's
+# measurement; this row is its drift gate on a CI runner.
+[[path_set]]
+id = "randomx-cache-derive"
+spec = [
+  "rust/shekyl-pow-randomx/src",
+  "rust/shekyl-pow-randomx/benches/cache_derive_iai.rs",
+]
+
+[[gated_row]]
+bench = "shekyl-pow-randomx::cache_derive_iai"
+measured_by = ["BA-T14"]
+path_set = "randomx-cache-derive"
 
 # --- gated rows: the rows that were gated before the ledger named them --
 #

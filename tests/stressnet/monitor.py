@@ -158,16 +158,24 @@ def collect_node_metrics(daemon: DaemonRPC) -> NodeMetrics:
         # and reading that as height 0 would report a node at an empty
         # chain. The height is the tip's ordinal.
         m.height = info["height"]
-        # The whole 128-bit difficulty. Required, and read strictly: a
-        # missing key or a string that is not `0x` hex is an error, never a
-        # difficulty of 0.
+        # The chain's part and the pool's count are shown only to a
+        # connection holding the `chain` and `pool` grants (RPC 4.1). The
+        # monitor needs both: a reply without them is this connection's
+        # grant, named as such, never a difficulty of 0 or an empty pool.
+        for part, grant in (("difficulty", "chain"), ("txpool_count", "pool")):
+            if part not in info:
+                raise ValueError(
+                    f"daemon_status shows no {part} to this connection: "
+                    f"the monitor needs the `{grant}` grant"
+                )
+        # The whole 128-bit difficulty, read strictly: a string that is not
+        # `0x` hex is an error, never a difficulty of 0.
         m.difficulty = parse_wide_hex(info["difficulty"])
         # The entries the node has broadcast: one quantity whoever asks, so
-        # it compares across nodes. Required: a reply without it is not a
-        # daemon_status reply, and reading that as an empty pool would hide
-        # it. A node that retired its pool (its pool file faulted) answers
-        # null: kept as None, never read as zero. `txpool_retired` rides
-        # under the status grant; where it is shown, the two must agree.
+        # it compares across nodes. A node that retired its pool (its pool
+        # file faulted) answers null: kept as None, never read as zero.
+        # `txpool_retired` rides under the status grant; where it is shown,
+        # the two must agree.
         m.tx_pool_size = info["txpool_count"]
         retired = info.get("txpool_retired")
         if retired is not None and (m.tx_pool_size is None) != retired:
