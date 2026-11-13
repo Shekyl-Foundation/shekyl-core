@@ -12,9 +12,14 @@ use std::time::Duration;
 
 use super::super::super::posture::BootstrapPace;
 use super::{
-    announces, carrying, duration_ns, held, managed, policy, reach_usable, render, replied, socks,
+    announces, carrying, duration_ns, held, managed, policy, reach_usable, replied, socks,
     takes_down, Action, Core, Input, Shown,
 };
+
+/// The status in words, as the daemon's log says it.
+fn said(core: &Core) -> String {
+    shekyl_tor_status::render(&core.view(u64::MAX), Some("/data"))
+}
 
 fn says_progress(step: &super::Step) -> usize {
     step.actions
@@ -126,7 +131,7 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     assert_eq!(line.received, Some(3_200_000));
     assert_eq!(line.window, Duration::from_secs(4));
     assert_eq!(core.status().pace, Some(BootstrapPace::SlowButNormal));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("55%"), "{text}");
     assert!(text.contains("unchanged for 4 s"), "{text}");
     assert!(text.contains("3.2 MB arrived in the last 4 s"), "{text}");
@@ -143,7 +148,7 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     assert_eq!(says_progress(&step), 1);
     assert_eq!(announces(&step), 0);
     assert_eq!(core.status().pace, Some(BootstrapPace::Stalled));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("Nothing arrived in the last 5 s"), "{text}");
     assert!(text.contains("unchanged for 8 s"), "{text}");
 
@@ -168,7 +173,7 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
         1,
     );
     core.on_deadline(duration_ns(Duration::from_secs(4)));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("30%"), "{text}");
     assert!(!text.contains("Nothing arrived"), "{text}");
 }
@@ -243,7 +248,7 @@ fn the_progress_line_measures_the_span_it_names() {
     assert_eq!(line.received, Some(5_000_000));
     assert_eq!(line.window, Duration::from_secs(5));
     assert_ne!(line.window, policy().alive_every);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("5.0 MB arrived in the last 5 s"), "{text}");
     assert!(text.contains("unchanged for 5 s"), "{text}");
 }

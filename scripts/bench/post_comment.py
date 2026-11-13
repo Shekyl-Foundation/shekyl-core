@@ -126,6 +126,15 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
             f"- **Moved crate (compared across the move):** "
             f"{len(summary['moved'])} entries — gated like any other."
         )
+    if summary.get("out_of_scope"):
+        rows = summary.get("captured_rows")
+        ran = ", ".join(f"`{row}`" for row in rows) if isinstance(rows, list) else "all"
+        lines.append(
+            f"- **Out of this capture's scope (not run, not gated):** "
+            f"{len(summary['out_of_scope'])} baseline entries. This pull "
+            f"request's change reaches the rows {ran}; the push to `dev` "
+            f"captures every row."
+        )
     if summary["added_in_pr"]:
         lines.append(
             f"- **New in PR (informational):** "

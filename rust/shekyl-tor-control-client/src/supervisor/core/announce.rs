@@ -52,7 +52,9 @@ impl SayKey {
             cause: std::mem::discriminant(cause),
             inbound: match inbound {
                 Inbound::Unreachable { cause, .. } => Some(std::mem::discriminant(&cause)),
-                Inbound::NotOffered | Inbound::Publishing | Inbound::Reachable { .. } => None,
+                Inbound::NotOffered | Inbound::Publishing { .. } | Inbound::Reachable { .. } => {
+                    None
+                }
             },
         }
     }

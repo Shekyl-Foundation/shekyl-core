@@ -14,6 +14,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The Tor status's renderer: the supervisor's log line and the pin warning
+# say what every client says (TOR_STATUS_CRATE.md).
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-options = { path = "../shekyl-options" }
 shekyl-logging = { path = "../shekyl-logging" }
