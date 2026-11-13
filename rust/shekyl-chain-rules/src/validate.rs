@@ -377,6 +377,11 @@ pub fn judge_slot_stateless(
 ///
 /// The class's proof row, at `slot`, when the proof fails. A class that
 /// does not derive is that derivation's row (CEN-H5 or CEN-H6).
+///
+/// Test and harness builds only: no production path judges a proof apart
+/// from its signatures, and its one reader is the chain forge's identity
+/// test (`CHAIN_FORGE.md` §6, lock 3).
+#[cfg(any(test, feature = "harness"))]
 pub fn judge_claimed_proof(
     tx: &Transaction,
     slot: TxSlot,
