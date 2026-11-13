@@ -73,6 +73,8 @@ required-features = ["test-utils"]
 # test-only, the `net` half is the transport's own dependency above.
 tokio = { version = "1", features = ["net", "rt", "macros"] }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# The rendezvous tests make their directories under a fresh temporary one.
+tempfile = "3"
 
 [lints]
 workspace = true

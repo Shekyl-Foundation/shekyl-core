@@ -16,7 +16,6 @@
       "weight": 1984,
       "weight_longterm": 1984,
       "tx_count": 1,
-      "pow": "7777777777777777777777777777777777777777777777777777777777777777",
       "coinbase": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "curve_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "attestation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"

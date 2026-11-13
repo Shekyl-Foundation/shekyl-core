@@ -213,6 +213,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The Tor status a store test hands `daemon_status`, as the daemon's
+# supervisor would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # The instruction-count harness of `benches/block_path_iai.rs`, at the
 # version every other gated bench uses.
 gungraun = "0.19"

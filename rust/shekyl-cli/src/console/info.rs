@@ -22,6 +22,19 @@ pub(super) fn fetch_status(daemon: &DaemonClient) -> Result<DaemonStatus, String
     super::call::<wire::DaemonStatus>(daemon, &NoParams)
 }
 
+/// A `daemon_status` part this connection's grant does not show: the
+/// console says which grant it needs rather than print a stand-in
+/// (`RPC_CHANNEL.md` §6.1, RK-D23).
+pub(super) fn disclosed<T>(
+    part: shekyl_rpc_types::kinds::Withheld<T>,
+    what: &str,
+    grant: &str,
+) -> Result<T, String> {
+    part.shown().ok_or_else(|| {
+        format!("the daemon does not show {what} to this connection: it needs the `{grant}` grant")
+    })
+}
+
 /// The chain's block count: the tip's height plus one. The console words
 /// that print a "height" have always printed this count.
 pub(super) const fn chain_count(status: &DaemonStatus) -> u64 {

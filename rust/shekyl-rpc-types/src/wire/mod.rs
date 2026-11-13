@@ -21,6 +21,7 @@ pub mod daemon;
 pub mod node;
 pub mod p2p;
 pub mod shared;
+pub mod tor;
 pub mod tx;
 
 use crate::kinds::{Done, NoParams};
@@ -355,7 +356,7 @@ mod tests {
         let mut doc = json!({
             "height": 10, "hash": hash(4), "target_height": null, "synchronized": true,
             "syncing": false, "offline": false, "degraded": false, "peered": true,
-            "writer": {"live": null}, "protocol_version": 1, "difficulty": "0x1",
+            "hiding": false, "writer": {"live": null}, "protocol_version": 1, "difficulty": "0x1",
             "difficulty_cumulative": "0x2", "block_spacing": 120, "tx_count": 3,
             "block_weight_max": 300000, "block_weight_median": 1000, "time_adjusted": 1700000000,
             "emission": "100", "emission_multiplier": 1000000, "burn": 0, "burn_total": "0",
@@ -384,6 +385,21 @@ mod tests {
             ("alt_count", json!(0)),
             ("rpc_connections", json!(1)),
             ("txpool_retired", json!(false)),
+            ("posture", json!({"tor": "managed", "clearnet": "off"})),
+            ("origination", json!("connecting")),
+            ("sync_connector", json!(["clearnet"])),
+            ("tor_quiet", json!({"failing": {"age": 130}})),
+            (
+                "tor",
+                json!({
+                    "state": "impaired", "cause": {"clock-skew": {"measured": -3600}},
+                    "age": 40, "respawn_count": 1, "progress": 45, "flagged": false,
+                    "fix": [],
+                    "onion": {"state": "unreachable", "age": 9, "cause": {"clock-behind": 3600}},
+                    "bootstrap": {"pace": "slow", "unchanged": 90, "download": 2048, "window": 60},
+                    "carriage": "gone"
+                }),
+            ),
         ];
         assert!(agree::<DaemonStatus>(&status(&whole)));
         assert!(!agree::<DaemonStatus>(&status(&whole[..3])));

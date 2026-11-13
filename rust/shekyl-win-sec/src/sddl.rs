@@ -74,6 +74,12 @@ use windows_sys::Win32::Security::{
 use crate::sid::{last_error, SidString};
 use crate::MEDIUM_INTEGRITY_SACL;
 
+/// The rendezvous objects' mandatory-label policy: no read up, and the
+/// default no write up kept. A label's policy is exactly the bits it names,
+/// so a label naming `NR` alone would let a low-integrity process of the
+/// same user write the rendezvous; `NWNR` refuses it both.
+const RENDEZVOUS_LABEL: &str = "NWNR";
+
 /// Why a descriptor could not be built.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SddlError {
@@ -141,6 +147,46 @@ impl OwnerOnlyDescriptor {
     /// a second grant here would be the PR #516 shape, and P-16 counts.
     pub fn private_file(owner: &SidString) -> Result<Self, SddlError> {
         let sddl = format!("O:{o}G:{o}D:P(A;;FA;;;{o})", o = owner.as_str());
+        Self::from_sddl(&sddl)
+    }
+
+    /// The daemon's data home, `%LOCALAPPDATA%\Shekyl`, when the daemon
+    /// creates it (`RPC_CHANNEL.md` §7.1, Rick, 2026-11-12): owned by
+    /// `owner`, full access for `owner` alone and inherited by what is made
+    /// inside, a protected DACL, and an inheritable no-read-up label.
+    pub fn data_home(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;OICI;FA;;;{o})S:(ML;OICI;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// The rendezvous directory, `%LOCALAPPDATA%\Shekyl\rendezvous`
+    /// (`RPC_CHANNEL.md` §7.1): owned by `owner`, owner-only and protected,
+    /// with its own no-read-up label, so a low-integrity process can neither
+    /// open it nor enumerate the rendezvous inside.
+    pub fn rendezvous_dir(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;OICI;FA;;;{o})S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// A rendezvous file (`RPC_CHANNEL.md` §7.1): owned by `owner`,
+    /// owner-only and protected, with the no-read-up label set in the
+    /// creating call. A label inherited from a directory, or applied after
+    /// creation, silently loses the read-up policy (RT-P8, measured), so the
+    /// label is never left to inheritance.
+    pub fn rendezvous_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;FA;;;{o})S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
         Self::from_sddl(&sddl)
     }
 

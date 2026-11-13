@@ -27,6 +27,8 @@ import time
 import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import owner_socket  # noqa: E402
 import rpc_capture as C  # noqa: E402
 
 # The column talks to the admin listener. View listen defaults to none
@@ -132,7 +134,8 @@ def main():
             [args.daemon, "--network", "regtest", "--data-dir", args.data,
              "--log-file", daemon_log, "--clearnet", "off", "--tor", "off",
              "--p2p-local", "--dev-rpc",
-             "--rpc-admin-listen", f"127.0.0.1:{admin_port}"],
+             "--rpc-admin-listen", f"127.0.0.1:{admin_port}"]
+            + owner_socket.argv("capture"),
             stdout=console, stderr=subprocess.STDOUT)
     finally:
         console.close()

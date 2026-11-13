@@ -30,6 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import armed_lever  # noqa: E402
+import owner_socket  # noqa: E402
 SHEKYLD = os.environ.get("SHEKYLD_BIN", os.path.join(ROOT, "build", "bin", "shekyld"))
 # Default to a freshly-derived current-format regtest address committed beside the
 # vectors (regenerate via `cargo test -p shekyl-wire --test emit_regtest_addr
@@ -91,7 +92,8 @@ def start_daemon(workdir, addr, attempts=5):
              "--dev-difficulty", "1", armed_lever.FLAG, "--mine-address", addr,
              "--data-dir", workdir,
              "--log-file", os.path.join(workdir, "shekyld.log"),
-             "--rpc-admin-listen", f"127.0.0.1:{port}", "--log-level", "warn"],
+             "--rpc-admin-listen", f"127.0.0.1:{port}", "--log-level", "warn"]
+            + owner_socket.argv("coinbase"),
             stdout=log, stderr=subprocess.STDOUT)
         for _ in range(120):
             if daemon.poll() is not None:

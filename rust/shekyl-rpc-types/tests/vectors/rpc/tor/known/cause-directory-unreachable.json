@@ -1,0 +1,28 @@
+{
+  "posture": {
+    "tor": "managed",
+    "clearnet": "off"
+  },
+  "origination": "connecting",
+  "sync_connector": [],
+  "tor_quiet": null,
+  "tor": {
+    "state": "impaired",
+    "cause": {
+      "directory-unreachable": null
+    },
+    "age": 75,
+    "respawn_count": 0,
+    "progress": 5,
+    "flagged": false,
+    "fix": [],
+    "onion": null,
+    "bootstrap": {
+      "pace": "held",
+      "unchanged": 120,
+      "download": null,
+      "window": 60
+    },
+    "carriage": "gone"
+  }
+}
