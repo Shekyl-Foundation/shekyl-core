@@ -314,24 +314,25 @@ pub fn proof_submittable(
 /// Whether a proof has aged out of CEN-I11's window for good: its
 /// connecting age exceeds `MAX_AGE`, so no later block can list it.
 ///
-/// `true` also when the reference block is above the tip (reorg §5.3):
-/// the anchor is no longer on the chain, so the proof cannot be submitted
-/// as-is. Distinct from "too fresh" (connecting age below `MIN_AGE`),
-/// which is **not** expiry — `proof_expired` stays `false`. A built proof
-/// starts at tip age [`REF_ANCHOR_AGE`], inside the window, but "too
-/// fresh" can still arise after a shallow reorg that lowers `tip_now`
-/// while the reference block remains canonical: [`proof_submittable`]
-/// goes `false` transiently, and the wallet waits for the chain to grow
-/// back past the anchor rather than treating it as expired.
+/// False when the reference is above the tip. That height has no
+/// connecting age: the block is not on this chain, a reorg for a wallet
+/// that built the proof and a node still catching up for a signer who
+/// received one. [`should_reanchor`] is what that case asks for.
+/// [`proof_submittable`] is false, and so is this function. Too fresh
+/// (connecting age below `MIN_AGE`) is the same: not expiry. A built
+/// proof starts at tip age [`REF_ANCHOR_AGE`], inside the window, but a
+/// shallow reorg that lowers `tip_now` while the reference stays
+/// canonical drops the connecting age below `MIN_AGE`. The wallet waits
+/// for the chain to grow back past the anchor.
 #[must_use]
 pub fn proof_expired(
     tip_now: shekyl_types::BlockHeight,
     reference_height: shekyl_types::BlockHeight,
 ) -> bool {
-    match connecting_age(tip_now, reference_height) {
-        Some(age) => age > REFERENCE_BLOCK_MAX_AGE,
-        None => true,
-    }
+    matches!(
+        connecting_age(tip_now, reference_height),
+        Some(age) if age > REFERENCE_BLOCK_MAX_AGE
+    )
 }
 
 /// Whether the wallet should proactively re-anchor an in-flight,
@@ -342,11 +343,10 @@ pub fn proof_expired(
 /// This is the proactive companion to the reactive `ProofStale` signal
 /// (2A §3.6): reactive catches a root that went stale unexpectedly; this
 /// keeps the wallet from carrying a proof until it hits the hard
-/// [`proof_expired`] boundary. In the age-based path, because
-/// `REBUILD_AT < MAX_AGE`, `should_reanchor` fires strictly before
-/// [`proof_expired`]; in the reorg path (reference above the tip, age
-/// `None`) both fire together — the anchor is gone, so re-anchor and
-/// expiry coincide.
+/// [`proof_expired`] boundary. On the age path, `REBUILD_AT < MAX_AGE`,
+/// so this fires strictly before [`proof_expired`]. On the reorg path the
+/// reference is above the tip: there is no connecting age,
+/// [`proof_expired`] stays false, and this function is what fires.
 #[must_use]
 pub fn should_reanchor(
     tip_now: shekyl_types::BlockHeight,
@@ -499,9 +499,9 @@ mod tests {
     /// at genesis, and the steady state) and every reference up to two
     /// above the tip, [`proof_submittable`] is exactly membership of
     /// `shekyl_chain_rules::admissible_references(tip + 1)`, and
-    /// [`proof_expired`] is exactly "the reference is off the chain, or
-    /// below the window's oldest edge with no clamp". The two never hold
-    /// together.
+    /// [`proof_expired`] is exactly below that window's oldest edge. A
+    /// reference above the tip is outside the window and is not expiry.
+    /// The two never hold together.
     #[test]
     fn the_window_is_cen_i11() {
         let span = 2 * REFERENCE_BLOCK_MAX_AGE.to_raw() + 50;
@@ -523,7 +523,7 @@ mod tests {
                     .is_some_and(|oldest| reference < oldest);
                 assert_eq!(
                     proof_expired(tip, reference),
-                    r > t || below_oldest,
+                    below_oldest,
                     "expired, tip {t}, reference {r}"
                 );
                 assert!(
@@ -624,12 +624,13 @@ mod tests {
 
     #[test]
     fn reorg_below_reference_requires_reanchor() {
-        // Reference block above the current tip: chain reorged below it.
+        // Reference block above the current tip: the anchor is off this
+        // chain. Re-anchor. It has not aged out of the window.
         let reference_height = h(1_000);
         let tip_now = h(998);
         assert_eq!(reference_block_age(tip_now, reference_height), None);
         assert!(!proof_submittable(tip_now, reference_height));
-        assert!(proof_expired(tip_now, reference_height));
+        assert!(!proof_expired(tip_now, reference_height));
         assert!(should_reanchor(tip_now, reference_height));
     }
 }

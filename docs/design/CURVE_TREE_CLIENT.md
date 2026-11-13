@@ -316,7 +316,7 @@ mod reference {
     /// In CEN-I11's window: connecting age `tip_now + 1 − reference_height`
     /// in `[MIN_AGE, MAX_AGE]` (§5.2).
     pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool;
-    /// Connecting age past `MAX_AGE` (or ref above tip) — no later block can list it.
+    /// Connecting age past `MAX_AGE`. A reference above the tip is not expiry.
     pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool;
     /// Reached `REBUILD_AT` (or ref above tip) — re-anchor proactively (§5.2).
     pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool;
@@ -550,8 +550,10 @@ connecting at `tip_build + 1` through `tip_build + 94`), and
 `REBUILD_AT` (50). The consensus predicates (`proof_submittable`,
 `proof_expired`) measure the reference's age from the connecting height,
 as CEN-I11 does, and a test sweeps them against
-`shekyl_chain_rules::admissible_references`; `select_reference_height`
-and `should_reanchor` read the wallet's tip age.
+`shekyl_chain_rules::admissible_references`. `proof_expired` is that age
+past `MAX_AGE` only: a reference above the tip has no connecting age, so
+it is not expiry, and `should_reanchor` is what that case asks for.
+`select_reference_height` and `should_reanchor` read the wallet's tip age.
 `REFERENCE_BLOCK_{MIN,MAX}_AGE` are emitted from
 `config/consensus_constants.json` by the crate's `build.rs` (same JSON
 authority as the C++ header), with const-eval sentinels guarding the
