@@ -340,6 +340,15 @@ PERMANENT: dict[tuple[str, str], str] = {
     "`regtest`, NETWORK_IDENTITY.md NI-Q1). A production surface, not a test "
     "seam",
     (
+        "shekyl-chain-ingest",
+        "bench-internals",
+    ): "the bench capture's selector: scripts/bench/capture_rust_baseline.sh "
+    "passes it, with `harness`, to build benches/block_path_iai.rs, and it "
+    "compiles bench_support.rs, the connector's form, validate and connect "
+    "calls made on one thread over a committed corpus. It turns on the "
+    "optional tempfile edge for the bench store's directory and enables no "
+    "other feature; no dependency edge names it",
+    (
         "shekyl-chain-sync",
         "cs2-long-run",
     ): "the floor-device job's selector: the cs2-long-run workflow passes it "
