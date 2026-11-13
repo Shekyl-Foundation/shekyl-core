@@ -1444,8 +1444,15 @@ async fn capture_chain_keeps_its_datadir() {
 /// A fresh accept, not `AlreadyInPool` / `AlreadyInChain`. Those also return
 /// `Ok`, and either would mean this run proved nothing about the bytes it
 /// just built — the daemon would be reporting on something it already had.
-fn require_fresh_accept(outcome: super::pending::SubmitOutcome, what: &str) -> TxHash {
-    match outcome {
+///
+/// Takes the whole receipt so every real-daemon send also checks the
+/// verdict save (A19): an accept the wallet did not save is a failure.
+fn require_fresh_accept(receipt: super::pending::SubmitReceipt, what: &str) -> TxHash {
+    assert!(
+        receipt.verdict_saved,
+        "the wallet must save the verdict on {what}"
+    );
+    match receipt.outcome {
         super::pending::SubmitOutcome::Accepted { hash } => hash,
         other => panic!("the daemon must freshly accept {what}, got {other:?}"),
     }

@@ -9,6 +9,7 @@
 //! daemon), plus the per-`P` `PTransactionSubmitter`'s
 //! ambiguous-failure + username-non-leak proof (SP-T4a).
 use super::*;
+use crate::engine::dispatch_durability::DurableTxBytes;
 use shekyl_rpc_client::Publication;
 
 /// Every identity-bearing verdict maps 1:1 and carries the locally
@@ -221,7 +222,7 @@ async fn broadcast_over_a_dead_proxy_is_a_username_free_ambiguous_error() {
     .expect("proxy config is well-formed");
 
     let err = submitter
-        .submit(tx_bytes)
+        .submit(DurableTxBytes::for_test(tx_bytes))
         .await
         .expect_err("a dead SOCKS proxy must fail the broadcast");
     assert!(
@@ -257,7 +258,9 @@ async fn broadcast_of_unparseable_bytes_is_a_local_malformed_never_reaching_the_
     .expect("proxy config is well-formed");
 
     let err = submitter
-        .submit(b"not a canonical shekyl-wire transaction".to_vec())
+        .submit(DurableTxBytes::for_test(
+            b"not a canonical shekyl-wire transaction".to_vec(),
+        ))
         .await
         .expect_err("unparseable bytes must fail");
     assert!(

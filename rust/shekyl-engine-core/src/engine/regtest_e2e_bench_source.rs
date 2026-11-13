@@ -156,7 +156,10 @@ async fn spend(
             .submit_pending_tx_async(pending.id, pending.content_gen)
             .await
         {
-            Ok(SubmitOutcome::Accepted { hash }) => {
+            Ok(crate::engine::SubmitReceipt {
+                outcome: SubmitOutcome::Accepted { hash },
+                ..
+            }) => {
                 say(&format!("ACCEPTED {hash}"));
                 if let Some(pause) = pause {
                     tokio::time::sleep(pause).await;

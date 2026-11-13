@@ -232,6 +232,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state,
+                tx_bytes: None,
             },
         );
     }
@@ -303,6 +304,7 @@ mod tests {
                     state: SendState::Confirmed {
                         height: shekyl_types::BlockHeight::from_raw(25),
                     },
+                    tx_bytes: None,
                 },
             );
         }

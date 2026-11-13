@@ -96,6 +96,21 @@ pub(crate) trait LedgerCommit: Sync {
     fn commit(&self, ledger: &WalletLedger) -> Result<(), PersistenceError>;
 }
 
+/// A test seam that saves nothing and always succeeds — for unit tests
+/// that drive the pending-tx engine or the watchdog without a wallet file.
+/// Named for what it does so no reader takes a test using it as evidence
+/// of durability; the tests of the save itself use a real wallet file or
+/// a failing commit.
+#[cfg(test)]
+pub(crate) struct NoSaveCommit;
+
+#[cfg(test)]
+impl LedgerCommit for NoSaveCommit {
+    fn commit(&self, _ledger: &WalletLedger) -> Result<(), PersistenceError> {
+        Ok(())
+    }
+}
+
 /// The engine's [`LedgerCommit`]: borrows its persistence and state key
 /// for the duration of one submit.
 pub(crate) struct EngineLedgerCommit<'a, F> {

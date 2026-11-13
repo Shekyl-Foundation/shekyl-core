@@ -17,6 +17,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use super::dispatch_durability::LedgerCommit;
 use super::error::{PendingTxError, SendError, SubmitError};
 use super::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
 use super::traits::pending_tx::PendingTxEngine;
@@ -134,10 +135,11 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
         }
     }
 
-    fn submit(
+    fn submit<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
+        commit: &C,
     ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
         let injected = self
             .queued_submit_failures
@@ -148,7 +150,7 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
             if let Some(err) = injected {
                 return Err(err);
             }
-            self.inner.submit(id, seen_gen).await
+            self.inner.submit(id, seen_gen, commit).await
         }
     }
 
@@ -183,6 +185,7 @@ mod tests {
 
     use super::*;
     use crate::engine::diagnostics::DiscardReason;
+    use crate::engine::dispatch_durability::NoSaveCommit;
     use crate::engine::pending::{FeePriority, TxHash};
     use crate::engine::traits::PendingTxEngine;
 
@@ -220,10 +223,11 @@ mod tests {
             }
         }
 
-        fn submit(
+        fn submit<C: LedgerCommit>(
             &self,
             _id: ReservationId,
             _seen_gen: u64,
+            _commit: &C,
         ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
             async {
                 Ok(SubmitOutcome::Accepted {
@@ -269,7 +273,7 @@ mod tests {
         let pending = wrapper.build(standard_request()).await.expect("build ok");
         assert_eq!(wrapper.outstanding(), 1);
         let outcome = wrapper
-            .submit(pending.id, pending.content_gen)
+            .submit(pending.id, pending.content_gen, &NoSaveCommit)
             .await
             .expect("submit ok");
         assert_eq!(
@@ -335,11 +339,13 @@ mod tests {
             reservation_id: pending.id,
         });
         assert!(matches!(
-            wrapper.submit(pending.id, pending.content_gen).await,
+            wrapper
+                .submit(pending.id, pending.content_gen, &NoSaveCommit)
+                .await,
             Err(SubmitError::ReservationNotFound { .. })
         ));
         assert!(wrapper
-            .submit(pending.id, pending.content_gen)
+            .submit(pending.id, pending.content_gen, &NoSaveCommit)
             .await
             .is_ok());
 
