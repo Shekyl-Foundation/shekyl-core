@@ -244,12 +244,12 @@ fn parse_block_show(word: &str) -> ResolvedCommand {
     if word.len() == 64 {
         return match parse_hash(word) {
             Ok(hash) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Hash(hash))),
-            Err(_) => diag(format!("{word:?} is not a block hash or a height")),
+            Err(_) => diag(format!("{word:?} is not a block hash or a block number")),
         };
     }
     match parse_u64("block show", word) {
         Ok(height) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Height(height))),
-        Err(_) => diag(format!("{word:?} is not a block hash or a height")),
+        Err(_) => diag(format!("{word:?} is not a block hash or a block number")),
     }
 }
 

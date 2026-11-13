@@ -21,8 +21,7 @@
 
 use serde_json::{json, Value};
 use shekyl_rpc_types::wire::daemon::{DaemonStatus, GrantName};
-use shekyl_rpc_types::wire::node::MineSpeed;
-use shekyl_rpc_types::HexU128;
+use shekyl_rpc_types::wire::node::{MineSpeed, MineStatus};
 
 use crate::daemon::{DaemonClient, DaemonError};
 use crate::display::short_address;
@@ -132,14 +131,15 @@ pub fn cmd_mine_start(daemon: Option<&DaemonClient>, threads: Option<u64>) -> Co
     };
 
     // F7 — not synced: the daemon would refuse `mine.syncing`. Refuse here
-    // with the height copy rather than confirm-and-fail. Heights here are
-    // block counts, as this copy has always printed them: the tip plus one.
+    // with where it is rather than confirm-and-fail. The tip and the target
+    // are blocks, the wire's `height` and `target_height` unchanged
+    // (`HEIGHT_SEMANTICS.md` §1).
     if !info.synchronized {
-        let height = info.height.0.saturating_add(1);
+        let tip = info.height.0;
         // The target is for the message only; the refusal is the flag's.
-        let of_target = match info.target_height.0.map(|tip| tip.0.saturating_add(1)) {
-            Some(target) if target > height => format!("height {height} of {target}"),
-            _ => format!("height {height}"),
+        let of_target = match info.target_height.0.map(|target| target.0) {
+            Some(target) if target > tip => format!("block {tip} of {target}"),
+            _ => format!("block {tip}"),
         };
         return failed(format!(
             "The daemon is still syncing ({of_target}) and will not start mining \
@@ -208,54 +208,27 @@ pub(crate) fn show_mine_stop(val: &Value) {
     }
 }
 
-/// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
-/// string is deliberately not rendered (CU-3: operators do not need a
-/// protocol-algorithm name; the daemon now always reports RandomX).
-pub fn cmd_mine_status(daemon: Option<&DaemonClient>) -> CommandResult {
+/// `mine status` — the daemon's `mine_status` reply. `--json` prints it as
+/// the wire serializes it. The human lines do not render the algorithm
+/// (CU-3: operators do not need a protocol-algorithm name).
+pub fn cmd_mine_status(daemon: Option<&DaemonClient>) -> CommandResult<MineStatus> {
     let (dc, _info) = gate(daemon)?;
-
-    match dc.mining_status() {
-        Ok(status) => Ok(json!({
-            "active": status.active,
-            "threads": status.threads.0,
-            "speed": status.speed,
-            "address": status.address.0.map(|address| address.0),
-            // The posted job's difficulty, in the wire's `0x` hex; `null`
-            // with no job.
-            "difficulty": status.difficulty.0,
-        })),
-        Err(e) => failed(e.to_string()),
-    }
+    dc.mining_status().or_else(|e| failed(e.to_string()))
 }
 
-pub(crate) fn show_mine_status(val: &Value) {
-    if !val.get("active").and_then(Value::as_bool).unwrap_or(false) {
+pub(crate) fn show_mine_status(status: &MineStatus) {
+    if !status.active {
         println!("Mining: idle.");
         return;
     }
     println!("Mining: active");
-    println!(
-        "  Threads:    {}",
-        val.get("threads").and_then(Value::as_u64).unwrap_or(0)
-    );
-    let rate = val
-        .get("speed")
-        .cloned()
-        .and_then(|speed| serde_json::from_value::<MineSpeed>(speed).ok())
-        .map_or_else(|| "0 H/s".to_owned(), hashes_per_second_text);
-    println!("  Hash rate:  {rate}");
-    if let Some(address) = val.get("address").and_then(|v| v.as_str()) {
-        if !address.is_empty() {
-            println!("  Paying to:  {}", short_address(address));
-        }
+    println!("  Threads:    {}", status.threads.0);
+    println!("  Hash rate:  {}", hashes_per_second_text(status.speed));
+    if let Some(address) = &status.address.0 {
+        println!("  Paying to:  {}", short_address(&address.0));
     }
-    let difficulty = val
-        .get("difficulty")
-        .and_then(Value::as_str)
-        .and_then(|text| HexU128::parse(text).ok())
-        .map_or(0, HexU128::get);
-    if difficulty > 0 {
-        println!("  Difficulty: {difficulty}");
+    if let Some(difficulty) = status.difficulty.0 {
+        println!("  Difficulty: {}", difficulty.get());
     }
 }
 
@@ -446,6 +419,40 @@ mod tests {
                 .any(|(_, body)| body.contains(<wire::MineStart as RpcMethod>::NAME)),
             "mine start with no wallet reached mine_start: {asked:?}"
         );
+    }
+
+    /// `mine status --json` prints the daemon's `mine_status` reply as the
+    /// wire serializes it, member for member. Red edit: rebuild the object
+    /// by hand (the old body dropped `block_spacing`, `height`, `reward`,
+    /// `cause` and `txpool_retired`).
+    #[test]
+    fn mine_status_json_is_the_wire_s_reply() {
+        let served = serde_json::json!({
+            "active": true, "speed": {"count": 600, "window": 5}, "threads": 2,
+            "address": "4test", "block_spacing": 120, "height": 10, "reward": "5000000000",
+            "difficulty": "0x1e240", "cause": null, "txpool_retired": false,
+        });
+        let key =
+            |name: &str| -> &'static str { Box::leak(format!("json_rpc:{name}").into_boxed_str()) };
+        let (address, _log) = crate::console::route_server_recording(vec![
+            (
+                key(<wire::DaemonStatus as RpcMethod>::NAME),
+                shekyl_rpc_transport::json_rpc_result_body(&crate::console::daemon_status_reply()),
+            ),
+            (
+                key(<wire::MineStatus as RpcMethod>::NAME),
+                shekyl_rpc_transport::json_rpc_result_body(&served),
+            ),
+        ]);
+        let daemon = crate::daemon::DaemonClient::new(
+            &format!("http://{address}"),
+            None,
+            None,
+            Network::Mainnet,
+        )
+        .expect("the route server parses");
+        let reply = super::cmd_mine_status(Some(&daemon)).expect("mine_status");
+        assert_eq!(serde_json::to_value(&reply).expect("serializes"), served);
     }
 
     /// **F3: a connection without the `mining-control` grant is refused

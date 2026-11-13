@@ -401,7 +401,7 @@ const STATUS_PART_KEYS: &[&str] = &[
 
 /// [`daemon_status_value`] with the Status part withheld, as a caller
 /// without the `status` grant reads it.
-fn status_withheld(count: u64) -> serde_json::Value {
+pub(crate) fn status_withheld(count: u64) -> serde_json::Value {
     let mut value = daemon_status_value(count);
     let members = value.as_object_mut().unwrap();
     for key in STATUS_PART_KEYS {
@@ -462,7 +462,7 @@ fn a_retained_transaction_prints_from_its_whole_body() {
     let out = run(&["tx", "show", &hex::encode(txid), "--body"], Some(&addr))
         .unwrap_or_else(|error| error);
     assert!(
-        out.contains("Found in blockchain at height 3"),
+        out.contains("Found in blockchain at block 3"),
         "expected the confirmed line, got: {out}"
     );
     use base64::Engine as _;
@@ -652,7 +652,7 @@ fn the_block_header_renders_line_for_line() {
              previous hash: {zero}\n\
              nonce: 10101\n\
              is orphan: 0\n\
-             height: 0\n\
+             block number: 0\n\
              depth: 0\n\
              hash: {seven}\n\
              difficulty: 1\n\
@@ -689,7 +689,7 @@ fn block_show_asks_for_the_block_with_its_pow() {
     });
     let (addr, log) = route_server_recording(vec![(rpc::<wire::BlockShow>(), rpc_result(block))]);
     let out = run(&["block", "show", "5"], Some(&addr)).expect("renders");
-    assert!(out.contains("height: 5"), "{out}");
+    assert!(out.contains("block number: 5"), "{out}");
     assert!(
         out.contains(&format!("POW hash: {}", "08".repeat(32))),
         "{out}"
@@ -1005,7 +1005,7 @@ fn sync_status_prints_counts_and_sessions() {
     let address = route_server(vec![(rpc::<wire::SyncStatus>(), rpc_result(&sync))]);
     let out = run(&["sync", "status"], Some(&address)).expect("renders");
     assert!(
-        out.starts_with("Height: 50, target: 100 (50%), behind"),
+        out.starts_with("Block count: 50, target: 100 (50%), behind"),
         "{out}"
     );
     assert!(out.contains("1 peers"), "{out}");
@@ -1046,14 +1046,20 @@ fn blockchain_info_lists_the_window_it_was_given() {
         Some(&address),
     )
     .expect("renders");
-    assert!(out.contains("height: 2, timestamp: 1600000002"), "{out}");
-    assert!(out.contains("height: 3, timestamp: 1600000003"), "{out}");
+    assert!(
+        out.contains("block number: 2, timestamp: 1600000002"),
+        "{out}"
+    );
+    assert!(
+        out.contains("block number: 3, timestamp: 1600000003"),
+        "{out}"
+    );
     assert!(out.contains("major version: 1, minor version: 0"), "{out}");
     assert!(
         out.contains("difficulty: 1000, nonce 42, reward 600.000000000"),
         "{out}"
     );
-    assert!(out.contains("\n\nheight: 3"), "{out}");
+    assert!(out.contains("\n\nblock number: 3"), "{out}");
     let params = params_of::<wire::BlockHeaderList>(&log);
     assert_eq!(params["from"], 2, "{params}");
     assert_eq!(params["to"], 3, "{params}");
@@ -1078,7 +1084,7 @@ fn a_missing_header_slot_is_named() {
         Some(&address),
     )
     .expect_err("refused");
-    assert!(out.contains("no header at height 3"), "{out}");
+    assert!(out.contains("no header at block 3"), "{out}");
 }
 
 /// `--from` is a height. A sign is refused before any request.
@@ -1160,7 +1166,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
         ),
     ]);
     let out = run(&["chain", "stats", "--last", "3"], Some(&address)).expect_err("refused");
-    assert!(out.contains("starting at height 100"), "{out}");
+    assert!(out.contains("starting at block 100"), "{out}");
     assert!(!out.contains("Last 3:"), "{out}");
 }
 
@@ -1186,7 +1192,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
     // Difficulty 0x1e240 is 123456, the cumulative 0x2dc6c0 is 3000000, the
     // count is 10, and the fee is the lowest tier.
     assert!(
-        out.contains("Height: 10, diff 123456, cum. diff 3000000, target 120 sec"),
+        out.contains("Block count: 10, diff 123456, cum. diff 3000000, target 120 sec"),
         "{out}"
     );
     assert!(out.contains("dyn fee 0.000000020/byte"), "{out}");
@@ -1247,8 +1253,8 @@ fn alt_chain_info_lists_and_filters() {
     let out = run(&["chain", "alt"], Some(&address)).expect("renders");
     assert!(out.starts_with("2 alternate chains found:"), "{out}");
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines[1].contains("1 blocks long, from height 50"), "{out}");
-    assert!(lines[2].contains("2 blocks long, from height 89"), "{out}");
+    assert!(lines[1].contains("1 blocks long, from block 50"), "{out}");
+    assert!(lines[2].contains("2 blocks long, from block 89"), "{out}");
     // 100 - 89 - 1 = 10 deep; 100 - 50 - 1 = 49.
     assert!(lines[1].contains("(49 deep)"), "{out}");
     assert!(lines[2].contains("(10 deep)"), "{out}");
@@ -1354,7 +1360,10 @@ fn the_status_line_names_the_network_version_reported() {
         ),
     ]);
     let out = run_on(Testnet, &["daemon", "status"], Some(&address)).expect("renders");
-    assert!(out.contains("Height: 100/100 (100.0%) on testnet"), "{out}");
+    assert!(
+        out.contains("Block count: 100/100 (100.0%) on testnet"),
+        "{out}"
+    );
     let asked = log.lock().unwrap();
     let version_requests = asked
         .iter()
@@ -1374,7 +1383,10 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
         ),
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
-    assert!(out.contains("Height: 100/100 (100.0%) on mainnet"), "{out}");
+    assert!(
+        out.contains("Block count: 100/100 (100.0%) on mainnet"),
+        "{out}"
+    );
     assert!(out.contains("mining at 2.50 kH/s"), "{out}");
     // net hash = difficulty 123456 / target 120, integer-divided to
     // 1028 H/s, which reads as 1.03 kH/s.
@@ -1471,7 +1483,7 @@ fn a_daemon_without_mine_status_still_reports_its_status() {
     let address = route_server(vec![(rpc::<wire::DaemonStatus>(), status_reply(100))]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("mining info unavailable"), "{out}");
-    assert!(out.contains("Height: 100/100"), "{out}");
+    assert!(out.contains("Block count: 100/100"), "{out}");
 }
 
 /// The view listener refuses `mine_status` (`mining-control`) with the grant
@@ -1492,7 +1504,7 @@ fn a_view_listener_refuses_mine_status_and_status_still_prints() {
     ]);
     let out = run(&["daemon", "status"], Some(&address)).expect("renders");
     assert!(out.contains("mining info unavailable"), "{out}");
-    assert!(out.contains("Height: 100/100"), "{out}");
+    assert!(out.contains("Block count: 100/100"), "{out}");
 }
 
 /// A node that posts no job because it is not synced is neither mining nor

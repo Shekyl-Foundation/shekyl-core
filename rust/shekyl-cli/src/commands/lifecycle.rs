@@ -136,11 +136,11 @@ pub fn cmd_restore(
     let mnemonic = Zeroizing::new(seed_words.join(" "));
     let password = read_password("New wallet password: ")?;
 
-    eprint!("Restore height (block height the wallet existed at; 0 = scan from genesis): ");
+    eprint!("Restore from block (the first block to scan; 0 = scan from the genesis block): ");
     drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
-        return failed("Failed to read restore height.");
+        return failed("Failed to read the block to restore from.");
     }
     let height_input = height_input.trim();
     let restore_height: u64 = if height_input.is_empty() {
@@ -149,7 +149,7 @@ pub fn cmd_restore(
         match height_input.parse() {
             Ok(h) => h,
             Err(_) => {
-                return failed("Invalid restore height: expected a block height number.");
+                return failed("Invalid block to restore from: expected a block number.");
             }
         }
     };
@@ -190,9 +190,16 @@ fn scan_counter(val: &Value, field: &str) -> i64 {
 fn print_scan_result(headline: &str, val: &Value) {
     let blocks = scan_counter(val, "blocks_processed");
     let detected = scan_counter(val, "transfers_detected");
-    let height = scan_counter(val, "synced_height");
     println!("{headline}: {blocks} blocks processed, {detected} transfers detected.");
-    println!("Wallet height: {height}");
+    // `synced_height` is the contract's count; the line names the block it
+    // reaches.
+    match val.get("synced_height").and_then(Value::as_u64) {
+        Some(count) => println!(
+            "Synced to block: {}",
+            crate::display::block_of_count_text(count, "nothing scanned yet")
+        ),
+        None => println!("Synced to block: ?"),
+    }
 }
 
 pub fn cmd_refresh(rpc: &RpcSession, presentation: &Presentation) -> CommandResult {
@@ -207,7 +214,7 @@ pub fn cmd_refresh(rpc: &RpcSession, presentation: &Presentation) -> CommandResu
 pub(crate) fn show_refresh(val: &Value) {
     print_scan_result("Refreshed", val);
     if let Some(fork) = val.get("reorg_fork_height").and_then(Value::as_i64) {
-        println!("Note: a chain reorg was detected and rewound (fork height {fork}).");
+        println!("Note: a chain reorg was detected and rewound (fork at block {fork}).");
     }
 }
 
@@ -259,7 +266,7 @@ pub fn cmd_rescan(rpc: &RpcSession, presentation: &Presentation, hard: bool) -> 
                 }
                 RpcError::Transport(_) => {
                     "The connection dropped, so it is unclear how far the rescan got. Run \
-                     \"status\" to see the wallet height, and \"wallet rescan\" again if the \
+                     \"status\" to see the block the wallet reached, and \"wallet rescan\" again if the \
                      history is incomplete."
                 }
             };
@@ -273,7 +280,7 @@ pub(crate) fn show_rescan(val: &Value) {
     print_scan_result("Rescan complete", val);
 }
 
-/// `status` — wallet and daemon sync heights. `daemon_down_hint` is the F1
+/// `status` — the blocks the wallet and the daemon have reached. `daemon_down_hint` is the F1
 /// recovery copy (CLI_USABILITY.md §CU-5): the wallet RPC reports an
 /// unreachable daemon as `daemon_height: null`, and this surface owes the
 /// same "start shekyld" line as the paths that dial the daemon directly.
@@ -299,34 +306,50 @@ fn attach_daemon_down_hint(val: &mut Value, daemon_down_hint: Option<&str>) {
 }
 
 pub(crate) fn show_status(val: &Value) {
+    for line in status_lines(val) {
+        println!("{line}");
+    }
+}
+
+/// The status lines. `wallet_height` and `daemon_height` are the contract's
+/// counts; each line names the block its count reaches, so a synced wallet
+/// shows its daemon's block (`HEIGHT_SEMANTICS.md` §1). The sync verdict
+/// compares the counts.
+fn status_lines(val: &Value) -> Vec<String> {
     let wallet = val
         .get("wallet_height")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    println!("Wallet height: {wallet}");
+    let block = |count: i64, none: &str| {
+        crate::display::block_of_count_text(u64::try_from(count).unwrap_or(0), none)
+    };
+    let mut lines = vec![format!(
+        "Synced to block: {}",
+        block(wallet, "nothing scanned yet")
+    )];
     // daemon_height is null when the daemon is unreachable; still show
-    // the wallet height rather than reporting a total failure.
+    // the wallet's block rather than reporting a total failure.
     match val.get("daemon_height").and_then(Value::as_i64) {
         Some(daemon) => {
-            println!("Daemon height: {daemon}");
-            match crate::status::classify(true, Some(daemon), wallet) {
+            lines.push(format!("Daemon block:    {}", block(daemon, "nothing yet")));
+            lines.push(match crate::status::classify(true, Some(daemon), wallet) {
                 crate::status::SyncView::Behind(n) => {
-                    println!("Behind by {} — run \"refresh\".", crate::status::blocks(n))
+                    format!("Behind by {} — run \"refresh\".", crate::status::blocks(n))
                 }
-                _ => println!("Synced."),
-            }
+                _ => "Synced.".to_owned(),
+            });
         }
         None => {
-            println!("Daemon height: unavailable (daemon unreachable).");
-            match val.get("daemon_down_hint").and_then(|v| v.as_str()) {
-                Some(hint) => println!("{hint} Then run \"refresh\"."),
-                None => println!(
-                    "Showing wallet height only — start/sync your node, then \
-                     \"refresh\"."
-                ),
-            }
+            lines.push("Daemon block:    unavailable (daemon unreachable).".to_owned());
+            lines.push(match val.get("daemon_down_hint").and_then(|v| v.as_str()) {
+                Some(hint) => format!("{hint} Then run \"refresh\"."),
+                None => "Showing the wallet's block only — start/sync your node, then \
+                         \"refresh\"."
+                    .to_owned(),
+            });
         }
     }
+    lines
 }
 
 pub fn cmd_password(rpc: &RpcSession, presentation: &Presentation) -> CommandResult {
@@ -364,6 +387,26 @@ pub(crate) fn show_password(_val: &Value) {
 
 #[cfg(test)]
 mod tests {
+    /// A synced wallet's block equals its daemon's; an unscanned wallet
+    /// names no block. Red edit: print the counts as they arrive (the
+    /// "Wallet height: 100" this replaced).
+    #[test]
+    fn a_synced_wallet_s_block_is_its_daemon_s_and_an_unscanned_one_names_none() {
+        let synced = super::status_lines(&serde_json::json!({
+            "wallet_height": 1557, "daemon_height": 1557,
+        }));
+        assert_eq!(
+            synced,
+            ["Synced to block: 1556", "Daemon block:    1556", "Synced."]
+        );
+        let unscanned = super::status_lines(&serde_json::json!({
+            "wallet_height": 0, "daemon_height": 3,
+        }));
+        assert_eq!(unscanned[0], "Synced to block: nothing scanned yet");
+        assert_eq!(unscanned[1], "Daemon block:    2");
+        assert_eq!(unscanned[2], "Behind by 3 blocks — run \"refresh\".");
+    }
+
     use super::*;
 
     #[test]
