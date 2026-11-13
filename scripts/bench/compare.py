@@ -260,6 +260,24 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     unrouted: list[str] = []
     missing_in_pr: list[str] = []
     added_in_pr: list[str] = []
+    # A scoped capture ran only the rows a change can reach
+    # (`captured_rows` in the PR envelope: `all`, or a list of
+    # `<crate>::<gungraun-target>`). A baseline entry of a row it did not
+    # run is out of scope: counted here, not gated, and never "missing".
+    # An entry of a row it DID run that is absent is still missing, and
+    # still fails: that is a deleted bench.
+    out_of_scope: list[str] = []
+    captured = pr.get("captured_rows", "all")
+    if captured != "all" and not (
+        isinstance(captured, list) and all(isinstance(row, str) for row in captured)
+    ):
+        raise SystemExit(
+            f"[compare] the PR envelope's captured_rows is neither 'all' nor a "
+            f"list of row names: {captured!r}"
+        )
+
+    def in_scope(entry: dict[str, Any]) -> bool:
+        return captured == "all" or f"{entry['crate']}::{entry['bench_target']}" in captured
     # `baseline_zero` carries `{full_id, class, pr}` (not just full_id)
     # so the renderer can surface the PR-side measurement alongside
     # the anomaly notice. The other buckets above are
@@ -280,7 +298,10 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
             added_in_pr.append(full_id)
             continue
         if p is None:
-            missing_in_pr.append(full_id)
+            if in_scope(b):
+                missing_in_pr.append(full_id)
+            else:
+                out_of_scope.append(full_id)
             continue
 
         func = b["function"]
@@ -382,6 +403,8 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         "unrouted": unrouted,
         "missing_in_pr": missing_in_pr,
         "added_in_pr": added_in_pr,
+        "out_of_scope": out_of_scope,
+        "captured_rows": captured,
         "baseline_zero": baseline_zero,
         "moved": moved,
     }
@@ -467,6 +490,7 @@ def main() -> int:
             else ""
         )
         + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else "")
+        + (f", {len(s['out_of_scope'])} out of this capture's scope" if s["out_of_scope"] else "")
         + (
             f", {len(s['baseline_zero'])} baseline-zero anomaly"
             if s["baseline_zero"]
