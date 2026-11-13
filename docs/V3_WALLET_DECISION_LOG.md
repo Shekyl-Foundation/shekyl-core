@@ -7025,3 +7025,31 @@ claims it; a site list makes each one a reviewed decision with its seed
 source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
+
+## 2026-11-13 — Chain forge: the harness identity ends in CF-5, and the harness seed is public and regtest-only
+
+**Decision** (Rick, on `CF-1a`; `CHAIN_FORGE.md` §1, `CF-R15`).
+
+- `CF-1a` adds a regtest mode alongside the existing harness id; the
+  design's regtest-identity section governs. Two identities side by side
+  are fine for now.
+- The old harness id is marked test-only and due for deletion in `CF-5`,
+  and listed as a follow-up, so a later revival fails review instead of
+  passing quietly. Where the test-only feature gate can check it, it does.
+- Lock 4 (the wire) may be cited rather than tested only if the citation
+  names, by path and function, an existing test of the network's
+  transport prefix; with none, `CF-1a` writes one with the positive-control
+  pattern of locks 1–3.
+- The harness seed is public and regtest-only: the regtest miner's
+  coinbases can be spent by anyone who restores it, which is intended.
+  Its addresses are refused on mainnet and testnet because their prefixes
+  do not match, and a test holds that refusal.
+- The emission claim's network id and proof reference travel as one
+  argument (`ClaimAnchor`): grouping them fixes the design, where an
+  `#[allow]` would have hidden the lint.
+
+**Why.** An identity kept for convenience is the one that quietly comes
+back; a dated deletion with a gate behind it does not. A public seed is
+safe only while what it can spend is worthless, which regtest's prefixes
+make true and a test keeps true.
+
