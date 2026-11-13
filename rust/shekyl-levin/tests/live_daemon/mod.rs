@@ -22,7 +22,7 @@ use shekyl_levin::{
     COMMAND_HANDSHAKE,
 };
 
-#[path = "../owner_socket_dir.rs"]
+#[path = "../support/owner_socket_dir.rs"]
 mod owner_socket_dir;
 
 pub struct Daemon {

@@ -33,7 +33,7 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-#[path = "owner_socket_dir.rs"]
+#[path = "support/owner_socket_dir.rs"]
 mod owner_socket_dir;
 
 /// Regtest (`--network regtest`) derives its id from its own genesis pin.
