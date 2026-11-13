@@ -10,7 +10,9 @@
 //! decomposition ratchet asks.
 
 use super::super::diagnostics::{emit_pending_tx_diagnostic, PendingTxDiagnostic};
-use super::super::dispatch_durability::{commit_dispatch, DurableTxBytes, LedgerCommit};
+use super::super::dispatch_durability::{
+    commit_dispatch, DispatchRecord, DurableTxBytes, LedgerCommit,
+};
 use super::super::error::SubmitError;
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
@@ -86,37 +88,30 @@ where
             recipients,
         } = dispatch;
         let saved = self.ledger.with_wallet_ledger_mut(|wallet| {
+            // The input set is resolved here, under the write guard the
+            // save holds, so the row records the transfers the lock names.
+            let inputs = selected
+                .iter()
+                .map(|&idx| {
+                    let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
+                        panic!("dispatch: output_locks references missing transfer index {idx}")
+                    });
+                    shekyl_engine_state::SendInputRef {
+                        gindex: td.global_output_index.to_raw(),
+                        amount: td.amount().to_raw(),
+                    }
+                })
+                .collect();
             commit_dispatch(
                 wallet,
                 commit,
-                dispatch_txid.to_bytes(),
-                tx_bytes.clone(),
-                |wallet| {
-                    wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
-                    // PR-SJ-1: the journal row is born in the same guard as
-                    // the retention record. C2: the journal owns these
-                    // facts; the F14 lock set is derived from them.
-                    let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
-                        .iter()
-                        .map(|&idx| {
-                            let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
-                                panic!(
-                                    "dispatch: output_locks references missing transfer index {idx}"
-                                )
-                            });
-                            shekyl_engine_state::SendInputRef {
-                                gindex: td.global_output_index.to_raw(),
-                                amount: td.amount().to_raw(),
-                            }
-                        })
-                        .collect();
-                    wallet.record_dispatched_send(
-                        dispatch_txid.to_bytes(),
-                        realized_fee,
-                        recipients,
-                        inputs,
-                        tx_bytes,
-                    );
+                DispatchRecord {
+                    txid: dispatch_txid.to_bytes(),
+                    retained,
+                    fee: realized_fee,
+                    recipients,
+                    inputs,
+                    tx_bytes,
                 },
             )
         });

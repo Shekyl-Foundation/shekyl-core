@@ -14,6 +14,8 @@
 //! the verdict save writes the whole `WalletLedger`, which only the local
 //! ledger hands out.
 
+use shekyl_engine_file::Durability;
+
 use super::dispatch_durability::{EngineLedgerCommit, LedgerCommit};
 use super::error::SubmitError;
 use super::pending::{ReservationId, SubmitOutcome};
@@ -112,7 +114,14 @@ impl<
         let saved = if definite {
             let guard = self.ledger.read();
             match commit.commit(&guard.ledger) {
-                Ok(()) => true,
+                Ok(Durability::Confirmed) => true,
+                Ok(Durability::Unconfirmed) => {
+                    tracing::warn!(
+                        "submit: the send left and stands, but saving its verdict was not \
+                         confirmed; the next save writes it"
+                    );
+                    false
+                }
                 Err(error) => {
                     tracing::error!(
                         %error,

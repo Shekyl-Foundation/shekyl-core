@@ -2006,6 +2006,16 @@ impl From<PersistenceError> for WalletRpcError {
         match err {
             PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
             PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
+            // A dispatch whose rename landed but whose parent-directory
+            // fsync did not confirm. Nothing was sent. The submit path
+            // reports this as `DispatchNotSaved`; this arm is the same
+            // answer if the error reaches the boundary on its own.
+            PersistenceError::DurabilityUnconfirmed => {
+                tracing::error!(
+                    "a wallet write was applied but its crash-durability was not confirmed"
+                );
+                WalletRpcError::SendNotSaved
+            }
         }
     }
 }

@@ -28,7 +28,10 @@ use super::diagnostics::WatchdogAlarmReason;
 use super::dispatch_durability::EngineLedgerCommit;
 use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
 use super::pending::SubmitOutcome;
-use super::submit_lifecycle::{apply_resend_verdict, WatchdogHost};
+use super::submit::SubmitReceipt;
+use super::submit_lifecycle::{
+    held_send_attention, HeldSendAttention, ReportedVerdict, WatchdogHost,
+};
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
@@ -137,21 +140,24 @@ impl<
     pub fn list(&self) -> Vec<HeldSend> {
         let host: &dyn WatchdogHost = &self.engine.pending;
         let mut sends: Vec<HeldSend> = host
-            .held_submits()
+            .held_send_facts()
             .into_iter()
-            .filter_map(|held| {
-                let tx_hash = held.tx_hash;
-                let alarm = if host.held_bytes_for(&tx_hash).is_none() {
-                    WatchdogAlarmReason::HeldBytesMissing
-                } else if !host.dispatched_this_session(&tx_hash) {
-                    WatchdogAlarmReason::DispatchedBeforeThisSession
-                } else {
-                    host.alarm_for(&tx_hash)?
+            .filter_map(|fact| {
+                let alarm = match held_send_attention(
+                    fact.has_bytes,
+                    fact.dispatched_this_session,
+                    fact.latched,
+                ) {
+                    HeldSendAttention::Ask(reason)
+                    | HeldSendAttention::Automatic {
+                        latched: Some(reason),
+                    } => reason,
+                    HeldSendAttention::Automatic { latched: None } => return None,
                 };
                 Some(HeldSend {
-                    tx_hash,
+                    tx_hash: fact.tx_hash,
                     alarm,
-                    sent_height: host.sent_height(&tx_hash)?,
+                    sent_height: fact.sent_height,
                 })
             })
             .collect();
@@ -166,14 +172,15 @@ impl<
     /// privacy-neutral (same txid; the daemon dedups) and doubles as the
     /// status query (§2.5). It goes to the wallet's own daemon. From here
     /// this session owns the send: the watchdog's automatic rung 1 applies
-    /// to it again, and its alarm clears. The verdict is applied the way
-    /// the watchdog applies its probe's
-    /// ([`apply_resend_verdict`]): a terminal refusal releases the inputs.
+    /// to it again, and its alarm clears. The verdict is recorded by the
+    /// submit driver, the same writer that records a probe: the sight
+    /// lands in the driver's overlay, and a terminal refusal releases the
+    /// inputs. [`SubmitReceipt::verdict_saved`] is that release's save.
     ///
     /// # Errors
     ///
     /// [`ResendError`]: not held, no saved bytes, a refusal, or no verdict.
-    pub async fn resend(&self, tx_hash: TxHash) -> Result<SubmitOutcome, ResendError> {
+    pub async fn resend(&self, tx_hash: TxHash) -> Result<SubmitReceipt, ResendError> {
         let engine = self.engine;
         let host: &dyn WatchdogHost = &engine.pending;
         let held = host
@@ -198,16 +205,35 @@ impl<
                 }
             })?;
         let commit = EngineLedgerCommit::new(&engine.persistence, engine.state_wrap_key());
-        let released = apply_resend_verdict(host, &commit, &held, outcome.clone());
+        let recorded = engine.submit_driver.lock().await.apply_reported_verdict(
+            host,
+            &commit,
+            held,
+            outcome.clone(),
+        );
+        // A continuation records an in-memory sight; there is no ledger
+        // write to fail. A release reports whether the inputs are
+        // confirmed free.
+        let verdict_saved = match recorded {
+            ReportedVerdict::Continued | ReportedVerdict::ReferenceStale => true,
+            ReportedVerdict::Released(persistence) => persistence.inputs_confirmed_free(),
+        };
         match outcome_to_result(outcome) {
-            Ok(SubmitSuccess::Broadcast { kind, .. }) => Ok(kind.into_outcome(tx_hash)),
-            Ok(SubmitSuccess::AlreadyInChain { height, .. }) => Ok(SubmitOutcome::AlreadyInChain {
-                hash: tx_hash,
-                height,
+            Ok(SubmitSuccess::Broadcast { kind, .. }) => Ok(SubmitReceipt {
+                outcome: kind.into_outcome(tx_hash),
+                verdict_saved,
             }),
-            Err(SubmitterError::RejectedTerminal { kind }) => {
-                Err(ResendError::RejectedTerminal { kind, released })
-            }
+            Ok(SubmitSuccess::AlreadyInChain { height, .. }) => Ok(SubmitReceipt {
+                outcome: SubmitOutcome::AlreadyInChain {
+                    hash: tx_hash,
+                    height,
+                },
+                verdict_saved,
+            }),
+            Err(SubmitterError::RejectedTerminal { kind }) => Err(ResendError::RejectedTerminal {
+                kind,
+                released: verdict_saved,
+            }),
             Err(SubmitterError::RejectedRetryable { cause }) => {
                 Err(ResendError::RejectedRetryable { cause })
             }

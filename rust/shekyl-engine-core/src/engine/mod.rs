@@ -734,7 +734,8 @@ pub struct Engine<
     /// entry point itself takes `&self`. The guard is the *driver's*
     /// lock, independent of the ledger `RwLock`, so a tick never blocks
     /// the merge write-lock.
-    submit_driver: tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
+    pub(in crate::engine) submit_driver:
+        tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on

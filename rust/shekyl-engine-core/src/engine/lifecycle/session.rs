@@ -92,7 +92,8 @@ impl<
             self.persistence
                 .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        .map_err(|e| OpenError::Persistence(e.into()))
+        .map(|_| ())?;
         drop(ledger_guard);
         drive_persistence(
             self.persistence
@@ -131,7 +132,8 @@ impl<
             self.persistence
                 .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        .map_err(|e| OpenError::Persistence(e.into()))
+        .map(|_| ())?;
         drop(ledger_guard);
         drive_persistence(
             self.persistence

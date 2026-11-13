@@ -24,10 +24,13 @@
 //! takes a [`DurableTxBytes`], and a [`DurableTxBytes`] has two mints,
 //! each of which witnesses a durable record of the bytes:
 //!
-//! - [`commit_dispatch`] — a plain send: the journal row (bytes included)
-//!   and the retained secret are written and the whole ledger saved
-//!   (`save_state` → `atomic_write_file`) under one write guard; a failed
-//!   save undoes the record under the same guard and mints nothing.
+//! - [`commit_dispatch`] — a plain send: this function writes the journal
+//!   row (bytes included) and the retained secret, then saves the whole
+//!   ledger (`save_state` → `atomic_write_file`) under one write guard.
+//!   The minted bytes are the bytes the row stored. Only
+//!   [`Durability::Confirmed`] mints. A save that fails before the rename
+//!   undoes the record under the same guard. A rename whose parent-directory
+//!   fsync did not confirm leaves the applied record and mints nothing.
 //! - [`DurableTxBytes::from_sealed`] — a claim, drain, release or bond
 //!   post: `submit_bound` receives [`PBoundBytes`] only from a record sealed
 //!   in its pending store before the call (`claim_dispatch.rs`,
@@ -38,7 +41,8 @@
 //! straight to the daemon, not through a submitter: each is a status query
 //! over bytes whose record is already on disk.
 
-use shekyl_engine_state::WalletLedger;
+use shekyl_engine_file::Durability;
+use shekyl_engine_state::{SendInputRef, SendRecipient, TxSecretKey, WalletLedger};
 
 use super::bond_assembly::PBoundBytes;
 use super::error::PersistenceError;
@@ -91,9 +95,13 @@ impl DurableTxBytes {
 /// from the engine's own persistence and key. A test implementor is the
 /// honest form only where a test names it as a seam.
 pub(crate) trait LedgerCommit: Sync {
-    /// Durably write `ledger` (`save_state`: tmp → fsync → rename →
-    /// fsync parent). On `Err` nothing new is on disk.
-    fn commit(&self, ledger: &WalletLedger) -> Result<(), PersistenceError>;
+    /// Write `ledger` (`save_state`: tmp → fsync → rename → fsync parent).
+    ///
+    /// `Err` means the rename did not land: nothing new is on disk.
+    /// [`Durability::Unconfirmed`] means the rename landed and the parent
+    /// fsync missed: the write is applied, and the caller must not undo it.
+    /// Only [`Durability::Confirmed`] authorizes a broadcast.
+    fn commit(&self, ledger: &WalletLedger) -> Result<Durability, PersistenceError>;
 }
 
 /// A test seam that saves nothing and always succeeds — for unit tests
@@ -106,8 +114,8 @@ pub(crate) struct NoSaveCommit;
 
 #[cfg(test)]
 impl LedgerCommit for NoSaveCommit {
-    fn commit(&self, _ledger: &WalletLedger) -> Result<(), PersistenceError> {
-        Ok(())
+    fn commit(&self, _ledger: &WalletLedger) -> Result<Durability, PersistenceError> {
+        Ok(Durability::Confirmed)
     }
 }
 
@@ -128,37 +136,69 @@ impl<'a, F: PersistenceEngine> EngineLedgerCommit<'a, F> {
 }
 
 impl<F: PersistenceEngine> LedgerCommit for EngineLedgerCommit<'_, F> {
-    fn commit(&self, ledger: &WalletLedger) -> Result<(), PersistenceError> {
+    fn commit(&self, ledger: &WalletLedger) -> Result<Durability, PersistenceError> {
         drive_persistence(self.persistence.save_state(self.state_key, ledger)).map_err(Into::into)
     }
 }
 
-/// Record a plain send's dispatch facts and save them, minting the
-/// [`DurableTxBytes`] the hand-off requires only once the save succeeded.
+/// The dispatch facts [`commit_dispatch`] writes, and the bytes it may mint.
 ///
-/// Runs under the caller's ledger write guard (`wallet`). `record` writes
-/// the journal row (with `tx_bytes`) and the retained secret; the whole
-/// ledger is then saved under the same guard, so no refresh merge or
+/// One value, so the row and the hand-off cannot carry different bytes.
+pub(crate) struct DispatchRecord {
+    /// Canonical transaction id.
+    pub txid: [u8; 32],
+    /// Retained per-transaction secret (the OUTBOUND proof).
+    pub retained: TxSecretKey,
+    /// Realized fee of the built transaction, in atomic units.
+    pub fee: u64,
+    /// Realized recipients, in transaction order.
+    pub recipients: Vec<SendRecipient>,
+    /// Dispatched input set the F14 lock re-derives from.
+    pub inputs: Vec<SendInputRef>,
+    /// Signed transaction bytes about to leave.
+    pub tx_bytes: Vec<u8>,
+}
+
+/// Record a plain send and save it, minting [`DurableTxBytes`] only when
+/// that save is [`Durability::Confirmed`].
+///
+/// Runs under the caller's ledger write guard (`wallet`). This function
+/// writes the journal row (with `tx_bytes`) and the retained secret, then
+/// saves the whole ledger under the same guard, so no refresh merge or
 /// watchdog edge can interleave between the record and the save (the
-/// `abandon_tx` crash-ordering contract). If the save fails, the record is
-/// undone under the same guard ([`WalletLedger::undo_unsaved_dispatch`])
-/// and nothing is minted: the bytes cannot be sent, and no later save can
-/// write a send the user was told did not go.
+/// `abandon_tx` crash-ordering contract). The minted bytes are read back
+/// from the row just saved.
+///
+/// A save that fails before the rename undoes the record under the same
+/// guard ([`WalletLedger::undo_unsaved_dispatch`]). A rename whose
+/// parent-directory fsync did not confirm leaves the applied record: the
+/// write is already on disk, and undoing it in memory would diverge from
+/// that disk. Either outcome mints nothing, so the bytes cannot leave.
 pub(crate) fn commit_dispatch<C: LedgerCommit + ?Sized>(
     wallet: &mut WalletLedger,
     commit: &C,
-    txid: [u8; 32],
-    tx_bytes: Vec<u8>,
-    record: impl FnOnce(&mut WalletLedger),
+    record: DispatchRecord,
 ) -> Result<DurableTxBytes, PersistenceError> {
-    record(wallet);
-    debug_assert_eq!(
-        wallet.send_journal.tx_bytes(&txid),
-        Some(tx_bytes.as_slice()),
-        "commit_dispatch: the record must hold the bytes it is about to authorize"
-    );
+    let DispatchRecord {
+        txid,
+        retained,
+        fee,
+        recipients,
+        inputs,
+        tx_bytes,
+    } = record;
+    wallet.record_retained_tx_key(txid, retained);
+    wallet.record_dispatched_send(txid, fee, recipients, inputs, tx_bytes);
     match commit.commit(wallet) {
-        Ok(()) => Ok(DurableTxBytes(tx_bytes)),
+        Ok(Durability::Confirmed) => {
+            let bytes = wallet
+                .send_journal
+                .tx_bytes(&txid)
+                .expect("commit_dispatch stored the bytes it authorizes")
+                .to_vec();
+            Ok(DurableTxBytes(bytes))
+        }
+        Ok(Durability::Unconfirmed) => Err(PersistenceError::DurabilityUnconfirmed),
         Err(error) => {
             wallet.undo_unsaved_dispatch(&txid);
             Err(error)
@@ -172,53 +212,55 @@ mod tests {
 
     use super::*;
 
-    /// A commit that fails or succeeds on demand and counts its calls —
-    /// the seam for exercising the mint without a wallet file.
+    /// What one test commit reports.
+    enum CommitAnswer {
+        Confirmed,
+        Unconfirmed,
+        Fail,
+    }
+
+    /// A commit that answers on demand and counts its calls — the seam
+    /// for exercising the mint without a wallet file.
     struct CountingCommit {
-        fail: bool,
+        answer: CommitAnswer,
         calls: AtomicUsize,
     }
 
     impl LedgerCommit for CountingCommit {
-        fn commit(&self, _ledger: &WalletLedger) -> Result<(), PersistenceError> {
+        fn commit(&self, _ledger: &WalletLedger) -> Result<Durability, PersistenceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if self.fail {
-                Err(PersistenceError::WalletFile(
+            match self.answer {
+                CommitAnswer::Confirmed => Ok(Durability::Confirmed),
+                CommitAnswer::Unconfirmed => Ok(Durability::Unconfirmed),
+                CommitAnswer::Fail => Err(PersistenceError::WalletFile(
                     shekyl_engine_file::WalletFileError::Io(std::io::Error::other(
                         "test: save refused",
                     )),
-                ))
-            } else {
-                Ok(())
+                )),
             }
         }
     }
 
-    fn record_send(txid: [u8; 32], bytes: Vec<u8>) -> impl FnOnce(&mut WalletLedger) {
-        move |wallet: &mut WalletLedger| {
-            wallet.record_retained_tx_key(
-                txid,
-                shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new([7; 32])),
-            );
-            wallet.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), bytes);
+    fn dispatch_record(txid: [u8; 32], bytes: Vec<u8>) -> DispatchRecord {
+        DispatchRecord {
+            txid,
+            retained: TxSecretKey::new(zeroize::Zeroizing::new([7; 32])),
+            fee: 0,
+            recipients: Vec::new(),
+            inputs: Vec::new(),
+            tx_bytes: bytes,
         }
     }
 
     #[test]
-    fn a_saved_dispatch_mints_the_bytes_it_recorded() {
+    fn a_confirmed_save_mints_the_bytes_the_row_stored() {
         let mut wallet = WalletLedger::empty();
         let commit = CountingCommit {
-            fail: false,
+            answer: CommitAnswer::Confirmed,
             calls: AtomicUsize::new(0),
         };
-        let durable = commit_dispatch(
-            &mut wallet,
-            &commit,
-            [1; 32],
-            vec![9, 9],
-            record_send([1; 32], vec![9, 9]),
-        )
-        .expect("save succeeded");
+        let durable = commit_dispatch(&mut wallet, &commit, dispatch_record([1; 32], vec![9, 9]))
+            .expect("save confirmed");
         assert_eq!(durable.into_bytes(), vec![9, 9]);
         assert_eq!(commit.calls.load(Ordering::SeqCst), 1);
         assert_eq!(wallet.send_journal.tx_bytes(&[1; 32]), Some(&[9u8, 9][..]));
@@ -229,19 +271,30 @@ mod tests {
     fn a_failed_save_mints_nothing_and_undoes_the_record() {
         let mut wallet = WalletLedger::empty();
         let commit = CountingCommit {
-            fail: true,
+            answer: CommitAnswer::Fail,
             calls: AtomicUsize::new(0),
         };
-        let result = commit_dispatch(
-            &mut wallet,
-            &commit,
-            [2; 32],
-            vec![1],
-            record_send([2; 32], vec![1]),
-        );
+        let result = commit_dispatch(&mut wallet, &commit, dispatch_record([2; 32], vec![1]));
         assert!(result.is_err());
         assert!(!wallet.send_journal.rows.contains_key(&[2; 32]));
         assert!(!wallet.tx_meta.tx_keys.contains_key(&[2; 32]));
         assert!(!wallet.sync_state.pending_tx_hashes.contains(&[2; 32]));
+    }
+
+    #[test]
+    fn an_unconfirmed_save_mints_nothing_and_keeps_the_applied_record() {
+        let mut wallet = WalletLedger::empty();
+        let commit = CountingCommit {
+            answer: CommitAnswer::Unconfirmed,
+            calls: AtomicUsize::new(0),
+        };
+        let result = commit_dispatch(&mut wallet, &commit, dispatch_record([3; 32], vec![4, 5]));
+        assert!(matches!(
+            result,
+            Err(PersistenceError::DurabilityUnconfirmed)
+        ));
+        assert_eq!(wallet.send_journal.tx_bytes(&[3; 32]), Some(&[4u8, 5][..]));
+        assert!(wallet.tx_meta.tx_keys.contains_key(&[3; 32]));
+        assert!(wallet.sync_state.pending_tx_hashes.contains(&[3; 32]));
     }
 }

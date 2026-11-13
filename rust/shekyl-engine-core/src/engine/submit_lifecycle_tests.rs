@@ -212,18 +212,18 @@ impl WatchdogHost for StubHost {
         self.state.lock().unwrap().alarms.remove(tx_hash);
     }
 
-    fn alarm_for(&self, tx_hash: &TxHash) -> Option<WatchdogAlarmReason> {
-        self.state.lock().unwrap().alarms.get(tx_hash).copied()
-    }
-
-    fn sent_height(&self, tx_hash: &TxHash) -> Option<BlockHeight> {
-        self.state
-            .lock()
-            .unwrap()
-            .held
+    fn held_send_facts(&self) -> Vec<HeldSendFact> {
+        let s = self.state.lock().unwrap();
+        s.held
             .iter()
-            .find(|h| &h.tx_hash == tx_hash)
-            .map(|h| BlockHeight::from_raw(h.baseline_height))
+            .map(|held| HeldSendFact {
+                tx_hash: held.tx_hash,
+                sent_height: BlockHeight::from_raw(held.baseline_height),
+                has_bytes: s.held_bytes.contains_key(&held.tx_hash),
+                dispatched_this_session: !s.earlier.contains(&held.tx_hash),
+                latched: s.alarms.get(&held.tx_hash).copied(),
+            })
+            .collect()
     }
 
     fn adopt_into_session(&self, tx_hash: TxHash) {
@@ -240,15 +240,19 @@ impl WatchdogHost for StubHost {
         &self,
         tx_hashes: &HashSet<TxHash>,
         _commit: &dyn LedgerCommit,
-    ) -> usize {
+    ) -> ReleasePersistence {
         let mut s = self.state.lock().unwrap();
         let before = s.held.len();
         s.held.retain(|h| !tx_hashes.contains(&h.tx_hash));
-        let released = before - s.held.len();
+        let removed = before - s.held.len();
         for tx in tx_hashes {
             s.released.insert(*tx);
         }
-        released
+        if removed == 0 {
+            ReleasePersistence::Unchanged
+        } else {
+            ReleasePersistence::Confirmed
+        }
     }
 
     fn emit(&self, event: PendingTxDiagnostic) {
@@ -611,8 +615,11 @@ async fn a_send_from_an_earlier_session_alarms_instead_of_resending() {
         vec![WatchdogAlarmReason::DispatchedBeforeThisSession]
     );
     assert_eq!(
-        host.alarm_for(&tx),
-        Some(WatchdogAlarmReason::DispatchedBeforeThisSession),
+        host.held_send_facts()
+            .iter()
+            .find(|fact| fact.tx_hash == tx)
+            .map(|fact| fact.latched),
+        Some(Some(WatchdogAlarmReason::DispatchedBeforeThisSession)),
         "the alarm is latched where the held-sends read sees it"
     );
     assert!(host.is_held(&tx), "the lock is retained");
@@ -644,9 +651,88 @@ async fn a_resend_returns_the_send_to_the_automatic_rung() {
     assert_eq!(daemon.submit_calls(), 0);
 
     host.adopt_into_session(tx);
-    assert_eq!(host.alarm_for(&tx), None, "the resend clears the alarm");
+    assert_eq!(
+        host.held_send_facts()
+            .iter()
+            .find(|fact| fact.tx_hash == tx)
+            .map(|fact| fact.latched),
+        Some(None),
+        "the resend clears the alarm"
+    );
     d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 1, "rung 1 runs for an adopted send");
+}
+
+/// No saved bytes outranks "earlier session": the user cannot resend
+/// what the row does not hold, so the alarm names the missing bytes.
+#[tokio::test]
+async fn missing_bytes_outrank_an_earlier_session() {
+    let tx = txid(1);
+    let host = StubHost::new(1_000 + CEILING)
+        .with_held(held(1, 1_000))
+        .dispatched_earlier(tx);
+    let daemon = StubDaemon::new();
+    let mut d = driver();
+
+    d.tick(&host, &daemon, &NoSaveCommit).await;
+
+    assert_eq!(daemon.submit_calls(), 0);
+    assert_eq!(
+        alarm_reasons(&host.events()),
+        vec![WatchdogAlarmReason::HeldBytesMissing]
+    );
+}
+
+/// A resend that learns the bytes are published replaces a stale
+/// held-overdue sight. The next tick probes from the publication
+/// instead of raising the overdue alarm again.
+#[tokio::test]
+async fn a_reported_resend_replaces_the_overdue_sight() {
+    let tx = txid(1);
+    let host = StubHost::new(1_000 + CEILING)
+        .with_held(held(1, 1_000))
+        .with_bytes(tx, vec![0xAB; 8]);
+    let daemon = StubDaemon::new();
+    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
+        hash: tx,
+        relay: Publication::Overdue,
+    }));
+    let mut d = driver();
+    d.tick(&host, &daemon, &NoSaveCommit).await;
+    assert_eq!(
+        alarm_reasons(&host.events()),
+        vec![WatchdogAlarmReason::HeldOverdue]
+    );
+    assert_eq!(daemon.submit_calls(), 1);
+
+    host.adopt_into_session(tx);
+    let held = host
+        .held_submits()
+        .into_iter()
+        .find(|row| row.tx_hash == tx)
+        .expect("still held");
+    let recorded = d.apply_reported_verdict(
+        &host,
+        &NoSaveCommit,
+        held,
+        TxSubmitOutcome::AlreadyInPool {
+            hash: tx,
+            relay: Publication::Public,
+        },
+    );
+    assert!(matches!(recorded, ReportedVerdict::Continued));
+
+    d.tick(&host, &daemon, &NoSaveCommit).await;
+    assert_eq!(
+        daemon.submit_calls(),
+        2,
+        "the published sight is probed, not re-alarmed as overdue"
+    );
+    assert_eq!(
+        alarm_reasons(&host.events()),
+        vec![WatchdogAlarmReason::HeldOverdue],
+        "the cleared overdue alarm is not raised again"
+    );
 }
 
 /// A retryable probe rejection (stale reference) is a driver-level

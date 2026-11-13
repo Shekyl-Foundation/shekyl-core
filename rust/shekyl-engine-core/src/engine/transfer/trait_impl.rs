@@ -16,6 +16,8 @@ use shekyl_engine_state::LedgerBlock;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic, WatchdogAlarmReason,
 };
+use shekyl_engine_file::Durability;
+
 use super::super::dispatch_durability::LedgerCommit;
 use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
@@ -24,7 +26,7 @@ use super::super::output_selector::OutputSelector;
 use super::super::pending::{PendingTx, ReservationId, SubmitOutcome, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
-use super::super::submit_lifecycle::WatchdogHost;
+use super::super::submit_lifecycle::{HeldSendFact, ReleasePersistence, WatchdogHost};
 use super::super::submit_watchdog::{self, HeldSubmit};
 use super::super::traits::{LedgerEngine, PendingTxEngine};
 use super::super::transaction_submitter::TransactionSubmitter;
@@ -124,7 +126,7 @@ where
         &self,
         tx_hashes: &HashSet<TxHash>,
         commit: &dyn LedgerCommit,
-    ) -> usize {
+    ) -> ReleasePersistence {
         // The confirmed-absent verdict releases the F14 locks ONLY. It
         // deliberately does NOT touch the WI-RPC-3 retention record:
         // the release trigger — a terminal reject when the held bytes
@@ -141,9 +143,10 @@ where
         // death rule).
         //
         // A19: the release frees inputs a new send can select, so it is
-        // saved under the same guard before anything can act on it; a
-        // failed save restores the rows (fail closed: the locks stay, and
-        // the next probe asks again).
+        // saved under the same guard before anything can act on it. A
+        // save that fails before the rename restores the rows. A rename
+        // whose parent-directory fsync did not confirm leaves the applied
+        // rows: undoing them would diverge from disk.
         self.ledger.with_wallet_ledger_mut(|wallet| {
             let before: Vec<([u8; 32], shekyl_engine_state::SendState, Option<u64>)> = tx_hashes
                 .iter()
@@ -156,12 +159,26 @@ where
                         .map(|row| (key, row.state, row.lock_baseline))
                 })
                 .collect();
-            let released = submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes);
-            if released == 0 {
-                return 0;
+            submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes);
+            let changed = before.iter().any(|(key, state, baseline)| {
+                wallet
+                    .send_journal
+                    .rows
+                    .get(key)
+                    .is_some_and(|row| row.state != *state || row.lock_baseline != *baseline)
+            });
+            if !changed {
+                return ReleasePersistence::Unchanged;
             }
             match commit.commit(wallet) {
-                Ok(()) => released,
+                Ok(Durability::Confirmed) => ReleasePersistence::Confirmed,
+                Ok(Durability::Unconfirmed) => {
+                    tracing::warn!(
+                        "watchdog: the release of a send that will not confirm was applied \
+                         but not confirmed; the next confirmed save writes it"
+                    );
+                    ReleasePersistence::Unconfirmed
+                }
                 Err(error) => {
                     for (key, state, baseline) in before {
                         if let Some(row) = wallet.send_journal.rows.get_mut(&key) {
@@ -174,28 +191,40 @@ where
                         "watchdog: the release of a send that will not confirm could not be \
                          saved; its inputs stay locked and the next probe asks again"
                     );
-                    0
+                    ReleasePersistence::NotSaved
                 }
             }
         })
     }
 
-    fn alarm_for(&self, tx_hash: &TxHash) -> Option<WatchdogAlarmReason> {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .raised_alarms
-            .get(tx_hash)
-            .copied()
-    }
-
-    fn sent_height(&self, tx_hash: &TxHash) -> Option<BlockHeight> {
+    fn held_send_facts(&self) -> Vec<HeldSendFact> {
+        // State first, then the ledger. A build holds the state lock
+        // across a ledger read, so the reverse order deadlocks behind a
+        // writer waiting on that read.
+        let (session, alarms) = {
+            let state = self.state.lock().expect("pending-tx state lock poisoned");
+            (
+                state.dispatched_this_session.clone(),
+                state.raised_alarms.clone(),
+            )
+        };
         self.ledger.with_wallet_ledger(|wallet| {
             wallet
                 .send_journal
                 .rows
-                .get(&tx_hash.to_bytes())
-                .map(|row| BlockHeight::from_raw(row.dispatched_at_height.to_raw()))
+                .iter()
+                .filter(|(_, row)| row.lock_baseline.is_some() && row.state.locks_carried_inputs())
+                .map(|(txid, row)| {
+                    let tx_hash = TxHash::from_bytes(*txid);
+                    HeldSendFact {
+                        tx_hash,
+                        sent_height: row.dispatched_at_height,
+                        has_bytes: row.tx_bytes.is_some(),
+                        dispatched_this_session: session.contains(&tx_hash),
+                        latched: alarms.get(&tx_hash).copied(),
+                    }
+                })
+                .collect()
         })
     }
 

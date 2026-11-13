@@ -91,6 +91,81 @@ use super::submit_watchdog::{
 };
 use super::traits::{DaemonEngine, DaemonHealth, TxSubmitOutcome};
 
+/// One held send, read once for the user-facing list.
+///
+/// The session set and the alarm latch are copied, then the journal is
+/// read. The two locks are not held together: a build holds the pending-tx
+/// state lock across a ledger read, so taking the state lock under the
+/// ledger lock can deadlock behind a waiting writer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HeldSendFact {
+    /// The send's canonical transaction id.
+    pub tx_hash: TxHash,
+    /// The wallet's synced height when the send left.
+    pub sent_height: BlockHeight,
+    /// The journal row still holds the signed bytes.
+    pub has_bytes: bool,
+    /// This session dispatched the send, or the user resent it.
+    pub dispatched_this_session: bool,
+    /// The alarm the watchdog has latched for it this session.
+    pub latched: Option<WatchdogAlarmReason>,
+}
+
+/// Whether the watchdog may re-offer a held send, and what the user is shown.
+///
+/// One order, shared by the probe and by [`HeldSends::list`](super::held_sends::HeldSends::list):
+/// a row with no bytes asks for those bytes, even when the send is also
+/// from an earlier session; an earlier-session row that has bytes asks the
+/// user; a row this session owns is the watchdog's, and the user sees it
+/// only once an alarm is latched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeldSendAttention {
+    /// This session may re-offer the bytes.
+    Automatic {
+        /// The latched alarm, when the watchdog has raised one.
+        latched: Option<WatchdogAlarmReason>,
+    },
+    /// The probe must not run. The user is asked.
+    Ask(WatchdogAlarmReason),
+}
+
+/// Classify one held send. See [`HeldSendAttention`].
+pub(crate) fn held_send_attention(
+    has_bytes: bool,
+    dispatched_this_session: bool,
+    latched: Option<WatchdogAlarmReason>,
+) -> HeldSendAttention {
+    if !has_bytes {
+        HeldSendAttention::Ask(WatchdogAlarmReason::HeldBytesMissing)
+    } else if !dispatched_this_session {
+        HeldSendAttention::Ask(WatchdogAlarmReason::DispatchedBeforeThisSession)
+    } else {
+        HeldSendAttention::Automatic { latched }
+    }
+}
+
+/// What a confirmed-absent release did with the ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleasePersistence {
+    /// No row held a lock. Nothing was written.
+    Unchanged,
+    /// The release is on disk and the parent-directory fsync confirmed it.
+    Confirmed,
+    /// The release was applied and the parent-directory fsync did not
+    /// confirm it. The in-memory rows match that applied write.
+    Unconfirmed,
+    /// The save failed before the rename. The rows were restored.
+    NotSaved,
+}
+
+impl ReleasePersistence {
+    /// The inputs are free across a crash: nothing was locked, or the
+    /// release was confirmed.
+    pub(crate) fn inputs_confirmed_free(self) -> bool {
+        matches!(self, Self::Confirmed | Self::Unchanged)
+    }
+}
+
 /// The wallet-side operations the §5.3 watchdog driver performs, behind
 /// an object-safe surface so the driver reaches the wallet through a
 /// narrow, named contract (not the six-parameter
@@ -152,23 +227,20 @@ pub(crate) trait WatchdogHost: Send + Sync {
 
     /// Release the F14 awaiting-confirmation locks under every txid in
     /// `tx_hashes` (the §2.6 confirmed-absent leg) and save the release
-    /// through `commit` under the same ledger guard, returning the number
-    /// of locks released. The release frees inputs a new send can select,
-    /// so it reaches disk before anything else can act on it; a failed
-    /// save puts the locks back and returns `0` (fail closed — the next
-    /// probe asks again). **Release is not rebuild authorization.**
+    /// through `commit` under the same ledger guard. The release frees
+    /// inputs a new send can select, so it reaches disk before anything
+    /// else can act on it. A save that fails before the rename puts the
+    /// locks back. A rename whose parent-directory fsync did not confirm
+    /// leaves the applied rows. **Release is not rebuild authorization.**
     fn release_awaiting_confirmation(
         &self,
         tx_hashes: &HashSet<TxHash>,
         commit: &dyn LedgerCommit,
-    ) -> usize;
+    ) -> ReleasePersistence;
 
-    /// The operator alarm latched for `tx_hash` this session, if any.
-    fn alarm_for(&self, tx_hash: &TxHash) -> Option<WatchdogAlarmReason>;
-
-    /// The wallet's synced height when the send `tx_hash` left
-    /// (its journal row's `dispatched_at_height`).
-    fn sent_height(&self, tx_hash: &TxHash) -> Option<BlockHeight>;
+    /// Every held send, read once: the journal row, whether this session
+    /// owns it, and the alarm latched for it. See [`HeldSendFact`].
+    fn held_send_facts(&self) -> Vec<HeldSendFact>;
 
     /// The user resent the held send `tx_hash`: this session owns it from
     /// here (the watchdog's rung 1 applies again) and its alarm clears.
@@ -499,21 +571,22 @@ impl SubmitLifecycleDriver {
         synced: u64,
         health: DaemonHealth,
     ) {
-        if !host.dispatched_this_session(&held.tx_hash) {
-            // Dispatched before a restart: re-offering the bytes — perhaps
-            // to a different daemon than the one they went to — is the
-            // user's decision (A19). The probe rung becomes the alarm rung.
-            raise_alarm(
-                host,
-                held.tx_hash,
-                WatchdogAlarmReason::DispatchedBeforeThisSession,
-            );
-            return;
+        let bytes = host.held_bytes_for(&held.tx_hash);
+        match held_send_attention(
+            bytes.is_some(),
+            host.dispatched_this_session(&held.tx_hash),
+            None,
+        ) {
+            // No bytes, or dispatched before a restart: re-offering is not
+            // this watchdog's to do (A19). The same order the user-facing
+            // list uses.
+            HeldSendAttention::Ask(reason) => {
+                raise_alarm(host, held.tx_hash, reason);
+                return;
+            }
+            HeldSendAttention::Automatic { .. } => {}
         }
-        let Some(bytes) = host.held_bytes_for(&held.tx_hash) else {
-            raise_alarm(host, held.tx_hash, WatchdogAlarmReason::HeldBytesMissing);
-            return;
-        };
+        let bytes = bytes.expect("a held send the watchdog may probe holds its bytes");
 
         host.emit(PendingTxDiagnostic::WatchdogProbeDispatched {
             tx_hash: held.tx_hash,
@@ -562,26 +635,97 @@ impl SubmitLifecycleDriver {
         probe_height: u64,
         health: DaemonHealth,
     ) {
+        let RecordedVerdict::Continued(next) =
+            self.record_verdict(host, commit, held, outcome, probe_height)
+        else {
+            return;
+        };
+        if let WatchdogStep::OperatorAlarm(reason) =
+            escape_ladder_step(&next, probe_height, health, self.config)
+        {
+            raise_alarm(host, next.tx_hash, project_alarm(reason));
+        }
+    }
+
+    /// Write a probe outcome into the overlay, or release on a definite
+    /// terminal verdict. Shared by the probe and by the user's resend, so
+    /// the two cannot record different sights for one answer.
+    fn record_verdict(
+        &mut self,
+        host: &dyn WatchdogHost,
+        commit: &dyn LedgerCommit,
+        held: HeldSubmit,
+        outcome: ProbeOutcome,
+        probe_height: u64,
+    ) -> RecordedVerdict {
         match apply_probe_outcome(&held, outcome, probe_height) {
             ProbeDisposition::ReleaseConfirmedAbsent => {
                 // §2.6 release path 2: the definite terminal verdict
                 // proves the tx never confirmed; release the F14 locks.
                 let released: HashSet<TxHash> = std::iter::once(held.tx_hash).collect();
-                host.release_awaiting_confirmation(&released, commit);
-                self.overlay.remove(&held.tx_hash);
-                host.clear_alarm(&held.tx_hash);
+                let persistence = host.release_awaiting_confirmation(&released, commit);
+                if persistence.inputs_confirmed_free() {
+                    self.overlay.remove(&held.tx_hash);
+                    host.clear_alarm(&held.tx_hash);
+                }
+                RecordedVerdict::Released(persistence)
             }
             ProbeDisposition::Continue(next) => {
-                let tx_hash = next.tx_hash;
-                self.overlay.insert(tx_hash, next);
-                if let WatchdogStep::OperatorAlarm(reason) =
-                    escape_ladder_step(&next, probe_height, health, self.config)
-                {
-                    raise_alarm(host, tx_hash, project_alarm(reason));
+                self.overlay.insert(next.tx_hash, next);
+                RecordedVerdict::Continued(next)
+            }
+        }
+    }
+
+    /// Record a verdict learned outside a tick — the user's resend.
+    /// The sight lands in this overlay. The next tick judges it against
+    /// the daemon's health; this call does not invent that health.
+    pub(crate) fn apply_reported_verdict(
+        &mut self,
+        host: &dyn WatchdogHost,
+        commit: &dyn LedgerCommit,
+        held: HeldSubmit,
+        outcome: TxSubmitOutcome,
+    ) -> ReportedVerdict {
+        let synced = host.synced_height().to_raw();
+        match classify_probe(outcome) {
+            ProbeVerdict::ReferenceStale => {
+                raise_alarm(
+                    host,
+                    held.tx_hash,
+                    WatchdogAlarmReason::ReferenceStaleNeedsRebuild,
+                );
+                ReportedVerdict::ReferenceStale
+            }
+            ProbeVerdict::Kernel(kernel_outcome) => {
+                match self.record_verdict(host, commit, held, kernel_outcome, synced) {
+                    RecordedVerdict::Continued(_) => ReportedVerdict::Continued,
+                    RecordedVerdict::Released(persistence) => {
+                        ReportedVerdict::Released(persistence)
+                    }
                 }
             }
         }
     }
+}
+
+/// A verdict written into the driver.
+enum RecordedVerdict {
+    /// The sight is in the overlay. The ladder judges it.
+    Continued(HeldSubmit),
+    /// A terminal refusal released, or tried to release, the inputs.
+    Released(ReleasePersistence),
+}
+
+/// A verdict the user's resend asked the driver to record.
+pub(crate) enum ReportedVerdict {
+    /// The sight is recorded. The ledger did not need a release.
+    Continued,
+    /// A terminal refusal. The persistence says whether the inputs are
+    /// confirmed free.
+    Released(ReleasePersistence),
+    /// The bytes need a fresh reference. The alarm is latched.
+    ReferenceStale,
 }
 
 /// Emit a watchdog alarm for `tx_hash`, edge-triggered on the host's latch:
@@ -592,35 +736,6 @@ impl SubmitLifecycleDriver {
 fn raise_alarm(host: &dyn WatchdogHost, tx_hash: TxHash, reason: WatchdogAlarmReason) {
     if host.latch_alarm(tx_hash, reason) {
         host.emit(PendingTxDiagnostic::WatchdogAlarm { tx_hash, reason });
-    }
-}
-
-/// Apply the daemon's answer to the user's resend of the held send `held`
-/// (A19, `HeldSends::resend`) the way the watchdog applies its own probe's:
-/// [`classify_probe`] and the kernel's [`apply_probe_outcome`], so a resend
-/// and a probe cannot disagree about what one verdict means. A definite
-/// terminal verdict releases the F14 locks (§2.6 release path 2) and saves
-/// the release; returns whether it did. Every other verdict leaves the
-/// send held, for the watchdog to follow from its next tick (the resend
-/// put the send in this session).
-pub(crate) fn apply_resend_verdict(
-    host: &dyn WatchdogHost,
-    commit: &dyn LedgerCommit,
-    held: &HeldSubmit,
-    outcome: TxSubmitOutcome,
-) -> bool {
-    let synced = host.synced_height().to_raw();
-    let ProbeVerdict::Kernel(kernel_outcome) = classify_probe(outcome) else {
-        return false;
-    };
-    match apply_probe_outcome(held, kernel_outcome, synced) {
-        ProbeDisposition::ReleaseConfirmedAbsent => {
-            let released: HashSet<TxHash> = std::iter::once(held.tx_hash).collect();
-            host.release_awaiting_confirmation(&released, commit);
-            host.clear_alarm(&held.tx_hash);
-            true
-        }
-        ProbeDisposition::Continue(_) => false,
     }
 }
 

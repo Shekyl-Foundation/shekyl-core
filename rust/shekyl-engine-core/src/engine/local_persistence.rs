@@ -22,7 +22,8 @@ impl PersistenceEngine for WalletFile {
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send
+    {
         std::future::ready(
             self.save_state(state_key.as_bytes(), ledger)
                 .map_err(PersistenceError::WalletFile),

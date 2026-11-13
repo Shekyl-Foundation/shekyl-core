@@ -250,15 +250,15 @@ impl std::fmt::Debug for ScannedOutput {
 /// refuses bytes that are not one. A key drawn as 32 raw random bytes and
 /// reduced only to compute `R` fails that check for fifteen keys in
 /// sixteen (alpha.11 bug hunt §A19: an OUTBOUND proof for a settled payment
-/// that could not be made). The output constructions take these same bytes
+/// that could not be made). The scalar is [`Zeroizing`], so an unwind wipes
+/// it. The output constructions take these same bytes
 /// ([`construct_output_with_label_plaintext`]), so every use of `r` agrees.
 /// The one mint for the wallet's transfers, drains and bond posts (rule 36:
 /// the reduction lives in this crate).
 pub fn generate_tx_key() -> (Zeroizing<[u8; 32]>, EdwardsPoint) {
-    let mut r = Scalar::random(&mut rand::rngs::OsRng);
+    let r = Zeroizing::new(Scalar::random(&mut rand::rngs::OsRng));
     let secret = Zeroizing::new(r.to_bytes());
-    let public = G * r;
-    r.zeroize();
+    let public = G * *r;
     (secret, public)
 }
 

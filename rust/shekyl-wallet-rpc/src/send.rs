@@ -235,11 +235,8 @@ pub(crate) async fn tx_resend(
     })?;
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    let outcome = engine.held_sends().resend(TxHash::from_bytes(txid)).await?;
-    let result = submit_pending_tx_result(&shekyl_engine_core::SubmitReceipt {
-        outcome,
-        verdict_saved: true,
-    });
+    let receipt = engine.held_sends().resend(TxHash::from_bytes(txid)).await?;
+    let result = submit_pending_tx_result(&receipt);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize tx_resend: {e}")))
 }

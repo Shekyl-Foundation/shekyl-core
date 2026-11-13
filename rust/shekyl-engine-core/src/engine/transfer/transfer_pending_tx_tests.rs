@@ -1490,7 +1490,7 @@ async fn discard_never_persists_tx_key() {
 /// path 2 drives.
 #[tokio::test]
 async fn confirmed_absent_release_keeps_retention_record() {
-    use crate::engine::submit_lifecycle::WatchdogHost;
+    use crate::engine::submit_lifecycle::{ReleasePersistence, WatchdogHost};
 
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
@@ -1511,7 +1511,11 @@ async fn confirmed_absent_release_keeps_retention_record() {
         &HashSet::from([tx_hash]),
         &NoSaveCommit,
     );
-    assert!(released > 0, "the F14 lock is released");
+    assert_eq!(
+        released,
+        ReleasePersistence::Confirmed,
+        "the F14 lock is released"
+    );
 
     let guard = pending.ledger.read();
     assert!(
@@ -3889,10 +3893,10 @@ impl crate::engine::dispatch_durability::LedgerCommit for CapturingCommit {
     fn commit(
         &self,
         ledger: &shekyl_engine_state::WalletLedger,
-    ) -> Result<(), crate::engine::error::PersistenceError> {
+    ) -> Result<shekyl_engine_file::Durability, crate::engine::error::PersistenceError> {
         let bytes = ledger.to_postcard_bytes().expect("the ledger serializes");
         *self.saved.lock().expect("capture lock") = Some(bytes);
-        Ok(())
+        Ok(shekyl_engine_file::Durability::Confirmed)
     }
 }
 

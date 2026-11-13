@@ -246,13 +246,15 @@ pub enum SubmitError {
     },
 
     /// A19: the dispatch record (journal row with the signed bytes, the
-    /// retained tx secret, the inputs the F14 lock holds) could not be
-    /// saved, so **nothing was sent**. The record was undone under the
-    /// same guard as the failed save and the reservation is back in
-    /// `consumer_held` with its output locks; the consumer may retry the
-    /// submit once the cause (a full disk, an unwritable wallet
-    /// directory) is fixed, or discard.
-    #[error("send not saved, so not sent (reservation {reservation_id:?} kept): {source}")]
+    /// retained tx secret, the inputs the F14 lock holds) is not
+    /// confirmed on disk, so **nothing was sent**. A save that failed
+    /// before the rename undoes the record under the same guard. A rename
+    /// whose parent-directory fsync did not confirm leaves the applied
+    /// record (undoing it would diverge from disk) and still sends
+    /// nothing. Either way the reservation is back in `consumer_held`
+    /// with its output locks; the consumer may retry the submit once the
+    /// cause is fixed, or discard.
+    #[error("send not saved durably, so not sent (reservation {reservation_id:?} kept): {source}")]
     DispatchNotSaved {
         /// The reservation, kept for a retry.
         reservation_id: ReservationId,

@@ -1040,13 +1040,16 @@ components:
                                           disconnecting)
           -29120 SEND_NOT_SAVED           submit: the send's record (its
                                           signed bytes, tx secret and input
-                                          locks) could not be saved, so the
-                                          wallet sent NOTHING. The
-                                          reservation is kept: make the
-                                          wallet directory writable or free
-                                          disk space and submit again, or
-                                          discard. The cause is in the
-                                          wallet's log (A19)
+                                          locks) is not confirmed on disk,
+                                          so the wallet sent NOTHING. A
+                                          failed save undoes the record; a
+                                          save whose durability was not
+                                          confirmed leaves the applied
+                                          record. The reservation is kept:
+                                          make the wallet directory writable
+                                          or free disk space and submit
+                                          again, or discard. The cause is
+                                          in the wallet's log (A19)
           -29121 TX_NOT_HELD              tx_resend: no held send has this
                                           id — it confirmed, was released,
                                           or was never this wallet's
