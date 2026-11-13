@@ -690,6 +690,9 @@ impl RegtestDaemon {
         } = spec;
         install_wallet_tracing();
 
+        // A released binary named here (the mixed-version test's alpha.11)
+        // predates `rpc-socket-dir`, and refuses a row it does not know.
+        let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
@@ -775,6 +778,16 @@ impl RegtestDaemon {
             "--log-level",
             "info",
         ]);
+        // The owner's socket goes in the same private directory: this
+        // account's, mode 0700, one per spawn. A harness names it, so a test
+        // daemon never meets another's at the default rendezvous and needs no
+        // session directory (`RPC_CHANNEL.md` §7.1, IG-Q104).
+        if !released {
+            cmd.args([
+                "--rpc-socket-dir",
+                config_dir.to_str().expect("utf8 config path"),
+            ]);
+        }
         let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
         cmd.args(["--mine-address", &mine_address]);
         match peering {
@@ -1026,6 +1039,8 @@ impl RegtestDaemon {
             .0;
         status
             .txpool_count
+            .shown()
+            .expect("the harness is the host, and is told the pool part")
             .0
             .expect("the harness's pool is live")
             .0
@@ -1037,7 +1052,18 @@ impl RegtestDaemon {
     /// `daemon_status` reports them.
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let status = self.status().await;
-        (status.block_weight_median.0, status.block_weight_max.0)
+        (
+            status
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            status
+                .block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+        )
     }
 
     /// The block at `height`, whole.
@@ -1102,7 +1128,12 @@ impl RegtestDaemon {
     /// The emission e2e samples it once, at epoch close, and pins it to 0
     /// (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
-        self.status().await.burn_total.to_atomic_units()
+        self.status()
+            .await
+            .burn_total
+            .shown()
+            .expect("the chain part is shown")
+            .to_atomic_units()
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open

@@ -470,7 +470,14 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         if restricted_stats.count.0 != 0 {
             disclosed.push("txpool_stats counted it");
         }
-        if restricted_status.txpool_count.0.map(|count| count.0) != Some(0) {
+        if restricted_status
+            .txpool_count
+            .shown()
+            .expect("the pool part is shown")
+            .0
+            .map(|count| count.0)
+            != Some(0)
+        {
             disclosed.push("daemon_status counted it");
         }
         if !matches!(restricted_tx, Slot::State(SlotState::Missing(_))) {

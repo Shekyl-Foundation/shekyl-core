@@ -1,0 +1,85 @@
+# cache_derive on the floor device
+start 2026-11-10T20:15:14Z
+cf561f79d646a70dec67e1a37e64a3a16c0b7140
+rustc 1.94.0 (4a4ef493e 2026-03-02)
+Linux 7.0.0-1020-raspi aarch64
+## build
+build rc=0
+## run 1
+at 2026-11-10T20:19:08Z
+ 15:19:08 up 44 days, 56 min,  1 user,  load average: 3.92, 3.19, 2.51
+68166
+1800000
+%CPU COMMAND
+ 188 shekyld
+ 100 ps
+ 2.2 tor
+    Finished `bench` profile [optimized] target(s) in 1.37s
+     Running benches/cache_derive.rs (target/release/deps/cache_derive-7ad17dc22e3222a2)
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 216.1s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 216.13 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.0900 s 2.0946 s 2.0994 s]
+Found 6 outliers among 100 measurements (6.00%)
+  5 (5.00%) high mild
+  1 (1.00%) high severe
+
+run 1 rc=0
+## run 2
+at 2026-11-10T20:22:53Z
+ 15:22:53 up 44 days,  1:00,  1 user,  load average: 3.58, 3.20, 2.66
+72062
+1800000
+%CPU COMMAND
+ 188 shekyld
+ 100 ps
+ 2.2 tor
+    Finished `bench` profile [optimized] target(s) in 0.61s
+     Running benches/cache_derive.rs (target/release/deps/cache_derive-7ad17dc22e3222a2)
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 210.1s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 210.08 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.1118 s 2.1149 s 2.1181 s]
+                        change: [+0.6900% +0.9717% +1.2194%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+run 2 rc=0
+## run 3
+at 2026-11-10T20:26:42Z
+ 15:26:42 up 44 days,  1:04,  1 user,  load average: 3.39, 3.17, 2.77
+72549
+1800000
+%CPU COMMAND
+ 188 shekyld
+ 2.2 tor
+ 0.2 kworker/3:2-events
+    Finished `bench` profile [optimized] target(s) in 0.56s
+     Running benches/cache_derive.rs (target/release/deps/cache_derive-7ad17dc22e3222a2)
+Gnuplot not found, using plotters backend
+Benchmarking cache_derive/derive
+Benchmarking cache_derive/derive: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 210.5s, or reduce sample count to 10.
+Benchmarking cache_derive/derive: Collecting 100 samples in estimated 210.53 s (100 iterations)
+Benchmarking cache_derive/derive: Analyzing
+cache_derive/derive     time:   [2.0926 s 2.0971 s 2.1021 s]
+                        change: [-1.0897% -0.8418% -0.5809%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+
+run 3 rc=0
+end 2026-11-10T20:30:30Z
+DONE

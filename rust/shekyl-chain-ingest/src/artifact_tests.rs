@@ -391,8 +391,7 @@ mod fetch {
 
     use shekyl_rpc_client::{wire, Rpc, RpcError, RpcMethod};
     use shekyl_rpc_types::hash::HashHex;
-    use shekyl_rpc_types::kinds::{Bytes, Integer, Size};
-    use shekyl_rpc_types::nullable::Nullable;
+    use shekyl_rpc_types::kinds::{Asked as Selected, Bytes, Integer};
     use shekyl_rpc_types::wire::block::BlockTx;
     use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived};
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
@@ -468,7 +467,7 @@ mod fetch {
             "height": height.to_raw(), "hash": zero, "parent": zero, "version_major": 1,
             "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
             "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
-            "weight": 0, "weight_longterm": 0, "tx_count": 0, "pow": null,
+            "weight": 0, "weight_longterm": 0, "tx_count": 0,
             "coinbase": zero, "curve_root": zero, "attestation_root": zero,
         })
     }
@@ -479,9 +478,10 @@ mod fetch {
             OrArchived::Item(BlockTx {
                 id: HashHex::ZERO,
                 body: Bytes(body.clone()),
-                prunable_hash: HashHex::ZERO,
-                pqc_auth_hash: Nullable(None),
-                archival_size: Size(0),
+                // The full form, asked without `prune`: `{id, body}`.
+                prunable_hash: Selected::Unasked,
+                pqc_auth_hash: Selected::Unasked,
+                archival_size: Selected::Unasked,
             })
         })
     }
@@ -563,9 +563,9 @@ mod fetch {
                 OrArchived::Item(BlockTx {
                     id: HashHex::ZERO,
                     body: Bytes(body.clone()),
-                    prunable_hash: HashHex::ZERO,
-                    pqc_auth_hash: Nullable(None),
-                    archival_size: Size(0),
+                    prunable_hash: Selected::Unasked,
+                    pqc_auth_hash: Selected::Unasked,
+                    archival_size: Selected::Unasked,
                 })
             }
         })]);

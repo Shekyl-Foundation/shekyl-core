@@ -113,19 +113,25 @@ pub enum InstanceNameError {
     Reserved,
 }
 
+impl InstanceNameError {
+    /// The rule the name broke, in the words a refusal shows. The numbers
+    /// are [`INSTANCE_NAME_MAX`] and [`DEFAULT_INSTANCE_LABEL`]; a test
+    /// holds the text to them.
+    #[must_use]
+    pub const fn rule(self) -> &'static str {
+        match self {
+            Self::Reserved => "`default` names the default instance and cannot be an instance name",
+            Self::Empty | Self::TooLong | Self::BadStart | Self::BadCharacter => {
+                "an instance name is 1 to 16 lower-case letters, digits or hyphens, \
+                 starting with a letter or digit"
+            }
+        }
+    }
+}
+
 impl fmt::Display for InstanceNameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Reserved => write!(
-                f,
-                "'{DEFAULT_INSTANCE_LABEL}' names the default instance and cannot be an instance name"
-            ),
-            Self::Empty | Self::TooLong | Self::BadStart | Self::BadCharacter => write!(
-                f,
-                "an instance name is 1 to {INSTANCE_NAME_MAX} lower-case letters, digits or \
-                 hyphens, starting with a letter or digit"
-            ),
-        }
+        f.write_str(self.rule())
     }
 }
 

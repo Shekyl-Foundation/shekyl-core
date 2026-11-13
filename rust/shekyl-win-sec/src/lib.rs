@@ -77,6 +77,8 @@ mod peer;
 #[cfg(windows)]
 mod pipe;
 #[cfg(windows)]
+pub mod rendezvous;
+#[cfg(windows)]
 mod sddl;
 #[cfg(windows)]
 mod sid;

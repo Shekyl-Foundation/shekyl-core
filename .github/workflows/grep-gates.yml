@@ -335,6 +335,14 @@ jobs:
             python3 scripts/ci/check_armed_lever_launchers.py --selftest
           run_one "Armed lever: every regtest lever spawn arms the row" \
             python3 scripts/ci/check_armed_lever_launchers.py
+          # RT-W10 step 3 (RPC_CHANNEL.md §7.1, IG-Q104): every regtest
+          # shekyld spawn names a private directory for the owner's socket,
+          # or it refuses on a runner with no session directory and meets
+          # another test's daemon on one that has one. `--selftest` first.
+          run_one "Owner socket: launcher gate selftest" \
+            python3 scripts/ci/check_owner_socket_launchers.py --selftest
+          run_one "Owner socket: every regtest shekyld spawn names a socket directory" \
+            python3 scripts/ci/check_owner_socket_launchers.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers

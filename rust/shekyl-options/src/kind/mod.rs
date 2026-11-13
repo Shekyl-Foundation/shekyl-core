@@ -73,6 +73,24 @@ impl fmt::Debug for KeyRule {
     }
 }
 
+/// A name's rule, held by its owner (IG-6 `name`: a word an operator types,
+/// whose rule the row names). The check returns the broken rule in words.
+#[derive(Clone, Copy)]
+pub struct NameRule {
+    /// How the name is described in a refusal.
+    pub describe: &'static str,
+    /// `Ok` when the name keeps the rule; otherwise the rule it breaks.
+    pub check: fn(&str) -> Result<(), &'static str>,
+}
+
+impl fmt::Debug for NameRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NameRule")
+            .field("describe", &self.describe)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A value kind with its row's constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
@@ -117,6 +135,8 @@ pub enum Kind {
     /// 64 hexadecimal characters (IG-Q23): a transaction id, a block hash
     /// or a key image.
     Hash,
+    /// A name an operator types, checked by its owner's rule (IG-6 `name`).
+    Name(NameRule),
     /// A list of a scalar kind; `none` is the empty list.
     List(&'static Kind),
     /// A map from a closed key set to a scalar kind; `none` is the empty map.
@@ -201,6 +221,8 @@ pub enum Value {
     Origin(String),
     /// 64 lowercase hexadecimal characters.
     Hash(String),
+    /// A name, as given; its rule held.
+    Name(String),
     /// A list; empty is `none`.
     List(Vec<Value>),
     /// A map; empty is `none`.
@@ -222,7 +244,7 @@ impl Value {
             Self::Duration(d) => render_duration(*d),
             Self::Endpoint(addr) => addr.to_string(),
             Self::Peer(peer) => peer.to_string(),
-            Self::Address(a) | Self::Origin(a) | Self::Hash(a) => a.clone(),
+            Self::Address(a) | Self::Origin(a) | Self::Hash(a) | Self::Name(a) => a.clone(),
             Self::Path(p) => p.display().to_string(),
             Self::Secret(_) => "set".to_owned(),
             Self::Command(args) => format!("{args:?}"),
@@ -501,6 +523,10 @@ impl Kind {
             }
             Self::Origin => parse_origin(text).map(Value::Origin),
             Self::Hash => parse_hash(text).map(Value::Hash),
+            Self::Name(rule) => match (rule.check)(text) {
+                Ok(()) => Ok(Value::Name(text.to_owned())),
+                Err(broken) => Err(range(text, broken)),
+            },
             Self::Secret | Self::Command { .. } => Err(Fault::new(Code::ValueSurface)
                 .param("given", "the command line")
                 .param("allowed", "in the configuration file")),
@@ -538,6 +564,7 @@ impl Kind {
             Self::Command { .. } => "an array of strings",
             Self::Origin => "a web origin such as `https://example.org`",
             Self::Hash => "64 hexadecimal characters",
+            Self::Name(rule) => rule.describe,
             Self::List(_) => "a list",
             Self::Map { .. } => "a map",
         }

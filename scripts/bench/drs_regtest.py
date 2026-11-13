@@ -28,6 +28,7 @@ import sys
 
 import drs_bench as B  # noqa: E402
 import armed_lever  # noqa: E402
+import owner_socket  # noqa: E402
 
 # A bounded caller is refused a `block_header_list` range longer than this
 # (`bound.header`, RESTRICTED_BLOCK_HEADER_RANGE). The admin listener is
@@ -103,7 +104,8 @@ class Session:
         net = ["--clearnet", "off"] if offline else ["--clearnet-listen", f"127.0.0.1:{p2p}"]
         argv = [self.daemon] + common + ["--data-dir", data_dir] + net + [
             "--rpc-admin-listen", f"127.0.0.1:{rpc}",
-            "--log-file", os.path.join(self.work, f"{tag}.daemon.log")] + extra
+            "--log-file", os.path.join(self.work, f"{tag}.daemon.log")] + extra + \
+            owner_socket.argv(tag)
         log = open(os.path.join(self.work, f"{tag}.log"), "a", encoding="utf-8")
         try:
             return subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=data_dir)

@@ -193,6 +193,8 @@ mod tests {
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
+            session_dir: None,
+            service_rendezvous: None,
         };
         let config = build(&mut resolved, network, mode, &platform, None).unwrap();
         (resolved, config)
@@ -219,6 +221,8 @@ mod tests {
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
+            session_dir: None,
+            service_rendezvous: None,
         };
         let built = build(
             &mut resolved,

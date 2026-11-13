@@ -1102,7 +1102,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
-- **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`) and the send flow reads `OwnTx`, reporting `Held` as held and a `ClearnetOnly` send as sent, falsified by §11's two cases once increment 3's typed read and the RW field names exist, with the GUI's display tracked in `shekyl-gui-wallet`. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
+- **Report a held send as held.** The send flow reads `daemon_status`'s Tor status (4.2) through its one accessor, `TorStatus::own_tx_hides_address`, which fails closed on a value it does not know, and reports a held send as held and a `clearnet-only` send as sent, falsified by §11's two cases, with the GUI's display tracked in `shekyl-gui-wallet`. `shekyl-cli`'s `status` already speaks the status through the one renderer (`TSR-Q13`). — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
 

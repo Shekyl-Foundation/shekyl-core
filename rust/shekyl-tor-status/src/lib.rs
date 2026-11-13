@@ -29,7 +29,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod render;
 
-pub use render::{held_at_start_sentence, install_sentence, render, UNKNOWN_SENTENCE};
+pub use render::{
+    held_at_start_sentence, install_sentence, names_data_dir, render, UNKNOWN_SENTENCE,
+};
 
 /// A closed set of keywords, with an arm for a keyword this build does not
 /// know. Serialized as the keyword; a keyword not in the set decodes as
@@ -48,6 +50,10 @@ macro_rules! keywords {
         }
 
         impl $name {
+            /// Every keyword this build knows, in declaration order: what a
+            /// schema lists for the set.
+            pub const KEYWORDS: &'static [&'static str] = &[$($word),+];
+
             /// The keyword on the wire.
             #[must_use]
             pub fn keyword(&self) -> &str {
