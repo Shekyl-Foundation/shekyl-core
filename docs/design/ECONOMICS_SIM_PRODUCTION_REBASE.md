@@ -3369,9 +3369,13 @@ burned, and fewer shards close.
   fees about 322,368 SKL an epoch (was 429,862). The verdict line moves from
   "see the slew reading below" to "no measurable adversarial slew": its
   `< 1.0` point-an-epoch gate is the one ruled on 2026-10-24 (ruling 8),
-  under which this member was excluded from the band at S = 4. The exclusion
-  stands; at S = 3 the member measures 0.7558, under the gate. The slew
-  scales with S, and S is re-derived at BA-T10.
+  under which this member was excluded from the band at S = 4. The slew
+  scales with S, and S is re-derived at BA-T10, so the member sits at the
+  gate's edge. Rick ruled on 2026-11-13: the gate is the ruling and band
+  membership is its output; the member stays excluded until BA-T10 sets S;
+  then a member is admitted only if it passes the gate across BA-T10's whole
+  plausible range of S, not at the S shipped that day; the band is decided at
+  EUP-5 F, after BA-T10. The verdict line is accurate at S = 3 and stays.
 
 **The flat control** (16 lines) moves in A6 alone in substance (the same
 ceiling, slew and reorg figures; the flood's fees 7,174 → 5,380 SKL an

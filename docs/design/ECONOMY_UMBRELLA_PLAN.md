@@ -257,8 +257,8 @@ the three operands.
 3. **Tail.** "A criterion, not a number": at maturity the tail is at least
    `k` times the median per-block fee revenue on the baseline demand
    scenario, `k ≥ 1` ("Carlsten: the fixed reward must dominate fee
-   variance"). It is in §4, the one criterion there still PROPOSED:
-   Rick sets `k`. The ratio-of-asymptote figure is derived from EUP-4's tables and then
+   variance"). It is in §4, its wording ratified (Rick, 2026-11-13) and
+   `k` still open: Rick sets `k`. The ratio-of-asymptote figure is derived from EUP-4's tables and then
    ratified as the inflation Rick is willing to carry. The structural arms
    carry a per-block fee revenue and variance column to about year 135.
 4. **Fee basis: direction ruled, derivation open.** Fees are decoupled from
@@ -283,10 +283,13 @@ the three operands.
 Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
 principal (B); the knee stays held; nothing in EUP-5 moves before EUP-4's
 tables. Given 2026-11-13: §4's criteria and the horizon, ratified as
-written (the year-1 Standard-rung fee was ratified 2026-11-06), and the
-authorization to start EUP-3's coupling half. Still Rick's: the tail's `k`
-(§4), §4.2's boom/bust emission fraction, what the growth schedule does past
-its supply break (§4.1), and the GF-7 asymptote (EUP-5 F).
+written (the year-1 Standard-rung fee was ratified 2026-11-06, and the
+Tail's wording with its `k` left open), and the authorization to start
+EUP-3's coupling half. Still Rick's, before EUP-4 runs: the tail's `k` (§4),
+§4.2's boom/bust emission fraction, and what the growth schedule does past
+its supply break (§4.1). The GF-7 asymptote is EUP-5 F's, after BA-T10: a
+band member is admitted only if it passes the slew gate across BA-T10's
+whole plausible range of S (Rick, 2026-11-13).
 
 ---
 
@@ -307,7 +310,7 @@ still his to set.
 | 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **RATIFIED (Rick, 2026-11-13):** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
 | Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **RATIFIED (Rick, 2026-11-13):** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
 | Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **RATIFIED (Rick, 2026-11-06):** the year-1 Standard-rung fee for an ordinary 1-in/2-out transaction is at most **0.05 %** of the year-1 block reward: about 0.496 SKL (496 289 839 atomic) on the design curve, whose year-1 mean block reward is 992.58 SKL (`projected_already_generated` over the first 262 800 blocks, read at `b8b11453e`). The floor is the stuffing criterion, applied in year 1. Set before ESR-10 runs, which prints this fee for every cell |
-| Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **PROPOSED:** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`; Rick sets `k`. The tail's ratio of the asymptote per year is read off this table and then ratified |
+| Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **RATIFIED except `k` (Rick, 2026-11-13; Rick sets `k`):** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`. The tail's ratio of the asymptote per year is read off this table and then ratified |
 | Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **RATIFIED (Rick, 2026-11-13):** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
