@@ -882,6 +882,63 @@ mod tests {
         }
     }
 
+    /// A header inside a list, missing `pow` the request asked for, is
+    /// refused before decode (RW-Q4). The slot's other alternative is a
+    /// state, and this header is not one.
+    #[test]
+    fn a_listed_header_missing_an_asked_pow_is_refused() {
+        use std::io::{Read, Write};
+
+        let header = serde_json::json!({
+            "version_major": 3, "version_minor": 3, "time": 1_700_000_000,
+            "parent": "11".repeat(32), "nonce": 7, "orphan": false, "height": 9,
+            "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
+            "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
+            "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
+            "curve_root": "44".repeat(32), "attestation_root": "55".repeat(32),
+        });
+        let body = json_rpc_result_body(&serde_json::json!([header]));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let port = listener.local_addr().expect("the bound port").port();
+        let answer = body.clone();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 8192];
+            if sock.read(&mut buf).is_err() {
+                return;
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            drop(sock.write_all(resp.as_bytes()));
+        });
+        let daemon = SyncDaemon::connect(
+            format!("http://127.0.0.1:{port}"),
+            None,
+            Duration::from_secs(5),
+        )
+        .expect("the client");
+        let err = daemon
+            .call::<shekyl_rpc_client::wire::BlockHeaderList>(
+                &shekyl_rpc_types::wire::block::HeaderRange {
+                    select: shekyl_rpc_types::wire::block::HeaderRangeSelect::Range {
+                        from: shekyl_rpc_types::kinds::Height(1),
+                        to: shekyl_rpc_types::kinds::Height(1),
+                    },
+                    pow: true,
+                },
+            )
+            .expect_err("pow was asked for and the header has none");
+        let message = err.to_string();
+        assert!(
+            message.contains("`pow`") && message.contains("missing"),
+            "{message}"
+        );
+    }
+
     /// `validate_endpoint` is the offline startup gate: well-formed
     /// URL + proxy combinations pass without dialing; a malformed proxy or a
     /// URL shape the transport cannot dial refuses with an error naming the

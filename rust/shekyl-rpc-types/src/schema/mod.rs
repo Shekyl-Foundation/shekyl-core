@@ -812,15 +812,28 @@ fn conforms_in(value: &serde_json::Value, shape: &Shape, check: Check<'_>) -> Re
                 }
             }
         }
-        (Shape::Either(item, slot), _) => {
-            let first = conforms_in(value, item, check);
-            match (first, check.presence()) {
-                (Ok(()), _) => Ok(()),
-                (Err(first), true) => conforms_in(value, slot, check).map_err(|_| first),
-                (Err(first), false) => conforms_in(value, slot, check)
-                    .map_err(|second| format!("neither ({first}) nor ({second})")),
+        (Shape::Either(item, slot), _) if check.presence() => {
+            // Which alternative this value is, read with no request in
+            // hand: a selected field may be absent, so a header missing
+            // `pow` is still a header. Presence is read on that
+            // alternative alone. Falling through to the other side after
+            // a presence failure accepts the header as a state, because a
+            // state this object is not is not a fault there.
+            let structural = Check::Shape { asked: None };
+            let item_fits = conforms_in(value, item, structural).is_ok();
+            let slot_fits = conforms_in(value, slot, structural).is_ok();
+            match (item_fits, slot_fits) {
+                (true, false) => conforms_in(value, item, check),
+                (false, true) => conforms_in(value, slot, check),
+                (true, true) => conforms_in(value, item, check)
+                    .or_else(|first| conforms_in(value, slot, check).map_err(|_| first)),
+                (false, false) => Ok(()),
             }
         }
+        (Shape::Either(item, slot), _) => conforms_in(value, item, check).or_else(|first| {
+            conforms_in(value, slot, check)
+                .map_err(|second| format!("neither ({first}) nor ({second})"))
+        }),
         (
             Shape::Object {
                 fields,

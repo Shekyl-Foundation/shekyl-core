@@ -251,4 +251,35 @@ fn a_reply_holds_exactly_the_fields_the_request_selected() {
             other => panic!("pow {why} with the switch {asked}: {other:?}"),
         }
     }
+
+    // The same field inside a list slot. A header without `pow` is still a
+    // header, not the slot's missing state, so the switch is still enforced.
+    let list = |pow: bool| {
+        use shekyl_rpc_types::kinds::Height;
+        use shekyl_rpc_types::wire::block::{HeaderRange, HeaderRangeSelect};
+        block_on(
+            Canned::new(&result(&json!([header(None)]))).call_or_refusal::<wire::BlockHeaderList>(
+                HeaderRange {
+                    select: HeaderRangeSelect::Range {
+                        from: Height(1),
+                        to: Height(1),
+                    },
+                    pow,
+                },
+            ),
+        )
+    };
+    match list(true) {
+        Err(RpcError::InvalidNode(message)) => {
+            assert!(
+                message.contains("`pow`") && message.contains("missing"),
+                "{message}"
+            );
+        }
+        other => panic!("a listed header without pow: {other:?}"),
+    }
+    assert!(
+        matches!(list(false), Ok(Ok(_))),
+        "an unasked pow is absent from the header"
+    );
 }
