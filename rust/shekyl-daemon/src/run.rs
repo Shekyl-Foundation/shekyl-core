@@ -554,6 +554,7 @@ mod tests {
             home: Some(home.to_path_buf()),
             program_data: None,
             session_dir: crate::test_session_dir(home),
+            service_rendezvous: None,
         }
     }
 

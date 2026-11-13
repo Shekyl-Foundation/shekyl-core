@@ -337,7 +337,8 @@ type and the minimal required-privilege list (RT-P8 confirms both).
 - **The data directory moves** for the service: a machine-wide home
   (`%ProgramData%` on Windows) with an ACL admitting the service account
   and Administrators, holding chain data, the daemon's channel bundle, the
-  console key (§5), the machine-wide rendezvous (§7.1), and the bundled
+  console key (§5), on Windows the machine-wide rendezvous (§7.1; on Linux
+  and macOS the service's rendezvous directory is separate), and the bundled
   Tor's data and key directories — Tor
   runs as the service's child under the same account, with the
   `TOR_BUNDLE_DISTRIBUTION.md` launch rules unchanged.
@@ -1939,7 +1940,7 @@ client never reaches the wrong network's node.
   a hash of network and instance, on every platform.** `<name>` is derived
   from the network id and the instance name (`default`, or the operator's
   name). The Unix socket is `<base>/shekyl-<name>.sock`; the Windows
-  rendezvous file is `%LOCALAPPDATA%\Shekyl\shekyl-<name>` (below).
+  rendezvous file is `%LOCALAPPDATA%\Shekyl\rendezvous\shekyl-<name>` (below).
   **One naming function and one known-answer test serve both platforms**,
   under the registered customization `shekyl/rpc-rendezvous-name-v1`
   (`CRYPTO_DOMAIN_REGISTRY.tsv`). **An instance name therefore reaches no
@@ -1978,7 +1979,7 @@ client never reaches the wrong network's node.
   Path safety is no longer a reason, on any platform.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
-  rendezvous file, `%LOCALAPPDATA%\Shekyl\shekyl-<name>`, that only the
+  rendezvous file, `%LOCALAPPDATA%\Shekyl\rendezvous\shekyl-<name>`, that only the
   user can read. `<name>` is the same derivation as the Unix socket's
   (RT-O10, above): one function, one known-answer test, and no
   per-network or per-instance directory. A pipe has no containing
@@ -2009,19 +2010,23 @@ client never reaches the wrong network's node.
     ([`file.rs:86`](../../rust/shekyl-win-sec/src/file.rs)), which WP-D8
     left unlabelled because the read-up question for files was not that
     slice's (`file.rs:20-21`); it is answered now.
-  - **The directory `%LOCALAPPDATA%\Shekyl` carries its own no-read-up
-    label** as well: a low-integrity process cannot open it, so it cannot
-    enumerate the rendezvous (measured). The directory's label is not
-    relied on to protect the file. **That directory is reserved for
-    rendezvous files and holds nothing else**. The label denies
-    a low-integrity reader everything inside, so a file with a different
-    audience must not be put there by accident; nothing in the tree uses
-    this directory today (`shekyl-cli` keeps its history under
-    `%LOCALAPPDATA%\shekyl-cli`, the GUI under the roaming profile), and
-    anything that later wants a per-user Shekyl directory takes a
-    different one. The daemon creates the directory with its descriptor
-    and label in the creating call, and where it already exists asserts
-    both — owner and the label's policy bits — rather than adopting it.
+  - **The rendezvous directory `%LOCALAPPDATA%\Shekyl\rendezvous` carries
+    its own no-read-up label** as well: a low-integrity process cannot open
+    it, so it cannot enumerate the rendezvous (measured on the directory
+    form, RT-P8; re-run on this subdirectory under RT-P8's Windows check).
+    The directory's label is not relied on to protect the file. **That
+    directory holds rendezvous files and nothing else**: the label denies a
+    low-integrity reader everything inside, so a file with a different
+    audience must not be put there by accident. The daemon creates it with
+    its owner, its protections and its label in the creating call, and
+    where it already exists checks all three (the owner, the protected
+    DACL, and the label's policy bits) rather than adopting it (Rick,
+    2026-11-12).
+  - **The daemon's data home `%LOCALAPPDATA%\Shekyl`**, the run-as-user
+    root (`INPUT_GRAMMAR.md` IG-13), is the rendezvous directory's parent.
+    When the daemon creates it, it carries owner-only access and an
+    inheritable no-read-up label, set in the creating call (Rick,
+    2026-11-12).
   - **Clean exit deletes the rendezvous before closing the pipe**, so the
     name is never free while a rendezvous still points at it.
   - **Start-up dials an existing rendezvous through the peer check** before
@@ -2040,14 +2045,24 @@ client never reaches the wrong network's node.
   both hide the logon-session SID the DACL relies on; only a raw token read
   (`GetTokenInformation`, `TokenGroups`, `SE_GROUP_LOGON_ID`) shows it. A
   check written against either tool will report the design unworkable.
-- **Service mode, both platforms:** a machine-wide rendezvous file,
-  `<service data home>/shekyl-<name>`, readable by users, naming the
-  loopback channel address and the daemon's public bundle. `<name>` is the
-  RT-O10 derivation — the same function and the same known-answer test as
-  the Unix socket and the Windows rendezvous file. **The service data home
-  is its containment** (RT-16: an ACL admitting the service account and
-  Administrators to write; nobody else can place a file there). A same-user
-  socket or pipe is never served by a service.
+- **Service mode, every platform:** a machine-wide rendezvous file,
+  `<the service's rendezvous directory>/shekyl-<name>`, readable by users,
+  naming the loopback channel address and the daemon's public bundle.
+  `<name>` is the RT-O10 derivation — the same function and the same
+  known-answer test as the Unix socket and the Windows rendezvous file.
+  **The service's rendezvous directory is fixed per platform and separate
+  from `data-dir`** (Rick, 2026-11-12): `/run/shekyl` on Linux, which the
+  unit's `RuntimeDirectory=shekyl` with `RuntimeDirectoryMode=0755`
+  creates; `/Library/Application Support/Shekyl` on macOS, which the
+  installer creates; and `%ProgramData%\shekyl` on Windows, unchanged
+  (RT-16). **That directory is its containment**: only the service's
+  account can place a file there. A service daemon checks it rather than
+  adopting it: it exists, it is not a link, it is owned by the daemon's
+  account, it is not writable by its group or by others, and the daemon is
+  not root. On any failure the start refuses, naming the condition
+  (`config.service.rendezvous`), so a non-service account that gives
+  `service` is refused. A same-user socket or pipe is never served by a
+  service.
 - **Named instances.** The rendezvous above is the **default
   instance**: one per user and network, or one per machine and network for
   a service, and the only thing "this computer" resolves to. A daemon

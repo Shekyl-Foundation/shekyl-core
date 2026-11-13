@@ -90,6 +90,10 @@ pub enum Code {
     /// The service run mode's machine-wide root is missing, mis-owned, or
     /// writable outside its permitted principals.
     ServiceRoot,
+    /// A service daemon's rendezvous directory is missing, a link, not the
+    /// daemon's account's, writable by its group or by others, or the daemon
+    /// runs as root (`RPC_CHANNEL.md` §7.1).
+    ServiceRendezvous,
     /// A run-as-me daemon has no per-user session directory and was named
     /// no socket directory (`RPC_CHANNEL.md` §7.1).
     SocketDirNone,
@@ -145,6 +149,7 @@ impl Code {
             Self::ServicePlatform => "config.service.platform",
             Self::ServiceNoManager => "config.service.no-manager",
             Self::ServiceRoot => "config.service.root",
+            Self::ServiceRendezvous => "config.service.rendezvous",
             Self::SocketDirNone => "config.socket-dir.none",
             Self::SocketDirUnusable => "config.socket-dir.unusable",
             Self::SocketPathLong => "config.socket-dir.path-long",
@@ -385,6 +390,11 @@ impl Diagnostic {
                 p("path"),
                 p("found")
             ),
+            Code::ServiceRendezvous => format!(
+                "`{opt}` cannot run here: {}; a service runs under the daemon's own account, never root, and the installer or the service manager gives that account the service's rendezvous directory {}",
+                p("found"),
+                p("path")
+            ),
             Code::SocketDirNone => format!(
                 "this account has no session directory ({}) to hold the owner's socket, so a daemon run as this user cannot start here; run it unattended with `--service`, keep this user's session past logout with `loginctl enable-linger`, or name a directory you own with `--rpc-socket-dir`",
                 p("looked")
@@ -507,6 +517,7 @@ mod tests {
             Code::ServicePlatform,
             Code::ServiceNoManager,
             Code::ServiceRoot,
+            Code::ServiceRendezvous,
             Code::SocketDirNone,
             Code::SocketDirUnusable,
             Code::SocketPathLong,

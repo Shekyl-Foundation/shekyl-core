@@ -19,7 +19,11 @@ ExecStartPre=/bin/mkdir -p /var/log/shekyl
 User=shekyl
 Group=shekyl
 
+# /run/shekyl: the service's rendezvous directory (RPC_CHANNEL.md §7.1),
+# the daemon's account's and readable by every user, which the daemon
+# checks and never creates.
 RuntimeDirectory=shekyl
+RuntimeDirectoryMode=0755
 StateDirectory=shekyl
 LogsDirectory=shekyl
 

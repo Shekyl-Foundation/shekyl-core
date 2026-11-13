@@ -110,6 +110,91 @@ pub fn plan(
     }))
 }
 
+/// A service's rendezvous directory, checked (`RPC_CHANNEL.md` §7.1; Rick,
+/// 2026-11-12): `None` for a daemon run as its user, and on Windows, where
+/// `service` waits for RT-W14. The directory is fixed per platform
+/// ([`Platform::service_rendezvous`]) and checked, never adopted: the
+/// daemon is not root, and the directory exists, is not a link, is owned by
+/// the daemon's account, and is not writable by its group or by others. A
+/// non-service account that gives `service` fails the ownership check.
+///
+/// # Errors
+///
+/// `config.service.rendezvous`, naming the condition that failed.
+pub fn service_rendezvous(
+    config: &DaemonConfig,
+    platform: &Platform,
+) -> Result<Option<PathBuf>, Diagnostic> {
+    if config.run_mode != RunMode::Service || cfg!(windows) {
+        return Ok(None);
+    }
+    let refuse = |path: &str, found: String| {
+        Diagnostic::new(Code::ServiceRendezvous, Source::Cli)
+            .option("service")
+            .param("path", path)
+            .param("found", found)
+    };
+    let Some(dir) = &platform.service_rendezvous else {
+        return Err(refuse(
+            "(none)",
+            "this platform names no service rendezvous directory".to_owned(),
+        ));
+    };
+    check_service_dir(dir, euid())
+        .map(|()| Some(dir.clone()))
+        .map_err(|found| refuse(&dir.display().to_string(), found))
+}
+
+#[cfg(unix)]
+fn euid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
+#[cfg(not(unix))]
+fn euid() -> u32 {
+    u32::MAX
+}
+
+/// The service directory's conditions for the account `me`, in the order a
+/// refusal names them; the error is the clause that failed, path included.
+#[cfg(unix)]
+fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let shown = dir.display();
+    if me == 0 {
+        return Err("the daemon runs as root".to_owned());
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => format!("{shown} does not exist"),
+        _ => format!("{shown} cannot be read: {e}"),
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("{shown} is a symbolic link"));
+    }
+    if !meta.is_dir() {
+        return Err(format!("{shown} is not a directory"));
+    }
+    if meta.uid() != me {
+        return Err(format!(
+            "{shown} is owned by uid {}, not this account (uid {me})",
+            meta.uid()
+        ));
+    }
+    let mode = meta.permissions().mode() & 0o7777;
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "{shown} is writable by its group or by others (mode {mode:04o})"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_service_dir(_dir: &std::path::Path, _me: u32) -> Result<(), String> {
+    Ok(())
+}
+
 /// A Unix socket path's buffer, its terminator included: `sun_path` is 108
 /// bytes on Linux and 104 on macOS and the BSDs (`RPC_CHANNEL.md` §7.1).
 const SUN_PATH_MAX: usize = if cfg!(target_os = "linux") { 108 } else { 104 };
@@ -233,6 +318,7 @@ mod tests {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
             session_dir: session.map(Path::to_path_buf),
+            service_rendezvous: None,
         }
     }
 
@@ -386,6 +472,107 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(d.code, Code::SocketPathLong);
+    }
+
+    fn service_config() -> DaemonConfig {
+        config(&[
+            "--network",
+            "regtest",
+            "--service",
+            "--data-dir",
+            "/var/lib/shekyl",
+            "--log-file",
+            "/var/log/shekyl/shekyld.log",
+        ])
+    }
+
+    fn with_rendezvous(dir: &Path) -> Platform {
+        Platform {
+            service_rendezvous: Some(dir.to_path_buf()),
+            ..platform(None)
+        }
+    }
+
+    /// The service's directory, the account's and closed to writers other
+    /// than it, is accepted; a daemon run as its user is not asked.
+    #[test]
+    fn a_service_accepts_its_own_closed_rendezvous_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            service_rendezvous(&service_config(), &with_rendezvous(dir.path())),
+            Ok(Some(dir.path().to_path_buf()))
+        );
+        let session = private_dir();
+        assert_eq!(
+            service_rendezvous(
+                &config(&["--network", "regtest"]),
+                &with_rendezvous(session.path())
+            ),
+            Ok(None)
+        );
+    }
+
+    /// Each condition is checked, not adopted, and the refusal names the one
+    /// that failed. Red edit: drop the group/other write check and the 0775
+    /// case is accepted.
+    #[test]
+    fn a_service_rendezvous_directory_is_refused_by_condition() {
+        let found = |dir: &Path| {
+            let d = service_rendezvous(&service_config(), &with_rendezvous(dir)).unwrap_err();
+            assert_eq!(d.code, Code::ServiceRendezvous);
+            assert_eq!(d.option.as_deref(), Some("service"));
+            d.params
+                .iter()
+                .find(|(k, _)| *k == "found")
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        let base = tempfile::tempdir().unwrap();
+        assert!(found(&base.path().join("absent")).contains("does not exist"));
+
+        let open = base.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(found(&open).contains("writable by its group or by others"));
+
+        let target = base.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(found(&link).contains("symbolic link"));
+
+        let none = Platform {
+            service_rendezvous: None,
+            ..platform(None)
+        };
+        let d = service_rendezvous(&service_config(), &none).unwrap_err();
+        assert_eq!(d.code, Code::ServiceRendezvous);
+    }
+
+    /// A root daemon is refused whatever the directory is.
+    #[test]
+    fn a_root_service_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_service_dir(dir.path(), 0),
+            Err("the daemon runs as root".to_owned())
+        );
+    }
+
+    /// A non-service account that gives `service` is refused: the
+    /// directory is not its own. `/` stands for a directory the service
+    /// manager gave another account. Runs as an ordinary account.
+    #[test]
+    fn a_non_service_account_giving_service_is_refused() {
+        assert!(
+            !rustix::process::geteuid().is_root(),
+            "run the tests as an ordinary account"
+        );
+        let d =
+            service_rendezvous(&service_config(), &with_rendezvous(Path::new("/"))).unwrap_err();
+        let found = &d.params.iter().find(|(k, _)| *k == "found").unwrap().1;
+        assert!(found.contains("owned by uid 0"), "{found}");
     }
 
     /// A directory owned by another account is refused. The test must run

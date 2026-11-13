@@ -138,6 +138,22 @@ fn darwin_user_temp_dir() -> Option<PathBuf> {
     Some(dir.components().collect())
 }
 
+/// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
+/// §7.1): what the installer or the service manager creates, never the
+/// daemon.
+#[must_use]
+pub fn service_rendezvous() -> Option<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Some(PathBuf::from("/run/shekyl"))
+    } else if cfg!(target_os = "macos") {
+        Some(PathBuf::from("/Library/Application Support/Shekyl"))
+    } else if cfg!(windows) {
+        program_data().map(|pd| pd.join("shekyl"))
+    } else {
+        None
+    }
+}
+
 /// This account's and this machine's roots, as the daemon's configuration
 /// takes them: the one constructor the daemon's start, the snapshot export
 /// and the utilities' default data directory share.
@@ -147,6 +163,7 @@ pub fn current() -> shekyl_daemon_config::Platform {
         home: account_home(),
         program_data: program_data(),
         session_dir: session_dir(),
+        service_rendezvous: service_rendezvous(),
     }
 }
 

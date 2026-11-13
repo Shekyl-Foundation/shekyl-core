@@ -77,6 +77,7 @@ fn run_child_if_requested() {
             home: Some(dir),
             program_data: None,
             session_dir: None,
+            service_rendezvous: None,
         },
     );
     std::process::exit(status);
