@@ -3354,8 +3354,9 @@ comments in `params.rs` and `shekyl-chain-rules`' `rules/block_weight.rs`,
 the consensus digest re-pinned in `shekyl-rpc-types`' `build.rs`, and the
 digest line in the sim's `baseline.rs`. The pins attribute the three
 fixtures they read; the fourth, the full `--esr10` narration, has an
-on-demand pin (85 CPU-minutes) that was not run at the parent and moved
-only in the cells the other three locate.
+on-demand pin (85 CPU-minutes) that was not run at the parent; it moved
+only in the cells the other three locate, and the regeneration on the PR's
+last head rendered it byte for byte as committed.
 
 **The mechanism.** The effective median is the short-term median clamped
 between the long-term median and S times it (CEN-G6b). A burst raises the
@@ -3441,15 +3442,12 @@ longer moves it.
 
 **Regenerated** under `SHEKYL_PINNED_REGEN_DECISION="2026-11-13 ESR-18:
 #1323's surge re-sign (S = 3, interim ruling 2026-11-08) moved the
-narrations; recorded after the fact in ECONOMICS_SIM_PRODUCTION_REBASE.md
-§5.30"`, through `regen_stage2_narration_fixtures` and
-`regen_esr10_narration_fixtures` (the four narration fixtures). The A6
-verdict's wording was then regenerated under
-`SHEKYL_PINNED_REGEN_DECISION="2026-11-13 ESR-18: the A6 verdict line names
-the worst penalty-free slew, the surge factor it was measured at and the
-gate's result (Rick, 2026-11-13, on Copilot's finding); the verdict is
-unchanged; recorded in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30"`, through
-`regen_stage2_narration_fixtures`: one line in each stage2 fixture.
+narrations, and the A6 verdict line now states the worst penalty-free slew,
+the surge factor it was measured at and the gate's result (Rick,
+2026-11-13); recorded after the fact in ECONOMICS_SIM_PRODUCTION_REBASE.md
+§5.31"`, through `regen_stage2_narration_fixtures` and
+`regen_esr10_narration_fixtures` (the four narration fixtures), on a tree
+that carries §5.30's A5 decision (#1327).
 
 **The gap, closed.** A change to a value the sim reads could not move a
 narration at review: the pins ran only at night. `rust-audit-test.yml`'s
