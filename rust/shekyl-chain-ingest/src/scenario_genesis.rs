@@ -26,16 +26,14 @@
 
 use core::num::NonZeroU128;
 
-use shekyl_chain_rules::Substrate;
-use shekyl_chain_rules::{form, Candidate, CappedEpoch, FormAttempt, FormClaims, ReferenceClaims};
+use shekyl_chain_rules::{Candidate, CappedEpoch, Substrate};
 use shekyl_genesis_tool::builder::genesis_block;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::{Network, NetworkId};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 
-use super::{handler_error, MinerKeys, Scenario, StepOutcome};
-use crate::connector::Apply;
+use super::{MinerKeys, Scenario, StepOutcome};
 use crate::schedule::ChainRules;
 
 /// `network`'s genesis block as the node connects it: the table's coinbase
@@ -101,9 +99,9 @@ where
     }
 
     /// Offer `block` as this chain's block 0: formed under the chain's own
-    /// claims at height 0 and applied through the connector's door, as the
-    /// node offers its pinned genesis. The rules judge it whole — CEN-E1
-    /// against the chain's genesis pin among them — and a refusal is
+    /// claims at height 0 and applied through the connector's door, the
+    /// same form and apply a mined block takes. The rules judge it whole —
+    /// CEN-E1 against the chain's genesis pin among them — and a refusal is
     /// returned with its row, not panicked: the identity test offers one
     /// network's genesis to another network's chain on purpose.
     ///
@@ -114,38 +112,19 @@ where
     pub async fn offer_genesis(&mut self, block: &Block) -> Result<BlockHash, StepOutcome> {
         let height = BlockHeight::ZERO;
         let (seed, target) = self.claimed_seed_and_target(height).await?;
-        let rule_set = self.rules.in_force(height);
         // A genesis lists nothing, so it names no reference to claim.
-        let candidate = Candidate::new(block.clone(), Vec::new());
-        self.substrate.pin_seed(&seed);
-        let formed = form(
-            candidate,
-            &FormClaims {
-                rule_set: &rule_set,
-                seed,
-                target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault")
-        .map_err(StepOutcome::Refused)?;
-        let applied = self
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
-            .await
-            .map_err(handler_error)
-            .map_err(StepOutcome::Connector)?;
+        let formed = self.form_at(
+            height,
+            Candidate::new(block.clone(), Vec::new()),
+            seed,
+            target,
+        )?;
+        let applied = self.apply_formed(height, formed).await?;
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
         }
+        self.record_header(height, block, target);
         let (_, hash) = applied.connected[0];
-        // Block 0's header joins the window every later claim reads.
-        self.targets
-            .extend(height, block, target)
-            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
         Ok(hash)
     }
 

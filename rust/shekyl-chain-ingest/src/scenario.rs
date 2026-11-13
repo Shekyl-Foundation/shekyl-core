@@ -52,7 +52,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    Substrate, Target,
+    StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -64,13 +64,13 @@ use shekyl_types::{
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
-use shekyl_wire::Transaction;
+use shekyl_wire::{Block, Transaction};
 use zeroize::Zeroizing;
 
 use crate::connector::{
-    AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
-    Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize, Rewind, Rewound,
-    RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector,
+    ConnectorArgs, Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize,
+    Rewind, Rewound, RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
@@ -299,12 +299,7 @@ where
     /// [`mine_listing`](Self::mine_listing) applies what it built.
     pub async fn connect_template(&mut self, next: NextBlock) -> Result<Mined, StepOutcome> {
         let (height, formed, kept) = self.form_next(next)?;
-        let applied = self
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
-            .await
-            .map_err(handler_error)
-            .map_err(StepOutcome::Connector)?;
+        let applied = self.apply_formed(height, formed).await?;
         self.mined(height, applied, kept)
     }
 
@@ -342,41 +337,15 @@ where
     fn form_next(
         &mut self,
         next: NextBlock,
-    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
+    ) -> Result<(BlockHeight, StructurallyValid, Formed), StepOutcome> {
         let NextBlock {
             height,
             template,
             seed,
             target,
         } = next;
-        // Nothing the producer priced is handed to `connect`: the reward it
-        // priced is judged by F14b/F18, the burn by F17, and both are
-        // recorded from the verdict (the ledger that carried the burn left
-        // with wave B).
-        let rule_set = self.rules.in_force(height);
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
-        // The third claim, off the same ledger (its window covers CEN-I11's).
-        let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
-            Ok(references) => references,
-            Err(never) => match never {},
-        };
-        // The longhash looks the cache up. This driver is the chain, so
-        // it pins the seed first; a harness longhash's pin does nothing.
-        self.substrate.pin_seed(&seed);
-        let formed = form(
-            candidate,
-            &FormClaims {
-                rule_set: &rule_set,
-                seed,
-                target,
-                references: &references,
-                network: self.rules.trust().network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault");
-        let formed = formed.map_err(StepOutcome::Refused)?;
+        let formed = self.form_at(height, candidate, seed, target)?;
         Ok((
             height,
             formed,
@@ -386,6 +355,66 @@ where
                 target,
             },
         ))
+    }
+
+    /// Form `candidate` at `height` under this chain's claims.
+    ///
+    /// Nothing the producer priced is handed to `connect`: the reward it
+    /// priced is judged by F14b/F18, the burn by F17, and both are recorded
+    /// from the verdict. The third claim is read off this driver's ledger
+    /// (its window covers CEN-I11's). A block that lists nothing — a table
+    /// genesis — claims nothing. The longhash looks the cache up, so this
+    /// driver pins the seed first; a harness longhash's pin does nothing.
+    fn form_at(
+        &mut self,
+        height: BlockHeight,
+        candidate: Candidate,
+        seed: BlockHash,
+        target: Target,
+    ) -> Result<StructurallyValid, StepOutcome> {
+        let rule_set = self.rules.in_force(height);
+        let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
+            Ok(references) => references,
+            Err(never) => match never {},
+        };
+        self.substrate.pin_seed(&seed);
+        form(
+            candidate,
+            &FormClaims {
+                rule_set: &rule_set,
+                seed,
+                target,
+                references: &references,
+                network: self.network_id(),
+            },
+            &self.substrate,
+            FormAttempt::FIRST,
+        )
+        .expect("the driver's substrate does not fault")
+        .map_err(StepOutcome::Refused)
+    }
+
+    /// Apply one formed block through the connector's door.
+    async fn apply_formed(
+        &self,
+        height: BlockHeight,
+        formed: StructurallyValid,
+    ) -> Result<Applied, StepOutcome> {
+        self.connector
+            .ask(Apply(vec![(height, Ok(formed))]))
+            .await
+            .map_err(handler_error)
+            .map_err(StepOutcome::Connector)
+    }
+
+    /// The connected block's header joins the window the next claim reads.
+    /// A refused block never does, so a later mine claims against the
+    /// chain.
+    fn record_header(&mut self, height: BlockHeight, block: &Block, target: Target) {
+        self.targets
+            .extend(height, block, target)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
+        self.targets.forget_below_window_of(height);
     }
 
     /// What one applied block came to, and its header in the ledger.
@@ -403,13 +432,7 @@ where
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
         }
-        // Connected: its header joins the window the next claim reads. A
-        // refused block never does, so a test that mines again after a
-        // refusal claims against the chain, not the refused block.
-        self.targets
-            .extend(height, &template.block, target)
-            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
-        self.targets.forget_below_window_of(height);
+        self.record_header(height, &template.block, target);
         let (_, hash) = applied.connected[0];
         let judged_by = CenRow::ALL
             .iter()
