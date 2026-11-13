@@ -349,7 +349,7 @@ fn section_13_words_answer_a_regtest_daemon() {
         crate::commands::mine::cmd_mine_start(Some(&client), Some(1)).expect("mine start");
     assert_eq!(started["started"], true, "{started}");
     let mining = crate::commands::mine::cmd_mine_status(Some(&client)).expect("mine status");
-    assert_eq!(mining["active"], true, "{mining}");
+    assert!(mining.active, "{mining:?}");
     crate::commands::mine::cmd_mine_stop(Some(&client)).expect("mine stop");
 
     let marks = daemon.marks();
