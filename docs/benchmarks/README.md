@@ -198,15 +198,18 @@ numbers live that the gate reads.
 - Updated by the `update-baseline` job of the workflow on every
   push to `dev` that touches the same paths the per-PR gate triggers on. A bot-authored commit
   replaces the tip with the fresh capture.
-- After the push, the job's `drift alarm` step compares the fresh
-  capture with the baseline it replaced, through `compare.py` and its
-  thresholds (`scripts/bench/drift_report.sh`, the comparison the nightly
-  full-weight capture runs too). A row past its fail threshold, or a row
-  gone, turns the push's run red. The baseline has already moved, so a
-  count changed on purpose is red on one push and is then the figure the
-  next is held to. This is the one place every row is counted on the
-  merged tree: a pull request captures only the rows its change can
-  reach, and a warn passes it.
+- After the push, the job's `drift alarm` step compares that capture
+  with the baseline it replaced (`scripts/bench/drift_report.sh`).
+  The capture is every row of the pull-request set. A pull request
+  runs only the rows its change can reach; the nightly full-weight
+  rows are a different capture, and `bench-full-drift` calls the same
+  script on that set. A row past its fail threshold, or a row gone,
+  turns the run red, the log names the row, and the dev-red reporter
+  opens the issue. A warn does not redden the run. The baseline has
+  already moved, so each push is judged against the capture before
+  it: a step that stays inside the warn band does not accumulate, and
+  a count that crossed the fail threshold is red on that push and is
+  then the figure the next is held to.
 - If the branch does not exist (first-time bootstrap), the gate
   posts a `bootstrap-pending` comment on the PR and passes. The
   first subsequent push to `dev` that the workflow sees creates

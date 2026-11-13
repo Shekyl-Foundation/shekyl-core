@@ -41,15 +41,11 @@ import subprocess
 import sys
 from typing import Any
 
+from compare import VERDICT_ORDER, format_delta_pct
+
 
 MARKER = "<!-- shekyl-benchmarks-comment -->"
-
-
-def _fmt_pct(delta: float) -> str:
-    # Show at most one decimal and always include the sign, because
-    # "0.0%" reads very differently from "+0.0%" on a delta column.
-    sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta * 100:.2f}%"
+_VERDICT_RANK = {name: index for index, name in enumerate(VERDICT_ORDER)}
 
 
 def _fmt_verdict_badge(verdict: str) -> str:
@@ -182,10 +178,10 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
     # bucket, by absolute delta descending so the biggest swings are
     # near the top of the bucket.
     def _sort_key(e: dict[str, Any]) -> tuple[int, float]:
-        rank = {"fail": 0, "warn": 1, "unrouted": 2, "ok": 3}.get(
-            e["verdict"], 4
+        return (
+            _VERDICT_RANK.get(e["verdict"], len(VERDICT_ORDER)),
+            -abs(e["delta_pct"]),
         )
-        return (rank, -abs(e["delta_pct"]))
 
     for e in sorted(report["entries"], key=_sort_key):
         lines.append(
@@ -194,7 +190,7 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
             f"| {e['class']} "
             f"| {e['baseline']:,} "
             f"| {e['pr']:,} "
-            f"| {_fmt_pct(e['delta_pct'])} |"
+            f"| {format_delta_pct(e['delta_pct'])} |"
         )
 
     for fid in summary["missing_in_pr"]:
@@ -241,7 +237,7 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
                     f"| `{e['full_id']}` "
                     f"| {bm / 1_000:.2f} µs "
                     f"| {pm / 1_000:.2f} µs "
-                    f"| {_fmt_pct(e['delta_pct'])} |"
+                    f"| {format_delta_pct(e['delta_pct'])} |"
                 )
             elif e["verdict"] == "added":
                 lines.append(

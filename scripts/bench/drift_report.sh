@@ -4,20 +4,20 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# One drift comparison: a capture against the capture before it, through
-# compare.py and its thresholds, with the per-row table printed (the
-# report's delta is a fraction; the table shows it as a percentage). The
-# nightly full-weight capture (nightly_drift.sh) and the push to dev's
-# baseline update (benchmarks.yml, update-baseline) both run it, so the
-# two alarms are one comparison.
+# One drift comparison: a later capture against an earlier one, through
+# compare.py. The log, including every row that makes the run red, is
+# compare.py's. The nightly full-weight capture (nightly_drift.sh) and
+# the push to dev's baseline update (benchmarks.yml, update-baseline)
+# both run it, so the two alarms share one comparator. They do not share
+# a row set: each caller passes the capture it just made.
 #
 #   drift_report.sh <label> <earlier shekyl_rust_v0.json> <later one> <what the earlier one is>
 #
-# Exit: compare.py's. 0 clean, 1 a row past its fail threshold or a row
-# gone, 2 an input error. Rule 46: the comparison's exit is kept and
-# returned; nothing here pipes a verdict.
+# Exit: compare.py's. 0 clean (a warn is clean), 1 a row past its fail
+# threshold or a row gone, 2 an input error. Rule 46: the comparison
+# runs unpiped and its exit is this script's exit.
 #
-# Needs jq and python3.
+# Needs python3.
 set -euo pipefail
 
 if [ "$#" -ne 4 ]; then
@@ -37,19 +37,6 @@ done
 
 report=$(mktemp)
 trap 'rm -f "${report}"' EXIT
-status=0
 python3 "$(dirname "$0")/compare.py" \
-  --baseline "${earlier}" --pr "${later}" --out "${report}" || status=$?
-if [ -s "${report}" ]; then
-  jq -r '
-    "earlier " + .baseline_git_rev[0:10] + " -> later " + .pr_git_rev[0:10],
-    (.entries[]
-      | "\(.verdict)\t"
-        + (if .delta_pct == null then "-" else (.delta_pct * 100 | tostring | .[0:8]) + "%" end)
-        + "\t\(.full_id)")' \
-    "${report}"
-fi
-if [ "${status}" -eq 1 ]; then
-  echo "::error::${label}: a row moved past its fail threshold, or a row is gone, against ${against}"
-fi
-exit "${status}"
+  --baseline "${earlier}" --pr "${later}" --out "${report}" \
+  --alarm-label "${label}" --alarm-against "${against}"
