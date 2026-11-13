@@ -28,15 +28,23 @@ use crate::marker::NetworkId;
 use crate::platform::{Platform, RunMode};
 use crate::sections::DaemonConfig;
 
-/// The checked place for the owner's socket.
+/// The checked place for the owner's leg: on Unix the socket, on Windows
+/// the rendezvous file that names the pipe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnerSocketPlan {
-    /// The socket's path: `<dir>/shekyl-<name>.sock`.
+    /// Unix: the socket, `<dir>/shekyl-<name>.sock`. Windows: the rendezvous
+    /// file, `<dir>\shekyl-<name>`.
     pub path: PathBuf,
     /// The directory that holds it.
     pub dir: PathBuf,
-    /// The account that owns the directory, which is this daemon's.
+    /// Unix: the account that owns the directory, which is this daemon's.
+    #[cfg(unix)]
     pub owner: u32,
+    /// Windows: the data home `%LOCALAPPDATA%\Shekyl` the default
+    /// rendezvous directory sits in, which the start creates owner-only and
+    /// labelled when it does not exist. `None` for a named directory, whose
+    /// parent is the operator's, and on Unix.
+    pub data_home: Option<PathBuf>,
     /// The instance, as the start line names it.
     pub instance: Instance,
 }
@@ -49,20 +57,25 @@ impl OwnerSocketPlan {
     }
 }
 
-/// The owner's socket for this configuration, checked: `None` for a
-/// service, which serves no owner socket, and on Windows, whose owner leg is
-/// a pipe.
+/// The owner's leg for this configuration, checked, with nothing created:
+/// `None` for a service, which serves no owner's leg (IG-Q105).
+///
+/// On Unix the leg is a socket in the session directory or `rpc-socket-dir`.
+/// On Windows it is a pipe named in a rendezvous file in
+/// `%LOCALAPPDATA%\Shekyl\rendezvous`, or in the directory `rpc-socket-dir`
+/// names on a test host; a directory that already exists must pass the
+/// rendezvous directory's check (its owner, its protections, its no-read-up
+/// label), and one that does not is created by the start.
 ///
 /// `named_source` is where `rpc-socket-dir` came from, for the refusal.
 ///
 /// # Errors
 ///
 /// - `config.socket-dir.none`: a run-as-me daemon with no session directory
-///   and no `rpc-socket-dir`;
-/// - `config.socket-dir.unusable`: the directory is missing, a link, not a
-///   directory, not this account's, not mode 0700, or on a network
-///   filesystem;
-/// - `config.socket-dir.path-long`: the socket's path is over the
+///   (Unix) or no local application data folder (Windows), and no
+///   `rpc-socket-dir`;
+/// - `config.socket-dir.unusable`: the directory fails its check;
+/// - `config.socket-dir.path-long`: on Unix, the socket's path is over the
 ///   platform's limit.
 pub fn plan(
     config: &DaemonConfig,
@@ -70,12 +83,14 @@ pub fn plan(
     network_id: &NetworkId,
     named_source: Source,
 ) -> Result<Option<OwnerSocketPlan>, Diagnostic> {
-    if config.run_mode == RunMode::Service || cfg!(windows) {
+    if config.run_mode == RunMode::Service {
         return Ok(None);
     }
-    let (dir, source, option) = match (&config.rpc.socket_dir, &platform.session_dir) {
+    let name = rendezvous_name(network_id, &config.rpc.instance);
+    let default_dir = default_dir(platform);
+    let (dir, source, option) = match (&config.rpc.socket_dir, &default_dir) {
         (Some(named), _) => (named.clone(), named_source, Some("rpc-socket-dir")),
-        (None, Some(session)) => (session.clone(), Source::Machine, None),
+        (None, Some(default)) => (default.clone(), Source::Machine, None),
         (None, None) => {
             return Err(Diagnostic::new(Code::SocketDirNone, Source::Machine)
                 .param("looked", session_dir_description()));
@@ -88,26 +103,62 @@ pub fn plan(
             None => d,
         }
     };
-    let owner = assert_dir(&dir).map_err(|found| {
+    let unusable = |found: String| {
         refuse(Code::SocketDirUnusable)
             .param("path", dir.display().to_string())
             .param("found", found)
-    })?;
-    let name = rendezvous_name(network_id, &config.rpc.instance);
-    let path = dir.join(format!("shekyl-{name}.sock"));
-    let length = path.as_os_str().len();
-    if length + 1 > SUN_PATH_MAX {
-        return Err(refuse(Code::SocketPathLong)
-            .param("path", path.display().to_string())
-            .param("length", length.to_string())
-            .param("limit", (SUN_PATH_MAX - 1).to_string()));
+    };
+    #[cfg(unix)]
+    {
+        let owner = assert_dir(&dir).map_err(unusable)?;
+        let path = dir.join(format!("shekyl-{name}.sock"));
+        let length = path.as_os_str().len();
+        if length + 1 > SUN_PATH_MAX {
+            return Err(refuse(Code::SocketPathLong)
+                .param("path", path.display().to_string())
+                .param("length", length.to_string())
+                .param("limit", (SUN_PATH_MAX - 1).to_string()));
+        }
+        Ok(Some(OwnerSocketPlan {
+            path,
+            dir,
+            owner,
+            data_home: None,
+            instance: config.rpc.instance.clone(),
+        }))
     }
-    Ok(Some(OwnerSocketPlan {
-        path,
-        dir,
-        owner,
-        instance: config.rpc.instance.clone(),
-    }))
+    #[cfg(not(unix))]
+    {
+        let _ = &refuse;
+        if dir.exists() {
+            shekyl_win_sec::rendezvous::check_owner_only_labelled(&dir)
+                .map_err(|e| unusable(e.to_string()))?;
+        }
+        let data_home = match (&config.rpc.socket_dir, &platform.home) {
+            (None, Some(home)) => Some(home.join("Shekyl")),
+            _ => None,
+        };
+        Ok(Some(OwnerSocketPlan {
+            path: dir.join(format!("shekyl-{name}")),
+            dir,
+            data_home,
+            instance: config.rpc.instance.clone(),
+        }))
+    }
+}
+
+/// Where the owner's leg goes when `rpc-socket-dir` is unset: the session
+/// directory on Unix, `%LOCALAPPDATA%\Shekyl\rendezvous` on Windows (Rick,
+/// 2026-11-12).
+fn default_dir(platform: &Platform) -> Option<PathBuf> {
+    if cfg!(windows) {
+        platform
+            .home
+            .as_ref()
+            .map(|home| home.join("Shekyl").join("rendezvous"))
+    } else {
+        platform.session_dir.clone()
+    }
 }
 
 /// A service's rendezvous directory, checked (`RPC_CHANNEL.md` §7.1; Rick,
@@ -201,11 +252,14 @@ fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
 
 /// A Unix socket path's buffer, its terminator included: `sun_path` is 108
 /// bytes on Linux and 104 on macOS and the BSDs (`RPC_CHANNEL.md` §7.1).
+#[cfg(unix)]
 const SUN_PATH_MAX: usize = if cfg!(target_os = "linux") { 108 } else { 104 };
 
 /// What a refusal says the daemon looked for.
 fn session_dir_description() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(windows) {
+        "the local application data folder is not reported"
+    } else if cfg!(target_os = "linux") {
         "/run/user/<uid> does not exist"
     } else if cfg!(target_os = "macos") {
         "the per-user temporary directory is not reported"
@@ -247,12 +301,6 @@ pub fn assert_dir(dir: &std::path::Path) -> Result<u32, String> {
         return Err("it is on a network filesystem".to_owned());
     }
     Ok(me)
-}
-
-/// Windows has no socket directory; its owner leg is a pipe.
-#[cfg(not(unix))]
-pub fn assert_dir(_dir: &std::path::Path) -> Result<u32, String> {
-    Err("a socket directory is a Unix directory".to_owned())
 }
 
 /// Whether the filesystem holding `dir` is local. On Linux the filesystem's

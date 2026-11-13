@@ -102,6 +102,14 @@ shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "service"] }
 
+[target.'cfg(windows)'.dependencies]
+# The owner's pipe, its rendezvous directory and file, and the start-up
+# dial's peer check: the workspace's Windows `unsafe` lives there.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+# The owner's pipe name is drawn at random on every start (RPC_CHANNEL.md
+# §7.1). The pin the channel crate already carries.
+rand_core = { version = "0.6", features = ["getrandom"] }
+
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test
 # (tests/submit_verifier.rs) — the same dev-only construction stack as

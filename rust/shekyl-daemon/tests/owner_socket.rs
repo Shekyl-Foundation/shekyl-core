@@ -3,25 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The owner's socket on a running daemon (`docs/design/RPC_CHANNEL.md`
-//! RT-15, RT-16, §7.1).
+//! The owner's leg on a running daemon (`docs/design/RPC_CHANNEL.md` RT-15,
+//! RT-16, §7.1): on Unix a socket in a private directory, on Windows a pipe
+//! named in a rendezvous file.
 //!
-//! A daemon run as its user serves that user on a socket in a private
-//! directory, at the host administrator's authority. Its life is the
-//! socket's: when the socket goes, the daemon stops cleanly. A clean stop
-//! removes the socket. A second daemon of the same account, network and
-//! instance refuses to start while the first answers.
+//! A daemon run as its user serves that user on its owner's leg, at the
+//! host administrator's authority. Its life is the rendezvous's: when the
+//! socket or the record goes, the daemon stops cleanly. A clean stop removes
+//! it. A second daemon of the same account, network and instance refuses to
+//! start while the first answers.
 //!
 //! Each test re-executes this binary as the daemon child, which runs
 //! `shekyl_daemon::run::main` with a private `--rpc-socket-dir`, as every
-//! harness does.
-
-#![cfg(unix)]
+//! harness does. On Windows that directory does not exist yet: the daemon
+//! creates it with its owner, protections and label, and refuses one that
+//! lacks them.
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -92,13 +91,18 @@ struct Node {
 
 /// A working directory with its private socket directory, as a harness
 /// makes it. Named `s`: under macOS's per-user temporary directory a
-/// longer name leaves the socket's path over the 104-byte limit.
+/// longer name leaves the socket's path over the 104-byte limit. On Windows
+/// the daemon makes the directory itself, labelled.
 fn workdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a directory");
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(dir.path().join("s"))
-        .expect("the socket directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir.path().join("s"))
+            .expect("the socket directory");
+    }
     dir
 }
 
@@ -151,7 +155,10 @@ impl Node {
         );
     }
 
+    /// The socket (Unix) or the rendezvous record (Windows) the daemon
+    /// published: `shekyl-<24 hex>`, with `.sock` on Unix.
     fn socket(&self) -> Option<PathBuf> {
+        let suffix = if cfg!(unix) { ".sock" } else { "" };
         std::fs::read_dir(self.dir.join("s"))
             .ok()?
             .filter_map(Result::ok)
@@ -159,7 +166,11 @@ impl Node {
             .find(|path| {
                 path.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("shekyl-") && n.ends_with(".sock"))
+                    .and_then(|n| n.strip_prefix("shekyl-"))
+                    .and_then(|n| n.strip_suffix(suffix))
+                    .is_some_and(|hex| {
+                        hex.len() == 24 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
             })
     }
 
@@ -187,12 +198,11 @@ impl Node {
         None
     }
 
-    fn terminate(&self) {
-        let pid = self.child.id().to_string();
-        let mut kill = Command::new("kill");
-        kill.args(["-TERM", pid.as_str()]);
-        let status = shekyl_tor_control_client::spawn_lock::status(&mut kill).expect("kill starts");
-        assert!(status.success(), "kill -TERM {pid}: {status}");
+    /// Ask the daemon to stop over its owner's leg: `daemon_stop`, the
+    /// host administrator's.
+    fn stop(rendezvous: &Path) {
+        let reply = post(rendezvous, "daemon_stop").expect("daemon_stop is answered");
+        assert!(reply.contains("\"result\""), "{reply}");
     }
 }
 
@@ -205,13 +215,28 @@ impl Drop for Node {
     }
 }
 
-/// One JSON-RPC call over the owner's socket; the reply's body, or `None`
-/// while nothing serves it.
-fn post(path: &Path, method: &str) -> Option<String> {
-    let mut stream = UnixStream::connect(path).ok()?;
+/// The owner's leg at `rendezvous`, connected: the socket itself on Unix,
+/// the pipe the record names on Windows, opened through the peer check.
+#[cfg(unix)]
+fn connect(rendezvous: &Path) -> Option<std::os::unix::net::UnixStream> {
+    let stream = std::os::unix::net::UnixStream::connect(rendezvous).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .ok()?;
+    Some(stream)
+}
+
+#[cfg(windows)]
+fn connect(rendezvous: &Path) -> Option<shekyl_win_sec::VerifiedPipe> {
+    let record = std::fs::read_to_string(rendezvous).ok()?;
+    let pipe = record.lines().find_map(|l| l.strip_prefix("pipe "))?;
+    shekyl_win_sec::open_verified(pipe).ok()
+}
+
+/// One JSON-RPC call over the owner's leg; the reply's body, or `None`
+/// while nothing serves it.
+fn post(path: &Path, method: &str) -> Option<String> {
+    let mut stream = connect(path)?;
     let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
     let request = format!(
         "POST /json_rpc HTTP/1.1\r\nHost: owner\r\nContent-Type: application/json\r\n\
@@ -226,10 +251,10 @@ fn post(path: &Path, method: &str) -> Option<String> {
 }
 
 /// **The owner is the host's administrator, and the daemon's life is its
-/// socket's.** Over the socket, a host-only read is answered, not refused
-/// as host-only. Removing the socket stops the daemon cleanly (exit 0),
-/// and it says why. Red edit: start the RPC with no owner's socket, and
-/// nothing answers in the socket directory.
+/// rendezvous's.** Over the owner's leg, a host-only read is answered, not
+/// refused as host-only. Removing the socket (Unix) or the record (Windows)
+/// stops the daemon cleanly (exit 0), and it says why. Red edit: start the
+/// RPC with no owner's leg, and nothing answers in the socket directory.
 #[test]
 fn removing_the_owners_socket_stops_the_daemon_cleanly() {
     const NAME: &str = "removing_the_owners_socket_stops_the_daemon_cleanly";
@@ -255,11 +280,12 @@ fn removing_the_owners_socket_stops_the_daemon_cleanly() {
     );
 }
 
-/// **A clean stop removes the socket, and a second daemon of the same
+/// **A clean stop removes the rendezvous, and a second daemon of the same
 /// account, network and instance is refused while the first answers.** The
-/// second has its own data directory, so it is the socket that refuses it,
-/// not the data directory's lock. Red edit: keep the rendezvous on stop,
-/// and the socket is still there after the first daemon exits.
+/// second has its own data directory, so it is the rendezvous that refuses
+/// it, not the data directory's lock. The first is stopped over its owner's
+/// leg (`daemon_stop`). Red edit: keep the rendezvous on stop, and it is
+/// still there after the first daemon exits.
 #[test]
 fn a_second_daemon_is_refused_and_a_clean_stop_removes_the_socket() {
     const NAME: &str = "a_second_daemon_is_refused_and_a_clean_stop_removes_the_socket";
@@ -280,10 +306,13 @@ fn a_second_daemon_is_refused_and_a_clean_stop_removes_the_socket() {
     );
     assert!(socket.exists(), "the first daemon's socket was not touched");
 
-    first.terminate();
+    Node::stop(&socket);
     let status = first
         .ended_within(STOP_ARRIVES)
         .unwrap_or_else(|| panic!("the daemon kept running\n{}", first.evidence()));
     assert!(status.success(), "{status}\n{}", first.evidence());
-    assert!(!socket.exists(), "a clean stop removes the owner's socket");
+    assert!(
+        !socket.exists(),
+        "a clean stop removes the owner's rendezvous"
+    );
 }

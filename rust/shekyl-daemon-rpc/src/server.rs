@@ -320,11 +320,6 @@ pub(crate) async fn serve_bound(
             _signal = fail.wait_for(|&fail| fail) => {}
         }
     };
-    #[cfg(not(unix))]
-    if let Some((_, listener)) = owner {
-        match listener {}
-    }
-    #[cfg(unix)]
     if let Some((app, listener)) = owner {
         let listener = crate::owner::serve_ready(listener)?;
         serves.spawn(crate::listener_http::serve_plaintext(

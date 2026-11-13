@@ -168,18 +168,22 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     let lines = announced.into_lines();
     announce_all(&lines);
 
-    // The owner's socket, dialled and bound before the node opens: a second
-    // daemon of this account, network and instance refuses here, with
-    // nothing opened (`RPC_CHANNEL.md` §7.1). The RPC serves it once the
-    // node is up.
-    let owner = match walked
-        .owner_socket
-        .as_ref()
-        .map(|plan| shekyl_daemon_rpc::owner::OwnerSocket::bind(plan, network.name()))
-        .transpose()
-    {
-        Ok(owner) => owner,
-        Err(d) => return refuse(&[d]),
+    // The RPC's runtime and the owner's leg, dialled and bound before the
+    // node opens: a second daemon of this account, network and instance
+    // refuses here, with nothing opened (`RPC_CHANNEL.md` §7.1). The RPC
+    // serves it once the node is up.
+    let prepared = match shekyl_daemon_rpc::run::prepare(
+        walked
+            .owner_socket
+            .as_ref()
+            .map(|plan| (plan, network.name())),
+    ) {
+        Ok(prepared) => prepared,
+        Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return refuse(&[d]),
+        Err(shekyl_daemon_rpc::run::PrepareError::Runtime(e)) => {
+            tell(&mut std::io::stderr(), &format!("shekyld: the RPC's {e}"));
+            return EXIT_FAILED;
+        }
     };
 
     // The settlement schedule, armed before the node whose first epoch
@@ -274,7 +278,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         network,
         Arc::new(move |limits| link_owner.set_limits(limits)),
     ));
-    let status = supervise(&config, &pool, options, node, tor_inbox, owner);
+    let status = supervise(&config, &pool, options, node, tor_inbox, prepared);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -311,7 +315,7 @@ fn supervise(
     options: OptionsHandle,
     node: shekyl_node::Node,
     tor_inbox: Option<tor::Prepared>,
-    owner: Option<shekyl_daemon_rpc::owner::OwnerSocket>,
+    prepared: shekyl_daemon_rpc::run::Prepared,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
     // failed start: the node is torn down the one way. The owner's socket
@@ -322,7 +326,8 @@ fn supervise(
         options,
         node.handles(),
         config.dev.rpc,
-        owner.map(|socket| (socket, gone)),
+        prepared,
+        gone,
     ) {
         Ok(rpc) => Some(rpc),
         Err(refusal) => {
@@ -687,7 +692,7 @@ mod tests {
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
             None,
-            None,
+            shekyl_daemon_rpc::run::prepare(None).expect("the RPC's runtime"),
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");

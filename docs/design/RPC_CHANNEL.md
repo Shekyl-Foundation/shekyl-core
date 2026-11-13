@@ -1980,7 +1980,14 @@ client never reaches the wrong network's node.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
   rendezvous file, `%LOCALAPPDATA%\Shekyl\rendezvous\shekyl-<name>`, that only the
-  user can read. `<name>` is the same derivation as the Unix socket's
+  user can read. The record is three lines: `shekyl-rendezvous 1`,
+  `pipe \\.\pipe\shekyl-owner-<32 hex>` and `session <logon SID>`. It is
+  published after the pipe exists, by writing a fresh labelled file
+  beside it and renaming it over the path, so a reader sees the old record
+  or the new one. On a test host, `rpc-socket-dir` names the rendezvous
+  directory in place of `%LOCALAPPDATA%\Shekyl\rendezvous`, under the
+  same rule: created with its owner, protections and label, or checked
+  (`INPUT_GRAMMAR.md` IG-Q104). `<name>` is the same derivation as the Unix socket's
   (RT-O10, above): one function, one known-answer test, and no
   per-network or per-instance directory. A pipe has no containing
   directory, so containment is rebuilt here: with no predictable name there
