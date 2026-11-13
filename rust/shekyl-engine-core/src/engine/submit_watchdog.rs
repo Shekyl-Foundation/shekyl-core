@@ -11,12 +11,11 @@
 //! scaffolding for that ownership: the *pure decision kernel* of the
 //! watchdog — held-tx tracking keyed on chain confirmation, the
 //! privacy-tiered escape ladder with presence branching, daemon-health
-//! gating, and the horizon bound — with no driver attached. The
-//! driving actor (cadence is role policy: staking vs plain wallets need
-//! not share periodicity) lands with the wallet plan; a pure kernel
-//! makes the §10 item 8 ladder-ordering and presence-branching
-//! obligations unit-testable now and keeps the eventual actor a thin
-//! scheduler around audited decisions.
+//! gating, and the horizon bound. The kernel stays pure; its driver is
+//! [`submit_lifecycle`](super::submit_lifecycle), ticked by the engine
+//! cadence driver's submit leg, a thin scheduler around these audited
+//! decisions, and the §10 item 8 ladder-ordering and presence-branching
+//! obligations are unit-tested here.
 //!
 //! # The tracked substrate
 //!

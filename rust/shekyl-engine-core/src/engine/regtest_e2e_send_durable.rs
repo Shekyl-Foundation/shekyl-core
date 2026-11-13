@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::{create_wallet, mine_address_from_seed, RegtestDaemon};
+use super::{mine_address_from_seed, regtest_expectation, regtest_params, RegtestDaemon};
 
 /// A JSON-RPC refusal from the wallet server.
 #[derive(Debug)]
@@ -210,13 +210,26 @@ fn tail(text: &str) -> String {
 
 const PASSWORD: &str = "a19-send-durable";
 
+/// The wallet's name on the wire: the server opens `<wallet-dir>/<name>.wallet`.
+const NAME: &str = "a19";
+
 /// A wallet created from `seed` and closed, in a fresh directory, beside a
 /// daemon that mines to its address; returns the daemon, the directory,
 /// and a directory for the server's logs.
 async fn wallet_and_daemon(seed_byte: u8) -> (RegtestDaemon, tempfile::TempDir, tempfile::TempDir) {
     let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = RegtestDaemon::start_for_seed(&seed).await;
-    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, PASSWORD.as_bytes()).await;
+    let tmp = tempfile::tempdir().expect("wallet dir");
+    let creds = super::super::lifecycle::Credentials::password_only(PASSWORD.as_bytes());
+    let base = tmp.path().join(format!("{NAME}.wallet"));
+    let rpc = shekyl_rpc_transport::HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("daemon rpc");
+    let created = super::super::Engine::<super::super::SoloSigner>::create(
+        regtest_params(&base, &creds, &seed),
+        super::super::DaemonClient::verifying(rpc, regtest_expectation()),
+    )
+    .expect("create the wallet");
     created
         .close(&super::super::lifecycle::Credentials::password_only(
             PASSWORD.as_bytes(),
@@ -228,10 +241,7 @@ async fn wallet_and_daemon(seed_byte: u8) -> (RegtestDaemon, tempfile::TempDir, 
 }
 
 fn open(server: &WalletServer) {
-    server.ok(
-        "open_wallet",
-        json!({"name": "wallet", "password": PASSWORD}),
-    );
+    server.ok("open_wallet", json!({"name": NAME, "password": PASSWORD}));
 }
 
 fn refresh(server: &WalletServer) {
