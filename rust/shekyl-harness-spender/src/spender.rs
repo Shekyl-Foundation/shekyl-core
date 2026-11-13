@@ -104,7 +104,9 @@ impl Spender {
     /// The tree after every block of `mined`, in order, from genesis, for a
     /// chain that mines its own genesis: its spends sign under the harness
     /// id, the id `Trust::UNPINNED` validates them under
-    /// (`NETWORK_IDENTITY.md` NI-Q4).
+    /// (`NETWORK_IDENTITY.md` NI-Q4). Goes with the harness id: `CF-1b`
+    /// moves its callers to [`Self::on`] with their chain's own id, and
+    /// `CF-5` deletes the id (`CHAIN_FORGE.md` `CF-R15`).
     #[must_use]
     pub fn over<B: MinedBlock>(mined: &[B]) -> Self {
         Self::on(shekyl_network::HARNESS_NETWORK_ID, mined)

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_network::Network;
 use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
@@ -57,6 +58,7 @@ fn causes() -> Recorded {
 }
 
 fn config(
+    network_id: [u8; 16],
     option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
@@ -66,7 +68,7 @@ fn config(
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         option,
         column: ConnectorId::Clearnet.column(),
-        network_id: ID,
+        network_id,
         ceiling,
         handshake_within: within,
         shutdown_timeout: Duration::from_millis(50),
@@ -87,11 +89,12 @@ fn start(
     Listener<MonotonicClock>,
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
-    start_on(Sockets::new(), option, within, ceiling)
+    start_on(Sockets::new(), ID, option, within, ceiling)
 }
 
 fn start_on(
     sockets: Sockets,
+    network_id: [u8; 16],
     option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
@@ -108,7 +111,7 @@ fn start_on(
         pool,
         &engine.handle(),
         sockets,
-        &config(option, within, ceiling, recorded.sink),
+        &config(network_id, option, within, ceiling, recorded.sink),
     )
     .expect("listen");
     (engine, listener, seen)
@@ -210,6 +213,78 @@ fn a_bad_prefix_is_fin_after_zero_bytes() {
     }
     listener.shutdown();
     drop(engine);
+}
+
+/// Lock 4 of the chain forge's identity test (`CHAIN_FORGE.md` §6): a node
+/// of one network does not take a session from another. For every pair of
+/// networks, a fresh listener under the listening network's id is offered
+/// the dialing network's prefix: another network's is closed after zero
+/// bytes with `PrefixMismatch`, and the listener's own opens a sealed
+/// session — the positive control, so a listener that refused everything
+/// fails here too. One listener per attempt, so the per-host accept rate
+/// (`AcceptRateExceeded`) never stands in for the prefix.
+#[test]
+fn a_listener_refuses_every_other_networks_prefix_and_takes_its_own() {
+    let mut refused = 0;
+    let mut sealed = 0;
+    for listening in Network::ALL {
+        for dialing in Network::ALL {
+            let id = listening.network_id();
+            let (engine, mut listener, seen) = start_on(
+                Sockets::new(),
+                id,
+                ClearnetOption::On,
+                Tick::new(5_000_000_000),
+                InboundCeiling::Bounded(4),
+            );
+            let mut client = connect(listener.local_addr());
+            if dialing == listening {
+                let (initiator, message1) = Initiator::new(&id).expect("initiator");
+                client.write_all(&prefix_for(&id)).expect("prefix");
+                client.write_all(&message1).expect("message1");
+                let mut prefix = [0u8; PREFIX_LEN];
+                client.read_exact(&mut prefix).expect("prefix");
+                assert_eq!(prefix, prefix_for(&id), "{listening}");
+                let mut message2 = vec![0u8; MESSAGE2_LEN];
+                client.read_exact(&mut message2).expect("message2");
+                let (mut send, _recv) = initiator
+                    .read_message2(&message2)
+                    .expect("message2")
+                    .split();
+                let wire = send.seal(b"same network").expect("seal");
+                client.write_all(&wire).expect("record");
+                let handle = listener.runtime_handle().clone();
+                let mut session = handle.block_on(next_session(&mut listener.sessions));
+                let got = handle.block_on(session.recv()).expect("plain");
+                assert_eq!(got, b"same network", "{listening}");
+                sealed += 1;
+            } else {
+                let theirs = prefix_for(&dialing.network_id());
+                assert_ne!(theirs, prefix_for(&id), "{listening} and {dialing}");
+                client.write_all(&theirs).expect("write");
+                let mut buf = [0u8; 8];
+                let n = client.read(&mut buf).expect("read");
+                assert_eq!(n, 0, "{listening} answered {dialing}'s prefix");
+                let start = Instant::now();
+                while !seen
+                    .lock()
+                    .expect("causes")
+                    .contains(&CloseKind::PrefixMismatch)
+                {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(2),
+                        "{listening}: {dialing}'s close cause"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                refused += 1;
+            }
+            listener.shutdown();
+            drop(engine);
+        }
+    }
+    assert_eq!(sealed, Network::ALL.len());
+    assert_eq!(refused, Network::ALL.len() * (Network::ALL.len() - 1));
 }
 
 #[test]
@@ -328,6 +403,7 @@ fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
     );
     let (engine, listener, seen) = start_on(
         Sockets::with_clearnet_gate(gate),
+        ID,
         ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
@@ -636,6 +712,7 @@ fn a_socks_refusal_carries_the_reply_byte() {
         &engine.handle(),
         Sockets::new(),
         &config(
+            ID,
             ClearnetOption::Off,
             Tick::new(5_000_000_000),
             InboundCeiling::Bounded(4),
@@ -759,6 +836,7 @@ fn flight_after(mut client: StdStream, after: Duration) -> Option<std::io::Error
 fn a_flight_written_after_the_refusal_ends_with_fin_not_rst() {
     let (engine, listener, seen) = start_on(
         refusing_gate(100_000_000, 4),
+        ID,
         ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
@@ -788,6 +866,7 @@ fn refusals_past_the_linger_cap_close_at_once() {
     // Burst 1, one token per 5 s span: a cap of 1 + 1 = 2.
     let (engine, listener, seen) = start_on(
         refusing_gate(5_000_000_000, 1),
+        ID,
         ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(8),
@@ -911,6 +990,7 @@ fn idle_refusals_close_at_the_span_and_free_their_slots() {
     // Burst 1, one token per 300 ms span: a cap of 1 + 1 = 2.
     let (engine, listener, seen) = start_on(
         refusing_gate(300_000_000, 1),
+        ID,
         ClearnetOption::On,
         Tick::new(300_000_000),
         InboundCeiling::Bounded(8),

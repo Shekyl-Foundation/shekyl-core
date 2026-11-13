@@ -32,6 +32,11 @@ tracing = "0.1"
 [target.'cfg(windows)'.dependencies]
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
+[dev-dependencies]
+# Every network's id, for the test that a listener of one network refuses
+# every other network's prefix (`CHAIN_FORGE.md` §6, lock 4).
+shekyl-network = { path = "../shekyl-network" }
+
 [features]
 # The step 7 message-size tap. Empty on purpose: it must not enable
 # `shekyl-transport-layer/measurement-spans`. CMake turns both features on

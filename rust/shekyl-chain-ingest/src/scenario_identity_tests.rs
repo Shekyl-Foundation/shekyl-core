@@ -37,7 +37,11 @@
 //! 4. **The wire.** A node of another network does not complete a
 //!    handshake with a regtest node: the transport's prefix is derived from
 //!    the network id (`PWD-T5`, `shekyl-network`'s `prefix_for`). That lock
-//!    is the network's, and this test cites it rather than re-testing it.
+//!    is the network's, and this test cites it rather than re-testing it:
+//!    `shekyl-clearnet/src/tests.rs`,
+//!    `a_listener_refuses_every_other_networks_prefix_and_takes_its_own` —
+//!    a listener of each network closes every other network's prefix after
+//!    zero bytes and seals a session opened with its own.
 
 use std::collections::BTreeMap;
 

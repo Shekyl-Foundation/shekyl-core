@@ -70,9 +70,15 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::kem::HybridKemSecretKey;
 use zeroize::Zeroizing;
 
-/// The seed the harness miner is derived from. Public on purpose: this
-/// wallet exists so tests can spend what fixtures pay, and a secret that
-/// every test binary carries is not a secret.
+/// The seed the harness miner is derived from. **Public, and regtest-only**
+/// (`CHAIN_FORGE.md` §6, `CF-R15`): this wallet exists so tests can spend
+/// what fixtures pay, and a secret that every test binary carries is not a
+/// secret. Anyone who restores it can spend every coinbase a regtest chain
+/// paid [`MinerWallet::harness_regtest`], and that is intended: a test
+/// chain's coins are worth nothing off regtest. Its regtest addresses carry
+/// regtest's prefixes, which a mainnet, testnet or stagenet wallet refuses
+/// as another network's (`tests::the_regtest_miners_address_is_refused_off_regtest`).
+/// Never pay a seed derived from it on any other network.
 pub const HARNESS_SEED: [u8; 32] = *b"shekyl-harness-wallet-miner-v1\0\0";
 
 /// The fixture derivation's HKDF salt. Fixed, and not a wallet's: wallets
@@ -333,5 +339,47 @@ mod tests {
             );
         }
         assert_ne!(MinerWallet::harness().recipient(), miner.recipient());
+    }
+
+    /// The public seed's regtest address is regtest's alone: the wallet's
+    /// payment decoder takes it on regtest and refuses it on every other
+    /// network as another network's, because its prefix is regtest's
+    /// (`HARNESS_SEED`'s docs; `CHAIN_FORGE.md` §6).
+    #[test]
+    fn the_regtest_miners_address_is_refused_off_regtest() {
+        use shekyl_address::{AddressError, PaymentAddress};
+
+        let (_master, account) =
+            account_from_seed(&HARNESS_SEED, Network::Regtest).expect("derives");
+        let encoded = account
+            .to_address(Network::Regtest)
+            .encode()
+            .expect("the address encodes");
+        assert!(
+            encoded.starts_with(Network::Regtest.prefixes().classical),
+            "{encoded}"
+        );
+        let accepted = PaymentAddress::decode(&encoded, Network::Regtest)
+            .expect("regtest takes its own address");
+        assert_eq!(
+            accepted.as_address().spend_key,
+            MinerWallet::harness_regtest().recipient().spend_public
+        );
+        for other in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+            assert!(
+                !encoded.starts_with(other.prefixes().classical),
+                "{other}'s prefix is not regtest's"
+            );
+            match PaymentAddress::decode(&encoded, other) {
+                Err(AddressError::NetworkMismatch {
+                    addr_net,
+                    expected_net,
+                }) => {
+                    assert_eq!(addr_net, Network::Regtest, "{other}");
+                    assert_eq!(expected_net, other);
+                }
+                refused => panic!("{other} did not refuse regtest's address: {refused:?}"),
+            }
+        }
     }
 }
