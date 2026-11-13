@@ -6930,15 +6930,29 @@ is held. Rick ruled all four the same day (the next entry).
 
 ---
 
-## 2026-11-12 — Chain forge Round 0 rulings: storage, layouts, the RNG line, the split of CF-1
+## 2026-11-12 — Chain forge Round 0 rulings: storage and hosting, layouts, the RNG line, the split of CF-1
 
-**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R6`…`CF-R10`).
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R6`…`CF-R11`).
 
 - **Storage** (`CF-R6`). Chain bytes up to 5 MB are committed. Above that,
   the manifest, the block-hash list and the trace are committed, and the
   bytes are a release asset pinned by SHA-256. The asset is a cache:
   deterministic regeneration at the pinned commit is the source of truth.
   The five old corpora move to this scheme when they are next regenerated.
+- **Hosting** (`CF-R11`). Chains above 5 MB are OCI artifacts on GHCR
+  (`ghcr.io/shekyl-foundation/test-chains/<chain>`, one per chain
+  version, public), pushed and pulled with `oras`, in a package linked to
+  a new repository, `shekyl-test-chains`, that holds the forge plans,
+  manifests, hash lists and release notes. Layers carry their own media
+  types under the artifact type `application/vnd.shekyl.test-chain`.
+  shekyl-core pins each chain by digest, never by tag, in a committed pin
+  file with every layer's SHA-256 and size; the fetch script pulls by
+  digest and refuses any layer that disagrees; `oras` is installed from a
+  pinned, checksum-verified release. Only a protected workflow in
+  `shekyl-test-chains`, approved by Rick, publishes, so a pin change is
+  always a reviewed core PR. The artifacts are a cache: a deleted package
+  is rebuilt from the pinned commit, never lost, and a nightly pull of
+  every pinned digest reports a missing one through `dev-red`.
 - **Corpus layouts** (`CF-R7`). The reader takes both the old and the new
   layout until the last old corpus is gone, then the old reader is
   deleted. No live-daemon re-capture.
