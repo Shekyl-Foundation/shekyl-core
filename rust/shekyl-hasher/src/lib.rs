@@ -385,7 +385,6 @@ impl Shared {
                     self.raise.store(true, Ordering::Release);
                     self.budget.wake();
                 }
-                Decision::Grant { .. } | Decision::Schedule { .. } => {}
             }
         }
         // After every flag is stored: a loan parked for a permit reads its
@@ -406,9 +405,12 @@ impl Shared {
         while !freed.is_empty() {
             let seeds: Vec<Seedhash> = freed.iter().map(|(seed, _)| *seed).collect();
             for (_, cache) in freed {
-                // Each is the last holder: every lease's clone went back
-                // before its return reached the core.
-                debug_assert_eq!(
+                // The cap is the memory. A lease's clone is dropped before
+                // its return reaches the core, so this Arc is the last one.
+                // `assert` rather than `debug_assert`: the release daemon
+                // and the release nightly are where a leaked clone would
+                // otherwise free the place and keep the 256 MiB.
+                assert_eq!(
                     Arc::strong_count(&cache),
                     1,
                     "a freed cache is still held: a lease kept its clone past its return"

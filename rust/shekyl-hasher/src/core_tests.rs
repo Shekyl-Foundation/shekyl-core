@@ -97,7 +97,7 @@ fn three_places_with_jobs_in_flight_and_a_fourth_job_waits() {
     let z = request(&mut core, 12, Class::Chain);
     build_all(&mut core);
     assert_eq!(core.take_grant(z), None, "a fourth seed waits for a place");
-    assert_eq!(core.fifo.front(), Some(&z));
+    assert_eq!(core.queue.fifo.front().map(|waiter| waiter.ticket), Some(z));
     core.returned(x);
     build_all(&mut core);
     assert!(
@@ -259,7 +259,7 @@ fn warm_only_declines_an_unlisted_a_building_or_a_contested_third_seed() {
     let third = granted(&mut core, 3, Class::HeaderPow);
     let x = granted(&mut core, 10, Class::HeaderPow);
     let _queued = request(&mut core, 11, Class::Evidence);
-    assert!(!core.fifo.is_empty(), "a job queues");
+    assert!(!core.queue.fifo.is_empty(), "a job queues");
     assert_eq!(
         core.request_warm(s(3)),
         Err(WarmRefused::NotWarm),
@@ -292,7 +292,7 @@ fn a_freed_place_is_not_reused_until_its_cache_is_dropped() {
     let (ticket, out) = core.request(s(20), Class::Evidence).expect("open");
     assert_eq!(freed(&out), vec![s(3)], "the warm third is freed");
     assert!(
-        !out.contains(&Decision::Schedule { seed: s(20) }),
+        core.entry(&s(20)).is_none(),
         "no build while the third's cache is still held: {out:?}"
     );
     assert_eq!(
@@ -302,7 +302,11 @@ fn a_freed_place_is_not_reused_until_its_cache_is_dropped() {
     );
     assert_eq!(core.claim(), None);
     let out = core.retired(s(3));
-    assert!(out.contains(&Decision::Schedule { seed: s(20) }), "{out:?}");
+    assert_eq!(
+        core.entry(&s(20)).map(|entry| entry.state),
+        Some(EntryState::Queued),
+        "the place, once free, holds the job's build: {out:?}"
+    );
     build_all(&mut core);
     assert!(core.take_grant(ticket).is_some());
 }
@@ -319,7 +323,7 @@ fn a_warm_request_on_the_third_while_the_window_waits_for_a_place_is_refused() {
     let x = granted(&mut core, 10, Class::HeaderPow);
     let out = core.rank(list(&[1, 2], Some((3, Class::CalcPow))));
     assert!(core.window_short(), "the new window seed has no place");
-    assert!(core.fifo.is_empty(), "no job queues");
+    assert!(core.queue.fifo.is_empty(), "no job queues");
     assert!(out.contains(&Decision::Cancel { lease: warm }), "{out:?}");
     assert_eq!(
         core.request_warm(s(3)),
@@ -346,11 +350,11 @@ fn a_request_parked_on_a_building_seed_is_not_granted_after_close() {
     assert!(core.begin(claimed));
     core.close();
     let out = core.built(claimed.0);
-    assert!(
-        !out.iter().any(|d| matches!(d, Decision::Grant { .. })),
-        "{out:?}"
+    assert_eq!(
+        core.take_grant(ticket),
+        None,
+        "a derive that finishes after the close grants nothing: {out:?}"
     );
-    assert_eq!(core.take_grant(ticket), None);
     assert!(
         freed(&out).contains(&s(1)),
         "the cache goes: nothing holds it"
@@ -362,10 +366,12 @@ fn a_second_job_on_a_resident_seed_schedules_no_build() {
     let mut core = Core::default();
     core.rank(list(&[1], None));
     build_all(&mut core);
-    let (ticket, out) = core.request(s(1), Class::Chain).expect("open");
+    let (ticket, _out) = core.request(s(1), Class::Chain).expect("open");
     assert!(
-        !out.iter().any(|d| matches!(d, Decision::Schedule { .. })),
-        "{out:?}"
+        core.entries
+            .iter()
+            .all(|entry| entry.state != EntryState::Queued),
+        "a second job on a resident seed reserves nothing"
     );
     assert!(core.take_grant(ticket).is_some());
 }
@@ -472,7 +478,7 @@ impl World {
 
     fn quiet(&self) -> bool {
         self.freed.is_empty()
-            && self.core.waiters.is_empty()
+            && self.core.queue.is_empty()
             && self.core.leases.is_empty()
             && self
                 .core
@@ -504,7 +510,7 @@ fn apply(world: &mut World, op: &Op) -> Option<Vec<Decision>> {
         Op::Warm(seed) => {
             let before = world.core.entries.len();
             let outside = !world.core.in_window(&s(*seed));
-            let contested = !world.core.fifo.is_empty() || world.core.window_short();
+            let contested = !world.core.queue.fifo.is_empty() || world.core.window_short();
             if let Ok(lease) = world.core.request_warm(s(*seed)) {
                 assert!(
                     !(outside && contested),
@@ -577,7 +583,7 @@ fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
     // I7: no warm lease is lendable on an outside seed while a job queues
     // or a window seed is short of a place. Checked after every event, not
     // only on a warm request, so the rare state is seen when it occurs.
-    if !core.fifo.is_empty() || core.window_short() {
+    if !core.queue.fifo.is_empty() || core.window_short() {
         if let Some((third, _)) = core.third() {
             assert!(
                 !core.warm_lendable(&third),
@@ -594,27 +600,24 @@ fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
         core.entries.len(),
         "I6: two entries for one seed"
     );
-    for decision in out {
-        if let Decision::Grant { lease, .. } = decision {
-            // A grant is made on a built cache, never one being dropped,
-            // and never after a close.
-            assert!(!before.closed, "a grant after close");
-            let seed = core
-                .leases
-                .iter()
-                .find(|held| held.id == *lease)
-                .expect("a granted lease is held")
-                .seed;
-            assert!(
-                !world.freed.contains(&seed),
-                "a grant on a cache being dropped"
-            );
-            assert_eq!(
-                core.entry(&seed).map(|entry| entry.state),
-                Some(EntryState::Resident),
-                "a grant on a cache not built"
-            );
+    for lease in &core.leases {
+        if before.leases.iter().any(|held| held.id == lease.id) {
+            continue;
         }
+        // A grant is made on a built cache, never one being dropped,
+        // and never after a close. It is state, not a decision.
+        assert!(!before.closed, "a grant after close");
+        assert!(
+            !world.freed.contains(&lease.seed),
+            "a grant on a cache being dropped"
+        );
+        assert_eq!(
+            core.entry(&lease.seed).map(|entry| entry.state),
+            Some(EntryState::Resident),
+            "a grant on a cache not built"
+        );
+    }
+    for decision in out {
         if let Decision::Free { seed } = decision {
             // I2: a window seed is never freed while the hasher is open.
             assert!(
@@ -642,8 +645,12 @@ fn check(world: &World, op: &Op, before: &Core, out: &[Decision]) {
     // I3: outside jobs leave the queue in arrival order. A stop or a list
     // change may take one from the middle; only the head is ever granted.
     if !matches!(op, Op::Rank(..) | Op::Leave(_)) {
-        let after: BTreeSet<Ticket> = core.fifo.iter().copied().collect();
-        let mut gone = before.fifo.iter().map(|t| after.contains(t));
+        let after: BTreeSet<Ticket> = core.queue.fifo.iter().map(|waiter| waiter.ticket).collect();
+        let mut gone = before
+            .queue
+            .fifo
+            .iter()
+            .map(|waiter| after.contains(&waiter.ticket));
         // Once a ticket stays, every later ticket stays.
         let mut kept = false;
         for stays in &mut gone {
@@ -750,8 +757,7 @@ proptest! {
             let before = Core {
                 list: world.core.list.clone(),
                 entries: world.core.entries.clone(),
-                waiters: world.core.waiters.clone(),
-                fifo: world.core.fifo.clone(),
+                queue: world.core.queue.clone(),
                 leases: world.core.leases.clone(),
                 closed: world.core.closed,
                 ..Core::default()
@@ -772,7 +778,7 @@ proptest! {
         // Liveness: draining grants every request that did not stop.
         drain(&mut world);
         prop_assert!(world.pending.is_empty(), "never granted: {:?}", world.pending);
-        prop_assert!(world.core.waiters.is_empty());
+        prop_assert!(world.core.queue.is_empty());
         if world.core.closed {
             prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
         } else if let Some(list) = world.core.list.clone() {

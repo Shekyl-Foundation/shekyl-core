@@ -6,11 +6,13 @@
 //! The hasher's decisions, as a state machine with no clock, no threads, no
 //! caches and no I/O (`RANDOMX_CACHE_ACTOR.md` §5.2, §5.4, §5.5).
 //!
-//! The shell runs it under one lock and acts on what it returns: it wakes a
-//! waiter whose request was granted, drops a freed cache, raises a warm
-//! lease's cancel flag, and wakes the builder. The builder asks it for the
-//! next build and reports the build's start and end. Production runs this
-//! core; nothing here is a test lever.
+//! The shell runs it under one lock. A [`Decision`] is a command it
+//! performs: drop a freed cache, cancel a warm lease, or wake the builder
+//! off its permit wait. A grant is not a command. It is recorded on the
+//! core, and the waiting thread reads it with [`Core::take_grant`] after
+//! the wake. A reserved build is an entry in [`EntryState::Queued`], and
+//! the builder reads the next one with [`Core::claim`]. Production runs
+//! this core; nothing here is a test lever.
 //!
 //! # Terms
 //!
@@ -24,6 +26,9 @@
 //!   reports the drop ([`Core::retired`]).
 //! - **Outside:** an entry or a job whose seed is not in W. The outside
 //!   places are [`CAP`] minus the window's length.
+//! - **The queue:** two collections, and a job is in one of them.
+//!   [`Queue::fifo`] is outside jobs in arrival order (HA-R8). [`Queue::seed`]
+//!   is jobs waiting on a build. Ticket order is arrival order.
 //! - **A lease:** a granted job. A warm lease (`lend_warm`) can be
 //!   cancelled; a job's lease cannot (HA-R1).
 
@@ -34,7 +39,8 @@ use shekyl_pow_randomx::Seedhash;
 
 use crate::{Ranked, CAP};
 
-/// One request that has not been granted yet.
+/// One request that has not been granted yet. Minted once, when the job
+/// asks. Its order is the job's arrival order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Ticket(u64);
 
@@ -42,15 +48,10 @@ pub(crate) struct Ticket(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct LeaseId(u64);
 
-/// What the shell does after an event.
+/// A command the shell performs. A grant and a reserved build are state
+/// the waiter and the builder read; they are not variants here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
-    /// The request holding `ticket` was granted `lease`. Its thread takes
-    /// the grant with [`Core::take_grant`].
-    Grant { ticket: Ticket, lease: LeaseId },
-    /// A build of `seed` was reserved. The builder takes it with
-    /// [`Core::claim`].
-    Schedule { seed: Seedhash },
     /// `seed`'s cache is no longer held: drop it with no lock held, then
     /// report the drop with [`Core::retired`]. Until then its place stays
     /// taken.
@@ -89,15 +90,16 @@ enum EntryState {
 /// What [`Core::place_outside`] did with an outside job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Placed {
-    /// Granted, joined a build, or reserved one.
+    /// Granted, joined a build, or reserved one. The job is not in the fifo.
     Taken,
     /// It freed an idle outside entry: the place is free once that cache is
-    /// dropped. The job waits.
+    /// dropped. The job stays at the head of the fifo.
     Freeing,
     /// A place is already on its way back (an outside entry, or the job's
-    /// own seed, is retiring). The job waits.
+    /// own seed, is retiring). The job stays at the head of the fifo.
     Waits,
     /// No place is free or freeing: only a warm lease's return can make one.
+    /// The job stays at the head of the fifo.
     Short,
 }
 
@@ -107,27 +109,132 @@ struct Entry {
     state: EntryState,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WaitFor {
-    /// In the queue for an outside place (HA-R8).
-    Fifo,
-    /// Waiting for its seed's build: one it joined or reserved, or a
-    /// window seed's build that waits for room.
-    Seed,
-}
-
+/// One job that has not been granted. It lives in exactly one of
+/// [`Queue`]'s collections.
 #[derive(Clone, Copy, Debug)]
 struct Waiter {
     ticket: Ticket,
     seed: Seedhash,
     class: Class,
-    /// Arrival order: builds a waiter needs are taken in the order their
-    /// first waiter asked, and a waiter moved back into the queue keeps it.
-    seq: u64,
-    wait: WaitFor,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Jobs that have not been granted (module docs, *The queue*).
+#[derive(Clone, Debug, Default)]
+struct Queue {
+    /// Outside jobs waiting for a place, earliest arrival at the front.
+    fifo: VecDeque<Waiter>,
+    /// Jobs waiting on their seed's build: a window job, or an outside job
+    /// that has joined or reserved one.
+    seed: Vec<Waiter>,
+}
+
+impl Queue {
+    fn is_empty(&self) -> bool {
+        self.fifo.is_empty() && self.seed.is_empty()
+    }
+
+    /// Both collections. The settle bound counts a fifo job twice, once
+    /// here and once for the move between the collections.
+    fn len(&self) -> usize {
+        self.fifo.len() + self.seed.len()
+    }
+
+    /// The job the place queue will consider next.
+    fn head(&self) -> Option<Waiter> {
+        self.fifo.front().copied()
+    }
+
+    /// An outside job joins the back. It is not already queued.
+    fn enqueue(&mut self, waiter: Waiter) {
+        self.fifo.push_back(waiter);
+    }
+
+    /// Drop `ticket` from whichever collection holds it.
+    fn remove(&mut self, ticket: Ticket) {
+        self.fifo.retain(|waiter| waiter.ticket != ticket);
+        self.seed.retain(|waiter| waiter.ticket != ticket);
+    }
+
+    fn clear(&mut self) {
+        self.fifo.clear();
+        self.seed.clear();
+    }
+
+    /// `waiter` is waiting on its seed's build, and is not in the fifo.
+    fn move_to_seed(&mut self, waiter: Waiter) {
+        self.fifo.retain(|queued| queued.ticket != waiter.ticket);
+        if let Some(held) = self
+            .seed
+            .iter_mut()
+            .find(|held| held.ticket == waiter.ticket)
+        {
+            *held = waiter;
+        } else {
+            self.seed.push(waiter);
+        }
+    }
+
+    /// `waiter` is an outside job again, at its arrival position.
+    fn insert_fifo_by_arrival(&mut self, waiter: Waiter) {
+        self.seed.retain(|held| held.ticket != waiter.ticket);
+        self.fifo.retain(|queued| queued.ticket != waiter.ticket);
+        let at = self
+            .fifo
+            .iter()
+            .position(|queued| queued.ticket > waiter.ticket)
+            .unwrap_or(self.fifo.len());
+        self.fifo.insert(at, waiter);
+    }
+
+    fn seed_on(&self, seed: Seedhash) -> impl Iterator<Item = &Waiter> {
+        self.seed.iter().filter(move |waiter| waiter.seed == seed)
+    }
+
+    fn any_seed_on(&self, seed: &Seedhash) -> bool {
+        self.seed.iter().any(|waiter| waiter.seed == *seed)
+    }
+
+    /// The jobs waiting on `seed`'s build, earliest arrival first, removed
+    /// from this collection.
+    fn take_seed_on(&mut self, seed: Seedhash) -> Vec<Waiter> {
+        let mut waiting: Vec<Waiter> = self.seed_on(seed).copied().collect();
+        waiting.sort_by_key(|waiter| waiter.ticket);
+        self.seed.retain(|waiter| waiter.seed != seed);
+        waiting
+    }
+
+    /// A seed-wait whose seed is outside the window and has no entry behind
+    /// it joins the fifo at its arrival position. `window` and `backed`
+    /// are the seeds that still hold it.
+    fn requeue_unbacked(&mut self, window: &[Seedhash], backed: &[Seedhash]) {
+        let mut index = 0;
+        while index < self.seed.len() {
+            let waiter = self.seed[index];
+            let held = window.contains(&waiter.seed) || backed.contains(&waiter.seed);
+            if held {
+                index += 1;
+            } else {
+                self.seed.remove(index);
+                self.insert_fifo_by_arrival(waiter);
+            }
+        }
+    }
+
+    /// A fifo job whose seed joined the window waits on that build instead.
+    fn promote_window(&mut self, in_window: impl Fn(&Seedhash) -> bool) {
+        let mut index = 0;
+        while index < self.fifo.len() {
+            if in_window(&self.fifo[index].seed) {
+                let waiter = self.fifo.remove(index).expect("the index was just checked");
+                self.move_to_seed(waiter);
+            } else {
+                index += 1;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Lease {
     id: LeaseId,
     seed: Seedhash,
@@ -135,13 +242,23 @@ struct Lease {
     cancelled: bool,
 }
 
+/// How many times a settle may walk the rules and still be moving.
+///
+/// One pass grants, frees, reserves, or moves one job. A job that moves
+/// from the fifo onto a build, and a place that is freed and then reserved,
+/// take more than one pass. Four cycles of that is the bound the property
+/// test holds. The fifo is counted twice on purpose: once as a waiting job,
+/// once as a move between the collections.
+const SETTLE_CYCLES: usize = 4;
+/// Class-rise wakes and the third's refill are not a place or a job.
+const SETTLE_SLACK: usize = 4;
+
 /// The state machine (module docs).
 #[derive(Debug, Default)]
 pub(crate) struct Core {
     list: Option<Ranked>,
     entries: Vec<Entry>,
-    waiters: Vec<Waiter>,
-    fifo: VecDeque<Ticket>,
+    queue: Queue,
     leases: Vec<Lease>,
     granted: Vec<(Ticket, LeaseId)>,
     /// The build the builder took and has not begun: its seed and class.
@@ -198,18 +315,11 @@ impl Core {
             .count()
     }
 
-    fn waiters_on(&self, seed: &Seedhash) -> impl Iterator<Item = &Waiter> {
-        let seed = *seed;
-        self.waiters
-            .iter()
-            .filter(move |waiter| waiter.wait == WaitFor::Seed && waiter.seed == seed)
-    }
-
     /// A resident entry nothing holds or waits for: it may be freed.
     fn idle(&self, entry: &Entry) -> bool {
         entry.state == EntryState::Resident
             && self.leases_on(&entry.seed) == 0
-            && self.waiters_on(&entry.seed).next().is_none()
+            && !self.queue.any_seed_on(&entry.seed)
     }
 
     /// A window seed has no entry and every place is taken: it waits for
@@ -230,38 +340,25 @@ impl Core {
             return None;
         }
         let ticket = Ticket(self.next());
-        let seq = self.next_id;
+        let waiter = Waiter {
+            ticket,
+            seed,
+            class,
+        };
         let mut out = Vec::new();
         if self.in_window(&seed) {
             match self.entry(&seed).map(|entry| entry.state) {
-                Some(EntryState::Resident) => {
-                    self.grant(ticket, seed, false, &mut out);
-                }
-                _ => self.waiters.push(Waiter {
-                    ticket,
-                    seed,
-                    class,
-                    seq,
-                    wait: WaitFor::Seed,
-                }),
+                Some(EntryState::Resident) => self.grant(ticket, seed),
+                _ => self.queue.move_to_seed(waiter),
+            }
+        } else if self.queue.fifo.is_empty() && !self.window_short() {
+            // A stream for one seed must not pass a job waiting for another:
+            // a non-empty fifo takes every newcomer, above.
+            if self.place_outside(waiter, &mut out) != Placed::Taken {
+                self.queue.enqueue(waiter);
             }
         } else {
-            let waiter = Waiter {
-                ticket,
-                seed,
-                class,
-                seq,
-                wait: WaitFor::Fifo,
-            };
-            // A stream for one seed must not pass a job waiting for another:
-            // a non-empty queue takes every newcomer.
-            if self.fifo.is_empty() && !self.window_short() {
-                if self.place_outside(waiter, &mut out) != Placed::Taken {
-                    self.enqueue(waiter);
-                }
-            } else {
-                self.enqueue(waiter);
-            }
+            self.queue.enqueue(waiter);
         }
         self.settle(&mut out);
         Some((ticket, out))
@@ -299,19 +396,18 @@ impl Core {
             && self
                 .entry(seed)
                 .is_some_and(|entry| entry.state == EntryState::Resident)
-            && (self.in_window(seed) || (self.fifo.is_empty() && !self.window_short()))
+            && (self.in_window(seed) || (self.queue.fifo.is_empty() && !self.window_short()))
     }
 
     /// The lease `ticket` was granted, if it has been. Taken once.
     pub(crate) fn take_grant(&mut self, ticket: Ticket) -> Option<LeaseId> {
-        let at = self.granted.iter().position(|(t, _)| *t == ticket)?;
+        let at = self.granted.iter().position(|(held, _)| *held == ticket)?;
         Some(self.granted.swap_remove(at).1)
     }
 
     /// A waiter left on its stop flag before it was granted.
     pub(crate) fn leave(&mut self, ticket: Ticket) -> Vec<Decision> {
-        self.waiters.retain(|waiter| waiter.ticket != ticket);
-        self.fifo.retain(|queued| *queued != ticket);
+        self.queue.remove(ticket);
         let mut out = Vec::new();
         self.settle(&mut out);
         out
@@ -344,15 +440,10 @@ impl Core {
                 out.push(Decision::Cancel { lease: lease.id });
             }
         }
-        // A queued job whose seed joined W leaves the queue: a window seed's
+        // A queued job whose seed joined W leaves the fifo: a window seed's
         // job never waits for an outside place.
-        for at in 0..self.waiters.len() {
-            let waiter = self.waiters[at];
-            if waiter.wait == WaitFor::Fifo && self.in_window(&waiter.seed) {
-                self.fifo.retain(|queued| *queued != waiter.ticket);
-                self.waiters[at].wait = WaitFor::Seed;
-            }
-        }
+        let window: Vec<Seedhash> = self.window().to_vec();
+        self.queue.promote_window(|seed| window.contains(seed));
         self.requeue_unbacked();
         self.settle(&mut out);
         out
@@ -385,8 +476,7 @@ impl Core {
     /// finishes; every cache goes once no lease holds it.
     pub(crate) fn close(&mut self) -> Vec<Decision> {
         self.closed = true;
-        self.waiters.clear();
-        self.fifo.clear();
+        self.queue.clear();
         let mut out = Vec::new();
         self.settle(&mut out);
         out
@@ -412,7 +502,11 @@ impl Core {
         if current != Some(claimed) {
             return false;
         }
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.seed == claimed.0) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.seed == claimed.0)
+        {
             entry.state = EntryState::Deriving;
         }
         true
@@ -424,17 +518,14 @@ impl Core {
     }
 
     /// The derive of `seed` finished: it is resident, and every job waiting
-    /// for it is granted.
+    /// for it is granted, earliest arrival first.
     pub(crate) fn built(&mut self, seed: Seedhash) -> Vec<Decision> {
         let mut out = Vec::new();
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.seed == seed) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.seed == seed) {
             entry.state = EntryState::Resident;
         }
-        let mut waiting: Vec<Waiter> = self.waiters_on(&seed).copied().collect();
-        waiting.sort_by_key(|waiter| waiter.seq);
-        for waiter in waiting {
-            self.waiters.retain(|w| w.ticket != waiter.ticket);
-            self.grant(waiter.ticket, seed, false, &mut out);
+        for waiter in self.queue.take_seed_on(seed) {
+            self.grant(waiter.ticket, seed);
         }
         self.settle(&mut out);
         out
@@ -445,7 +536,7 @@ impl Core {
     pub(crate) fn drained(&self) -> bool {
         self.closed
             && self.leases.is_empty()
-            && self.waiters.is_empty()
+            && self.queue.is_empty()
             && self
                 .entries
                 .iter()
@@ -478,8 +569,16 @@ impl Core {
 
     // ----- inside -----------------------------------------------------------
 
-    fn grant(&mut self, ticket: Ticket, seed: Seedhash, warm: bool, out: &mut Vec<Decision>) {
-        debug_assert!(
+    /// Record a grant of `ticket` on the resident `seed`. The shell's wake
+    /// is the notify that follows every apply; the waiter reads the grant
+    /// with [`take_grant`](Self::take_grant).
+    ///
+    /// # Panics
+    ///
+    /// When the hasher is stopping. [`close`](Self::close) has dropped every
+    /// waiter, so a grant now would start a job during a stop.
+    fn grant(&mut self, ticket: Ticket, seed: Seedhash) {
+        assert!(
             !self.closed,
             "a grant after close: close drops every waiter"
         );
@@ -487,80 +586,49 @@ impl Core {
         self.leases.push(Lease {
             id: lease,
             seed,
-            warm,
+            warm: false,
             cancelled: false,
         });
         self.granted.push((ticket, lease));
-        out.push(Decision::Grant { ticket, lease });
-    }
-
-    fn enqueue(&mut self, mut waiter: Waiter) {
-        waiter.wait = WaitFor::Fifo;
-        self.waiters.push(waiter);
-        self.fifo.push_back(waiter.ticket);
     }
 
     /// A job that waits for its seed's build, whose seed is not in W and
     /// has no build or cache to wait for (its seed left W before anything
     /// was built, or its cache is retiring), is an outside job without a
-    /// place: it joins the queue in its arrival order.
+    /// place: it joins the fifo at its arrival position.
     fn requeue_unbacked(&mut self) {
-        for at in 0..self.waiters.len() {
-            let waiter = self.waiters[at];
-            let backed = self
-                .entry(&waiter.seed)
-                .is_some_and(|entry| entry.state != EntryState::Retiring);
-            if waiter.wait == WaitFor::Seed && !self.in_window(&waiter.seed) && !backed {
-                self.waiters[at].wait = WaitFor::Fifo;
-                self.insert_in_order(waiter.ticket, waiter.seq);
-            }
-        }
-    }
-
-    fn insert_in_order(&mut self, ticket: Ticket, seq: u64) {
-        let at = self
-            .fifo
+        let window: Vec<Seedhash> = self.window().to_vec();
+        let backed: Vec<Seedhash> = self
+            .entries
             .iter()
-            .position(|queued| {
-                self.waiters
-                    .iter()
-                    .find(|waiter| waiter.ticket == *queued)
-                    .is_some_and(|waiter| waiter.seq > seq)
-            })
-            .unwrap_or(self.fifo.len());
-        self.fifo.insert(at, ticket);
+            .filter(|entry| entry.state != EntryState::Retiring)
+            .map(|entry| entry.seed)
+            .collect();
+        self.queue.requeue_unbacked(&window, &backed);
     }
 
     /// Rule 2 without its first step: join the seed's entry, take a free
     /// outside place, or free the lowest-ranked idle outside entry, whose
     /// place is free once its cache is dropped. A freed place is never
-    /// taken in the step that frees it. A waiter not yet in `self.waiters`
-    /// is added when it must wait for a build.
+    /// taken in the step that frees it. A job that must wait for a build
+    /// is moved into [`Queue::seed`].
     fn place_outside(&mut self, waiter: Waiter, out: &mut Vec<Decision>) -> Placed {
-        let seed_wait = |core: &mut Self| {
-            let mut waiter = waiter;
-            waiter.wait = WaitFor::Seed;
-            match core.waiters.iter_mut().find(|w| w.ticket == waiter.ticket) {
-                Some(held) => *held = waiter,
-                None => core.waiters.push(waiter),
-            }
-        };
         match self.entry(&waiter.seed).map(|entry| entry.state) {
             Some(EntryState::Resident) => {
-                self.waiters.retain(|w| w.ticket != waiter.ticket);
-                self.grant(waiter.ticket, waiter.seed, false, out);
+                self.queue.remove(waiter.ticket);
+                self.grant(waiter.ticket, waiter.seed);
                 return Placed::Taken;
             }
             Some(EntryState::Queued | EntryState::Deriving) => {
-                seed_wait(self);
+                self.queue.move_to_seed(waiter);
                 return Placed::Taken;
             }
             Some(EntryState::Retiring) => return Placed::Waits,
             None => {}
         }
         if self.outside_count() < self.outside_places() {
-            self.reserve(waiter.seed, out);
-            seed_wait(self);
+            self.reserve(waiter.seed);
+            self.queue.move_to_seed(waiter);
             return Placed::Taken;
         }
         if self.outside_retiring() {
@@ -621,12 +689,11 @@ impl Core {
         }
     }
 
-    fn reserve(&mut self, seed: Seedhash, out: &mut Vec<Decision>) {
+    fn reserve(&mut self, seed: Seedhash) {
         self.entries.push(Entry {
             seed,
             state: EntryState::Queued,
         });
-        out.push(Decision::Schedule { seed });
     }
 
     /// No outside entry may be freed while a lease is out on it. A warm
@@ -658,9 +725,9 @@ impl Core {
     /// The build class of a queued entry, `None` when nothing asks for it:
     /// the highest (earliest in `Class::ALL`) of each waiting job's class,
     /// `Chain` for a window seed, and the third's refill class for the
-    /// third (§5.4).
+    /// third (§5.4). A job still in the fifo has not joined the build.
     fn build_class(&self, entry: &Entry) -> Option<Class> {
-        let waiting = self.waiters_on(&entry.seed).map(|waiter| waiter.class);
+        let waiting = self.queue.seed_on(entry.seed).map(|waiter| waiter.class);
         let window = self.in_window(&entry.seed).then_some(Class::Chain);
         let third = self
             .third_refill_class()
@@ -683,7 +750,11 @@ impl Core {
             .filter(|entry| entry.state == EntryState::Queued)
             .filter_map(|entry| {
                 let class = self.build_class(entry)?;
-                let first_waiter = self.waiters_on(&entry.seed).map(|w| w.seq).min();
+                let first_waiter = self
+                    .queue
+                    .seed_on(entry.seed)
+                    .map(|waiter| waiter.ticket)
+                    .min();
                 Some((
                     (first_waiter.is_none(), first_waiter, rank(&entry.seed)),
                     (entry.seed, class),
@@ -691,6 +762,12 @@ impl Core {
             })
             .min_by_key(|(order, _)| *order)
             .map(|(_, build)| build)
+    }
+
+    /// Passes that still move something before the settle is a core fault.
+    fn settle_bound(&self) -> usize {
+        let movers = CAP + self.queue.fifo.len() + self.queue.len() + SETTLE_SLACK;
+        movers * SETTLE_CYCLES
     }
 
     /// Bring the state to what the list and the jobs ask for, after every
@@ -703,7 +780,7 @@ impl Core {
     /// is a core fault; a silent return would leave a waiter that nothing
     /// wakes.
     fn settle(&mut self, out: &mut Vec<Decision>) {
-        let bound = (CAP + self.fifo.len() + self.waiters.len() + 4) * 4;
+        let bound = self.settle_bound();
         let mut settled = false;
         for _ in 0..bound {
             if !self.settle_once(out) {
@@ -726,14 +803,12 @@ impl Core {
     fn settle_once(&mut self, out: &mut Vec<Decision>) -> bool {
         // 0. A job that waits for a seed that is resident is granted. A
         //    queued job whose seed joined the window finds it built.
-        if let Some(waiter) = self.waiters.iter().copied().find(|waiter| {
-            waiter.wait == WaitFor::Seed
-                && self
-                    .entry(&waiter.seed)
-                    .is_some_and(|entry| entry.state == EntryState::Resident)
+        if let Some(waiter) = self.queue.seed.iter().copied().find(|waiter| {
+            self.entry(&waiter.seed)
+                .is_some_and(|entry| entry.state == EntryState::Resident)
         }) {
-            self.waiters.retain(|w| w.ticket != waiter.ticket);
-            self.grant(waiter.ticket, waiter.seed, false, out);
+            self.queue.remove(waiter.ticket);
+            self.grant(waiter.ticket, waiter.seed);
             return true;
         }
         // 1. Free what nothing lists, holds or waits for; drop a reserved
@@ -747,9 +822,10 @@ impl Core {
                     (self.closed || !self.listed(&entry.seed)) && self.idle(entry)
                 }
                 EntryState::Queued => {
-                    let asked = self.waiters_on(&entry.seed).next().is_some();
+                    let asked = self.queue.any_seed_on(&entry.seed);
                     let listed = self.listed(&entry.seed) && !self.closed;
-                    let third_gives_way = !self.in_window(&entry.seed) && !self.fifo.is_empty();
+                    let third_gives_way =
+                        !self.in_window(&entry.seed) && !self.queue.fifo.is_empty();
                     !asked && (!listed || third_gives_way)
                 }
                 EntryState::Deriving | EntryState::Retiring => false,
@@ -767,9 +843,10 @@ impl Core {
         //    When every place is taken (the list grew while outside leases
         //    were out), the lowest-ranked idle outside entry is freed; when
         //    none is idle, the build waits for the first outside lease to
-        //    come back, and no outside job takes that place meanwhile.
-        //    A place that is retiring comes back when its cache is dropped,
-        //    and nothing else is freed meanwhile.
+        //    come back. The queue and the third are not judged in that
+        //    case: an outside job must not take the place the window waits
+        //    for. A place that is retiring comes back when its cache is
+        //    dropped, and nothing else is freed meanwhile.
         let missing = self
             .window()
             .iter()
@@ -777,7 +854,7 @@ impl Core {
             .find(|seed| self.entry(seed).is_none());
         if let Some(seed) = missing {
             if self.entries.len() < CAP {
-                self.reserve(seed, out);
+                self.reserve(seed);
                 return true;
             }
             let retiring = self
@@ -790,35 +867,24 @@ impl Core {
                 }
                 self.cancel_warm_outside(out);
             }
+            return false;
         }
-        // 3. The queue's head, judged by rule 2 without its first step.
-        if !self.window_short() {
-            if let Some(&head) = self.fifo.front() {
-                let waiter = self
-                    .waiters
-                    .iter()
-                    .copied()
-                    .find(|waiter| waiter.ticket == head)
-                    .expect("a queued ticket has its waiter");
-                match self.place_outside(waiter, out) {
-                    Placed::Taken => {
-                        self.fifo.pop_front();
-                        return true;
-                    }
-                    Placed::Freeing => return true,
-                    Placed::Waits => return false,
-                    Placed::Short => {
-                        self.cancel_warm_outside(out);
-                        return false;
-                    }
+        // 3. The fifo's head, judged by rule 2 without its first step.
+        if let Some(head) = self.queue.head() {
+            match self.place_outside(head, out) {
+                Placed::Taken | Placed::Freeing => return true,
+                Placed::Waits => return false,
+                Placed::Short => {
+                    self.cancel_warm_outside(out);
+                    return false;
                 }
             }
         }
         // 4. The third, once no job waits for a place (HA-R3).
-        if self.fifo.is_empty() && !self.window_short() {
+        if self.queue.fifo.is_empty() {
             if let Some((third, _)) = self.third() {
                 if self.entry(&third).is_none() && self.outside_count() < self.outside_places() {
-                    self.reserve(third, out);
+                    self.reserve(third);
                     return true;
                 }
             }
