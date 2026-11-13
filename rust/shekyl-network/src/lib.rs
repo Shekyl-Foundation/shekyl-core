@@ -160,18 +160,6 @@ impl Network {
         false
     }
 
-    /// The proof that this network's row permits `lever`, for a caller
-    /// that holds no network (the store, rule 71): `None` where the row
-    /// does not permit it.
-    #[must_use]
-    pub const fn permit(self, lever: Lever) -> Option<Permit> {
-        if self.permits(lever) {
-            Some(Permit { lever })
-        } else {
-            None
-        }
-    }
-
     /// This network's genesis.
     #[must_use]
     pub const fn genesis(self) -> &'static Genesis {
@@ -314,16 +302,10 @@ pub enum Lever {
     SettlementEpochBlocks,
     /// `dev-archival-reorg-depth`: the archival reorg depth.
     ArchivalReorgDepth,
-    /// The out-of-band serve-credit write a corpus `inject` record replays
-    /// through (NI-F6).
-    InjectServeCredit,
-    /// The issued-draws write a corpus replays through (NI-F6).
-    IssueDraws,
 }
 
 impl Lever {
-    /// What an operator or a refusal calls it: the option's name, or the
-    /// write's for the two a corpus replays through.
+    /// What an operator or a refusal calls it: the option's name.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -334,13 +316,11 @@ impl Lever {
             Self::PowSeedEpochLag => "dev-pow-seed-epoch-lag",
             Self::SettlementEpochBlocks => "dev-settlement-epoch-blocks",
             Self::ArchivalReorgDepth => "dev-archival-reorg-depth",
-            Self::InjectServeCredit => "the injected serve-credit write",
-            Self::IssueDraws => "the issued-draws write",
         }
     }
 
     /// Every lever.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 7] = [
         Self::DevRpc,
         Self::Sync,
         Self::Difficulty,
@@ -348,25 +328,7 @@ impl Lever {
         Self::PowSeedEpochLag,
         Self::SettlementEpochBlocks,
         Self::ArchivalReorgDepth,
-        Self::InjectServeCredit,
-        Self::IssueDraws,
     ];
-}
-
-/// A network row's permission for one lever (NI-R6). Only
-/// [`Network::permit`] makes one, so a callee that requires a `Permit`
-/// runs only where a row allowed it, without learning which network.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Permit {
-    lever: Lever,
-}
-
-impl Permit {
-    /// The lever permitted.
-    #[must_use]
-    pub const fn lever(self) -> Lever {
-        self.lever
-    }
 }
 
 /// A staging flag (NI-R9): a candidate mainnet behaviour staged on the

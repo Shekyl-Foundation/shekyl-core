@@ -162,7 +162,6 @@ fn assemble(
             },
             pqc_auths,
             prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
                 tree_depth: u64::from(signed.tree_depth.checked_sub(1).expect("L >= 1")),
                 fcmp_proof: signed.fcmp_proof.clone(),

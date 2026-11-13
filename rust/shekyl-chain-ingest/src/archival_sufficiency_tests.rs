@@ -31,7 +31,7 @@
 //! (`ARW-13`: no capture slashes, which was §6.2 item 5's decision point,
 //! `ARW-Q18` — ruled 2026-10-02: no capture; the `0x04` slash families are
 //! pinned at non-empty by `shekyl-chain-store`'s slash witness instead)
-//! and the attestation witness. For them this module
+//! and the alt-chain family. For them this module
 //! asserts the *absence* — zero rows on every chain — so the empty slash
 //! rows of every `0x04` record are a pre-declared fact of the corpus, not a
 //! silence the oracle happens to agree with. One cell cuts across that
@@ -106,10 +106,6 @@ const fn witness(family: ArchivalFamily) -> Witness {
         },
         // The epoch close and everything it writes: witnessed only by a
         // chain that crosses an epoch.
-        ArchivalFamily::ServeCredit => Witness::Unwitnessed {
-            rows: SnapshotFamily::ServeCredit,
-            why: EPOCH_CLOSE_UNWITNESSED,
-        },
         ArchivalFamily::RMarket => Witness::Unwitnessed {
             rows: SnapshotFamily::RMarket,
             why: EPOCH_CLOSE_UNWITNESSED,
@@ -128,9 +124,9 @@ const fn witness(family: ArchivalFamily) -> Witness {
             shape: "spend-1in-2out",
             rows: SnapshotFamily::BudgetAccruing,
         },
-        ArchivalFamily::AttestationWitness => Witness::Unwitnessed {
-            rows: SnapshotFamily::AttestationWitness,
-            why: "no captured chain carries an attestation transaction",
+        ArchivalFamily::BundleReferences => Witness::Unwitnessed {
+            rows: SnapshotFamily::BundleReferences,
+            why: "no captured block admits a bundle",
         },
         ArchivalFamily::SlashLog => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashLog,
@@ -147,7 +143,7 @@ const fn witness(family: ArchivalFamily) -> Witness {
             why: "ARW-13: no capture slashes (as SlashLog)",
         },
         ArchivalFamily::Settlement
-        | ArchivalFamily::AltAttestationWitness
+        | ArchivalFamily::AltSectionReferences
         | ArchivalFamily::ShardSegment
         | ArchivalFamily::EmissionClaimLog
         | ArchivalFamily::BondReinstateLog

@@ -24,11 +24,10 @@
 //!
 //! # Heights here are BLOCK heights, never chain heights
 //!
-//! Admission builds its window from `predecessor_height` — a block height —
-//! and the window's centre is `predecessor_height − 720`
-//! (`attestation_wire_kat.rs`'s `SIG_ANCHOR_HEIGHT`). `P`'s gate centres on
-//! `own_height − 720`, so the two centres coincide only when `own_height` is
-//! the **top block's height**.
+//! A requester anchors at its top block's height minus 720
+//! (`pass_anchor::PASS_ANCHOR_DEPTH_BLOCKS`). `P`'s gate centres on
+//! `own_height − 720`, so the two coincide only when `own_height` is the
+//! **top block's height**.
 //!
 //! The daemon's `daemon_status.height` is the top block's height (IG-Q45),
 //! but a chain *count* — top block height plus one — is what several readers

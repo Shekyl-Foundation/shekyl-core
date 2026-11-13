@@ -8,7 +8,7 @@
 use shekyl_p_host::{DaemonTipCache, PersonaServing};
 
 use super::daemon_tip;
-use super::pass_key::ResidentPassKey;
+use super::receipt_key::ResidentReceiptKey;
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
@@ -245,14 +245,17 @@ where
                 identity,
                 virtual_port: SERVING_VIRTUAL_PORT,
                 max_streams: SERVING_MAX_STREAMS,
-                // The `SF-D13` countersignature key is the persona's
-                // `hybrid_sign_sk`, which lives inside the stake actor under
-                // Model D. What crosses into the serving role is not the key
-                // but a per-shard signing round-trip to the actor, over a
-                // weak handle bound to the slot active at this start
-                // (`pass_key`). The actor going away is the pre-flight 503
-                // (`sign_failures`); no unsigned shard is ever served.
-                key: ResidentPassKey::new(&stake, active.p_slot),
+                // The `SF-D13` countersignature key is the persona's receipt
+                // key (hybrid scheme 3), which lives inside the stake actor
+                // under Model D; the bundle verifier checks the receipt
+                // under the bond record's `receipt_sign_pk`. What crosses
+                // into the serving role is not the key but a per-shard
+                // signing round-trip to the actor, over a weak handle bound
+                // to the slot active at this start (`receipt_key`). The
+                // actor going away, or a receipt key that did not decode,
+                // is the pre-flight 503 (`sign_failures`); no unsigned
+                // shard is ever served.
+                key: ResidentReceiptKey::new(&stake, active.p_slot),
                 // The anchor gate reads the daemon's tip, not the principal's
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.

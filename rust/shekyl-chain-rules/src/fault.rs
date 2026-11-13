@@ -171,6 +171,21 @@ pub enum Stale {
         /// Whether `form` may be run again.
         retry: Retry,
     },
+    /// The candidate does not carry the body the bundle reference at
+    /// `position` names: the bodies are fewer than the references, or the
+    /// body at that position is not the one its reference hashes to.
+    /// The caller assembles a candidate's bodies by the references'
+    /// prunable hashes before `form` (§7.5: a body is accepted on hash
+    /// equality), so this is a driver defect, the class of
+    /// [`Self::Network`]. A fault, never a refusal: the block committed to
+    /// the reference, and the wrong bytes are the caller's, not the
+    /// block's (`BundleRefused::BodyNotReferenced`).
+    BundleBody {
+        /// The reference's position in the section.
+        position: usize,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
 }
 
 /// What [`Stale::Reference`] compared: what `form` verified under against
@@ -348,21 +363,6 @@ pub enum Corrupt {
         /// Which invariant the fold found broken.
         which: RecordInvariant,
     },
-    /// A recorded bond's `hybrid_pubkey` is not a canonical hybrid public
-    /// key. The at-rest record keeps the key as bytes (`BondRecord` lives
-    /// in `shekyl-types`, below the crypto crate that owns the grammar),
-    /// and a bond is admitted only with bytes that grammar accepts. Bytes
-    /// that no longer parse are store contents admission cannot have
-    /// written — the same class as [`Self::LeafNotConstructible`], a halt
-    /// on `archival_bond`, not a fold [`RecordInvariant`].
-    ///
-    /// Absence of a record is CEN-B4's refusal of the block. The FFI
-    /// distinguishes a malformed key from an absent bond because there the
-    /// bytes are the caller's input. Here they are the view's.
-    BondHybridKeyMalformed {
-        /// The persona whose record holds the key.
-        persona: PCanonicalId,
-    },
     /// The open epoch's accruing budget plus this block's accrual does not
     /// fit the type (CEN-L8's third clause; SI-8 on
     /// `archival_budget_accruing`). The accrual is bounded by the emission
@@ -384,16 +384,6 @@ pub enum Corrupt {
         /// Which check failed.
         check: SettlementCheck,
     },
-    /// `epoch` has a frozen `Σwork(E)` and no frozen complete-tree set
-    /// (A22; SI-31). The slash pass writes the two in one write set, so a
-    /// settled epoch without the set is a file that lost a row, never an
-    /// epoch a claim may be judged on without it: the re-gather would have
-    /// to read the record's flag, which is the defect the set closes
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
-    CompleteTreesAbsent {
-        /// The settled epoch whose set is missing.
-        epoch: SettlementEpoch,
-    },
     /// The drawable set of `epoch` cannot be built from the recorded state
     /// (`SO-D12` increment 2; SI-30). Never a refusal of the block: the
     /// block is not invalid, this node's journals or records are.
@@ -411,6 +401,18 @@ pub enum Corrupt {
         height: BlockHeight,
         /// Why it could not be.
         why: DrawCountFault,
+    },
+    /// The bundle view of the chain a block is connecting to did not
+    /// answer for something a chain that holds the referenced block must
+    /// hold (`BundleRefused::Unanswered`), or for a drawable epoch the
+    /// filing step put in the memo before admission read it (SI-35's
+    /// class). Never a refusal of the block: the block is not invalid,
+    /// this node's rows are.
+    BundleUnanswered {
+        /// The block whose section was being admitted.
+        including: BlockHeight,
+        /// What the view did not answer.
+        why: crate::archival::BundleUnanswered,
     },
 }
 
@@ -452,6 +454,19 @@ pub enum DrawCountFault {
     InFlightOverflow,
     /// `COUNTED_DRAWS · |D|` does not fit the shortfall's `u64`.
     ShortfallOverflow,
+    /// The carry the row at `h − 1` left owes a tree more than the cap
+    /// `c`: no transition writes one.
+    SupportCountPastCap {
+        /// The count the row holds.
+        count: u32,
+    },
+    /// The block before this one, or the block whose response window
+    /// closes here, has no support row: every connected height writes one
+    /// (SI-40).
+    MissingSeats {
+        /// The height whose row is absent.
+        at: BlockHeight,
+    },
 }
 
 impl fmt::Display for DrawCountFault {
@@ -474,6 +489,12 @@ impl fmt::Display for DrawCountFault {
             Self::InFlightOverflow => write!(f, "the in-flight draws do not fit a u64"),
             Self::ShortfallOverflow => {
                 write!(f, "the visible shortfall does not fit a u64")
+            }
+            Self::SupportCountPastCap { count } => {
+                write!(f, "a support row's carry owes {count}, past the cap")
+            }
+            Self::MissingSeats { at } => {
+                write!(f, "no support row is recorded at height {at}")
             }
         }
     }
@@ -818,6 +839,11 @@ impl fmt::Display for Stale {
                     claims.expected.height, claims.expected.root
                 ),
             },
+            Self::BundleBody { position, retry } => write!(
+                f,
+                "stale bundle bodies: the candidate does not carry the body bundle reference \
+                 #{position} names ({retry})"
+            ),
         }
     }
 }
@@ -872,10 +898,6 @@ impl fmt::Display for Corrupt {
             Self::BondRecordInvariant { persona, which } => {
                 write!(f, "bond record of {persona} is inconsistent: {which} (SI-7)")
             }
-            Self::BondHybridKeyMalformed { persona } => write!(
-                f,
-                "bond record of {persona} holds a hybrid key that is not canonical (SI-7)"
-            ),
             Self::AccrualOverflow { epoch } => {
                 write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
             }
@@ -912,14 +934,14 @@ impl fmt::Display for Corrupt {
             Self::DrawableEpoch { epoch, why } => {
                 write!(f, "the drawable set of epoch {epoch} cannot be built: {why} (SI-30)")
             }
-            Self::CompleteTreesAbsent { epoch } => write!(
-                f,
-                "settled epoch {epoch} has a frozen Σwork and no frozen complete-tree set \
-                 (SI-31)"
-            ),
             Self::DrawCount { height, why } => {
                 write!(f, "the draw count at height {height} cannot be recorded: {why} (SI-33)")
             }
+            Self::BundleUnanswered { including, why } => write!(
+                f,
+                "admitting the section of the block at height {including}: the view did not \
+                 answer {why:?}"
+            ),
         }
     }
 }

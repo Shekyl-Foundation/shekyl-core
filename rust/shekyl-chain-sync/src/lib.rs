@@ -73,6 +73,7 @@ pub use model::{
     Job, OfferedBody, Outcome, ProveItem, Proved, Requesting, Spent, Sync, ALARM_RETRY,
     BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
+pub use runs::awaiting::{AWAITING_AGE, AWAITING_PER_SESSION, AWAITING_TOTAL};
 pub use shekyl_chain_rules::HeaderView;
 pub use state::{Declaration, SyncState};
 pub use view::{BodiesInFlight, HeaderInFlight, SessionMode, SessionView, SyncView};

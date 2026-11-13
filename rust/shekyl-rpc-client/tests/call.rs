@@ -207,7 +207,7 @@ fn header(pow: Option<&str>) -> Value {
         "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
         "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
         "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
-        "curve_root": "44".repeat(32), "attestation_root": "55".repeat(32),
+        "curve_root": "44".repeat(32), "section_root": "55".repeat(32),
     });
     if let Some(pow) = pow {
         header["pow"] = json!(pow);

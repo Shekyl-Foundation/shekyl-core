@@ -20,8 +20,8 @@ use shekyl_wire::{
     BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Output, Transaction, TxPrefix,
 };
 use submit_fixtures::{
-    emission_tx, emission_vin_bytes, serve_credit_tx, spend_tx, spend_tx_with_kis, tx_bytes,
-    valid_key_images, FIXTURE_REF_BLOCK,
+    emission_tx, emission_vin_bytes, spend_tx, spend_tx_with_kis, tx_bytes, valid_key_images,
+    FIXTURE_REF_BLOCK,
 };
 
 fn reject_reason(tx: &[u8]) -> String {
@@ -58,18 +58,6 @@ fn valid_spend_parses_with_extracted_facts() {
     assert_eq!(parsed.fee, 12_345);
     assert_eq!(parsed.weight, tx.weight() as u64, "row I3 weight");
     assert_eq!(parsed.kind, SubmitTxKind::Spend);
-}
-
-#[test]
-fn valid_serve_credit_parses_as_non_spending() {
-    let parsed = parse_submission(&tx_bytes(&serve_credit_tx(0)))
-        .expect("fee-0 serve-credit clears Phase A");
-    assert_eq!(parsed.kind, SubmitTxKind::ServeCreditOnly);
-    assert!(
-        parsed.key_images.is_empty(),
-        "no key images on the non-spending arm"
-    );
-    assert_eq!(parsed.fee, 0);
 }
 
 // ── Transport-shape rejects (rows T2 / I1 / I2) ─────────────────────────
@@ -157,15 +145,6 @@ fn nonzero_unlock_time_rejects() {
         reason.contains("unlock_time"),
         "unexpected reason: {reason}"
     );
-}
-
-#[test]
-fn serve_credit_with_nonzero_fee_rejects() {
-    // Row N6's static leg: consensus pins the non-spending arm to fee 0
-    // (tx_verification_utils.cpp:126). shekyl-wire's validate() does not
-    // own the fee pin; the engine does.
-    let reason = reject_reason(&tx_bytes(&serve_credit_tx(1)));
-    assert!(reason.contains("zero fee"), "unexpected reason: {reason}");
 }
 
 #[test]

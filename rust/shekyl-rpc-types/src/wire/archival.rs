@@ -41,7 +41,6 @@ crate::wire_object! {
     ["bond"]
     pub struct ClaimBond {
         pub joined_epoch: Integer,
-        pub complete_tree: bool,
         pub failure: Vec<Failure>,
     }
 }
@@ -98,7 +97,11 @@ crate::wire_object! {
         pub claimed: Vec<Integer>,
         pub bond_total: Amount,
         pub failure_count: Count,
-        /// `null`: never served.
+        /// The last epoch in which the record passed a draw, when that is
+        /// inside the release cooldown's window (the last
+        /// `RELEASE_COOLDOWN_EPOCHS` epochs through the next block's).
+        /// `null`: it never passed one, or its last pass is older than the
+        /// window — for a release the two are one fact (CEN-J16).
         pub served_epoch: Nullable<Integer>,
         /// `null`: never slashed.
         pub slash_epoch: Nullable<Integer>,

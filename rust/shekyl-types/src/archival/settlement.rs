@@ -468,11 +468,10 @@ impl SupportSeats {
     }
 }
 
-/// A support-stream count: one tree's unissued draws in an epoch
-/// (`archival_support_unissued`). Four little-endian bytes
-/// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at `c` by the writer; the
-/// codec stores the number. A block's issued support draws are its
-/// [`SupportSeats`], whose length is that count.
+/// A support-stream count: the draws one tree is owed, carried in a
+/// block's [`SupportCarryAfter`] (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at
+/// `c` by the transition; the row stores the number. A block's issued
+/// support draws are its [`SupportSeats`], whose length is that count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SupportCount(u32);
 
@@ -499,6 +498,104 @@ impl SupportCount {
     pub const fn get(self) -> u32 {
         self.0
     }
+}
+
+/// The support carry a block leaves: each complete tree still owed draws
+/// after the block, in persona order, with how many
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §2, the carry). Sparse: a tree owed nothing
+/// has no entry, so a block that leaves nothing owed holds
+/// [`SupportCarryAfter::EMPTY`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SupportCarryAfter(Vec<(PCanonicalId, SupportCount)>);
+
+/// [`SupportCarryAfter::new`]'s refusal, at entry `index`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportCarryError {
+    /// The persona is not above the one before it.
+    NotIncreasing {
+        /// Position of the entry.
+        index: usize,
+    },
+    /// The entry owes nothing: a tree owed nothing has no entry.
+    OwesNothing {
+        /// Position of the entry.
+        index: usize,
+    },
+}
+
+impl core::fmt::Display for SupportCarryError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotIncreasing { index } => {
+                write!(f, "carried persona {index} is not above the one before it")
+            }
+            Self::OwesNothing { index } => write!(f, "carried persona {index} owes nothing"),
+        }
+    }
+}
+
+impl SupportCarryAfter {
+    /// A block that leaves nothing owed.
+    pub const EMPTY: Self = Self(Vec::new());
+
+    /// The carry `entries`: personas strictly increasing, each owed at
+    /// least one draw.
+    ///
+    /// # Errors
+    ///
+    /// [`SupportCarryError`] at the first entry that breaks either.
+    pub fn new(entries: Vec<(PCanonicalId, SupportCount)>) -> Result<Self, SupportCarryError> {
+        for (index, (persona, owed)) in entries.iter().enumerate() {
+            if owed.get() == 0 {
+                return Err(SupportCarryError::OwesNothing { index });
+            }
+            if index > 0 && entries[index - 1].0 >= *persona {
+                return Err(SupportCarryError::NotIncreasing { index });
+            }
+        }
+        Ok(Self(entries))
+    }
+
+    /// The entries, ascending by persona.
+    #[must_use]
+    pub fn as_slice(&self) -> &[(PCanonicalId, SupportCount)] {
+        &self.0
+    }
+
+    /// How many trees are owed draws.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing is owed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// `archival_support_block[h]`: the block's support seats and the carry it
+/// leaves (`SO-D12` S1; the switch's C5). One row per connected block, the
+/// empty one included. The next block in the epoch reads `carry_after`;
+/// at an epoch's open the carry starts empty (`SO-D12r`). Like
+/// [`BlockDraws`], the row stores the carry its successor's step is
+/// computed from (CEN-L17's precedent), so admission can check the row as
+/// one step of the carry (SI-43).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SupportRow {
+    /// The complete trees the block seated, in persona order.
+    pub seats: SupportSeats,
+    /// The trees still owed draws after the block.
+    pub carry_after: SupportCarryAfter,
+}
+
+impl SupportRow {
+    /// A block that seated nobody and leaves nothing owed.
+    pub const EMPTY: Self = Self {
+        seats: SupportSeats::EMPTY,
+        carry_after: SupportCarryAfter::EMPTY,
+    };
 }
 
 /// One issued support draw (`ARCHIVAL_SUPPORT_DRAW.md` §3).

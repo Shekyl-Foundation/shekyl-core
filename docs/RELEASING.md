@@ -30,6 +30,18 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Creating a Release
 
+**Early in the cut week: the alpha resync.** Until the full wallet
+adjustment lands, every cut resyncs the GUI wallet with the core it ships
+beside, once per cut. Dispatch `gitian.yml` with `package_dry_run` from
+`dev`, with the head commit as `tag`, never from a tag ref: the publish step
+keys on the ref, not the event, so a dispatch from a tag publishes. Then
+the GUI's release dry run runs against that run id. The GUI repository's
+`docs/design/GUI_SYNC_LANE.md` §7 ("Alpha resync") is the sequence, and the
+GUI is tagged beside this release. Run both again at the freeze. The CLI's
+half is in this tree: its daemon calls are typed and its `--json` is the
+wire's reply, so the sweep checks only its human lines' words against
+`docs/design/HEIGHT_SEMANTICS.md` §1.
+
 1. **Prepare the changelog on `dev`.** Until the cut, each pull request's
    entry is a file of its own under `docs/changelog.d/` (its `README.md`
    says why). The cut is one commit, on a branch off `dev`, merged by pull

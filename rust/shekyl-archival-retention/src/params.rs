@@ -171,6 +171,13 @@ pub enum ArchivalParamsError {
     /// §2.2, the L16 pin).
     #[error("release cooldown {0} epochs does not exceed the slash grace")]
     CooldownNotPastGrace(u64),
+    /// The release cooldown reaches back past the slash grace plus one, so
+    /// the window a Release reads (`release_last_served`, the last cooldown
+    /// epochs) would reach below the issued indexes' read floor, which keeps
+    /// the grace (`EpochFloor<Settling>`): a release would ask for a retired
+    /// epoch.
+    #[error("release cooldown {0} epochs reaches past the slash grace plus one")]
+    CooldownPastReadableWindow(u64),
     /// The age weight lets a shard's scarcity exceed the `u32` wire field
     /// it is carried in (`WORK_MICRO_PER_MILLI · (WORK_MILLI_SCALE + g)`).
     #[error("reward age weight {0} lets scarcity exceed its u32 wire field")]
@@ -341,6 +348,11 @@ impl ArchivalParams {
         }
         if self.release_cooldown_epochs <= SLASH_GRACE_EPOCHS {
             return Err(ArchivalParamsError::CooldownNotPastGrace(
+                self.release_cooldown_epochs,
+            ));
+        }
+        if self.release_cooldown_epochs - 1 > SLASH_GRACE_EPOCHS {
+            return Err(ArchivalParamsError::CooldownPastReadableWindow(
                 self.release_cooldown_epochs,
             ));
         }
@@ -534,6 +546,17 @@ mod tests {
             with(|p| p.release_cooldown_epochs = SLASH_GRACE_EPOCHS),
             Err(ArchivalParamsError::CooldownNotPastGrace(
                 SLASH_GRACE_EPOCHS
+            ))
+        );
+        assert_eq!(
+            with(|p| p.release_cooldown_epochs = SLASH_GRACE_EPOCHS + 1),
+            Ok(()),
+            "one past the grace is the one readable cooldown"
+        );
+        assert_eq!(
+            with(|p| p.release_cooldown_epochs = SLASH_GRACE_EPOCHS + 2),
+            Err(ArchivalParamsError::CooldownPastReadableWindow(
+                SLASH_GRACE_EPOCHS + 2
             ))
         );
         const PAST_WIRE: u64 = u32::MAX as u64 / WORK_MICRO_PER_MILLI - WORK_MILLI_SCALE + 1;

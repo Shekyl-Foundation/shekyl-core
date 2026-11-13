@@ -51,7 +51,7 @@ use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::tx_extra::TxExtraField;
 use tokio::sync::{mpsc, watch};
 
-use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, OfferBundle, TipChanged};
+use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, TipChanged};
 use crate::schedule::ChainRules;
 
 /// One read through the daemon's fetch path: the due read in, its outcome
@@ -65,6 +65,8 @@ pub type ReadFn =
 pub struct ProducerParts {
     /// The connector: the draws and the queue's admission.
     pub connector: kameo::actor::ActorRef<Connector>,
+    /// Where a queued bundle is published for the sync owner to relay.
+    pub filed: tokio::sync::broadcast::Sender<crate::connector::FiledBundle>,
     /// The store, read for the blocks near the tip.
     pub store: Arc<shekyl_chain_store::store::ChainStore>,
     /// The rules by height.
@@ -167,7 +169,6 @@ pub async fn run(
         seat.start_spread,
     );
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(ReadKey, ReadOutcome)>();
-    let mut scheme_logged = SchemeLine::default();
     tracing::info!("the bundle producer is running: the witness ring starts empty");
     loop {
         // A read that ended leaves the count only once the wake it caused
@@ -202,7 +203,6 @@ pub async fn run(
             TipPublication::from_seq(published.seq),
             window,
             &done_tx,
-            &mut scheme_logged,
             &progress,
         )
         .await;
@@ -219,18 +219,6 @@ pub async fn run(
             h.to_raw(),
             draws
         );
-    }
-}
-
-/// The blocks the serving-scheme line was logged for: once per block.
-#[derive(Default)]
-pub(crate) struct SchemeLine(std::collections::BTreeSet<BlockHeight>);
-
-impl SchemeLine {
-    /// Whether `h`'s line is due now: the first filing of `h` that met the
-    /// identity scheme. Later offers of the same block log nothing.
-    pub(crate) fn due(&mut self, h: BlockHeight, absent: bool) -> bool {
-        absent && self.0.insert(h)
     }
 }
 
@@ -258,7 +246,6 @@ async fn step(
     published: TipPublication,
     window: Window,
     done: &mpsc::UnboundedSender<(ReadKey, ReadOutcome)>,
-    scheme_logged: &mut SchemeLine,
     progress: &watch::Sender<ProducerProgress>,
 ) {
     let observed = match parts.store.begin_read() {
@@ -321,7 +308,7 @@ async fn step(
         );
     }
     for filing in filings {
-        offer(parts, filing, scheme_logged).await;
+        offer(parts, filing).await;
     }
 }
 
@@ -362,23 +349,16 @@ pub(crate) fn spawn_read(
     });
 }
 
-async fn offer(parts: &ProducerParts, filing: Filing, scheme_logged: &mut SchemeLine) {
+async fn offer(parts: &ProducerParts, filing: Filing) {
     let Filing {
         h,
         reference,
         body,
         draws,
         passes,
-        serving_scheme_absent,
     } = filing;
-    if scheme_logged.due(h, serving_scheme_absent) {
-        tracing::info!(
-            h = h.to_raw(),
-            "block {}: no receipt scheme on the serving side yet; filed with no passes",
-            h.to_raw()
-        );
-    }
-    let offered = parts.connector.ask(OfferBundle { reference, body }).await;
+    let offered =
+        crate::connector::file_bundle(&parts.connector, &parts.filed, reference, body).await;
     match offered {
         Ok(BundleOffered::Queued { tip_height, .. }) => tracing::info!(
             h = h.to_raw(),

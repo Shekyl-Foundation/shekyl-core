@@ -48,7 +48,17 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// `tor` are a part shown to `status`, in `shekyl-tor-status`'s types. Every
 /// closed set there decodes a keyword this build does not know, and the
 /// send flow reads such a value as not address-hiding.
-pub const CORE_RPC_VERSION_MINOR: u32 = 2;
+///
+/// 4.3: the 4b switch (`SO-D12`; `INPUT_GRAMMAR.md` IG-Q102). A block
+/// header's `attestation_root` is `section_root`, the root of the block's
+/// bundle section; `block_show` and `block_list` carry each block's
+/// `section` (its bundle references) and the `section_body` list this node
+/// holds for it; an `archival_claim_show` bond loses `complete_tree` (a
+/// complete tree is never in an epoch's market, so it was always `false`),
+/// and `served_epoch` names the last pass only inside the release
+/// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
+/// version read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 3;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -62,15 +72,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 2)` is `(4 << 16) | 2` = 262146. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 3)` is `(4 << 16) | 3` = 262147. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_146);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 2);
+        assert_eq!(CORE_RPC_VERSION, 262_147);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 3);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 2);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.2");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 3);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.3");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

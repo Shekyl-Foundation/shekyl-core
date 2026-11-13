@@ -1685,8 +1685,8 @@ mod cancel_tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            section_root: shekyl_types::SectionRoot::from_bytes(
+                shekyl_archival_retention::empty_section_root(),
             ),
         };
         // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
@@ -1755,8 +1755,8 @@ mod cancel_tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            section_root: shekyl_types::SectionRoot::from_bytes(
+                shekyl_archival_retention::empty_section_root(),
             ),
         };
         let miner_tx = Transaction {

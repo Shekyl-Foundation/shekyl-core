@@ -237,7 +237,6 @@ fn fixture_source() -> EmissionClaimSource {
                 has_budget_row: true,
                 bonds: vec![BondRow {
                     join_settlement_epoch: 0,
-                    is_support_complete_tree: false,
                     bad_intervals: vec![BadInterval {
                         start_epoch: 2,
                         end_exclusive: 3,

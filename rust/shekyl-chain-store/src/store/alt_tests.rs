@@ -13,7 +13,7 @@
 
 use shekyl_chain_rules::{alt_against, AltValid, RuleSet, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
 
 use shekyl_chain_rules::harness::fixture;
@@ -39,7 +39,11 @@ pub(super) const fn h(n: u64) -> BlockHeight {
 /// A row from bare facts, for planting around AL1 (`AltBlock::checked`;
 /// AL1 itself takes no row). The facts are fixture literals: a planted
 /// row's bookkeeping is whatever the test needs it to be.
-pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
+pub(super) fn alt(
+    height: BlockHeight,
+    block: &[u8],
+    references: Option<BundleReferences>,
+) -> AltBlock {
     let raw = height.to_raw();
     AltBlock::checked(
         AltBlockFacts {
@@ -52,7 +56,7 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             },
         },
         block,
-        witness,
+        references,
     )
     .expect("fixture record")
 }
@@ -107,12 +111,16 @@ pub(super) fn side_block(
     (cand.block.hash(), cand.block.serialize())
 }
 
-/// `candidate` carrying `witness` as its attestation sidecar (CW-2: the
-/// witness rides in the alt row the tier's verdict becomes).
-pub(super) fn with_witness(candidate: Candidate, witness: &[u8]) -> Candidate {
-    candidate.with_attestation_witness(Some(
-        AttestationWitness::new(witness.to_vec()).expect("a fixture witness is well-formed"),
-    ))
+/// A one-reference section of `fill` bytes: the tier carries a sidecar
+/// unopened, so its bytes need only be a section.
+pub(super) fn references(fill: u8) -> BundleReferences {
+    BundleReferences::new(vec![vec![fill; 80]]).expect("a fixture section")
+}
+
+/// `candidate` carrying [`references`] of `fill` as its sidecar (CW-2: the
+/// references ride in the alt row the tier's verdict becomes).
+pub(super) fn with_references(candidate: Candidate, fill: u8) -> Candidate {
+    candidate.with_bundle_references(Some(references(fill)))
 }
 
 /// The cheap tier over `snap` — what AL1 takes. CEN-K2's walk from the
@@ -177,12 +185,12 @@ fn insert_read_enumerate_remove_and_drop() {
     let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
     let a_cand = side_candidate(h(1), main[0], 3);
     let (a, a_bytes) = (a_cand.block.hash(), a_cand.block.serialize());
-    let witness = vec![0xA5; 40];
+    let section = references(0xA5);
 
     // `a` first: `b`'s chain walks through `a`'s row, so `b` is judged on a
     // snapshot that holds it (K2 — the tier reads what the store holds).
     insert_admitted(&store, a_cand).expect("insert a");
-    let b_cand = with_witness(side_candidate(h(2), a, 4), &witness);
+    let b_cand = with_references(side_candidate(h(2), a, 4), 0xA5);
     let b = b_cand.block.hash();
     let judged = store.begin_read().expect("read");
     let b_valid = admitted(&judged, b_cand);
@@ -196,8 +204,8 @@ fn insert_read_enumerate_remove_and_drop() {
             batch
                 .alt_block(&b)?
                 .as_ref()
-                .and_then(AltBlock::attestation_witness),
-            Some(witness.as_slice())
+                .and_then(AltBlock::bundle_references),
+            Some(&section)
         );
         Ok(())
     });
@@ -218,7 +226,7 @@ fn insert_read_enumerate_remove_and_drop() {
             "handed out parsed, not as bytes"
         );
         assert_eq!(got.block().hash(), a, "the key is the block's identity");
-        assert_eq!(got.attestation_witness(), None);
+        assert_eq!(got.bundle_references(), None);
         assert_eq!(got.height(), BlockHeight::from_raw(1));
         assert!(
             got.block_weight().to_raw() > 0,
@@ -229,10 +237,10 @@ fn insert_read_enumerate_remove_and_drop() {
         assert_eq!(all.len(), 2);
         assert!(all
             .iter()
-            .any(|e| e.id == a && e.block.attestation_witness().is_none()));
+            .any(|e| e.id == a && e.block.bundle_references().is_none()));
         assert!(all
             .iter()
-            .any(|e| e.id == b && e.block.attestation_witness() == Some(witness.as_slice())));
+            .any(|e| e.id == b && e.block.bundle_references() == Some(&section)));
         // Key order is the table's, never insertion order.
         let keys: Vec<LmdbHashKey> = all
             .iter()
@@ -728,13 +736,13 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         "the fixture's coinbase is one `repay` prices"
     );
     let alt_top = alt_cand.block.hash();
-    let alt_witness = vec![0x5A; 40];
-    // top' through the tier, carrying its witness (CW-2): the alt row is
+    let alt_references = references(0x5A);
+    // top' through the tier, carrying its references (CW-2): the alt row is
     // the verdict. Its parent is recorded, so the chain has no entries and
     // the fork pops one block.
     // The snapshot stays live through the write: the verdict borrows it.
     let judged = store.begin_read().expect("read");
-    let alt_valid = admitted(&judged, with_witness(alt_cand.clone(), &alt_witness));
+    let alt_valid = admitted(&judged, with_references(alt_cand.clone(), 0x5A));
     assert_eq!(alt_valid.hash(), alt_top);
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(alt_valid)?));
     out.expect("hold top'");
@@ -749,7 +757,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     assert_eq!(demoted.hash(), main_top_hash);
 
     // The switch to top': demote top, promote top'.
-    let out: Result<Vec<u8>, TestErr> = store.write(|batch| {
+    let out: Result<BundleReferences, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         // Read what the switch is about to change, through the batch.
         let promoted = batch.alt_block(&alt_top)?.expect("top' is held");
@@ -759,12 +767,12 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         // The connect takes the promoted block's own row (one home per id).
         let connected = batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
         assert!(connected.left_alt);
-        Ok(promoted.attestation_witness().expect("witness").to_vec())
+        Ok(promoted.bundle_references().expect("references").clone())
     });
     assert_eq!(
         out,
-        Ok(alt_witness),
-        "the promoted block's witness travels out of the switch"
+        Ok(alt_references),
+        "the promoted block's references travel out of the switch"
     );
     assert_eq!(tip_height(&store), Some(top));
     assert_eq!(hash_at(&store, top), Some(alt_top));
@@ -827,14 +835,14 @@ fn a_switch_is_one_transaction_or_none_of_it() {
 }
 
 /// SAL-15: the alt surface is *not chain state* (§11.2) — a fact every
-/// digest declared and, for `alt_blocks` and its witness, nothing enforced
+/// digest declared and, for `alt_blocks` and its sidecar, nothing enforced
 /// (`LMDB_WRITE_ATOMICITY_AUDIT.md`, non-canonical class: "declared, not
-/// enforced"). With the witness a field of the alt row there is one table
-/// to test: an AL1 carrying a witness must move no digest. This test exists
+/// enforced"). With the sidecar a field of the alt row there is one table
+/// to test: an AL1 carrying references must move no digest. This test exists
 /// because the fold made the boundary testable, not because the fold was
 /// made to close the audit row.
 #[test]
-fn an_alt_block_with_a_witness_moves_no_digest() {
+fn an_alt_block_with_references_moves_no_digest() {
     let path = tmp("alt-digest-boundary");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &spendable_prefix(vec![vec![spend()]])).hashes;
@@ -847,7 +855,7 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
     let judged = store.begin_read().expect("read");
     let a_valid = admitted(
         &judged,
-        with_witness(side_candidate(h(1), main[0], 6), &[0xC3; 40]),
+        with_references(side_candidate(h(1), main[0], 6), 0xC3),
     );
     let a = a_valid.hash();
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(a_valid)?));
@@ -858,7 +866,7 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
     assert_eq!(
         snap.logical_state_digest_v0().expect("digest"),
         before,
-        "an alt block and its witness are outside the digest's domain"
+        "an alt block and its references are outside the digest's domain"
     );
 
     // And the removal moves nothing either — the boundary holds in both

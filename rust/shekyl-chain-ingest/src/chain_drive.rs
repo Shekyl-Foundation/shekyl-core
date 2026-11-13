@@ -34,31 +34,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::FAILURE_WINDOW_M;
 use shekyl_chain_store::archival_snapshot::{ArchivalSnapshot, SnapshotFamily};
 use shekyl_chain_store::codec::{PropertyCell, TotalBurnedCell, UndoLogFloorCell};
 use shekyl_chain_store::store::RawRows;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_harness_spender::{Owner, Spender};
-use shekyl_types::archival::{IndexedDraw, IssuedDigest, IssuedDraw};
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
-use crate::connector::{ArchivalState, IssueDraws, Rewound};
+use crate::connector::{ArchivalState, Rewound};
 use crate::emission_assembly::{assemble_emission_claim, ClaimAnchor, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
-use crate::scenario_shard::{levered_schedule, EPOCH_BLOCKS};
-
-/// Draws issued for one persona on one shard. Three is this driver's
-/// witness, not [`shekyl_archival_retention`](shekyl_archival_retention)'s
-/// `SUPPORT_DRAWS_PER_EPOCH`.
-pub(crate) const DRAWS_PER_PAIR: u64 = 3;
-
-/// Every draw issued here is index 0 of its block.
-pub(crate) const WITNESS_DRAW_INDEX: u32 = 0;
+use shekyl_chain_rules::SettlementSchedule;
 
 /// How many times a relay fee is repriced before its varint width has
 /// settled. The fee is an input of the weight it pays for, so the price
@@ -75,7 +65,6 @@ const RETIRED_AT_A_BOUNDARY: &[&str] = &[
     "archival_block_draws",
     "archival_support_block",
     "archival_sigma_work",
-    "archival_complete_trees",
     "archival_budget",
     "archival_settlement",
     "archival_support_settlement",
@@ -88,6 +77,14 @@ const RETIRED_AT_A_BOUNDARY: &[&str] = &[
 ];
 
 /// The archival families those tables carry.
+/// Tables a connect sweeps for good, at every height: the bodies of the
+/// block that has just passed the undo retention (SI-41's main-chain
+/// holder, `bundle_holders.rs`). The body store is not chain state, and a
+/// legal reorg from any later tip cannot reach that block, so a pop does
+/// not restore what the sweep dropped: [`pop_keeps_the_prune`] at every
+/// pop, not only at a boundary's.
+const SWEPT_AT_A_CONNECT: &[&str] = &["archival_bundle_body"];
+
 const FAMILIES_RETIRED_AT_A_BOUNDARY: &[SnapshotFamily] = &[
     SnapshotFamily::SigmaWork,
     SnapshotFamily::Budget,
@@ -101,11 +98,12 @@ pub(crate) fn failure_window_epochs() -> u64 {
     u64::from(FAILURE_WINDOW_M)
 }
 
-/// Whether the block at `height` runs the boundary batch on the levered
-/// schedule: `E·SEB` with `E ≥ 2`.
-pub(crate) fn is_pruning_boundary(height: BlockHeight) -> bool {
+/// Whether the block at `height` runs the boundary batch under `schedule`:
+/// `E·SEB` with `E ≥ 2`.
+pub(crate) fn is_pruning_boundary(height: BlockHeight, schedule: SettlementSchedule) -> bool {
     let h = height.to_raw();
-    h.is_multiple_of(EPOCH_BLOCKS) && h >= 2 * EPOCH_BLOCKS
+    let seb = schedule.blocks().get();
+    h.is_multiple_of(seb) && h >= 2 * seb
 }
 
 /// The pop of a retired table: the keys `parent` and `connected` share,
@@ -152,58 +150,6 @@ fn pop_keeps_the_floor(
             .collect::<BTreeMap<_, _>>()
     };
     pop.get(floor) == connected.get(floor) && others(pop) == others(parent)
-}
-
-/// One pair's draws for an epoch, as the regtest door records them.
-pub(crate) struct IssuedPair {
-    pub persona: PCanonicalId,
-    pub shard: ShardId,
-    /// Whether each of the pair's draws passed.
-    pub passed: bool,
-}
-
-/// Issue `epoch`'s draws: [`DRAWS_PER_PAIR`] per pair, at the epoch's first
-/// heights, each at [`WITNESS_DRAW_INDEX`]. One call per epoch — the door
-/// writes the epoch's digest whole.
-pub(crate) async fn issue_draws(
-    scenario: &Scenario<FreeHash>,
-    epoch: SettlementEpoch,
-    draws_of: &[IssuedPair],
-) {
-    let open = levered_schedule().open_height(epoch.to_raw());
-    let mut digest = IssuedDigest::ZERO;
-    let mut draws = Vec::new();
-    for pair in draws_of {
-        for k in 0..DRAWS_PER_PAIR {
-            let issuing_height = BlockHeight::from_raw(open + k);
-            digest.fold(&issued_draw_term(
-                &pair.persona,
-                pair.shard,
-                epoch,
-                issuing_height,
-                WITNESS_DRAW_INDEX,
-            ));
-            draws.push(IndexedDraw {
-                persona: pair.persona,
-                shard: pair.shard,
-                issuing_height,
-                draw: WITNESS_DRAW_INDEX,
-                state: IssuedDraw {
-                    revealed_at: BlockHeight::from_raw(open + k + 1),
-                    passed: pair.passed,
-                },
-            });
-        }
-    }
-    scenario
-        .connector()
-        .ask(IssueDraws {
-            epoch,
-            draws,
-            digest,
-        })
-        .await
-        .expect("the door issues the draws");
 }
 
 /// What an emission claim is priced from. The terms stay with the caller:
@@ -313,11 +259,13 @@ fn indexed(rows: &RawRows) -> BTreeMap<Vec<u8>, Vec<u8>> {
 }
 
 /// `got` is the store `parent` describes. With `connected`, `got` is the
-/// store after a pop of the block that wrote `connected`: retired tables
-/// and families satisfy [`pop_keeps_the_prune`], and everything else is
-/// equal. Without it, every read is equal — a reconnect, or a block that
-/// did not prune.
-fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>) {
+/// store after a pop of the block that wrote `connected`, which ran a
+/// boundary: retired tables and families satisfy [`pop_keeps_the_prune`],
+/// and everything else is equal. With `swept`, `got` is the store after a
+/// pop of the block that wrote `swept`: the tables a connect sweeps satisfy
+/// [`pop_keeps_the_prune`] against it. Without either, every read is equal
+/// — a reconnect.
+fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>, swept: Option<&Tip>) {
     assert_eq!(got.height, parent.height, "{step}: the tip");
     let families: Vec<_> = SnapshotFamily::ALL
         .into_iter()
@@ -345,6 +293,13 @@ fn assert_same(step: &str, parent: &Tip, got: &Tip, connected: Option<&Tip>) {
         .filter(|table| {
             let want = parent.rows.get(table).unwrap_or(&none);
             let have = got.rows.get(table).unwrap_or(&none);
+            if let Some(swept) = swept.filter(|_| SWEPT_AT_A_CONNECT.contains(table)) {
+                return !pop_keeps_the_prune(
+                    &indexed(want),
+                    &indexed(have),
+                    &indexed(swept.rows.get(table).unwrap_or(&none)),
+                );
+            }
             let kept = match connected {
                 Some(connected) if RETIRED_AT_A_BOUNDARY.contains(table) => pop_keeps_the_prune(
                     &indexed(want),
@@ -482,6 +437,13 @@ impl Driven {
         )
     }
 
+    /// The scenario and the chain back, for a caller that mines on past
+    /// what it handed to the drive. A round trip's ledger goes with the
+    /// drive.
+    pub(crate) fn into_parts(self) -> (Scenario<FreeHash>, Vec<Mined>) {
+        (self.scenario, self.chain)
+    }
+
     /// The scenario and the chain, for a straight prefix (`close_shards`).
     ///
     /// # Panics
@@ -539,11 +501,26 @@ impl Driven {
     /// not popped: the block never landed. A connected block is popped and
     /// connected again when round-tripping.
     pub(crate) async fn connect(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
-        let block = self.scenario.mine_listing(listed).await?;
+        self.connect_admitting(listed).await.map(|(block, _)| block)
+    }
+
+    /// [`Self::connect`], reporting the bundles the block admitted. Every
+    /// block carries the queued bundles inside its window as its section,
+    /// as the node's template does; an empty queue is an empty section. A
+    /// round trip pops the block, which returns its bundles to the queue
+    /// (the switch's C3), and reconnects it carrying them again, so the
+    /// block it reconnects is the same block.
+    pub(crate) async fn connect_admitting(
+        &mut self,
+        listed: Vec<Transaction>,
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let next = self.scenario.next_template(listed).await?;
+        let (block, admitted) = self.scenario.connect_next_admitting(next).await?;
         if !matches!(self.recording, Recording::RoundTrip(_)) {
             self.chain.push(block.clone());
-            return Ok(block);
+            return Ok((block, admitted));
         }
+        let schedule = self.scenario.settlement_schedule();
         let parent_height = match &self.recording {
             Recording::RoundTrip(ledger) => ledger.parent.height,
             Recording::Straight => unreachable!("round-tripping was just matched"),
@@ -570,12 +547,13 @@ impl Driven {
                 &format!("popping block {}", block.height),
                 parent,
                 &popped,
-                is_pruning_boundary(block.height).then_some(&connected),
+                is_pruning_boundary(block.height, schedule).then_some(&connected),
+                Some(&connected),
             );
         }
-        let again = self
+        let (again, readmitted) = self
             .scenario
-            .connect_template(NextBlock {
+            .connect_next_admitting(NextBlock {
                 height: block.height,
                 template: block.template.clone(),
                 seed: block.seed,
@@ -583,6 +561,12 @@ impl Driven {
             })
             .await
             .unwrap_or_else(|outcome| panic!("block {} reconnects: {outcome}", block.height));
+        assert_eq!(
+            readmitted.len(),
+            admitted.len(),
+            "block {} re-admits the bundles its pop returned to the queue",
+            block.height
+        );
         assert_eq!(again.hash, block.hash, "the same block");
         assert_eq!(again.archival, block.archival, "the same delta");
         let reconnected = tip_of(&self.scenario).await;
@@ -590,6 +574,7 @@ impl Driven {
             &format!("reconnecting block {}", block.height),
             &connected,
             &reconnected,
+            None,
             None,
         );
         let close_slot = again
@@ -601,11 +586,11 @@ impl Driven {
                 ledger.closes[slot] += 1;
             }
             ledger.trips += 1;
-            ledger.boundaries += u64::from(is_pruning_boundary(again.height));
+            ledger.boundaries += u64::from(is_pruning_boundary(again.height, schedule));
             ledger.parent = connected;
         }
         self.chain.push(again.clone());
-        Ok(again)
+        Ok((again, readmitted))
     }
 
     /// Empty blocks until `to` is the next height. Each goes through
@@ -616,15 +601,8 @@ impl Driven {
         }
     }
 
-    /// [`issue_draws`], then reread the trip's parent. A draw is a write
-    /// beside a block; the next pop compares against the store it left.
-    pub(crate) async fn issue_draws(&mut self, epoch: SettlementEpoch, draws_of: &[IssuedPair]) {
-        issue_draws(&self.scenario, epoch, draws_of).await;
-        self.wrote_beside_a_block().await;
-    }
-
-    /// Reread the trip's parent after a write beside a block (an injected
-    /// serve credit). A straight chain has no parent to reread.
+    /// Reread the trip's parent after a write beside a block (a filed
+    /// bundle). A straight chain has no parent to reread.
     pub(crate) async fn wrote_beside_a_block(&mut self) {
         if matches!(self.recording, Recording::RoundTrip(_)) {
             let parent = tip_of(&self.scenario).await;

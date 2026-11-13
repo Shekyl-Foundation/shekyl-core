@@ -21,37 +21,32 @@
 //! for the vocabulary crate's type lives where the trait does). This module
 //! **re-exports** them so every `crate::codec::…` path in this store is
 //! unchanged, and keeps the one shape that is the daemon store's alone: the
-//! attestation witness blob. The bytes did not move — `bond_record.snap`,
+//! bundle-references blob. The bytes did not move — `bond_record.snap`,
 //! `r_market.snap`, `sigma_work_milli.snap` pin them.
 
 use shekyl_store_codec::BlobKind;
-use shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES;
+use shekyl_types::archival::BundleReferences;
 
 pub use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight, HeldShard,
-    HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount, SupportIssued, SupportSeats,
-    MAX_BOND_KEY_BYTES,
+    BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, HeldShards, Holdings,
+    HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, SupportCount, SupportIssued, SupportRow, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
-/// `archival_attestation_witness[height]` — a block's attestation witness
-/// as stored: bytes the store does not parse (`shekyl-archival-retention::
-/// attestation_wire` owns the parse). A [`BlobKind`], not a codec: the
-/// consumer checks well-formedness, and an empty witness is **no row**, not
-/// an empty row (the writer stores nothing for an empty attestation set).
+/// `archival_bundle_references[height]` — a block's bundle references as
+/// stored: [`BundleReferences::encode`]'s bytes, length-framed, each
+/// reference undecoded (`shekyl-chain-rules` opens them). A [`BlobKind`],
+/// not a codec: the consumer decodes, and a block that admits no bundle is
+/// **no row**, not an empty row (the writer stores nothing for `None`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AttestationWitnessBytes;
+pub struct BundleReferencesBytes;
 
-impl BlobKind for AttestationWitnessBytes {
-    const NAME: &'static str = "attestation_witness";
+impl BlobKind for BundleReferencesBytes {
+    const NAME: &'static str = "bundle_references";
 
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
-        if bytes.is_empty() {
-            return Err("an empty witness is no row, never an empty row");
-        }
-        if bytes.len() > MAX_ATTESTATION_WITNESS_BYTES {
-            return Err("attestation witness exceeds MAX_ATTESTATION_WITNESS_BYTES");
-        }
-        Ok(())
+        BundleReferences::decode(bytes)
+            .map(drop)
+            .map_err(|_| "not a stored section of bundle references")
     }
 }

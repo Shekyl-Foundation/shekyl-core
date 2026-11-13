@@ -64,9 +64,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
-    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SupportSeats,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, RMarket,
+    ReleasedRecord, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportRow,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -330,6 +329,31 @@ pub trait HeaderView<'id> {
 /// (DRS-E5) that also knows the pool's own key images implements this trait
 /// over an inner view; this crate never names it.
 pub trait ChainView<'id>: HeaderView<'id> {
+    /// What admission reads a block's bundle section against: this view at
+    /// `h_incl`, with `D` read from `memo` (`SO-D12` 4b).
+    ///
+    /// A method of the chain view, not a second argument beside it, so the
+    /// reads that admit a bundle are this view's: a verdict judged here
+    /// connects only under this view (the brand above), and its admissions
+    /// were read from the same batch. The store returns its
+    /// `StoreBundleView`; a pool decorator returns its inner view's.
+    ///
+    /// The view reads `memo` and does not rebuild it: `validate` files the
+    /// epochs the block's window names before it asks. A view that cannot
+    /// answer answers `None` or faults. It never answers a value that would
+    /// refuse a block it has no rows for.
+    type Bundles<'m>: crate::archival::BundleView<Fault = Self::Fault>
+    where
+        Self: 'm;
+
+    /// [`Self::Bundles`] at `h_incl`, over `memo`.
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m crate::archival::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m>;
+
     /// Whether `key_image` has been spent on the recorded chain.
     ///
     /// CEN-I7 (chain-wide key-image uniqueness); the chain half of CEN-L1.
@@ -527,36 +551,6 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: crate::SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, Self::Fault>;
 
-    /// **A3.** The latest settlement epoch `persona` earned a pass bit in
-    /// for `shard`, or `None` for a pair that never served — the release
-    /// cooldown's anchor and its vacuous arm (CEN-J16).
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Self::Fault>;
-
-    /// **A4.** Every shard `persona` ever earned a pass bit for, each with
-    /// its latest epoch; empty for a persona that never served. The
-    /// last-served marshal in its complete-tree form (such a record stores
-    /// no shard list, so the served set is the only list there is) —
-    /// CEN-J16's cooldown over every shard. (It was also CEN-J17's
-    /// drop-arm grace tail until that row retired with `HoldingsUpdate`,
-    /// `ARW-14`; slice 8 Q1.)
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Self::Fault>;
-
-    /// **A5.** Pass bits recorded for `(persona, shard, epoch)`;
-    /// [`PassCount::ZERO`] when none. No rule reads it since `SO-D11`:
-    /// slashing and accrual read the settlement row, whose pass fact is
-    /// the issued-draw index's. The read goes with the serve-credit table
-    /// when admission re-keys or deletes it (`SO-D10c`).
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, Self::Fault>;
-
     /// **A6.** The market's co-holder count for `shard` at `epoch`, as the
     /// epoch's slash pass gathered it (`SO-D11`), or `None` for an epoch
     /// not gathered with the shard in it: not settled yet, or the shard was
@@ -681,11 +675,9 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
     fn support_issued(
         &self,
-        _epoch: SettlementEpoch,
-        _floor: EpochFloor<Settling>,
-    ) -> Result<Vec<IndexedDraw>, Self::Fault> {
-        Ok(Vec::new())
-    }
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Self::Fault>;
 
     /// The support row `(persona, epoch)` an earlier pass stored. `None`
     /// is no row, not a miss. One row per tree
@@ -694,12 +686,10 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
     fn support_settlement(
         &self,
-        _persona: &PCanonicalId,
-        _epoch: SettlementEpoch,
-        _floor: EpochFloor<Claimable>,
-    ) -> Result<Option<SettlementRow>, Self::Fault> {
-        Ok(None)
-    }
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, Self::Fault>;
 
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
@@ -753,19 +743,19 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: crate::BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, Self::Fault>;
 
-    /// **A23.** The complete trees the block at `height` seated on the
-    /// support stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5;
-    /// `SO-D12` S1). `None` for a block no row was written for.
-    /// [`SupportSeats::EMPTY`] is a block that seated nobody: absence is
-    /// not that empty row.
+    /// **A23.** The block at `height`'s support row: the complete trees it
+    /// seated, in persona order, and the carry it left
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1). `None` for a block no
+    /// row was written for. [`SupportRow::EMPTY`] is a block that seated
+    /// nobody and left nothing owed: absence is not that empty row.
     ///
     /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34), the same
     /// window as [`Self::block_draws`]. A read below it is refused.
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: crate::BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, Self::Fault>;
+    ) -> Result<Option<SupportRow>, Self::Fault>;
 
     /// **A19.** The digest of `epoch`'s drawable set, as written when the
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never
@@ -779,21 +769,6 @@ pub trait ChainView<'id>: HeaderView<'id> {
         epoch: SettlementEpoch,
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
-
-    /// **A22.** The personas `epoch`'s slash pass excluded from the
-    /// epoch's market as complete trees, as it froze them beside `Σwork(E)`
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`), or `None` for an epoch
-    /// the pass has not settled. A written empty set is a value. CEN-J23's
-    /// re-gather takes every bond's complete-tree flag from it and never
-    /// from the record, which may have stopped holding a complete tree
-    /// since the pass.
-    ///
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, Self::Fault>;
 
     /// **A20.** Every Release journaled at a height **strictly above**
     /// `height`, ascending by height and then persona: each releasing

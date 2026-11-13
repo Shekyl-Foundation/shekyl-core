@@ -17,7 +17,7 @@ use core::future::Future;
 use shekyl_rpc_types::wire::shared::{Archived, ArchivedState};
 
 use shekyl_types::{
-    ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, TxHash,
+    ArchivalLength, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, SectionRoot, TxHash,
 };
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL};
@@ -137,13 +137,15 @@ fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) ->
         "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
         "weight": 0, "weight_longterm": null, "tx_count": 0,
         "coinbase": "00".repeat(32), "curve_root": "00".repeat(32),
-        "attestation_root": "00".repeat(32),
+        "section_root": "00".repeat(32),
     });
     serde_json::json!({
         "header": header,
         "body": Bytes(block.serialize()),
         "tx": tx,
         "output_index": output_index,
+        "section": [],
+        "section_body": [],
     })
 }
 
@@ -190,9 +192,7 @@ fn coinbase_block(number: u64) -> Block {
             previous: BlockHash::NULL,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
@@ -443,7 +443,6 @@ fn full_spend_tx() -> Transaction {
     }];
     *prunable = Some(Prunable {
         // Spend fixture: no pass records (RF-D1).
-        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0; 32],
             a1: [0; 32],

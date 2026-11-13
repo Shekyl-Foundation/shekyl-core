@@ -255,11 +255,12 @@ fn the_open_reconcile_drops_what_has_no_holder_and_says_so() {
     drop(store);
 }
 
-/// A body no entry names is SI-41 at the queue's read once the open has
-/// passed. Red edit: compare the counts with `<=` — the orphan reads as
-/// held.
+/// A body the queue does not name is not the queue read's fault: a block
+/// or an alternative block may hold it (`bundle_holders.rs`). The open's
+/// reconcile is what finds a body nothing holds, and drops it. Red edit:
+/// make the reconcile keep every stored body — the orphan stays.
 #[test]
-fn a_body_without_a_holder_is_si_41() {
+fn a_body_the_queue_does_not_name_is_the_reconciles_to_drop() {
     let path = tmp("queue-orphan");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     queue(&store, 40).expect("queued");
@@ -277,16 +278,13 @@ fn a_body_without_a_holder_is_si_41() {
         Ok(())
     });
     planted.expect("planted");
-    let refused = store.begin_read().expect("snapshot").queued_bundles();
-    assert!(
-        matches!(
-            refused,
-            Err(StoreError::InvariantViolated(
-                StoreInvariant::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder)
-            ))
-        ),
-        "{refused:?}"
-    );
+    let read = store.begin_read().expect("snapshot").queued_bundles();
+    assert_eq!(read.expect("the queue reads").len(), 1);
+    let report: Result<QueueReconciled, StoreError> =
+        store.write(|batch| batch.reconcile_bundle_queue());
+    let report = report.expect("the reconcile runs");
+    assert_eq!(report.bodies_without_holder, vec![orphan.prunable_hash()]);
+    assert!(report.entries_without_body.is_empty());
     drop(store);
 }
 
@@ -341,4 +339,86 @@ fn a_swallowed_retip_of_an_absent_entry_poisons_and_leaves_the_writer_live() {
         .write(|_| Ok::<(), StoreError>(()))
         .expect("a later write proceeds");
     drop(store);
+}
+
+/// A body is read by its prunable hash, and a hash the store holds no body
+/// for is `None`; whether `h` is queued is a point read that follows the
+/// entry in and out. These are what a peer's body request is answered from
+/// and what admission asks before it judges a second bundle for `h`. Red
+/// edits: key the body read by `h`, or answer `bundle_queued` from the
+/// body table — the removal below then reads stale.
+#[test]
+fn a_body_reads_by_its_hash_and_a_queued_height_by_its_entry() {
+    let path = tmp("queue-point-reads");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (reference, body) = bundle(40);
+    queue(&store, 40).expect("queued");
+    let snap = store.begin_read().expect("snapshot");
+    assert_eq!(
+        snap.bundle_body(reference.prunable_hash()).expect("reads"),
+        Some(body.clone())
+    );
+    assert_eq!(snap.bundle_body(&[0xEE; 32]).expect("reads"), None);
+    drop(snap);
+    let held = |h| {
+        store
+            .begin_read()
+            .expect("snapshot")
+            .bundle_queued(BlockHeight::from_raw(h))
+            .expect("reads")
+    };
+    assert!(held(40));
+    assert!(!held(41));
+    store
+        .write(|batch| batch.unqueue_bundle(BlockHeight::from_raw(40)))
+        .expect("removed");
+    assert!(!held(40));
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("snapshot")
+            .bundle_body(reference.prunable_hash())
+            .expect("reads"),
+        None,
+        "the body leaves with its entry"
+    );
+}
+
+/// A section whose middle body the store does not hold: the candidate's
+/// list stops at the gap, since a candidate's bodies are positional; what
+/// a peer or a reader is sent passes over it and keeps the body after it
+/// (Copilot on #1327: an RPC read lost every body after the first one the
+/// store had released). Red edit: stop `held_section_bodies` at the first
+/// absent body — the third body is not read.
+#[test]
+fn a_section_with_a_gap_stops_for_a_candidate_and_is_passed_over_for_a_reader() {
+    let path = tmp("section-gap");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    queue(&store, 40).expect("queued");
+    queue(&store, 42).expect("queued");
+    let (first, first_body) = bundle(40);
+    let (absent, _) = bundle(41);
+    let (third, third_body) = bundle(42);
+    let section = shekyl_types::archival::BundleReferences::from_sidecar(vec![
+        first.encode(),
+        absent.encode(),
+        third.encode(),
+    ])
+    .expect("a section");
+    let snap = store.begin_read().expect("snapshot");
+    assert_eq!(
+        snap.section_bodies(section.as_ref()).expect("reads"),
+        vec![first_body.clone()],
+        "a candidate's list stops at the gap"
+    );
+    assert_eq!(
+        snap.held_section_bodies(section.as_ref()).expect("reads"),
+        vec![first_body, third_body],
+        "a reader is sent every body held"
+    );
+    assert_eq!(
+        snap.held_section_bodies(None).expect("reads"),
+        Vec::new(),
+        "no section, no bodies"
+    );
 }

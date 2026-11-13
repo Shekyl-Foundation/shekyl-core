@@ -10,16 +10,17 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_archival_retention::BundleBody;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_network::NetworkId;
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{
     BlockHash, BlockHeight, CurveTreeRoot, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
-use crate::archival::ArchivalDelta;
+use crate::archival::{Admitted, ArchivalDelta};
 use crate::coverage::RuleCoverage;
 use crate::drain::Drain;
 use crate::fault::FormAttempt;
@@ -89,20 +90,20 @@ impl TxIdentity {
 }
 
 /// The untrusted input to `validate`: the block as received, plus the bodies
-/// of the transactions its header lists, in listed order, plus the
-/// attestation-witness sidecar that travelled beside them.
+/// of the transactions its header lists, in listed order, plus the bundle
+/// references that travelled beside them.
 ///
 /// Public fields — this is the outside. Nothing about it has been checked,
 /// including whether `transactions` are the bodies `block.transaction_hashes`
 /// names; that is a 4.G rule and lands with its slice. One value rather than
 /// two arguments (round-1 ruling Q9). `#[non_exhaustive]` so a further
 /// component is a constructor-site addition, not a breaking struct literal
-/// (the Q9 "non-breaking" claim; Copilot #753) — the witness was the first
+/// (the Q9 "non-breaking" claim; Copilot #753) — the sidecar was the first
 /// such addition (DRS-E4 commit 5).
 ///
 /// ```compile_fail
 /// use shekyl_chain_rules::Candidate;
-/// let _ = Candidate { block: todo!(), transactions: todo!(), attestation_witness: None };
+/// let _ = Candidate { block: todo!(), transactions: todo!(), bundle_references: None };
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,15 +112,23 @@ pub struct Candidate {
     pub block: Block,
     /// The listed transactions' bodies, in the header's order.
     pub transactions: Vec<Transaction>,
-    /// The attestation witness carried beside the block — **not in it**
-    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5): the C++ sync wire's
-    /// `block_complete_entry::attestation_witness`, `None` for an empty
-    /// attestation set. CEN-B4's operand (`rules::attestation`, E6 slice 8
-    /// row 10): `None` is judged as the empty set against the header's
-    /// `attestation_root`, `Some` as the recompute over the coinbase's kept
-    /// headers and every record's countersignature; the verdict carries it
-    /// to the store, which records it at the block's height.
-    pub attestation_witness: Option<AttestationWitness>,
+    /// The bundle references carried beside the block — **not in it**
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
+    /// `section_root` commits, undecoded, `None` when the block admits no
+    /// bundle. The operand of CEN-J29 through J37, all `validate`'s: J29
+    /// holds the root to them and the rest admit each. A body that arrives
+    /// behind its judged header is held to the root at arrival too
+    /// ([`bind_body`](crate::bind_body)). The verdict carries them to the
+    /// store, which records them at the block's height.
+    pub bundle_references: Option<BundleReferences>,
+    /// The body each reference names, in section order: body `i` is the
+    /// one whose prunable hash reference `i` states. Empty when the block
+    /// carries no references. The caller resolves them by hash before
+    /// `form` (§7.5: a body is accepted on hash equality) — from the body
+    /// store, or from a peer by 2014 or 2016 — so a body here is never
+    /// judged as the block's: one that is missing or not its reference's
+    /// is [`Stale::BundleBody`](crate::Stale::BundleBody), not a verdict.
+    pub bundle_bodies: Vec<BundleBody>,
 }
 
 impl Candidate {
@@ -136,8 +145,8 @@ impl Candidate {
     }
 
     /// Assemble a candidate from the block as received and the listed
-    /// bodies, in listed order, with no attestation witness — the shape of
-    /// every block whose attestation set is empty, which is every block a
+    /// bodies, in listed order, with no bundle references — the shape of
+    /// every block that admits no bundle, which is every block a
     /// format-2 capture carries (§3.2 phase 5: the RPC edge the corpus
     /// fetcher uses does not carry the sidecar).
     #[must_use]
@@ -145,14 +154,22 @@ impl Candidate {
         Self {
             block,
             transactions,
-            attestation_witness: None,
+            bundle_references: None,
+            bundle_bodies: Vec::new(),
         }
     }
 
     /// The same candidate with the sidecar attached.
     #[must_use]
-    pub fn with_attestation_witness(mut self, witness: Option<AttestationWitness>) -> Self {
-        self.attestation_witness = witness;
+    pub fn with_bundle_references(mut self, references: Option<BundleReferences>) -> Self {
+        self.bundle_references = references;
+        self
+    }
+
+    /// The same candidate with the references' bodies, in section order.
+    #[must_use]
+    pub fn with_bundle_bodies(mut self, bodies: Vec<BundleBody>) -> Self {
+        self.bundle_bodies = bodies;
         self
     }
 }
@@ -403,7 +420,9 @@ impl fmt::Debug for StructurallyValid {
 ///     weights: todo!(),
 ///     emission: todo!(),
 ///     archival: todo!(),
-///     attestation_witness: todo!(),
+///     bundle_references: todo!(),
+///     admitted: todo!(),
+///     bundle_bodies: todo!(),
 ///     pow: todo!(),
 /// };
 /// ```
@@ -445,13 +464,20 @@ pub struct ValidatedBlock {
     /// future validity and the store computes none of it: `connect` writes
     /// each part through its handle.
     archival: ArchivalDelta,
-    /// The candidate's attestation-witness sidecar, judged by CEN-B4
-    /// (`rules::attestation`, E6 slice 8 row 10) and carried through for
-    /// `connect` to record at the block's height
-    /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.2 phase 5). Bytes a verdict holds
-    /// have passed B4: the empty set against the mined root when `None`,
-    /// the recompute and every countersignature when `Some`.
-    attestation_witness: Option<AttestationWitness>,
+    /// The candidate's bundle references, carried through for `connect` to
+    /// record at the block's height. References a verdict holds have passed
+    /// CEN-J29 through J37: the header's root is theirs, and each bundle
+    /// was admitted.
+    bundle_references: Option<BundleReferences>,
+    /// What admitting each bundle of the section derived, in section order
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.6): `connect` journals the
+    /// reveals, the issued draws and the digest terms from it. Empty when
+    /// the block carries no references, and then `connect` writes nothing.
+    admitted: Vec<Admitted>,
+    /// The section's bodies, in section order: what `connect` holds under
+    /// this block once it is on the main chain (SI-41), so a pop can return
+    /// each bundle to the queue and a peer's request can be answered.
+    bundle_bodies: Vec<BundleBody>,
     /// The PoW `form` computed under its seed, accepted by this verdict
     /// (CEN-D1/D2/D3). `connect` records it beside the block.
     pow: ProvenPow,
@@ -688,6 +714,8 @@ pub(crate) struct Derived {
     pub(crate) emission: PaidEmission,
     /// The archival transition (DRS-E4, CEN-L7).
     pub(crate) archival: ArchivalDelta,
+    /// The section's admissions (CEN-J29 through J37).
+    pub(crate) admitted: Vec<Admitted>,
     /// The PoW `form` computed, under the seed D3 checked (CEN-D1/D2).
     pub(crate) pow: ProvenPow,
 }
@@ -712,7 +740,8 @@ impl ValidatedBlock {
         let Candidate {
             block,
             transactions,
-            attestation_witness,
+            bundle_references,
+            bundle_bodies,
         } = candidate;
         let Derived {
             target,
@@ -722,6 +751,7 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
+            admitted,
             pow,
         } = derived;
         Self {
@@ -739,7 +769,9 @@ impl ValidatedBlock {
             weights,
             emission,
             archival,
-            attestation_witness,
+            bundle_references,
+            admitted,
+            bundle_bodies,
             pow,
         }
     }
@@ -750,12 +782,33 @@ impl ValidatedBlock {
         self.pow
     }
 
-    /// The candidate's attestation-witness sidecar, as CEN-B4 judged it
-    /// (the field's docs). `connect` writes `archival_attestation_witness[h]`
-    /// from it when `Some`; `None` writes no row.
+    /// The candidate's bundle references, as CEN-J29 through J37 admitted
+    /// them (the field's docs). `connect` writes
+    /// `archival_bundle_references[h]` from them when `Some`; `None` writes
+    /// no row.
     #[must_use]
-    pub const fn attestation_witness(&self) -> Option<&AttestationWitness> {
-        self.attestation_witness.as_ref()
+    pub const fn bundle_references(&self) -> Option<&BundleReferences> {
+        self.bundle_references.as_ref()
+    }
+
+    /// What admitting each bundle derived, in section order (the field's
+    /// docs). Empty when the block admits none.
+    #[must_use]
+    pub fn admitted(&self) -> &[Admitted] {
+        &self.admitted
+    }
+
+    /// The section's bodies, in section order (the field's docs). Empty
+    /// when the block admits none.
+    #[must_use]
+    pub fn bundle_bodies(&self) -> &[BundleBody] {
+        &self.bundle_bodies
+    }
+
+    /// [`crate::ChainValid::with_admitted`]'s write: a test instrument.
+    #[cfg(any(test, feature = "harness"))]
+    pub(crate) fn set_admitted(&mut self, admitted: Vec<Admitted>) {
+        self.admitted = admitted;
     }
 
     /// The block's weight, long-term weight and the medians it was judged

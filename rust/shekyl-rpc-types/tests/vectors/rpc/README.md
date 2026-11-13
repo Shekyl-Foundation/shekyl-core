@@ -34,6 +34,12 @@ same day the switched methods were split into one pair per shape, each
 field a request did not select taken out of its reply (`RPC_WIRE.md`
 RW-Q4 as amended).
 
+At 4.3 the files were edited by hand from the grammar as IG-Q102 amends it
+(the 4b switch): a header's `section_root` in place of `attestation_root`,
+each block's `section` and `section_body` (empty here: no block in these
+files admits a bundle), and no `complete_tree` on an `archival_claim_show`
+bond.
+
 ### Layout
 
 A method whose reply has fields a request switch selects has one pair per

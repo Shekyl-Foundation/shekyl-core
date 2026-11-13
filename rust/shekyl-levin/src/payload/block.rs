@@ -11,24 +11,26 @@ use super::error::Error;
 use super::get::{self, HASH_SIZE};
 use super::PortableMap;
 
-/// Transport cap for `attestation_witness`, duplicated from
-/// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES`
-/// (`src/cryptonote_config.h`) / `shekyl-archival-retention::MAX_ATTESTATION_WITNESS_BYTES`.
-///
-/// Formula: `count(8) + 256 * (nonce(32) + anchor_height(8) +
-/// delivery_digest(32) + 3385)` — `PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN +
-/// PASS_DELIVERY_DIGEST_LEN` plus `PQC_HYBRID_SINGLE_SIG_LEN` /
-/// `HybridSignature::CANONICAL_LEN` per pass entry (`SF-D8`: the
-/// requester-random nonce, the anchor height and the digest of the delivered
-/// response all ride the witness, because admission can derive none of them;
-/// the anchor hash does not — the verifier reads it from its own chain).
-/// This crate does **not** take `shekyl-archival-retention` as a production
-/// dependency (that stack is heavier than a framing crate). The numeric
-/// identity is pinned below, and `tests/notify_kats.rs` asserts it against
-/// the retention crate's own constant so a move there fails here.
-pub const ATTESTATION_WITNESS_MAX_BYTES: usize = 8 + 256 * (32 + 8 + 32 + 3385);
+/// Transport cap on a block's bundle references: one section's,
+/// `shekyl_types::archival::MAX_SECTION_REFERENCES` (`W₂`'s ruled upper
+/// edge). A reference's own length grows with its bitmaps, which grow with
+/// `D`, chain state; the packet caps the bytes. The references are not
+/// decoded here: a malformed one is a verdict on the block (CEN-J29), not a
+/// framing fault.
+pub const MAX_BUNDLE_REFERENCES: usize = shekyl_types::archival::MAX_SECTION_REFERENCES;
 
-const _: () = assert!(ATTESTATION_WITNESS_MAX_BYTES == 885_000);
+/// Refuse a section past [`MAX_BUNDLE_REFERENCES`]: the block codecs check
+/// it on both sides, not their callers.
+pub(super) fn check_references(references: &[Vec<u8>]) -> Result<(), Error> {
+    if references.len() > MAX_BUNDLE_REFERENCES {
+        Err(Error::TooManyReferences {
+            got: references.len(),
+            max: MAX_BUNDLE_REFERENCES,
+        })
+    } else {
+        Ok(())
+    }
+}
 
 /// `cryptonote::tx_blob_entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,27 +72,15 @@ pub struct BlockCompleteEntry {
     pub block_weight: u64,
     /// Transactions. See the pruned / unpruned store split above.
     pub txs: Vec<TxBlobEntry>,
-    /// Opaque attestation witness. `KV_SERIALIZE_OPT` default empty.
-    /// Cap-checked at this codec, not at callers.
-    pub attestation_witness: Vec<u8>,
-}
-
-impl BlockCompleteEntry {
-    fn check_witness(bytes: &[u8]) -> Result<(), Error> {
-        if bytes.len() > ATTESTATION_WITNESS_MAX_BYTES {
-            Err(Error::WitnessTooLarge {
-                got: bytes.len(),
-                max: ATTESTATION_WITNESS_MAX_BYTES,
-            })
-        } else {
-            Ok(())
-        }
-    }
+    /// The block's bundle references, undecoded, in the block's order. The
+    /// key is omitted when there are none. At most
+    /// [`MAX_BUNDLE_REFERENCES`], checked at this codec, not at callers.
+    pub bundle_references: Vec<Vec<u8>>,
 }
 
 impl PortableMap for BlockCompleteEntry {
     fn to_section(&self) -> Result<Section, Error> {
-        Self::check_witness(&self.attestation_witness)?;
+        check_references(&self.bundle_references)?;
         let mut section = Section::new();
         get::insert_opt_bool(&mut section, "pruned", self.pruned, false);
         section.insert("block", Value::Bytes(self.block.clone()));
@@ -105,11 +95,7 @@ impl PortableMap for BlockCompleteEntry {
             let blobs: Vec<Vec<u8>> = self.txs.iter().map(|tx| tx.blob.clone()).collect();
             get::insert_bytes_array(&mut section, "txs", &blobs);
         }
-        get::insert_opt_bytes(
-            &mut section,
-            "attestation_witness",
-            &self.attestation_witness,
-        );
+        get::insert_bytes_array(&mut section, "bundle_references", &self.bundle_references);
         Ok(section)
     }
 
@@ -129,14 +115,21 @@ impl PortableMap for BlockCompleteEntry {
                 })
                 .collect()
         };
-        let attestation_witness = get::opt_bytes(section, "attestation_witness")?;
-        Self::check_witness(&attestation_witness)?;
+        let bundle_references = opt_references(section)?;
         Ok(Self {
             pruned,
             block: get::bytes(section, "block")?.to_vec(),
             block_weight: get::opt_u64(section, "block_weight", 0)?,
             txs,
-            attestation_witness,
+            bundle_references,
         })
     }
+}
+
+/// A block's `bundle_references`, absent when it has none, refused past
+/// [`MAX_BUNDLE_REFERENCES`].
+pub(super) fn opt_references(section: &Section) -> Result<Vec<Vec<u8>>, Error> {
+    let references = get::bytes_array(section, "bundle_references")?;
+    check_references(&references)?;
+    Ok(references)
 }

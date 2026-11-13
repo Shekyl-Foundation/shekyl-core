@@ -466,8 +466,8 @@ mod tests {
     use super::*;
     use crate::tx_extra::{
         admitted_leaf_blob, conforming_pqc_leaf_blob, PqcExtraField, PqcFieldShapeError,
-        HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_MULTISIG,
+        HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_TAG_PADDING,
+        TX_EXTRA_TAG_PQC_MULTISIG,
     };
     use crate::tx_extra::{KemCiphertext, MultisigEntry};
 
@@ -678,10 +678,6 @@ mod tests {
                 .expect("one member, right lengths")]),
                 TX_EXTRA_TAG_PQC_MULTISIG,
             ),
-            (
-                TxExtraField::ArchivalAttestation(Vec::new()),
-                TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-            ),
         ];
         for (field, tag) in foreign {
             let mut fields = conforming(1);
@@ -814,8 +810,8 @@ mod tests {
             "coinbase tx_extra 0x02 nonce is 3 bytes; exactly 8 required"
         );
         assert_eq!(
-            CoinbaseGrammarError::ForeignTag { tag: 0x0B }.to_string(),
-            "coinbase tx_extra carries 0x0b; only 0x01, 0x02, 0x0c, 0x06, 0x07 are admitted"
+            CoinbaseGrammarError::ForeignTag { tag: 0x04 }.to_string(),
+            "coinbase tx_extra carries 0x04; only 0x01, 0x02, 0x0c, 0x06, 0x07 are admitted"
         );
     }
 

@@ -73,7 +73,6 @@ pub enum EmissionSourceError {
 #[derive(Debug, Clone)]
 pub struct BondRow {
     pub join_settlement_epoch: u64,
-    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 
@@ -108,8 +107,10 @@ pub struct EpochSnapshot {
 /// consume this operand treat an absent anchor as *permissive*:
 /// `release_cooldown_elapsed` returns `true` on `None`, and
 /// `slashes_settled_through` returns `true` on `None`. That is correct at the
-/// daemon, where absence can only mean "no shard has ever served" — nothing
-/// served, nothing whose settlement an exit could outrun.
+/// daemon, where absence can only mean "no pass inside the cooldown's
+/// window": the record never passed a draw, or its last pass is old enough
+/// that its cooldown has elapsed and its epoch's slash deadline has run
+/// (`release_last_served`) — nothing whose settlement an exit could outrun.
 ///
 /// On this side of the wire a bare `None` could also mean "the field never
 /// arrived", and that fact must be *fail-closed*: it would otherwise flow into
@@ -287,7 +288,6 @@ impl EpochSnapshot {
             .iter()
             .map(|b| EpochCloseBond {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_support_complete_tree: b.is_support_complete_tree,
                 bad_intervals: &b.bad_intervals,
             })
             .collect()
@@ -369,7 +369,6 @@ fn decode_failure(failure: &reply::Failure) -> Result<BadInterval, EmissionSourc
 fn decode_bond_row(bond: &reply::ClaimBond) -> Result<BondRow, EmissionSourceError> {
     Ok(BondRow {
         join_settlement_epoch: bond.joined_epoch.0,
-        is_support_complete_tree: bond.complete_tree,
         bad_intervals: bond
             .failure
             .iter()

@@ -94,20 +94,6 @@ pub fn good_through(
     true
 }
 
-/// Market membership at epoch close (ARCHIVAL_BOND_GATE4.md §2.2).
-#[must_use]
-pub fn market_member_at_epoch(
-    join_settlement_epoch: u64,
-    settlement_epoch: u64,
-    bad_intervals: &[BadInterval],
-    is_support_complete_tree: bool,
-) -> bool {
-    if is_support_complete_tree {
-        return false;
-    }
-    good_through(join_settlement_epoch, settlement_epoch, bad_intervals)
-}
-
 /// One archiver's serve-credit row for `R_market` materialization KATs.
 #[derive(Debug, Clone)]
 pub struct ServeCreditRow {
@@ -116,7 +102,6 @@ pub struct ServeCreditRow {
     pub serve_credit: bool,
     pub join_settlement_epoch: u64,
     pub bad_intervals: Vec<BadInterval>,
-    pub is_foundation: bool,
 }
 
 /// `R_market(shard, E)` — serve-credit-weighted count (Gap 2 pin).
@@ -127,11 +112,10 @@ pub fn r_market_count(rows: &[ServeCreditRow], shard_id: u64, settlement_epoch: 
         if row.shard_id != shard_id || !row.serve_credit {
             continue;
         }
-        if !market_member_at_epoch(
+        if !good_through(
             row.join_settlement_epoch,
             settlement_epoch,
             &row.bad_intervals,
-            row.is_foundation,
         ) {
             continue;
         }
@@ -382,7 +366,6 @@ impl ShardClose {
 #[derive(Debug, Clone)]
 pub struct EpochCloseBond<'a> {
     pub join_settlement_epoch: u64,
-    pub is_support_complete_tree: bool,
     pub bad_intervals: &'a [BadInterval],
 }
 
@@ -595,11 +578,10 @@ pub fn as_of_e_served_work(
     let member: Vec<bool> = bonds
         .iter()
         .map(|b| {
-            market_member_at_epoch(
+            good_through(
                 b.join_settlement_epoch,
                 inputs.settlement_epoch,
                 b.bad_intervals,
-                b.is_support_complete_tree,
             )
         })
         .collect();
@@ -684,7 +666,7 @@ pub fn shard_contribution_micro(
 ///
 /// Composes the pinned semantics in one deterministic pass:
 ///
-/// 1. **Market membership** per bond — [`market_member_at_epoch`].
+/// 1. **Market membership** per bond — [`good_through`].
 /// 2. **`R_market(shard, E)`** — count of serve-credit rows whose `P` is a
 ///    market member (§3.3 pinned measure).
 /// 3. **`work_P`** — Σ over credited shards of [`shard_work_micro`]
@@ -735,7 +717,6 @@ mod tests {
             serve_credit: serve,
             join_settlement_epoch: 0,
             bad_intervals: bad,
-            is_foundation: false,
         }
     }
 
@@ -873,7 +854,6 @@ mod tests {
     fn epoch_close_single_member_full_pipeline() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -896,7 +876,6 @@ mod tests {
         let bonds: Vec<EpochCloseBond<'_>> = (0..=crowd)
             .map(|_| EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_support_complete_tree: false,
                 bad_intervals: &[],
             })
             .collect();
@@ -975,7 +954,6 @@ mod tests {
         const N_SHARDS: usize = 40;
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         // `ClosedAt(0)` so the age term is LIVE — open, the age is zeroed
@@ -1093,23 +1071,6 @@ mod tests {
     }
 
     #[test]
-    fn epoch_close_complete_tree_excluded_from_market_and_sigma() {
-        let bonds = [EpochCloseBond {
-            join_settlement_epoch: 0,
-            is_support_complete_tree: true,
-            bad_intervals: &[],
-        }];
-        let shards = [shard(7, bh(0))];
-        let pairs = [CreditPair {
-            bond_idx: 0,
-            shard_idx: 0,
-        }];
-        let out = epoch_close_compute(&close_inputs(&bonds, &shards, &pairs)).unwrap();
-        assert_eq!(out.r_market_by_shard, vec![0]);
-        assert_eq!(out.sigma_work_milli, 0);
-    }
-
-    #[test]
     fn drop_after_serve_credit_counts_toward_work() {
         // WS-1 drop-after-serve KAT (REWARD_EMISSION_E3_GATING_ROUND.md §5.6):
         // a serve-credit row is a proven held-and-served-at-fire fact, so it
@@ -1120,7 +1081,6 @@ mod tests {
         // consult, and this KAT is the regression guard on that deletion.
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [shard(7, bh(0))];
@@ -1153,12 +1113,10 @@ mod tests {
         let bonds = [
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
             EpochCloseBond {
                 join_settlement_epoch: 0,
-                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
         ];
@@ -1242,7 +1200,6 @@ mod tests {
         }];
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &bad,
         }];
         let shards = [shard(7, bh(0))];
@@ -1259,7 +1216,6 @@ mod tests {
     fn epoch_close_open_shard_zeroes_age_not_scarcity() {
         let bonds = [EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &[],
         }];
         let shards = [EpochCloseShard {
@@ -1281,7 +1237,6 @@ mod tests {
     fn epoch_close_shared_shard_splits_scarcity() {
         let bond = EpochCloseBond {
             join_settlement_epoch: 0,
-            is_support_complete_tree: false,
             bad_intervals: &[],
         };
         let bonds = [bond.clone(), bond];

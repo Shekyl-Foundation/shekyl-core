@@ -242,7 +242,7 @@ mod live {
     fn fresh_header() -> RequestHeader {
         RequestHeader::fresh(
             BlockHeight::from_raw(APPARATUS_ANCHOR_HEIGHT),
-            APPARATUS_ANCHOR_HASH,
+            shekyl_types::BlockHash::from_bytes(APPARATUS_ANCHOR_HASH),
         )
         .expect("OS entropy")
     }

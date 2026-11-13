@@ -89,7 +89,6 @@
 //! hole there is a [`ViewRead`] at the function that walked the heights.
 
 pub(crate) mod alt;
-pub(crate) mod attestation;
 pub(crate) mod block_weight;
 pub(crate) mod body;
 pub(crate) mod bundle_admission;
@@ -325,7 +324,7 @@ pub(crate) trait BlockRule: Rule {
     /// is a new `ChainView` method. `?` on a view method lifts `V::Fault`
     /// into [`ViewRead::View`]; a parent-side hole goes through [`recorded`].
     ///
-    /// The type says every block rule can halt the writer; only B4 can. That
+    /// The type says every block rule can halt the writer; none can. That
     /// gap is held by `scripts/ci/check_block_rule_corrupt_sites.py`, which
     /// reads each rule impl — `impl BlockRule for X` and `impl HeaderRule
     /// for X` alike, the trait set derived from the blanket impl below
@@ -752,8 +751,8 @@ pub fn recorded<'id, V: ChainView<'id>>(
 /// [`recorded`]'s header-facts half: the [`HeaderRecord`] at `height`,
 /// which is below the connecting height and therefore present on a
 /// conforming view — the read every [`HeaderRule`] makes for a parent-side
-/// fact (C3's window, D3's seed, D4's window and work, E1's pin, B4's
-/// anchor window). The hole is the same SI-7 under
+/// fact (C3's window, D3's seed, D4's window and work, E1's pin).
+/// The hole is the same SI-7 under
 /// [`PerHeightRecord::Header`], so the store halts against `block_info`.
 pub fn recorded_header<'id, H: HeaderView<'id>>(
     view: &H,

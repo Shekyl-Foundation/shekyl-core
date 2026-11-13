@@ -25,9 +25,7 @@
 //! CEN-J27 (`CHAIN_RULES_SLICE_6.md` §5 row 6): once the funding half of a
 //! bond post is judged, a fixture join — a filler spend with a post on it
 //! — connects nowhere, and the store's tests need a real one as much as
-//! the ingest's. The serve credit a persona responds with stays in the
-//! ingest: it is a wire body with no spend, and its pruned record is the
-//! rules harness's.
+//! the ingest's.
 //!
 //! The vin-to-wire mapping is
 //! [`shekyl_archival_bond_builder::bond_post_input`]: every
@@ -37,8 +35,8 @@
 
 use shekyl_archival_bond_builder::{bond_post_input, build_join_market_vin, build_release_vin};
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, HoldingsDescriptor, HoldingsKind,
+    ShardSet,
 };
 use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
@@ -151,28 +149,6 @@ impl Persona {
             .expect("the persona's identity key signs")
             .to_canonical_bytes()
             .expect("a hybrid signature encodes")
-    }
-
-    /// The serve-credit vin crediting this persona for `shard` in
-    /// `settlement_epoch`: the kept half of a pass record on the production
-    /// wire type ([`ArchivalServeCreditResponse`]), naming [`Self::id`] so
-    /// CEN-J4 finds the record a [`Self::join`] wrote. The
-    /// countersignature is a **marker**, not a signature: no Rust
-    /// countersigner exists (the challenger side is not built) and no
-    /// landed rule verifies it (CEN-J1/J4/J10 pending in the census). The
-    /// body around it — CEN-H20's shape with its `RF-D1` pruned record — is
-    /// the rules harness's to build (`fixture::serve_credit_only_with`).
-    #[must_use]
-    pub fn serve_credit_vin(&self, shard: u64, settlement_epoch: u64) -> Input {
-        let kept = ArchivalServeCreditResponse {
-            p_canonical_id: *self.id().as_bytes(),
-            shard_id: shard,
-            settlement_epoch,
-            ed25519_countersignature: [0x5c; 64],
-        };
-        Input::ServeCredit {
-            canonical_bytes: kept.serialize().expect("a kept half serializes"),
-        }
     }
 
     /// A JoinMarket over `holdings` at `endpoint`, through the production

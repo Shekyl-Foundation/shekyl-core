@@ -44,8 +44,9 @@ const KAT_BLOB_SHA256_HEX: &str =
     "a5dd684467a665612b46781d267a4035f7259d881e4618de8e01dbe19b659dba";
 const KAT_TX_HASH_HEX: &str = "95c3042a529d4be98de3d5c0cc5d6007936ffaf85c5162d630e6863b22e2f747";
 // The block id is the genesis header over the tx, nonce 0 on every network
-// (NI-Q1); the tx pins above do not depend on the header.
-const KAT_BLOCK_ID_HEX: &str = "1515ced8f8d5623bd656bb2d57df3cd56c235f57e4e7fb80c9cccd603aa7d22e";
+// (NI-Q1), whose last 32 bytes are the empty section's root (SCS-P34);
+// the tx pins above do not depend on the header.
+const KAT_BLOCK_ID_HEX: &str = "0efaaf40f5a217c30b642d8b14271a21d9a379635240c72fc47e5a4395e7242a";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {

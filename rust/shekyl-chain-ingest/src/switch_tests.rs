@@ -670,11 +670,12 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
             reason: PlanMismatchReason::PromotedLength,
         })
     ));
-    // A demoted block formed with a witness its height row does not hold
+    // A demoted block formed with references its height row does not hold
     // (CEN-K5b's demoted direction).
     let mut witnessed = plan.clone();
-    witnessed.demoted[0].candidate.attestation_witness =
-        Some(shekyl_types::archival::AttestationWitness::new(vec![0x5E; 8]).expect("non-empty"));
+    witnessed.demoted[0].candidate.bundle_references = Some(
+        shekyl_types::archival::BundleReferences::new(vec![vec![0x5E; 80]]).expect("a section"),
+    );
     assert!(matches!(
         x.reorganize(&witnessed).await,
         Err(RunFault::PlanMismatch {

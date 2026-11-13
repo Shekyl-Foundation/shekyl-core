@@ -44,8 +44,8 @@ shekyl-units = { path = "../shekyl-units" }
 # `TxHash` newtype: the scanner lifts oxide's raw `[u8; 32]` txid into the
 # typed domain at the `from_wallet_output` boundary.
 shekyl-types = { path = "../shekyl-types" }
-# Single owner of the §3 empty-set `attestation_root` the block-header fixtures
-# carry (ARCHIVAL_CREDIT_WIRE.md; never the all-zero null_hash). Optional: only
+# Single owner of the empty-section `section_root` the block-header fixtures
+# carry (ARCHIVAL_SERVE_CREDIT_SPEC.md §7.3; never the all-zero null_hash). Optional: only
 # the `test-utils` fixture surface needs it — the production scan path never
 # derives the root. Plain `cargo test` builds get it via [dev-dependencies].
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }

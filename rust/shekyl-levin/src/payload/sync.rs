@@ -19,7 +19,7 @@ use shekyl_portable_storage::{load_from_binary, Limits, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
 use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody, MIN_POW_BLOB_SIZE, MIN_PRUNED_SEGMENT};
 
-use super::block::ATTESTATION_WITNESS_MAX_BYTES;
+use super::block::{check_references, opt_references, MAX_BUNDLE_REFERENCES};
 use super::error::Error;
 use super::get::{self, HASH_SIZE};
 use super::notifies::{
@@ -179,10 +179,11 @@ pub const RESPONSE_BODIES_MAX_OBJECTS: usize =
     cap_usize(MAX_OBJECT_REQUEST_COUNT) + RESPONSE_BODIES_MAX_TXS;
 
 /// Strings in the minimum (full) section: the blob. A body adds `block`
-/// and, at most, `attestation_witness`. The root adds `deferred` and
-/// `missed_ids`.
+/// and, at most, one per bundle reference and one per bundle body the
+/// server holds (no more bodies than references). The root adds
+/// `deferred` and `missed_ids`.
 const FULL_TX_STRINGS: usize = 1;
-const BODY_STRINGS: usize = 2;
+const BODY_STRINGS: usize = 1 + 2 * MAX_BUNDLE_REFERENCES;
 const ROOT_STRINGS: usize = 2;
 
 /// Strings a body response may declare, from the same two counts.
@@ -190,10 +191,11 @@ pub const RESPONSE_BODIES_MAX_STRINGS: usize = ROOT_STRINGS
     + cap_usize(MAX_OBJECT_REQUEST_COUNT) * BODY_STRINGS
     + RESPONSE_BODIES_MAX_TXS * FULL_TX_STRINGS;
 
-/// Fields: the root's three, two on a body (`block`, `txs`), two on the
-/// minimum transaction section (`form`, `blob`).
+/// Fields: the root's three, at most four on a body (`block`, `txs`,
+/// `bundle_references`, `bundle_bodies`), two on the minimum transaction
+/// section (`form`, `blob`).
 const ROOT_FIELDS: usize = 3;
-const BODY_FIELDS: usize = 2;
+const BODY_FIELDS: usize = 4;
 const FULL_TX_FIELDS: usize = 2;
 
 /// Fields a body response may declare, from the same two counts.
@@ -784,13 +786,19 @@ impl BodyPlanner {
 }
 
 /// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
-/// block, each carried transaction, and the witness. [`plan_bodies`] and
+/// block, each carried transaction, each bundle reference and each bundle
+/// body. [`plan_bodies`] and
 /// the body codec ([`ResponseBodies::decode`], [`PortableMap::to_section`])
 /// both charge this and nothing else.
 #[must_use]
 pub fn body_budget_bytes(body: &BlockBody) -> usize {
     let mut n = body.block.len();
-    n = n.saturating_add(body.attestation_witness.len());
+    for reference in &body.bundle_references {
+        n = n.saturating_add(reference.len());
+    }
+    for bundle in &body.bundle_bodies {
+        n = n.saturating_add(bundle.len());
+    }
     for tx in &body.txs {
         n = n.saturating_add(match tx {
             TxBody::Full(bytes) => bytes.len(),
@@ -824,13 +832,21 @@ fn charge(sent_bytes: usize, size: usize, sent_one: bool) -> Option<usize> {
     }
 }
 
-fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
-    if body.attestation_witness.len() > ATTESTATION_WITNESS_MAX_BYTES {
-        return Err(Error::WitnessTooLarge {
-            got: body.attestation_witness.len(),
-            max: ATTESTATION_WITNESS_MAX_BYTES,
-        });
+/// No more bundle bodies than a section has references.
+fn check_bundle_bodies(bodies: &[Vec<u8>]) -> Result<(), Error> {
+    if bodies.len() > MAX_BUNDLE_REFERENCES {
+        Err(Error::TooManyBundleBodies {
+            got: bodies.len(),
+            max: MAX_BUNDLE_REFERENCES,
+        })
+    } else {
+        Ok(())
     }
+}
+
+fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
+    check_references(&body.bundle_references)?;
+    check_bundle_bodies(&body.bundle_bodies)?;
     let mut section = Section::new();
     section.insert("block", Value::Bytes(body.block.clone()));
     let mut txs = Vec::with_capacity(body.txs.len());
@@ -838,22 +854,15 @@ fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
         txs.push(tx_section(tx));
     }
     get::insert_object_array(&mut section, "txs", txs);
-    get::insert_opt_bytes(
-        &mut section,
-        "attestation_witness",
-        &body.attestation_witness,
-    );
+    get::insert_bytes_array(&mut section, "bundle_references", &body.bundle_references);
+    get::insert_bytes_array(&mut section, "bundle_bodies", &body.bundle_bodies);
     Ok(section)
 }
 
 fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
-    let attestation_witness = get::opt_bytes(section, "attestation_witness")?;
-    if attestation_witness.len() > ATTESTATION_WITNESS_MAX_BYTES {
-        return Err(Error::WitnessTooLarge {
-            got: attestation_witness.len(),
-            max: ATTESTATION_WITNESS_MAX_BYTES,
-        });
-    }
+    let bundle_references = opt_references(section)?;
+    let bundle_bodies = get::bytes_array(section, "bundle_bodies")?;
+    check_bundle_bodies(&bundle_bodies)?;
     let txs = get::object_array(section, "txs")?
         .into_iter()
         .map(tx_from)
@@ -861,7 +870,8 @@ fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
     Ok(BlockBody {
         block: get::bytes(section, "block")?.to_vec(),
         txs,
-        attestation_witness,
+        bundle_references,
+        bundle_bodies,
     })
 }
 

@@ -122,14 +122,14 @@ mod memo;
 mod slash;
 mod support_seats;
 
-pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
+pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues, SupportIssue};
 pub(crate) use arm::BondArm;
 pub use bundle::{
-    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
-    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
+    check_section, check_section_stateless, draw_targets, fill_section, judge_bundles, open_body,
+    open_reference, seats_with_carry, support_step, verify_bundle, AdmissionFault, Admitted,
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
     DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
-    SupportCarry, SupportSeat, WindowClosed,
+    SupportCarry, SupportSeat, SupportStepFault, WindowClosed,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
@@ -138,7 +138,7 @@ pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
+    RecordWriteKind, ReleasePreImage, Settlement, Slash, SupportSettlement,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
@@ -224,7 +224,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let close = transition.close(accrued);
     let opened = transition.drawable_at_open(view)?;
     let drawable_digest = opened.as_ref().map(|(write, _)| *write);
-    let (draws, support_seats) = transition.block_draws(
+    let (draws, support_row) = transition.block_draws(
         view,
         opened.as_ref().map(|(_, drawable)| drawable),
         count_memo,
@@ -236,7 +236,7 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
         close,
         drawable_digest,
         draws,
-        support_seats,
+        support_row,
     )))
 }
 
@@ -282,7 +282,6 @@ struct Transition {
     /// Each Release's pre-image, in block order: what the Release journal
     /// keeps of it.
     releases: Vec<ReleasePreImage>,
-    serve_credits: Vec<ServeCreditKey>,
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
     settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
@@ -307,7 +306,6 @@ impl Transition {
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
             releases: Vec::new(),
-            serve_credits: Vec::new(),
             settled: BTreeMap::new(),
             support_settled: BTreeMap::new(),
             gathers: Vec::new(),
@@ -432,7 +430,7 @@ impl Transition {
         close: Option<EpochClose>,
         drawable_digest: Option<DrawableDigestWrite>,
         draws: shekyl_types::archival::BlockDraws,
-        support_seats: shekyl_types::archival::SupportSeats,
+        support_row: shekyl_types::archival::SupportRow,
     ) -> ArchivalDelta {
         let records = self
             .posts
@@ -467,7 +465,6 @@ impl Transition {
         ArchivalDelta {
             records,
             releases: self.releases,
-            serve_credits: self.serve_credits,
             settlements,
             support_settlements,
             gathers: self.gathers,
@@ -477,7 +474,7 @@ impl Transition {
             close,
             drawable_digest,
             draws,
-            support_seats,
+            support_row,
         }
     }
 }

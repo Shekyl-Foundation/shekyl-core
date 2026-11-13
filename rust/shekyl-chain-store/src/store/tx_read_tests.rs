@@ -13,7 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{
-    body, connect_chain_anchored, credited, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, connect_chain_anchored, spend, spendable_prefix, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, HeldRegion, StoreError, StoreInvariant};
 use super::store_tests::{tmp, EPOCH};
@@ -34,37 +34,38 @@ fn hash_of(tx: &Transaction) -> TxHash {
 /// The spendable prefix, then the first admissible spend block listing
 /// the join that opens a record (a real spend of genesis's coinbase, the
 /// one matured for that block, funding the bond), then the spend block
-/// listing two bodies: the 3-part serve credit on that record (a
-/// serve-credit-only transaction — no `pqc_auths` by rule, CEN-H20; it
-/// connects only behind its record, CEN-L7 / CEN-J4, read off the view
-/// before the block, so it sits one block above the join rather than
-/// beside it or at height 1), and a real spend (of block 1's coinbase,
-/// the one matured for the spend block and spent by none), which carries
-/// per-input `pqc_auths` and is 4-part. Coinbases at every height, so the
-/// dense id space is `0..TX_COUNT`: the coinbases and the join through the
-/// spend block's coinbase, then the serve credit, the spend.
+/// listing a real spend (of block 1's coinbase, the one matured for the
+/// spend block and spent by none). Both carry per-input `pqc_auths` and are
+/// 4-part. Coinbases at every height, so the dense id space is
+/// `0..TX_COUNT`: the coinbases and the join through the spend block's
+/// coinbase, then the spend. Both bodies are returned as connected — built
+/// on the chain — since they are the ones the reads are asked about by
+/// hash.
 fn tx_chain(
     path: impl AsRef<std::path::Path>,
 ) -> (ChainStore, Vec<BlockHash>, Transaction, Transaction) {
     let path: &std::path::Path = path.as_ref();
     let store = ChainStore::create(path, EPOCH).expect("create");
-    let (join, plain) = credited(10);
-    let listing = spendable_prefix(vec![vec![join], vec![body(plain.clone()), spend()]]);
-    // The spend as connected — built on the chain — is the one the reads
-    // are asked about by hash.
-    let (grown, mut connected) = connect_chain_anchored(&store, &listing);
+    let listing = spendable_prefix(vec![vec![Listed::Join { slot: 10 }], vec![spend()]]);
+    let (grown, connected) = connect_chain_anchored(&store, &listing);
+    let join = connected
+        .get(at(BlockHeight::from_raw(FIRST_SPEND_HEIGHT)))
+        .and_then(|block| block.first())
+        .cloned()
+        .expect("the first spend block lists the join");
     let with_pqc = connected
-        .pop()
-        .and_then(|mut block| block.pop())
+        .last()
+        .and_then(|block| block.last())
+        .cloned()
         .expect("the last block lists the spend");
-    (store, grown.hashes, plain, with_pqc)
+    (store, grown.hashes, join, with_pqc)
 }
 
 /// The height [`tx_chain`]'s spend block sits at: one above the join's.
 const SPEND_HEIGHT: u64 = FIRST_SPEND_HEIGHT + 1;
 /// [`tx_chain`]'s dense id count: one coinbase per height through the
-/// spend block, the join, the serve credit, the spend.
-const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 3;
+/// spend block, the join, the spend.
+const TX_COUNT: u64 = SPEND_HEIGHT + 1 + 2;
 
 fn is_si7_absent(err: &StoreError, table: &str) -> bool {
     matches!(
@@ -79,22 +80,22 @@ fn is_si7_absent(err: &StoreError, table: &str) -> bool {
 #[test]
 fn tx_location_is_some_for_a_recorded_hash_and_none_for_an_unknown_one() {
     let path = tmp("tx-location");
-    let (store, _, plain, with_pqc) = tx_chain(&path);
+    let (store, _, join, with_pqc) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
 
-    let plain_loc = snap
-        .tx_location(&hash_of(&plain))
+    let join_loc = snap
+        .tx_location(&hash_of(&join))
         .expect("read")
         .expect("recorded");
     let pqc_loc = snap
         .tx_location(&hash_of(&with_pqc))
         .expect("read")
         .expect("recorded");
-    assert_eq!(plain_loc.height, BlockHeight::from_raw(SPEND_HEIGHT));
+    assert_eq!(join_loc.height, BlockHeight::from_raw(FIRST_SPEND_HEIGHT));
     assert_eq!(pqc_loc.height, BlockHeight::from_raw(SPEND_HEIGHT));
     assert!(
-        plain_loc.id < pqc_loc.id,
-        "ids are dense in listing order: {plain_loc:?} before {pqc_loc:?}"
+        join_loc.id < pqc_loc.id,
+        "ids are dense in listing order: {join_loc:?} before {pqc_loc:?}"
     );
     assert_eq!(
         pqc_loc.id.to_raw(),
@@ -119,7 +120,7 @@ fn tx_count_is_the_dense_id_space_coinbases_included() {
     let path = tmp("tx-count");
     let (store, _, _, _) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
-    // A coinbase per block + the serve credit + the spend.
+    // A coinbase per block + the join + the spend.
     assert_eq!(snap.tx_count().expect("read"), TX_COUNT);
     // Every id below the count has a location reachable by hash; the count
     // is the authority the by-id reads bound against (T4, T5).
@@ -138,10 +139,10 @@ fn tx_count_is_the_dense_id_space_coinbases_included() {
 #[test]
 fn tx_record_carries_the_permanent_half_and_recomposes_the_wire_bytes() {
     let path = tmp("tx-record");
-    let (store, _, plain, with_pqc) = tx_chain(&path);
+    let (store, _, join, with_pqc) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
 
-    for tx in [&plain, &with_pqc] {
+    for tx in [&join, &with_pqc] {
         let parts = tx.txid_parts();
         let record = snap
             .tx_record(&parts.hash)
@@ -188,8 +189,8 @@ fn a_recorded_transaction_missing_its_prunable_hash_row_is_si7_not_a_log_line() 
     // under a typed read (STX-6): §7.7 leg (i) enforced by a fault the
     // caller cannot ignore.
     let path = tmp("tx-record-no-hash-row");
-    let (store, _, plain, _) = tx_chain(&path);
-    let hash = hash_of(&plain);
+    let (store, _, join, _) = tx_chain(&path);
+    let hash = hash_of(&join);
     let tx_id = store
         .begin_read()
         .expect("read")
@@ -370,12 +371,12 @@ fn a_half_held_archival_good_is_si42_and_a_pqc_segment_without_its_row_is_si7() 
 #[test]
 fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded_when_gone() {
     let path = tmp("tx-prunable");
-    let (store, _, plain, _) = tx_chain(&path);
+    let (store, _, join, _) = tx_chain(&path);
     let count = store.begin_read().expect("read").tx_count().expect("read");
-    let plain_id = store
+    let join_id = store
         .begin_read()
         .expect("read")
-        .tx_location(&hash_of(&plain))
+        .tx_location(&hash_of(&join))
         .expect("read")
         .expect("recorded")
         .id;
@@ -401,8 +402,8 @@ fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded
             AtIndex::BeyondCount
         );
     }
-    // Discard the plain spend's region as S-PRUNE will: segment gone, hash
-    // row kept. That is §7.7 leg (iii)'s one state — `Discarded`, not an
+    // Discard the join's good as S-PRUNE will: both segments gone, hash
+    // rows kept. That is §7.7 leg (iii)'s one state — `Discarded`, not an
     // error and not an absence.
     drop(store);
     {
@@ -410,23 +411,27 @@ fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded
         let txn = db.begin_write().expect("write");
         {
             let mut prunable = txn.open_table(TXS_PRUNABLE).expect("t");
-            prunable.remove(plain_id.to_raw()).expect("remove");
+            prunable.remove(join_id.to_raw()).expect("remove");
+            // The join is 4-part: S-PRUNE takes its `pqc_auths` segment
+            // with the prunable one, over the same id (SI-42).
+            let mut auths = txn.open_table(crate::schema::TXS_PQC_AUTHS).expect("t");
+            auths.remove(join_id.to_raw()).expect("remove");
         }
         txn.commit().expect("commit");
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.tx_archival_good(plain_id).expect("read"),
+        snap.tx_archival_good(join_id).expect("read"),
         AtIndex::Recorded(ArchivalGood::Discarded)
     );
     // The permanent half is unaffected: T3 still answers, with the hash the
     // client needs to verify bytes fetched from an archiver.
     let record = snap
-        .tx_record(&hash_of(&plain))
+        .tx_record(&hash_of(&join))
         .expect("read")
         .expect("recorded");
-    assert_eq!(record.prunable_hash, plain.txid_parts().prunable_hash);
+    assert_eq!(record.prunable_hash, join.txid_parts().prunable_hash);
     assert_eq!(store.connect_state(), ConnectState::Live);
 }
 
@@ -435,21 +440,21 @@ fn tx_archival_good_is_retained_below_the_count_beyond_count_at_it_and_discarded
 #[test]
 fn tx_output_indices_is_dense_bound_first_and_a_hole_is_si9() {
     let path = tmp("tx-output-indices");
-    let (store, _, plain, with_pqc) = tx_chain(&path);
+    let (store, _, join, with_pqc) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
     let count = snap.tx_count().expect("read");
-    let plain_id = snap
-        .tx_location(&hash_of(&plain))
+    let join_id = snap
+        .tx_location(&hash_of(&join))
         .expect("read")
         .expect("recorded")
         .id;
-    let AtIndex::Recorded(indices) = snap.tx_output_indices(plain_id).expect("read") else {
+    let AtIndex::Recorded(indices) = snap.tx_output_indices(join_id).expect("read") else {
         panic!("below the count is recorded");
     };
     assert_eq!(
         indices.0.len(),
-        0,
-        "the serve credit has no outputs — and a row, dense, never a hole"
+        join.prefix.outputs.len(),
+        "the join's outputs — a row, dense, never a hole"
     );
     let pqc_id = snap
         .tx_location(&hash_of(&with_pqc))
@@ -471,14 +476,14 @@ fn tx_output_indices_is_dense_bound_first_and_a_hole_is_si9() {
         let txn = db.begin_write().expect("write");
         {
             let mut outputs = txn.open_table(crate::schema::TX_OUTPUTS).expect("t");
-            outputs.remove(plain_id.to_raw()).expect("remove");
+            outputs.remove(join_id.to_raw()).expect("remove");
         }
         txn.commit().expect("commit");
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     let err = snap
-        .tx_output_indices(plain_id)
+        .tx_output_indices(join_id)
         .expect_err("a hole below the count");
     assert!(
         matches!(
@@ -551,11 +556,11 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
     // it. With `txs_pruned[id]` gone and the hash row, the segment and the
     // output indices all still present, T4 and T5 must not serve them.
     let path = tmp("tx-primary-hole");
-    let (store, _, plain, _) = tx_chain(&path);
-    let plain_id = store
+    let (store, _, join, _) = tx_chain(&path);
+    let join_id = store
         .begin_read()
         .expect("read")
-        .tx_location(&hash_of(&plain))
+        .tx_location(&hash_of(&join))
         .expect("read")
         .expect("recorded")
         .id;
@@ -566,24 +571,24 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
         let txn = db.begin_write().expect("write");
         {
             let mut pruned = txn.open_table(TXS_PRUNED).expect("t");
-            pruned.remove(plain_id.to_raw()).expect("remove");
+            pruned.remove(join_id.to_raw()).expect("remove");
         }
         txn.commit().expect("commit");
     }
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().expect("read");
     assert!(
-        plain_id.to_raw() < count - 1,
+        join_id.to_raw() < count - 1,
         "the hole is below the (now shorter) count, so the bound admits it"
     );
     for (name, err) in [
         (
             "T4",
-            snap.tx_archival_good(plain_id).expect_err("primary hole"),
+            snap.tx_archival_good(join_id).expect_err("primary hole"),
         ),
         (
             "T5",
-            snap.tx_output_indices(plain_id).expect_err("primary hole"),
+            snap.tx_output_indices(join_id).expect_err("primary hole"),
         ),
     ] {
         assert!(
@@ -595,7 +600,7 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
         );
     }
     // T3 reaches the same row by hash and names the table.
-    let err = snap.tx_record(&hash_of(&plain)).expect_err("primary hole");
+    let err = snap.tx_record(&hash_of(&join)).expect_err("primary hole");
     assert!(is_si7_absent(&err, "txs_pruned"), "got {err:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
 }

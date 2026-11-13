@@ -832,7 +832,7 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
 
     // The archival reads (DRS-E4 commit 2): a chain that posted no bond has
     // no archival state, and both views say so in the same shape — `None`,
-    // empty, `PassCount::ZERO` — which is the only archival answer the mock
+    // empty, `false` — which is the only archival answer the mock
     // gives (§5.2: no `Mock*` archival state; a chain with a bond is
     // witnessed against the real store alone). What is held here is that
     // the store's empty state and the mock's empty state are the *same*
@@ -862,9 +862,6 @@ fn the_mock_view_and_the_batch_view_answer_the_same_reads() {
 struct ArchivalReads {
     bond: Option<shekyl_types::archival::BondRecord>,
     slashes: Vec<shekyl_types::archival::SlashLogEntry>,
-    last_served: Option<shekyl_types::SettlementEpoch>,
-    served: Vec<shekyl_types::archival::ServedShard>,
-    passes: shekyl_types::archival::PassCount,
     r_market: Option<shekyl_types::archival::RMarket>,
     sigma_work: Option<shekyl_types::archival::SigmaWorkMilli>,
     budget: Option<shekyl_units::AtomicUnits>,
@@ -882,9 +879,6 @@ impl ArchivalReads {
     const EMPTY: Self = Self {
         bond: None,
         slashes: Vec::new(),
-        last_served: None,
-        served: Vec::new(),
-        passes: shekyl_types::archival::PassCount::ZERO,
         r_market: None,
         sigma_work: None,
         budget: None,
@@ -906,9 +900,6 @@ impl ArchivalReads {
                 BlockHeight::ZERO,
                 shekyl_chain_rules::SlashLogFloor::NONE,
             )?,
-            last_served: view.last_served_epoch(&persona, shard)?,
-            served: view.served_shards(&persona)?,
-            passes: view.pass_count(&persona, shard, epoch)?,
             r_market: view.r_market(shard, epoch, EpochFloor::NONE)?,
             sigma_work: view.sigma_work(epoch, EpochFloor::NONE)?,
             budget: view.budget(epoch, EpochFloor::NONE)?,

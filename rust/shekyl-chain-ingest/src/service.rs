@@ -61,7 +61,8 @@ use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{
-    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+    BundleOffered, Connector, ConnectorArgs, FiledBundle, OfferBundle, OfferFault,
+    PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
 };
 use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
@@ -102,8 +103,13 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
-    /// The attestation witness carried beside the block; empty when none.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when none.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash. Empty when
+    /// none were carried.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -133,9 +139,12 @@ pub struct BoundArrival {
     pub block: Vec<u8>,
     /// The listed bodies, as blobs, in the block's order.
     pub bodies: Vec<Vec<u8>>,
-    /// The attestation witness carried beside the block; empty for an empty
-    /// set.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when the block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl BoundArrival {
@@ -155,7 +164,8 @@ impl BoundArrival {
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
-            witness_len: self.attestation_witness.len(),
+            reference_count: self.bundle_references.len(),
+            bundle_body_count: self.bundle_bodies.len(),
         }
     }
 }
@@ -172,18 +182,23 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
-    /// The attestation witness's length; zero when none was carried.
-    /// Bounded by [`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`], not by
+    /// How many bundle references were carried; zero when none were.
+    /// Bounded by [`shekyl_types::archival::MAX_SECTION_REFERENCES`], not by
     /// [`crate::admission::ArrivalBound`].
-    pub witness_len: usize,
+    pub reference_count: usize,
+    /// How many bundle bodies were carried: never more than a section has
+    /// references, and, like the references, not block bytes.
+    pub bundle_body_count: usize,
 }
 
 impl ArrivalLengths {
     /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
-    /// block and the bodies it carried. The attestation witness is a
-    /// sidecar with its own cap
-    /// ([`shekyl_types::MAX_ATTESTATION_WITNESS_BYTES`]); it is not these
-    /// bytes.
+    /// block and the bodies it carried. The bundle references are a sidecar
+    /// with their own cap, a count
+    /// ([`shekyl_types::archival::MAX_SECTION_REFERENCES`]); their bytes
+    /// are not these bytes. A section is not block weight (§7.1: a bundle
+    /// is not a transaction), so a full block carrying one is not oversize,
+    /// and a peer's arrival is already bounded by the packet it came in.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
@@ -197,7 +212,8 @@ impl ArrivalLengths {
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
-            witness_len: arrival.attestation_witness.len(),
+            reference_count: arrival.bundle_references.len(),
+            bundle_body_count: arrival.bundle_bodies.len(),
         }
     }
 }
@@ -419,7 +435,8 @@ struct Staged {
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
     proof: Proof,
-    witness: Vec<u8>,
+    references: Vec<Vec<u8>>,
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl Staged {
@@ -431,7 +448,8 @@ impl Staged {
             proof: Proof::Hash {
                 class: class_of(arrival.origin),
             },
-            witness: arrival.attestation_witness,
+            references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 
@@ -441,7 +459,8 @@ impl Staged {
             block: arrival.block,
             bodies: arrival.bodies,
             proof: Proof::Judged(Box::new(arrival.judged)),
-            witness: arrival.attestation_witness,
+            references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 }
@@ -454,8 +473,11 @@ struct Accepted {
     bodies: Vec<Vec<u8>>,
     /// How this arrival is formed.
     proof: Proof,
-    /// The witness carried beside the block; empty when none was.
-    witness: Vec<u8>,
+    /// The bundle references carried beside the block; empty when none
+    /// were.
+    references: Vec<Vec<u8>>,
+    /// The bundle bodies carried beside the block, unverified.
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// The service's knobs, each with its reason. How many `form` workers hash
@@ -583,6 +605,8 @@ pub(crate) struct Shared<S: Substrate> {
     rules: ChainRules,
     substrate: Arc<S>,
     connector: ActorRef<Connector>,
+    /// The bundles this node filed and queued, for the sync owner to relay.
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
     /// The daemon's one hasher budget.
     budget: Budget,
     /// Set with [`Self::request_stop`]. The budget's waiters load it.
@@ -625,9 +649,10 @@ pub(crate) struct Shared<S: Substrate> {
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant: parked bodies, and a shown-set change at this
-    /// tip (Q9: once the relay marks an entry shown, the next template
-    /// lists it — N2 rebuilds the posted job, not only on a tip move).
+    /// Wakes the attendant: parked bodies, a shown-set change at this tip
+    /// (Q9: once the relay marks an entry shown, the next template lists
+    /// it — N2 rebuilds the posted job, not only on a tip move), and a
+    /// bundle the queue admits at this tip (the connector fires it).
     pending_ready: Arc<Notify>,
     /// What a test does to the pool between the producer's two locks.
     /// The build clones it, so a test can replace it between wakes.
@@ -823,8 +848,8 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip: parked bodies, and a
-    /// shown-set change at this tip (Q9).
+    /// The attendant waits on this beside the tip: parked bodies, a
+    /// shown-set change at this tip (Q9), and a bundle the queue admits.
     pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
@@ -923,9 +948,57 @@ pub struct Door {
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
     seeds: tokio::sync::watch::Receiver<Option<SlotPair>>,
+    connector: ActorRef<Connector>,
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
+    /// The follower's postings: a block mined on one is given its bundle
+    /// section here ([`Door::offer_local`]).
+    postings: crate::follower::Postings,
 }
 
 impl Door {
+    /// Offer a bundle a peer relayed to the queue (§7.5). Admission is the
+    /// bundle rule against the tip, the same rule this node's own bundles
+    /// meet ([`OfferBundle`]); the verdict is the reply. Only an admitted
+    /// bundle's body is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn offer_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        match self.connector.ask(OfferBundle { reference, body }).await {
+            Ok(offered) => Ok(offered),
+            Err(kameo::error::SendError::HandlerError(fault)) => Err(OfferFault::Connector(fault)),
+            Err(_) => Err(OfferFault::Stopped),
+        }
+    }
+
+    /// File a bundle this node produced (§7.5): the queue's admission, and
+    /// on admission the relay feed ([`Self::filed`]). The producer's task
+    /// files through the same path.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn file_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        crate::connector::file_bundle(&self.connector, &self.filed, reference, body).await
+    }
+
+    /// The bundles this node files and queues from now on, for the sync
+    /// owner to relay (`SCS-P25`). A receiver that falls more than
+    /// [`FILED_FEED_CAPACITY`] behind misses the oldest.
+    #[must_use]
+    pub fn filed(&self) -> tokio::sync::broadcast::Receiver<FiledBundle> {
+        self.filed.subscribe()
+    }
+
     /// The seeds the two cache slots hold, published before the pin lock
     /// drops: the pair the lookup-only longhash answers from. The window
     /// last installed, plus any seed a run or a branch has prepared there
@@ -963,6 +1036,42 @@ impl Door {
         self.room.close();
     }
 
+    /// The bundle section of the posting `block` was mined on, as the block
+    /// carries it: references, and bodies (`SO-D12` 4b, C4). A local block
+    /// arrives as bytes — the built-in miner's and an outside miner's
+    /// `submit_block` alike — and its header commits the section's root, so
+    /// the posting with the same parent and the same root is the one it was
+    /// mined on. A block whose root is no posting's, or the empty section's,
+    /// carries none, and the validator judges its root against that.
+    fn posted_section(&self, block: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let Ok(block) = shekyl_wire::Block::from_bytes(block) else {
+            return (Vec::new(), Vec::new());
+        };
+        let header = &block.header;
+        let kept = self
+            .postings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.values()
+            .filter_map(|posting| {
+                let posted = &posting.job.block.header;
+                let section = posting.section.as_ref()?;
+                (posted.previous == header.previous && posted.section_root == header.section_root)
+                    .then(|| {
+                        (
+                            section.references.as_slice().to_vec(),
+                            section
+                                .bodies
+                                .iter()
+                                .map(|body| body.as_bytes().to_vec())
+                                .collect(),
+                        )
+                    })
+            })
+            .next()
+            .unwrap_or_default()
+    }
+
     /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
     /// node mined, was submitted, or is connecting at genesis. It waits for
     /// the local seat while the window is full, offers the block as
@@ -984,12 +1093,14 @@ impl Door {
         block: Vec<u8>,
         bodies: Vec<Vec<u8>>,
     ) -> Result<Tagged, Refusal> {
+        let (bundle_references, bundle_bodies) = self.posted_section(&block);
         let arrival = Arrival {
             tag,
             origin: Origin::Local,
             block,
             bodies,
-            attestation_witness: Vec::new(),
+            bundle_references,
+            bundle_bodies,
         };
         loop {
             match self.offer(arrival.clone()) {
@@ -1113,8 +1224,10 @@ pub struct Follow {
     pub producer: Option<crate::bundle_producer::ProducerSeat>,
     /// Wakes the tip follower when the pool's shown set changes at this
     /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
-    /// [`Notify`] the pool door's fluff hook fires. `None` is a private
-    /// notify: tests that admit through the pool lock wake it themselves.
+    /// [`Notify`] the pool door's fluff hook fires. The connector fires it
+    /// too, when the bundle queue admits a bundle at the tip. `None` is a
+    /// private notify: tests that admit through the pool lock wake it
+    /// themselves.
     pub shown: Option<Arc<Notify>>,
     /// The measurement sink the live phases are timed into: each
     /// `form_judged`, and each run the connector applies
@@ -1305,17 +1418,22 @@ where
             #[cfg(test)]
             refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
+        // The follower's one wake: a shown pool transaction and a bundle
+        // the queue admits both rebuild the posted job through it.
+        let pending_ready = follow.shown.unwrap_or_else(|| Arc::new(Notify::new()));
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
         let connector_task = prepared.spawn(ConnectorArgs {
             store: Arc::clone(&store),
             rules,
+            bundle_queued: Some(Arc::clone(&pending_ready)),
         });
         let shared = Arc::new(Shared {
             store,
             rules,
             substrate,
             connector,
+            filed: tokio::sync::broadcast::Sender::new(FILED_FEED_CAPACITY),
             budget,
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
@@ -1330,7 +1448,7 @@ where
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: follow.shown.unwrap_or_else(|| Arc::new(Notify::new())),
+            pending_ready,
             #[cfg(test)]
             between_locks: Mutex::new(None),
         });
@@ -1351,6 +1469,9 @@ where
             room: crate::room::Room::new(config.room.get()),
             admission,
             seeds: shared.seeds.subscribe(),
+            connector: shared.connector.clone(),
+            filed: shared.filed.clone(),
+            postings: shared.postings(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
@@ -1362,6 +1483,7 @@ where
         let producing = follow.producer.map(|seat| {
             let parts = crate::bundle_producer::ProducerParts {
                 connector: shared.connector.clone(),
+                filed: shared.filed.clone(),
                 store: Arc::clone(&shared.store),
                 rules: shared.rules,
             };

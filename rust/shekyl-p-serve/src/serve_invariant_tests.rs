@@ -59,16 +59,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
-use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_types::{BlockHeight, SHARD_LENGTH};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::{
     fetch, filler, good_get_shard_0, head_of, render_ok, resolve, write_response, PServeEndpoint,
-    Resolved, IDENTITY_ENVELOPE_LEN, OWN_HEIGHT, WRITE_CHUNK_BYTES,
+    Resolved, OWN_HEIGHT, RECEIPT_ENVELOPE_LEN, WRITE_CHUNK_BYTES,
 };
-use crate::countersign::{PassKey, PassSigner, SignRefused, TestKeySigner};
+use crate::countersign::{PassKey, PassSigner, SignRefused, TestReceiptKeySigner};
 use crate::provider::{ProviderError, ShardBody, ShardProvider};
 use crate::serve_counters::ServeCounterReader;
 
@@ -134,7 +133,7 @@ pub(super) enum Signs {
 
 /// The test key, counting the signatures it is asked for.
 pub(super) struct CountingSigner {
-    key: TestKeySigner,
+    key: TestReceiptKeySigner,
     signs: Signs,
     asked_to_sign: AtomicUsize,
 }
@@ -146,7 +145,7 @@ impl CountingSigner {
 
     pub(super) fn that(signs: Signs) -> Arc<Self> {
         Arc::new(Self {
-            key: TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)),
+            key: TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)),
             signs,
             asked_to_sign: AtomicUsize::new(0),
         })
@@ -156,12 +155,12 @@ impl CountingSigner {
         self.asked_to_sign.load(Ordering::SeqCst)
     }
 
-    pub(super) fn key(&self) -> &TestKeySigner {
+    pub(super) fn key(&self) -> &TestReceiptKeySigner {
         &self.key
     }
 }
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for CountingSigner {
+impl PassKey for CountingSigner {
     fn ready(&self, shard_id: u64, anchor_height: BlockHeight) -> Result<(), SignRefused> {
         if self.signs == Signs::NotReady {
             return Err(SignRefused::new("counting signer: not ready"));
@@ -171,8 +170,8 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for CountingSigner {
 
     fn sign_pass(
         &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+        message: &crate::PassTranscript,
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
         self.asked_to_sign.fetch_add(1, Ordering::SeqCst);
         if self.signs == Signs::FailsLate {
             return Err(SignRefused::new("counting signer: fails late"));
@@ -181,7 +180,7 @@ impl PassKey<IDENTITY_ENVELOPE_LEN> for CountingSigner {
     }
 }
 
-impl PassSigner<IDENTITY_ENVELOPE_LEN> for CountingSigner {
+impl PassSigner for CountingSigner {
     fn own_height(&self) -> Option<BlockHeight> {
         if self.signs == Signs::NoHeight {
             return None;
@@ -233,7 +232,7 @@ fn full_body_bytes() -> usize {
 /// Bytes of a 200 that precede the first body chunk: the head, and nothing
 /// else — the loop writes no frame of its own ahead of the body.
 fn bytes_ahead_of_the_body(body_bytes: usize) -> usize {
-    let content_length = u64::try_from(body_bytes + IDENTITY_ENVELOPE_LEN).expect("fits");
+    let content_length = u64::try_from(body_bytes + RECEIPT_ENVELOPE_LEN).expect("fits");
     render_ok(content_length).len()
 }
 
@@ -253,7 +252,7 @@ async fn serve_to_a_requester_that_accepts(
     let resolved = resolve(
         good_get_shard_0().as_bytes(),
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
         &writer,
     )
     .await;
@@ -268,7 +267,7 @@ async fn serve_to_a_requester_that_accepts(
     let outcome = write_response(
         &mut requester,
         resolved,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
         &writer,
     )
     .await;
@@ -293,7 +292,7 @@ async fn nothing_that_scales_with_the_shard_happens_before_the_head() {
         let resolved = resolve(
             good_get_shard_0().as_bytes(),
             Arc::clone(&provider) as Arc<dyn ShardProvider>,
-            Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+            Arc::clone(&signer) as Arc<dyn PassSigner>,
             &writer,
         )
         .await;
@@ -368,7 +367,7 @@ async fn a_requester_that_takes_everything_costs_every_chunk_and_one_signature()
     let signer = CountingSigner::new();
     let ep = PServeEndpoint::bind(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
     )
     .await
     .expect("bind");
@@ -415,7 +414,7 @@ async fn serve_a_shard_to_a_requester_that_reads(
     let signer = CountingSigner::new();
     let ep = PServeEndpoint::bind_with_send_buffer(
         Arc::clone(&provider) as Arc<dyn ShardProvider>,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+        Arc::clone(&signer) as Arc<dyn PassSigner>,
         PINNED_BUFFER_BYTES,
     )
     .expect("bind");

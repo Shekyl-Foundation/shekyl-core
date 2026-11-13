@@ -34,9 +34,9 @@ unanswered draws top the economy's count up, up to nine times the base.
 `bond_floor_of` returns a single `ARCHIVAL_BOND_FLOOR_ATOMIC` for
 `HoldingsKind::CompleteTree`.
 
-`freeze_complete_trees` (`close.rs`) and `market_member_at_epoch`
-(`consensus_state.rs`) keep a credited complete tree out of `R_market`
-and `Σwork`. On rewards it is not a Sybil route. The drawable set is
+A complete tree lists no shard (CEN-J14, `CompleteTreeWithShardIds`), so
+no economy row credits it and it is in no `R_market` and no `Σwork`. On
+rewards it is not a Sybil route. The drawable set is
 the route.
 
 A draw is an index `j` below `BlockDraws.count` at height `h`
@@ -304,8 +304,8 @@ empty: every flag below still has a job.
 | Site | Class | Why |
 | --- | --- | --- |
 | `emit` complete-tree arm | support role, leaves `D` | The PR skips `Holdings::CompleteTree`: no pairs, no receipt key. Both derivations share `emit`, so the digest cross-check still compares them. Digest vectors are re-derived. |
-| `freeze_complete_trees`, `archival_complete_trees[E]`, SI-31 `CompleteTreesNotFrozen` | still needed | SO-D12h freezes, at the slash pass, every credited persona whose record is a complete tree (`close.rs` `freeze_complete_trees`). That is the set `market_member_at_epoch` excludes. It is not the epoch-open membership the schedule needs. |
-| `is_support_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | still the §1.4 guard | Serve credit is written from passed draws. After complete trees leave `D`, an economy draw cannot select one. A support pass must not write credit. The exclusion is what still drops the persona from `R_market` and `Σwork` if a credit row is written anyway. The flag is reachable. Renamed from `is_foundation_complete_tree`; not deleted. |
+| `freeze_complete_trees`, `archival_complete_trees[E]`, SI-31 `CompleteTreesNotFrozen` | deleted (the switch's C7) | No gather credits a complete tree, so the set each pass froze was always empty (`ARCHIVAL_SETTLEMENT_WRITER.md` §17.3). |
+| `is_support_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | deleted (the switch's C7) | Credit is written only from an admitted economy pass, and an economy draw cannot select a complete tree, so the flag was always false. Market membership is `good_through`. The claim-source RPC row loses the field at 3.71. |
 | `SlashedHolding::CompleteTree`, `unslashed` | stays live | §3 demotes through it. |
 | `ReportedSet::CompleteTreePrefix`, `ServingPosture::SupportCompleteTree`, `PinCompleteTreePrefix` | support role, stays | The node already serves the prefix. The producer of `h` dials, the same pull as an economy read (`read_from` / `read_from_nonce`), and files the support bitmap in the same bundle (§5). The serve posture does not need a second arm to answer a fetch of a prefix shard. Renamed from `FoundationCompleteTree`. |
 | `HolderSource::holders_of` | design question, §7 | The scheduler's holders are the drawable holders. Leaving `D` removes complete trees from that urn. |
@@ -340,8 +340,8 @@ Consensus accepts `HoldingsKind::CompleteTree` from any poster
 (`verify_join_market_bond_post` allows the kind with an empty shard
 list). The wallet's ordinary path is `ShardSetCompact`. The names
 that said Foundation were the role's names and were wrong for ruling 2.
-They are now `is_support_complete_tree` and
-`ServingPosture::SupportCompleteTree`. The Foundation is one holder.
+The serving posture is `ServingPosture::SupportCompleteTree`. The
+Foundation is one holder.
 
 `verify_release_bond_post` does not refuse the kind. `Reinstate` does
 (`ReinstateOnCompleteTree`). The proposal for the ruling: a voluntary

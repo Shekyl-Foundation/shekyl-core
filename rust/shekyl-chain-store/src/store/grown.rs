@@ -54,11 +54,6 @@ pub(in super::super) enum Listed {
     /// `FIRST_SPEND_HEIGHT` there is one, and each block above it matures
     /// one more ([`prefix_maturing`]).
     Spend { fee: u64 },
-    /// `n` matured coinbases in **one** transaction, paying `fee`
-    /// ([`Grown::spend_many`]). A block that keeps adding spends until a
-    /// measured length is crossed realises one of these at a time
-    /// ([`Grown::stage`]).
-    Spends { n: usize, fee: u64 },
     /// A **real join**: the zero-fee spend [`Listed::Spend`] makes, with
     /// the `JoinMarket` post of the persona at `slot` ([`Persona::at`])
     /// riding it ([`Grown::join`]) — a complete-tree bond at
@@ -67,19 +62,17 @@ pub(in super::super) enum Listed {
     /// CEN-J27 judges that spend as CEN-I13/I15 judge any other, so a
     /// join's reference and proof are the chain's to make as a spend's are
     /// — it is listed, never held. It opens the persona's `archival_bond`
-    /// row; the credit for it is [`serve_credit`]'s ([`credited`] pairs
-    /// them).
+    /// row.
     Join { slot: u32 },
     /// A **real Release** of the persona at `slot`'s whole bond,
     /// `bonded_total`, riding the zero-fee spend a join rides
     /// ([`Grown::release`]). CEN-J16 judges it over the record the chain
     /// holds, so the persona must have joined in an earlier block.
     Release { slot: u32, bonded_total: u64 },
-    /// A body listed as given, anchored for its height ([`anchor`]): a
-    /// serve credit, an emission. Never a spend or a join — their
-    /// reference and proof are the chain's to make, not a value a test
-    /// holds before the chain exists.
-    Body(Transaction),
+    /// A **real compact join**: [`Listed::Join`] with the persona at
+    /// `slot` holding `shards` ([`Grown::join_shards`]). CEN-J15 judges
+    /// it: every shard must be closed, final and priced at the parent.
+    JoinShards { slot: u32, shards: Vec<u64> },
 }
 
 /// The endpoint every fixture join names. No landed rule reads a record's
@@ -99,63 +92,6 @@ pub(in super::super) const fn spend() -> Listed {
 /// coinbase.
 pub(in super::super) const fn spend_paying(fee: u64) -> Listed {
     Listed::Spend { fee }
-}
-
-/// [`Listed::Spends`]: `n` coinbases in one transaction, paying `fee`.
-pub(in super::super) const fn spends(n: usize, fee: u64) -> Listed {
-    Listed::Spends { n, fee }
-}
-
-/// A [`Listed::Body`].
-pub(in super::super) fn body(tx: Transaction) -> Listed {
-    Listed::Body(tx)
-}
-
-/// The serve credit for the persona at `slot`, for shard 0 in
-/// `settlement_epoch`: the spender persona's vin
-/// ([`Persona::serve_credit_vin`]) in the rules harness's CEN-H20 body
-/// (`fixture::serve_credit_only_with`) — the one legal listed shape with
-/// no key image and no `pqc_auths`, 3-part. The epoch is the caller's
-/// derivation: CEN-J5 admits a credit for epoch `E` only when `E ≥` the
-/// epoch the persona's join settled in `+ 1`.
-pub(in super::super) fn serve_credit(slot: u32, settlement_epoch: u64) -> Transaction {
-    fixture::serve_credit_only_with(Persona::at(slot).serve_credit_vin(0, settlement_epoch))
-}
-
-/// A serve credit **with the record it credits**: the [`Listed::Join`]
-/// that opens the `archival_bond` row of the persona at `slot` (a real
-/// spend funding the bond — 4-part, like every spend), and the credit for
-/// that persona ([`serve_credit`]). A credit for a persona with no record
-/// is refused (CEN-L7 since DRS-E4 commit 4; CEN-J4 is the row), so a
-/// credit connects only behind its join. The join spends, so it sits no
-/// lower than [`FIRST_SPEND_HEIGHT`], and the credit lists in the block
-/// **after** it:
-/// CEN-J4 reads the record off the view the block is judged against, which
-/// a join in the same block has not yet written — the C++ reads it so
-/// (`check_tx_inputs` runs before `add_block`), and a same-block pair is
-/// refused there. *Records-was:* until E6 slice 8 row 3 the pair was
-/// listed in one block, which the fold's in-block sequencing admitted
-/// (`archival/inputs.rs`, `apply_input`) and the C++ never did.
-///
-/// The credit is for settlement epoch 1, the first a persona joining in
-/// epoch 0 may serve (CEN-J5, `E ≥ join + 1`): under the genesis schedule
-/// (`GENESIS` rules) epoch 0 runs past every height a fixture chain here
-/// reaches, so a join at or above [`FIRST_SPEND_HEIGHT`] settles in epoch
-/// 0. A chain under a shorter schedule derives its own epoch and pairs
-/// [`Listed::Join`] with [`serve_credit`] itself (`prune_tests`). Which
-/// epoch a fixture chain is *in* when it lists the credit is CEN-J7's (E6
-/// slice C), not yet a Rust rule.
-///
-/// The credit is the harness's, in the **`RF-D1`** shape CEN-H20 requires:
-/// a prunable region holding one pruned pass record per serve-credit vin.
-/// Before that shape was required (`SHT-9`), a credit with no region
-/// connected and then halted the store ten heights later, on SI-7:
-/// its txid mixes the null hash where its `txs_prunable_hash` row is
-/// `keccak256("")`, so the drain's reconstruction named another
-/// transaction. `prune_tests` connects one past that age (its own
-/// `sized_credit`, the same shape with the record's length chosen).
-pub(in super::super) fn credited(slot: u32) -> (Listed, Transaction) {
-    (Listed::Join { slot }, serve_credit(slot, 1))
 }
 
 /// The first height at which a block may list a spend: the spender crate's
@@ -329,6 +265,19 @@ impl Grown {
         self.spend_posting(coinbase, 0, Some(&bond))
     }
 
+    /// A real compact join for the block connecting next —
+    /// [`Listed::JoinShards`]: [`Self::join`] with the persona at `slot`
+    /// holding `shards` in place of the complete tree.
+    pub(in super::super) fn join_shards(&mut self, slot: u32, shards: &[u64]) -> Transaction {
+        let coinbase = self.next_coinbase();
+        let persona = Persona::at(slot);
+        let bond = persona.join(
+            shekyl_harness_spender::shard_set(shards.to_vec()),
+            JOIN_ENDPOINT,
+        );
+        self.spend_posting(coinbase, 0, Some(&bond))
+    }
+
     /// A real Release for the block connecting next — [`Listed::Release`]:
     /// the persona at `slot`'s production Release of `bonded_total`
     /// ([`Persona::release`]), riding a zero-fee spend of the lowest
@@ -373,42 +322,27 @@ impl Grown {
         self.spend_posting(coinbase, fee, None)
     }
 
-    /// One real spend of the `n` lowest matured coinbases no block spent
-    /// and no spend built for this block took — the multi-input shape
-    /// ([`Spender::spend_coinbases`]), each input its own `pqc_auths`
-    /// slot, so a body's archival length grows by a hybrid key and
-    /// signature per input. This is how a chain reaches a shard boundary
-    /// with bytes every landed rule verifies; the prune tests' padded
-    /// serve-credit records are the cheap stand-in, and the `#[ignore]`d
-    /// nightly twin in `prune_tests` is this method's caller. Not
-    /// memoised: its chains are not shared across tests. Panics when fewer
-    /// than `n` have matured.
-    pub(in super::super) fn spend_many(&mut self, n: usize, fee: u64) -> Transaction {
-        let coinbases: Vec<u64> = self
-            .matured()
-            .into_iter()
-            .filter(|h| !self.building.values().any(|b| b == h))
-            .take(n)
-            .collect();
-        assert_eq!(
-            coinbases.len(),
-            n,
-            "{n} coinbases have matured unspent for height {}",
-            self.height()
-        );
-        let heights: Vec<BlockHeight> = coinbases
+    /// Watch `output_key`: when a block this chain records lists it, the
+    /// spender registers it ([`Spender::own`]) and
+    /// [`Self::spend_watched`] can spend it. Call before the block that
+    /// lists it is recorded.
+    pub(in super::super) fn watch(&mut self, output_key: [u8; 32]) {
+        self.spender.own(output_key);
+    }
+
+    /// One real spend of the watched outputs `keys` ([`Self::watch`]), all
+    /// the miner's, for the block connecting next, paying `fee` and the
+    /// rest back to the miner in two outputs ([`Spender::spend_owned`]).
+    /// Panics when a key was not listed by a recorded block.
+    pub(in super::super) fn spend_watched(&mut self, keys: &[[u8; 32]], fee: u64) -> Transaction {
+        let wallet = MinerWallet::harness();
+        let owner = shekyl_harness_spender::Owner::miner(wallet);
+        let connecting = self.height();
+        let sourced = keys
             .iter()
-            .map(|&c| BlockHeight::from_raw(c))
+            .map(|key| self.spender.owned_input(&owner, *key, connecting))
             .collect();
-        // The spender yields the coinbases in the body's input order
-        // (sorted by key image, CEN-I5), the order `key_images` reads.
-        let (tx, in_input_order) =
-            self.spender
-                .spend_coinbases(MinerWallet::harness(), &heights, self.height(), fee);
-        for (image, coinbase) in key_images(&tx).into_iter().zip(in_input_order) {
-            self.building.insert(image, coinbase.to_raw());
-        }
-        tx
+        Spender::spend_owned(sourced, connecting, fee, wallet.recipient())
     }
 
     /// [`Self::spend_of`] with a bond post riding the spend
@@ -468,28 +402,18 @@ impl Grown {
 
     /// `listed` realised for the block connecting next: each
     /// [`Listed::Spend`] built ([`Self::spend`]), each [`Listed::Join`]
-    /// built ([`Self::join`]), each [`Listed::Body`] anchored
-    /// ([`anchor`]).
+    /// built ([`Self::join`]), each [`Listed::Release`] built
+    /// ([`Self::release`]).
     pub(in super::super) fn realise(&mut self, listed: &[Listed]) -> Vec<Transaction> {
-        let height = self.height();
         listed
             .iter()
             .map(|entry| match entry {
                 Listed::Spend { fee } => self.spend(*fee),
-                Listed::Spends { n, fee } => self.spend_many(*n, *fee),
                 Listed::Join { slot } => self.join(*slot),
                 Listed::Release { slot, bonded_total } => self.release(*slot, *bonded_total),
-                Listed::Body(tx) => anchor(&self.hashes, height, tx.clone()),
+                Listed::JoinShards { slot, shards } => self.join_shards(*slot, shards),
             })
             .collect()
-    }
-
-    /// Realise one listing entry. A block that decides whether to add
-    /// another spend after measuring the one it just built uses this,
-    /// then [`Self::judge_listing`] once for the block.
-    pub(in super::super) fn stage(&mut self, entry: &Listed) -> Transaction {
-        let mut txs = self.realise(std::slice::from_ref(entry));
-        txs.pop().expect("one listing realises one body")
     }
 
     /// The candidate for the block connecting next on the committed
@@ -526,6 +450,36 @@ impl Grown {
         memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
         let cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
+        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
+        self.record(judged.block().block(), txs);
+        Ok(judged)
+    }
+
+    /// [`Self::judge_listing_with_memo`] for a block carrying a bundle
+    /// section: `refs` as its references, under the root they make, and
+    /// `bodies` as their bodies in section order. `validate` admits them
+    /// (CEN-J29 through J37) and the verdict carries what it admitted.
+    pub(in super::super) fn judge_listing_with_section<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: &[Transaction],
+        memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
+        refs: &[shekyl_archival_retention::BundleRef],
+        bodies: Vec<shekyl_archival_retention::BundleBody>,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        let mut cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
+        let root = shekyl_archival_retention::section_root(refs).expect("a countable section");
+        cand.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
+        let section = shekyl_types::archival::BundleReferences::new(
+            refs.iter()
+                .map(shekyl_archival_retention::BundleRef::encode)
+                .collect(),
+        )
+        .expect("a non-empty section");
+        let cand = cand
+            .with_bundle_references(Some(section))
+            .with_bundle_bodies(bodies);
         let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
         Ok(judged)

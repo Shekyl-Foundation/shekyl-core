@@ -182,12 +182,7 @@ async fn body_phase_on_the_captured_corpora() {
         let bytes: usize = steps
             .iter()
             .skip(1)
-            .map(|step| match step {
-                Step::Block { block, bodies } => {
-                    block.len() + bodies.iter().map(Vec::len).sum::<usize>()
-                }
-                Step::Inject(_) => 0,
-            })
+            .map(|Step { block, bodies }| block.len() + bodies.iter().map(Vec::len).sum::<usize>())
             .sum();
         let mut node = Node::start(
             &format!("long-bodies-{shape}"),

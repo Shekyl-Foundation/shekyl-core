@@ -31,7 +31,7 @@ thread_local! {
     pub(super) static BATCHES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 use crate::census::CenRow;
-use crate::harness::fixture::{candidate, listed, serve_credit_only};
+use crate::harness::fixture::{candidate, listed};
 use crate::rules::tx::H19;
 use crate::verdict::{InvalidBlock, Locus, TxSlot};
 use crate::FormClaims;
@@ -106,27 +106,17 @@ fn refused_at(listed: Vec<Transaction>, slot: TxSlot) {
 }
 
 /// A block with nothing to range-prove passes, so the row records on every
-/// coinbase-only block (`ChainValid::mint` requires it once `implemented`):
-/// no listed body, and a serve credit, which carries no proof by mandate.
+/// coinbase-only block (`ChainValid::mint` requires it once `implemented`).
 #[test]
 fn h19_passes_a_block_with_no_proofs() {
     assert_eq!(H19::verify_block(&candidate(Vec::new())), Ok(()));
-    assert_eq!(
-        H19::verify_block(&candidate(vec![serve_credit_only([7; 32])])),
-        Ok(())
-    );
 }
 
-/// Valid proofs pass in one batch, beside a body with none.
+/// Valid proofs pass in one batch.
 #[test]
 fn h19_passes_valid_proofs_in_one_batch() {
     assert_eq!(
-        H19::verify_block(&candidate(vec![
-            valid(1),
-            serve_credit_only([7; 32]),
-            valid(2),
-            valid(3),
-        ])),
+        H19::verify_block(&candidate(vec![valid(1), valid(2), valid(3),])),
         Ok(())
     );
 }
@@ -167,12 +157,11 @@ fn h19_names_the_first_bad_transaction_whichever_way_its_proof_is_bad() {
 
 /// A lone transaction is a batch of one (DRS-E5 PR-b, the pool door): the
 /// verdict at `Lone` is the block fold's at the transaction's slot — a
-/// valid proof passes, a broken or unreassemblable one is refused at
-/// `Lone`, and a body with no proof passes vacuously, as an empty batch
-/// does.
+/// valid proof passes, and a broken or unreassemblable one is refused at
+/// `Lone`.
 #[test]
 fn h19_alone_is_the_folds_verdict_at_the_lone_slot() {
-    for tx in [valid(1), valid(2), serve_credit_only([7; 32])] {
+    for tx in [valid(1), valid(2)] {
         assert_eq!(H19::verify_lone(&tx), Ok(()));
         assert_eq!(H19::verify_block(&candidate(vec![tx])), Ok(()));
     }
@@ -241,8 +230,7 @@ fn synthetic(tag: u8) -> Transaction {
 }
 
 /// The determinism KAT at the block: the seed the fold derives for a fixed
-/// candidate — two listed transactions and a serve credit between them,
-/// which contributes nothing — pinned. The two synthetic proofs and their
+/// candidate — two listed transactions — pinned. The two synthetic proofs and their
 /// commitments are byte-for-byte `shekyl-bulletproofs`' KAT batch
 /// (`tests/derived.rs`, `the_seed_of_a_fixed_batch_is_pinned`), so the pin
 /// is that crate's: the fold's batch is exactly the documented two-entry
@@ -254,7 +242,7 @@ fn h19_the_seed_of_a_fixed_block_is_pinned() {
         let entries = gathered.entries().expect("reassembled");
         batch_weights_seed(&entries)
     };
-    let block = vec![synthetic(0x00), serve_credit_only([7; 32]), synthetic(0xA5)];
+    let block = vec![synthetic(0x00), synthetic(0xA5)];
     assert_eq!(
         seed_of(block),
         [

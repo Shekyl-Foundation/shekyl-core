@@ -895,7 +895,7 @@ mod tests {
             "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
             "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
             "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
-            "curve_root": "44".repeat(32), "attestation_root": "55".repeat(32),
+            "curve_root": "44".repeat(32), "section_root": "55".repeat(32),
         });
         let body = json_rpc_result_body(&serde_json::json!([header]));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");

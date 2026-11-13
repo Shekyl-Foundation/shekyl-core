@@ -158,10 +158,6 @@ pub mod fetch;
 /// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
-/// `SO-D12h`: the frozen-membership chain through the claim window. The
-/// emission test and the pop test each connect the claim.
-#[cfg(all(test, feature = "pipeline"))]
-mod frozen_membership;
 #[cfg(all(test, feature = "pipeline"))]
 mod header_path_tests;
 /// The logical-state digest at a tip, and at every height of a
@@ -251,6 +247,11 @@ pub mod shard_facts;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
+/// Two complete trees on admitted support draws, one released and one
+/// demoted, beside a compact persona that serves through the claim window.
+/// The emission test and the pop test each connect the claim.
+#[cfg(all(test, feature = "pipeline"))]
+mod support_trees;
 /// DRS-E5 a5 (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the switch through the
 /// production stack — two drivers, two branches, the store that switched
 /// held to the store that connected the winner directly.
@@ -275,10 +276,10 @@ mod vectors_tests;
 #[cfg(feature = "pipeline")]
 pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
-    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
-    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion,
-    Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows,
-    TemplateFacts, TipChanged, WatchDeepReorg, WatchLatch, WatchTip,
+    OfferAlt, Offered, PlanMismatchReason, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, PopBlocks, RaiseAlarm, RefusePromotion, Reorganize, Rewind, Rewound, RunEnd,
+    RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts, TipChanged,
+    WatchDeepReorg, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
@@ -295,8 +296,6 @@ pub use schedule::{ChainRules, LeverRefused};
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
-pub use source::{
-    IngestEvent, Injection, InjectionParseError, SequenceNo, Sequenced, ServeCredit, Source,
-};
+pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
 pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

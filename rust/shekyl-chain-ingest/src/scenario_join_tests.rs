@@ -6,8 +6,8 @@
 //! The compact join through the production stack, and the blocks that
 //! read the record it wrote (E6 slice 8 PR-b). Split out of
 //! `scenario_archival_tests` so that file stays the single-block arms:
-//! this scenario fills two shards, joins, and then walks the credit,
-//! release, rejoin and reinstate that a persisted record makes reachable.
+//! this scenario fills two shards, joins, and then walks the release,
+//! rejoin and reinstate that a persisted record makes reachable.
 //! Minutes of proofs; the live lane (`cargo test -p shekyl-chain-ingest
 //! --features pipeline -- --ignored a_join_is_written`). The suite's
 //! account of which arms live here is the module docs of
@@ -16,7 +16,7 @@
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_chain_rules::{Accrual, CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_types::archival::{BadInterval, Holdings};
-use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::BondPostKind;
 use shekyl_wire::Input;
@@ -44,8 +44,7 @@ const FILL_FROM_COINBASE: u64 = 10;
 /// `Insert`, field for field from the post and the open epoch; the accrual
 /// is the open epoch's row plus the block's leg. Then the store: the
 /// record is there, the accrual row is the post-image, and the blocks
-/// after read them — a credit for the persona, for the first epoch it may
-/// serve (`E_join + 1`, CEN-J5), connects, a release whose debit is not
+/// after read them — a release whose debit is not
 /// the persisted total is CEN-J16's before any connect, a release of that
 /// total empties the record and its post-image is what the store holds, a
 /// second join is CEN-J14's refusal and a reinstate over a clean close is
@@ -55,13 +54,6 @@ const FILL_FROM_COINBASE: u64 = 10;
 /// negative the fixtures cannot shape. The two shards are 0 and 1, filled
 /// and closed before the join, which lands at the first height CEN-J15
 /// admits it (module docs).
-///
-/// *Records-was:* until E6 slice 8 row 3 this block also listed a credit
-/// **beside** the join, for the join's own epoch, and it connected: the
-/// fold sequenced the post before the credit within the block. CEN-J4
-/// reads the record off the view before the block and CEN-J5 refuses the
-/// join epoch, as the C++'s `check_tx_inputs` does; the credit now lists
-/// in the block after, for the epoch after.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills two shards with real proofs; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
@@ -72,7 +64,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
     assert_eq!(shards, vec![0, 1]);
     // The join connects at the first height J15 admits both shards; the
-    // block after it (the credit and the release) stays in the join's
+    // block after it (the release) stays in the join's
     // epoch, and neither block is an epoch close — the rows read here are
     // the posts', not a close's.
     let connecting = inside_one_epoch(
@@ -108,8 +100,6 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         ),
     ];
     let epoch = levered_epoch_at(connecting);
-    // The first epoch a persona joining in `epoch` may serve (CEN-J5).
-    let serving = SettlementEpoch::from_raw(epoch.to_raw() + 1);
     // The epoch's row before this block: what the blocks before it accrued.
     let accrued_before = scenario
         .budget_accruing(epoch)
@@ -125,7 +115,6 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         CenRow::H21,
         CenRow::I18,
         CenRow::G10,
-        CenRow::J4,
         CenRow::J13,
         CenRow::J14,
         CenRow::J15,
@@ -184,11 +173,6 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         "a complete tree is one holding at the floor"
     );
 
-    assert!(
-        block.archival.serve_credits().is_empty(),
-        "no credit can list beside the join it needs (J4 reads the view before the block)"
-    );
-
     // The accrual is the open epoch's post-image: the row the store held
     // before this block plus the block's archival emission leg (the
     // verdict's own `PaidEmission::accrual`, not a number this test
@@ -227,11 +211,9 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     let whole_record = records[1].record().clone();
     spender.push(&block);
 
-    // The next block reads the records: the credit for a persona who
-    // joined earlier — for the first epoch it may serve — connects through
-    // J4, J5 and J6 over the persisted record (SI-15's row keyed to it),
-    // and a release of the other persisted record is its `Update` — bonded
-    // to zero, holding nothing, one clean interval close at the open epoch.
+    // The next block reads the records: a release of the persisted
+    // complete tree is its `Update` — bonded to zero, holding nothing, one
+    // clean interval close at the open epoch.
     let next = connecting + BlockCount::ONE;
     // A debit that is not the persisted total is CEN-J16's
     // (`DebitNotFullBalance`) at the post input — J13 passes it first,
@@ -257,33 +239,22 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     );
     let release_whole = whole.release(whole_record.bonded_total.to_raw());
     let block = scenario
-        .mine_listing(vec![
-            compact.serve_credit(0, serving.to_raw()),
-            spender.spend_coinbase_posting(
-                scenario.wallet(),
-                BlockHeight::from_raw(2),
-                next,
-                FEE,
-                Some(&release_whole),
-            ),
-        ])
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(2),
+            next,
+            FEE,
+            Some(&release_whole),
+        )])
         .await
-        .unwrap_or_else(|outcome| panic!("a credit and a release connect: {outcome}"));
+        .unwrap_or_else(|outcome| panic!("the release connects: {outcome}"));
     assert_eq!(block.height, next);
-    for row in [CenRow::H20, CenRow::J4, CenRow::J5, CenRow::J6] {
-        assert!(block.judged_by.contains(&row), "{row} judged the credit");
-    }
     // The release passed J13 (the bond-spend slot) and J16 over the
     // persisted record: `whole` never served, so the cooldown and the
     // slash watermark have nothing to wait on.
     for row in [CenRow::J13, CenRow::J16] {
         assert!(block.judged_by.contains(&row), "{row} judged the release");
     }
-    let credits = block.archival.serve_credits();
-    assert_eq!(credits.len(), 1);
-    assert_eq!(credits[0].persona, compact.id());
-    assert_eq!(credits[0].shard, ShardId::from_raw(0));
-    assert_eq!(credits[0].epoch, serving);
     let records = block.archival.records();
     assert_eq!(records.len(), 1, "the release is the block's one write");
     assert_eq!(records[0].persona(), &whole.id());
@@ -327,7 +298,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
     assert_eq!(
         scenario.bond_record(compact.id()).await.expect("read"),
         Some(record.clone()),
-        "a credit does not touch the record"
+        "the compact persona's record is as its join wrote it"
     );
     spender.push(&block);
 

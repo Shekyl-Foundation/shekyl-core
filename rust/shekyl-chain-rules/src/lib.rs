@@ -165,7 +165,7 @@ pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
     ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather, EpochIssues,
-    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    RecordWrite, RecordWriteKind, ReleasePreImage, Settlement, Slash, SupportIssue,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
 pub use genesis_pin::GenesisPin;
@@ -180,11 +180,11 @@ pub use archival::scheduled_seats;
 // the verifier's own selection, and the template fills its section at
 // the switch. `form` and `validate` do not call them.
 pub use archival::{
-    check_section, check_section_until_switch, draw_targets, fill_section, judge_bundles,
-    open_body, open_reference, seats_with_carry, verify_bundle, AdmissionFault, Admitted,
+    check_section, check_section_stateless, draw_targets, fill_section, judge_bundles, open_body,
+    open_reference, seats_with_carry, support_step, verify_bundle, AdmissionFault, Admitted,
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
     DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
-    SupportCarry, SupportSeat, WindowClosed,
+    SupportCarry, SupportSeat, SupportStepFault, WindowClosed,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
@@ -243,7 +243,7 @@ pub use rules::tx_emission_against::{
     EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
-pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
+pub use shekyl_archival_retention::{CarriedBodies, DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{

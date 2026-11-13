@@ -21,8 +21,7 @@
 //!  2. transactions miner tx then listed → tx_indices, txs_*, tx_outputs,
 //!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1);
 //!                  then the delta's archival_bond post-images (SI-19/20)
-//!                  and archival_serve_credit bits (SI-15) —
-//!                  `archival_write.rs`, DRS-E4
+//!                  — `archival_write.rs`, DRS-E4
 //!  3. tree         the verdict's drain → curve_tree_leaves, the position
 //!                  maps, curve_tree_layers, curve_tree_meta (SI-11/12/17);
 //!                  curve_tree_leaf_counts[h + 1] every connect (SI-18) —
@@ -30,7 +29,7 @@
 //!  4. root         curve_tree_roots[h + 1] = the verdict's root_after (SI-4)
 //!                  — every connect, grown or not (the C++ write at
 //!                  :663–:664 is outside the growth gate; SCW-19)
-//!  5. witness      archival_attestation_witness[h] = the verdict's sidecar,
+//!  5. references   archival_bundle_references[h] = the verdict's sidecar,
 //!                  when non-empty — `archival_write.rs`
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
 //!  7. rule set     rule_set_in_force[h] = in_force (the CEN-B3 belt)
@@ -86,7 +85,7 @@
 //! cardinality: a second bucket, or a hole compensated by a foreign row,
 //! is SI-9, never a verdict.
 
-use shekyl_chain_rules::{Admitted, ChainValid, DrawableMemo, RuleSet, TxIdentity};
+use shekyl_chain_rules::{ChainValid, DrawableMemo, RuleSet, TxIdentity};
 use shekyl_types::{
     ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
 };
@@ -173,35 +172,21 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-1 (key image), SI-4 (root), SI-8 (`total_burned` overflow) — each
     /// [`StoreError::InvariantViolated`] and each poisoning the batch;
     /// engine errors.
-    pub fn connect(
-        &self,
-        valid: ChainValid<'id, BatchView<'_, 'id>>,
-        in_force: RuleSet,
-    ) -> Result<Connected, StoreError> {
-        self.connect_admitting(valid, in_force, None)
-    }
-
-    /// [`connect`](Self::connect), then the block's admitted bundles.
     ///
-    /// `admitted` is the memo the count phase filed and the verifier's
-    /// [`Admitted`] values. This method does not call the verifier. The
-    /// view is built here, at the height being connected, so the plan and
-    /// the journal name one height. The writes land before the journal
-    /// seals, so `pop` of the block removes them with it. `issued_short`
-    /// counts only draws of the epoch of that height.
-    ///
-    /// # Errors
-    ///
-    /// [`connect`](Self::connect)'s, and the admission writer's.
+    /// The block's admitted bundles are the verdict's
+    /// ([`ValidatedBlock::admitted`](shekyl_chain_rules::ValidatedBlock::admitted)),
+    /// journaled at phase 9 (`admission_write.rs`): the reveals, the issued
+    /// draws and the digest terms. This method does not call the verifier.
+    /// The writes land before the journal seals, so `pop` of the block
+    /// removes them with it. A block that admits none writes nothing there.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
     )]
-    pub fn connect_admitting(
+    pub fn connect(
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
         in_force: RuleSet,
-        admitted: Option<(&DrawableMemo, &[Admitted])>,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
         // The connecting height is known from the tip's key alone and is
@@ -315,12 +300,11 @@ impl<'id> WriteBatch<'_, 'id> {
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
             .insert(height + 1, block.root_after().encoded().as_encoded())?;
 
-        // ---- 5. attestation witness (DRS-E4; `archival_write.rs`) -------
-        // The verdict's sidecar, judged by CEN-B4 in `validate` (E6 slice 8
-        // row 10): `None` is the empty set against the mined root, `Some`
-        // the recompute and every record's countersignature. B4 is always
-        // in coverage, so the widening above never names it.
-        self.record_attestation_witness(height, block.attestation_witness())?;
+        // ---- 5. bundle references (`archival_write.rs`) ------------------
+        // The verdict's section, admitted by CEN-J29 through J37 in
+        // `validate`: the header's root is theirs. The nine rows are always
+        // in coverage, so the widening above never names them.
+        self.record_bundle_references(height, block.bundle_references())?;
 
         // ---- 6. block --------------------------------------------------
         let hash = BlockHash::from_bytes(*block.hash().as_bytes());
@@ -399,19 +383,25 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
         self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
-        if let Some((memo, bundles)) = admitted {
+        let admitted = valid.block().admitted();
+        if !admitted.is_empty() {
             // The connecting height was noted before this block's row
             // landed. `chain_view` notes `tip + 1`, and the tip is now this
             // block, so that note would halt a later fault at the next
             // height. The view is the batch, and it does not re-note.
+            //
+            // The journal reads the issued-draw index and never `D`, so the
+            // memo the view holds is empty: a read of it would be SI-35, and
+            // the writer makes none (`write_admissions`).
             let chain = BatchView::new(self);
+            let no_drawable = DrawableMemo::new();
             let view = StoreBundleView::new(
                 &chain,
-                memo,
+                &no_drawable,
                 BlockHeight::from_raw(height),
                 in_force.settlement_schedule(),
             );
-            self.write_admissions(&view, bundles)?;
+            self.write_admissions(&view, admitted)?;
         }
 
         // ---- 10. journal -----------------------------------------------
@@ -440,6 +430,13 @@ impl<'id> WriteBatch<'_, 'id> {
             Some(through) => self.retire_alt_blocks(BlockHeight::from_raw(through))?,
             None => 0,
         };
+        // ---- 14. bundle holders (`store/bundle_holders.rs`) ---------------
+        // After the seal for the prune's reason: the queue and the body
+        // store are not chain state (SI-41). The block holds the bodies of
+        // the bundles it admitted and their queue entries leave; the block
+        // that has just passed the undo retention gives its bodies up.
+        self.hold_section(block.admitted(), block.bundle_bodies())?;
+        self.sweep_section(height)?;
         Ok(Connected {
             height,
             journaled,

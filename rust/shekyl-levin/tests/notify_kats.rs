@@ -6,12 +6,12 @@
 //! LV-2b notify maps: 2002–2004 / 2006–2010.
 //!
 //! Pins fluff OPT, empty-container omit, CONTAINER_POD_AS_BLOB, pruned vs
-//! unpruned `txs`, and the attestation-witness transport cap.
+//! unpruned `txs`, and the bundle-references transport cap.
 
 use shekyl_levin::{
     notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewCompactBlock,
     NewTransactions, PayloadError, PortableMap, Received, RequestCompactMissingTx, TxBlobEntry,
-    ATTESTATION_WITNESS_MAX_BYTES, HASH_SIZE, NOTIFY_NEW_TRANSACTIONS,
+    HASH_SIZE, MAX_BUNDLE_REFERENCES, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_portable_storage::{store_to_binary, Array, Section, Value};
 
@@ -27,26 +27,23 @@ fn empty_block() -> BlockCompleteEntry {
         block: b"blk".to_vec(),
         block_weight: 0,
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     }
 }
 
 #[test]
-fn witness_cap_is_cpp_formula() {
-    assert_eq!(ATTESTATION_WITNESS_MAX_BYTES, 885_000);
+fn hash_size_is_a_crypto_hash() {
     assert_eq!(HASH_SIZE, 32);
 }
 
-/// The framing crate carries a hand-copied twin of the retention crate's
-/// witness maximum (no production dependency). This is the gate that makes
-/// the copy unable to drift silently: a per-entry change in the retention
-/// crate (the entry is `nonce ‖ anchor_height ‖ delivery_digest ‖
-/// signature`) moves the authority, and a literal here would not follow.
+/// A block carries at most one section's references, and a section names
+/// at most `W₂` of them: the ruled band's top. Red edit: move the section
+/// bound in `shekyl-types` — this names the drift.
 #[test]
-fn witness_cap_matches_retention_authority() {
+fn a_blocks_references_are_at_most_one_sections() {
     assert_eq!(
-        ATTESTATION_WITNESS_MAX_BYTES,
-        shekyl_archival_retention::MAX_ATTESTATION_WITNESS_BYTES
+        u64::try_from(MAX_BUNDLE_REFERENCES).expect("fits"),
+        shekyl_archival_retention::constants::W2_MAX_DEFENSIBLE_BLOCKS
     );
 }
 
@@ -127,7 +124,7 @@ fn unpruned_txs_are_blob_array_hashes_dropped() {
             blob: b"tx".to_vec(),
             prunable_hash: [0x11; HASH_SIZE],
         }],
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
     };
     let section = entry.to_section().expect("section");
     match section.get("txs") {
@@ -149,7 +146,7 @@ fn pruned_txs_are_objects() {
             blob: b"tx".to_vec(),
             prunable_hash: [0x22; HASH_SIZE],
         }],
-        attestation_witness: b"wit".to_vec(),
+        bundle_references: vec![b"ref-a".to_vec(), b"ref-b".to_vec()],
     };
     let section = entry.to_section().expect("section");
     assert!(matches!(
@@ -166,26 +163,35 @@ fn empty_unpruned_txs_omitted() {
     assert!(section.get("txs").is_none());
     assert!(section.get("pruned").is_none());
     assert!(section.get("block_weight").is_none());
-    assert!(section.get("attestation_witness").is_none());
+    assert!(section.get("bundle_references").is_none());
     round_trip(&entry);
 }
 
+/// One section's references pass both ways; one more is refused on
+/// either side of the codec. Red edit: drop either check — the side
+/// without it accepts the oversized section.
 #[test]
-fn witness_over_cap_rejected() {
-    let entry = BlockCompleteEntry {
-        pruned: false,
-        block: b"blk".to_vec(),
-        block_weight: 0,
-        txs: Vec::new(),
-        attestation_witness: vec![0u8; ATTESTATION_WITNESS_MAX_BYTES + 1],
+fn references_over_cap_rejected() {
+    let at_cap = BlockCompleteEntry {
+        bundle_references: vec![vec![0xAB]; MAX_BUNDLE_REFERENCES],
+        ..empty_block()
     };
-    assert_eq!(
-        entry.to_section(),
-        Err(PayloadError::WitnessTooLarge {
-            got: ATTESTATION_WITNESS_MAX_BYTES + 1,
-            max: ATTESTATION_WITNESS_MAX_BYTES,
-        })
+    round_trip(&at_cap);
+    let over = BlockCompleteEntry {
+        bundle_references: vec![vec![0xAB]; MAX_BUNDLE_REFERENCES + 1],
+        ..empty_block()
+    };
+    let refused = PayloadError::TooManyReferences {
+        got: MAX_BUNDLE_REFERENCES + 1,
+        max: MAX_BUNDLE_REFERENCES,
+    };
+    assert_eq!(over.to_section(), Err(refused.clone()));
+    let mut section = at_cap.to_section().expect("section");
+    section.insert(
+        "bundle_references",
+        Value::Array(Array::Bytes(vec![vec![0xAB]; MAX_BUNDLE_REFERENCES + 1])),
     );
+    assert_eq!(BlockCompleteEntry::from_section(&section), Err(refused));
 }
 
 #[test]

@@ -7,7 +7,8 @@ use super::alt::test_block_bytes;
 use super::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{Canonical, CodecError};
-use shekyl_types::{BlockHeight, BlockWeight, MAX_ATTESTATION_WITNESS_BYTES};
+use shekyl_types::archival::BundleReferences;
+use shekyl_types::{BlockHeight, BlockWeight};
 
 fn facts(weight: u64) -> AltBlockFacts {
     AltBlockFacts {
@@ -25,22 +26,22 @@ fn block() -> Vec<u8> {
     test_block_bytes(41)
 }
 
-fn witness() -> Vec<u8> {
-    vec![0xA5; 40]
+fn references() -> BundleReferences {
+    BundleReferences::new(vec![vec![0xA5; 80], vec![0xA6; 81]]).expect("a section")
 }
 
 #[test]
-fn round_trips_with_and_without_a_witness() {
+fn round_trips_with_and_without_references() {
     let bare = AltBlock::checked(facts(2_048), &block(), None).expect("bare");
-    let full = AltBlock::checked(facts(2_048), &block(), Some(witness())).expect("full");
+    let full = AltBlock::checked(facts(2_048), &block(), Some(references())).expect("full");
     for record in [&bare, &full] {
         let bytes = record.encode();
         assert_eq!(AltBlock::decode(&bytes).as_ref(), Ok(record));
     }
     assert_eq!(bare.block_weight(), BlockWeight::from_raw(2_048));
-    assert_eq!(bare.attestation_witness(), None);
+    assert_eq!(bare.bundle_references(), None);
     assert_eq!(full.block_weight(), BlockWeight::from_raw(2_048));
-    assert_eq!(full.attestation_witness(), Some(witness().as_slice()));
+    assert_eq!(full.bundle_references(), Some(&references()));
     assert_eq!(
         full.block().serialize(),
         block(),
@@ -60,7 +61,7 @@ fn round_trips_with_and_without_a_witness() {
 /// lengthens the record and fails here, not only in the snapshot.
 #[test]
 fn an_alt_row_has_no_supply_word() {
-    let record = AltBlock::checked(facts(2_048), &block(), Some(witness())).expect("full");
+    let record = AltBlock::checked(facts(2_048), &block(), Some(references())).expect("full");
     let bytes = record.encode();
     let mut expected = Vec::new();
     expected.extend_from_slice(&41u64.to_le_bytes()); // height
@@ -70,12 +71,13 @@ fn an_alt_row_has_no_supply_word() {
     expected.extend_from_slice(&[0x70; 32]); // the recorded PoW
     expected.extend_from_slice(&u32::try_from(block().len()).unwrap().to_le_bytes());
     expected.extend_from_slice(&block());
-    expected.push(1); // witness present
-    expected.extend_from_slice(&u32::try_from(witness().len()).unwrap().to_le_bytes());
-    expected.extend_from_slice(&witness());
+    let section = references().encode();
+    expected.push(1); // references present
+    expected.extend_from_slice(&u32::try_from(section.len()).unwrap().to_le_bytes());
+    expected.extend_from_slice(&section);
     assert_eq!(
         bytes, expected,
-        "height, weight, difficulty, recorded PoW, block, witness — nothing else"
+        "height, weight, difficulty, recorded PoW, block, references — nothing else"
     );
     // The facts half is the three scalars and the recorded PoW; a fifth
     // would not build here.
@@ -102,20 +104,6 @@ fn checked_refuses_what_decode_refuses() {
         "an empty block is not a block"
     );
     assert_eq!(
-        AltBlock::checked(facts(2_048), &block(), Some(Vec::new())).map(drop),
-        Err(AltBlockError::WitnessMalformed),
-        "empty stores no row: absence is None, not Some(empty)"
-    );
-    assert_eq!(
-        AltBlock::checked(
-            facts(2_048),
-            &block(),
-            Some(vec![0; MAX_ATTESTATION_WITNESS_BYTES + 1])
-        )
-        .map(drop),
-        Err(AltBlockError::WitnessMalformed)
-    );
-    assert_eq!(
         AltBlock::checked(facts(0), &block(), None).map(drop),
         Err(AltBlockError::ZeroWeight),
         "zero is not a weight"
@@ -124,7 +112,7 @@ fn checked_refuses_what_decode_refuses() {
 
 /// Encode a record that `checked` would have refused, by writing the bytes
 /// by hand in the codec's layout.
-fn forged(weight: u64, block: &[u8], witness: Option<&[u8]>) -> Vec<u8> {
+fn forged(weight: u64, block: &[u8], references: Option<&[u8]>) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&41u64.to_le_bytes());
     out.extend_from_slice(&weight.to_le_bytes());
@@ -133,7 +121,7 @@ fn forged(weight: u64, block: &[u8], witness: Option<&[u8]>) -> Vec<u8> {
     out.extend_from_slice(&[0x70; 32]); // recorded pow: hash
     out.extend_from_slice(&u32::try_from(block.len()).unwrap().to_le_bytes());
     out.extend_from_slice(block);
-    match witness {
+    match references {
         None => out.push(0),
         Some(w) => {
             out.push(1);
@@ -157,7 +145,7 @@ fn reason(result: Result<AltBlock, CodecError>) -> &'static str {
 #[test]
 fn decode_refuses_the_forged_shapes() {
     // The forger agrees with the codec on a valid record.
-    assert!(AltBlock::decode(&forged(9, &block(), Some(&witness()))).is_ok());
+    assert!(AltBlock::decode(&forged(9, &block(), Some(&references().encode()))).is_ok());
 
     assert_eq!(
         reason(AltBlock::decode(&forged(0, &block(), None))),
@@ -167,19 +155,34 @@ fn decode_refuses_the_forged_shapes() {
         reason(AltBlock::decode(&forged(9, &[0xFF; 7], None))),
         "alt block bytes do not parse as a block"
     );
+    // Present and empty, and present but past the bound: neither is a
+    // section; absence is the presence byte, not an empty one.
     assert_eq!(
-        reason(AltBlock::decode(&forged(9, &block(), Some(&[])))),
-        "attestation witness is empty or over its bound; absence is a missing option"
+        reason(AltBlock::decode(&forged(
+            9,
+            &block(),
+            Some(&0u32.to_le_bytes())
+        ))),
+        "stored bundle references are not a section"
+    );
+    let over = u32::try_from(shekyl_types::archival::MAX_SECTION_REFERENCES + 1).unwrap();
+    assert_eq!(
+        reason(AltBlock::decode(&forged(
+            9,
+            &block(),
+            Some(&over.to_le_bytes())
+        ))),
+        "stored bundle references are not a section"
     );
 
-    // An absent witness is one trailing presence byte. That is the byte a
+    // No references is one trailing presence byte. That is the byte a
     // forger can set off {0, 1}; the weight has no presence byte to forge.
     let mut bad_presence = forged(9, &block(), None);
-    let witness_presence = bad_presence.len() - 1;
-    bad_presence[witness_presence] = 2;
+    let presence = bad_presence.len() - 1;
+    bad_presence[presence] = 2;
     assert_eq!(
         reason(AltBlock::decode(&bad_presence)),
-        "attestation_witness presence byte is not 0 or 1"
+        "bundle_references presence byte is not 0 or 1"
     );
 
     let mut trailing = forged(9, &block(), None);

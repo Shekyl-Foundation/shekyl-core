@@ -698,6 +698,10 @@ pub(crate) struct Peer<K> {
     pub rate: Option<u64>,
     /// Where this session's header answer stands for the opening.
     pub reply: HeaderReply,
+    /// The 2016s this session was sent and has not answered, oldest first
+    /// (`runs::awaiting`). Counted apart from the waits: a wait can end
+    /// while its ask is still out.
+    pub bundle_asks: Vec<crate::runs::awaiting::AskOut>,
 }
 
 impl<K> Peer<K> {
@@ -717,6 +721,7 @@ impl<K> Peer<K> {
             announced: Vec::new(),
             rate: None,
             reply: HeaderReply::Waiting,
+            bundle_asks: Vec::new(),
         }
     }
 }

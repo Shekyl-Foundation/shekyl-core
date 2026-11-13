@@ -71,7 +71,7 @@ pub fn keccak256(data: &[u8]) -> Hash {
 /// [`keccak256`] only where an existing pinned contract requires it.
 ///
 /// `customization` follows the house convention `b"shekyl/<domain>-v1"` (see
-/// `shekyl/archival-serve-credit-response-v1`, `shekyl/receive-label-hash-v1`);
+/// `shekyl/archival-bundle-root-v1`, `shekyl/receive-label-hash-v1`);
 /// version it, so a preimage change is a new domain rather than a silent
 /// reinterpretation.
 ///

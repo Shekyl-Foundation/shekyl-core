@@ -164,7 +164,7 @@ where
         let hash = pow.identity();
         if self.tree.contains(hash) {
             if !self.body_accounted(hash) {
-                self.finish_announced(session, hash, body, out);
+                self.finish_announced(session, hash, body, now, out);
             }
             return Ok(());
         }
@@ -260,6 +260,7 @@ where
         main: &H,
         job: Job,
         results: &[Proved],
+        now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let Some(session) = self.announce_for(job.raw()) else {
@@ -294,7 +295,7 @@ where
                 // (#1237, the three-miner rehearsal).
                 if self.tree.contains(hash) {
                     if !self.body_accounted(hash) {
-                        self.finish_announced(session, hash, &announced.body, out);
+                        self.finish_announced(session, hash, &announced.body, now, out);
                     }
                     return Ok(());
                 }
@@ -355,7 +356,7 @@ where
                                 peer.frontier = Some((height, hash));
                             }
                         }
-                        self.finish_announced(session, hash, &body, out);
+                        self.finish_announced(session, hash, &body, now, out);
                         Ok(())
                     }
                 }
@@ -371,6 +372,7 @@ where
         session: K,
         hash: BlockHash,
         body: &BlockBody,
+        now: Instant,
         out: &mut Vec<Command<K>>,
     ) {
         let Some(judged) = self.judged_in_tree(hash) else {
@@ -401,13 +403,17 @@ where
         };
         let tag = self.next_tag;
         self.next_tag = self.next_tag.saturating_add(1);
-        self.held.insert(BoundArrival {
-            tag,
-            session,
-            header: judged,
-            body: offered,
-            solicited: false,
-        });
+        self.hold_or_await(
+            BoundArrival {
+                tag,
+                session,
+                header: judged,
+                body: offered,
+                solicited: false,
+            },
+            now,
+            out,
+        );
         self.flush_offers(out);
     }
 

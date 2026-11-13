@@ -25,7 +25,7 @@
 //!    is SI-27). Then one `store.write`: the
 //!    pops and SI-5 (`pop_many`), the demoted rows from their verdicts
 //!    (K7), every alt entry through the
-//!    full `validate` and `connect` (K5; K5b's witness travels in the alt
+//!    full `validate` and `connect` (K5; K5b's references travel in the alt
 //!    row), each connect removing its block's alt row (a block id has one
 //!    home, `store/alt.rs`). A promotion verdict aborts the
 //!    transaction — the store is the pre-switch chain — and the failing alt
@@ -66,7 +66,7 @@ use shekyl_chain_store::store::{
     WriteBatch,
 };
 use shekyl_difficulty::{fork_choice, ForkChoiceVerdict};
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, Transaction};
 
@@ -168,12 +168,12 @@ pub struct PlannedBlock {
 pub struct PlannedDemotion {
     /// Height, identity, seed claim.
     pub at: PlannedBlock,
-    /// The block as recorded, with its listed bodies and witness
+    /// The block as recorded, with its listed bodies and references
     /// (`ReadSnapshot::candidate_at`, SAL-13).
     pub candidate: shekyl_chain_rules::Candidate,
 }
 
-/// An alt entry the switch will promote: the block, its witness and its
+/// An alt entry the switch will promote: the block, its references and its
 /// listed bodies, as the store holds them (module docs).
 #[derive(Clone, Debug)]
 pub struct PlannedPromotion {
@@ -181,8 +181,12 @@ pub struct PlannedPromotion {
     pub at: PlannedBlock,
     /// The block as the alt row holds it.
     pub block: Block,
-    /// The witness the alt row carries (CEN-K5b).
-    pub witness: Option<AttestationWitness>,
+    /// The bundle references the alt row carries (CEN-K5b).
+    pub references: Option<BundleReferences>,
+    /// Their bodies, from the body store, where the alt row holds them
+    /// (`SO-D12` 4b, C3): read before the closure, so promotion's
+    /// `validate` judges the row's section whole.
+    pub bundle_bodies: Vec<shekyl_archival_retention::BundleBody>,
     /// The listed bodies, in listed order (AL8).
     pub transactions: Vec<Transaction>,
 }
@@ -491,6 +495,9 @@ fn offer(
     };
     let height = chain.candidate_height();
     let in_force = rules.in_force(height);
+    // The bodies the arrival carried for its section: the alt row holds
+    // them once stored (`bundle_holders.rs`), so a switch reads them back.
+    let bundle_bodies = formed.candidate().bundle_bodies.clone();
     let view = AltView::new(&snap, chain);
     let admitted = match alt_against(formed, &view, &in_force, &trust) {
         Ok(Ok(admitted)) => admitted,
@@ -499,7 +506,10 @@ fn offer(
     };
     drop(view);
     let alternative = admitted.cumulative_difficulty();
-    let inserted: Result<(), StoreError> = store.write(|batch| batch.insert_alt_block(admitted));
+    let inserted: Result<(), StoreError> = store.write(|batch| {
+        batch.insert_alt_block(admitted)?;
+        batch.hold_alt_bodies(&bundle_bodies)
+    });
     match inserted {
         Ok(()) => {}
         Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::AlreadyHeld))) => {
@@ -583,12 +593,8 @@ fn plan(
     let mut promoted = Vec::with_capacity(entries.len());
     for entry in entries {
         let height = entry.block.height();
-        let witness = entry
-            .block
-            .attestation_witness()
-            .map(|bytes| AttestationWitness::new(bytes.to_vec()))
-            .transpose()
-            .expect("an alt row's witness was held well-formed when it was read (AL4)");
+        let references = entry.block.bundle_references().cloned();
+        let bundle_bodies = snap.section_bodies(references.as_ref())?;
         let target = match target_claim(&stitched, height, &rules.in_force(height)) {
             Ok(target) => target,
             Err(fault) => return Err(snapshot_fault(store, height, fault)),
@@ -602,7 +608,8 @@ fn plan(
                 recorded: entry.block.pow().proven(),
             },
             block: entry.block.block().clone(),
-            witness,
+            references,
+            bundle_bodies,
             transactions: snap
                 .alt_block_bodies(&entry.id)?
                 .expect("an entry of the alternative chain was read from its row")
@@ -800,19 +807,16 @@ fn switch(
     }
 
     // The promoted blocks are the alt entries, in order, each with the
-    // witness its row carries (K5b).
+    // references its row carries (K5b).
     if msg.promoted.len() != entries.len() {
         return Err(RunFault::PlanMismatch {
             reason: PlanMismatchReason::PromotedLength,
         });
     }
     for (formed, entry) in msg.promoted.iter().zip(&entries) {
-        let witness = formed
-            .candidate()
-            .attestation_witness
-            .as_ref()
-            .map(AttestationWitness::as_bytes);
-        if formed.hash() != entry.id || witness != entry.block.attestation_witness() {
+        if formed.hash() != entry.id
+            || formed.candidate().bundle_references.as_ref() != entry.block.bundle_references()
+        {
             return Err(RunFault::PlanMismatch {
                 reason: PlanMismatchReason::PromotedRow,
             });
@@ -825,7 +829,7 @@ fn switch(
     // rows (K7).
     let depth = tip.height.to_raw() - root.height.to_raw();
     let mut demoted = Vec::new();
-    let mut witnesses = Vec::new();
+    let mut sidecars = Vec::new();
     let mut returned = Vec::new();
     for offset in 1..=depth {
         let height = BlockHeight::from_raw(root.height.to_raw() + offset);
@@ -834,15 +838,15 @@ fn switch(
             AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
         };
         demoted.push((height, recorded_hash(&snap, height)?));
-        witnesses.push(candidate.attestation_witness.clone());
+        sidecars.push(candidate.bundle_references.clone());
         returned.extend(candidate.transactions);
     }
-    // CEN-K5b's other direction: a demoted row carries the witness its
-    // height row held, so the formed block must carry that one.
+    // CEN-K5b's other direction: a demoted row carries the references its
+    // height row held, so the formed block must carry those.
     if msg.demoted.len() != demoted.len()
-        || msg.demoted.iter().zip(demoted.iter().zip(&witnesses)).any(
-            |(formed, ((_, hash), witness))| {
-                formed.hash() != *hash || formed.candidate().attestation_witness != *witness
+        || msg.demoted.iter().zip(demoted.iter().zip(&sidecars)).any(
+            |(formed, ((_, hash), references))| {
+                formed.hash() != *hash || formed.candidate().bundle_references != *references
             },
         )
     {

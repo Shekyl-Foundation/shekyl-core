@@ -29,7 +29,7 @@ use tokio::time::timeout;
 
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
-use crate::target::{ExpectedShard, TxSink, VerifiedTx};
+use crate::target::{ExpectedShard, TxSink, VerifiedTx, RECEIPT_ENVELOPE_LEN};
 
 /// Largest single read while draining a body. A bound on one `read`, not
 /// on what stays resident: the resident term is one transaction's two
@@ -186,10 +186,6 @@ pub(crate) struct BodyReader<'a, S> {
     received: u64,
     /// Content bytes (ahead of the envelope) not yet consumed.
     content_remaining: u64,
-    /// The envelope's width: the scheme's of the target this read is for
-    /// (`PassVerifyingKey::ENVELOPE_LEN`). The reader reads this many
-    /// bytes of envelope and decides nothing about them.
-    envelope_len: usize,
     digest: PassDeliveryHasher,
     stall: Duration,
 }
@@ -201,7 +197,6 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         stream: &'a mut S,
         carried: Vec<u8>,
         declared: u64,
-        envelope_len: usize,
         header: &RequestHeader,
         stall: Duration,
     ) -> Result<Self, FetchError> {
@@ -209,7 +204,7 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         if received > declared {
             return Err(FetchError::Malformed(Malformed::Overlength { declared }));
         }
-        let envelope = u64::try_from(envelope_len).expect("envelope fits u64");
+        let envelope = u64::try_from(RECEIPT_ENVELOPE_LEN).expect("envelope fits u64");
         Ok(Self {
             stream,
             buf: carried,
@@ -217,7 +212,6 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
             declared,
             received,
             content_remaining: declared.saturating_sub(envelope),
-            envelope_len,
             digest: PassDeliveryHasher::new(header.nonce()),
             stall,
         })
@@ -324,15 +318,16 @@ impl<'a, S: AsyncRead + Unpin> BodyReader<'a, S> {
         Ok(())
     }
 
-    /// The envelope: the declared length's last bytes, not hashed. Only
-    /// after the content is spent.
+    /// The envelope: the declared length's last [`RECEIPT_ENVELOPE_LEN`]
+    /// bytes, not hashed; the reader decides nothing about them. Only after
+    /// the content is spent.
     pub(crate) async fn envelope(&mut self) -> Result<Vec<u8>, FetchError> {
         debug_assert_eq!(self.content_remaining, 0);
-        let mut out = vec![0u8; self.envelope_len];
+        let mut out = vec![0u8; RECEIPT_ENVELOPE_LEN];
         let mut got = 0usize;
-        while got < self.envelope_len {
+        while got < RECEIPT_ENVELOPE_LEN {
             self.fill().await?;
-            let n = self.buffered().len().min(self.envelope_len - got);
+            let n = self.buffered().len().min(RECEIPT_ENVELOPE_LEN - got);
             out[got..got + n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
             self.pos += n;
             got += n;

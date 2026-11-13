@@ -100,10 +100,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::A2,
             CenRow::B1,
             CenRow::B2,
-            // Slice 8 row 10: B4 over the attestation witness
-            // (`CHAIN_RULES_SLICE_8.md` §5 row 10). A3 is decided by B4's
-            // empty arm and stays `pending` as a row.
-            CenRow::B4,
             CenRow::B5,
             CenRow::B6,
             CenRow::C1,
@@ -139,7 +135,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::F18,
             CenRow::F20,
             // Slice 7 commit 7: G1 before the slot loop
-            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G7/G9/G10 below, after it.
+            // (`CHAIN_RULES_SLICE_7.md` §5 row 7); G9/G10 below, after it.
             CenRow::G1,
             // Slice 7 commit 6: the body's pairing, a `FormRule`
             // (`CHAIN_RULES_SLICE_7.md` §5 row 6).
@@ -148,7 +144,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // (`CHAIN_RULES_SLICE_7.md` §5 row 4).
             CenRow::G6,
             CenRow::G6b,
-            CenRow::G7,
             CenRow::G9,
             CenRow::G10,
             CenRow::G11,
@@ -171,7 +166,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // H19 (2026-10-15): the layout half in `tx_form`, the verification
             // half the block fold that records it (`rules::range_proof`).
             CenRow::H19,
-            CenRow::H20,
             CenRow::H21,
             CenRow::H22,
             // Slice 6 commit 2: the stateless 4.I rows (`CHAIN_RULES_SLICE_6.md`
@@ -196,13 +190,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I18,
             CenRow::I19,
             CenRow::I20,
-            // `SHT-9`'s conformance correction (2026-10-03): the serve
-            // credit's pass records against its vins.
-            CenRow::J2,
-            // Slice 8 row 3: the bond-state rows on a serve-credit vin.
-            CenRow::J4,
-            CenRow::J5,
-            CenRow::J6,
             // Slice 8 row 4: the bond post's key and hint, its JoinMarket
             // coupling, and the key its kind selects.
             CenRow::J11,
@@ -238,6 +225,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J24,
             CenRow::J25,
             CenRow::J26,
+            // The switch's C3 (`SO-D12` 4b, 2026-11-09): the bundle section,
+            // through `rules::bundle_admission::admit`, at B4's old slot.
+            CenRow::J29,
+            CenRow::J30,
+            CenRow::J31,
+            CenRow::J32,
+            CenRow::J33,
+            CenRow::J34,
+            CenRow::J35,
+            CenRow::J36,
+            CenRow::J37,
             CenRow::L1,
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
@@ -360,6 +358,27 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
          chain (M6) or in the pool (M7); b3: the engine's seam (M9); b4: eviction (M10)"
     );
+    // SO-D12g: the rows retired by ruling at the switch's C7. Their
+    // successors are compile-pinned enforced rows of this registry
+    // (`census_pin!`); this is the list.
+    let retired: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::Retired)
+        .collect();
+    assert_eq!(
+        retired,
+        [
+            CenRow::J1,
+            CenRow::J2,
+            CenRow::J3,
+            CenRow::J7,
+            CenRow::J8,
+            CenRow::J9,
+            CenRow::J10
+        ],
+        "the serve-credit vin's rows, retired to the bundle rows that carry their subjects"
+    );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a
     // matching status list.
@@ -435,7 +454,15 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 161 → 160 on 2026-11-03: CEN-E2 (the anchor floor and anchored reorg
     // cap) went to bucket 3 with S1 (no coded checkpoints) and left this
     // registry.
-    assert_eq!(CenRow::ALL.len(), 160);
+    // 160 → 159 on 2026-11-09: CEN-B4 (the header root against the
+    // sidecar) went to bucket 3 with the switch's C3 and left this
+    // registry — its successors CEN-J29–J37 judge the bundle section.
+    // 159 → 154 on 2026-11-10: the switch's C7 deleted the carrier class.
+    // CEN-G7, H20 and J4–J6, the rows that judged only that class, went to
+    // bucket 3 and left this registry. J1–J3 and J7–J10 stay as entries
+    // retired by ruling (`SO-D12g`), each naming the bundle rows that carry
+    // its subject.
+    assert_eq!(CenRow::ALL.len(), 154);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

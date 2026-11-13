@@ -359,6 +359,20 @@ impl<'id> HeaderView<'id> for GrownTree {
 /// The tree `tree_after` grows, and the block records, weight window and
 /// burned fold the reward chain reads when a block is pushed.
 impl<'id> ChainView<'id> for GrownTree {
+    type Bundles<'m>
+        = shekyl_chain_rules::harness::NoBundleRows<Infallible>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m shekyl_chain_rules::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        shekyl_chain_rules::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }
