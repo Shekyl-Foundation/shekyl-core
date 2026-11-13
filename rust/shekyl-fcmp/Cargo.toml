@@ -70,7 +70,7 @@ rand_chacha = "0.3"
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-dealer"]
+multisig = ["shekyl-fcmp-proofs/multisig", "dep:transcript", "dep:modular-frost", "dep:dkg-dealer"]
 
 [lints]
 workspace = true
