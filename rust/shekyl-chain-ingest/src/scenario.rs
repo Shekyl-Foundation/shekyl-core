@@ -52,7 +52,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    Substrate, Target,
+    StructurallyValid, Substrate, Target, Verdict,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -389,7 +389,7 @@ where
     fn form_next(
         &mut self,
         next: NextBlock,
-    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
+    ) -> Result<(BlockHeight, StructurallyValid, Formed), StepOutcome> {
         self.form_next_carrying(next, None)
     }
 
@@ -403,14 +403,14 @@ where
             Vec<shekyl_archival_retention::BundleRef>,
             Vec<shekyl_archival_retention::BundleBody>,
         )>,
-    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
+    ) -> Result<(BlockHeight, StructurallyValid, Formed), StepOutcome> {
         let NextBlock {
             height,
             mut template,
             seed,
             target,
         } = next;
-        let (references, bodies) = match section {
+        let (bundle_references, bundle_bodies) = match section {
             None => (None, Vec::new()),
             Some((refs, bodies)) => {
                 let root = shekyl_archival_retention::section_root(&refs)
@@ -431,8 +431,8 @@ where
         // with wave B).
         let rule_set = self.rules.in_force(height);
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone())
-            .with_bundle_references(references)
-            .with_bundle_bodies(bodies);
+            .with_bundle_references(bundle_references.clone())
+            .with_bundle_bodies(bundle_bodies.clone());
         // The third claim, off the same ledger (its window covers CEN-I11's).
         let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
             Ok(references) => references,
@@ -462,6 +462,8 @@ where
                 template,
                 seed,
                 target,
+                bundle_references,
+                bundle_bodies,
             },
         ))
     }
@@ -477,6 +479,8 @@ where
             template,
             seed,
             target,
+            bundle_references,
+            bundle_bodies,
         } = kept;
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
@@ -511,6 +515,8 @@ where
             archival,
             seed,
             target,
+            bundle_references,
+            bundle_bodies,
         })
     }
 
@@ -564,10 +570,28 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
+        let formed = self
+            .form_mined(mined)
+            .expect("a block another driver connected forms");
+        self.connector
+            .ask(OfferAlt(formed))
+            .await
+            .map_err(handler_error)
+    }
+
+    /// `mined` — a block this or another driver connected — formed here as
+    /// [`Self::offer`] forms it: its whole candidate, section included,
+    /// under the seed and target its producer claimed, with no reference
+    /// claims.
+    ///
+    /// # Errors
+    ///
+    /// The block's refusal.
+    pub fn form_mined(&self, mined: &Mined) -> Verdict<StructurallyValid> {
         // This driver's own substrate, so the form can look the cache up.
         // An untrusted alternative on the live service never pins.
         self.substrate.pin_seed(&mined.seed);
-        let formed = form(
+        form(
             mined.candidate(),
             &FormClaims {
                 rule_set: &self.rules.in_force(mined.height),
@@ -580,11 +604,6 @@ where
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
-        .expect("a block another driver connected forms");
-        self.connector
-            .ask(OfferAlt(formed))
-            .await
-            .map_err(handler_error)
     }
 
     /// Build the next block on `facts` without connecting it.
@@ -936,6 +955,8 @@ struct Formed {
     template: Template,
     seed: BlockHash,
     target: Target,
+    bundle_references: Option<shekyl_types::archival::BundleReferences>,
+    bundle_bodies: Vec<shekyl_archival_retention::BundleBody>,
 }
 
 /// The scenario's template for `facts`, listing `listed`, at clock `now`:

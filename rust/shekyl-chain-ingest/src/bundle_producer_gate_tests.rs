@@ -301,7 +301,10 @@ fn queued(scenario: &Scenario<FreeHash>) -> Vec<shekyl_chain_store::store::Queue
 }
 
 /// One more block, then the producer's turn. With bundles queued, the
-/// block takes them through 4a's door; the verdicts come back.
+/// block takes them through 4a's door; the verdicts come back. A block
+/// that admitted a bundle forms again from its own record, as a second
+/// driver forms it ([`Scenario::form_mined`]): the record keeps the
+/// section the header commits.
 async fn step(
     scenario: &mut Scenario<FreeHash>,
     chain: &mut Vec<Mined>,
@@ -314,6 +317,14 @@ async fn step(
             .mine_admitting(Vec::new())
             .await
             .unwrap_or_else(|outcome| panic!("the block lands: {outcome}"));
+        if !admitted.is_empty() {
+            if let Err(refused) = scenario.form_mined(&mined) {
+                panic!(
+                    "block {} admitted a bundle and its record does not form: {refused}",
+                    mined.height
+                );
+            }
+        }
         chain.push(mined);
         admitted
     } else {

@@ -12,10 +12,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use shekyl_archival_retention::BundleBody;
 use shekyl_block_template::{Template, TemplateError};
 use shekyl_chain_rules::{
     ArchivalDelta, Candidate, CenRow, InvalidBlock, PaidEmission, Substrate, Target, Weights,
 };
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::Transaction;
 
@@ -187,17 +189,27 @@ pub struct Mined {
     pub seed: BlockHash,
     /// The target the producer claimed (CEN-D4), likewise.
     pub target: Target,
+    /// The bundle references the block carried beside it
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section its header's
+    /// `section_root` commits, `None` when it admitted no bundle.
+    pub bundle_references: Option<BundleReferences>,
+    /// The body each reference names, in section order; empty with no
+    /// references.
+    pub bundle_bodies: Vec<BundleBody>,
 }
 
 impl Mined {
-    /// The block as a candidate: the template's block and listed bodies,
-    /// no references (the driver's blocks admit no bundle).
+    /// The block as a candidate: the template's block, its listed bodies,
+    /// and the section it carried. A block's header commits its section, so
+    /// a candidate without it forms only when the section was empty.
     #[must_use]
     pub fn candidate(&self) -> Candidate {
         Candidate::new(
             self.template.block.clone(),
             self.template.transactions.clone(),
         )
+        .with_bundle_references(self.bundle_references.clone())
+        .with_bundle_bodies(self.bundle_bodies.clone())
     }
 }
 
