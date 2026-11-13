@@ -48,13 +48,13 @@ pub(crate) const CACHE_DIR_NAME: &str = "tor-directory-cache";
 pub const TOR_WRITE_HEADROOM: u64 = 32 * 1024 * 1024;
 
 /// Bytes a spawn needs free under `parent`, the daemon's data directory
-/// (`TOR_SUPERVISOR.md` §5, "Data directory unusable"). A fresh
+/// (`TOR_SUPERVISOR.md` §5, "Data directory unusable"). A new
 /// `DataDirectory` is seeded from the public directory cache, so it also
-/// needs the bytes [`DirectoryCache::copy_bytes`] would write; a kept one
-/// (a respawn) already holds that copy.
+/// needs the bytes [`DirectoryCache::copy_bytes`] would write; a reused one
+/// (a respawn into a kept directory) already holds that copy.
 #[must_use]
-pub fn space_needed(parent: &Path, fresh: bool) -> u64 {
-    let cache = if fresh {
+pub fn space_needed(parent: &Path, new_directory: bool) -> u64 {
+    let cache = if new_directory {
         DirectoryCache::at(parent.join(CACHE_DIR_NAME)).copy_bytes()
     } else {
         0
@@ -408,9 +408,9 @@ mod tests {
         assert!(dir.path().is_dir());
     }
 
-    /// A fresh directory needs the cache's size on top of Tor's own write
-    /// headroom; a kept one needs only the headroom. A missing cache adds
-    /// nothing. Dropping the `fresh` branch fails the first assertion.
+    /// A new directory needs the cache's size on top of Tor's own write
+    /// headroom; a reused one needs only the headroom. A missing cache adds
+    /// nothing. Dropping the `new_directory` branch fails the first assertion.
     #[test]
     fn space_needed_counts_the_cache_only_for_a_fresh_directory() {
         let parent = tempfile::tempdir().unwrap();
