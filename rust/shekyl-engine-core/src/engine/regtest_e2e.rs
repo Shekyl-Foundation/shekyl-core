@@ -6134,7 +6134,7 @@ async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
 
     let out = daemon.console(&format!("tx show {txid}"));
     assert!(
-        out.contains("Found in blockchain at height 0"),
+        out.contains("Found in blockchain at block 0"),
         "tx show must locate the genesis coinbase; got:\n{out}"
     );
 

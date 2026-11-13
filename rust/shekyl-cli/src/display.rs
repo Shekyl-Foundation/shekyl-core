@@ -194,3 +194,21 @@ mod tests {
         ));
     }
 }
+
+/// The block a count of blocks reaches: a count the wallet contract carries
+/// (a wallet's synced height, the daemon's chain height) shown as the newest
+/// block it includes, the block's own number (`HEIGHT_SEMANTICS.md` §1).
+/// `None` for 0: no block yet.
+#[must_use]
+pub fn block_of_count(count: u64) -> Option<u64> {
+    shekyl_types::ChainCount::from_raw(count)
+        .tip()
+        .map(shekyl_types::BlockHeight::to_raw)
+}
+
+/// "N", or `none` for a count of 0, for a line that names the block a
+/// count reaches.
+#[must_use]
+pub fn block_of_count_text(count: u64, none: &str) -> String {
+    block_of_count(count).map_or_else(|| none.to_owned(), |block| block.to_string())
+}

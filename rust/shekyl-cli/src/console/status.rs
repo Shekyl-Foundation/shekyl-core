@@ -187,7 +187,7 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
         .checked_div(u128::from(target))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
     let mut line = format!(
-        "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
+        "Block count: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
          {connections}",
         height,
         sync_percentage(height, net_height),
