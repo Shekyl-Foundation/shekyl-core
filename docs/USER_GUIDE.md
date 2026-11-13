@@ -104,6 +104,24 @@ blockchain from peers. The default locations are:
 - **macOS:** `~/.shekyl/`
 - **Windows:** `%LOCALAPPDATA%\Shekyl\` (the per-account root; a service install uses `%ProgramData%\shekyl\`)
 
+**The owner's socket (Linux and macOS).** A daemon you start yourself
+serves your own account on a private socket in your session directory:
+`/run/user/<uid>` on Linux, the per-user temporary directory on macOS. The
+start line names the network, the instance and the socket's path. The
+daemon's life is the socket's: when your session ends and the directory
+goes, the daemon stops cleanly, so a daemon left running in `tmux` or
+`screen` stops at logout. To keep one running past logout, run it as a
+service (`--service`, which the shipped unit passes), or keep your
+session with `loginctl enable-linger`. Where there is no session
+directory at all (a CI runner, a container, `sudo -u`, cron) the daemon
+refuses to start and says so; pass `--service`, or name a directory you
+own with mode 0700 in `--rpc-socket-dir`.
+
+A second daemon of the same network, started by the same account, is
+refused while the first is running. A deliberate second node on one
+machine is a named instance with its own data:
+`--instance bench --data-dir <its own directory>`.
+
 To check a configuration without starting, add `--config-verify` to the
 command you would start with, run as the account that will run the daemon:
 
@@ -151,6 +169,11 @@ it: keep the daemon's group a local group.
 # as on the command line without the leading dashes. The network is
 # always given on the command line, because it chooses the file.
 # Every line below is commented out: uncomment one to set it.
+
+# This node's name, for a second node of the same network on this machine:
+# 1 to 16 lower-case letters, digits or hyphens. Unset is the default
+# instance. A named instance needs its own data-dir.
+# instance = "<name>"
 
 # The data directory. An explicit path is used as given.
 # Default: the daemon's root and the network's subdirectory.
@@ -256,6 +279,11 @@ it: keep the daemon's group a local group.
 # The mining thread count, or `auto`.
 # mine-threads = "auto"
 
+# The directory for the owner's socket, where the account has no session
+# directory (a test host). It must be local, owned by this account, with
+# mode 0700. Unset uses the session directory.
+# rpc-socket-dir = "/path"
+
 # The plaintext full-access listeners, loopback only; `none` is no admin
 # listener.
 # Default: 127.0.0.1 and the network's rpc port.
@@ -287,6 +315,8 @@ whether `option_set` changes it while the daemon runs.
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
 | `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
+| `service` | switch | — | command line | no | Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14). |
+| `instance` | name (an instance name) | — | both | no | This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir. |
 | `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
 | `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
 | `log-file` | absolute path | the daemon's root, logs/shekyld-<network>.log | both | no | The log file. |
@@ -319,6 +349,7 @@ whether `option_set` changes it while the daemon runs.
 | `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
 | `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-socket-dir` | absolute path | — | both | no | The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
@@ -350,7 +381,9 @@ future channel. It is not a property of today's loopback RPC, and
 manager for background operation (systemd on Linux, launchd on macOS,
 Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
-`contrib/packaging/linux/shekyld.service`. The daemon has no console and
+`contrib/packaging/linux/shekyld.service`; it passes `--service`, so the
+daemon runs as the machine's service instance, serves no owner's socket,
+and keeps its loopback RPC listeners. The daemon has no console and
 reads nothing from stdin; its commands are `shekyl-cli` words (see
 [Commands](#commands)).
 

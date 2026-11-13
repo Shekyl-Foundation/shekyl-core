@@ -7,6 +7,7 @@
   "offline": false,
   "degraded": false,
   "peered": true,
+  "hiding": true,
   "writer": {
     "live": null
   },
@@ -47,6 +48,31 @@
   "alt_count": 2,
   "rpc_connections": 1,
   "txpool_retired": false,
+  "posture": {
+    "tor": "managed",
+    "clearnet": "off"
+  },
+  "origination": "address-hiding",
+  "sync_connector": [
+    "tor"
+  ],
+  "tor_quiet": null,
+  "tor": {
+    "state": "usable",
+    "cause": null,
+    "age": 5400,
+    "respawn_count": 0,
+    "progress": null,
+    "flagged": false,
+    "fix": [],
+    "onion": {
+      "state": "reachable",
+      "age": 120,
+      "cause": null
+    },
+    "bootstrap": null,
+    "carriage": "carries"
+  },
   "connector": {
     "clearnet": {
       "inbound_count": 2,

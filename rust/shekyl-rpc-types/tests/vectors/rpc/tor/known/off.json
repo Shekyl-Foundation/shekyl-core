@@ -1,0 +1,12 @@
+{
+  "posture": {
+    "tor": "off",
+    "clearnet": "on"
+  },
+  "origination": "clearnet-only",
+  "sync_connector": [
+    "clearnet"
+  ],
+  "tor_quiet": null,
+  "tor": null
+}

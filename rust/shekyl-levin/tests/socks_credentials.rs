@@ -209,6 +209,11 @@ impl Daemon {
                 "warn",
                 "--config-file",
                 config.to_str().expect("utf8 config path"),
+                // The owner's socket in the owner-only data directory: a
+                // harness names it, so the test needs no session directory
+                // and never meets another daemon's (`RPC_CHANNEL.md` §7.1).
+                "--rpc-socket-dir",
+                data_dir.to_str().expect("utf8 data dir"),
             ])
             .args(args)
             .stdout(Stdio::from(log.try_clone().expect("clone log")))

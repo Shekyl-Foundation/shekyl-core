@@ -761,7 +761,7 @@ def artifact_refusals(a):
 # directory, a port) and say nothing about the engine. The grammar takes a
 # value as the next word or after `=` (INPUT_GRAMMAR.md §5); both are masked.
 PER_RUN_FLAGS = ("--data-dir", "--log-file", "--clearnet-listen",
-                 "--rpc-admin-listen", "--p2p-closed-peer")
+                 "--rpc-admin-listen", "--p2p-closed-peer", "--rpc-socket-dir")
 
 
 def _masked_argv(a):

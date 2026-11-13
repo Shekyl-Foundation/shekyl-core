@@ -12,6 +12,7 @@ use crate::method::Policy;
 use super::*;
 use crate::kinds::{Count, Done, Endpoint, Height, NoParams, Withheld};
 use crate::nullable::Nullable;
+use crate::wire_object;
 use serde_json::json;
 use shekyl_rpc_grants::Grant;
 
@@ -262,6 +263,68 @@ fn no_parameters_and_bare_success_are_empty_objects() {
     assert_eq!(NoParams::from_params(None), Ok(NoParams));
     assert_eq!(NoParams::from_params(Some(&json!({}))), Ok(NoParams));
     assert!(NoParams::from_params(Some(&json!(null))).is_err());
+}
+
+/// A header or a transaction missing a field its request selected is that
+/// field missing, including when the reply wraps the item in a slot or an
+/// archived state (RW-Q4). The state is a different object, so it does not
+/// excuse the item.
+#[test]
+fn a_selected_field_inside_a_union_is_still_required() {
+    use crate::schema::conforms_presence;
+    use crate::wire::block::BlockHeader;
+    use crate::wire::shared::{OrArchived, Slot};
+    use crate::wire::tx::TxEntry;
+
+    let header = json!({
+        "version_major": 3, "version_minor": 3, "time": 1_700_000_000,
+        "parent": "11".repeat(32), "nonce": 7, "orphan": false, "height": 9,
+        "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
+        "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
+        "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
+        "curve_root": "44".repeat(32), "section_root": "55".repeat(32),
+    });
+    let slot = Slot::<BlockHeader>::shape();
+    let missing = conforms_presence(&header, &slot, &["pow"]).expect_err("pow was asked");
+    assert!(
+        missing.contains("`pow`") && missing.contains("missing"),
+        "{missing}"
+    );
+    let in_a_list = conforms_presence(&json!([header]), &Shape::List(Box::new(slot)), &["pow"])
+        .expect_err("the list carries the same header");
+    assert!(
+        in_a_list.contains("`pow`") && in_a_list.contains("missing"),
+        "{in_a_list}"
+    );
+    conforms_presence(
+        &json!({"missing": null}),
+        &Slot::<BlockHeader>::shape(),
+        &["pow"],
+    )
+    .expect("a missing slot is not a header");
+
+    let entry = json!({
+        "id": "ab".repeat(32),
+        "body": "",
+        "pooled": true,
+        "mined_height": null,
+        "confirmations": null,
+        "mined_time": null,
+        "output_index": [],
+        "public": null,
+    });
+    let tx = OrArchived::<TxEntry>::shape();
+    let pruned = conforms_presence(&entry, &tx, &["prune"]).expect_err("prune was asked");
+    assert!(
+        pruned.contains("`prunable_hash`") && pruned.contains("missing"),
+        "{pruned}"
+    );
+    conforms_presence(
+        &json!({"archived": {"id": "ab".repeat(32), "shard": 1}}),
+        &tx,
+        &["prune"],
+    )
+    .expect("an archived body is not an entry");
 }
 
 wire_object! {

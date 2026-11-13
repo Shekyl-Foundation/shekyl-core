@@ -33,6 +33,9 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
+#[path = "support/owner_socket_dir.rs"]
+mod owner_socket_dir;
+
 /// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
@@ -43,6 +46,8 @@ fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
 struct Daemon {
     child: Child,
     data_dir: PathBuf,
+    /// Not under `data_dir`: that path is too long for `sun_path` on macOS.
+    socket_dir: PathBuf,
     p2p_port: u16,
     rpc_port: u16,
 }
@@ -62,6 +67,7 @@ impl Daemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
+        let socket_dir = owner_socket_dir::owner_socket_dir(p2p_port);
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
@@ -81,6 +87,8 @@ impl Daemon {
                 &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
                 "warn",
+                "--rpc-socket-dir",
+                socket_dir.to_str().expect("utf8 socket dir"),
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -91,6 +99,7 @@ impl Daemon {
         let mut daemon = Self {
             child,
             data_dir,
+            socket_dir,
             p2p_port,
             rpc_port,
         };
@@ -135,6 +144,7 @@ impl Drop for Daemon {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
+        drop(std::fs::remove_dir_all(&self.socket_dir));
     }
 }
 

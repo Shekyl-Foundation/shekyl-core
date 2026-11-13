@@ -50,8 +50,8 @@ use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_tor_control_client::control::{
     BootstrapState, ControlReply, EventSink, Fed, EVENT_QUEUE_EVENTS,
 };
-use shekyl_tor_control_client::supervisor::Status;
 use shekyl_tor_control_daemon::TorDeath;
+use shekyl_tor_status::TorStatus;
 use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 /// One thing that happened, in the order it was posted.
@@ -77,9 +77,12 @@ pub(super) enum Arrival {
         number: u64,
         answer: Box<super::requests::Answer>,
     },
-    /// A caller asks for the status. The loop answers in the pass that
-    /// takes this.
-    Status(oneshot::Sender<Status>),
+    /// A caller asks for the status, in the wire's shape at the moment it
+    /// is taken. The loop answers in the pass that takes this.
+    Status(oneshot::Sender<TorStatus>),
+    /// A caller asks Health's one boolean, `hiding`. The loop answers in
+    /// the pass that takes this, and builds no status for it.
+    Hiding(oneshot::Sender<bool>),
     /// The daemon is stopping.
     Stop,
 }
@@ -163,10 +166,45 @@ impl Owner {
     }
 
     /// Ask the loop for its status. `None` once the queue has closed.
-    pub(super) fn ask_status(&self) -> Option<oneshot::Receiver<Status>> {
+    pub(super) fn ask_status(&self) -> Option<oneshot::Receiver<TorStatus>> {
+        self.asker()?.ask_status()
+    }
+
+    /// An end that asks and never keeps the queue open: the RPC's. `None`
+    /// once the queue has closed.
+    pub(super) fn asker(&self) -> Option<Asker> {
+        Some(Asker {
+            queue: self.queue.as_ref()?.downgrade(),
+        })
+    }
+}
+
+/// An asking end: it posts a status or `hiding` ask while the inbox lives,
+/// and is refused after. It does not keep the queue open, so holding it
+/// never holds off the stop.
+#[derive(Clone)]
+pub(super) struct Asker {
+    queue: mpsc::WeakUnboundedSender<Arrival>,
+}
+
+impl Asker {
+    fn ask<T>(
+        &self,
+        arrival: impl FnOnce(oneshot::Sender<T>) -> Arrival,
+    ) -> Option<oneshot::Receiver<T>> {
         let (reply, answer) = oneshot::channel();
-        self.queue.as_ref()?.send(Arrival::Status(reply)).ok()?;
+        self.queue.upgrade()?.send(arrival(reply)).ok()?;
         Some(answer)
+    }
+
+    /// Ask the status. `None` once the inbox is gone.
+    pub(super) fn ask_status(&self) -> Option<oneshot::Receiver<TorStatus>> {
+        self.ask(Arrival::Status)
+    }
+
+    /// Ask `hiding`. `None` once the inbox is gone.
+    pub(super) fn ask_hiding(&self) -> Option<oneshot::Receiver<bool>> {
+        self.ask(Arrival::Hiding)
     }
 }
 

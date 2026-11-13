@@ -32,7 +32,7 @@ use std::sync::Arc;
 use shekyl_chain_store::store::{ArchivalGood, AtIndex};
 use shekyl_daemon_rpc::reads::{block_list, tx_list};
 use shekyl_engine_core::__test_helpers::{fetch_proof_tx_for_test, verify_exhaustive_for_test};
-use shekyl_rpc_types::kinds::{Height, Integer, Size};
+use shekyl_rpc_types::kinds::{Asked, Height, Integer, Size};
 use shekyl_rpc_types::wire::block::{BlockListQuery, BlockTx};
 use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived, Slot, SlotState};
 use shekyl_rpc_types::wire::tx::{TxList, TxListQuery};
@@ -307,12 +307,21 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
         };
         let skeleton = shekyl_wire::SkeletonTx {
             unprunable: slot.body.0.clone(),
-            prunable_hash: shekyl_types::PrunableHash::from_bytes(slot.prunable_hash.to_bytes()),
+            prunable_hash: shekyl_types::PrunableHash::from_bytes(
+                slot.prunable_hash
+                    .present()
+                    .expect("asked with prune")
+                    .to_bytes(),
+            ),
             pqc_auth_hash: slot
                 .pqc_auth_hash
+                .present()
+                .expect("asked with prune")
                 .0
                 .map(|h| shekyl_types::PqcAuthHash::from_bytes(h.to_bytes())),
-            archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_size.0),
+            archival_len: shekyl_types::ArchivalLength::from_raw(
+                slot.archival_size.present().expect("asked with prune").0,
+            ),
         };
         assert_eq!(skeleton.txid().expect("binds"), *id);
     }
@@ -366,19 +375,19 @@ async fn the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded() {
     );
     assert_eq!(
         after_entry.prunable_hash,
-        HashHex::from_bytes(parts.prunable_hash.to_bytes())
+        Asked::Present(HashHex::from_bytes(parts.prunable_hash.to_bytes()))
     );
     assert_eq!(
         after_entry.pqc_auth_hash,
-        Nullable(
+        Asked::Present(Nullable(
             parts
                 .pqc_auth_hash
                 .map(|h| HashHex::from_bytes(h.to_bytes()))
-        )
+        ))
     );
     assert_eq!(
         after_entry.archival_size,
-        Size(spend.archival_len().to_raw())
+        Asked::Present(Size(spend.archival_len().to_raw()))
     );
     drop(facts);
     drop(store);
@@ -416,24 +425,34 @@ fn lies(target: TxHash) -> Vec<(&'static str, ReplyEdit)> {
             "a changed prunable hash",
             Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
                 on_target(block, &|e| {
-                    let mut h = e.prunable_hash.to_bytes();
+                    let mut h = e
+                        .prunable_hash
+                        .present()
+                        .expect("asked with prune")
+                        .to_bytes();
                     h[0] ^= 0x01;
-                    e.prunable_hash = HashHex::from_bytes(h);
+                    e.prunable_hash = Asked::Present(HashHex::from_bytes(h));
                 });
             }) as ReplyEdit,
         ),
         (
             "an archival length one byte long",
             Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
-                on_target(block, &|e| e.archival_size.0 += 1);
+                on_target(block, &|e| {
+                    let size = e.archival_size.present().expect("asked with prune");
+                    e.archival_size = Asked::Present(Size(size.0 + 1));
+                });
             }) as ReplyEdit,
         ),
         (
             "the third operand dropped",
             Arc::new(move |block: &mut shekyl_rpc_types::wire::block::Block| {
                 on_target(block, &|e| {
-                    assert!(e.pqc_auth_hash.0.is_some(), "a spend's prefix carries it");
-                    e.pqc_auth_hash = Nullable(None);
+                    assert!(
+                        matches!(e.pqc_auth_hash, Asked::Present(Nullable(Some(_)))),
+                        "a spend's prefix carries it"
+                    );
+                    e.pqc_auth_hash = Asked::Present(Nullable(None));
                 });
             }) as ReplyEdit,
         ),

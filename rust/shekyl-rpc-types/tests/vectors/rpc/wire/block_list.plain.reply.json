@@ -16,7 +16,6 @@
       "weight": 1984,
       "weight_longterm": 1984,
       "tx_count": 1,
-      "pow": "7777777777777777777777777777777777777777777777777777777777777777",
       "coinbase": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "curve_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "section_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -25,10 +24,7 @@
     "tx": [
       {
         "id": "1111111111111111111111111111111111111111111111111111111111111111",
-        "body": "AwBkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIE=",
-        "prunable_hash": "2222222222222222222222222222222222222222222222222222222222222222",
-        "pqc_auth_hash": "3333333333333333333333333333333333333333333333333333333333333333",
-        "archival_size": 3120
+        "body": "AwBkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8="
       }
     ],
     "output_index": 5821,

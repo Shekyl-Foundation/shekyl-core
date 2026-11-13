@@ -488,7 +488,7 @@ impl DaemonStatusDocument {
     /// struct does not choose holds a fixed, unremarkable value.
     pub(crate) fn to_value(&self) -> Value {
         let count = self.chain_count.to_raw();
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "height": count.saturating_sub(1),
             "hash": hex::encode(self.top_hash.as_bytes()),
             "target_height": self.target_height.map(|target| target.saturating_sub(1)),
@@ -522,7 +522,16 @@ impl DaemonStatusDocument {
             "alt_count": 0,
             "rpc_connections": 1,
             "txpool_retired": false,
-        })
+        });
+        // Health's `hiding` and Status's Tor fields (4.2): a node with Tor
+        // off. Set after the literal, which is at `json!`'s recursion limit.
+        value["hiding"] = serde_json::json!(false);
+        value["posture"] = serde_json::json!({"tor": "off", "clearnet": "on"});
+        value["origination"] = serde_json::json!("clearnet-only");
+        value["sync_connector"] = serde_json::json!(["clearnet"]);
+        value["tor_quiet"] = Value::Null;
+        value["tor"] = Value::Null;
+        value
     }
 
     /// The reply as the shared type.
@@ -545,6 +554,11 @@ impl DaemonStatusDocument {
             "alt_count",
             "rpc_connections",
             "txpool_retired",
+            "posture",
+            "origination",
+            "sync_connector",
+            "tor_quiet",
+            "tor",
         ] {
             members.remove(key);
         }
