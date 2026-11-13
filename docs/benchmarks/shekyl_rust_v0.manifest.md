@@ -1481,3 +1481,8 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   code on the new history with `dev`'s on the old, so it does not say
   which of the two moved the reads. One-time, absorbed by the rolling
   baseline on the next `dev` rotation.
+- 2026-11-13: the design-load fixture is mined again onto corpus format 4.
+  D2 wrote `block_path_spend_2in_2out_design.corpus` as format 3, which
+  the switch's reader refuses. The listing is still the 28 2-in/2-out
+  spends one block admits. §17's template count stays the format-3
+  capture; the row's next capture counts this corpus.
