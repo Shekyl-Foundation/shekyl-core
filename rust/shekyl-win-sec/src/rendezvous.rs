@@ -323,18 +323,20 @@ impl SecurityRead {
             return Err(RendezvousError::Read(last_error()));
         }
         for index in 0..info.AceCount {
-            let mut ace: *mut c_void = std::ptr::null_mut();
-            // SAFETY: `index` is below the count the ACL reported; a null
-            // result is refused before any read.
-            if unsafe { GetAce(self.sacl, index, &raw mut ace) } == 0 {
+            let mut out = std::mem::MaybeUninit::<*mut c_void>::uninit();
+            // SAFETY: `index` is below the count the ACL reported; `out` is
+            // read only after the call reports success.
+            if unsafe { GetAce(self.sacl, index, out.as_mut_ptr()) } == 0 {
                 return Err(RendezvousError::Read(last_error()));
             }
-            if ace.is_null() {
+            // SAFETY: `GetAce` succeeded, so it wrote `out`.
+            let written = unsafe { out.assume_init() };
+            let Some(ace) = std::ptr::NonNull::new(written.cast::<u8>()) else {
                 return Err(RendezvousError::Read(ERROR_INVALID_ACL));
-            }
-            // SAFETY: `GetAce` returned a live ACE inside the SACL, and every
-            // ACE begins with an `ACE_HEADER`.
-            if let Some(policy) = unsafe { label_mask(ace.cast_const().cast::<u8>()) }? {
+            };
+            // SAFETY: `GetAce` returned a live ACE inside the SACL, readable
+            // for its `AceSize` bytes, beginning with an `ACE_HEADER`.
+            if let Some(policy) = unsafe { label_mask(ace) }? {
                 return Ok(Some(policy));
             }
         }
@@ -350,13 +352,14 @@ impl SecurityRead {
 ///
 /// # Safety
 ///
-/// `ace` points at an ACE header readable for its `AceSize` bytes.
+/// `ace` is readable for its `AceSize` bytes.
 ///
 /// # Errors
 ///
 /// [`RendezvousError::Read`] with `ERROR_INVALID_ACL` for a label ACE shorter
 /// than its mask.
-unsafe fn label_mask(ace: *const u8) -> Result<Option<u32>, RendezvousError> {
+unsafe fn label_mask(ace: std::ptr::NonNull<u8>) -> Result<Option<u32>, RendezvousError> {
+    let ace = ace.as_ptr().cast_const();
     // SAFETY: the caller guarantees a readable header.
     let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
     if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
@@ -388,16 +391,22 @@ mod tests {
         buffer[2..4].copy_from_slice(&u16::try_from(mask_at + 4).unwrap().to_le_bytes());
         buffer[mask_at..mask_at + 4].copy_from_slice(&3u32.to_le_bytes());
         // SAFETY: the buffer is 32 readable bytes, more than any size here.
-        assert_eq!(unsafe { label_mask(buffer.as_ptr()) }.unwrap(), Some(3));
+        assert_eq!(
+            unsafe { label_mask(std::ptr::NonNull::from(&buffer).cast()) }.unwrap(),
+            Some(3)
+        );
         buffer[2..4].copy_from_slice(&u16::try_from(mask_at).unwrap().to_le_bytes());
         // SAFETY: as above.
         assert!(matches!(
-            unsafe { label_mask(buffer.as_ptr()) },
+            unsafe { label_mask(std::ptr::NonNull::from(&buffer).cast()) },
             Err(RendezvousError::Read(ERROR_INVALID_ACL))
         ));
         buffer[0] = 0;
         // SAFETY: as above.
-        assert_eq!(unsafe { label_mask(buffer.as_ptr()) }.unwrap(), None);
+        assert_eq!(
+            unsafe { label_mask(std::ptr::NonNull::from(&buffer).cast()) }.unwrap(),
+            None
+        );
     }
 
     /// The three objects come out of their creating calls owner-only, with
