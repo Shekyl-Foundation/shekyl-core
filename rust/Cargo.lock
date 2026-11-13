@@ -5629,6 +5629,7 @@ dependencies = [
 name = "shekyl-win-sec"
 version = "3.1.0"
 dependencies = [
+ "tempfile",
  "tokio",
  "windows-sys 0.61.2",
 ]
