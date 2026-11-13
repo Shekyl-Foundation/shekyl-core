@@ -237,6 +237,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-15** | One fee loop over a pricing function: the ordinary fee is the lattice-rounded fixed point of weight and rate, paid as the wallet pays it (`shekyl_economics::quantized_fee`), and §4's unrounded-fee row is deleted. The loop is judged against seven properties (the brief's §A.2a, ruled 2026-10-24; [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12): never under-pays; least (the least fixed point, from a seed at or below it); bounded over-payment (`f − rate × weight(f) < MASK` at the final weight); exact; fails closed (`None`, never a saturated fee); terminates by agreement (two successive passes equal, never the pass limit); one lattice on both sides. Its own step, after ESR-9 and before ESR-10 runs (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone. Its PR records the lattice's size as an open fee-ladder row with its current ground, and prints the lattice step as basis points of the ordinary fee (ruling 7, 2026-10-24); the six decimals stay until ruled. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`; a loop output that fails one of the seven properties on any registered cell. |
 | **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9; the completion's placement ruled 2026-10-29, §5.26). Three generated structs, one source file each, the file boundary the digest boundary: `EconomicParams` is chain identity in the params digest, every economic consensus constant a field, promoted so each digest and the C4 fixture move once; `ArchivalParams` is the archival consensus set, in the consensus digest; `RelayPolicy` (G, the admission slack, the fee decimals, `w_ref`, the rung ratios, the emission-claim hold) stays outside both, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. A sim run is that baseline plus named overrides, each through its struct's validator. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
 | **ESR-17** | The pool the Rust daemon holds (`shekyl-mempool`, CEN-M10, the rulings of 2026-10-17), before ESR-10 (ruled 2026-11-06). The waiting transactions are cohorts, each keeping the fee and weight it was built with. A cohort leaves when its reference leaves CEN-I11's window: the wallet's reference is `select_reference_height` at the tip it built on, and the window is `admissible_references` at the connecting height, both called. The pool holds at most `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit. Admission evicts entries paying strictly less per unit of weight, cheapest first, and refuses a transaction it cannot make room for. The template offers by fee per unit of weight, then the hour received. The cap's arithmetic and both orders are called from `shekyl-mempool`'s store-free policy, not restated. The C++ livetime defines, the sim's copy and §4's two pool rows are deleted. Predictions in §5.27. | A cohort that re-prices, or one held past the window; a pool over its cap; a template order that differs from `AdmissionRank::template` on a pool where they can be compared; carried per block moving in any scenario. |
+| **ESR-18** | The narrations re-pinned under the surge re-sign (S = 3, #1323), which merged without regenerating them, and the record of what it moved written after the fact (§5.30). The gap closes with it: `rust-audit-test.yml`'s `economics-sim-narrations` job runs the narration pins on every pull request whose Rust test scope reaches the sim (`scripts/ci/change_scope.py`, `sim_narrations`), so a change to a value the sim reads fails at review, not on the nightly. | The pins pass at #1323's parent and fail at its merge; nothing between the merge and the re-pin moves them; `change_scope.py` answers `sim_narrations=run` on #1323's diff. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -3236,13 +3237,14 @@ decides how a drop is labelled, not what the chain carries.
 declared order that can move the pool. No other line of either `--esr10`
 fixture moved, and the `--stage2` fixtures did not move.
 
-**2026-11-09: `baseline_steady_state.json` regenerated for its
-`params_digest` only** (rule 50). The consensus surge re-sign moved the
-parameter-set digest to
-`blake2b:50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e`.
-No recorded row moved. The sim's behavior did not change; the fixture's
-header names the parameter set it was folded under, and that set's surge
-factor is the re-signed 3.
+**2026-11-09: the surge re-sign (S = 3, #1323).** `baseline_steady_state.json`
+was regenerated for its `params_digest` (rule 50): the parameter-set digest
+is `blake2b:50376bfff9b581026383deb54bc4848541658efc3eb7b12bf22f6f8544dfbf6e`,
+and the fixture's header names the parameter set it was folded under, whose
+surge factor is 3. None of that fixture's rows moved: the baseline's demand
+never reaches the surge cap. The narrations did move, in every scenario whose
+bursts reach the cap and on the inherited arm of `--esr10` only, and were
+re-pinned by ESR-18; §5.30 records what moved.
 
 **Cost.** The full narration, 144 folds of 60 years, takes 379 s wall and
 85 CPU-minutes on 16 threads (load 5 to 16). The nightly lane already runs
@@ -3291,6 +3293,117 @@ the re-derived pair, the cells, the folds and the readings taken of them
 once, the narration and the reach probe). The committed narrations move
 only under a cited decision in this document (`committed_fixture.rs`,
 rule 50).
+
+### 5.30 ESR-18, what the surge re-sign moved: a record after the fact (2026-11-13)
+
+**This is a record, not a prediction.** #1323 (merged 2026-11-09) moved the
+short-term surge factor `block_weight_short_term_surge_factor` from 4 to 3:
+C2-R2 Q3 re-signed by Rick on 2026-11-08, an interim value (an Assumption,
+re-derived at BA-T10). It regenerated `baseline_steady_state.json` for its
+digest and none of the narrations. The narration pins ran only in the
+nightly lane, so #1323's CI was green and `economics-sim-ignored` was red on
+`dev` from 2026-11-10 (issue #1110). No prediction was written before the
+change landed, so none is graded here.
+
+**Attribution.** At #1323's parent (`5d0ed6384`) the three narration pins
+pass. At its merge (`4df90a482`) they fail, and at `dev` `5ea4bff87` they fail
+on the same lines: `stage2_narration.txt` first differs at line 19, the flat
+control at line 22, `esr10_narration_nightly.txt` at line 208. The fixtures
+regenerated at `5ea4bff87` pass at the merge, so nothing after #1323 moved
+the narrations. Within the merge, the sim reads #1323's change only through
+S: the constant in `config/consensus_constants.json`, its field in
+`shekyl-economics`' `params.rs` and the median clamp in `block_weight.rs`.
+
+**The mechanism.** The effective median is the short-term median clamped
+between the long-term median and S times it (CEN-G6b). A burst raises the
+short-term median within 100 blocks; S caps how far that lifts the room a
+block has above the long-term median, from four times it to three. Where
+demand never presses past three times the long-term median nothing moves:
+the baseline, the stuffing attack, stake concentration and mass unstaking
+print the same lines, and so does every cell on ESR-10's re-derived arm,
+whose zone gives the long-term median more room. Where a burst does press
+past it, the burst year carries less, the pool drops more, fewer fees are
+burned, and fewer shards close.
+
+**What moved on `--stage2`'s production arm** (54 lines; old → new):
+
+- **Sustained growth.** At its 20-year horizon `final_n` 2,070,219 → 1,890,857
+  (−8.7 %), the outputs 1,000,495,768 → 915,268,102. Its year-20 burst carries
+  1,214.9 of 1,597 a block (was 1,326.7); the 382.4 it drops (was 270.6) splits
+  269.8 expired, 3.5 evicted, 109.1 refused (was 233.4, 0, 37.2). Year 20's
+  mean ordinary fee 0.0317 → 0.0244 SKL. Folded to 60 years, `n` 15,629,783,769
+  → 15,629,603,721 and the flat-25 ratio at year 20 5.26 → 4.89; the GF-7 band
+  row 25.91 / 10.49 / 5.26 → 24.07 / 9.74 / 4.89 (flat-25 at 0, 10, 25 %/yr) and
+  59.95 / 24.27 / 12.18 → 50.13 / 20.29 / 10.19 (the best candidate), R sustained
+  at 10 % 31.59 / 73.09 → 29.35 / 61.11. The stuffer's ROI (OQ-4) 3.0437 /
+  18.9056 → 2.3197 / 14.0896; the pool capture 143,753.0 → 100,505.9 SKL a
+  year, `fee×→1` 7.6 → 5.2, and the non-gating `ROI(resp)` 1.01 → 0.77.
+- **Boom-bust.** The surge year (year 15) carries 125.9 of 150 (was 138.2);
+  it drops 24.1 a block (was 11.8): 20.7 expired, 0.8 evicted, 2.6 refused
+  (was 11.1, 0.8, 0). At 60 years `n` 4,159,884 → 3,837,433, and two onset
+  cells move: best at 5 %/yr y30* → y32*, flat at 10 %/yr y26* → y28*; the
+  flat-25 ratio at year 20 4.31 → 4.55.
+- **Chain bootstrap.** Its year-20 jump carries 74.8 of 75 (was all 75), and
+  one onset cell moves, flat at 5 %/yr y33 → y34; `n` at 60 years 3,786,905 →
+  3,785,690.
+- **High history, low activity.** `n` at 60 years 1,296,390 → 1,290,604, the
+  flat-25 ratio at year 20 9.26 → 9.34, and its tail-floor and burn rows in
+  the second decimal (flat + 15 % tail floor 13.27 → 13.33). The
+  stuffer's ROI (OQ-4) 1.1399 / 4.2941 → 0.8962 / 3.3596; the pool capture
+  250,016.1 → 194,791.5 SKL a year, `fee×→1` 1.1 → 0.9.
+- **Late-chain tail.** `n` 1,234,953 → 1,234,932 at its horizon; year-1
+  expiry 0.7 → 0.8 a block.
+- **A6, the swing.** The flood ceiling is 900,000 bytes a block (was
+  1,200,000), and an epoch's flood closes 2,907 shards at most (was 3,877).
+  On the GF-7 band's steepest member (90 % at knee 500 000) the worst slew is
+  0.7558 points an epoch penalty-free (was 1.0080) and 1.5119 at the legal 2×
+  limit (was 2.0160); the reorg down-swing 0.0543 (was 0.0725); the flood's
+  fees about 322,368 SKL an epoch (was 429,862). The verdict line moves from
+  "see the slew reading below" to "no measurable adversarial slew": its
+  `< 1.0` point-an-epoch gate is the one ruled on 2026-10-24 (ruling 8), under
+  which this member was excluded from the band at S = 4. At S = 3 it passes.
+  Whether it re-enters the band is Rick's to rule; the slew scales with S,
+  and S is re-derived at BA-T10.
+
+**The flat control** (16 lines) moves in A6 alone in substance (the same
+ceiling, slew and reorg figures; the flood's fees 7,174 → 5,380 SKL an
+epoch), and the late-chain tail in the last digit.
+
+**`--esr10`.** Only the inherited arm moves. The nightly fixture (3 lines)
+moves in the stuffing attack's ×2 and ×3 cells: year-1 Standard expiry 63.9
+→ 63.8 a block, closed shards at year 10 538,393 → 538,348. The full narration
+(183 lines, run on demand) moves boom-bust in every inherited cell (the surge
+year carries 125.9 of 150 at ×1, and the pool cap refuses 2.6 a block where it
+refused none); sustained growth, chain bootstrap and high history in the
+×1, ×1.25 and mix cells; the late-chain tail up to ×1.5; and the stuffing
+attack's ×2 and ×3 cells, as in the nightly fixture.
+Its summary table: boom-bust's onsets at ×1 flat-25 y26* → y28*, at ×1.25 and
+×3 best y24* → y26*; Economy served on boom-bust 58.3 → 51.5 % (15/80/5) and
+59.4 → 51.9 % (15/85/0), on chain bootstrap 53.6 → 53.4 % and 54.6 → 54.3 %,
+on high history 17.6 → 17.4 % (15/85/0); high history's best onset on 15/80/5
+y52 → y53. §5.29.1's readings for EUP-5 are taken on the re-derived arm and
+on the inherited arm's baseline, neither of which moves, and they stand. One of its outcomes changes: P6's boom-bust onset was
+y26* → y28* on 15/80/5; at S = 3 the ×1 onset is y28* itself, so the mix no
+longer moves it.
+
+**Regenerated** under `SHEKYL_PINNED_REGEN_DECISION="2026-11-13 ESR-18:
+#1323's surge re-sign (S = 3, interim ruling 2026-11-08) moved the
+narrations; recorded after the fact in ECONOMICS_SIM_PRODUCTION_REBASE.md
+§5.30"`, through `regen_stage2_narration_fixtures` and
+`regen_esr10_narration_fixtures` (the four narration fixtures).
+
+**The gap, closed.** A change to a value the sim reads could not move a
+narration at review: the pins ran only at night. `rust-audit-test.yml`'s
+`economics-sim-narrations` job now runs the three narration pins on every
+pull request whose Rust test scope reaches the sim. `change_scope.py`
+decides it (`sim_narrations`) from the same dependency closure that
+scopes the per-PR tests, so a change to any crate the sim calls runs them,
+not only the four paths that moved this time; on #1323's diff it answers
+`run`. The job has its own runner beside the Rust job, so it adds runner
+time and no wall time. A smoke fold over the burst scenarios was the
+cheaper option; it was not built, because it would pin a second, smaller
+narration that the full ones already cover, and the pins fit beside the
+Rust job.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
