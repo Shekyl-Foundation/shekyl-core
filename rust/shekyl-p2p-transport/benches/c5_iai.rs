@@ -45,7 +45,10 @@ fn body(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i % 251) as u8).collect()
 }
 
+// Every function carries a named case: the capture's envelope keys a
+// count by its case id, and a function without one is not in it.
 #[library_benchmark]
+#[bench::initiator()]
 fn crypto_bench_noise_handshake_message1() -> (OpenInit, Vec<u8>) {
     black_box(OpenInit::message1())
 }
@@ -152,6 +155,7 @@ fn crypto_bench_noise_window_open(
 }
 
 #[library_benchmark]
+#[bench::one_hkdf()]
 fn crypto_bench_noise_rekey() {
     c5_bench::rekey_once();
 }

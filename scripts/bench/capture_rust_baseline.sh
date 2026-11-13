@@ -413,6 +413,11 @@ if criterion_root.exists():
 # so we know which crate owns each iai entry. Within a section:
 #
 #   <bench_binary>::<group>::<function> <run_id>:<setup>
+#
+# A case with no arguments and no setup prints no `:<setup>`. Its header
+# must still open an entry: left unmatched, its metric lines would be
+# read as the entry before it and overwrite that entry's counts.
+#
 #     Instructions:    <n>|...
 #     L1 Hits:         <n>|...
 #     LL Hits:         <n>|...
@@ -429,7 +434,7 @@ section_marker = re.compile(
     r"^==== (?P<crate>[\w-]+)::(?P<bench>[\w_]+) ====$", re.MULTILINE)
 header_re = re.compile(
     r"^(?P<bin>[A-Za-z_][\w]*)::(?P<group>[A-Za-z_][\w]*)::"
-    r"(?P<function>[A-Za-z_][\w]*)\s+(?P<run_id>[^:\s]+):(?P<setup>.+)$")
+    r"(?P<function>[A-Za-z_][\w]*)\s+(?P<run_id>[^:\s]+)(?::(?P<setup>.+))?$")
 metric_re = re.compile(
     r"^\s{2}(?P<name>[A-Za-z][A-Za-z0-9+ ]*?):\s+(?P<value>\d+)\|")
 
@@ -465,7 +470,7 @@ for i in range(len(section_starts) - 1):
                 "group": hm.group("group"),
                 "function": hm.group("function"),
                 "run_id": hm.group("run_id"),
-                "setup": hm.group("setup").strip(),
+                "setup": (hm.group("setup") or "").strip(),
                 "metrics": {},
             }
             continue
