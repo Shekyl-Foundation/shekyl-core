@@ -148,8 +148,9 @@ BENCHES=(
   # BA-T45: that response as one inbound Levin frame, read off the
   # session's bytes and decoded into its bodies. iai-only.
   "shekyl-chain-ingest::levin_bodies_iai:bench-internals,harness"
-  # BA-T46: one block template built over the design load's listing
-  # (30 transactions, each 2-in/2-out). iai-only.
+  # BA-T46: one block template built over the design load's listing.
+  # The design load names 30 transactions a block; 28 2-in/2-out spends
+  # are what one block admits at the genesis median. iai-only.
   "shekyl-chain-ingest::block_template_iai:bench-internals,harness"
   # BA-T47: a wallet's block read, the RPC's `block_list` over the store
   # facts for eight heights, and the reply serialized. iai-only.

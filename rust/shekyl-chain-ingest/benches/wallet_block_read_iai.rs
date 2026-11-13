@@ -8,9 +8,9 @@
 //! store facts (`StoreFacts`, whose `blocks_by_height` reads the bodies),
 //! and the reply serialized as the handler serializes it.
 //!
-//! The request names the last [`REQUESTED`] heights of a block-path
-//! fixture's chain with its subject connected: seven coinbase-only blocks
-//! and the subject, which lists four spends, unpruned. For each height the
+//! The request names the tail of a block-path fixture's chain with its
+//! subject connected: seven coinbase-only blocks and the subject, which
+//! lists [`SUBJECT_SPENDS`] spends, unpruned. For each height the
 //! read takes the header facts, the block and each listed transaction's
 //! body, and the miner transaction's first output index. The caller is
 //! bounded, as a wallet's connection is; the request is inside the bound.
@@ -48,15 +48,11 @@ use shekyl_rpc_types::wire::block::BlockListQuery;
 use shekyl_rpc_types::wire::shared::Slot;
 use shekyl_types::{KeyImage, TxHash};
 
-#[path = "support/block_path.rs"]
-#[allow(dead_code)]
-mod support;
-use support::connected;
+#[path = "support/tail.rs"]
+mod tail;
+use tail::{RequestedTail, SUBJECT_SPENDS, TAIL_BLOCKS};
 
 const SPEND_1IN_2OUT: &[u8] = include_bytes!("fixtures/block_path_spend_1in_2out_unit.corpus");
-
-/// The heights one request names.
-const REQUESTED: u64 = 8;
 
 /// A node that answers nothing: a block read is the store's alone.
 struct NoNode;
@@ -104,10 +100,14 @@ struct Prepared {
 }
 
 fn prepared(corpus: &[u8]) -> Prepared {
-    let chain = connected(corpus);
-    let tip = u64::try_from(chain.hashes().len()).expect("a short chain") - 1;
-    assert!(tip + 1 >= REQUESTED, "the chain holds the request");
-    let (store, file, dir) = chain.into_shared();
+    let tail = RequestedTail::connected(corpus);
+    let tip = u64::try_from(tail.chain.hashes().len()).expect("a short chain") - 1;
+    let requested = u64::try_from(tail.hashes.len()).expect("the tail fits");
+    let request = BlockListQuery {
+        height: (tip + 1 - requested..=tip).map(Height).collect(),
+        prune: false,
+    };
+    let (store, file, dir) = tail.chain.into_shared();
     let facts = StoreFacts::new(
         store,
         file,
@@ -123,10 +123,6 @@ fn prepared(corpus: &[u8]) -> Prepared {
         Arc::new(CacheStore::new()),
         shekyl_hash_budget::Budget::of_host(),
     );
-    let request = BlockListQuery {
-        height: (tip + 1 - REQUESTED..=tip).map(Height).collect(),
-        prune: false,
-    };
     let prepared = Prepared {
         facts,
         request,
@@ -134,9 +130,11 @@ fn prepared(corpus: &[u8]) -> Prepared {
     };
     let reply = block_list(&prepared.facts, &prepared.facts, &prepared.request, true)
         .unwrap_or_else(|fault| panic!("the read answers: {fault:?}"));
-    assert_eq!(reply.len() as u64, REQUESTED);
+    assert_eq!(reply.len(), TAIL_BLOCKS);
     match reply.last() {
-        Some(Slot::Item(block)) => assert_eq!(block.tx.len(), 4, "the subject's four spends"),
+        Some(Slot::Item(block)) => {
+            assert_eq!(block.tx.len(), SUBJECT_SPENDS, "the subject's spends")
+        }
         other => panic!("the tip is a block: {other:?}"),
     }
     prepared

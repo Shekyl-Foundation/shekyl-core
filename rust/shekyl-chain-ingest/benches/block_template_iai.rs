@@ -29,8 +29,8 @@
 //!
 //! The bench is this crate's for the listing: real spends come from the
 //! committed corpus, which `bench_support.rs` reads. `shekyl-block-template`
-//! is a linked dependency of this crate, and the ledger row's path set
-//! names it.
+//! is a linked dependency of this crate, so the row's path set names this
+//! crate and a change to the template reaches it through that link.
 //!
 //! An instruction count on the CI runner's x86, never a floor figure
 //! (rule 76).
@@ -74,7 +74,7 @@ impl Operands {
             height: self.height,
             previous: header.previous,
             curve_tree_root: header.curve_tree_root,
-            attestation_root: header.attestation_root,
+            section_root: header.section_root,
             major_version: rule_set.header_major_version(),
             now: Timestamp::from_raw(header.timestamp),
             median_timestamp: None,

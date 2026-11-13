@@ -18,14 +18,15 @@
 //!   (`shekyl-chain-sync` `runs/bodies.rs`).
 //!
 //! The frame is the notification (command 2014) a serving node sends for a
-//! request of the last [`REQUESTED`] blocks of a block-path fixture's
-//! chain: the bytes `serve_bodies` and the Levin encoder produce in setup,
+//! request of the tail of a block-path fixture's chain: the bytes
+//! `serve_bodies` and the Levin encoder produce in setup,
 //! so the decoder reads what the serving side writes. The subject block
-//! lists four spends, each carried whole.
+//! lists the unit fixture's spends, each carried whole.
 //!
 //! The bench is this crate's for the store the response is served from
-//! (`bench_support.rs`). `shekyl-levin` is a linked dependency of this
-//! crate, and the ledger row's path set names it.
+//! (`bench_support.rs`). The row shares the body exchange's path set
+//! with the serve: `shekyl-levin` is a normal dependency of
+//! `shekyl-chain-sync-runtime`, so a change to the decoder selects both.
 //!
 //! An instruction count on the CI runner's x86, never a floor figure
 //! (rule 76).
@@ -39,38 +40,34 @@ use shekyl_levin::{
     DEFAULT_MAX_PACKET_SIZE,
 };
 
-#[path = "support/block_path.rs"]
-#[allow(dead_code)]
-mod support;
-use support::connected;
+#[path = "support/tail.rs"]
+mod tail;
+use tail::{RequestedTail, SUBJECT_SPENDS, TAIL_BLOCKS};
 
 const SPEND_1IN_2OUT: &[u8] = include_bytes!("fixtures/block_path_spend_1in_2out_unit.corpus");
-
-/// The blocks the request names.
-const REQUESTED: usize = 8;
 
 /// The body response's command (`NOTIFY_RESPONSE_BODIES`).
 const RESPONSE_BODIES: u32 = 2014;
 
-/// The request for the fixture chain's last [`REQUESTED`] blocks, and the
-/// encoded response a serving node answers it with.
+/// The request for the fixture chain's tail, and the encoded response a
+/// serving node answers it with.
 fn served(corpus: &[u8]) -> (Vec<[u8; 32]>, Vec<u8>) {
-    let chain = connected(corpus);
-    let hashes = chain.hashes();
-    let requested: Vec<[u8; 32]> = hashes[hashes.len() - REQUESTED..]
-        .iter()
-        .map(|hash| *hash.as_bytes())
-        .collect();
+    let tail = RequestedTail::connected(corpus);
     let response = serve_bodies(
-        chain.store(),
+        tail.chain.store(),
         &RequestBodies {
-            hashes: requested.clone(),
+            hashes: tail.hashes.clone(),
         },
     )
     .expect("the serve");
-    assert_eq!(response.bodies.len(), REQUESTED, "every body is sent");
+    assert_eq!(response.bodies.len(), TAIL_BLOCKS, "every body is sent");
+    assert_eq!(
+        response.bodies[TAIL_BLOCKS - 1].txs.len(),
+        SUBJECT_SPENDS,
+        "the subject carries its spends"
+    );
     let payload = response.store().expect("the response encodes");
-    (requested, payload)
+    (tail.hashes, payload)
 }
 
 /// A reader past the handshake, and the response as one frame.
