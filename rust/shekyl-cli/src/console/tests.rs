@@ -424,16 +424,13 @@ fn status_offline(count: u64) -> serde_json::Value {
     value
 }
 
-/// A full-form `tx_list` entry whose body is `body` and whose operands are
-/// [`console_spend`]'s own; the label is the caller's.
+/// A full-form `tx_list` entry whose body is `body`; the label is the
+/// caller's. The full form is `{id, body}` and the entry's state: the txid's
+/// operands are the pruned form's, selected by `prune` (4.1, IG-Q55).
 fn mined_entry(label: [u8; 32], body: &[u8]) -> serde_json::Value {
-    let skeleton = console_spend_skeleton();
     serde_json::json!({
         "id": HashHex::from_bytes(label),
         "body": shekyl_rpc_types::kinds::Bytes(body.to_vec()),
-        "prunable_hash": HashHex::from_bytes(skeleton.prunable_hash.to_bytes()),
-        "pqc_auth_hash": skeleton.pqc_auth_hash.map(|h| HashHex::from_bytes(h.to_bytes())),
-        "archival_size": skeleton.archival_len.to_raw(),
         "pooled": false,
         "mined_height": 3,
         "confirmations": 1,
