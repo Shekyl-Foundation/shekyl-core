@@ -620,7 +620,12 @@ mod tests {
         let d =
             service_rendezvous(&service_config(), &with_rendezvous(Path::new("/"))).unwrap_err();
         let found = &d.params.iter().find(|(k, _)| *k == "found").unwrap().1;
-        assert!(found.contains("owned by uid 0"), "{found}");
+        // The refusal names the owner's uid; the assertion message does not
+        // repeat it (CodeQL rust/cleartext-logging, alert 199).
+        assert!(
+            found.contains("owned by uid 0"),
+            "the refusal does not name the owner"
+        );
     }
 
     /// A directory owned by another account is refused. The test must run
@@ -634,6 +639,11 @@ mod tests {
         );
         // `/` is root's on every Unix the tests run on.
         let found = assert_dir(Path::new("/")).unwrap_err();
-        assert!(found.contains("owned by uid 0"), "{found}");
+        // The refusal names the owner's uid; the assertion message does not
+        // repeat it (CodeQL rust/cleartext-logging, alert 199).
+        assert!(
+            found.contains("owned by uid 0"),
+            "the refusal does not name the owner"
+        );
     }
 }

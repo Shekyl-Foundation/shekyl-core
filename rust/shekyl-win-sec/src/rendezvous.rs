@@ -332,25 +332,73 @@ impl SecurityRead {
             if ace.is_null() {
                 return Err(RendezvousError::Read(ERROR_INVALID_ACL));
             }
-            // SAFETY: every ACE begins with an `ACE_HEADER`.
-            let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
-            if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
-                continue;
+            // SAFETY: `GetAce` returned a live ACE inside the SACL, and every
+            // ACE begins with an `ACE_HEADER`.
+            if let Some(policy) = unsafe { label_mask(ace.cast_const().cast::<u8>()) }? {
+                return Ok(Some(policy));
             }
-            let label = ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>();
-            // SAFETY: the type says this ACE is a mandatory label ACE, whose
-            // `Mask` is its policy; read through the raw pointer, as the
-            // header is.
-            let policy = unsafe { std::ptr::addr_of!((*label).Mask).read_unaligned() };
-            return Ok(Some(policy));
         }
         Ok(None)
     }
 }
 
+/// The policy of the ACE at `ace` when it is a mandatory label, `None` when
+/// it is another type. The `Mask` read is bounded by the ACE's own size: an
+/// ACE that says it is a label and is too short to hold its mask is refused,
+/// so the read never leaves it (CodeQL rust/access-invalid-pointer, alert
+/// 200).
+///
+/// # Safety
+///
+/// `ace` points at an ACE header readable for its `AceSize` bytes.
+///
+/// # Errors
+///
+/// [`RendezvousError::Read`] with `ERROR_INVALID_ACL` for a label ACE shorter
+/// than its mask.
+unsafe fn label_mask(ace: *const u8) -> Result<Option<u32>, RendezvousError> {
+    // SAFETY: the caller guarantees a readable header.
+    let header = unsafe { ace.cast::<ACE_HEADER>().read_unaligned() };
+    if u32::from(header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE {
+        return Ok(None);
+    }
+    let mask_at = std::mem::offset_of!(SYSTEM_MANDATORY_LABEL_ACE, Mask);
+    if usize::from(header.AceSize) < mask_at + std::mem::size_of::<u32>() {
+        return Err(RendezvousError::Read(ERROR_INVALID_ACL));
+    }
+    // SAFETY: the ACE holds at least `mask_at + 4` bytes, checked above.
+    Ok(Some(unsafe {
+        ace.add(mask_at).cast::<u32>().read_unaligned()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A label ACE is read for its mask; one whose size is too short to hold
+    /// the mask is refused rather than read past; another type is skipped.
+    /// Red edit: drop the size check and the short ACE's mask is read from
+    /// past its end.
+    #[test]
+    fn a_label_ace_too_short_for_its_mask_is_refused() {
+        let mask_at = std::mem::offset_of!(SYSTEM_MANDATORY_LABEL_ACE, Mask);
+        let mut buffer = [0u8; 32];
+        buffer[0] = u8::try_from(SYSTEM_MANDATORY_LABEL_ACE_TYPE).unwrap();
+        buffer[2..4].copy_from_slice(&u16::try_from(mask_at + 4).unwrap().to_le_bytes());
+        buffer[mask_at..mask_at + 4].copy_from_slice(&3u32.to_le_bytes());
+        // SAFETY: the buffer is 32 readable bytes, more than any size here.
+        assert_eq!(unsafe { label_mask(buffer.as_ptr()) }.unwrap(), Some(3));
+        buffer[2..4].copy_from_slice(&u16::try_from(mask_at).unwrap().to_le_bytes());
+        // SAFETY: as above.
+        assert!(matches!(
+            unsafe { label_mask(buffer.as_ptr()) },
+            Err(RendezvousError::Read(ERROR_INVALID_ACL))
+        ));
+        buffer[0] = 0;
+        // SAFETY: as above.
+        assert_eq!(unsafe { label_mask(buffer.as_ptr()) }.unwrap(), None);
+    }
 
     /// The three objects come out of their creating calls owner-only, with
     /// the no-read-up policy bit, and the directory check accepts what it
