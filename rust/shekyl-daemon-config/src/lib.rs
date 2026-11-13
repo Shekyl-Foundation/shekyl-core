@@ -28,6 +28,7 @@ pub mod load;
 pub mod lock;
 pub mod marker;
 pub mod network;
+pub mod owner_socket;
 pub mod paths;
 pub mod platform;
 mod probe;
@@ -39,6 +40,7 @@ pub use load::{load, Loaded};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, MarkerRead, NetworkId};
 pub use network::Network;
+pub use owner_socket::OwnerSocketPlan;
 pub use platform::{Platform, RunMode};
 pub use resolve::{choosers, resolve, Resolved};
 pub use sections::{

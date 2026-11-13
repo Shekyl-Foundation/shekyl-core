@@ -45,6 +45,7 @@ import fsync_probe  # noqa: E402
 # scripts/armed_lever.py, one directory up from this file.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import armed_lever  # noqa: E402
+import owner_socket  # noqa: E402
 
 ROOT = A.ROOT
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -496,7 +497,8 @@ def _measure_with_probe(args, work, seed_dir, daemon, addr, subj_dir):
         # the binary's default log file.
         argv = [daemon] + common + ["--data-dir", d] + net + [
             "--rpc-admin-listen", f"127.0.0.1:{rpcp}",
-            "--log-file", os.path.join(work, f"{tag}.daemon.log")] + argv_extra
+            "--log-file", os.path.join(work, f"{tag}.daemon.log")] + argv_extra + \
+            owner_socket.argv(tag)
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is

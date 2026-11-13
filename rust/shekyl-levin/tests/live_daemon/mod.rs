@@ -55,6 +55,20 @@ impl Daemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
+        // A private directory for the owner's socket, mode 0700: a harness
+        // names one per daemon (`RPC_CHANNEL.md` §7.1).
+        let socket_dir = data_dir.join("socket");
+        {
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder
+                .create(&socket_dir)
+                .expect("create the socket directory");
+        }
         // Regtest has no seeds and the test names no peer, so every connection
         // counted here is INBOUND and ours; the outbound degree is a protocol
         // constant (`out-peers` is a rejected row). Regtest's default is the
@@ -77,6 +91,8 @@ impl Daemon {
             &data_dir.join("shekyld.log").display().to_string(),
             "--log-level",
             log_level,
+            "--rpc-socket-dir",
+            socket_dir.to_str().expect("utf8 socket dir"),
         ];
         let mut command = match descriptor_limit {
             None => {

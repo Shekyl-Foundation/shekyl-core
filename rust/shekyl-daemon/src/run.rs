@@ -105,7 +105,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // The walk (IG-Q59): every refusal a start makes before it creates
     // anything, with nothing created. The check prints its verdict and
     // exits; a start goes on to the effects the walk withheld.
-    let walked = match verify::walk(&config, &resolved) {
+    let walked = match verify::walk(&config, &resolved, platform) {
         Ok(walked) => walked,
         Err(ds) => return refuse(&ds),
     };
@@ -159,8 +159,28 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     );
     announced.rest.extend(mining_notice(&config));
     announced.rest.extend(interrupt.line().map(str::to_owned));
+    announced.rest.extend(
+        walked
+            .owner_socket
+            .as_ref()
+            .map(|plan| owner_socket_line(network.name(), plan.instance_label(), &plan.path)),
+    );
     let lines = announced.into_lines();
     announce_all(&lines);
+
+    // The owner's socket, dialled and bound before the node opens: a second
+    // daemon of this account, network and instance refuses here, with
+    // nothing opened (`RPC_CHANNEL.md` §7.1). The RPC serves it once the
+    // node is up.
+    let owner = match walked
+        .owner_socket
+        .as_ref()
+        .map(|plan| shekyl_daemon_rpc::owner::OwnerSocket::bind(plan, network.name()))
+        .transpose()
+    {
+        Ok(owner) => owner,
+        Err(d) => return refuse(&[d]),
+    };
 
     // The settlement schedule, armed before the node whose first epoch
     // arithmetic would latch it exists; a value the owner refuses is the
@@ -254,7 +274,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         network,
         Arc::new(move |limits| link_owner.set_limits(limits)),
     ));
-    let status = supervise(&config, &pool, options, node, tor_inbox);
+    let status = supervise(&config, &pool, options, node, tor_inbox, owner);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -291,17 +311,25 @@ fn supervise(
     options: OptionsHandle,
     node: shekyl_node::Node,
     tor_inbox: Option<tor::Prepared>,
+    owner: Option<shekyl_daemon_rpc::owner::OwnerSocket>,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
-    // failed start: the node is torn down the one way.
-    let rpc =
-        match shekyl_daemon_rpc::run::start(&config.rpc, options, node.handles(), config.dev.rpc) {
-            Ok(rpc) => Some(rpc),
-            Err(refusal) => {
-                tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-                None
-            }
-        };
+    // failed start: the node is torn down the one way. The owner's socket
+    // going stops the daemon through the one stop owner.
+    let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(signals::rendezvous_gone);
+    let rpc = match shekyl_daemon_rpc::run::start(
+        &config.rpc,
+        options,
+        node.handles(),
+        config.dev.rpc,
+        owner.map(|socket| (socket, gone)),
+    ) {
+        Ok(rpc) => Some(rpc),
+        Err(refusal) => {
+            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
+            None
+        }
+    };
     // The notify runner, pushed from the chain's tip watch; its children
     // run on the signal owner's runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
@@ -439,7 +467,9 @@ enum StopReport {
 
 fn stop_report(cause: signals::StopCause) -> StopReport {
     match cause {
-        signals::StopCause::Signal(_) | signals::StopCause::Requested => {
+        signals::StopCause::Signal(_)
+        | signals::StopCause::Requested
+        | signals::StopCause::RendezvousGone => {
             StopReport::Announce(format!("stop requested by {cause}"))
         }
         signals::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
@@ -479,6 +509,16 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// on one and does not open the log beside the rolling writer. Standard
 /// error is prefixed `shekyld:`; the log line is the line alone. The
 /// closing [`shekyl_logging::flush`] delivers a line queued before it.
+/// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
+/// §7.1): the socket's name is a hash, so the operator is told which
+/// network and instance it serves and where it is.
+fn owner_socket_line(network: &str, instance: &str, path: &std::path::Path) -> String {
+    format!(
+        "owner's socket: network {network}, instance {instance}, at {}",
+        path.display()
+    )
+}
+
 fn announce_all(lines: &[String]) {
     for line in lines {
         shekyl_logging::announce(&format!("shekyld: {line}"), line);
@@ -507,10 +547,13 @@ mod tests {
     /// this module.
     pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 
+    /// A logged-in account: its home, and a private session directory
+    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
             program_data: None,
+            session_dir: crate::test_session_dir(home),
         }
     }
 
@@ -642,6 +685,7 @@ mod tests {
             &pool,
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
+            None,
             None,
         );
         requester.join().unwrap();

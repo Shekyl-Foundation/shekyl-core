@@ -19,6 +19,11 @@ Three checks over an enumerated set of files:
 3. Every key the fleet's generators write into a node's TOML
    (`echo "key = …"` lines) is a row the file accepts, and the generator's
    default roots are the fleet units' `StateDirectory` and `LogsDirectory`.
+4. A unit has no session directory, so its daemon either runs as the
+   machine's service instance (`--service`) and names no socket directory,
+   or names `--rpc-socket-dir /run/<RuntimeDirectory>` with
+   `RuntimeDirectoryMode=0700` (RPC_CHANNEL.md §7.1; INPUT_GRAMMAR.md
+   IG-Q104, IG-Q105). Neither is a daemon that refuses to start.
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -111,6 +116,18 @@ def check_unit(rel: str, text: str, live: dict[str, str]) -> list[str]:
             errors.append(f"{rel}: ExecStart names --log-file but the unit has no LogsDirectory")
         elif str(Path(values["log-file"]).parent) != f"/var/log/{logs}":
             errors.append(f"{rel}: --log-file {values['log-file']} is not under /var/log/{logs} (LogsDirectory)")
+    runtime = fields.get("RuntimeDirectory")
+    if "service" in flags:
+        if "rpc-socket-dir" in values:
+            errors.append(f"{rel}: ExecStart names --service and --rpc-socket-dir; a service is given no socket directory")
+    elif "rpc-socket-dir" not in values:
+        errors.append(f"{rel}: ExecStart names neither --service nor --rpc-socket-dir; a unit has no session directory, so the daemon would refuse to start")
+    elif not runtime:
+        errors.append(f"{rel}: ExecStart names --rpc-socket-dir but the unit has no RuntimeDirectory")
+    elif values["rpc-socket-dir"] != f"/run/{runtime}":
+        errors.append(f"{rel}: --rpc-socket-dir {values['rpc-socket-dir']} is not /run/{runtime} (RuntimeDirectory)")
+    elif fields.get("RuntimeDirectoryMode") != "0700":
+        errors.append(f"{rel}: the socket directory /run/{runtime} is not RuntimeDirectoryMode=0700")
     return errors
 
 
@@ -179,13 +196,18 @@ def selftest() -> int:
         "| `tor-socks` | endpoint | — | both | no | x |\n"
         "| `notify-block` | command | — | file | no | x |\n"
         "| `console` | switch | — | command line | no | x |\n"
+        "| `service` | switch | — | command line | no | x |\n"
+        "| `rpc-socket-dir` | path | — | both | no | x |\n"
         "<!-- development rows, live on the named networks only and not in --help: dev-difficulty (regtest) -->\n"
     )
     unit_ok = (
-        "[Service]\nExecStart=/usr/local/bin/shekyld --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log\n"
+        "[Service]\nExecStart=/usr/local/bin/shekyld --service --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log\n"
         "StateDirectory=shekyl\nLogsDirectory=shekyl\n"
     )
-    fleet_ok = "[Service]\nExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/f/node-%i.toml\nStateDirectory=f/%i\nLogsDirectory=f\n"
+    fleet_ok = (
+        "[Service]\nExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/f/node-%i.toml --rpc-socket-dir /run/f/%i\n"
+        "RuntimeDirectory=f/%i\nRuntimeDirectoryMode=0700\nStateDirectory=f/%i\nLogsDirectory=f\n"
+    )
     gen_ok = (
         'DATA_ROOT="${DATA_ROOT:-/var/lib/f}"\nLOG_ROOT="${LOG_ROOT:-/var/log/f}"\n'
         '    echo "data-dir = \\"$DATA_ROOT/$i\\""\n    echo "log-level = \\"info\\""\n    echo "tor = \\"off\\""\n'
@@ -199,6 +221,10 @@ def selftest() -> int:
         ("a dead key written by a generator is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"no-igd = '), ["`no-igd = …`, which is not a row"]),
         ("a command-line row written into a file is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"network = '), ["`network = …`, a command-line-only row"]),
         ("a generator root off the fleet unit is named", unit_ok, fleet_ok, gen_ok.replace("/var/lib/f", "/var/lib/g"), ["DATA_ROOT defaults to /var/lib/g"]),
+        ("a unit with neither service nor a socket directory is named", unit_ok.replace("--service ", ""), fleet_ok, gen_ok, ["names neither --service nor --rpc-socket-dir"]),
+        ("a service given a socket directory is named", unit_ok.replace("--service ", "--service --rpc-socket-dir /run/shekyl "), fleet_ok, gen_ok, ["a service is given no socket directory"]),
+        ("a socket directory off RuntimeDirectory is named", unit_ok, fleet_ok.replace("--rpc-socket-dir /run/f/%i", "--rpc-socket-dir /run/g/%i"), gen_ok, ["is not /run/f/%i (RuntimeDirectory)"]),
+        ("a socket directory not 0700 is named", unit_ok, fleet_ok.replace("RuntimeDirectoryMode=0700", "RuntimeDirectoryMode=0755"), gen_ok, ["is not RuntimeDirectoryMode=0700"]),
     ]
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:

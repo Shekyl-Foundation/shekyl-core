@@ -169,6 +169,12 @@ pub struct Rpc {
     pub cors_origins: Vec<String>,
     /// The connection cap.
     pub connections_max: NonZeroU32,
+    /// Which node this is on the machine (`RPC_CHANNEL.md` §7.1): the
+    /// default instance, or one the operator named.
+    pub instance: shekyl_rpc_channel::Instance,
+    /// The operator-named directory for the owner's socket, for an account
+    /// with no session directory. Never set in service mode.
+    pub socket_dir: Option<PathBuf>,
 }
 
 /// The logging owner's section.
@@ -368,6 +374,9 @@ pub fn build(
     config_file: Option<&Path>,
 ) -> Result<DaemonConfig, Vec<Diagnostic>> {
     let mut faults = materialize::fill(resolved, network, run_mode, platform);
+    if cfg!(windows) && run_mode == RunMode::Service {
+        faults.push(windows_service_not_yet(resolved));
+    }
     let mut r = Reader::new(resolved);
     let data_dir = taken_path(&mut r, "data-dir");
     let log_file = taken_path(&mut r, "log-file");
@@ -387,7 +396,7 @@ pub fn build(
         tor_on,
     );
     let p2p = p2p_section(&mut r, peers, closed_peers);
-    let rpc = rpc_section(&mut r);
+    let rpc = rpc_section(&mut r, run_mode);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
     let session = session_section(&mut r);
@@ -413,12 +422,29 @@ pub fn build(
             connections_max: rpc
                 .connections_max
                 .expect("rpc-connections-max was read or a fault was recorded"),
+            instance: rpc.instance,
+            socket_dir: rpc.socket_dir,
         },
         notify,
         mine,
         dev,
         session,
     })
+}
+
+/// `service` on Windows: the switch also answers the service manager, and
+/// that dispatcher is RT-W14's (IG-Q105), so until it is built a Windows
+/// start refuses the switch as the reserved row did.
+fn windows_service_not_yet(resolved: &Resolved) -> Diagnostic {
+    Diagnostic::new(
+        Code::NameReserved,
+        resolved.source("service").cloned().unwrap_or(Source::Cli),
+    )
+    .option("service")
+    .param(
+        "reason",
+        "the Windows service run mode (RPC_CHANNEL.md RT-16), accepted once RT-W14 builds the service-manager dispatcher",
+    )
 }
 
 /// The path [`materialize`] wrote, or the path the operator gave. Absence
@@ -552,14 +578,46 @@ struct RpcRead {
     view_listen: Vec<SocketAddr>,
     cors_origins: Vec<String>,
     connections_max: Option<NonZeroU32>,
+    instance: shekyl_rpc_channel::Instance,
+    socket_dir: Option<PathBuf>,
 }
 
-fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
+/// The RPC rows, and the two rules between them and the run mode
+/// (`RPC_CHANNEL.md` §7.1): a named instance is a second node and names its
+/// own data home, so `instance` needs an explicit `data-dir`; and a service
+/// serves no owner socket, so `rpc-socket-dir` is refused with `service`
+/// (IG-Q105) rather than ignored.
+fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
+    let instance = match r.name("instance") {
+        Read::Present(text) => match shekyl_rpc_channel::InstanceName::parse(&text) {
+            Ok(name) => {
+                if !r.given("data-dir") {
+                    r.requires(
+                        "instance",
+                        "an explicit `data-dir`: a named instance is a second node and keeps its own state",
+                    );
+                }
+                shekyl_rpc_channel::Instance::Named(name)
+            }
+            // The kind's rule already refused it at parse.
+            Err(_) => shekyl_rpc_channel::Instance::Default,
+        },
+        Read::Absent | Read::Unreadable => shekyl_rpc_channel::Instance::Default,
+    };
+    let socket_dir = r.optional_path("rpc-socket-dir").present();
+    if socket_dir.is_some() && run_mode == RunMode::Service {
+        r.conflict(
+            "rpc-socket-dir",
+            "`service` is set: a service serves no owner socket",
+        );
+    }
     RpcRead {
         admin_listen: r.endpoint_list("rpc-admin-listen", true),
         view_listen: r.endpoint_list("rpc-view-listen", true),
         cors_origins: r.origin_list("rpc-cors-origin"),
         connections_max: r.required_count("rpc-connections-max"),
+        instance,
+        socket_dir,
     }
 }
 

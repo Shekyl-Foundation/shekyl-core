@@ -15,7 +15,9 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
-use shekyl_daemon_config::{account, announce, marker, resolve, Lock, TABLE};
+use shekyl_daemon_config::{
+    account, announce, marker, owner_socket, resolve, Lock, Platform, TABLE,
+};
 use shekyl_options::{Code, Diagnostic, Source, Value};
 
 use crate::levers;
@@ -26,6 +28,9 @@ use crate::run::tell;
 pub(crate) struct Walked {
     pub(crate) network_id: [u8; 16],
     pub(crate) warnings: Vec<String>,
+    /// Where the owner's socket goes, checked; `None` for a service
+    /// (`RPC_CHANNEL.md` §7.1, IG-Q105).
+    pub(crate) owner_socket: Option<shekyl_daemon_config::OwnerSocketPlan>,
 }
 
 /// The walk (IG-Q59), in a start's order, stopping at the first refusal
@@ -39,18 +44,30 @@ pub(crate) struct Walked {
 /// file; the owner values the table accepted, judged and not latched; a
 /// `mine-threads` count above the host's parallelism, refused here so the
 /// start-time miner never asks for it (Rick, 2026-11-02); and the managed
-/// Tor's pin, read and not started. Nothing is created, opened for
-/// writing, locked or latched, so the check can run while a daemon is up
-/// and leaves the machine as it found it.
+/// Tor's pin, read and not started; and where the owner's socket goes,
+/// its directory asserted and nothing bound (`RPC_CHANNEL.md` §7.1).
+/// Nothing is created, opened for writing, locked or latched, so the check
+/// can run while a daemon is up and leaves the machine as it found it.
 pub(crate) fn walk(
     config: &DaemonConfig,
     resolved: &resolve::Resolved,
+    platform: &Platform,
 ) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;
     log_location_creatable(&config.logging.file).map_err(one)?;
+    let owner_socket = owner_socket::plan(
+        config,
+        platform,
+        &network_id,
+        resolved
+            .source("rpc-socket-dir")
+            .cloned()
+            .unwrap_or(Source::Cli),
+    )
+    .map_err(one)?;
     let dev = &config.dev;
     if let Err(refusal) =
         levers::check_seed_epoch(dev.pow_seed_epoch_blocks, dev.pow_seed_epoch_lag)
@@ -83,6 +100,7 @@ pub(crate) fn walk(
     Ok(Walked {
         network_id,
         warnings,
+        owner_socket,
     })
 }
 
@@ -189,10 +207,13 @@ mod tests {
         shekyl_daemon_config::Network::Regtest.network_id()
     }
 
+    /// A logged-in account: its home, and a private session directory
+    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
             program_data: None,
+            session_dir: crate::test_session_dir(home),
         }
     }
 
@@ -285,7 +306,7 @@ mod tests {
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let loaded = load(cli, &platform(d.path())).unwrap();
-        let ds = walk(&loaded.config, &loaded.resolved)
+        let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
             .err()
             .expect("a seed-epoch length of 3 is refused");
         assert_eq!(ds.len(), 1);
@@ -323,7 +344,7 @@ mod tests {
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let loaded = load(cli, &platform(d.path())).unwrap();
-        let walked = walk(&loaded.config, &loaded.resolved).unwrap();
+        let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
         assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
         let warning = &walked.warnings[0];
@@ -390,7 +411,7 @@ mod tests {
             let a = args(&full);
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
             let loaded = load(cli, &platform(d.path())).unwrap();
-            let walked = walk(&loaded.config, &loaded.resolved).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),

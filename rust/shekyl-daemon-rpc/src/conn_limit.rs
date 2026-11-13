@@ -262,28 +262,56 @@ fn ip_is_local(ip: IpAddr) -> bool {
 /// [`ConnTracker`]. A connection over a configured cap is dropped (closed
 /// immediately) and accepting continues; an admitted connection is wrapped in a
 /// [`CountedStream`] so its slot is released when it closes.
-pub struct LimitedListener {
-    inner: TcpListener,
+///
+/// The owner's socket (`RPC_CHANNEL.md` RT-15) is admitted through the same
+/// tracker, so the cap stays one per daemon and `daemon_status` counts every
+/// socket. Its caller is on this computer, so it is admitted as loopback.
+pub struct LimitedListener<L = TcpListener> {
+    inner: L,
     tracker: Arc<ConnTracker>,
 }
 
-impl LimitedListener {
-    pub fn new(inner: TcpListener, tracker: Arc<ConnTracker>) -> Self {
+impl<L> LimitedListener<L> {
+    pub fn new(inner: L, tracker: Arc<ConnTracker>) -> Self {
         Self { inner, tracker }
     }
 }
 
-impl Listener for LimitedListener {
-    type Io = CountedStream;
-    type Addr = SocketAddr;
+/// What a listener's connection is admitted as.
+pub trait AdmitAs: Listener {
+    /// The address the tracker counts this connection under.
+    fn admit_as(addr: &Self::Addr) -> IpAddr;
+}
+
+impl AdmitAs for TcpListener {
+    fn admit_as(addr: &SocketAddr) -> IpAddr {
+        addr.ip()
+    }
+}
+
+#[cfg(unix)]
+impl AdmitAs for tokio::net::UnixListener {
+    /// The owner's caller is on this computer.
+    fn admit_as(_addr: &tokio::net::unix::SocketAddr) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    }
+}
+
+impl<L> Listener for LimitedListener<L>
+where
+    L: AdmitAs,
+    L::Addr: std::fmt::Debug,
+{
+    type Io = CountedStream<L::Io>;
+    type Addr = L::Addr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
-            // Delegate to tokio's TcpListener via axum's own Listener impl,
-            // which logs and backs off on transient accept errors and only
-            // yields on a real connection.
-            let (stream, addr) = <TcpListener as Listener>::accept(&mut self.inner).await;
-            match self.tracker.try_acquire(addr.ip()) {
+            // Delegate to the listener's own axum `Listener` impl, which
+            // logs and backs off on transient accept errors and only yields
+            // on a real connection.
+            let (stream, addr) = self.inner.accept().await;
+            match self.tracker.try_acquire(L::admit_as(&addr)) {
                 Some(guard) => {
                     return (
                         CountedStream {
@@ -295,7 +323,7 @@ impl Listener for LimitedListener {
                 }
                 None => {
                     tracing::debug!(
-                        peer = %addr,
+                        peer = ?addr,
                         "daemon RPC connection rejected: connection limit reached"
                     );
                     // `stream` drops here → the socket is closed. Keep accepting.
@@ -305,19 +333,19 @@ impl Listener for LimitedListener {
     }
 
     fn local_addr(&self) -> io::Result<Self::Addr> {
-        <TcpListener as Listener>::local_addr(&self.inner)
+        self.inner.local_addr()
     }
 }
 
-/// A `TcpStream` paired with a [`ConnGuard`]; dropping it (connection close)
+/// A stream paired with a [`ConnGuard`]; dropping it (connection close)
 /// releases the tracked slot. Read/write are delegated verbatim to the inner
 /// stream.
-pub struct CountedStream {
-    inner: TcpStream,
+pub struct CountedStream<S = TcpStream> {
+    inner: S,
     _guard: ConnGuard,
 }
 
-impl AsyncRead for CountedStream {
+impl<S: AsyncRead + Unpin> AsyncRead for CountedStream<S> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -327,7 +355,7 @@ impl AsyncRead for CountedStream {
     }
 }
 
-impl AsyncWrite for CountedStream {
+impl<S: AsyncWrite + Unpin> AsyncWrite for CountedStream<S> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,

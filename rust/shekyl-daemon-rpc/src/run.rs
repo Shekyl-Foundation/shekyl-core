@@ -44,16 +44,31 @@ fn daemon_rpc_budget() -> RuntimeBudget {
     }
 }
 
-/// A running server: its level-triggered stop signal, its runtime and its
-/// serve task.
+/// A running server: its level-triggered stop signal, its runtime, its
+/// serve task, and the owner's socket with its watch.
 pub struct Running {
     shutdown: watch::Sender<bool>,
     rt: Pool,
     serve: tokio::task::JoinHandle<()>,
+    owner: Option<Owner>,
 }
+
+/// The owner's socket while it is served: the rendezvous that removes it,
+/// and the watch that stops the daemon if it goes first.
+struct Owner {
+    rendezvous: crate::owner::Rendezvous,
+    watch_stop: watch::Sender<bool>,
+    watch: tokio::task::JoinHandle<()>,
+}
+
+/// What the daemon does when its owner's socket goes: it stops, the one way
+/// a stop is asked for (`RPC_CHANNEL.md` §7.1).
+pub type OnRendezvousGone = Arc<dyn Fn() + Send + Sync>;
 
 /// Binds every listener synchronously, then serves them on the node's
 /// handles. `armed` is the node's `dev-rpc` switch (`RPC_CHANNEL.md` §6.1).
+/// `owner` is the owner's socket, already dialled and bound at start
+/// ([`crate::owner::OwnerSocket::bind`]), with what to do if it goes.
 ///
 /// # Errors
 ///
@@ -65,6 +80,7 @@ pub fn start(
     options: OptionsHandle,
     handles: Handles,
     armed: bool,
+    owner: Option<(crate::owner::OwnerSocket, OnRendezvousGone)>,
 ) -> Result<Running, String> {
     // The section's one cap; the listeners are loopback only, so the
     // per-address caps the C++ options carried had no population.
@@ -103,8 +119,33 @@ pub fn start(
     // Level-triggered: a stop that lands before any acceptor has polled is
     // still observed by `wait_for`. One sender, cloned into every acceptor.
     let (shutdown, shutdown_rx) = watch::channel(false);
+    let (owner, owner_listener) = match owner {
+        Some((socket, gone)) => {
+            let (listener, rendezvous) = socket.into_parts();
+            let (watch_stop, watch_rx) = watch::channel(false);
+            let watch = rt.spawn(crate::owner::watch(rendezvous.place(), gone, watch_rx));
+            (
+                Some(Owner {
+                    rendezvous,
+                    watch_stop,
+                    watch,
+                }),
+                Some(listener),
+            )
+        }
+        None => (None, None),
+    };
     let serve = rt.spawn(async move {
-        if let Err(e) = serve_listeners(config, submit_engine, admin, view, shutdown_rx).await {
+        if let Err(e) = serve_listeners(
+            config,
+            submit_engine,
+            admin,
+            view,
+            owner_listener,
+            shutdown_rx,
+        )
+        .await
+        {
             tracing::error!("daemon-rpc server error: {e}");
         }
     });
@@ -112,6 +153,7 @@ pub fn start(
         shutdown,
         rt,
         serve,
+        owner,
     })
 }
 
@@ -124,7 +166,21 @@ impl Running {
             shutdown,
             rt,
             serve,
+            owner,
         } = self;
+        // The owner's socket first: the watch stops, so removing the socket
+        // is not read as its going, and then the socket is removed, so no
+        // client reaches a daemon that is draining (`RPC_CHANNEL.md` §7.1).
+        if let Some(Owner {
+            rendezvous,
+            watch_stop,
+            watch,
+        }) = owner
+        {
+            watch_stop.send_replace(true);
+            drop(rt.block_on(watch));
+            drop(rendezvous);
+        }
         // Every acceptor observes this, polled yet or not (`watch` is
         // level-triggered; `notify_waiters` was not and could lose a stop).
         shutdown.send_replace(true);

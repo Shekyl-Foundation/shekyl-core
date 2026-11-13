@@ -690,6 +690,9 @@ impl RegtestDaemon {
         } = spec;
         install_wallet_tracing();
 
+        // A released binary named here (the mixed-version test's alpha.11)
+        // predates `rpc-socket-dir`, and refuses a row it does not know.
+        let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
@@ -775,6 +778,16 @@ impl RegtestDaemon {
             "--log-level",
             "info",
         ]);
+        // The owner's socket goes in the same private directory: this
+        // account's, mode 0700, one per spawn. A harness names it, so a test
+        // daemon never meets another's at the default rendezvous and needs no
+        // session directory (`RPC_CHANNEL.md` §7.1, IG-Q104).
+        if !released {
+            cmd.args([
+                "--rpc-socket-dir",
+                config_dir.to_str().expect("utf8 config path"),
+            ]);
+        }
         let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
         cmd.args(["--mine-address", &mine_address]);
         match peering {
