@@ -14,7 +14,6 @@
 //! synthetic values: this is where slice 1's outputs and slice 2's signing
 //! meet.
 
-#![cfg(feature = "multisig")]
 // CLIPPY(non_snake_case): `O`, `C`, `CM` are the FCMP++ notation.
 #![allow(non_snake_case)]
 
@@ -34,6 +33,7 @@ use shekyl_crypto_pq::kem::{
 };
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::leaf_commitment::pqc_leaf_commitment;
+use shekyl_crypto_pq::multisig_envelope::mint_multisig_envelope_keypair;
 use shekyl_crypto_pq::multisig_output::{
     construct_multisig_output, open_multisig_entry, MultisigEntryView, MultisigMemberView,
     MultisigOutputData,
@@ -86,9 +86,14 @@ fn found_group(n: u8, m: u8) -> (MultisigAddressPayload, Vec<MemberFile>) {
     .unwrap();
     let mut transport = Zeroizing::new([0u8; 32]);
     OsRng.fill_bytes(transport.as_mut());
+    let envelope_keys: Vec<_> = (0..n)
+        .map(|_| mint_multisig_envelope_keypair(&mut OsRng).unwrap())
+        .collect();
+    let envelope_publics: Vec<_> = envelope_keys.iter().map(|(pk, _)| pk.clone()).collect();
 
-    let files = (0..n)
-        .map(|i| {
+    let files = (0u8..)
+        .zip(envelope_keys)
+        .map(|(i, (_, envelope_secret))| {
             let secret = |sk: &shekyl_crypto_pq::kem::HybridKemSecretKey| {
                 Zeroizing::new([sk.x25519.as_slice(), &sk.ml_kem].concat())
             };
@@ -96,12 +101,14 @@ fn found_group(n: u8, m: u8) -> (MultisigAddressPayload, Vec<MemberFile>) {
                 address.clone(),
                 i,
                 split.verification_shares.clone(),
+                envelope_publics.clone(),
                 MemberSecrets {
                     b: Zeroizing::new(b.to_bytes()),
                     y_share: split.shares[usize::from(i)].clone(),
                     group_kem_secret: secret(&group_sk),
                     member_kem_secret: secret(&member_sks[usize::from(i)]),
                     transport_secret: transport.clone(),
+                    envelope_secret,
                 },
             )
             .unwrap();

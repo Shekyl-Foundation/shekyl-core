@@ -954,7 +954,11 @@ Everything is Rust. The FROST layer lives in a crypto crate (rule 36):
 place), `SalSigningParams` and the drivers over `modular_frost`'s own
 machines (`preprocess` / `from_cache` / `sign` / `complete` / `cache`), so
 the binding factor, nonce hedging and nonce custody are the machine's.
-`shekyl-multisig` carries bytes and takes no curve dependency. The former
+`shekyl-multisig` carries bytes and does no curve arithmetic. Since slice 3
+PR-B it depends on `shekyl-crypto-pq` (the ceremony file's seal and its
+sender's envelope signature) and `shekyl-curve-tree` (the reference-block
+window, R-13); the end-to-end spend test moved into it, and `shekyl-fcmp`
+takes no edge back. The former
 `wallet2.cpp` group-create / `m_pqc_multisig_*` surface — once wrongly cited
 here as the "**correct** `shekyl_pqc_multisig_group_id`" caller — is **deleted**:
 it was a non-functional fossil (threw on every input) and group_id is retired.
@@ -1042,8 +1046,10 @@ forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
 because the danger is scoped to one role — **not** "nonces unrepresentable /
 non-persistable by type" (the earlier F-9 framing), **not** `!Serialize` (which is
 unprovable — a foreign `derive` lands in six months), and **not** "restart
-forfeits the round" (incompatible with the walk to the safe, which the transport
-decision made mandatory):
+forfeits the round" (a signing session spans bringing a safe-held device out
+once, and a restart inside it must not cost the round; the session itself is
+bounded by the intent's reference block, about three hours from a fresh
+anchor, `PROOF_VALIDITY_HORIZON` blocks, R-13):
 1. **B's nonce (the safe key): ephemeral `!Clone`** — born, used, and dropped in
    one call, never persisted. B is protected by the *ceremony's shape*.
 2. **A's nonce (online): held across RT1, under three guards** — (a) **containment**
@@ -1129,7 +1135,7 @@ not a quiet reopen of MS-8.
 | ID | Status | Notes |
 | --- | --- | --- |
 | MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
-| MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate), `shekyl-multisig` stays curve-free |
+| MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate), `shekyl-multisig` does no curve arithmetic (its curve-tree edge is the reference window, R-13) |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
 | MS-5 | **S1 LANDED** | `shekyl-multisig` crate + `FrostCeremony` FSM (four-blob/two-round-trip/pqc-last) + both nonce shapes + `ConsumedNonce` typestate; no live crypto (S2/S3); DoD gate = S5 |
