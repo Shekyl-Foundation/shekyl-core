@@ -649,9 +649,10 @@ pub(crate) struct Shared<S: Substrate> {
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant: parked bodies, and a shown-set change at this
-    /// tip (Q9: once the relay marks an entry shown, the next template
-    /// lists it — N2 rebuilds the posted job, not only on a tip move).
+    /// Wakes the attendant: parked bodies, a shown-set change at this tip
+    /// (Q9: once the relay marks an entry shown, the next template lists
+    /// it — N2 rebuilds the posted job, not only on a tip move), and a
+    /// bundle the queue admits at this tip (the connector fires it).
     pending_ready: Arc<Notify>,
     /// What a test does to the pool between the producer's two locks.
     /// The build clones it, so a test can replace it between wakes.
@@ -847,8 +848,8 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip: parked bodies, and a
-    /// shown-set change at this tip (Q9).
+    /// The attendant waits on this beside the tip: parked bodies, a
+    /// shown-set change at this tip (Q9), and a bundle the queue admits.
     pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
@@ -1223,8 +1224,10 @@ pub struct Follow {
     pub producer: Option<crate::bundle_producer::ProducerSeat>,
     /// Wakes the tip follower when the pool's shown set changes at this
     /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
-    /// [`Notify`] the pool door's fluff hook fires. `None` is a private
-    /// notify: tests that admit through the pool lock wake it themselves.
+    /// [`Notify`] the pool door's fluff hook fires. The connector fires it
+    /// too, when the bundle queue admits a bundle at the tip. `None` is a
+    /// private notify: tests that admit through the pool lock wake it
+    /// themselves.
     pub shown: Option<Arc<Notify>>,
     /// The measurement sink the live phases are timed into: each
     /// `form_judged`, and each run the connector applies
@@ -1415,11 +1418,15 @@ where
             #[cfg(test)]
             refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
+        // The follower's one wake: a shown pool transaction and a bundle
+        // the queue admits both rebuild the posted job through it.
+        let pending_ready = follow.shown.unwrap_or_else(|| Arc::new(Notify::new()));
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
         let connector_task = prepared.spawn(ConnectorArgs {
             store: Arc::clone(&store),
             rules,
+            bundle_queued: Some(Arc::clone(&pending_ready)),
         });
         let shared = Arc::new(Shared {
             store,
@@ -1441,7 +1448,7 @@ where
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: follow.shown.unwrap_or_else(|| Arc::new(Notify::new())),
+            pending_ready,
             #[cfg(test)]
             between_locks: Mutex::new(None),
         });

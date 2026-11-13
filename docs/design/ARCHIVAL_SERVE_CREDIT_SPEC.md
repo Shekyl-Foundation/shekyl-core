@@ -740,6 +740,11 @@ A block carries **references**, never bundle bodies.
 transactions (DRS-E5).
 
 - Admission is the bundle rule of §9.1 run against the tip.
+- An admission rebuilds the posted mining job, through the same wake a
+  newly shown transaction uses, so a bundle filed after block `h + 1`'s
+  job was built still lands in `h + 1`. The wake coalesces, and only a
+  judged bundle that is not a duplicate fires it, so rebuilds are
+  bounded by valid bundles.
 - Keyed by `h`, one per `h`, the first valid one wins. Bounded at `W₂`
   entries.
 - An entry leaves when its bundle is admitted on chain, when `h` is

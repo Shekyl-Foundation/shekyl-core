@@ -723,6 +723,7 @@ where
     let actor_task = prepared.spawn(ConnectorArgs {
         store: Arc::new(store),
         rules,
+        bundle_queued: None,
     });
 
     let mut drive = Drive {

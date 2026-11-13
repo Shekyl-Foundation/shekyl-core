@@ -193,6 +193,7 @@ where
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules,
+            bundle_queued: None,
         });
         Self {
             connector,
@@ -821,6 +822,7 @@ where
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules: self.rules,
+            bundle_queued: None,
         });
         self.task = Some(task);
         self.connector = connector;

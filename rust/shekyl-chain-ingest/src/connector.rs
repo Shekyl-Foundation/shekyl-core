@@ -424,6 +424,11 @@ pub struct ConnectorArgs {
     pub store: Arc<ChainStore>,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
+    /// The tip follower's wake ([`crate::service::Follow::shown`]): fired
+    /// when the bundle queue admits a bundle at the tip, so the posted job
+    /// is rebuilt with the section that names it (module docs of
+    /// `connector_bundles`). `None` where no follower builds jobs.
+    pub bundle_queued: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// The store behind its latch: the only way to a write closure, refusing
@@ -498,6 +503,8 @@ pub struct Connector {
     /// following. Not persisted: the warning line is the durable record.
     deep_reorg: tokio::sync::watch::Sender<Option<DeepReorg>>,
     rules: ChainRules,
+    /// [`ConnectorArgs::bundle_queued`].
+    bundle_queued: Option<Arc<tokio::sync::Notify>>,
     /// Drawable sets the count has already built, keyed by the epoch and
     /// the opening block's hash. Not chain state (`SO-D12b`).
     memo: DrawableMemo,
@@ -519,6 +526,7 @@ impl Actor for Connector {
             deep_reorg: tokio::sync::watch::Sender::new(None),
             writer: Writer::live(args.store),
             rules: args.rules,
+            bundle_queued: args.bundle_queued,
             memo: DrawableMemo::new(),
         };
         // The bundle queue and the body store are reconciled at open

@@ -343,23 +343,22 @@ async fn job_after(node: &Node, tip: BlockHeight) -> Job {
     job.expect("the job the wait saw")
 }
 
-/// Jobs the follower may connect that still name no bundle. The job on
-/// the tip the bundle was filed at can be empty; the next must name it,
-/// inside the bundle's window (`h < h_incl ≤ h + W₂`).
-const EMPTY_JOBS_BEFORE_THE_SECTION: usize = 1;
-
-/// A block whose section names a bundle B already holds connects on B
-/// without a 2016 (`SCS-P27`; the owner's `ask_bundle_bodies`). A files a
-/// bundle, and B's queue admits it from A's 2015. A then mines its
-/// follower's jobs: the door attaches the posting's section to each, and
-/// the model relays each as 2008, references only. The follower builds on
-/// a tip move, so the job on the tip the bundle was filed at may name no
-/// bundle; the next names it. B connects every block, its store answers
-/// the section, and B asks A for nothing. No session is closed. Red edit:
-/// have the owner ask the session for every reference whatever the store
-/// holds — B sends a 2016.
+/// A bundle filed after block `h + 1`'s job is built lands in `h + 1`, and
+/// B connects that block without a 2016 (`SCS-P27`; the owner's
+/// `ask_bundle_bodies`). A's follower posts the job for `h + 1` with an
+/// empty section. A then files the bundle, and the queue's admission wakes
+/// the follower (the `Notify` a shown pool transaction fires), which
+/// rebuilds the job with the section that names it. B's queue admits the
+/// bundle from A's 2015. A mines the rebuilt job: the door attaches the
+/// posting's section, and the model relays the block as a 2008,
+/// references only. B's store answers the section, B asks A for nothing,
+/// and no session is closed. Red edits: remove the queue's notify, and the
+/// job for `h + 1` is never rebuilt, so the bundle would land in `h + 2`
+/// and the wait for a job at `h + 1` naming it fails; or have the owner
+/// ask the session for every reference whatever the store holds, and B
+/// sends a 2016.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_block_naming_a_held_bundle_connects_without_a_body_request() {
+async fn a_bundle_filed_after_the_job_is_built_lands_in_the_next_block_without_a_body_request() {
     logs();
     let (corpus, steps) = spend();
     let rules = corpus.rules();
@@ -391,6 +390,13 @@ async fn a_block_naming_a_held_bundle_connects_without_a_body_request() {
         from_b,
     } = link(&mut a, &mut b).await;
 
+    let empty = SectionRoot::from_bytes(empty_section_root());
+    let built = job_after(&a, h).await;
+    assert_eq!(
+        built.block.header.section_root, empty,
+        "the job for h + 1 is built before the bundle is filed"
+    );
+
     let (reference, body) = witness.bundle(rules, h);
     let filed = a
         .chain
@@ -409,36 +415,31 @@ async fn a_block_naming_a_held_bundle_connects_without_a_body_request() {
     let naming = SectionRoot::from_bytes(
         section_root(std::slice::from_ref(&reference)).expect("one reference is a section"),
     );
-    let empty = SectionRoot::from_bytes(empty_section_root());
-    let mut tip = h;
-    let mut mined = 0;
-    loop {
-        let job = job_after(&a, tip).await;
-        let root = job.block.header.section_root;
-        assert!(
-            root == naming || root == empty,
-            "the job at {} names a section of something else",
-            job.height.to_raw()
-        );
-        tip = connect_local(&a, job.block.serialize()).await;
-        assert_eq!(tip, job.height, "A connects its own job");
-        mined += 1;
-        let count = tip.to_raw() + 1;
-        let followed = b.wait(LIMIT, |node| node.count() == count).await;
-        assert!(followed, "B's tip never reached height {}", tip.to_raw());
-        if root == naming {
-            break;
-        }
-        assert!(
-            mined <= EMPTY_JOBS_BEFORE_THE_SECTION,
-            "the job after the tip move names no bundle B's queue holds"
-        );
-    }
+    let next = h.to_raw() + 1;
+    let board = &a.miner.as_ref().expect("a mining node").board;
+    let mut rebuilt = None;
+    let named = a
+        .wait(LIMIT, |_| {
+            rebuilt = board.posted().map(|(_, job)| job).filter(|job| {
+                job.height.to_raw() == next && job.block.header.section_root == naming
+            });
+            rebuilt.is_some()
+        })
+        .await;
+    assert!(
+        named,
+        "the job for h + 1 was never rebuilt to name the bundle"
+    );
+    let job = rebuilt.expect("the job the wait saw");
+    let landed = connect_local(&a, job.block.serialize()).await;
+    assert_eq!(landed.to_raw(), next, "the bundle lands in h + 1");
+    let followed = b.wait(LIMIT, |node| node.count() == next + 1).await;
+    assert!(followed, "B's tip never reached h + 1");
 
     assert_eq!(b.chain.tip(), a.chain.tip(), "B holds A's chain");
     assert!(
-        sent(&from_a, NOTIFY_NEW_COMPACT_BLOCK) >= mined,
-        "A relayed fewer 2008s than the blocks it mined"
+        sent(&from_a, NOTIFY_NEW_COMPACT_BLOCK) >= 1,
+        "A relayed no 2008 for the block it mined"
     );
     assert_eq!(
         sent(&from_b, NOTIFY_REQUEST_BUNDLE_BODIES),

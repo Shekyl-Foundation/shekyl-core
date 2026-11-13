@@ -22,7 +22,10 @@
 //!    nothing withdraws the job and says why ([`Posting`]). A shown-set
 //!    change at this tip (the relay's fluff event, Q9) wakes this task the
 //!    same way a parked body does, so the posted job lists the newly
-//!    shown body without waiting for the next tip.
+//!    shown body without waiting for the next tip. A bundle the queue
+//!    admits at this tip wakes it through the same `Notify`, so the job
+//!    for `tip + 1` carries the section that names it
+//!    (`connector_bundles`).
 //!
 //! **One posting.** Each post writes one record: the job and the bodies it
 //! listed, under the generation the board minted for it. The board keeps

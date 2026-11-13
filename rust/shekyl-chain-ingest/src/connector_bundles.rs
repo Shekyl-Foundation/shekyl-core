@@ -10,11 +10,23 @@
 //! Both run here because both read `D`, and the drawable memo is this
 //! actor's.
 //!
-//! - [`OfferBundle`] — the producer files a bundle. The queue's admission
-//!   is the bundle rule run against the tip: `judge_bundles` over the
-//!   store's bundle view at `h_incl = tip + 1`, in the same write that
-//!   queues it. It is shaped like offering an alternative block: the
-//!   offer is judged, and the verdict is the reply.
+//! - [`OfferBundle`] — the producer files a bundle, or a peer's 2015
+//!   offers one. The queue's admission is the bundle rule run against the
+//!   tip: `judge_bundles` over the store's bundle view at
+//!   `h_incl = tip + 1`, in the same write that queues it. It is shaped
+//!   like offering an alternative block: the offer is judged, and the
+//!   verdict is the reply.
+//! - **The posted job is rebuilt on admission.** A bundle admitted at the
+//!   tip fires the tip follower's wake
+//!   ([`ConnectorArgs::bundle_queued`](super::ConnectorArgs::bundle_queued)),
+//!   the same `Notify` a shown pool transaction fires, so the job for
+//!   `tip + 1` is rebuilt with the section that names it and the bundle
+//!   can land at `h + 1`. There is no second rebuild path. The `Notify`
+//!   coalesces: a burst of admissions while a rebuild is pending costs one
+//!   rebuild. Only a judged bundle that is not a duplicate reaches it:
+//!   a refused bundle, one for an `h` already queued and one already
+//!   revealed on the chain are replied to without it. So rebuilds are
+//!   bounded by valid bundles, at most one per `h`.
 //! - [`LearnDraws`] — the producer mined `h` and asks for its draws, which
 //!   the verifier's own selection derives (`draw_targets`) on a committed
 //!   snapshot, with the endpoint each persona's bond record carries. A
@@ -29,8 +41,8 @@
 //! - **Reconcile**, at start: the store drops a body no entry names and an
 //!   entry whose body is gone (SI-41), and this actor logs what went.
 //!
-//! The queue is not the connect path. No block carries a reference until
-//! 4b, so nothing the queue admits is ever connected from it here.
+//! The queue is not the connect path: a block that names a queued bundle
+//! connects through validation like any other.
 
 use kameo::message::{Context, Message};
 use shekyl_archival_retention::{
@@ -225,16 +237,24 @@ impl Message<OfferBundle> for Connector {
                 tip_height,
                 tip_hash,
                 capacity,
-            } => self.writer.write(|batch| {
-                queue(
-                    batch,
-                    &msg.reference,
-                    &msg.body,
-                    tip_height,
-                    tip_hash,
-                    capacity,
-                )
-            }),
+            } => {
+                let offered = self.writer.write(|batch| {
+                    queue(
+                        batch,
+                        &msg.reference,
+                        &msg.body,
+                        tip_height,
+                        tip_hash,
+                        capacity,
+                    )
+                })?;
+                if matches!(offered, BundleOffered::Queued { .. }) {
+                    if let Some(rebuild) = &self.bundle_queued {
+                        rebuild.notify_one();
+                    }
+                }
+                Ok(offered)
+            }
         }
     }
 }
