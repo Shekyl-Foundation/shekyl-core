@@ -3,6 +3,11 @@
 # always given on the command line, because it chooses the file.
 # Every line below is commented out: uncomment one to set it.
 
+# This node's name, for a second node of the same network on this machine:
+# 1 to 16 lower-case letters, digits or hyphens. Unset is the default
+# instance. A named instance needs its own data-dir.
+# instance = "<name>"
+
 # The data directory. An explicit path is used as given.
 # Default: the daemon's root and the network's subdirectory.
 # data-dir = "/path"
@@ -106,6 +111,11 @@
 
 # The mining thread count, or `auto`.
 # mine-threads = "auto"
+
+# The directory for the owner's socket, where the account has no session
+# directory (a test host). It must be local, owned by this account, with
+# mode 0700. Unset uses the session directory.
+# rpc-socket-dir = "/path"
 
 # The plaintext full-access listeners, loopback only; `none` is no admin
 # listener.

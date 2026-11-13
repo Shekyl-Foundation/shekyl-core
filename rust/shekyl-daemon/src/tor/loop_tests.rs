@@ -28,12 +28,13 @@ use shekyl_p2p::{
 };
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{ReplyFramer, SocksTimeout};
-use shekyl_tor_control_client::supervisor::{Cause, Input, Shown};
+use shekyl_tor_control_client::supervisor::Input;
 use shekyl_tor_control_daemon::{DaemonTorConfig, DaemonTorControl};
+use shekyl_tor_status::{ManagedTor, TorCause, TorState, TorStatus};
 use tokio::sync::watch;
 
 use super::inbox::inbox;
-use super::{drive, Drive, PinSource, Supervisor};
+use super::{drive, Drive, PinSource, Supervises, Supervisor};
 
 struct NoSync;
 
@@ -204,7 +205,7 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
     let (owner, inbox, feeds) = inbox();
     let network = network(dir, feeds);
     let task = tokio::spawn(drive(
-        PinSource::Unchecked(tor),
+        Supervises::Managed(PinSource::Unchecked(tor)),
         policy,
         true,
         18_021,
@@ -212,18 +213,22 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
         inbox,
         network,
     ));
-    Supervisor { owner, task }
+    Supervisor {
+        owner,
+        task,
+        managed: true,
+    }
 }
 
 /// Ask the status, taken within a second.
-async fn status_of(
-    supervisor: &Supervisor,
-    what: &str,
-) -> shekyl_tor_control_client::supervisor::Status {
-    tokio::time::timeout(Duration::from_secs(1), supervisor.status())
+async fn status_of(supervisor: &Supervisor, what: &str) -> ManagedTor {
+    let status: TorStatus = tokio::time::timeout(Duration::from_secs(1), supervisor.status())
         .await
         .unwrap_or_else(|_| panic!("{what}: the status ask was held"))
-        .expect("the loop runs")
+        .expect("the loop runs");
+    status
+        .tor
+        .expect("a managed Tor's status carries the managed object")
 }
 
 /// **A status ask and the stop are taken while Tor does not answer.** The
@@ -246,8 +251,8 @@ async fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
         assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
         // The subject: the launch is in flight. A launch that had failed
         // would read `FailedStart`; one that had answered, `Bootstrapping`.
-        assert_eq!(status.shown, Shown::Restarting, "ask {ask}: {status:?}");
-        assert_eq!(status.cause, Cause::None, "ask {ask}: {status:?}");
+        assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
+        assert_eq!(status.cause, None, "ask {ask}: {status:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
@@ -275,7 +280,7 @@ async fn a_launch_the_core_gives_up_on_ends_its_tor() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let status = status_of(&supervisor, "before the fault").await;
-        if status.cause == Cause::ReplyLate {
+        if status.cause == Some(TorCause::Unanswered) {
             break;
         }
         assert!(Instant::now() < deadline, "no fault: {status:?}");
@@ -321,7 +326,7 @@ async fn a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped() {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let status = status_of(&supervisor, "the reap starts in the fault's step").await;
-        if status.cause == Cause::ReplyLate {
+        if status.cause == Some(TorCause::Unanswered) {
             break;
         }
         assert!(Instant::now() < deadline, "no fault: {status:?}");
@@ -334,7 +339,7 @@ async fn a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped() {
         let took = asked.elapsed();
         assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
         // The subject: Tor is being restarted, not bootstrapping again.
-        assert_eq!(status.shown, Shown::Restarting, "ask {ask}: {status:?}");
+        assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
@@ -375,7 +380,7 @@ async fn an_upload_before_the_add_onion_reply_is_read() {
     let network = network(dir.path(), feeds);
     let events = inbox.poster().events();
     let mut drive = Drive::start(
-        PinSource::Unchecked(tor.clone()),
+        Supervises::Managed(PinSource::Unchecked(tor.clone())),
         super::policy(),
         true,
         18_021,

@@ -149,7 +149,8 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
         ProofsError::Daemon(RpcError::InvalidNode("an empty tx_list reply".to_string()))
     })?;
     let state = chain_state_of(&entry)?;
-    let tx = bind_served(TxHash::from_bytes(txid), &Served::from(&entry))
+    let served = Served::try_from(&entry).map_err(ProofsError::Daemon)?;
+    let tx = bind_served(TxHash::from_bytes(txid), &served)
         .map_err(ProofsError::Daemon)?
         .into_tx();
     Ok(FetchedTx { tx, state })
@@ -200,7 +201,8 @@ async fn fetch_proof_txs<R: Rpc>(
         }
         for (requested, entry) in batch.iter().zip(&entries) {
             bodies.push(
-                bind_served(TxHash::from_bytes(*requested), &Served::from(entry))
+                Served::try_from(entry)
+                    .and_then(|served| bind_served(TxHash::from_bytes(*requested), &served))
                     .map_err(ProofsError::Daemon)?
                     .into_tx(),
             );

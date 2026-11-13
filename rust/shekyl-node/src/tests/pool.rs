@@ -67,7 +67,22 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         .chain
         .key_images_spent(&[shekyl_types::KeyImage::from_bytes([7; 32])]);
     let status = handles.mining.status();
-    let info = daemon_status(&*handles.chain, &*handles.chain, Disclosure::FULL, 0);
+    // The Tor read is the supervisor's, which a node test does not run: a
+    // Tor-off node's answer, as the handler would pass it.
+    let tor = shekyl_daemon_rpc::tor_facts::TorRead {
+        hiding: false,
+        status: Some(shekyl_tor_status::TorStatus {
+            posture: shekyl_tor_status::Posture {
+                tor: shekyl_tor_status::TorSetting::Off,
+                clearnet: shekyl_tor_status::Clearnet::On,
+            },
+            origination: shekyl_tor_status::Origination::ClearnetOnly,
+            sync_connector: vec![],
+            tor_quiet: None,
+            tor: None,
+        }),
+    };
+    let info = daemon_status(&*handles.chain, &*handles.chain, Disclosure::FULL, 0, tor);
     // The genesis coinbase: an id the chain holds.
     let genesis = handles
         .chain
@@ -102,7 +117,11 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         "the service's pool is retired"
     );
     let info = info.unwrap_or_else(|_| panic!("daemon_status answers over a retired pool"));
-    assert_eq!(info.txpool_count.0, None, "the pool's count has no answer");
+    assert_eq!(
+        info.txpool_count.shown().expect("the pool part is shown").0,
+        None,
+        "the pool's count has no answer"
+    );
     assert_eq!(
         info.txpool_private_count.shown().map(|count| count.0),
         Some(None),

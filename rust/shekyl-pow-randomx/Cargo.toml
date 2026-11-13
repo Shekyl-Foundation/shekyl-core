@@ -120,8 +120,10 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # both benches are **informational baselines** (recorded in
 # `BENCH_RESULTS.md`), not enforced PR gates.
 criterion = { version = "0.5", features = ["html_reports"] }
-# The instruction-count harness of `benches/verify_header_iai.rs`, at the
-# version every other gated bench uses.
+# The instruction-count harness of `benches/verify_header_iai.rs` and
+# `benches/cache_derive_iai.rs` (the derive counted in instructions, the
+# drift gate on the hashing actor's rebuild bound, `RANDOMX_CACHE_ACTOR.md`
+# §5.8), at the version every other gated bench uses.
 gungraun = "0.19"
 
 [[bench]]
@@ -139,6 +141,13 @@ harness = false
 # in `RANDOMX_V2_PHASE2C_PLAN.md` §14. See `benches/cache_derive.rs`
 # for the harness rationale and the threshold-enforcement disposition.
 name = "cache_derive"
+harness = false
+
+[[bench]]
+# One `PreparedCache::derive` in instructions (gungraun): the drift gate
+# beside the criterion row above. Registered in
+# `scripts/bench/capture_rust_baseline.sh`.
+name = "cache_derive_iai"
 harness = false
 
 [[bench]]

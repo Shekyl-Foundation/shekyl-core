@@ -434,6 +434,17 @@ impl<'a> Reader<'a> {
         }
     }
 
+    pub(super) fn name(&mut self, name: &str) -> Read<String> {
+        match self.take(name).cloned() {
+            None => Read::Absent,
+            Some(Value::Name(text)) => Read::Present(text),
+            Some(other) => {
+                self.syntax(name, &other.render(), "a name");
+                Read::Unreadable
+            }
+        }
+    }
+
     /// A switch. Absence is off. Another arm is a fault.
     pub(super) fn switch(&mut self, name: &str) -> bool {
         match self.take(name).cloned() {

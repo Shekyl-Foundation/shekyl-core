@@ -79,6 +79,9 @@ pub enum StopCause {
     Signal(Signal),
     /// The RPC's `daemon_stop`, which `shekyl-cli daemon stop` posts.
     Requested,
+    /// The owner's socket, or its directory, went from under the running
+    /// daemon: the session that started it ended (`RPC_CHANNEL.md` §7.1).
+    RendezvousGone,
     /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
     Fatal(NodeEnd),
 }
@@ -88,6 +91,7 @@ impl fmt::Display for StopCause {
         match self {
             Self::Signal(signal) => f.write_str(signal.name()),
             Self::Requested => f.write_str("the RPC's daemon_stop"),
+            Self::RendezvousGone => f.write_str("the owner's socket going"),
             Self::Fatal(end) => write!(f, "{end}"),
         }
     }
@@ -118,6 +122,12 @@ fn latched() -> Option<StopCause> {
 /// The daemon's own request: the RPC's `daemon_stop`.
 pub fn request_stop() {
     latch(StopCause::Requested);
+}
+
+/// The owner's socket went: a run-as-me daemon stops when its session
+/// ends (`RPC_CHANNEL.md` §7.1). A clean stop.
+pub fn rendezvous_gone() {
+    latch(StopCause::RendezvousGone);
 }
 
 /// A task the node owns ended on its own, as `end` says.

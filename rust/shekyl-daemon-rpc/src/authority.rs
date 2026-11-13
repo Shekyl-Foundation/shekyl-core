@@ -74,6 +74,19 @@ impl Authority {
         }
     }
 
+    /// The owner's socket or pipe (`RPC_CHANNEL.md` RT-15, §7.1): the
+    /// daemon's own account, reached through a directory or a pipe only it
+    /// can open, is the host's administrator and holds every grant. `armed`
+    /// is the node's armed-lever switch.
+    #[must_use]
+    pub const fn owner(armed: bool) -> Self {
+        Self {
+            grants: GrantSet::ALL,
+            host: true,
+            armed,
+        }
+    }
+
     /// The plaintext view listener (RT-O33).
     pub const VIEW_LISTENER: Self = Self {
         grants: VIEW_LISTENER_GRANTS,
@@ -303,6 +316,26 @@ mod tests {
         let view = Authority::VIEW_LISTENER;
         assert!(view.admit(&row::<wire::Pow>()).is_ok());
         assert!(view.admit(&row::<wire::ChainCoinbaseSum>()).is_ok());
+    }
+
+    /// The owner's socket is the host's administrator (RT-15): every row,
+    /// the host-only class included, is admitted with the switch on, and the
+    /// armed levers still need the switch. Red edit: give the owner
+    /// `host: false` and the host-only rows are refused.
+    #[test]
+    fn the_owner_is_the_hosts_administrator_with_every_grant() {
+        let armed = Authority::owner(true);
+        assert!(armed.host());
+        assert!(!armed.bounded());
+        for row in TABLE {
+            assert!(armed.admit(row).is_ok(), "{}", row.name);
+        }
+        let unarmed = Authority::owner(false);
+        assert!(unarmed.admit(&row::<wire::RelayStats>()).is_ok());
+        let refused = unarmed
+            .admit(&row::<wire::DevChainPop>())
+            .expect_err("an armed lever needs the switch");
+        assert_eq!(refused.diagnostic.code, UNARMED);
     }
 
     /// Every row is admitted for the host with the switch on: the admin

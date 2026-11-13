@@ -188,10 +188,30 @@ impl Budget {
     /// thread that sets `stop`, or this call stays in the condvar.
     #[must_use]
     pub fn acquire_unless(&self, class: Class, stop: &AtomicBool) -> Option<Permit> {
+        self.acquire_until(class, &[stop])
+    }
+
+    /// [`acquire_unless`](Self::acquire_unless) that gives up once either
+    /// flag is set: a caller's stop and a second end of its own, such as a
+    /// cancel. One wait serves both, with the same guarantees for each:
+    /// read under the budget lock, and paired with [`wake`](Self::wake)
+    /// from the thread that sets it.
+    #[must_use]
+    pub fn acquire_unless_either(
+        &self,
+        class: Class,
+        stop: &AtomicBool,
+        or: &AtomicBool,
+    ) -> Option<Permit> {
+        self.acquire_until(class, &[stop, or])
+    }
+
+    /// The one permit wait: `None` once any of `stops` is set.
+    fn acquire_until(&self, class: Class, stops: &[&AtomicBool]) -> Option<Permit> {
         let mut state = self.0.lock();
         state.waiting[class.index()] += 1;
         loop {
-            if stop.load(Ordering::Acquire) {
+            if stops.iter().any(|stop| stop.load(Ordering::Acquire)) {
                 state.waiting[class.index()] -= 1;
                 drop(state);
                 // A dropped waiting count can make a lower class grantable.
@@ -435,7 +455,7 @@ mod tests {
             const { std::cell::RefCell::new(None) };
     }
 
-    /// The hook [`Budget::acquire_unless`] calls between its stop check and
+    /// The hook the permit wait calls between its stop check and
     /// its wait, on a thread that set [`PAUSE`]. Once.
     pub(super) fn pause_before_wait() {
         if let Some((pause, paused)) = PAUSE.with(|cell| cell.borrow_mut().take()) {
@@ -470,6 +490,39 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("the waiter saw the stop: the wake was not lost");
         assert!(stopped);
+        drop(held);
+    }
+
+    /// A wait on two flags ends on the second as on the first: a warm
+    /// loan's cancel ends its permit wait while the permit is still held
+    /// elsewhere.
+    #[test]
+    fn a_wait_on_two_flags_ends_when_the_second_is_set() {
+        let budget = one();
+        let held = budget.acquire(Class::Chain);
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        {
+            let (budget, stop, cancel) = (budget.clone(), Arc::clone(&stop), Arc::clone(&cancel));
+            std::thread::spawn(move || {
+                let permit = budget.acquire_unless_either(Class::CalcPow, &stop, &cancel);
+                let _sent = done_tx.send(permit.is_none());
+            });
+        }
+        until(|| budget.waiting(Class::CalcPow) == 1);
+        cancel.store(true, Ordering::Release);
+        budget.wake();
+        let ended = done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the cancel ended the wait with the permit still held");
+        assert!(ended);
+        assert_eq!(
+            budget.waiting(Class::CalcPow),
+            0,
+            "its waiting count is gone"
+        );
+        assert!(!stop.load(Ordering::Acquire));
         drop(held);
     }
 
