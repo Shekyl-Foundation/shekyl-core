@@ -330,7 +330,7 @@ mod tests {
         let address = MultisigAddressPayload::new(
             Network::Testnet,
             n,
-            2.min(n),
+            2,
             [0xB1; 32],
             [0x71; 32],
             vec![0x40; HYBRID_KEM_PUBKEY_LEN],
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn member_file_round_trips() {
-        for (n, index) in [(1u8, 0u8), (3, 2), (5, 4)] {
+        for (n, index) in [(2u8, 0u8), (3, 2), (5, 4)] {
             let original = file(n, index);
             let bytes = original.to_bytes();
             let read = MemberFile::from_bytes(&bytes).unwrap();

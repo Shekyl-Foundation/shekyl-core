@@ -48,6 +48,11 @@ use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, Sig
 /// is deliberately NOT the source of the DoS ceilings below (see
 /// `PQC_MAX_*_BLOB`).
 pub const MAX_MULTISIG_PARTICIPANTS: u8 = 5;
+
+/// The smallest threshold, and so the smallest group, a container may
+/// carry (R-11, ruled 2026-11-12): a 1-of-N group is a shared key under a
+/// multisig label. Pinned equal to the address's below.
+pub const MIN_MULTISIG_THRESHOLD: u8 = 2;
 /// The `pqc_auth.scheme_id` of a multisig spend.
 pub const HYBRID_SCHEME_ID_MULTISIG: u8 = 2;
 
@@ -75,10 +80,11 @@ pub const SINGLE_KEY_CANONICAL_LEN: usize = HybridPublicKey::CANONICAL_LEN;
 /// from the type that owns the encoding — one canonical definition (MSW-1).
 pub const SINGLE_SIG_CANONICAL_LEN: usize = HybridSignature::CANONICAL_LEN;
 
-/// The shortest legal multisig key blob: a 1-of-1 group revealing its one key
-/// (`3 + 32 + 1 + 1996 = 2032`). The structural floor both consensus
+/// The shortest legal multisig key blob: a 2-of-2 group revealing both keys
+/// (`3 + 64 + 1 + 2·1996 = 4060`). The structural floor both consensus
 /// verifiers apply before the exact parse (CEN-I16, K13).
-pub const MULTISIG_KEY_BLOB_MIN: usize = MultisigKeyBlob::expected_len(1, 1);
+pub const MULTISIG_KEY_BLOB_MIN: usize =
+    MultisigKeyBlob::expected_len(MIN_MULTISIG_THRESHOLD, MIN_MULTISIG_THRESHOLD);
 
 /// DoS pre-bound for a serialized multisig **key** blob
 /// (`pqc_auth.hybrid_public_key`, scheme 2). A generous, round ceiling
@@ -113,6 +119,10 @@ const _: () = assert!(
 const _: () = assert!(
     MAX_MULTISIG_PARTICIPANTS == shekyl_address::multisig_address::MAX_MULTISIG_PARTICIPANTS,
     "MSW-1: shekyl-crypto-pq and shekyl-address multisig participant caps diverged"
+);
+const _: () = assert!(
+    MIN_MULTISIG_THRESHOLD == shekyl_address::multisig_address::MIN_MULTISIG_THRESHOLD,
+    "R-11: shekyl-crypto-pq and shekyl-address minimum thresholds diverged"
 );
 
 // MSW-2, length-primary disjointness: a solo key blob (1996 bytes) is never
@@ -284,8 +294,7 @@ impl MultisigCommittedForm {
 }
 
 fn check_bounds(n_total: u8, m_required: u8) -> Result<(), PqcVerifyError> {
-    if m_required == 0
-        || n_total == 0
+    if m_required < MIN_MULTISIG_THRESHOLD
         || m_required > n_total
         || n_total > MAX_MULTISIG_PARTICIPANTS
     {
@@ -692,9 +701,9 @@ mod tests {
 
     #[test]
     fn committed_form_round_trips_at_three_plus_32n() {
-        for n in 1..=MAX_MULTISIG_PARTICIPANTS {
+        for n in MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS {
             let hashes = (0..n).map(|i| [i; 32]).collect();
-            let form = MultisigCommittedForm::new(1, hashes).unwrap();
+            let form = MultisigCommittedForm::new(MIN_MULTISIG_THRESHOLD, hashes).unwrap();
             let bytes = form.to_bytes();
             assert_eq!(bytes.len(), 3 + 32 * usize::from(n));
             assert_eq!(bytes[0], 0x02);
@@ -713,12 +722,23 @@ mod tests {
             Err(PqcVerifyError::ParameterBounds)
         );
         assert_eq!(
-            MultisigCommittedForm::new(1, vec![[0; 32]; 6]),
+            MultisigCommittedForm::new(2, vec![[0; 32]; 6]),
             Err(PqcVerifyError::ParameterBounds)
         );
-        let bytes = MultisigCommittedForm::new(1, vec![[7; 32]; 2])
+        // R-11: a 1-of-N group is refused, built or parsed.
+        assert_eq!(
+            MultisigCommittedForm::new(1, vec![[0; 32]; 3]),
+            Err(PqcVerifyError::ParameterBounds)
+        );
+        let bytes = MultisigCommittedForm::new(2, vec![[7; 32]; 2])
             .unwrap()
             .to_bytes();
+        let mut one_of_two = bytes.clone();
+        one_of_two[2] = 1;
+        assert_eq!(
+            MultisigCommittedForm::from_bytes(&one_of_two),
+            Err(PqcVerifyError::ParameterBounds)
+        );
         let mut longer = bytes.clone();
         longer.extend_from_slice(&[7; 32]);
         assert_eq!(
@@ -734,7 +754,7 @@ mod tests {
     /// The never-issued `0x01` is refused by name, not as a bounds error.
     #[test]
     fn version_0x01_is_refused_with_a_typed_error() {
-        let mut bytes = MultisigCommittedForm::new(1, vec![[7; 32]])
+        let mut bytes = MultisigCommittedForm::new(2, vec![[7; 32]; 2])
             .unwrap()
             .to_bytes();
         bytes[0] = 0x01;
@@ -742,8 +762,8 @@ mod tests {
             MultisigCommittedForm::from_bytes(&bytes),
             Err(PqcVerifyError::ContainerVersion)
         );
-        let (pairs, form) = group(1, 1);
-        let mut blob = key_blob(&form, &pairs, &[0]);
+        let (pairs, form) = group(2, 2);
+        let mut blob = key_blob(&form, &pairs, &[0, 1]);
         blob[0] = 0x01;
         assert_eq!(
             MultisigKeyBlob::from_canonical_bytes(&blob).unwrap_err(),
@@ -755,8 +775,8 @@ mod tests {
     #[test]
     fn msw1_key_blob_lengths_and_round_trip_over_all_n_m() {
         let pairs = gen_keypairs(usize::from(MAX_MULTISIG_PARTICIPANTS));
-        for n in 1..=MAX_MULTISIG_PARTICIPANTS {
-            for m in 1..=n {
+        for n in MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS {
+            for m in MIN_MULTISIG_THRESHOLD..=n {
                 let hashes = pairs[..usize::from(n)]
                     .iter()
                     .map(|(pk, _)| multisig_key_hash(&NET, pk))
@@ -771,7 +791,7 @@ mod tests {
                 assert_eq!(parsed.to_canonical_bytes().unwrap(), bytes);
             }
         }
-        assert_eq!(MULTISIG_KEY_BLOB_MIN, 2032);
+        assert_eq!(MULTISIG_KEY_BLOB_MIN, 4060);
     }
 
     /// MSW-2, length-primary: the solo key length is never a multisig length,
@@ -779,8 +799,8 @@ mod tests {
     #[test]
     fn msw2_lengths_are_injective_and_disjoint_from_the_solo_key() {
         let mut seen = std::collections::BTreeMap::new();
-        for n in 1..=MAX_MULTISIG_PARTICIPANTS {
-            for m in 1..=n {
+        for n in MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS {
+            for m in MIN_MULTISIG_THRESHOLD..=n {
                 let len = MultisigKeyBlob::expected_len(n, m);
                 assert_ne!(len, SINGLE_KEY_CANONICAL_LEN);
                 assert!(seen.insert(len, (n, m)).is_none(), "length {len} repeats");
@@ -791,7 +811,7 @@ mod tests {
     #[test]
     fn valid_spends_verify() {
         for (n, m, signers) in [
-            (1usize, 1u8, vec![0u8]),
+            (2usize, 2u8, vec![0u8, 1]),
             (3, 2, vec![0, 2]),
             (5, 3, vec![1, 3, 4]),
             (5, 5, vec![0, 1, 2, 3, 4]),
@@ -899,8 +919,8 @@ mod tests {
 
     #[test]
     fn a_blob_one_byte_off_is_refused_by_length() {
-        let (pairs, form) = group(2, 1);
-        let blob = key_blob(&form, &pairs, &[1]);
+        let (pairs, form) = group(3, 2);
+        let blob = key_blob(&form, &pairs, &[0, 2]);
         let mut long = blob.clone();
         long.push(0);
         for bad in [&blob[..blob.len() - 1], long.as_slice()] {
@@ -965,20 +985,22 @@ mod tests {
 
     #[test]
     fn signatures_are_checked_under_the_multisig_domain_and_message() {
-        let (pairs, form) = group(1, 1);
+        let (pairs, form) = group(2, 2);
         let msg = payload(b"domain");
-        let key = key_blob(&form, &pairs, &[0]);
-        let solo_domain = HybridEd25519MlDsa
-            .sign(
-                &pairs[0].1,
-                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-                msg.as_bytes(),
-            )
-            .unwrap();
+        let key = key_blob(&form, &pairs, &[0, 1]);
+        let solo_domain = |i: usize| {
+            HybridEd25519MlDsa
+                .sign(
+                    &pairs[i].1,
+                    crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                    msg.as_bytes(),
+                )
+                .unwrap()
+        };
         let sig = MultisigSigContainer {
-            sig_count: 1,
-            sigs: vec![solo_domain],
-            signer_indices: vec![0],
+            sig_count: 2,
+            sigs: vec![solo_domain(0), solo_domain(1)],
+            signer_indices: vec![0, 1],
         }
         .to_canonical_bytes()
         .unwrap();
@@ -986,13 +1008,13 @@ mod tests {
             verify(&key, &sig, &msg),
             Err(PqcVerifyError::CryptoVerifyFailed)
         );
-        let sig = sig_blob(&pairs, &[0], &payload(b"another message"));
+        let sig = sig_blob(&pairs, &[0, 1], &payload(b"another message"));
         assert_eq!(
             verify(&key, &sig, &msg),
             Err(PqcVerifyError::CryptoVerifyFailed)
         );
         assert_eq!(
-            verify_multisig(1, &key, &sig_blob(&pairs, &[0], &msg), &msg, &NET),
+            verify_multisig(1, &key, &sig_blob(&pairs, &[0, 1], &msg), &msg, &NET),
             Err(PqcVerifyError::SchemeMismatch)
         );
     }

@@ -279,7 +279,7 @@ impl TxRule for I14 {
 /// required (MSW-6 withdrawn); a solo key blob exactly
 /// [`PQC_HYBRID_SINGLE_KEY_LEN`]; a multisig key blob within
 /// `[MULTISIG_KEY_BLOB_MIN, PQC_MAX_PUBLIC_KEY_BLOB]`, the floor being
-/// crypto-pq's shortest legal blob (a 1-of-1 revealing its key; the
+/// crypto-pq's shortest legal blob (a 2-of-2 revealing both keys, R-11; the
 /// submit verifier's K13 imports the same constant). The exact parse is
 /// `shekyl_crypto_pq::multisig`'s, run by CEN-I18. Every class that
 /// carries auths; a serve-credit response carries none (H20) and records

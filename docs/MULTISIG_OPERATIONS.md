@@ -63,8 +63,10 @@ with `n_total > 5` are unreachable.
   to N. 2-of-3 means any two can spend.
 - If you need maximum security (cold storage), keep M high relative to N.
   5-of-5 means every member must agree.
-- Never use 1-of-N — this is just single-sig with extra steps. If any
-  one key is compromised, funds are lost.
+- 1-of-N groups cannot be made: the wallet, the address and consensus
+  all refuse a threshold below 2. With one signer it would be a shared
+  key under a multisig label, and any one compromised device would lose
+  the funds.
 - Availability and security trade off directly: higher M means more
   security but lower availability (more people must be online to spend).
 

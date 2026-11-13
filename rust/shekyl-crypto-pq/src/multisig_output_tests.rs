@@ -152,7 +152,7 @@ fn member_sign(
 /// accepts.
 #[test]
 fn every_member_opens_the_output_and_any_m_can_spend() {
-    for (n, m) in [(1u8, 1u8), (3, 2), (5, 3)] {
+    for (n, m) in [(2u8, 2u8), (3, 2), (5, 3)] {
         let g = group(n, m);
         let index = 1u64;
         let out = construct_multisig_output(&tx_key(), &g.address, 7_000, index, &NET).unwrap();

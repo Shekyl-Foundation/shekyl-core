@@ -205,8 +205,13 @@ that role.
 
 A group is defined by:
 
-- `n_total`: total signers, `1 ≤ n_total ≤ MAX_MULTISIG_PARTICIPANTS`
-- `m_required`: threshold, `1 ≤ m_required ≤ n_total`
+- `n_total`: total signers, `2 ≤ n_total ≤ MAX_MULTISIG_PARTICIPANTS`
+- `m_required`: threshold, `2 ≤ m_required ≤ n_total`
+  (`MIN_MULTISIG_THRESHOLD`, R-11). With `m = 1` the FROST polynomial is a
+  constant: every member holds the whole of `y_group`, the PQ leg is 1-of-N
+  and the ceremony has no responder — a shared key under a multisig label.
+  The address, the dealer split, the on-chain container (CEN-I16/I18) and
+  the spend intent each refuse it.
 - `group_version`: `0x01` for V3.1 (reserved for future rotation)
 - `spend_auth_version`: **`0x02` for Option E′** (product path —
   threshold FROST SAL on `y`; dealer-mode). **`0x01` is never issued**
@@ -387,7 +392,6 @@ the short identifier participants compare.
 
 | N | Canonical bytes |
 |---|---|
-| 1 | 2,502 B |
 | 2 | 3,718 B |
 | 3 | 4,934 B |
 | 5 | 7,366 B |
@@ -672,7 +676,8 @@ the bitmap's set bits.
 So `m` signers spend without the other `n − m`: they reveal only their own
 keys, and every member can read every `h_j` from the `0x0D` entry. A
 non-signer's key never reaches the chain. CEN-I16's structural floor for a
-scheme-2 key blob is `MULTISIG_KEY_BLOB_MIN = 2032` bytes (a 1-of-1).
+scheme-2 key blob is `MULTISIG_KEY_BLOB_MIN = 4060` bytes (a 2-of-2
+revealing both keys; R-11 refuses a smaller group).
 
 ### 7.6 Outputs a group cannot spend
 
