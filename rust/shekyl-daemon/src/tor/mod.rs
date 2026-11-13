@@ -651,7 +651,7 @@ impl Drive {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            let inputs = self.act(&action, &mut halt);
+            let inputs = self.act(action, &mut halt);
             let mut produced = Vec::new();
             for input in inputs {
                 self.fold(input);
@@ -702,8 +702,8 @@ impl Drive {
         (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
-    fn act(&mut self, action: &Action, halt: &mut bool) -> Vec<Input> {
-        if let Some(instead) = self.withheld(action) {
+    fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(&action) {
             return instead;
         }
         match action {
@@ -724,8 +724,9 @@ impl Drive {
                 Vec::new()
             }
             Action::CheckPin => vec![self.pin()],
-            // A request: sent off the loop, answered as an arrival.
-            Action::Reap
+            // A request: sent off the loop, answered as an arrival. The
+            // action moves: a launch's binary is the driver's to spawn.
+            action @ (Action::Reap
             | Action::Spawn(_)
             | Action::SubscribeEvents
             | Action::Sample
@@ -734,9 +735,9 @@ impl Drive {
             | Action::AddOnion
             | Action::RefetchDescriptor
             | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. } => self.send(action),
+            | Action::FetchFromDirectory { .. }) => self.send(action),
             Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::Publish(route) => vec![self.publish_route(*route)],
+            Action::Publish(route) => vec![self.publish_route(route)],
             Action::Probe => vec![self.probe()],
             Action::CancelProbe => {
                 self.cancel_probe();
@@ -771,7 +772,7 @@ impl Drive {
                 Vec::new()
             }
             Action::PublishInbound(inbound) => {
-                self.publish_inbound(*inbound);
+                self.publish_inbound(inbound);
                 Vec::new()
             }
             Action::TakeDown => {
@@ -1066,10 +1067,11 @@ fn observed_death(death: TorDeath) -> Option<Input> {
 }
 
 /// The data directory's free space against what a launch needs, read after
-/// any replacement (§5, "Data directory unusable"). An unreadable figure
-/// starts Tor anyway.
-fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
-    let needed = space_needed(data_dir, fresh);
+/// any replacement (§5, "Data directory unusable"). `new_directory` counts
+/// the cache a created directory is seeded from; a reused one already holds
+/// it. An unreadable figure starts Tor anyway.
+fn space_short(data_dir: &Path, new_directory: bool) -> Option<Input> {
+    let needed = space_needed(data_dir, new_directory);
     match shekyl_node::free_bytes(data_dir) {
         Ok(available) if available < needed => Some(Input::DirectoryUnusable {
             space: Some(Space { available, needed }),

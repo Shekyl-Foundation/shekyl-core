@@ -54,15 +54,48 @@ fn waits_for_reply(action: &Action) -> bool {
     )
 }
 
+/// Which request is in flight, once its payload has moved to the driver.
+///
+/// The queue holds a [`Request`], binary included. Sending consumes that
+/// request: the driver receives the action, and this record is what the
+/// core still knows. A launch's binary is not copied into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sent {
+    /// [`Request::Reap`].
+    Reap,
+    /// [`Request::Launch`]. The binary went with the action.
+    Launch,
+    /// [`Request::Subscribe`].
+    Subscribe,
+    /// [`Request::Sample`].
+    Sample,
+    /// [`Request::DeferDiskWrites`].
+    DeferDiskWrites,
+    /// [`Request::DeleteOnion`].
+    DeleteOnion,
+    /// [`Request::AddOnion`].
+    AddOnion,
+    /// [`Request::Refetch`].
+    Refetch,
+    /// [`Request::CheckDirectories`].
+    CheckDirectories,
+    /// [`Request::FetchFrom`]. The directory is named again on the action.
+    FetchFrom {
+        /// The directory the fetch asks.
+        hsdir: RelayFingerprint,
+    },
+}
+
 /// A request the driver runs off the loop.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum Request {
     /// Stop and reap the incarnation that ended, keeping its directory for
     /// the next launch ([`Action::Reap`]). It waits Tor's grace for an exit,
     /// so it runs off the loop like any other request.
     Reap,
-    /// Launch Tor ([`Action::Spawn`]). The request holds the launch, its
-    /// binary included, until it is sent.
+    /// Launch Tor ([`Action::Spawn`]). The binary stays here until the
+    /// request is sent, then moves to the driver. The in-flight record
+    /// keeps [`Sent::Launch`] and no second copy.
     Launch(Launch),
     /// Subscribe to the supervisor's events ([`Action::SubscribeEvents`]).
     Subscribe,
@@ -83,27 +116,47 @@ pub(super) enum Request {
 }
 
 impl Request {
-    /// The requests a decision becomes, in the order they are sent. `None`
-    /// for an action the driver performs on the loop.
-    pub(super) fn of(action: &Action) -> Option<Vec<Self>> {
-        Some(match action {
+    /// The requests a decision becomes, in the order they are sent.
+    ///
+    /// `Err` returns an action the driver performs on the loop. A launch
+    /// moves into the queue; it is not cloned to get there.
+    pub(super) fn of(action: Action) -> Result<Vec<Self>, Action> {
+        Ok(match action {
             Action::Reap => vec![Self::Reap],
-            Action::Spawn(launch) => vec![Self::Launch(launch.clone()), Self::Subscribe],
+            Action::Spawn(launch) => vec![Self::Launch(launch), Self::Subscribe],
             Action::Sample => vec![Self::Sample],
             Action::SetConfAvoidDiskWrites => vec![Self::DeferDiskWrites],
             Action::RepublishOnion => vec![Self::DeleteOnion, Self::AddOnion],
             Action::RefetchDescriptor => vec![Self::Refetch],
             Action::CheckDirectories => vec![Self::CheckDirectories],
-            Action::FetchFromDirectory { hsdir } => vec![Self::FetchFrom { hsdir: *hsdir }],
-            _ => return None,
+            Action::FetchFromDirectory { hsdir } => vec![Self::FetchFrom { hsdir }],
+            other => return Err(other),
         })
     }
 
-    /// The action that sends this request.
-    pub(super) fn action(&self) -> Action {
+    /// The in-flight record of this request. The payload stays on `self`.
+    fn sent_kind(&self) -> Sent {
         match self {
+            Self::Reap => Sent::Reap,
+            Self::Launch(_) => Sent::Launch,
+            Self::Subscribe => Sent::Subscribe,
+            Self::Sample => Sent::Sample,
+            Self::DeferDiskWrites => Sent::DeferDiskWrites,
+            Self::DeleteOnion => Sent::DeleteOnion,
+            Self::AddOnion => Sent::AddOnion,
+            Self::Refetch => Sent::Refetch,
+            Self::CheckDirectories => Sent::CheckDirectories,
+            Self::FetchFrom { hsdir } => Sent::FetchFrom { hsdir: *hsdir },
+        }
+    }
+
+    /// The action the driver runs, and the record kept while it is in
+    /// flight. The launch's binary moves into the action.
+    fn into_send(self) -> (Action, Sent) {
+        let sent = self.sent_kind();
+        let action = match self {
             Self::Reap => Action::Reap,
-            Self::Launch(launch) => Action::Spawn(launch.clone()),
+            Self::Launch(launch) => Action::Spawn(launch),
             Self::Subscribe => Action::SubscribeEvents,
             Self::Sample => Action::Sample,
             Self::DeferDiskWrites => Action::SetConfAvoidDiskWrites,
@@ -111,8 +164,9 @@ impl Request {
             Self::AddOnion => Action::AddOnion,
             Self::Refetch => Action::RefetchDescriptor,
             Self::CheckDirectories => Action::CheckDirectories,
-            Self::FetchFrom { hsdir } => Action::FetchFromDirectory { hsdir: *hsdir },
-        }
+            Self::FetchFrom { hsdir } => Action::FetchFromDirectory { hsdir },
+        };
+        (action, sent)
     }
 
     /// The request that follows this one in the same decision, and goes
@@ -155,10 +209,11 @@ impl Work {
     }
 }
 
-/// The request in flight: what it is, its number, and when it was sent.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The request in flight: which one, its number, and when it was sent.
+/// The payload has moved to the driver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InFlight {
-    request: Request,
+    sent: Sent,
     number: u64,
     sent_at: u64,
 }
@@ -191,21 +246,20 @@ impl Requests {
             || self
                 .in_flight
                 .as_ref()
-                .is_some_and(|flight| flight.request == *request)
+                .is_some_and(|flight| request.repeats() && flight.sent == request.sent_kind())
     }
 
     /// A publication (its `DEL_ONION` or its `ADD_ONION`) is queued or in
     /// flight.
     fn publishing(&self) -> bool {
-        let publication =
-            |request: &Request| matches!(request, Request::DeleteOnion | Request::AddOnion);
-        self.queued
-            .iter()
-            .any(|work| work.request().is_some_and(publication))
-            || self
-                .in_flight
-                .as_ref()
-                .is_some_and(|flight| publication(&flight.request))
+        let publication = |sent: Sent| matches!(sent, Sent::DeleteOnion | Sent::AddOnion);
+        self.queued.iter().any(|work| {
+            work.request()
+                .is_some_and(|request| publication(request.sent_kind()))
+        }) || self
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| publication(flight.sent))
     }
 
     /// Join `work` to the list: into the reply being folded, or at the end.
@@ -256,12 +310,12 @@ impl Requests {
         }
     }
 
-    /// `request` was sent at `now`.
-    fn sent(&mut self, request: Request, now: u64) {
+    /// `sent` was sent at `now`. The payload is the driver's.
+    fn sent(&mut self, sent: Sent, now: u64) {
         self.refused = false;
         self.next = self.next.wrapping_add(1);
         self.in_flight = Some(InFlight {
-            request,
+            sent,
             number: self.next,
             sent_at: now,
         });
@@ -346,17 +400,18 @@ impl super::Core {
     pub(super) fn route_requests(&mut self, now: u64, actions: Vec<Action>) -> Vec<Action> {
         let mut immediate = Vec::new();
         for action in actions {
-            match Request::of(&action) {
-                // One publication at a time. The onion stays owed until the
-                // add is answered, so a sample deadline or the endpoint
-                // coming back while one is out asks for it again. That ask
-                // is already being answered, and a second delete queued
-                // behind it would remove the service the first one
-                // publishes. A remedial republish folded in here is sent by
-                // the publication already out: its answer settles the
-                // republish's state as its own.
-                Some(_) if action == Action::RepublishOnion && self.requests.publishing() => {}
-                Some(requests) => {
+            // One publication at a time. The onion stays owed until the
+            // add is answered, so a sample deadline or the endpoint
+            // coming back while one is out asks for it again. That ask
+            // is already being answered, and a second delete queued
+            // behind it would remove the service the first one
+            // publishes. A remedial republish folded in here is sent by
+            // the publication already out: its answer settles the
+            // republish's state as its own.
+            let republish = matches!(action, Action::RepublishOnion);
+            match Request::of(action) {
+                Ok(_) if republish && self.requests.publishing() => {}
+                Ok(requests) => {
                     for request in requests {
                         self.requests.push_request(request);
                     }
@@ -364,8 +419,8 @@ impl super::Core {
                 // Speech and bookkeeping run in this step. A dial, a route
                 // publish, a progress line, and a pin check keep their place
                 // in the list, behind the request they follow.
-                None if !waits_for_reply(&action) => immediate.push(action),
-                None => self.requests.push_now(action),
+                Err(action) if !waits_for_reply(&action) => immediate.push(action),
+                Err(action) => self.requests.push_now(action),
             }
         }
         if self.requests.in_flight().is_some() {
@@ -381,20 +436,20 @@ impl super::Core {
                     }
                 }
                 Work::Ask(request) => {
-                    let action = request.action();
+                    let (action, sent) = request.into_send();
                     if !self.action_stands(&action) {
-                        match &request {
-                            Request::DeleteOnion => out.extend(self.republish_withheld()),
-                            Request::FetchFrom { hsdir } => self.directory_fetch_withheld(*hsdir),
+                        match sent {
+                            Sent::DeleteOnion => out.extend(self.republish_withheld()),
+                            Sent::FetchFrom { hsdir } => self.directory_fetch_withheld(hsdir),
                             _ => {}
                         }
                         self.requests.drop_follower();
                         continue;
                     }
-                    if let Request::FetchFrom { hsdir } = &request {
-                        self.directory_fetch_sent(now, *hsdir);
+                    if let Sent::FetchFrom { hsdir } = sent {
+                        self.directory_fetch_sent(now, hsdir);
                     }
-                    self.requests.sent(request, now);
+                    self.requests.sent(sent, now);
                     out.push(action);
                     break;
                 }

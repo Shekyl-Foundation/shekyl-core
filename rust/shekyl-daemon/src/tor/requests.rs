@@ -42,7 +42,7 @@ use shekyl_tor_control_client::control::{
     RelayFingerprint, ServiceId, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    Action, DirectoryAnswer, DirectoryFetch, Input, Launch, LaunchDirectory, REPLY_BOUND,
+    Action, DirectoryAnswer, DirectoryFetch, DirectoryPlan, Input, Launch, REPLY_BOUND,
 };
 use shekyl_tor_control_daemon::{
     ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
@@ -137,7 +137,7 @@ impl Drive {
     /// Send the request `action` names: the core has just put it in flight.
     /// Returns what the loop answers at once, `Replied` last; empty when a
     /// task answers.
-    pub(super) fn send(&mut self, action: &Action) -> Vec<Input> {
+    pub(super) fn send(&mut self, action: Action) -> Vec<Input> {
         // A fault folded between the core sending this request and the loop
         // reaching it has cleared it: there is nothing to send.
         let Some(number) = self.core.in_flight() else {
@@ -145,7 +145,7 @@ impl Drive {
         };
         let answered = match action {
             Action::Reap => self.send_reap(number),
-            Action::Spawn(launch) => self.send_launch(number, launch.clone()),
+            Action::Spawn(launch) => self.send_launch(number, launch),
             Action::SubscribeEvents => self.send_subscribe(number),
             Action::Sample => self.send_sample(number),
             Action::SetConfAvoidDiskWrites => self.send_defer(number),
@@ -153,8 +153,8 @@ impl Drive {
             Action::AddOnion => self.send_add(number),
             Action::RefetchDescriptor => self.send_refetch(number),
             Action::CheckDirectories => self.send_check(number),
-            Action::FetchFromDirectory { hsdir } => self.send_fetch(number, *hsdir),
-            _ => unreachable!("{action:?} is not a request"),
+            Action::FetchFromDirectory { hsdir } => self.send_fetch(number, hsdir),
+            other => unreachable!("{other:?} is not a request"),
         };
         match answered {
             Some(mut inputs) => {
@@ -263,30 +263,31 @@ impl Drive {
                 say_retirement(&stray.stop_for_respawn().await.retire().await);
             });
         }
-        // A fresh launch retires the kept directory; a kept launch reuses it.
-        // Either one with nothing kept takes a new directory.
-        let (old, kept) = match directory {
-            LaunchDirectory::Fresh => (self.kept.take(), None),
-            LaunchDirectory::Kept => (None, self.kept.take()),
-        };
-        let fresh = kept.is_none();
+        // The policy read against the directory actually held. A fresh
+        // policy retires a held directory; a kept policy reuses one; either
+        // with nothing held creates one.
+        let plan = directory.plan(self.kept.take());
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
         let (abandon, abandoned) = watch::channel(false);
         self.launch = Some((number, abandon));
         self.hold_later(number, async move {
-            let swept = match old {
-                Some(old) => {
-                    say_retirement(&old.replace().await);
-                    true
+            let (retired, reuse) = match plan {
+                DirectoryPlan::Retire(previous) => {
+                    say_retirement(&previous.replace().await);
+                    (true, None)
                 }
-                None => false,
+                DirectoryPlan::New => (false, None),
+                DirectoryPlan::Reuse(directory) => (false, Some(directory)),
             };
-            if fresh && !swept {
+            // A new directory is swept of earlier incarnations, unless the
+            // retirement just swept them. A reused directory is left as it is.
+            let new_directory = reuse.is_none();
+            if new_directory && !retired {
                 sweep_stale_data_dirs(&data_dir, None);
             }
-            if let Some(input) = space_short(&data_dir, fresh) {
-                return Answer::Held { input, kept };
+            if let Some(input) = space_short(&data_dir, new_directory) {
+                return Answer::Held { input, kept: reuse };
             }
             let mut waiting = abandoned.clone();
             // A driver that has gone abandons the launch too.
@@ -295,7 +296,7 @@ impl Drive {
             };
             // The control's own awaiting methods take this bound. The
             // driver asks through `ControlAsker` and calls none of them.
-            let launched = match kept {
+            let launched = match reuse {
                 Some(directory) => DaemonTorControl::spawn_into(
                     directory,
                     binary,

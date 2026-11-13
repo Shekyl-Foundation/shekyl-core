@@ -225,7 +225,35 @@ pub enum LaunchDirectory {
     Fresh,
 }
 
-/// One launch of Tor: the binary its own pin check accepted (`TSR-F5`) and
+/// [`LaunchDirectory`] read against the directory actually held.
+///
+/// `Fresh` with one held retires it, then creates another. `Kept` with one
+/// held reuses it. Either policy with nothing held creates one. The value
+/// moves with the outcome, so a retire cannot be asked for when nothing is
+/// held.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DirectoryPlan<T> {
+    /// Retire this directory, then create one.
+    Retire(T),
+    /// Create a directory. None was held.
+    New,
+    /// Reuse this directory.
+    Reuse(T),
+}
+
+impl LaunchDirectory {
+    /// This policy applied to `held`.
+    #[must_use]
+    pub fn plan<T>(self, held: Option<T>) -> DirectoryPlan<T> {
+        match (self, held) {
+            (Self::Fresh, Some(previous)) => DirectoryPlan::Retire(previous),
+            (Self::Fresh | Self::Kept, None) => DirectoryPlan::New,
+            (Self::Kept, Some(directory)) => DirectoryPlan::Reuse(directory),
+        }
+    }
+}
+
+/// One launch of Tor: the binary its own pin check accepted (`TSR-F6`) and
 /// the data directory it takes. A launch exists only with a binary, so the
 /// driver holds none of its own and cannot be asked to launch without one
 /// (Rick, 2026-11-12).
@@ -1064,7 +1092,7 @@ impl Core {
     }
 
     /// The pin accepted `binary`: the launch carries it, so every spawn is
-    /// of the binary its own pin check accepted (`TSR-F5`).
+    /// of the binary its own pin check accepted (`TSR-F6`).
     fn pin_accepted(&mut self, binary: VerifiedTorBinary) -> Vec<Action> {
         self.phase = Phase::Launching;
         let directory = if self.launch_failures > 0

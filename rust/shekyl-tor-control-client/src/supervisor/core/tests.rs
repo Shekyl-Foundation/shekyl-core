@@ -14,7 +14,7 @@ use super::super::posture::{
     Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Sessions, Shown, Status, Syncing,
     TorSetting,
 };
-use super::{duration_ns, Action, Core, Input, LaunchDirectory, Policy, Step};
+use super::{duration_ns, Action, Core, DirectoryPlan, Input, LaunchDirectory, Policy, Step};
 
 impl Input {
     /// The pin's acceptance, carrying a witness no test spawns: the core
@@ -116,7 +116,7 @@ fn announces(step: &Step) -> usize {
 fn spawns(step: &Step) -> bool {
     step.actions
         .iter()
-        .any(|action| matches!(action, Action::Spawn { .. }))
+        .any(|action| matches!(action, Action::Spawn(_)))
 }
 
 fn publishes(step: &Step) -> bool {
@@ -129,6 +129,21 @@ fn takes_down(step: &Step) -> bool {
     step.actions
         .iter()
         .any(|action| matches!(action, Action::TakeDown))
+}
+
+/// **The directory policy read against what is held.** Fresh with a
+/// directory retires it. Kept with a directory reuses it. Either with
+/// nothing held creates one. Fails if a retire can be planned when nothing
+/// is held, or a kept directory is dropped.
+#[test]
+fn a_launch_directory_plans_against_what_is_held() {
+    assert_eq!(
+        LaunchDirectory::Fresh.plan(Some(7)),
+        DirectoryPlan::Retire(7)
+    );
+    assert_eq!(LaunchDirectory::Fresh.plan(None::<u8>), DirectoryPlan::New);
+    assert_eq!(LaunchDirectory::Kept.plan(None::<u8>), DirectoryPlan::New);
+    assert_eq!(LaunchDirectory::Kept.plan(Some(7)), DirectoryPlan::Reuse(7));
 }
 
 fn launch_directory(step: &Step) -> LaunchDirectory {
