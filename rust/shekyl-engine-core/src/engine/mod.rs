@@ -394,6 +394,7 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+pub mod submit;
 /// Transfer / pending-tx workflow (extracted from the former monofile
 /// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
 pub mod transfer;
@@ -474,15 +475,16 @@ pub use shekyl_address::ShekylAddress;
 // `shekyl-scanner`; do not wrap or redefine (type-placement).
 pub use shekyl_scanner::ScannableBlock;
 
-pub use held_sends::{HeldSend, ResendError};
+pub use held_sends::{HeldSend, HeldSends, ResendError};
 pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    SubmitOutcome, SubmitReceipt, TxDestination, TxHash, TxRecipient, TxRecipientSummary,
-    TxRequest, DEFAULT_RESERVATION_TTL,
+    SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    DEFAULT_RESERVATION_TTL,
 };
+pub use submit::SubmitReceipt;
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name

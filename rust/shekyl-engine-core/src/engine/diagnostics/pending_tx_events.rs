@@ -261,7 +261,7 @@ pub enum WatchdogAlarmReason {
     /// clause's auto-versus-confirm axis stays closed). The probe rung
     /// becomes the operator-alarm rung, preserving §2.6's "every exit is
     /// verdict, confirmation, or operator alarm"; the user resends
-    /// (`resend_held_send`) or abandons (`abandon_tx`).
+    /// (`tx_resend`) or abandons (`abandon_tx`).
     DispatchedBeforeThisSession,
 
     /// The kernel called for the probe, but the held send's journal row

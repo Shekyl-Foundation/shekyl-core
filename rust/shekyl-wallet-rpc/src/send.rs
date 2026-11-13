@@ -116,7 +116,7 @@ pub(crate) async fn build_pending_tx(
     // (`revalidate_selected_inputs`) and refuses rather than hand back a
     // `PendingTx` the merge already invalidated.
     let engine = shared.read().await;
-    let pending = engine.build_pending_tx_async(&request).await?;
+    let pending = engine.build_pending_tx(&request).await?;
     let result = pending_tx_result(&pending);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize build_pending_tx: {e}")))
@@ -141,7 +141,7 @@ pub(crate) async fn submit_pending_tx(
     // same build permit, so the serialized `AssembleTx` observable holds
     // across build and submit alike.
     let engine = shared.read().await;
-    let outcome = engine.submit_pending_tx_async(id, seen_gen).await?;
+    let outcome = engine.submit_pending_tx(id, seen_gen).await?;
     let result = submit_pending_tx_result(&outcome);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize submit_pending_tx: {e}")))
@@ -209,7 +209,12 @@ pub(crate) async fn tx_alarm(
     crate::params::require_empty_object(params, "tx_alarm")?;
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    let sends: Vec<_> = engine.held_sends().iter().map(tx_alarm_view).collect();
+    let sends: Vec<_> = engine
+        .held_sends()
+        .list()
+        .iter()
+        .map(tx_alarm_view)
+        .collect();
     serde_json::to_value(sends)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize tx_alarm: {e}")))
 }
@@ -230,7 +235,7 @@ pub(crate) async fn tx_resend(
     })?;
     let shared = require_open_engine(tenants).await?;
     let engine = shared.read().await;
-    let outcome = engine.resend_held_send(TxHash::from_bytes(txid)).await?;
+    let outcome = engine.held_sends().resend(TxHash::from_bytes(txid)).await?;
     let result = submit_pending_tx_result(&shekyl_engine_core::SubmitReceipt {
         outcome,
         verdict_saved: true,

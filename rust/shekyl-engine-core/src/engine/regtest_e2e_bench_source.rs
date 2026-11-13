@@ -141,7 +141,7 @@ async fn spend(
     let mut sent = 0u64;
     while limit.is_none_or(|n| sent < n) {
         let g = arc.read().await;
-        let pending = match g.build_pending_tx_async(&request).await {
+        let pending = match g.build_pending_tx(&request).await {
             Ok(p) => p,
             Err(SendError::OutputNotYetSpendable { .. }) => {
                 say("NOT_SPENDABLE");
@@ -152,10 +152,7 @@ async fn spend(
                 return;
             }
         };
-        match g
-            .submit_pending_tx_async(pending.id, pending.content_gen)
-            .await
-        {
+        match g.submit_pending_tx(pending.id, pending.content_gen).await {
             Ok(crate::engine::SubmitReceipt {
                 outcome: SubmitOutcome::Accepted { hash },
                 ..

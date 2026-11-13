@@ -332,7 +332,7 @@ pub struct SendRecord {
     /// the same bytes can be offered again: automatically within the
     /// session that dispatched them (the watchdog's resubmit-same-bytes
     /// probe), and only on the user's decision after a restart
-    /// (`resend_held_send`; `DAEMON_SUBMIT_VERDICT.md` §5.3).
+    /// (`tx_resend`; `DAEMON_SUBMIT_VERDICT.md` §5.3).
     ///
     /// `Some` from dispatch while the send can still need them; `None`
     /// once the row has settled ([`SendJournalBlock::prune_settled_tx_bytes`])

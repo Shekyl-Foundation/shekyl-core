@@ -339,7 +339,7 @@ pub(crate) struct PendingTxState {
     /// The operator alarm raised for each held send this session, by the
     /// watchdog's alarm rung (the edge-trigger latch: one alarm per held
     /// send until it leaves the held projection or the user resends it).
-    /// Read by [`Engine::held_sends`](crate::engine::Engine::held_sends)
+    /// Read by [`HeldSends::list`](crate::engine::held_sends::HeldSends::list)
     /// beside the alarm derived from the saved journal; never persisted.
     pub raised_alarms: HashMap<TxHash, crate::engine::diagnostics::WatchdogAlarmReason>,
     /// F40 targeted re-scan requests awaiting the driver's next tick.

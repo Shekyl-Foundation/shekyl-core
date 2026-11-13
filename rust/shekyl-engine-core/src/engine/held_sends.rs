@@ -8,8 +8,8 @@
 //!
 //! The watchdog's alarm used to reach only the diagnostic sink — a log
 //! line. A human cannot decide on what they cannot see, so the alarm is a
-//! read here ([`Engine::held_sends`]) and the decision an action
-//! ([`Engine::resend_held_send`]; [`Engine::abandon_tx_persisted`] is the
+//! read here ([`HeldSends::list`]) and the decision an action
+//! ([`HeldSends::resend`]; [`Engine::abandon_tx_persisted`] is the
 //! other choice).
 //!
 //! # Nothing here is persisted
@@ -85,6 +85,24 @@ pub enum ResendError {
     },
 }
 
+/// Borrow of an [`Engine`] for its held sends: the ones that need the
+/// user's decision ([`Self::list`]) and the user's resend
+/// ([`Self::resend`]). A façade, as the engine-decomposition ratchet asks
+/// of new behavior, so `Engine` carries one entry point for both.
+#[allow(private_bounds)] // same Engine-trait privacy posture as `Engine` itself
+pub struct HeldSends<'a, S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine + WatchdogHost,
+    F: PersistenceEngine,
+{
+    engine: &'a Engine<S, D, L, E, R, P, F>,
+}
+
 #[allow(private_bounds)]
 impl<
         S: EngineSignerKind,
@@ -96,11 +114,28 @@ impl<
         F: PersistenceEngine,
     > Engine<S, D, L, E, R, P, F>
 {
+    /// The held sends: what needs the user's decision, and the resend.
+    pub fn held_sends(&self) -> HeldSends<'_, S, D, L, E, R, P, F> {
+        HeldSends { engine: self }
+    }
+}
+
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine + WatchdogHost,
+        F: PersistenceEngine,
+    > HeldSends<'_, S, D, L, E, R, P, F>
+{
     /// The held sends that need the user's decision, oldest dispatch
     /// first: every held send dispatched before this session, and every
     /// one the watchdog has alarmed on in it.
-    pub fn held_sends(&self) -> Vec<HeldSend> {
-        let host: &dyn WatchdogHost = &self.pending;
+    pub fn list(&self) -> Vec<HeldSend> {
+        let host: &dyn WatchdogHost = &self.engine.pending;
         let mut sends: Vec<HeldSend> = host
             .held_submits()
             .into_iter()
@@ -138,8 +173,9 @@ impl<
     /// # Errors
     ///
     /// [`ResendError`]: not held, no saved bytes, a refusal, or no verdict.
-    pub async fn resend_held_send(&self, tx_hash: TxHash) -> Result<SubmitOutcome, ResendError> {
-        let host: &dyn WatchdogHost = &self.pending;
+    pub async fn resend(&self, tx_hash: TxHash) -> Result<SubmitOutcome, ResendError> {
+        let engine = self.engine;
+        let host: &dyn WatchdogHost = &engine.pending;
         let held = host
             .held_submits()
             .into_iter()
@@ -150,7 +186,7 @@ impl<
             .ok_or(ResendError::BytesMissing)?;
         host.adopt_into_session(tx_hash);
 
-        let outcome = self
+        let outcome = engine
             .daemon
             .submit_transaction(bytes)
             .await
@@ -161,7 +197,7 @@ impl<
                     kind: AmbiguousErrorKind::DaemonUnavailable,
                 }
             })?;
-        let commit = EngineLedgerCommit::new(&self.persistence, self.state_wrap_key());
+        let commit = EngineLedgerCommit::new(&engine.persistence, engine.state_wrap_key());
         let released = apply_resend_verdict(host, &commit, &held, outcome.clone());
         match outcome_to_result(outcome) {
             Ok(SubmitSuccess::Broadcast { kind, .. }) => Ok(kind.into_outcome(tx_hash)),

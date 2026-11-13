@@ -596,7 +596,7 @@ fn raise_alarm(host: &dyn WatchdogHost, tx_hash: TxHash, reason: WatchdogAlarmRe
 }
 
 /// Apply the daemon's answer to the user's resend of the held send `held`
-/// (A19, `resend_held_send`) the way the watchdog applies its own probe's:
+/// (A19, `HeldSends::resend`) the way the watchdog applies its own probe's:
 /// [`classify_probe`] and the kernel's [`apply_probe_outcome`], so a resend
 /// and a probe cannot disagree about what one verdict means. A definite
 /// terminal verdict releases the F14 locks (§2.6 release path 2) and saves

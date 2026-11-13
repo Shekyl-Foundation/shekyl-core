@@ -1447,7 +1447,7 @@ async fn capture_chain_keeps_its_datadir() {
 ///
 /// Takes the whole receipt so every real-daemon send also checks the
 /// verdict save (A19): an accept the wallet did not save is a failure.
-fn require_fresh_accept(receipt: super::pending::SubmitReceipt, what: &str) -> TxHash {
+fn require_fresh_accept(receipt: super::submit::SubmitReceipt, what: &str) -> TxHash {
     assert!(
         receipt.verdict_saved,
         "the wallet must save the verdict on {what}"
@@ -2024,7 +2024,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
             // matches production wallet-RPC locking and cannot mask
             // exclusive-lock regressions.
             let g = arc.read().await;
-            g.build_pending_tx_async(&request).await
+            g.build_pending_tx(&request).await
         };
         match attempt {
             Ok(p) => {
@@ -2059,7 +2059,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
     let outcome = {
         let g = arc.read().await;
-        g.submit_pending_tx_async(pending.id, pending.content_gen)
+        g.submit_pending_tx(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
     };
@@ -2178,7 +2178,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
             let g = arc.read().await;
-            g.build_pending_tx_async(&request).await
+            g.build_pending_tx(&request).await
         };
         match attempt {
             Ok(p) => {
@@ -2222,7 +2222,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     let outcome = {
         let g = arc.read().await;
-        g.submit_pending_tx_async(pending.id, pending.content_gen)
+        g.submit_pending_tx(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend")
     };
@@ -2471,7 +2471,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     for _ in 0..MAX_MINE_BATCHES {
         let attempt = {
             let g = arc.read().await;
-            g.build_pending_tx_async(&request).await
+            g.build_pending_tx(&request).await
         };
         match attempt {
             Ok(p) => {
@@ -2499,7 +2499,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
 
     let outcome = {
         let g = arc.read().await;
-        g.submit_pending_tx_async(pending.id, pending.content_gen)
+        g.submit_pending_tx(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
     };
@@ -2585,7 +2585,7 @@ async fn overfill_pool(
         };
         let pending = {
             let g = arc.read().await;
-            g.build_pending_tx_async(&request)
+            g.build_pending_tx(&request)
                 .await
                 .unwrap_or_else(|e| panic!("build pool spend {n}: {e:?}"))
         };
@@ -2597,7 +2597,7 @@ async fn overfill_pool(
         .expect("fits");
         let outcome = {
             let g = arc.read().await;
-            g.submit_pending_tx_async(pending.id, pending.content_gen)
+            g.submit_pending_tx(pending.id, pending.content_gen)
                 .await
                 .unwrap_or_else(|e| panic!("daemon must accept pool spend {n}: {e:?}"))
         };
@@ -3382,7 +3382,7 @@ async fn submit_transfer(
     for _ in 0..max_batches {
         let attempt = {
             let g = arc.read().await;
-            g.build_pending_tx_async(&request).await
+            g.build_pending_tx(&request).await
         };
         match attempt {
             Ok(p) => {
@@ -3445,7 +3445,7 @@ async fn submit_built(
 ) -> TxHash {
     let outcome = {
         let g = arc.read().await;
-        g.submit_pending_tx_async(pending.id, pending.content_gen)
+        g.submit_pending_tx(pending.id, pending.content_gen)
             .await
             .unwrap_or_else(|e| panic!("daemon must accept {what} (consensus verify): {e:?}"))
     };
@@ -4624,7 +4624,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     for _ in 0..24 {
         let attempt = {
             let g = fixture.arc.read().await;
-            g.build_pending_tx_async(&request).await
+            g.build_pending_tx(&request).await
         };
         match attempt {
             Ok(p) => {
@@ -4642,7 +4642,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     let transfer_bytes = built.tx_bytes.clone();
     {
         let g = fixture.arc.read().await;
-        g.submit_pending_tx_async(built.id, built.content_gen)
+        g.submit_pending_tx(built.id, built.content_gen)
             .await
             .expect("daemon must accept the transfer (consensus verify)");
     }
