@@ -13,7 +13,6 @@
       ],
       "responder_index": 2,
       "created_at": 1000000,
-      "tx_counter": 1,
       "reference_block_height": 999900,
       "reference_block_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "recipients": [
@@ -28,8 +27,8 @@
       ],
       "kem_randomness_seed": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "chain_state_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "canonical": "024242424242424242424242424242424242424242424242424242424242424242bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb000200000000020240420f00000000000100000000000000dc410f0000000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc01000000040000000102030400ca9a3b0000000040420f0000000000010000003930000000000000ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "intent_hash": "828f8a73fa8e21bb4b8b0feb33eaaf905ebbcb2782213fd035ff27410f00ddad"
+      "canonical": "024242424242424242424242424242424242424242424242424242424242424242bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb000200000000020240420f0000000000dc410f0000000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc01000000040000000102030400ca9a3b0000000040420f0000000000010000003930000000000000ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "intent_hash": "636ea80fe5c1540d5297600e892f7e4b1509623b1eab2d2810e471a897e9ed6a"
     },
     {
       "name": "3-of-5, member 3 proposes, member 1 responds, two recipients, three inputs",
@@ -44,7 +43,6 @@
       ],
       "responder_index": 1,
       "created_at": 1800000000,
-      "tx_counter": 7,
       "reference_block_height": 2000000,
       "reference_block_hash": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
       "recipients": [
@@ -65,8 +63,8 @@
       ],
       "kem_randomness_seed": "1313131313131313131313131313131313131313131313131313131313131313",
       "chain_state_fingerprint": "3737373737373737373737373737373737373737373737373737373737373737",
-      "canonical": "02000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a03030000000103040100d2496b00000000070000000000000080841e0000000000fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e00200000046000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00ba1dd20500000003000000bbbbbb030000000000000060490600000000000300000009000000000000000000000000010000ffffffffffffffff13131313131313131313131313131313131313131313131313131313131313133737373737373737373737373737373737373737373737373737373737373737",
-      "intent_hash": "051cc5c9bb1cfc06e35503c1aa1e8ea59fc527ba13868672f5b1edd156a540fb"
+      "canonical": "02000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a03030000000103040100d2496b0000000080841e0000000000fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e00200000046000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00ba1dd20500000003000000bbbbbb030000000000000060490600000000000300000009000000000000000000000000010000ffffffffffffffff13131313131313131313131313131313131313131313131313131313131313133737373737373737373737373737373737373737373737373737373737373737",
+      "intent_hash": "a89fd12eb148682fd2aadd2bedc0406825e81fa1ee24efc0f867ea67b92da16f"
     }
   ]
 }

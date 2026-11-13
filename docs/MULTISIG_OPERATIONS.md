@@ -271,8 +271,9 @@ Once M signatures are collected:
 
 ### 5.5 Confirmation
 
-`tx_counter` advances only after observing the transaction confirmed
-on-chain at N confirmations (default: 3).
+The spend is done when the transaction is confirmed on-chain. Until its
+session ends, your wallet will not commit to another proposal that spends
+any of the same inputs.
 
 ---
 
@@ -351,48 +352,8 @@ The Dashboard shows a yellow alert: "Signed intent not broadcast."
 **What to do:**
 - If the session hasn't expired (its reference block can still be used,
   §7): any member can retry the broadcast.
-- If it expired: create a new intent for the same transaction.
-  The `tx_counter` has not advanced (it only advances on-chain
-  confirmation), so the new intent will work normally.
-
-### 6.5 Transaction Counter Divergence
-
-The Dashboard shows: "Transaction counter divergence."
-
-**Meaning:** Your wallet missed a confirmed transaction, so your
-`tx_counter` is behind the group's.
-
-**What to do:**
-1. Wait for the automatic `CounterProof` exchange. Another member will
-   send you chain evidence of the transaction you missed.
-2. Your wallet verifies the proof against your local chain view
-   (8 verification rules).
-3. If your chain isn't synced to the relevant block yet, wait for sync
-   to complete — do not reject valid proofs prematurely.
-4. Once verified, your counter updates and you can sign new intents.
-
-**If CounterProof verification fails:** see §6.6.
-
-### 6.6 CounterProof Verification Failure
-
-The Dashboard shows a red alert: "CounterProof verification failed."
-
-**Meaning:** A CounterProof from another participant failed one of the
-8 verification rules. This could indicate:
-
-- A malicious participant sending a fabricated proof
-- A chain reorganization that invalidated the proof
-- A bug in the sender's wallet
-
-**What to do:**
-1. Do not accept the counter value.
-2. Contact the participant who sent the proof out-of-band.
-3. If a chain reorg occurred, wait for your chain to stabilize and ask
-   them to resend.
-4. If you suspect malice, alert all other participants and consider
-   migrating to a new group without the suspected party.
-5. As a last resort, perform a full wallet rescan to rebuild state from
-   the chain.
+- If it expired: create a new intent for the same transaction. Its inputs
+  are free again once the old session has ended.
 
 ---
 

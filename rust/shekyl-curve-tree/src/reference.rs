@@ -91,7 +91,8 @@ const _: () = assert!(
 ///
 /// `MIN_AGE + 1` below the tip, for reorg safety. The block that lists the
 /// spend connects at `tip + 1`, so it sees a connecting age of `MIN_AGE + 2`:
-/// two blocks deeper than the newest reference CEN-I11 admits. (It was also the anchor the daemon's per-output path RPC used
+/// two blocks below the newest admissible reference (CEN-I11), which gives
+/// one block of reorg slack. (It was also the anchor the daemon's per-output path RPC used
 /// before that RPC was removed as spend-revealing — `SOK-10` Q7; the wallet
 /// is now the only path assembler.) **Privacy-canonical, not a per-wallet knob:** every
 /// honest wallet uses this exact offset so the on-wire reference age does

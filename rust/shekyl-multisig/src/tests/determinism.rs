@@ -39,7 +39,6 @@ fn intent_of(v: &Value) -> SpendIntent {
         signers: v["signers"].as_array().unwrap().iter().map(u8_of).collect(),
         responder_index: u8_of(&v["responder_index"]),
         created_at: u64_of(&v["created_at"]),
-        tx_counter: u64_of(&v["tx_counter"]),
         reference_block_height: u64_of(&v["reference_block_height"]),
         reference_block_hash: hex32(&v["reference_block_hash"]),
         recipients: v["recipients"]

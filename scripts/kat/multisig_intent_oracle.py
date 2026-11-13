@@ -9,7 +9,7 @@ canonical bytes and `intent_hash = Keccak-256(canonical bytes)`
 (`rust/shekyl-multisig/src/intent.rs`, `SpendIntent::to_canonical_bytes`):
 
     version(1) || intent_id(32) || address_fingerprint(32) || proposer_index(1) ||
-    u32(len) || signers || responder_index(1) || created_at(8) || tx_counter(8) ||
+    u32(len) || signers || responder_index(1) || created_at(8) ||
     reference_block_height(8) || reference_block_hash(32) ||
     u32(count) || { u32(len) || address || amount(8) }* || fee(8) ||
     u32(count) || input_global_index(8)* || kem_randomness_seed(32) ||
@@ -59,7 +59,7 @@ def canonical(i: dict) -> bytes:
     out += bytes([i["proposer_index"]])
     out += u32(len(i["signers"])) + bytes(i["signers"])
     out += bytes([i["responder_index"]])
-    out += u64(i["created_at"]) + u64(i["tx_counter"]) + u64(i["reference_block_height"])
+    out += u64(i["created_at"]) + u64(i["reference_block_height"])
     out += bytes.fromhex(i["reference_block_hash"])
     out += u32(len(i["recipients"]))
     for r in i["recipients"]:
@@ -84,7 +84,6 @@ def fixtures() -> list[dict]:
         "signers": [0, 2],
         "responder_index": 2,
         "created_at": 1_000_000,
-        "tx_counter": 1,
         "reference_block_height": 999_900,
         "reference_block_hash": "cc" * 32,
         "recipients": [{"address": "01020304", "amount": 1_000_000_000}],
@@ -102,7 +101,6 @@ def fixtures() -> list[dict]:
         "signers": [1, 3, 4],
         "responder_index": 1,
         "created_at": 1_800_000_000,
-        "tx_counter": 7,
         "reference_block_height": 2_000_000,
         "reference_block_hash": "".join(f"{255 - b:02x}" for b in range(32)),
         "recipients": [

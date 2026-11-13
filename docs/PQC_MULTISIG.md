@@ -132,7 +132,7 @@ sign-off before addition.
 | Malicious assembler | Tries to broadcast tampered tx | §2.7 I6 tx-hash commitments |
 | Network observer | Tries to identify groups, link spends | §6 file-based addresses; §7 per-output ephemeral keys; §12 encrypted transport |
 | Whoever carries a ceremony file | Reads, drops, reorders, or injects files | §12.1 files are sealed and signed by their sender; §12.5 nothing but the format version is in the clear; a dropped file stalls the session until it is sent again, and the session ends with its reference block (§9.6) |
-| Network partition | Causes state divergence | §13.4 CounterProof recovery |
+| Network partition | Causes state divergence | §9.3 chain state fingerprint: a member whose view differs does not sign until it has synced |
 | Scanner resource exhaustion | Burns scanner CPU via griefing outputs | §7.6 per-sender griefing scores + hard caps |
 
 ### 3.2 Out of scope
@@ -172,7 +172,7 @@ consensus-layer fix would require a chain-anchored group registry
 | Key substitution by a signer | `verify_multisig`: each revealed key must hash to the committed `h_i` at its index (§7.5) |
 | Blob truncation/padding | Exact-length parses in `MultisigKeyBlob` / `MultisigSigContainer`; CEN-I16's floor and ceiling |
 | Replay across groups | **address-fingerprint** binding in the canonical signing intent (I1; §5.3 — replaces the retired `group_id`) |
-| Replay within group | `intent_id` + `tx_counter` + `reference_block_hash` (its age is the deadline, §9.6) + `kem_randomness_seed` freshness |
+| Replay within group | The reference block's age (§9.6), the held nonce bound to one intent hash, consensus key images; one live intent per input (§9.2 item 6) |
 
 ---
 
@@ -316,7 +316,7 @@ Concrete steps for participants forming a new group:
 8. Participants store group state: their own keypairs, the N pubkeys of
    others, the **address fingerprint** (§5.3), group_version,
    spend_auth_version, threshold parameters, DKG-derived shared secret,
-   acknowledgments, and an initial `tx_counter = 0`.
+   and acknowledgments.
 
 ---
 
@@ -802,7 +802,6 @@ SpendIntent {
 
     // Display and chain binding
     created_at:               u64        // unix seconds; display only (R-13)
-    tx_counter:               u64
     reference_block_height:   u64
     reference_block_hash:     [u8; 32]
 
@@ -836,7 +835,10 @@ Its `sender_index` must equal `proposer_index`.
    proposer
 5. The `Proposal` file that carried the intent verified under
    `envelope_public_keys[proposer_index]` (§12.1)
-6. `tx_counter` equals the group's currently-expected counter
+6. None of `input_global_indices` is spent by another of this member's
+   live ceremonies: a member commits to at most one live intent per
+   input, and refuses to commit to any other (the check is the
+   ceremony's, slice 3 PR-C)
 7. A spend anchored at `reference_block_height` can still be listed: its
    age measured from the connecting height is in
    `[FCMP_REFERENCE_BLOCK_MIN_AGE, FCMP_REFERENCE_BLOCK_MAX_AGE]` (CEN-I11;
@@ -855,6 +857,12 @@ Its `sender_index` must equal `proposer_index`.
     (see §9.3); mismatch → do not sign; trigger sync
 
 No invariant reads a clock.
+
+**Replay.** There is no group counter. Three things stop an intent, or a
+signature over it, being used twice: the reference block's age ends every
+intent (§9.6); a member's held FROST nonce is bound to one intent hash and
+consumed once; and consensus refuses a second spend of a key image. Item 6
+keeps a member from committing to two live intents that spend one input.
 
 ### 9.3 Chain state fingerprint (honest-signer invariant I2)
 
@@ -1013,57 +1021,6 @@ signing_payload = keccak256(
 Where `RctSigPrunable_skeleton` excludes the FCMP++ proof (comes from
 the prover asynchronously). Its hash is included separately in the
 signature share commitment (§12.2.1).
-
-### 10.5 Tiebreaker for conflicting intents
-
-When two proposers publish conflicting intents at the same `tx_counter`:
-
-```
-winner = intent for which the prover (per §11.1) emits a signed
-         ProverReceipt first, where ProverReceipt is published only
-         after full invariant verification
-```
-
-**ProverReceipt mechanics** (strengthened from v1.0 in response to R3):
-
-```
-ProverReceipt {
-    prover_index:        u8
-    intent_hash:         [u8; 32]
-    received_at:         u64
-    local_counter:       u64   // monotonic, prover-local, increments per receipt
-    sig:                 HybridSignature
-}
-```
-
-Requirements:
-
-- Prover emits `ProverReceipt` **only after completing full §9.2
-  invariant verification** on the intent. A malformed or invariant-failing
-  intent never earns a receipt.
-- Prover MUST publish the receipt to **all subscribed relays
-  simultaneously** (multi-relay mandatory per §12.4)
-- `local_counter` is prover-local, monotonic, increments once per receipt.
-  Two receipts from the same prover with non-monotonic counters is
-  equivocation (§12.2.4)
-- Signers observing conflicting intents wait **conflict window**
-  (default: 30 seconds) after the first intent before acting, to allow
-  the prover's receipt to propagate across relays
-- Signers accept the intent for which the ProverReceipt shows the
-  lowest `local_counter` (earliest-observed by prover)
-- Members who already signed the losing intent publish a `Veto` to reset
-
-**Why the monotonic counter matters:** an attacker controlling network
-delivery to the prover can attempt to equivocate (claim "received A first"
-to some signers, "received B first" to others). The monotonic
-`local_counter` in the receipt makes equivocation detectable: two
-receipts with the same counter or out-of-order counters = equivocation
-= prover marked untrusted via EquivocationProof (§12.2.4).
-
-**Why not hash-based tiebreaking:** grindable by attacker varying
-intent content fields. Prover-receipt shifts the tiebreaker to prover's
-observation order, which requires network-level asymmetry to exploit
-rather than content grinding.
 
 ---
 
@@ -1388,79 +1345,10 @@ REJECTED       → veto/invariant-violation threshold reached or chain-rejected
 TIMED_OUT      → the reference block aged out without BROADCAST (§9.6)
 ```
 
-### 13.2 tx_counter advancement
+### 13.2 Disagreement resolution
 
-`tx_counter` advances ONLY upon observed chain state, not local optimism.
-Specifically: tx_counter increments to k+1 when a member observes the
-broadcast tx confirmed in their local chain at height ≥ N confirmations
-(default N=3; configurable).
-
-### 13.4 CounterProof recovery (strengthened formalization)
-
-When a member is at stale `tx_counter`, recovery uses cryptographic
-chain proof with **explicit advancement-lineage verification**:
-
-```
-CounterProof {
-    sender_index:           u8
-    advancing_to:           u64
-    tx_hash:                [u8; 32]
-    block_height:           u64
-    block_hash:             [u8; 32]
-    tx_position:            u16
-    consumed_inputs:        [[u8; 32]]   // key images of consumed inputs
-    resulting_outputs:      [[u8; 32]]   // output pubkeys produced by the tx
-    intent_hash:            [u8; 32]     // the intent this tx broadcast
-    sender_sig:             HybridSignature
-}
-```
-
-**Verification rules (strengthened from v1.0):**
-
-A stale member receiving a `CounterProof` MUST verify, in order:
-
-1. `block_hash` matches their local chain at `block_height`
-   (if local chain lacks this block, wait for sync; do not reject)
-2. `tx_hash` appears at `tx_position` in that block
-3. `tx.pqc_auths[i].scheme_id == 2` for all inputs (multisig spend)
-4. `pqc_key_scalar(tx.pqc_auths[i].hybrid_public_key)` matches
-   the tracked key scalar of an output in local state with matching
-   `group_id`
-5. The `consumed_inputs` listed in CounterProof match the tx's actual
-   input key images exactly (no loose matching)
-6. All `consumed_inputs` are in local state as tracked unspent outputs
-   owned by the group
-7. `intent_hash` references an intent the member has seen (or, if
-   unseen, a note is logged: member was absent during proposal)
-8. `sender_sig` verifies
-
-**Advancement rule:** only after all checks pass, the member:
-
-1. Marks all `consumed_inputs` as spent in local state
-2. Adds all `resulting_outputs` to scanning (if they belong to the group)
-3. Advances `tx_counter` to `advancing_to`
-
-**If any check fails:**
-- If the failure is "I don't have the block yet": wait for sync; do not
-  reject; do not advance
-- If the failure is "I don't recognize these inputs as my tracked outputs":
-  trigger full wallet rescan from reference height; do not advance based
-  on this CounterProof
-- If the failure is structural (scheme_id wrong, leaf hash doesn't
-  match): CounterProof is invalid; do not advance; publish Veto
-
-This formalization prevents:
-- Attackers forging CounterProofs for arbitrary on-chain transactions
-  (must reference the group's actual tracked inputs)
-- Loose matching leading to false advancement (exact input/output match
-  required)
-- Advancement without state consistency (rescan forced if local state
-  is out of sync)
-
-### 13.5 Disagreement resolution
-
-**Conflicting intents same counter** → §10.5 ProverReceipt with
-monotonic counter
+**Conflicting intents spending one input** → a member commits to at most
+one of them (§9.2 item 6); the other times out
 
 **Proposer disappears** → the reference block ages out (§9.6) → TIMED_OUT
 
@@ -1526,7 +1414,7 @@ stream**, not as "same privacy as solo at small volume."
 | Proposer disappearance recovery | Yes (timeout + re-propose) |
 | Signer disappearance recovery | Yes if M others remain |
 | Prover disappearance per-output | Limited; 1/N outputs lock per missing prover (V4 fixes) |
-| Network partition recovery | Yes via formalized CounterProof |
+| Network partition recovery | Yes: a member syncs, and the chain state fingerprint (§9.3) agrees again |
 | A carrier withholding files | Members send by another means; files are the only transport (§12.4) |
 | Scanner resource bounds | Hard caps + per-sender griefing scores (§7.6) |
 
@@ -1537,8 +1425,7 @@ stream**, not as "same privacy as solo at small volume."
 | Tx hash integrity through assembly | tx_hash_commitment in SignatureShare (I6) |
 | Prover proof integrity | fcmp_proof_commitment + bp_plus_proof_commitment |
 | Prover non-equivocation | EquivocationProof detection (§12.2.4) |
-| Counter integrity | Formalized CounterProof advancement lineage (§13.4) |
-| Replay resistance | intent_id, kem_randomness_seed freshness, reference_block_hash (its age is the deadline), tx_counter |
+| Replay resistance | The reference block's age, the held nonce bound to one intent hash, consensus key images; kem_randomness_seed freshness |
 | Invariant enforcement | §2.7 mechanical, unbypassable in signing path |
 
 ---
@@ -1985,9 +1872,7 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - A member decapsulating another member's ciphertext cannot pass that member's hash
 
 **Adversarial (other):**
-- Network partition + CounterProof recovery (including malformed proofs)
-- Relay censorship; operator collusion detection
-- Conflicting simultaneous intents (ProverReceipt tiebreaking)
+- Two live intents spending one input: a member commits to one of them
 - Rotation rule grinding attempts
 - Prover equivocation (detection + EquivocationProof)
 - Sustained griefing: per-sender score effectiveness, state bounds
@@ -2017,7 +1902,6 @@ fuzz_multisig_blob_roundtrip         (the file seal; landed)
 fuzz_multisig_address_parse
 fuzz_view_tag_hint_check
 fuzz_rotating_prover_assignment      (uniformity + grindability)
-fuzz_counter_proof_verifier          (strengthened rules)
 fuzz_equivocation_proof_verifier
 fuzz_invariant_violation_parser
 fuzz_spend_auth_pubkey_derivation
@@ -2029,8 +1913,8 @@ fuzz_receive_time_validation
 | Phase | Duration | Content |
 |---|---|---|
 | 1 | 4-6 wk | Receiving model (Option C + Solution C), spend-auth derivation, tx_extra tag 0x0A, address format, wallet-side filtering with griefing scores, defense-in-depth wiring |
-| 2 | 4-6 wk | Governance protocol, invariants (§2.7), state machine, CounterProof, heartbeat with operator IDs, multi-relay + directory, DKG mandatory enforcement, InvariantViolation message type |
-| 3 | 3-4 wk | GUI: fingerprint (3-representation) verification, 1/N acknowledgment gate, prover distribution view, address provenance tracking, relay diversity check, DKG ceremony UI |
+| 2 | 4-6 wk | Governance protocol, invariants (§2.7), state machine, ceremony files (§12), DKG mandatory enforcement, InvariantViolation message type |
+| 3 | 3-4 wk | GUI: fingerprint (3-representation) verification, 1/N acknowledgment gate, prover distribution view, address provenance tracking, DKG ceremony UI |
 | 4 | 3-4 wk | Test matrix, fuzz harness, cross-platform determinism, interop tests across conforming clients |
 | 5 | 2-3 wk | External adversarial review (reviewer round 4) |
 | 6 | TBD | Cryptographer review of specific targets (see ANALYSIS §7) |
@@ -2050,8 +1934,7 @@ cannot is non-conforming.
 > **deleted**: `group_id` (A.1 — identity is the address fingerprint, §5.3),
 > `construct_multisig_output` / `assigned_prover_index` (A.2 — no constructor
 > and no mandatory prover under E′; the two-component `O = ho·G + B_group +
-> y_out·T` constructor lands in S2/S4), and the CounterProof vector (A.5 —
-> §11 deleted machinery). `spend_auth_version` is **`0x02`**, not `1`. These
+> y_out·T` constructor lands in S2/S4). `spend_auth_version` is **`0x02`**, not `1`. These
 > specs are rewritten to E′ shape as S2/S4 lands the live crypto; treat the
 > Option-D-named outputs here as historical until then.
 
@@ -2081,7 +1964,9 @@ least two independent implementations before being locked.
    - Input: fixed group state (from A.1), fixed input list, fixed
      recipient list, fixed parameters
    - Output: canonical serialized SpendIntent, intent_hash,
-     chain_state_fingerprint
+     chain_state_fingerprint. The intent half is pinned:
+     `docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+     `scripts/kat/multisig_intent_oracle.py`
 
 4. **Full-construction vector**
    - Input: fixed spend intent (from A.3), fixed chain reference data
@@ -2089,13 +1974,7 @@ least two independent implementations before being locked.
      rct_prunable_skeleton + pqc_auth_header), signing_payload hash,
      deterministic BP+ bytes
 
-5. **CounterProof vector**
-   - Input: fixed consumed inputs, fixed resulting outputs, fixed
-     block data
-   - Output: canonical CounterProof bytes, verification pass/fail cases
-     (including malformed attempts)
-
-6. **Prover-assignment vector**
+5. **Prover-assignment vector**
    - Input: grid of (group_id, output_index_in_tx, tx_secret_key_hash,
      reference_block_hash, n_total)
    - Output: expected prover_index for each combination (uniformity

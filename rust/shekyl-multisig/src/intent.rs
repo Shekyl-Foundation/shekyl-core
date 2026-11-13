@@ -102,9 +102,6 @@ pub enum SpendIntentError {
     #[error("the responder is the proposer")]
     ResponderIsProposer,
 
-    #[error("tx_counter mismatch: expected {expected}, got {got}")]
-    CounterMismatch { expected: u64, got: u64 },
-
     #[error("reference block {height} is not yet usable at tip {tip}")]
     RefBlockTooFresh { height: u64, tip: u64 },
 
@@ -192,7 +189,6 @@ pub struct SpendIntent {
     /// Unix seconds when the proposer wrote the intent. Shown to people;
     /// validated against nothing (R-13).
     pub created_at: u64,
-    pub tx_counter: u64,
     pub reference_block_height: u64,
     pub reference_block_hash: [u8; 32],
 
@@ -245,7 +241,7 @@ impl SpendIntent {
     ///
     /// ```text
     /// version(1) ‖ intent_id(32) ‖ address_fingerprint(32) ‖ proposer_index(1) ‖
-    /// u32(len) ‖ signers ‖ responder_index(1) ‖ created_at(8) ‖ tx_counter(8) ‖
+    /// u32(len) ‖ signers ‖ responder_index(1) ‖ created_at(8) ‖
     /// reference_block_height(8) ‖ reference_block_hash(32) ‖
     /// u32(count) ‖ { u32(len) ‖ address ‖ amount(8) }* ‖ fee(8) ‖
     /// u32(count) ‖ input_global_index(8)* ‖ kem_randomness_seed(32) ‖
@@ -263,7 +259,6 @@ impl SpendIntent {
         Self::push_len_prefixed(&mut buf, &self.signers, "signers")?;
         buf.push(self.responder_index);
         buf.extend_from_slice(&self.created_at.to_le_bytes());
-        buf.extend_from_slice(&self.tx_counter.to_le_bytes());
         buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
         buf.extend_from_slice(&self.reference_block_hash);
 
@@ -359,9 +354,9 @@ impl SpendIntent {
         Ok(())
     }
 
-    /// Validate the intent against this member's chain view (checks 7-9 of
-    /// §9.2): the counter, whether a spend anchored at the reference block can
-    /// still be listed, and the reference block's hash.
+    /// Validate the intent against this member's chain view (§9.2 items 6
+    /// and 7): whether a spend anchored at the reference block can still be
+    /// listed, and the reference block's hash.
     ///
     /// The window is consensus's, measured from the height the next block
     /// connects at (`shekyl_curve_tree::reference::{proof_submittable,
@@ -373,17 +368,9 @@ impl SpendIntent {
     /// behind, and catching up clears it.
     pub fn validate_temporal(
         &self,
-        expected_counter: u64,
         chain_tip_height: u64,
         local_block_hash_at_ref_height: &[u8; 32],
     ) -> Result<(), SpendIntentError> {
-        if self.tx_counter != expected_counter {
-            return Err(SpendIntentError::CounterMismatch {
-                expected: expected_counter,
-                got: self.tx_counter,
-            });
-        }
-
         let tip = BlockHeight::from_raw(chain_tip_height);
         let reference = BlockHeight::from_raw(self.reference_block_height);
         let too_fresh = SpendIntentError::RefBlockTooFresh {
@@ -497,7 +484,6 @@ mod tests {
             signers: vec![0, 2],
             responder_index: 2,
             created_at: 1000,
-            tx_counter: 5,
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
             recipients: vec![
@@ -659,19 +645,8 @@ mod tests {
     #[test]
     fn validate_temporal_passes() {
         make_test_intent()
-            .validate_temporal(5, 950, &[0xCC; 32])
+            .validate_temporal(950, &[0xCC; 32])
             .unwrap();
-    }
-
-    #[test]
-    fn validate_temporal_rejects_counter_mismatch() {
-        assert!(matches!(
-            make_test_intent().validate_temporal(6, 950, &[0xCC; 32]),
-            Err(SpendIntentError::CounterMismatch {
-                expected: 6,
-                got: 5
-            })
-        ));
     }
 
     /// The window is CEN-I11's, from the connecting height `tip + 1`: with
@@ -681,7 +656,7 @@ mod tests {
     #[test]
     fn validate_temporal_is_the_consensus_window() {
         let intent = make_test_intent();
-        let at = |tip: u64| intent.validate_temporal(5, tip, &[0xCC; 32]);
+        let at = |tip: u64| intent.validate_temporal(tip, &[0xCC; 32]);
         let min = shekyl_curve_tree::REFERENCE_BLOCK_MIN_AGE.to_raw();
         let max = shekyl_curve_tree::REFERENCE_BLOCK_MAX_AGE.to_raw();
         let newest_tip = 900 + min - 1;
@@ -710,7 +685,7 @@ mod tests {
     #[test]
     fn validate_temporal_rejects_ref_block_hash_mismatch() {
         assert!(matches!(
-            make_test_intent().validate_temporal(5, 950, &[0xFF; 32]),
+            make_test_intent().validate_temporal(950, &[0xFF; 32]),
             Err(SpendIntentError::RefBlockHashMismatch { .. })
         ));
     }

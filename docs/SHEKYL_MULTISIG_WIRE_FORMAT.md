@@ -151,7 +151,6 @@ fields use a `u32 LE` length prefix.
 m        signers                 member indices, strictly ascending
 1        responder_index         one of signers, not the proposer
 8        created_at              u64 LE, unix seconds; display only
-8        tx_counter              u64 LE
 8        reference_block_height  u64 LE
 32       reference_block_hash    32 bytes
 4        recipients_count        u32 LE (MUST be ≤ MAX_RECIPIENTS)
@@ -363,4 +362,4 @@ An implementation claiming conformance MUST:
 | 1 | 2026-04-13 | Initial release for V3.1 |
 | 1.1 | 2026-04-14 | Size bounds on every length prefix, the recipient sort order, the signable header, a persisted message counter, body layouts for eleven types, zeroization guidance, CSPRNG file names |
 | 1.2 | 2026-11-12 | The E′ seal: XChaCha20-Poly1305 under an HKDF-SHA-512 key from the group transport secret, a random 24-byte nonce, a clear 66-byte header as associated data |
-| 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter deleted; message types `0x0C`–`0x11`; files are the only transport |
+| 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter and the intent's `tx_counter` deleted (replay is the reference block's age, the per-intent held nonce and consensus key images); message types `0x0C`–`0x11`; files are the only transport |

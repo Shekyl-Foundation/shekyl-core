@@ -567,8 +567,9 @@ binding a height to a consensus root stays the caller's responsibility
 `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`.
 
 - Six blocks below the tip, so the block that lists the spend sees a
-  connecting age of 7: two blocks deeper than the newest reference CEN-I11
-  admits (`MIN_AGE`, measured from the connecting height). (It also matched the anchor the
+  connecting age of 7: two blocks below the newest admissible reference
+  (`MIN_AGE`, measured from the connecting height, CEN-I11), which gives one
+  block of reorg slack. (It also matched the anchor the
   daemon's `get_curve_tree_path` used before that RPC was removed — `SOK-10` Q7 →
   A, 2026-09-18; there is no daemon-assembled path to agree with any more, and
   the offset stands on its own reorg-safety and privacy-canonical grounds.)

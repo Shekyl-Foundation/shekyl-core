@@ -77,8 +77,6 @@ pub struct InvariantCheckInput<'a> {
     pub n_total: u8,
     /// m_required from group metadata.
     pub m_required: u8,
-    /// Expected tx_counter from local state.
-    pub expected_tx_counter: u64,
     /// Chain tip height from local view.
     pub chain_tip_height: u64,
     /// Block hash at the intent's reference_block_height from local view.
@@ -117,11 +115,7 @@ pub fn check_pre_signing_invariants(
             evidence: format!("{e}").into_bytes(),
         };
     }
-    if let Err(e) = intent.validate_temporal(
-        input.expected_tx_counter,
-        input.chain_tip_height,
-        input.local_ref_block_hash,
-    ) {
+    if let Err(e) = intent.validate_temporal(input.chain_tip_height, input.local_ref_block_hash) {
         return InvariantCheckResult::Fail {
             invariant: InvariantId::I1SpendIntentValidation,
             evidence: format!("{e}").into_bytes(),
@@ -182,7 +176,6 @@ mod tests {
             signers: vec![0, 2],
             responder_index: 2,
             created_at: 1000,
-            tx_counter: 5,
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
             recipients: vec![IntentRecipient {
@@ -220,7 +213,6 @@ mod tests {
             our_address_fingerprint: address_fingerprint,
             n_total: 3,
             m_required: 2,
-            expected_tx_counter: 5,
             chain_tip_height: 950,
             local_ref_block_hash: ref_hash,
             local_chain_state_fingerprint: chain_fp_ref,

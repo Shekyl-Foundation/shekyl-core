@@ -16,7 +16,6 @@ fn replay_detection_via_kem_seed() {
         signers: vec![0, 1],
         responder_index: 1,
         created_at: 1000,
-        tx_counter: 1,
         reference_block_height: 900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
@@ -49,7 +48,6 @@ fn structural_validation_rejects_all_bad_inputs() {
         signers: vec![0, 1],
         responder_index: 1,
         created_at: 1000,
-        tx_counter: 1,
         reference_block_height: 900,
         reference_block_hash: [0; 32],
         recipients: vec![IntentRecipient {

@@ -16,7 +16,6 @@ fn bench_intent_hash(c: &mut Criterion) {
         signers: vec![0, 2],
         responder_index: 2,
         created_at: 1000000,
-        tx_counter: 1,
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
@@ -45,7 +44,6 @@ fn bench_intent_serialization(c: &mut Criterion) {
         signers: vec![0, 2],
         responder_index: 2,
         created_at: 1000000,
-        tx_counter: 1,
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
