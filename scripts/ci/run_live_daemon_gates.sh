@@ -65,6 +65,11 @@ test -x "$SHEKYL_CLI_BIN" || {
   echo "FATAL: no shekyl-cli at $SHEKYL_CLI_BIN" >&2
   exit 1
 }
+export SHEKYL_WALLET_RPC_BIN="${SHEKYL_WALLET_RPC_BIN:-$REPO_ROOT/build/bin/shekyl-wallet-rpc}"
+test -x "$SHEKYL_WALLET_RPC_BIN" || {
+  echo "FATAL: no shekyl-wallet-rpc at $SHEKYL_WALLET_RPC_BIN" >&2
+  exit 1
+}
 
 cd rust
 
@@ -213,6 +218,19 @@ ARMED=(
   # model's relay of a local tip removed: "the peer did not take the block
   # generateblocks made within 20s". Green 4.4 s, local Release daemon.
   engine::regtest_e2e::sync::a_block_a_node_mines_reaches_its_peer_by_relay
+  # A19 (#1362): a real shekyl-wallet-rpc process, killed, signalled and
+  # refused a write. The kill gate was observed red 2026-11-13 for its
+  # own subject before the canonical tx-key mint: the reopened wallet's
+  # OUTBOUND proof refused "tx_key_secret is not a canonical scalar".
+  # Green 97 s, local Release binaries.
+  engine::regtest_e2e::send_durable::a_send_survives_a_kill_after_its_accept
+  # Observed red 2026-11-13 against a wallet server rebuilt without the
+  # close at shutdown: panicked at "SIGTERM: the close is logged".
+  engine::regtest_e2e::send_durable::each_stop_signal_closes_the_wallet
+  # Observed red 2026-11-13 against a wallet server rebuilt to mint the
+  # hand-off when the dispatch save failed: the submit answered ACCEPTED
+  # (verdict_saved false) where it must refuse -29120.
+  engine::regtest_e2e::send_durable::a_send_that_cannot_be_saved_is_not_sent
 )
 
 # Consensus gates too heavy for the per-PR lane (depth-3 spend, 13 min
