@@ -864,7 +864,9 @@ mod unix {
         #[test]
         fn a_removed_directory_is_named() {
             let base = tempfile::tempdir().unwrap();
-            let dir = base.path().join("session");
+            // `s`: under macOS's per-user temporary directory a longer name
+            // leaves the socket's path over the 104-byte limit.
+            let dir = base.path().join("s");
             std::fs::create_dir(&dir).unwrap();
             let plan = plan_in(&dir);
             let (_listener, rendezvous) = OwnerSocket::bind(&plan, "regtest").unwrap().into_parts();
