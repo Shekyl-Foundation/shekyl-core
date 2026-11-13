@@ -33,16 +33,21 @@ crate::wire_object! {
 }
 
 crate::wire_object! {
-    /// A transaction the daemon holds, on the chain or in the pool.
+    /// A transaction the daemon holds, on the chain or in the pool. Under
+    /// `prune` the entry is the skeleton: `body` is the pruned segment,
+    /// beside the txid's operands; without it `body` is the whole
+    /// transaction and the operands are not in the reply (IG-Q55, RW-Q4).
     ["tx"]
     pub struct TxEntry {
         pub id: HashHex,
-        /// Under `prune`, the pruned segment (IG-Q55).
         pub body: Bytes,
-        pub prunable_hash: HashHex,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub prunable_hash [asked "prune"]: crate::kinds::Asked<HashHex>,
         /// `null` where the identity has no third operand: the coinbase.
-        pub pqc_auth_hash: Nullable<HashHex>,
-        pub archival_size: Size,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub pqc_auth_hash [asked "prune"]: crate::kinds::Asked<Nullable<HashHex>>,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub archival_size [asked "prune"]: crate::kinds::Asked<Size>,
         /// In the pool, not yet in a block.
         pub pooled: bool,
         /// The block that holds it; `null` while pooled.

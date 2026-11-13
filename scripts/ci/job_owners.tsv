@@ -18,6 +18,7 @@ scripts/ci/_gfm_table.py	docs-gates:check-doc-links
 scripts/ci/change_scope.py	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
 scripts/ci/check_archival_reward_gates.sh	grep-gates:grep-gates
 scripts/ci/check_armed_lever_launchers.py	grep-gates:grep-gates
+scripts/ci/check_owner_socket_launchers.py	grep-gates:grep-gates
 scripts/ci/check_bench_not_a_dependency.py	docs-gates:check-doc-links
 scripts/ci/check_binary_hardening.sh	build:build-macos,build:build-ubuntu,build:build-windows-msvc,depends:build-cross
 scripts/ci/check_block_rule_corrupt_sites.py	docs-gates:check-doc-links

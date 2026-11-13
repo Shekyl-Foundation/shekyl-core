@@ -62,6 +62,9 @@ tracing = "0.1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# The Tor status a node test hands `daemon_status`, as the daemon's supervisor
+# would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # The follower tests ask the sync owner to publish. Dev edge only;
 # check_test_only_features.py holds that the normal dependency above
 # leaves it off.

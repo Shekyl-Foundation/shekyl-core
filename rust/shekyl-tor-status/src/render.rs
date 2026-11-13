@@ -22,9 +22,21 @@ pub const UNKNOWN_SENTENCE: &str =
 
 const CHECK: &str = "Check this computer's date and time.";
 
+/// Whether [`render`] names a data directory for `status`. Only the
+/// unusable sentence has a place for the path (IG-Q97). A caller that
+/// holds `config` passes the directory; every other caller passes `None`.
+#[must_use]
+pub fn names_data_dir(status: &TorStatus) -> bool {
+    status
+        .tor
+        .as_ref()
+        .and_then(|tor| tor.cause.as_ref())
+        .is_some_and(|cause| matches!(cause, TorCause::Unusable(_)))
+}
+
 /// The status in words. `data_dir` is Tor's data directory, named only by a
-/// caller that holds the `config` grant (IG-Q97); the daemon's own log
-/// always passes it.
+/// caller that holds the `config` grant (IG-Q97) and only when
+/// [`names_data_dir`] is set; the daemon's own log always passes it.
 #[must_use]
 pub fn render(status: &TorStatus, data_dir: Option<&str>) -> String {
     // The posture is not spoken, but a keyword in it this build does not

@@ -1,0 +1,21 @@
+{
+  "posture": {
+    "tor": "bridge",
+    "clearnet": "off"
+  },
+  "origination": "address-hiding",
+  "sync_connector": [],
+  "tor_quiet": null,
+  "tor": {
+    "state": "usable",
+    "cause": null,
+    "age": 75,
+    "respawn_count": 0,
+    "progress": null,
+    "flagged": false,
+    "fix": [],
+    "onion": null,
+    "bootstrap": null,
+    "carriage": "carries"
+  }
+}

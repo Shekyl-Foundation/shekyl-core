@@ -46,6 +46,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import armed_lever  # noqa: E402
+import owner_socket  # noqa: E402
 
 _RECIPIENTS = (
     Path(__file__).resolve().parents[3]
@@ -112,6 +113,7 @@ class Daemon:
                 f"127.0.0.1:{self.port}",
                 "--log-level",
                 "warn",
+                *owner_socket.argv("ct2"),
             ],
             stdout=self.log,
             stderr=subprocess.STDOUT,
