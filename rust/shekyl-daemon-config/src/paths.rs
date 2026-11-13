@@ -86,6 +86,8 @@ mod tests {
         Platform {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
+            session_dir: None,
+            service_rendezvous: None,
         }
     }
 
@@ -105,6 +107,8 @@ mod tests {
         let p = Platform {
             home: None,
             program_data: Some(PathBuf::from("C:/ProgramData")),
+            session_dir: None,
+            service_rendezvous: None,
         };
         assert_eq!(
             root(&p, RunMode::Service, "log-file").unwrap(),

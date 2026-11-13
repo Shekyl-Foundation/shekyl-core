@@ -184,7 +184,7 @@ says which and why.
 | The dialer checks the connector's readiness before it draws (`TSR-F1`); a failed dial is the judge's to decide, and leaves the lists only on proof of misbehaviour (`Verdict::Drop`), otherwise it is counted or excused | `rust/shekyl-dialer/src/owner/mod.rs` `Dialer::choose` (`readiness` first); `rust/shekyl-peerlist/src/peerlist.rs` `Peerlist::apply` (`DialOutcome::DialFailed`) |
 | The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-transport-layer/src/profile.rs` `WAKE`, drawn by `rust/shekyl-dialer/src/pace.rs` `next_wake_nanos` |
 | Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl` lines 1896 to 1904 (at `d26148535e`); `rust/shekyl-peerlist/src/partition/disclose.rs` `disclosure_population` (F1, Rick 2026-10-09) |
-| `get_info` Health is told to every caller; counts belong to Status | `rust/shekyl-rpc-types/src/info.rs` `InfoHealth` |
+| `daemon_status` (4.2): `hiding` is Health's and told to every caller; the Tor status is a part shown to Status, asked of the supervisor only for a caller shown it, in `shekyl-tor-status`'s shape | `rust/shekyl-daemon-rpc/src/tor_facts.rs` `TorFacts`, `read`; `rust/shekyl-daemon/src/tor/mod.rs` `TorAsks`; `rust/shekyl-rpc-types/src/wire/daemon.rs` `DaemonStatus` |
 
 ## 3. Findings
 

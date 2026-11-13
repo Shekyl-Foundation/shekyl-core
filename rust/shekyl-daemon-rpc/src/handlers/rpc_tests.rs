@@ -93,6 +93,7 @@ fn state_with(tag: &str, shard_view: ShardViewHandle) -> (Scratch, Arc<AppState>
         shard_view,
         options: Arc::new(OptionsAbsent),
         handles: Handles::absent(),
+        tor: Arc::new(crate::tor_facts::TorAbsent),
         hash_budget: Arc::new(HashBudget::new(Instant::now())),
         coinbase_reads: Arc::new(Semaphore::new(1)),
     });

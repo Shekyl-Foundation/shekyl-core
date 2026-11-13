@@ -318,3 +318,31 @@ fn a_hash_is_64_hexadecimal_characters() {
         Code::ValueSyntax
     );
 }
+
+#[test]
+fn a_name_is_kept_as_given_when_its_owners_rule_holds() {
+    const SHORT: Kind = Kind::Name(NameRule {
+        describe: "a name of at most three letters",
+        check: |name| {
+            if name.len() <= 3 && name.bytes().all(|b| b.is_ascii_lowercase()) {
+                Ok(())
+            } else {
+                Err("at most three lower-case letters")
+            }
+        },
+    });
+    assert_eq!(SHORT.parse_text("abc"), Ok(Value::Name("abc".to_owned())));
+    let refused = SHORT.parse_text("abcd").unwrap_err();
+    assert_eq!(refused.code, Code::ValueRange);
+    assert!(refused
+        .params
+        .contains(&("rule", "at most three lower-case letters".to_owned())));
+    assert_eq!(
+        SHORT.parse_file(&toml::Value::String("ab".to_owned())),
+        Ok(Value::Name("ab".to_owned()))
+    );
+    assert_eq!(
+        code(SHORT.parse_file(&toml::Value::Integer(1))),
+        Code::ValueSyntax
+    );
+}

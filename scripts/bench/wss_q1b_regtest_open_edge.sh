@@ -43,9 +43,13 @@ rm -rf "$DATA"; mkdir -p "$DATA"
 # --dev-rpc: dev_block_generate is an armed test lever, served only with this
 # switch set (RPC_CHANNEL.md section 6.1). The daemon announces it at
 # start, checked below once RPC is up.
+# --rpc-socket-dir: a harness names a private directory for the owner's
+# socket, so the daemon needs no session directory and never meets another
+# at the default rendezvous (RPC_CHANNEL.md section 7.1).
+mkdir -m 0700 "$DATA/sock"
 "$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 --dev-rpc \
   --mine-address "$ADDR" \
-  --rpc-admin-listen "127.0.0.1:$PORT" \
+  --rpc-admin-listen "127.0.0.1:$PORT" --rpc-socket-dir "$DATA/sock" \
   --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!
 echo "daemon pid $DPID, port $PORT"
