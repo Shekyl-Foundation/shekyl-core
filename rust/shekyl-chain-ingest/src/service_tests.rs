@@ -7,14 +7,17 @@
 //! PR2-Q5): blocks a scenario driver mined elsewhere arrive at a service
 //! over a fresh store, the way a peer's blocks do.
 //!
-//! The service's substrate is [`Gated`]: the free longhash, a clock ahead
-//! of every scenario timestamp, and a gate a test closes on one block's
-//! hash to hold its `form` while another arrival's write moves the tip
-//! under it.
+//! The service's proof-of-work boundary is [`Gated`]: the free longhash, a
+//! clock ahead of every scenario timestamp, and a gate a test closes on
+//! one block's hash to hold its `form` while another arrival's write moves
+//! the tip under it. It holds no cache. A `run` job takes one permit of a
+//! budget the fixture owns, so a test can hold the permits and watch which
+//! class a form waits in, and it records each job asked for and the last
+//! ranked list sent.
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_chain_rules::Substrate;
@@ -25,7 +28,9 @@ use super::{Arrival, ArrivalTag, Origin, Refusal, Reply, Service, ServiceConfig,
 use crate::connector::Rewind;
 use crate::scenario::{Mined, Scenario, CLOCK_START, RULES};
 use crate::test_support::{open_store, tmp, TestPath};
+use crate::pow::{LendJob, Pow, RunJob};
 use shekyl_hash_budget::Budget;
+use shekyl_hasher::{Class, Ranked, Resident};
 
 /// The free longhash under a clock ahead of the scenarios', with a gate.
 pub(crate) struct Gated {
@@ -34,32 +39,32 @@ pub(crate) struct Gated {
     hashes: AtomicUsize,
     /// Longhashes that met a closed gate and waited.
     waited: AtomicUsize,
-    /// Seeds pinned: every cache this substrate was asked to build.
-    pins: AtomicUsize,
-    /// The two cache slots, as the cache store keeps them: canonical, then
-    /// transient.
-    slots: Mutex<(Option<BlockHash>, Option<BlockHash>)>,
-    /// Caches a preparation built: a branch seed no slot held.
-    prepared: AtomicUsize,
-    /// Forms hashing under a held branch cache now, and the most at once.
-    branch_forms: AtomicUsize,
-    branch_forms_max: AtomicUsize,
+    /// The permits a `run` job holds one of for its scope: the hasher's
+    /// budget, as this fixture models it.
+    budget: Budget,
+    /// Every job asked for, in the order asked: its class and its seed.
+    jobs: Mutex<Vec<(Class, BlockHash)>>,
+    /// The ranked list last sent.
+    ranked: Mutex<Option<Ranked>>,
     /// Set: the next clock read panics.
     clock_panics: std::sync::atomic::AtomicBool,
 }
 
 impl Gated {
     pub(crate) fn new() -> Self {
+        Self::on(Budget::of_host())
+    }
+
+    /// A gate whose `run` jobs take their permits from `budget`.
+    pub(crate) fn on(budget: Budget) -> Self {
         Self {
             held: Mutex::new(HashSet::new()),
             opened: Condvar::new(),
             hashes: AtomicUsize::new(0),
             waited: AtomicUsize::new(0),
-            pins: AtomicUsize::new(0),
-            slots: Mutex::new((None, None)),
-            prepared: AtomicUsize::new(0),
-            branch_forms: AtomicUsize::new(0),
-            branch_forms_max: AtomicUsize::new(0),
+            budget,
+            jobs: Mutex::new(Vec::new()),
+            ranked: Mutex::new(None),
             clock_panics: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -80,29 +85,14 @@ impl Gated {
         self.hashes.load(Ordering::Acquire)
     }
 
-    /// Seeds pinned so far.
-    pub(crate) fn pins(&self) -> usize {
-        self.pins.load(Ordering::Acquire)
+    /// Every job asked for so far: its class and its seed.
+    pub(crate) fn jobs(&self) -> Vec<(Class, BlockHash)> {
+        self.jobs.lock().expect("jobs").clone()
     }
 
-    /// Caches preparations built so far.
-    pub(crate) fn prepared(&self) -> usize {
-        self.prepared.load(Ordering::Acquire)
-    }
-
-    /// The seed in the canonical slot.
-    pub(crate) fn canonical(&self) -> Option<BlockHash> {
-        self.slots.lock().expect("slots").0
-    }
-
-    /// The seed in the transient slot.
-    pub(crate) fn transient(&self) -> Option<BlockHash> {
-        self.slots.lock().expect("slots").1
-    }
-
-    /// The most forms that hashed under a held branch cache at once.
-    pub(crate) fn branch_forms_max(&self) -> usize {
-        self.branch_forms_max.load(Ordering::Acquire)
+    /// The ranked list last sent, if any was.
+    pub(crate) fn ranked(&self) -> Option<Ranked> {
+        self.ranked.lock().expect("ranked").clone()
     }
 
     /// Wait until a longhash has met a closed gate: the held block is in
@@ -111,6 +101,77 @@ impl Gated {
         while self.waited.load(Ordering::Acquire) == 0 {
             tokio::task::yield_now().await;
         }
+    }
+}
+
+/// The boundary a test plugs in: jobs call the gate itself, a `run` job
+/// under one permit of the fixture's budget, a `lend` job under none. Every
+/// seed reads as warm, since there is no cache to build.
+impl Pow for Gated {
+    type Fault = std::convert::Infallible;
+
+    fn clock(&self) -> Result<Timestamp, Self::Fault> {
+        self.local_clock()
+    }
+
+    fn run<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&RunJob<'job, Self::Fault>) -> R,
+    ) -> Option<R> {
+        self.jobs.lock().expect("jobs").push((class, seed));
+        let permit = self.budget.acquire_unless(class, stop)?;
+        let result = job(self);
+        drop(permit);
+        Some(result)
+    }
+
+    fn lend<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&LendJob<'job, Self::Fault>) -> R,
+    ) -> Option<R> {
+        self.jobs.lock().expect("jobs").push((class, seed));
+        if stop.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(job(self))
+    }
+
+    fn wake(&self) {
+        self.budget.wake();
+    }
+
+    fn rank(&self, list: Ranked) {
+        *self.ranked.lock().expect("ranked") = Some(list);
+    }
+
+    fn warm(&self, _seed: &BlockHash) -> bool {
+        true
+    }
+
+    fn resident(&self) -> Option<tokio::sync::watch::Receiver<Resident>> {
+        None
+    }
+
+    fn permits(&self) -> usize {
+        self.budget.permits()
+    }
+
+    fn derives(&self) -> crate::metrics::Derives {
+        crate::metrics::Derives::default()
+    }
+
+    fn unlent<R>(&self, job: impl for<'job> FnOnce(&LendJob<'job, Self::Fault>) -> R) -> R {
+        job(self)
+    }
+
+    fn stopped(fault: &Self::Fault) -> bool {
+        match *fault {}
     }
 }
 
@@ -137,56 +198,6 @@ impl Substrate for Gated {
         drop(held);
         self.hashes.fetch_add(1, Ordering::AcqRel);
         Ok(PowHash::from_bytes([0; 32]))
-    }
-
-    /// The cache store's `pin_canonical`: the previous canonical seed is
-    /// demoted to the transient slot.
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.pins.fetch_add(1, Ordering::AcqRel);
-        let mut slots = self.slots.lock().expect("slots");
-        if slots.0 != Some(*seed) {
-            *slots = (Some(*seed), slots.0);
-        }
-    }
-
-    /// The cache store's `release`: the transient slot empties when it
-    /// holds `seed`; the canonical slot does not move.
-    fn release_seed(&self, seed: &BlockHash) {
-        let mut slots = self.slots.lock().expect("slots");
-        if slots.1 == Some(*seed) {
-            slots.1 = None;
-        }
-    }
-
-    /// The two slots, as the cache store's `slots` reads them.
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        *self.slots.lock().expect("slots")
-    }
-
-    /// The cache store's derive: a seed no slot holds is built into the
-    /// transient slot; the canonical slot does not move.
-    fn prepare_seed(&self, seed: &BlockHash) {
-        let mut slots = self.slots.lock().expect("slots");
-        if slots.0 != Some(*seed) && slots.1 != Some(*seed) {
-            self.prepared.fetch_add(1, Ordering::AcqRel);
-            slots.1 = Some(*seed);
-        }
-    }
-
-    /// A form under a held branch cache, held open briefly so two at once
-    /// would overlap.
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        _held: &(),
-    ) -> Result<PowHash, Self::Fault> {
-        let now = self.branch_forms.fetch_add(1, Ordering::AcqRel) + 1;
-        self.branch_forms_max.fetch_max(now, Ordering::AcqRel);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let hashed = self.longhash(pow_blob, seed);
-        self.branch_forms.fetch_sub(1, Ordering::AcqRel);
-        hashed
     }
 }
 
@@ -239,16 +250,6 @@ impl Running {
 
 /// A service over a fresh store named `name`.
 pub(crate) fn service(name: &str, substrate: Arc<Gated>, config: ServiceConfig) -> Running {
-    service_on(name, substrate, config, Budget::of_host())
-}
-
-/// [`service`] taking its permits from `budget`.
-pub(crate) fn service_on(
-    name: &str,
-    substrate: Arc<Gated>,
-    config: ServiceConfig,
-    budget: Budget,
-) -> Running {
     let path = tmp(name);
     let store: ChainStore = open_store(&path);
     Running {
@@ -257,7 +258,6 @@ pub(crate) fn service_on(
             RULES,
             substrate,
             config,
-            budget,
             super::Follow::default(),
         ),
         _path: path,
@@ -284,7 +284,6 @@ pub(crate) fn service_under(
             rules,
             substrate,
             config,
-            Budget::of_host(),
             super::Follow::default(),
         ),
         _path: path,
@@ -292,8 +291,6 @@ pub(crate) fn service_under(
 }
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
-/// After each reply the published pair is what the slots hold
-/// ([`the_record_is_the_slots`]).
 pub(crate) async fn offer_all(
     service: &Service<Gated>,
     session: u64,
@@ -315,28 +312,14 @@ pub(crate) async fn offer_all(
         let tickets = door.offer_span(span).expect("room");
         for ticket in tickets {
             replies.push(ticket.reply().await.reply);
-            the_record_is_the_slots(service);
         }
     }
     replies
 }
 
-/// The pair the service publishes names the seeds the substrate's slots
-/// hold. The door hands that pair to arrivals, and a template hashes under
-/// it. A branch seed the window does not name stays in the transient slot
-/// after the arrival is answered, and the pair names it too: the slots are
-/// not the window. Read under the pin lock, which every pin, preparation
-/// and publish holds, so no change is midway. Skipped once the service is
-/// stopping.
-pub(crate) fn the_record_is_the_slots(service: &Service<Gated>) {
-    if service.shared.stopping() {
-        return;
-    }
-    let view = service.shared.pin_view();
-    assert_eq!(
-        view.published, view.slots,
-        "the published pair is what the slots hold"
-    );
+/// `hash` as the hasher names a seed.
+fn as_seed(hash: BlockHash) -> shekyl_pow_randomx::Seedhash {
+    shekyl_pow_randomx::Seedhash::from_bytes(*hash.as_bytes())
 }
 
 /// What the store holds for `hash`: on the main chain, as an alt row.
@@ -435,6 +418,8 @@ struct Faulting {
 #[derive(Debug)]
 struct FormFault;
 
+impl crate::pow::Fixture for Faulting {}
+
 impl Substrate for Faulting {
     type Fault = FormFault;
 
@@ -447,31 +432,6 @@ impl Substrate for Faulting {
             return Err(FormFault);
         }
         Ok(self.gate.longhash(pow_blob, seed).expect("the gate hashes"))
-    }
-
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.gate.pin_seed(seed);
-    }
-
-    fn release_seed(&self, seed: &BlockHash) {
-        self.gate.release_seed(seed);
-    }
-
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        self.gate.slots()
-    }
-
-    fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
-        self.gate.prepare_seed(seed);
-    }
-
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        _held: &Self::Held,
-    ) -> Result<PowHash, Self::Fault> {
-        self.longhash(pow_blob, seed)
     }
 }
 
@@ -496,7 +456,6 @@ async fn a_form_that_faults_fails_the_service_before_the_run_lands() {
             faulting: blocks[1].hash,
         }),
         ServiceConfig::default(),
-        Budget::of_host(),
         super::Follow::default(),
     );
     let door = service.door();
@@ -606,8 +565,9 @@ async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
 /// A run across a seed boundary lands in one commit: the span
 /// `2107 ..= 2113` straddles height 2112, the first block hashed under
 /// the seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG`),
-/// so the run's forms hash under two seeds, both pinned for the one run,
-/// and the run's one write records both halves. Ignored: it mines 2,114
+/// so the run's forms are jobs on two seeds, and the run's one write
+/// records both halves. Afterwards the ranked list's first seed is the new
+/// epoch's. Ignored: it mines 2,114
 /// blocks, and the nightly ignored lane runs it.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
@@ -630,7 +590,7 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
         "{before:?}"
     );
     let seq_before = tips.borrow_and_update().seq;
-    let pins_before = gate.pins();
+    let jobs_before = gate.jobs().len();
     let run = &blocks[split..];
     assert_eq!(run.len(), 7);
     let replies = offer_all(&service, 1, run).await;
@@ -651,15 +611,27 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
         seq_before + 1,
         "the run landed in one commit"
     );
-    assert!(
-        gate.pins() - pins_before >= 2,
-        "the one run pinned a seed on each side of the boundary ({} pins)",
-        gate.pins() - pins_before
-    );
+    let genesis = blocks[0].hash;
+    let epoch_seed = blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash;
+    let seeds: Vec<BlockHash> = gate.jobs()[jobs_before..]
+        .iter()
+        .map(|(_, seed)| *seed)
+        .collect();
     assert_eq!(
-        gate.canonical(),
-        Some(blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash),
-        "the canonical slot holds the new epoch's seed, block 2048's"
+        seeds,
+        [vec![genesis; 5], vec![epoch_seed; 2]].concat(),
+        "each form is a job on its own seed: five under block 0's id, two under block 2048's"
+    );
+    // The ranker runs after the write; the list is read once it has.
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(
+        gate.ranked(),
+        Some(
+            Ranked::new(as_seed(epoch_seed), Some(as_seed(genesis)), None)
+                .expect("two seeds")
+        ),
+        "the list's first seed is the new epoch's, block 2048's, and the window still names \
+         the epoch before it"
     );
     service.stop().await.expect("stops");
     y.close().await;
@@ -834,16 +806,15 @@ async fn an_extension_whose_parent_moves_is_placed_again() {
 async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
     let mut y = Scenario::open("service-room-y");
     let blocks = y.mine(4).await;
-    let gate = Arc::new(Gated::new());
+    let gate = Arc::new(Gated::on(Budget::new(NonZeroUsize::MIN)));
     let config = ServiceConfig {
         // Three seats: one stays reserved, so a sync caller sees two.
         room: NonZeroUsize::new(3).expect("three"),
     };
-    let service = service_on(
+    let service = service(
         "service-room",
         Arc::clone(&gate),
         config,
-        Budget::new(NonZeroUsize::MIN),
     );
     let door = service.door();
     assert_eq!(door.room(), 2);
@@ -981,7 +952,6 @@ fn service_with_clock(
                 RULES,
                 substrate,
                 config,
-                Budget::of_host(),
                 super::Follow::default(),
                 clock,
             ),
@@ -1086,12 +1056,11 @@ async fn an_arrival_one_byte_over_the_bound_is_oversize_before_parse() {
 async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_it() {
     let mut y = Scenario::open("service-cancel-y");
     let blocks = y.mine(6).await;
-    let gate = Arc::new(Gated::new());
-    let service = service_on(
+    let gate = Arc::new(Gated::on(Budget::new(NonZeroUsize::MIN)));
+    let service = service(
         "service-cancel",
         Arc::clone(&gate),
         ServiceConfig::default(),
-        Budget::new(NonZeroUsize::MIN),
     );
     let door = service.door();
     offer_all(&service, 1, &blocks[..2]).await;
@@ -1128,14 +1097,12 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
     y.close().await;
 }
 
-/// An arrival waits for a hasher permit in its origin's class (PR2-Q3): a
-/// block this node asked for in the chain's, an announcement in the
-/// unsolicited one. This bites against an origin stamped onto the wrong
-/// class. It does not cover which step holds the permit: the pin and the
-/// form share that class, and the pin reaches the wait first.
+/// An arrival's form is a job in its origin's class (PR2-Q3): a block this
+/// node asked for in the chain's, an announcement in the unsolicited one.
+/// This bites against an origin stamped onto the wrong class: red when
+/// `class_of` answers `Chain` for an unsolicited peer arrival.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_arrival_forms_in_the_class_its_origin_names() {
-    use shekyl_hash_budget::Class;
     use std::time::Duration;
     /// How long a form may take to reach its permit wait. The observation
     /// ends when the waiter is counted; this bounds a form that never is.
@@ -1146,20 +1113,12 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
     let mut y = Scenario::open("service-class-y");
     let blocks = y.mine(3).await;
     let budget = Budget::new(NonZeroUsize::MIN);
-    let service = service_on(
+    let service = service(
         "service-class",
-        Arc::new(Gated::new()),
+        Arc::new(Gated::on(budget.clone())),
         ServiceConfig::default(),
-        budget.clone(),
     );
     let door = service.door();
-    // An arrival waits for the attendant's first window. Holding the only
-    // permit before that install would starve the install, and the
-    // arrival would wait on the window, never in the budget.
-    assert!(
-        service.shared.seed_pair().await.is_some(),
-        "the window is installed"
-    );
     for (index, (solicited, class)) in [(true, Class::Chain), (false, Class::Unsolicited)]
         .into_iter()
         .enumerate()
@@ -1355,7 +1314,6 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         RULES,
         Arc::new(Gated::new()),
         ServiceConfig::default(),
-        Budget::of_host(),
         super::Follow {
             job: Some(seat),
             pool: None,
@@ -1448,7 +1406,7 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
     let door = service.door();
     offer_all(&service, 1, &prefix).await;
     offer_all(&service, 1, &main).await;
-    let (hashes, pins) = (substrate.hashes(), substrate.pins());
+    let (hashes, jobs) = (substrate.hashes(), substrate.jobs().len());
     let reply = door
         .offer(arrival(90, 2, &fork[0]))
         .expect("room")
@@ -1462,7 +1420,7 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
         "{reply:?}"
     );
     assert_eq!(substrate.hashes(), hashes, "no hash for the door's answer");
-    assert_eq!(substrate.pins(), pins, "no cache built for it");
+    assert_eq!(substrate.jobs().len(), jobs, "no job asked for it, so no cache built");
     assert_eq!(
         homes(&service, fork[0].hash),
         (false, false),
@@ -1635,7 +1593,6 @@ fn service_mining(
             RULES,
             substrate,
             ServiceConfig::default(),
-            Budget::of_host(),
             super::Follow {
                 job: Some(seat),
                 pool: None,
@@ -1733,7 +1690,6 @@ impl SeatedPool {
             RULES,
             Arc::new(Gated::new()),
             ServiceConfig::default(),
-            Budget::of_host(),
             super::Follow {
                 job: Some(seat),
                 pool: Some(super::PoolWiring {
@@ -2260,7 +2216,6 @@ fn miner_follow(
         RULES,
         Arc::new(Gated::new()),
         ServiceConfig::default(),
-        Budget::of_host(),
         super::Follow {
             job: Some(crate::follower::JobSeat {
                 board: Arc::new(shekyl_miner::JobBoard::new()),
@@ -2700,10 +2655,13 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
 /// popped, so the window's lower end is block 1, whose seed is genesis's.
 /// Under the levered cap of ten, five blocks are well inside the cap,
 /// where the lower end used to reach height 0 and name the null seed as
-/// the second slot. A cap past the tip, the reach stops at the floor.
+/// the window's other seed. A cap past the tip, the reach stops at the
+/// floor.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_window_names_no_null_seed_once_genesis_connects() {
-    use crate::cache_window::seeds_for;
+    let seeds_for = |store: &ChainStore, rules| {
+        crate::cache_window::seeds_on(&store.begin_read().expect("read"), rules)
+    };
     let rules = crate::scenario_shard::levered_rules();
     let mut y = Scenario::open_under("window-null-seed", crate::scenario::FreeHash, rules);
     let blocks = y.mine(5).await;
@@ -2715,7 +2673,7 @@ async fn the_window_names_no_null_seed_once_genesis_connects() {
     );
     assert_eq!(
         pair.transient, None,
-        "the null seed is not a slot: {pair:?}"
+        "the window does not name the null seed: {pair:?}"
     );
     assert!(!pair.holds(&BlockHash::NULL));
     // A cap deep and past it, the same: one seed until the next epoch.
@@ -2725,13 +2683,15 @@ async fn the_window_names_no_null_seed_once_genesis_connects() {
     y.close().await;
 }
 
-/// A2, the store half: the slots match the pair the window publishes. The
-/// first install pins the null seed (the empty chain's connecting height
-/// hashes under it); genesis's pin then demotes it into the transient
-/// slot, and a window naming one seed releases it there rather than
-/// holding it until the next epoch's pin.
+/// Nothing is ranked on a store with no block, so the list never names the
+/// null seed: genesis is hashed under it by its own job, and the cache is
+/// freed when that job ends. Once genesis connects the list is the
+/// window's: block 0's id alone.
+///
+/// Red edit: have `cache_window::gather` rank an empty store (return the
+/// window instead of `None`): the first list names the null seed.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_slots_hold_no_seed_the_window_does_not_name() {
+async fn an_empty_store_ranks_nothing_and_the_list_never_names_the_null_seed() {
     let mut y = Scenario::open("service-null-seed-y");
     let blocks = y.mine(3).await;
     let genesis = blocks[0].hash;
@@ -2741,39 +2701,18 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
-    let door = service.door();
-    let mut seeds = door.seeds();
-    seeds
-        .wait_for(|pair| pair.is_some_and(|p| p.canonical == BlockHash::NULL))
-        .await
-        .expect("the empty chain's window is installed");
-    assert_eq!(gate.canonical(), Some(BlockHash::NULL));
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(gate.ranked(), None, "an empty store ranks nothing");
     let replies = offer_all(&service, 1, &blocks).await;
     assert!(
         replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
         "{replies:?}"
     );
-    // The run's pin publishes the slots as they stand (genesis canonical,
-    // the null seed demoted beside it); the window's install then makes
-    // them its pair. Wait for that pair, and check the slots hold it: on
-    // the code before A2 the pair was published while the null seed stayed
-    // resident in the transient slot.
-    let window = crate::cache_window::SeedPair {
-        canonical: genesis,
-        transient: None,
-    };
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(window))),
-    )
-    .await
-    .expect("the window after genesis is installed within 30 s")
-    .expect("the service is up");
-    assert_eq!(gate.canonical(), Some(genesis));
+    assert!(service.shared.ranked_now().await, "the service is running");
     assert_eq!(
-        gate.transient(),
-        None,
-        "the null seed was demoted into the transient slot and released"
+        gate.ranked(),
+        Some(Ranked::new(as_seed(genesis), None, None).expect("one seed")),
+        "after genesis the list is block 0's id alone"
     );
     service.stop().await.expect("stops");
     y.close().await;
@@ -2782,20 +2721,19 @@ async fn the_slots_hold_no_seed_the_window_does_not_name() {
 /// A run that begins at genesis hashes under a seed the window does not
 /// name. Every height from 1 through the first epoch and its lag hashes
 /// under block 0's id (CEN-D3), with no lag after block 0. So a span of
-/// blocks 0 and 1 on an empty store pins block 0's id for block 1, while
-/// the window, read at the committed tip, names only the null seed: the
-/// store does not hold block 0 yet. That is the one case found (a probe at
-/// `pin_seeds` over this module and the loopback harness, 2026-11-10).
-/// Past genesis a seed is first named 65 blocks above its block, further
-/// than a span reaches, so the block is committed and the window names it.
+/// blocks 0 and 1 on an empty store forms block 1 under block 0's id while
+/// the store does not hold block 0 yet, and nothing ranks that seed. Each
+/// form is a job on its own seed, and a job gets its cache whether or not
+/// the list names it (HA-R1): genesis under the null seed, block 1 under
+/// block 0's id.
 ///
 /// The node connects its pinned genesis before it takes a span, so this is
-/// a fresh store's first span and nothing a peer can cause. An install
-/// that released whatever the window does not name took this seed from
-/// under the run (#1301's CI).
+/// a fresh store's first span and nothing a peer can cause.
+///
+/// Red edit: in `span::spawn_form`, ask for the job on the window's
+/// canonical seed instead of `claims.seed`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name() {
-    use crate::cache_window::seeds_for;
+async fn a_run_from_genesis_is_a_job_on_a_seed_the_window_does_not_name() {
     let mut y = Scenario::open("service-genesis-run-seed-y");
     let blocks = y.mine(2).await;
     assert_eq!(blocks[0].height, BlockHeight::ZERO);
@@ -2810,16 +2748,14 @@ async fn a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name() {
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
-    let window = seeds_for(service.shared.store(), service.shared.rules())
-        .expect("the window reads on an empty store");
-    assert_eq!(
-        (window.canonical, window.transient),
-        (BlockHash::NULL, None),
-        "an empty store's window names the null seed alone"
-    );
+    let window = crate::cache_window::seeds_on(
+        &service.shared.store().begin_read().expect("read"),
+        service.shared.rules(),
+    )
+    .expect("the window reads on an empty store");
     assert!(
         !window.holds(&blocks[0].hash),
-        "the window names block 0's id before block 0 is stored"
+        "the window cannot name block 0's id before block 0 is stored"
     );
     let replies = offer_all(&service, 1, &blocks).await;
     assert!(
@@ -2828,246 +2764,84 @@ async fn a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name() {
             .all(|reply| matches!(reply, Reply::Connected { .. })),
         "the two blocks connect as one run: {replies:?}"
     );
-    assert!(
-        gate.canonical() == Some(blocks[0].hash) || gate.transient() == Some(blocks[0].hash),
-        "block 0's id is resident after the run"
+    assert_eq!(
+        gate.jobs(),
+        vec![
+            (Class::Chain, BlockHash::NULL),
+            (Class::Chain, blocks[0].hash)
+        ],
+        "genesis under the null seed, block 1 under block 0's id"
     );
     service.stop().await.expect("stops");
     y.close().await;
 }
 
-/// A2's release names its seed. A run that begins at genesis pins a seed
-/// of a block it has not committed yet (`span.rs`, `pin_seeds`; the test
-/// above), and the follower installs the window at the committed tip,
-/// which cannot name it, on every tip move, beside the run. The install's pin demotes the run's seed
-/// into the transient slot; it must stay resident there. Releasing
-/// "whatever the second slot holds" took it from under the run's forms, so
-/// they missed the cache and the span was asked for again (#1301's CI: a
-/// sync that re-requested headers, and seed tests that ran for minutes).
+/// A span sends its next form once the previous one's job was granted, so
+/// one span has at most one ungranted form waiting on a blocking thread
+/// (`span` module docs; the node sizes its blocking pool from it).
+///
+/// The fixture's budget has one permit and the test holds it, so no job is
+/// granted. A span of four blocks is offered: one form asks for its job
+/// and waits, and the other three are not sent.
+///
+/// Red edit: in `span::extend_run`'s launcher, drop the wait on `granted`:
+/// all four forms wait at once.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_window_install_leaves_a_runs_uncommitted_seed_resident() {
-    let gate = Arc::new(Gated::new());
+async fn a_span_has_one_form_waiting_for_its_job_at_a_time() {
+    use std::time::Duration;
+    let mut y = Scenario::open("service-one-waiting-y");
+    let blocks = y.mine(5).await;
+    let budget = Budget::new(NonZeroUsize::MIN);
+    let gate = Arc::new(Gated::on(budget.clone()));
     let service = service(
-        "service-run-seed-kept",
+        "service-one-waiting",
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
-    let mut seeds = service.door().seeds();
-    seeds
-        .wait_for(|pair| pair.is_some_and(|p| p.canonical == BlockHash::NULL))
-        .await
-        .expect("the empty chain's window is installed");
-    // A run over genesis and the blocks above it: genesis hashes under the
-    // null seed, the rest under genesis's id, which the store has not got.
-    let run_seed = BlockHash::from_bytes([7; 32]);
-    service.shared.with_pin_lock(|_| {
-        gate.pin_seed(&BlockHash::NULL);
-        gate.pin_seed(&run_seed);
-    });
-    // The tip has not moved, so the window is still the empty chain's.
-    super::window::install_blocking(&service.shared).expect("the window installs");
-    assert_eq!(gate.canonical(), Some(BlockHash::NULL));
-    assert_eq!(
-        gate.transient(),
-        Some(run_seed),
-        "the run's seed is still resident beside the window's"
-    );
-    let view = service.shared.pin_view();
-    assert_eq!(
-        view.published,
-        Some(crate::cache_window::SlotPair {
-            canonical: BlockHash::NULL,
-            transient: Some(run_seed),
-        }),
-        "the published pair is what the slots hold, the run's seed included"
-    );
-    service.stop().await.expect("stops");
-}
-
-/// A2, the sequence that leaked on a live node, on the connect path's own
-/// functions and at PR time (the test that mines to the release height is
-/// in the nightly lane, and #1301 merged with this sequence broken).
-///
-/// 1. The window `{b, a}` is installed: past the epoch switch, `b` the new
-///    epoch's seed and `a` the previous one's.
-/// 2. A connect re-pins `b` through the run's pin, which moves no slot.
-/// 3. The window's lower end passes the switch: `{b, none}` is installed.
-///
-/// `a` is released at step 3. Recording the second slot empty at step 2
-/// made the install at step 3 find its pair already recorded and skip.
-///
-/// One block connects first, and the tip follower acts on it, so no
-/// install of the follower's runs between the steps.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_re_pin_of_the_canonical_seed_leaves_the_next_release_to_run() {
-    use crate::cache_window::SeedPair;
-    let mut y = Scenario::open("service-repin-release-y");
-    let blocks = y.mine(1).await;
-    let gate = Arc::new(Gated::new());
-    let service = service(
-        "service-repin-release",
-        Arc::clone(&gate),
-        ServiceConfig::default(),
-    );
-    // The follower installs the chain's window on its own task. Wait it
-    // out, so that install does not run between the steps below.
-    offer_all(&service, 1, &blocks).await;
-    let seq = service
-        .watch_tip()
-        .await
-        .expect("the tip watch")
-        .borrow()
-        .seq;
-    let mut followed = service.followed();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        followed.wait_for(|at| *at >= seq),
-    )
+    offer_all(&service, 1, &blocks[..1]).await;
+    let asked_before = gate.jobs().len();
+    let held = {
+        let budget = budget.clone();
+        tokio::task::spawn_blocking(move || budget.acquire(Class::HeaderPow))
+            .await
+            .expect("joins")
+    };
+    let span: Vec<Arrival> = blocks[1..]
+        .iter()
+        .zip(10u64..)
+        .map(|(mined, tag)| arrival(tag, 1, mined))
+        .collect();
+    let tickets = service.door().offer_span(span).expect("room");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while budget.waiting(Class::Chain) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
     .await
-    .expect("the follower acts on the block")
-    .expect("the tip watch is open");
-    let a = BlockHash::from_bytes([0xa1; 32]);
-    let b = BlockHash::from_bytes([0xb2; 32]);
-    super::window::install_pair(
-        &service.shared,
-        SeedPair {
-            canonical: b,
-            transient: Some(a),
-        },
-    );
-    assert_eq!((gate.canonical(), gate.transient()), (Some(b), Some(a)));
-    assert!(
-        super::span::pin_seeds(&service.shared, &[b], shekyl_hash_budget::Class::Chain).await,
-        "the run's pin"
+    .expect("the span's first form waits for its permit");
+    // Long enough for a launcher that did not wait to send the rest.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        budget.waiting(Class::Chain),
+        1,
+        "one form of the span waits; the rest are not sent"
     );
     assert_eq!(
-        (gate.canonical(), gate.transient()),
-        (Some(b), Some(a)),
-        "a re-pin of the canonical seed moves no slot"
+        gate.jobs().len() - asked_before,
+        1,
+        "one job was asked for while none was granted"
     );
-    let after_pin = service.shared.pin_view();
-    assert_eq!(
-        after_pin.published,
-        Some(crate::cache_window::SlotPair {
-            canonical: b,
-            transient: Some(a),
-        }),
-        "the re-pin leaves the second slot recorded"
-    );
-    super::window::install_pair(
-        &service.shared,
-        SeedPair {
-            canonical: b,
-            transient: None,
-        },
-    );
-    assert_eq!(
-        (gate.canonical(), gate.transient()),
-        (Some(b), None),
-        "the seed the window stopped naming is released"
-    );
-    assert_eq!(
-        service.shared.pin_view().published,
-        Some(crate::cache_window::SlotPair {
-            canonical: b,
-            transient: None,
-        }),
-        "the published pair is the slots"
-    );
+    drop(held);
+    for ticket in tickets {
+        let reply = ticket.reply().await.reply;
+        assert!(matches!(reply, Reply::Connected { .. }), "{reply:?}");
+    }
+    assert_eq!(gate.jobs().len() - asked_before, 4, "then each in turn");
     service.stop().await.expect("stops");
     y.close().await;
 }
 
-/// A2, the connect path: once the window stops naming the previous epoch's
-/// seed, the second slot empties. Under the levered cap of ten the window's
-/// lower end passes the switch (connecting height 2113) at connecting
-/// height 2123 (2832 under the production cap of 720); from there both
-/// ends name block 2048's seed, so genesis's cache is released.
-///
-/// Every block past the switch re-pins block 2048's seed, which moves no
-/// slot. The record of the slots must keep genesis's seed in the second
-/// slot through those pins; recording it empty made the window's install
-/// at 2123 find its pair already recorded and skip the release, and
-/// genesis's cache stayed resident until the next epoch's pin (the live
-/// reading of 2026-11-09: two caches at tip 2840 on regtest). Ignored: it
-/// mines 2,124 blocks, and the nightly ignored lane runs it; every
-/// connect-path test checks the published pair against the slots
-/// ([`the_record_is_the_slots`]).
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
-async fn a_connect_past_the_windows_end_empties_the_second_slot() {
-    use crate::cache_window::SeedPair;
-    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
-    use shekyl_difficulty::{SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-    let rules = levered_rules();
-    let switch = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1; // 2113
-    let release = switch + REORG_CAP_BLOCKS; // connecting height 2123
-    let mut y = Scenario::open_under("service-window-end-y", crate::scenario::FreeHash, rules);
-    // Heights 0..=release: the last connecting height is release + 1.
-    let blocks = y.mine(release + 1).await;
-    let genesis = blocks[0].hash;
-    let epoch_seed = blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash;
-    let gate = Arc::new(Gated::new());
-    let service = service_under(
-        "service-window-end",
-        Arc::clone(&gate),
-        ServiceConfig::default(),
-        rules,
-    );
-    let door = service.door();
-    let mut seeds = door.seeds();
-    // Up to three blocks short of the release: both seeds are in the window.
-    let short = usize::try_from(release - 3).expect("fits");
-    let before = offer_all(&service, 1, &blocks[..short]).await;
-    assert!(
-        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
-        "every block up to {short} connects"
-    );
-    let both = SeedPair {
-        canonical: epoch_seed,
-        transient: Some(genesis),
-    };
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(both))),
-    )
-    .await
-    .expect("the window naming both epochs is installed within 30 s")
-    .expect("the service is up");
-    assert_eq!(
-        (gate.canonical(), gate.transient()),
-        (Some(epoch_seed), Some(genesis)),
-        "past the switch, block 2048's seed is canonical and genesis's beside it"
-    );
-    // Across the release: the window names one seed.
-    let after = offer_all(&service, 1, &blocks[short..]).await;
-    assert!(
-        after.iter().all(|r| matches!(r, Reply::Connected { .. })),
-        "{after:?}"
-    );
-    let one = SeedPair {
-        canonical: epoch_seed,
-        transient: None,
-    };
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        seeds.wait_for(|pair| pair.is_some_and(|slots| slots.same_seeds(one))),
-    )
-    .await
-    .expect("the window naming one epoch is installed within 30 s")
-    .expect("the service is up");
-    // Take the pin lock and release it, so an install in flight has
-    // finished before the slots are read. The view is not the lock.
-    let _ = service.shared.pin_view();
-    assert_eq!(gate.canonical(), Some(epoch_seed));
-    assert_eq!(
-        gate.transient(),
-        None,
-        "genesis's cache is released once the window stops naming it"
-    );
-    service.stop().await.expect("stops");
-    y.close().await;
-}
+// PRODUCTION-2124-PLACEHOLDER
 
 /// A service fault is said when it happens, and published. On the CS-5
 /// rehearsal of 2026-11-02 a commit met `ENOSPC`, the service stopped, and

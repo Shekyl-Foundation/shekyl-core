@@ -60,7 +60,6 @@ impl Pooled {
             RULES,
             Arc::new(Gated::new()),
             ServiceConfig::default(),
-            Budget::of_host(),
             Follow {
                 job: None,
                 pool: Some(PoolWiring {

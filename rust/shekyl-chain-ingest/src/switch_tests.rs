@@ -738,6 +738,8 @@ impl CountingPow {
     }
 }
 
+impl crate::pow::Fixture for CountingPow {}
+
 impl shekyl_chain_rules::Substrate for CountingPow {
     type Fault = std::convert::Infallible;
 

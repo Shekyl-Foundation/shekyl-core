@@ -234,6 +234,8 @@ pub(crate) fn hex(hash: BlockHash) -> HashHex {
 /// that is not this block's own is visible, which an all-zero hash hides.
 pub(crate) struct KeccakPow;
 
+impl crate::pow::Fixture for KeccakPow {}
+
 impl Substrate for KeccakPow {
     type Fault = std::convert::Infallible;
 

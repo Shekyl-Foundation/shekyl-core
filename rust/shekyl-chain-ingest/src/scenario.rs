@@ -52,7 +52,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target,
+    StructurallyValid, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -71,6 +71,7 @@ use crate::connector::{
     Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize, Rewind, Rewound,
     RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
 use crate::test_support::{open_store, open_store_under, tmp, TestPath};
@@ -151,10 +152,42 @@ impl Scenario<FreeHash> {
     }
 }
 
-impl<P: Substrate + Send + Sync + 'static> Scenario<P>
-where
-    P::Fault: std::fmt::Debug + Send,
-{
+impl<P: Pow> Scenario<P> {
+    /// Run `job` as one hashing job on `seed`, as the ingest forms a
+    /// block: the driver's clock, and `seed`'s cache under a production
+    /// pow. The driver has no stop, so the job is always granted.
+    fn job<R>(
+        &self,
+        seed: BlockHash,
+        job: impl for<'job> FnOnce(&crate::pow::RunJob<'job, P::Fault>) -> R,
+    ) -> R {
+        static NEVER_STOPS: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        self.substrate
+            .run(shekyl_hasher::Class::Chain, seed, &NEVER_STOPS, job)
+            .expect("the driver's hasher runs for the driver's life")
+    }
+
+    /// Send the ranked list for the store as it is now, as the service's
+    /// ranker does after a write (`window::rank`), with no frontier. A
+    /// free longhash ignores it.
+    pub fn rank(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let snap = store.begin_read().expect("the driver's store reads");
+        let gathered = crate::cache_window::gather(&snap, self.rules)
+            .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
+        if let Some(list) = crate::cache_window::ranked_seeds(gathered.as_ref(), None) {
+            self.substrate.rank(list);
+        }
+    }
+
+    /// The proof-of-work boundary this driver forms through.
+    pub const fn pow(&self) -> &Clocked<P> {
+        &self.substrate
+    }
+
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
         Self::open_under_with(name, pow, RULES, |path| open_store(path))
@@ -439,10 +472,8 @@ where
             Ok(references) => references,
             Err(never) => match never {},
         };
-        // The longhash looks the cache up. This driver is the chain, so
-        // it pins the seed first; a harness longhash's pin does nothing.
-        self.substrate.pin_seed(&seed);
-        let formed = form(
+        let formed = self.job(seed, |job| {
+            form(
             candidate,
             &FormClaims {
                 rule_set: &rule_set,
@@ -451,9 +482,10 @@ where
                 references: &references,
                 network: self.rules.trust().network_id(),
             },
-            &self.substrate,
+            job,
             FormAttempt::FIRST,
         )
+        })
         .expect("the driver's substrate does not fault");
         let formed = formed.map_err(StepOutcome::Refused)?;
         Ok((
@@ -571,10 +603,8 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
-        // This driver's own substrate, so the form can look the cache up.
-        // An untrusted alternative on the live service never pins.
-        self.substrate.pin_seed(&mined.seed);
-        let formed = form(
+        let formed = self.job(mined.seed, |job| {
+            form(
             mined.candidate(),
             &FormClaims {
                 rule_set: &self.rules.in_force(mined.height),
@@ -583,9 +613,10 @@ where
                 references: &ReferenceClaims::EMPTY,
                 network: self.rules.trust().network_id(),
             },
-            &self.substrate,
+            job,
             FormAttempt::FIRST,
         )
+        })
         .expect("the driver's substrate does not fault")
         .expect("a block another driver connected forms");
         self.connector
@@ -615,8 +646,8 @@ where
             .template(facts, now, listed)
             .map_err(StepOutcome::Template)?;
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
-        self.substrate.pin_seed(&seed);
-        let formed = form(
+        let formed = self.job(seed, |job| {
+            form(
             candidate.clone(),
             &FormClaims {
                 rule_set: &self.rules.in_force(height),
@@ -625,9 +656,10 @@ where
                 references: &ReferenceClaims::EMPTY,
                 network: self.rules.trust().network_id(),
             },
-            &self.substrate,
+            job,
             FormAttempt::FIRST,
         )
+        })
         .expect("the driver's substrate does not fault")
         .map_err(StepOutcome::Refused)?;
         self.targets
@@ -646,8 +678,8 @@ where
     /// again here under empty reference claims, then [`OfferAlt`].
     #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
-        self.substrate.pin_seed(&block.seed);
-        let formed = form(
+        let formed = self.job(block.seed, |job| {
+            form(
             block.candidate.clone(),
             &FormClaims {
                 rule_set: &self.rules.in_force(block.height),
@@ -656,9 +688,10 @@ where
                 references: &ReferenceClaims::EMPTY,
                 network: self.rules.trust().network_id(),
             },
-            &self.substrate,
+            job,
             FormAttempt::FIRST,
         )
+        })
         .expect("the driver's substrate does not fault")
         .expect("a block assembled under empty claims forms");
         self.connector
@@ -692,15 +725,18 @@ where
         plan: &SwitchPlan,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        static NEVER_STOPS: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         let formed_plan = match crate::plan_form::form_plan(
             plan,
             self.rules,
             &self.substrate,
-            threads,
-            &|| (),
+            &NEVER_STOPS,
         ) {
             Ok(formed) => formed,
+            Err(crate::plan_form::PlanStop::Stopped) => {
+                unreachable!("the driver has no stop")
+            }
             Err(crate::plan_form::PlanStop::Substrate(fault)) => {
                 panic!("the driver's substrate does not fault: {fault:?}")
             }

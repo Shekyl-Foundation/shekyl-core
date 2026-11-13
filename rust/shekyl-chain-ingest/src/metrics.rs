@@ -497,7 +497,7 @@ mod tests {
         m.seated(None);
         m.seated(Some(Duration::from_nanos(50)));
         m.seated(Some(Duration::from_nanos(150)));
-        let s = m.snapshot();
+        let s = m.snapshot(Derives::default());
         assert_eq!(
             (s.transit_spans, s.transit_blocks, s.transit_bytes),
             (1, 3, 1_500)
@@ -534,7 +534,7 @@ mod tests {
             window: 1,
         });
         assert_eq!(
-            m.snapshot().concurrency,
+            m.snapshot(Derives::default()).concurrency,
             Some(Concurrency {
                 hashers: 4,
                 window: 32

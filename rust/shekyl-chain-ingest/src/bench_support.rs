@@ -76,6 +76,8 @@ impl FixedClock {
     }
 }
 
+impl crate::pow::Fixture for FixedClock {}
+
 impl Substrate for FixedClock {
     type Fault = std::convert::Infallible;
 

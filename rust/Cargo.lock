@@ -3848,6 +3848,7 @@ dependencies = [
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",
+ "shekyl-hasher",
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-network",

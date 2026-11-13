@@ -131,7 +131,3 @@ impl<P: Substrate + ?Sized> Substrate for Recalled<'_, P> {
         }
     }
 }
-
-#[cfg(all(test, feature = "pipeline"))]
-#[path = "substrate_tests.rs"]
-mod substrate_tests;

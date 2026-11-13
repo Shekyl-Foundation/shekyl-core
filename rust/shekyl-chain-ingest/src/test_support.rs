@@ -755,3 +755,36 @@ pub(crate) fn job_seat(
         posted,
     )
 }
+
+/// A production proof-of-work boundary over a hasher of the test's own, as
+/// each daemon has its own. Dropping it stops the hasher: every job has
+/// ended by then, since a job borrows the boundary.
+#[cfg(feature = "pipeline")]
+pub struct OwnHasher {
+    /// The boundary, to plug in. Cheap to clone.
+    pub pow: crate::pow::ProductionPow,
+    /// The hasher, for its `resident()` watch.
+    pub hasher: shekyl_hasher::Hasher,
+    /// The sink the boundary records into.
+    pub metrics: std::sync::Arc<crate::metrics::Metrics>,
+    _owner: shekyl_hasher::Owner,
+}
+
+/// [`OwnHasher`] over a budget of this host's parallelism.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher() -> OwnHasher {
+    own_hasher_on(shekyl_hash_budget::Budget::of_host())
+}
+
+/// [`OwnHasher`] over `budget`.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher_on(budget: shekyl_hash_budget::Budget) -> OwnHasher {
+    let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
+    let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+    OwnHasher {
+        pow: crate::pow::ProductionPow::new(hasher.clone(), std::sync::Arc::clone(&metrics)),
+        hasher,
+        metrics,
+        _owner: owner,
+    }
+}

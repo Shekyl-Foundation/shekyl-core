@@ -54,14 +54,13 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{GenesisPin, InvalidBlock, Substrate};
+use shekyl_chain_rules::{GenesisPin, InvalidBlock};
 use shekyl_types::BlockHeight;
 
 use crate::metrics::Metrics;
 use crate::pipeline::RunReport;
-use crate::substrate::ProductionSubstrate;
+use crate::pow::Pow;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
-use shekyl_pow_randomx::CacheStore;
 
 /// Which mutations a captured chain can carry (`CHAIN_RULES_SLICE_7.md` §3.7).
 mod corpus_census;
@@ -203,8 +202,7 @@ const CAPTURED_SHAPES: [&str; 5] = [
 /// fresh store; return the report.
 async fn replay<S>(dir: &Path, manifest: &Manifest, substrate: Arc<S>) -> RunReport
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + std::fmt::Debug + 'static,
+    S: Pow,
 {
     replay_under(dir, manifest, substrate, ApplyPolicy::Full)
         .await
@@ -224,8 +222,7 @@ pub(crate) async fn replay_under<S>(
     policy: ApplyPolicy,
 ) -> Result<RunReport, String>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + std::fmt::Debug + 'static,
+    S: Pow,
 {
     let (report, _path, _) =
         replay_keeping_store(dir, manifest, substrate, policy, &policy_tag(policy)).await;
@@ -628,11 +625,8 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "real RandomX over every captured chain; minutes; run by nightly.yml's chain-ingest-ignored job"]
 async fn replays_every_captured_chain_under_the_production_substrate() {
-    let metrics = Arc::new(Metrics::new());
-    let substrate = Arc::new(ProductionSubstrate::new(
-        Arc::new(CacheStore::new()),
-        Arc::clone(&metrics),
-    ));
+    let own = crate::test_support::own_hasher();
+    let substrate = Arc::new(own.pow.clone());
     for (dir, manifest) in captured_chains() {
         genesis_is_the_current_builds(&manifest);
         let report = replay(&dir, &manifest, substrate.clone()).await;

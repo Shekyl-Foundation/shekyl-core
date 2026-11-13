@@ -69,6 +69,7 @@ replay-cli = [
     "pipeline",
     "fetch",
     "dep:clap",
+    "dep:shekyl-hash-budget",
     "dep:shekyl-rpc-transport",
 ]
 # harness: the driver's emission-claim assembly (`emission_assembly.rs`,
@@ -161,6 +162,9 @@ serde_json = { workspace = true }
 # hash in the ingest borrows a cache from, inside a job. The ingest holds
 # no budget: a permit is taken through a job and nowhere else.
 shekyl-hasher = { path = "../shekyl-hasher", optional = true }
+# replay-cli: the budget the replay binary starts its own hasher over, one
+# permit per `--hashers`. The library names no budget.
+shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
 # pipeline: the miner's job board and found-block sink, which the ingest
 # service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
 shekyl-miner = { path = "../shekyl-miner", optional = true }
@@ -212,6 +216,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The budget a test starts its own hasher over, and the one the service
+# tests' gate takes its jobs' permits from. The library names no budget.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 # The Tor status a store test hands `daemon_status`, as the daemon's
 # supervisor would answer it.
 shekyl-tor-status = { path = "../shekyl-tor-status" }

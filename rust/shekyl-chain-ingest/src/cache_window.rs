@@ -377,27 +377,147 @@ mod tests {
     /// The store's lowest poppable height while nothing is retired.
     const GENESIS_FLOOR: BlockHeight = BlockHeight::from_raw(1);
 
+    fn seed(fill: u8) -> BlockHash {
+        BlockHash::from_bytes([fill; 32])
+    }
+
+    fn work(raw: u128) -> CumulativeDifficulty {
+        CumulativeDifficulty::from_raw(raw)
+    }
+
+    /// The window's canonical seed is 1; `other` is 2 when the window
+    /// spans a seed boundary.
+    fn gathered(two_seeds: bool, forks: &[(u8, u128)]) -> Gathered {
+        Gathered {
+            window: SeedPair {
+                canonical: seed(1),
+                transient: two_seeds.then(|| seed(2)),
+            },
+            forks: forks
+                .iter()
+                .map(|&(fill, raw)| HeldFork {
+                    seed: seed(fill),
+                    work: work(raw),
+                })
+                .collect(),
+        }
+    }
+
+    fn frontier(fill: u8, raw: u128) -> Option<Frontier> {
+        Some(Frontier {
+            seed: seed(fill),
+            work: work(raw),
+        })
+    }
+
+    /// The list `ranked_seeds` must return: the window's seeds, canonical
+    /// first, then the third and its class.
+    fn list(other: Option<u8>, third: Option<(u8, Class)>) -> Option<Ranked> {
+        Some(
+            Ranked::new(
+                seedhash(&seed(1)),
+                other.map(|fill| seedhash(&seed(fill))),
+                third.map(|(fill, class)| (seedhash(&seed(fill)), class)),
+            )
+            .expect("distinct seeds"),
+        )
+    }
+
+    /// `RANDOMX_CACHE_ACTOR.md` §8's table for the ranked list. Each row:
+    /// the window, the held forks as (seed, work), the frontier, the list.
+    ///
+    /// Red edits, one per rule: rank the frontier before the forks
+    /// (`equal work` row); take the next-heaviest chain when the winner's
+    /// seed is in the window (`heaviest is in the window` row); give a
+    /// fork `HeaderPow` (any fork row); list the lighter fork (`two forks`
+    /// row).
     #[test]
-    fn a_pair_names_the_slots_once_a_seed_is_canonical() {
-        let canonical = BlockHash::from_bytes([1; 32]);
-        let transient = BlockHash::from_bytes([2; 32]);
-        assert_eq!(SlotPair::from_stored((None, None)), None);
-        assert_eq!(
-            SlotPair::from_stored((None, Some(transient))),
-            None,
-            "a transient cache alone is not a pair a hash may use"
+    fn the_ranked_list_is_the_window_then_the_most_work_chain_outside_it() {
+        type Row = (
+            &'static str,
+            Gathered,
+            Option<Frontier>,
+            Option<Ranked>,
         );
-        let pair = SlotPair::from_stored((Some(canonical), Some(transient))).expect("canonical");
-        assert!(pair.holds(&canonical));
-        assert!(pair.holds(&transient));
-        assert!(pair.same_seeds(SeedPair {
-            canonical,
-            transient: Some(transient),
-        }));
-        assert!(!pair.same_seeds(SeedPair {
-            canonical,
-            transient: None,
-        }));
+        let fork = Class::Unsolicited;
+        let ahead = Class::HeaderPow;
+        let rows: Vec<Row> = vec![
+            ("a one-seed window", gathered(false, &[]), None, list(None, None)),
+            ("a two-seed window", gathered(true, &[]), None, list(Some(2), None)),
+            (
+                "a held fork past its seed point",
+                gathered(false, &[(7, 10)]),
+                None,
+                list(None, Some((7, fork))),
+            ),
+            (
+                "two held forks: the heavier is listed",
+                gathered(true, &[(7, 10), (8, 11)]),
+                None,
+                list(Some(2), Some((8, fork))),
+            ),
+            (
+                "two held forks of equal work: the first in key order",
+                gathered(false, &[(7, 10), (8, 10)]),
+                None,
+                list(None, Some((7, fork))),
+            ),
+            (
+                "a header frontier ahead of the window",
+                gathered(true, &[]),
+                frontier(9, 50),
+                list(Some(2), Some((9, ahead))),
+            ),
+            (
+                "a frontier and a fork: the frontier has more work",
+                gathered(false, &[(7, 10)]),
+                frontier(9, 11),
+                list(None, Some((9, ahead))),
+            ),
+            (
+                "a frontier and a fork: the fork has more work",
+                gathered(false, &[(7, 12)]),
+                frontier(9, 11),
+                list(None, Some((7, fork))),
+            ),
+            (
+                "a frontier and a fork of equal work: the fork",
+                gathered(false, &[(7, 11)]),
+                frontier(9, 11),
+                list(None, Some((7, fork))),
+            ),
+            (
+                "a fork whose seed is the window's: not listed twice",
+                gathered(true, &[(2, 10)]),
+                None,
+                list(Some(2), None),
+            ),
+            (
+                "a frontier whose seed is the window's: not listed twice",
+                gathered(false, &[]),
+                frontier(1, 50),
+                list(None, None),
+            ),
+            (
+                "the heaviest is in the window: the next-heaviest does not take the place",
+                gathered(true, &[(7, 10)]),
+                frontier(2, 50),
+                list(Some(2), None),
+            ),
+        ];
+        for (name, gathered, frontier, expected) in rows {
+            assert_eq!(ranked_seeds(Some(&gathered), frontier), expected, "{name}");
+        }
+    }
+
+    /// A store with no block gathers nothing, and nothing is ranked: with
+    /// or without a frontier. The list never names the null seed.
+    ///
+    /// Red edit: return `Ranked::new(null seed, None, None)` for `None`.
+    #[test]
+    fn nothing_is_ranked_on_a_store_with_no_block() {
+        assert_eq!(ranked_seeds(None, None), None);
+        assert_eq!(ranked_seeds(None, frontier(9, 50)), None);
     }
 
     fn tip(height: BlockHeight, fill: u8) -> Tip {
@@ -439,10 +559,10 @@ mod tests {
     }
 
     /// B2: a seed below the fork must be one of the pair, and a miss is a
-    /// defect, never a reply. The branch's own seed block is prepared,
-    /// whatever the pair holds.
+    /// defect, never a reply. The branch's own seed block is hashed,
+    /// whatever the pair holds: the form is a job on it.
     #[test]
-    fn a_below_fork_miss_is_a_defect_and_a_branch_seed_is_prepared() {
+    fn a_below_fork_miss_is_a_defect_and_a_branch_seed_is_hashed() {
         let fork = popping(BlockCount::from_raw(1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
@@ -472,7 +592,7 @@ mod tests {
             &window,
             GENESIS_FLOOR,
         );
-        assert!(matches!(branch, AltSpend::Prepare), "{branch:?}");
+        assert!(matches!(branch, AltSpend::Hash), "{branch:?}");
     }
 
     #[test]
@@ -510,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_the_chain_has_not_mined_is_not_a_slot() {
+    fn a_seed_the_chain_has_not_mined_is_not_in_the_window() {
         let canonical = BlockHash::from_bytes([1; 32]);
         let unmined = pair_of(canonical, Some(canonical), None);
         assert_eq!(unmined.canonical, canonical);

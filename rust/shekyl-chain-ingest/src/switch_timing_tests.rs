@@ -12,20 +12,16 @@
 
 #![cfg(test)]
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_chain_store::store::RawRows;
 use shekyl_harness_spender::Spender;
-use shekyl_pow_randomx::CacheStore;
 use shekyl_types::BlockHeight;
 
 use crate::connector::{Offered, Switched};
-use crate::metrics::Metrics;
 use crate::scenario::{FreeHash, Mined, Scenario};
-use crate::substrate::ProductionSubstrate;
-use crate::test_support::{Family, FIRST_SPEND_HEIGHT};
-use shekyl_chain_rules::Substrate;
+use crate::pow::Pow;
+use crate::test_support::{own_hasher, Family, FIRST_SPEND_HEIGHT};
 
 /// The cap in force at genesis.
 fn cap() -> u64 {
@@ -35,23 +31,18 @@ fn cap() -> u64 {
         .to_raw()
 }
 
-fn randomx() -> ProductionSubstrate {
-    ProductionSubstrate::new(Arc::new(CacheStore::new()), Arc::new(Metrics::new()))
-}
-
 /// Two drivers over one prefix of `FIRST_SPEND_HEIGHT + 2` blocks; `x`
 /// mines A (`cap` coinbase-only blocks), `y` mines B (`cap + 1` blocks,
 /// each listing one validating spend when `spends`). B arrives at `x` and
 /// the switch pops the cap exactly.
-async fn timed<P>(label: &str, pow: impl Fn() -> P, spends: bool)
+async fn timed<P>(label: &str, [pow_x, pow_y]: [P; 2], spends: bool)
 where
-    P: Substrate + Send + Sync + 'static,
-    P::Fault: std::fmt::Debug + Send,
+    P: Pow,
 {
     let depth = cap();
     let prefix_len = FIRST_SPEND_HEIGHT + 2;
-    let mut x = Scenario::open_with(&format!("switch-timing-{label}-x"), pow());
-    let mut y = Scenario::open_with(&format!("switch-timing-{label}-y"), pow());
+    let mut x = Scenario::open_with(&format!("switch-timing-{label}-x"), pow_x);
+    let mut y = Scenario::open_with(&format!("switch-timing-{label}-y"), pow_y);
     let started = Instant::now();
     x.mine(prefix_len).await;
     let prefix = y.mine(prefix_len).await;
@@ -163,7 +154,7 @@ where
 #[tokio::test]
 #[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_free_hash_coinbase_only() {
-    timed("free-coinbase", || FreeHash, false).await;
+    timed("free-coinbase", [FreeHash, FreeHash], false).await;
 }
 
 #[tokio::test]
@@ -172,17 +163,20 @@ async fn production_cap_switch_timing_free_hash_with_spends() {
     // Since the switch forms through the recorded PoW it makes no RandomX
     // call, so this run measures the switch the floor device runs, without
     // the hours RandomX would spend building the two chains first.
-    timed("free-spends", || FreeHash, true).await;
+    timed("free-spends", [FreeHash, FreeHash], true).await;
 }
 
 #[tokio::test]
 #[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_randomx_coinbase_only() {
-    timed("randomx-coinbase", randomx, false).await;
+    // A hasher for each driver, as each node has its own.
+    let (x, y) = (own_hasher(), own_hasher());
+    timed("randomx-coinbase", [x.pow.clone(), y.pow.clone()], false).await;
 }
 
 #[tokio::test]
 #[ignore = "measurement: the switch at the genesis cap; run by nightly.yml's chain-ingest-ignored job"]
 async fn production_cap_switch_timing_randomx_with_spends() {
-    timed("randomx-spends", randomx, true).await;
+    let (x, y) = (own_hasher(), own_hasher());
+    timed("randomx-spends", [x.pow.clone(), y.pow.clone()], true).await;
 }

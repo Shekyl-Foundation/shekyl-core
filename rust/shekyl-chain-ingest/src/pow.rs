@@ -416,3 +416,11 @@ where
         false
     }
 }
+
+/// The rules crate's mock, which the pipeline's tests run over.
+#[cfg(test)]
+impl Fixture for shekyl_chain_rules::harness::MockSubstrate {}
+
+#[cfg(test)]
+#[path = "pow_tests.rs"]
+mod pow_tests;

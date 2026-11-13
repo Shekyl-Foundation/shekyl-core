@@ -175,14 +175,8 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "real RandomX; seconds; run by nightly.yml's chain-ingest-ignored job"]
 async fn a_chain_mines_under_the_production_substrate() {
-    use std::sync::Arc;
-
-    use crate::metrics::Metrics;
-    use crate::substrate::ProductionSubstrate;
-    use shekyl_pow_randomx::CacheStore;
-
-    let pow = ProductionSubstrate::new(Arc::new(CacheStore::new()), Arc::new(Metrics::new()));
-    let mut scenario = Scenario::open_with("scenario-randomx", pow);
+    let own = crate::test_support::own_hasher();
+    let mut scenario = Scenario::open_with("scenario-randomx", own.pow.clone());
     let mined = scenario.mine(3).await;
     assert_eq!(mined.len(), 3);
     for block in &mined {
