@@ -678,7 +678,7 @@ impl SyncDaemon {
         // they select, and no field a switch left off (RW-Q4).
         let on = shekyl_rpc_types::schema::switches_on(&params, &reply_shape);
         let result = self.json_rpc_result(M::NAME, &params)?;
-        shekyl_rpc_types::schema::asked_faults(&result, &reply_shape, &on).map_err(|why| {
+        shekyl_rpc_types::schema::conforms_presence(&result, &reply_shape, &on).map_err(|why| {
             JsonRpcError::Malformed(format!("malformed {} reply: {why}", M::NAME))
         })?;
         serde_json::from_value(result).map_err(|error| {

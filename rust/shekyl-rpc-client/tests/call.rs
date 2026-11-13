@@ -228,7 +228,7 @@ fn tip(pow: bool) -> shekyl_rpc_types::wire::block::HeaderSelect {
 /// A reply carries the fields the request's switches selected and no
 /// other (RW-Q4, 4.1): `pow` asked for and missing, or present though not
 /// asked for, is the daemon answering a request this client did not send,
-/// refused before the decode. Red edit: skip `asked_faults` in the client.
+/// refused before the decode. Red edit: skip `conforms_presence` in the client.
 #[test]
 fn a_reply_holds_exactly_the_fields_the_request_selected() {
     let call = |reply: Value, pow: bool| {

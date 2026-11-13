@@ -399,7 +399,7 @@ pub trait Rpc: Sync + Clone {
                 serde_json::from_slice(&reply).map_err(|e| unreadable(e.to_string()))?;
             match (envelope.remove("result"), envelope.remove("error")) {
                 (Some(result), None) => {
-                    shekyl_rpc_types::schema::asked_faults(&result, &reply_shape, &on)
+                    shekyl_rpc_types::schema::conforms_presence(&result, &reply_shape, &on)
                         .map_err(&unreadable)?;
                     serde_json::from_value::<M::Reply>(result)
                         .map(Ok)

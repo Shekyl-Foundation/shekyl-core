@@ -12,6 +12,7 @@ use crate::method::Policy;
 use super::*;
 use crate::kinds::{Count, Done, Endpoint, Height, NoParams, Withheld};
 use crate::nullable::Nullable;
+use crate::wire_object;
 use serde_json::json;
 use shekyl_rpc_grants::Grant;
 

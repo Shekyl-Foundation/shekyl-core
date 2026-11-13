@@ -343,20 +343,39 @@ fn body_form(id: TxHash, body: &TxBody, prune: bool) -> Result<Bytes, shared::Ar
     }
 }
 
+/// The three operands `prune` selects (RW-Q4): present together, or all
+/// unasked. One transaction carries them on `tx_show` and inside a block.
+struct PrunedOperands {
+    prunable_hash: Asked<HashHex>,
+    pqc_auth_hash: Asked<Nullable<HashHex>>,
+    archival_size: Asked<Size>,
+}
+
+fn pruned_operands(body: &TxBody, prune: bool) -> PrunedOperands {
+    PrunedOperands {
+        prunable_hash: Asked::when(prune, || hash(body.skeleton.prunable_hash.to_bytes())),
+        pqc_auth_hash: Asked::when(prune, || {
+            body.skeleton
+                .pqc_auth_hash
+                .map(|auth| hash(auth.to_bytes()))
+                .into()
+        }),
+        archival_size: Asked::when(prune, || Size(body.skeleton.archival_len.to_raw())),
+    }
+}
+
 fn block_tx(id: TxHash, body: &TxBody, prune: bool) -> shared::OrArchived<block::BlockTx> {
     match body_form(id, body, prune) {
-        Ok(bytes) => shared::OrArchived::Item(block::BlockTx {
-            id: hash(id.to_bytes()),
-            body: bytes,
-            prunable_hash: Asked::when(prune, || hash(body.skeleton.prunable_hash.to_bytes())),
-            pqc_auth_hash: Asked::when(prune, || {
-                body.skeleton
-                    .pqc_auth_hash
-                    .map(|auth| hash(auth.to_bytes()))
-                    .into()
-            }),
-            archival_size: Asked::when(prune, || Size(body.skeleton.archival_len.to_raw())),
-        }),
+        Ok(bytes) => {
+            let pruned = pruned_operands(body, prune);
+            shared::OrArchived::Item(block::BlockTx {
+                id: hash(id.to_bytes()),
+                body: bytes,
+                prunable_hash: pruned.prunable_hash,
+                pqc_auth_hash: pruned.pqc_auth_hash,
+                archival_size: pruned.archival_size,
+            })
+        }
         Err(archived) => shared::OrArchived::Archived(shared::ArchivedState::Archived(archived)),
     }
 }
@@ -512,17 +531,13 @@ fn tx_entry(
             ))
         }
     };
+    let pruned = pruned_operands(body, prune);
     Some(shared::OrArchived::Item(tx::TxEntry {
         id: hash(id.to_bytes()),
         body: body_bytes,
-        prunable_hash: Asked::when(prune, || hash(body.skeleton.prunable_hash.to_bytes())),
-        pqc_auth_hash: Asked::when(prune, || {
-            body.skeleton
-                .pqc_auth_hash
-                .map(|auth| hash(auth.to_bytes()))
-                .into()
-        }),
-        archival_size: Asked::when(prune, || Size(body.skeleton.archival_len.to_raw())),
+        prunable_hash: pruned.prunable_hash,
+        pqc_auth_hash: pruned.pqc_auth_hash,
+        archival_size: pruned.archival_size,
         pooled,
         mined_height: mined.as_ref().map(|(at, _, _)| Height(*at)).into(),
         // Against the count read once for the whole gather.
