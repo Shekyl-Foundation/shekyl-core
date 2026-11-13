@@ -501,6 +501,8 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | list | tx, request, shard, peer, ban, txpool | *verb* — print the entries | tx:verb, request:verb, shard:verb, peer:verb, ban:verb, txpool:verb |
 | note | tx | *view* — a transaction's local note | tx:view |
 | abandon | tx | *verb* — give up on a dispatched send | tx:verb |
+| alarm | tx | *view* — the held sends that need the user's decision, each with why (A19) | tx:view |
+| resend | tx | *verb* — offer a held send's saved bytes to the daemon again, by the user's decision (A19) | tx:verb |
 | decode | tx | *verb* — decode a transaction blob | tx:verb |
 | make | uri | *verb* — compose | uri:verb |
 | read | uri | *verb* — decode | uri:verb |
@@ -582,6 +584,8 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `tx show <id>` | same | hash | `--body` | K (Rick, 2026-11-03): one report of transaction `<id>`. An open wallet that holds the id is the report, and the daemon is not asked. Otherwise the report is the daemon's view. `--body` fetches the serialized bytes from the daemon (kind `bytes`, RW-Q4). If neither source knows the id, the refusal names both |
 | `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
+| — | `tx alarm` | | | N (A19, 2026-11-12): the held sends that need a decision — every held send sent before this session, and every one the watchdog has alarmed on in it — with why and the height each left at |
+| — | `tx resend <txid>` | hash | | N (A19, 2026-11-12): resend a held send's saved bytes; the reply is `send`'s. After a restart this is the only way a held send is offered again |
 | — | `tx decode <body>` | bytes (a transaction's serialized bytes) | | N (IG-Q26, RW-Q4): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
 | `request new <amount> <label> [--expiry e]` | `request create <amount> <label>` | amount, text | `--expiry` quantity (duration) | R (IG-Q34) |
 | `request list [--matched \| --all]` | same | | `--matched`; `--all` | K |
@@ -741,6 +745,17 @@ The rules Part C applies are ruled. It adds no rule; each question in §20 is a 
 - `status` leaves every reply, and a failure is only the JSON-RPC error object (RW-Q3). Each value takes its kind's one encoding (RW-Q4): an amount is decimal atomic units, a 128-bit quantity is one `HexU128` field, a hash is `HashHex`, a body is `bytes`. RK-D23's three states replace every presence flag (`has_*`), every `""` sentinel and every `u64::MAX` sentinel: absent means withheld by grant, `null` means no answer.
 
 **The version read.** `version` is in every grant set. Every authenticated connection may call it, as may the same-user socket and the plaintext view listener. It is never served before authentication (`RPC_CHANNEL.md` §4.3). In its reply only the `version` field is frozen: the key, a JSON integer, `(major << 16) | minor` (RK-D25, RW-Q6). The method's name and its empty params are frozen from the RW-Q6 ruling on. Every other field of the reply follows this Part like any other.
+
+### 16.1 The wallet RPC's names added for A19
+
+The wallet RPC (`docs/api/wallet_rpc.yaml`) predates Part C's rename and keeps its names until its own rename. The methods and fields A19 adds (the alpha.11 bug hunt; the wallet lane brief, Rick, 2026-11-12) take Part C's rules now, so the rename has nothing to undo:
+
+| Method | Path | Parameters | Reply | Notes |
+|---|---|---|---|---|
+| `tx_alarm` | `tx alarm` (§12.3) | — | a list (IG-Q53) of `{id, alarm, sent_height}` | a view; `id` is the transaction's id (hash), `alarm` one keyword (IG-Q86): `earlier-session`, `overdue`, `untracked`, `published-past-lookback`, `peerless`, `offline`, `reference-stale`, `bytes-missing`; `sent_height` the wallet's height when the send left (ordinal) |
+| `tx_resend` | `tx resend` (§12.3) | `id` (hash) | `submit_pending_tx`'s reply | a state change ending in its verb; refusals are `submit_pending_tx`'s (`-29106`, `-29107`), and `-29121 TX_NOT_HELD`, `-29122 TX_BYTES_MISSING` |
+
+`submit_pending_tx`'s reply, and so `tx_resend`'s, gains `verdict_saved` (switch): `false` when the send went out and stands but saving its verdict failed. `submit_pending_tx` gains the refusal `-29120 SEND_NOT_SAVED`: the send's record could not be saved, so nothing was sent.
 
 ## 17. The method census
 
