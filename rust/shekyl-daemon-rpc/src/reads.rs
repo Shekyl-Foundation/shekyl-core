@@ -33,7 +33,7 @@ use crate::methods::{
     RESTRICTED_SPENT_KEY_IMAGES_COUNT, RESTRICTED_TRANSACTIONS_COUNT,
 };
 use crate::read_facts::{
-    ChainReadFacts, CoinbaseRange, PowAdmission, PowDecline, PowSeed, SpentAt,
+    ChainReadFacts, CoinbaseRange, PowAnswer, PowDecline, PowSeed, SpentAt,
 };
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
 
@@ -963,16 +963,17 @@ pub fn shard_coverage(read: &dyn ChainReadFacts) -> Result<archival::Coverage, R
 }
 
 /// `pow`: RandomX over the hashing bytes, under the seed named or the
-/// chain's seed for `height`, only under a cache this node already holds.
+/// chain's seed for `height`, only under a cache that is already warm.
 ///
-/// A bounded caller pays one hash from the shared budget, after the seed is
-/// admitted and before RandomX, so a request that will not hash spends
-/// nothing (`RPC_CHANNEL.md` §6.3).
+/// A bounded caller pays one hash from the shared budget inside the warm
+/// loan, so after the seed's cache was granted and before RandomX: a
+/// request that will not hash spends nothing (`RPC_CHANNEL.md` §6.3). A
+/// loan cancelled after the spend leaves the spend spent.
 ///
 /// # Errors
 ///
 /// `bound.pow-size` for hashing bytes longer than the hashing blob;
-/// `pow.seed` for a seed this node does not hold or one above the tip;
+/// `pow.seed` for a seed that is not warm or one above the tip;
 /// `bound.hash` for a bounded caller while the budget is empty; the facts'
 /// fault.
 pub fn pow(
@@ -1000,32 +1001,39 @@ pub fn pow(
             Diagnostic::new(codes::POW_SEED, message),
         ))
     };
-    let admitted = match read.admit_pow(seed)? {
-        PowAdmission::Admitted(admitted) => admitted,
-        PowAdmission::Declined(PowDecline::SeedNotHeld { seed }) => {
-            return Err(refused(format!(
-                "seed {} is not held: pow hashes under held seeds only",
-                block_hash(seed)
-            )))
+    let mut unpaid = None;
+    let mut pay = || {
+        if !bounded {
+            return true;
         }
-        PowAdmission::Declined(PowDecline::SeedAboveTip { seed_height, tip }) => {
-            return Err(refused(format!(
+        match budget.spend(std::time::Instant::now()) {
+            Ok(()) => true,
+            Err(refusal) => {
+                unpaid = Some(refusal);
+                false
+            }
+        }
+    };
+    match read.pow(seed, blob, &mut pay)? {
+        PowAnswer::Hashed(pow) => Ok(block::Pow {
+            pow: hash(pow.to_bytes()),
+        }),
+        PowAnswer::Declined(PowDecline::SeedNotWarm { seed }) => Err(refused(format!(
+            "seed {} is not warm: pow hashes under warm seeds only",
+            block_hash(seed)
+        ))),
+        PowAnswer::Declined(PowDecline::SeedAboveTip { seed_height, tip }) => {
+            Err(refused(format!(
                 "no seed for height {}: its seed height {} is above the tip {}",
                 request.height.0,
                 seed_height.to_raw(),
                 tip.to_raw()
             )))
         }
-    };
-    if bounded {
-        budget
-            .spend(std::time::Instant::now())
-            .map_err(RpcFault::Refused)?;
+        PowAnswer::Unpaid => Err(RpcFault::Refused(
+            unpaid.expect("the facts report unpaid only when the payment refused"),
+        )),
     }
-    let pow = read.hash_admitted(blob, &admitted)?;
-    Ok(block::Pow {
-        pow: hash(pow.to_bytes()),
-    })
 }
 
 #[cfg(test)]

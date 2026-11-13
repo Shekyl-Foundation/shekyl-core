@@ -158,24 +158,25 @@ pub struct StoreFacts {
     rules: Arc<dyn RulesAt>,
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
-    caches: Arc<shekyl_pow_randomx::CacheStore>,
-    /// The daemon's one hasher budget: `pow` hashes under a permit.
-    budget: shekyl_hash_budget::Budget,
+    /// The node's one hasher: `pow` hashes on a warm loan from it, and
+    /// `daemon_status` reads its live-cache count.
+    pub(crate) hasher: shekyl_hasher::Hasher,
+    /// `pow`'s loan has no stop of its own: the hasher's stop ends it.
+    pub(crate) never_stops: std::sync::atomic::AtomicBool,
 }
 
 impl StoreFacts {
     /// The facts over `store`, whose data file is `store_file`. `pow`
-    /// hashes under the caches `caches` already holds — the daemon's one
-    /// cache store, the validator's — and never derives one, each hash
-    /// under a permit from `budget` in `pow`'s class (PR2-Q3).
+    /// hashes on a warm loan from `hasher`, the node's one owner of
+    /// caches: it builds none, and each hash takes a permit in `pow`'s
+    /// class (PR2-Q3).
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
         rules: Arc<dyn RulesAt>,
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
-        caches: Arc<shekyl_pow_randomx::CacheStore>,
-        budget: shekyl_hash_budget::Budget,
+        hasher: shekyl_hasher::Hasher,
     ) -> Self {
         Self {
             store,
@@ -183,8 +184,8 @@ impl StoreFacts {
             rules,
             node,
             identity,
-            caches,
-            budget,
+            hasher,
+            never_stops: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

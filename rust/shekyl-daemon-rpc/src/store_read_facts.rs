@@ -42,7 +42,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::store::{
     AltCannot, AltChain, ArchivalGood, AtIndex, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
 };
-use shekyl_pow_randomx::{compute_hash, Seedhash};
+use shekyl_pow_randomx::Seedhash;
 use shekyl_types::archival::Holdings;
 use shekyl_types::{
     BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, SettlementEpoch, ShardId, TxHash,
@@ -53,8 +53,8 @@ use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFa
 use crate::chain_facts::FactsFault;
 use crate::info_facts::{PoolScope, PoolState};
 use crate::read_facts::{
-    AdmittedPow, AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond,
-    CoinbaseRange, CoinbaseSum, CurveTreeFacts, ListedTx, PowAdmission, PowDecline, PowSeed,
+    AltChainFacts, BlockRead, BlocksAt, ChainReadFacts, ClaimSource, ClaimantBond,
+    CoinbaseRange, CoinbaseSum, CurveTreeFacts, ListedTx, PowAnswer, PowDecline, PowSeed,
     ShardCoverage, SpentAt, TransactionsAt,
 };
 
@@ -559,7 +559,12 @@ impl ChainReadFacts for StoreFacts {
         Ok(CoinbaseRange::Summed(CoinbaseSum { emission, fees }))
     }
 
-    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault> {
+    fn pow(
+        &self,
+        seed: PowSeed,
+        pow_blob: &[u8],
+        pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault> {
         let seed = match seed {
             PowSeed::Given(seed) => seed,
             PowSeed::AtHeight(height) => match seed_height(height) {
@@ -571,7 +576,7 @@ impl ChainReadFacts for StoreFacts {
                     match snap.block_info(seed_height).map_err(store_fault)? {
                         AtHeight::Recorded(info) => info.hash,
                         AtHeight::AboveTip => {
-                            return Ok(PowAdmission::Declined(PowDecline::SeedAboveTip {
+                            return Ok(PowAnswer::Declined(PowDecline::SeedAboveTip {
                                 seed_height,
                                 tip,
                             }))
@@ -580,29 +585,38 @@ impl ChainReadFacts for StoreFacts {
                 }
             },
         };
-        // A held cache or nothing: `lookup`, never `lookup_or_derive`. The
-        // seed may be the chain's own and still not held (the store keeps
-        // two, the validator's current and spare). The `Arc` is what the
-        // later hash runs on, so a cache evicted after this admission is
-        // still the one that was held.
-        let Some(cache) = self.caches.lookup(&Seedhash::from_bytes(*seed.as_bytes())) else {
-            return Ok(PowAdmission::Declined(PowDecline::SeedNotHeld { seed }));
-        };
-        Ok(PowAdmission::Admitted(AdmittedPow { cache }))
-    }
-
-    fn hash_admitted(
-        &self,
-        pow_blob: &[u8],
-        admitted: &AdmittedPow,
-    ) -> Result<PowHash, FactsFault> {
-        // Under a permit in `pow`'s class (`Class::CalcPow`): below the chain's forms and
-        // chain sync's, above the miner's. The facts run on a blocking
-        // thread, so the wait is one. The permit is the hasher's, not the
-        // RPC hash budget: that spend happens before this call, and only
-        // for a bounded caller whose seed was admitted.
-        let _permit = self.budget.acquire(shekyl_hash_budget::Class::CalcPow);
-        Ok(PowHash::from_bytes(compute_hash(&admitted.cache, pow_blob)))
+        let not_warm = PowAnswer::Declined(PowDecline::SeedNotWarm { seed });
+        // A warm loan or nothing: it builds no cache and waits for no
+        // place. The seed may be the chain's own and still not warm. The
+        // hash runs under one permit in `pow`'s class (`Class::CalcPow`):
+        // below the chain's forms and chain sync's, above the miner's. The
+        // facts run on a blocking thread, so the wait is one. That permit
+        // is the hasher's, not the RPC hash budget: `pay` is that spend,
+        // made inside the loan and before the hash.
+        let lent = self.hasher.lend_warm(
+            shekyl_hasher::Class::CalcPow,
+            Seedhash::from_bytes(*seed.as_bytes()),
+            &self.never_stops,
+            |loan| {
+                if !pay() {
+                    return Ok(PowAnswer::Unpaid);
+                }
+                match loan.hash(pow_blob) {
+                    Ok(hash) => Ok(PowAnswer::Hashed(PowHash::from_bytes(hash))),
+                    // The seed left the list, or a job needs the place:
+                    // the same answer as a seed that was never warm.
+                    Err(shekyl_hasher::Unhashed::Cancelled) => {
+                        Ok(PowAnswer::Declined(PowDecline::SeedNotWarm { seed }))
+                    }
+                    Err(shekyl_hasher::Unhashed::Stopped) => Err(FactsFault::NotReady),
+                }
+            },
+        );
+        match lent {
+            Ok(answer) => answer,
+            Err(shekyl_hasher::Declined::NotWarm) => Ok(not_warm),
+            Err(shekyl_hasher::Declined::Stopped) => Err(FactsFault::NotReady),
+        }
     }
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
