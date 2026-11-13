@@ -1,0 +1,1 @@
+- **The Windows Tor integration check requires the clock test by its current name** (`tor-pin-verify`). It required a test name that #1352's review had renamed, so the check failed on every Windows run while the test itself passed.

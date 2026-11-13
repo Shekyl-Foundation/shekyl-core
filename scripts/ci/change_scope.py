@@ -84,6 +84,20 @@ dependency, not by topic:
   changed file belongs to that job (the lane script and the helper it
   sources).
 
+- `bench_rows`: `all`, `none`, or the benchmark rows a pull request's
+  capture runs (`benchmarks.yml`), each `<crate>::<gungraun-target>`. A row
+  is a `[[gated_row]]` of the measurement ledger with a path set, the code
+  whose change can move its counts. A row runs when the change's reverse
+  closure holds a package one of its path set's paths lies in, or when a
+  changed file lies under one of those paths. The closure is the
+  `rust_tests` packages and everything that links them: without the
+  dev-dependency edges, which join nearly every member to nearly every
+  other and do not change what a row counts. `all` wherever `rust_tests` is `all`,
+  and for a change to the capture's own inputs: `scripts/bench/`, the
+  benchmark workflow and the ledger. A wallet change runs the wallet rows
+  and not the block path's; the push to `dev` captures every row whatever
+  this says.
+
 The ownership table is the truth for `scripts/ci/**` and `.github/**`
 outside the workflow files, which own the jobs they define; the selftest
 holds the table to the tree (every tracked path claimed, no missing path or
@@ -91,7 +105,8 @@ job, a job whose steps name a script is among its owners).
 
 Usage:
   change_scope.py --base <sha> --head <sha>   # writes docs_only=…, rust_job=…,
-                                              # rust_tests=…, rust_doc_pkgs=…
+                                              # rust_tests=…, rust_doc_pkgs=…,
+                                              # bench_rows=…
                                               # to $GITHUB_OUTPUT
   change_scope.py --files a b c               # classify the given paths
   change_scope.py --selftest                  # pinned cases against this tree
@@ -337,12 +352,13 @@ def changed_files(base, head):
     return files
 
 
-def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", sim_narrations="run"):
+def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all", sim_narrations="run"):
     lines = [
         f"docs_only={'true' if docs_only else 'false'}",
         f"rust_job={rust_job}",
         f"rust_tests={rust_tests}",
         f"rust_doc_pkgs={rust_doc_pkgs}",
+        f"bench_rows={bench_rows}",
         f"sim_narrations={sim_narrations}",
     ]
     out = os.environ.get("GITHUB_OUTPUT")
@@ -373,6 +389,7 @@ class Workspace:
         self.dir_of = {}      # package name -> its directory, relative to the repo root
         self.has_lib = {}
         self.deps = {}        # package name -> the member names it declares
+        self.links = {}       # the same, without the dev-dependency edges
         by_id = {p["id"]: p for p in metadata["packages"] if p["id"] in members}
         manifests = {p["manifest_path"]: p["name"] for p in by_id.values()}
         root = metadata["workspace_root"]
@@ -383,16 +400,20 @@ class Workspace:
                 k in ("lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro")
                 for t in p["targets"] for k in t["kind"]
             )
-            names = set()
+            names, linked = set(), set()
             for d in p["dependencies"]:
                 path = d.get("path")
+                name = None
                 if path:
                     name = manifests.get(os.path.join(path, "Cargo.toml"))
-                    if name:
-                        names.add(name)
                 elif d["name"] in manifests.values():
-                    names.add(d["name"])
+                    name = d["name"]
+                if name:
+                    names.add(name)
+                    if d.get("kind") != "dev":
+                        linked.add(name)
             self.deps[p["name"]] = names
+            self.links[p["name"]] = linked
         if len(self.dir_of) < 50:
             raise RuntimeError(f"only {len(self.dir_of)} workspace members read; refusing to scope")
 
@@ -419,17 +440,27 @@ class Workspace:
                 best = name
         return best
 
-    def rdeps(self, names):
-        """`names` and every member that depends on one of them, transitively."""
+    def rdeps(self, names, edges=None):
+        """`names` and every member that depends on one of them, transitively,
+        over `edges` (every declared edge unless given)."""
+        edges = self.deps if edges is None else edges
         out = set(names)
         grew = True
         while grew:
             grew = False
-            for name, deps in self.deps.items():
+            for name, deps in edges.items():
                 if name not in out and deps & out:
                     out.add(name)
                     grew = True
         return out
+
+    def linked_rdeps(self, names):
+        """[`rdeps`] without the dev-dependency edges: the members whose
+        compiled code a change to `names` reaches. A test's reach is wider
+        (a dev-dependency changes what a test can observe); a benchmark
+        row counts code its crate links, and a dev-dependency edge joins
+        nearly every member to nearly every other."""
+        return self.rdeps(names, self.links)
 
 
 def read_owners(path=JOB_OWNERS):
@@ -584,6 +615,67 @@ def doc_pkgs(workspace, tests):
         return ""
     names = sorted(n for n in workspace.rdeps(tests) if workspace.has_lib[n] and n not in NEXTEST_EXCLUDED)
     return " ".join(f"-p {n}" for n in names)
+
+
+# ---- The benchmark capture's scope -------------------------------------------
+
+LEDGER = "docs/benchmarks/measurement_ledger.toml"
+BENCH_WORKFLOW = ".github/workflows/benchmarks.yml"
+# A change here can move any row or the way rows are captured and compared.
+BENCH_INPUT_DIRS = ("scripts/bench/",)
+BENCH_INPUT_FILES = (LEDGER, BENCH_WORKFLOW)
+CAPTURE_SCRIPT = "scripts/bench/capture_rust_baseline.sh"
+BENCH_ROW = re.compile(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*')
+
+
+def pr_capture_rows(path=CAPTURE_SCRIPT):
+    """The rows of the capture script's `BENCHES` array, the set a pull
+    request's capture draws from, as `<crate>::<gungraun-target>`. The
+    nightly set (`NIGHTLY_BENCHES`) is not a pull request's to run."""
+    block = re.search(r"^BENCHES=\(\n(.*?)^\)", read_text(path), re.M | re.S)
+    rows = {f"{m.group(1)}::{m.group(2)}" for line in (block.group(1).splitlines() if block else []) if (m := BENCH_ROW.fullmatch(line))}
+    if not rows:
+        raise RuntimeError(f"{path}: no BENCHES row")
+    return rows
+
+
+def read_gated_rows(path=LEDGER):
+    """[(bench, spec)]: each `[[gated_row]]` of the ledger that is a row of
+    the pull-request set, with its path set's included paths. A row on an
+    undefined path set, a pull-request row with no gated row, or none at
+    all, is an error: the caller fails closed to `all`."""
+    import tomllib
+
+    data = tomllib.loads(read_text(path))
+    specs = {s["id"]: tuple(p for p in s["spec"] if not p.startswith((":!", ":(exclude)", ":^"))) for s in data.get("path_set", [])}
+    captured = pr_capture_rows()
+    rows = [(row["bench"], specs[row["path_set"]]) for row in data.get("gated_row", []) if row["bench"] in captured]
+    unnamed = captured - {bench for bench, _ in rows}
+    if unnamed:
+        raise RuntimeError(f"{path}: no gated row for {sorted(unnamed)}")
+    return rows
+
+
+def under(path, root):
+    """`path` is `root` or lies beneath it."""
+    root = root.rstrip("/")
+    return path == root or path.startswith(root + "/")
+
+
+def bench_rows(files, tests, workspace, rows):
+    """`all`, `none` or the sorted rows `files` can move (module docstring)."""
+    if tests == "all":
+        return "all"
+    if any(f in BENCH_INPUT_FILES or f.startswith(BENCH_INPUT_DIRS) for f in files):
+        return "all"
+    closure = workspace.linked_rdeps(tests) if isinstance(tests, set) else set()
+    hit = sorted(
+        bench
+        for bench, spec in rows
+        if any(workspace.package_of(p.rstrip("/") + "/") in closure for p in spec)
+        or any(under(f, p) for f in files for p in spec)
+    )
+    return " ".join(hit) if hit else "none"
 
 
 def sim_narrations_scope(files, tests, workspace, owners, workflows):
@@ -883,6 +975,49 @@ def rust_selftest(inputs, trees):
         if job not in jobs:
             print(f"WRONG: {job} is not a job the workflows define")
             bad += 1
+    return bad + bench_selftest(inputs, trees, workspace, owners, workflows)
+
+
+# (path, rows that must be in scope, rows that must not; "all"/"none" exact)
+BENCH_SELFTEST = [
+    ("rust/shekyl-engine-state/src/lib.rs", {"shekyl-engine-state::ledger_iai"}, {"shekyl-chain-ingest::block_path_iai", "shekyl-pow-randomx::verify_header_iai"}),
+    ("rust/shekyl-chain-store/src/store/connect.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-engine-file::open_iai", "shekyl-pow-randomx::verify_header_iai"}),
+    ("rust/shekyl-pow-randomx/src/vm.rs", {"shekyl-pow-randomx::verify_header_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # Crates the block path links and its path set does not list: the
+    # closure reaches the row through a listed crate that links them.
+    ("rust/shekyl-crypto-hash/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-curve-io/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-chain-ingest/src/target.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    ("rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    ("rust/Cargo.lock", "all", None),
+    ("scripts/bench/compare.py", "all", None),
+    (BENCH_WORKFLOW, "all", None),
+    (LEDGER, "all", None),
+    ("scripts/ci/check_doc_links.py", "none", None),
+]
+
+
+def bench_selftest(inputs, trees, workspace, owners, workflows):
+    bad = 0
+    rows = read_gated_rows()
+    names = {bench for bench, _ in rows}
+    for path, want, never in BENCH_SELFTEST:
+        _, tests, _ = rust_scope([path], inputs, trees, workspace, owners, workflows)
+        got = bench_rows([path], tests, workspace, rows)
+        if isinstance(want, str):
+            ok = got == want
+        else:
+            hit = set(got.split())
+            ok = got not in ("all", "none") and want <= hit and not (never & hit) and (want | never) <= names
+        print(f"[{'ok' if ok else 'WRONG'}] {path}: bench_rows={got}")
+        bad += 0 if ok else 1
+    # A row whose path set does not reach its own crate would stay out of
+    # scope when that crate changes: the closure could not find it.
+    for bench, spec in rows:
+        crate = bench.split("::")[0]
+        if not any(workspace.package_of(p.rstrip("/") + "/") == crate for p in spec):
+            print(f"WRONG: gated row {bench}: no path of its path set lies in {crate}")
+            bad += 1
     return bad
 
 
@@ -902,13 +1037,16 @@ def main():
         docs_only, reasons = classify(files, inputs, trees)
         if docs_only:
             job, tests, more = "skip", "none", ["docs only: the Rust job is skipped"]
-            docs, narrations = "", "skip"
+            docs = ""
+            bench = "none"
+            narrations = "skip"
         else:
             workspace = Workspace.read()
             owners = read_owners()
             workflows = sorted(w for w in git("ls-files", WORKFLOW_DIR).splitlines() if w.endswith((".yml", ".yaml")))
             job, tests, more = rust_scope(files, inputs, trees, workspace, owners, workflows)
             docs = doc_pkgs(workspace, tests)
+            bench = bench_rows(files, tests, workspace, read_gated_rows())
             narrations, why = sim_narrations_scope(files, tests, workspace, owners, workflows)
             more = more + [f"sim narrations {narrations}: {why}"]
     except Exception as e:  # fail closed on anything
@@ -917,7 +1055,7 @@ def main():
         return 0
     for r in reasons + more:
         print(f"scope: {r}")
-    emit(docs_only, job, rust_tests_value(tests), docs, narrations)
+    emit(docs_only, job, rust_tests_value(tests), docs, bench, narrations)
     return 0
 
 

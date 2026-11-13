@@ -446,6 +446,9 @@ jobs:
         # split. The keypair's contract and the buffer's contract are these
         # docs, and both were clean when they landed.
         #
+        # `shekyl-tor-status` joined when it landed: its docs state the wire
+        # contract every client of the Tor status reads.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -456,7 +459,7 @@ jobs:
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
           -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
-          -p shekyl-onion-key -p shekyl-heap-secret
+          -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
@@ -477,6 +480,13 @@ jobs:
         # own workspace and lockfile, type-checked on the pinned stable
         # toolchain as the API-drift gate; running them needs nightly.
         run: cargo check --locked --manifest-path rust/shekyl-wire/fuzz/Cargo.toml
+      - name: compile the shekyl-multisig fuzz harnesses
+        # The multisig envelope, payload and intent decoders read bytes a
+        # group member's file carries. Same shape as the fcmp and wire steps:
+        # its own workspace and lockfile, type-checked on the pinned stable
+        # toolchain as the API-drift gate (rule 47: a fuzz crate nothing
+        # compiles cannot see its own drift); running them needs nightly.
+        run: cargo check --locked --manifest-path rust/shekyl-multisig/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its

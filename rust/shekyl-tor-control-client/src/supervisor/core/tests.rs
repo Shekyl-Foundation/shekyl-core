@@ -11,8 +11,8 @@ use std::time::Duration;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 
 use super::super::posture::{
-    render, Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Sessions, Shown, Status,
-    Syncing, TorSetting,
+    Cause, Connectors, ManagedTorFix, OriginVerdict, OwnTx, Sessions, Shown, Status, Syncing,
+    TorSetting,
 };
 use super::{duration_ns, Action, Core, Input, Policy, Step};
 
@@ -36,6 +36,27 @@ fn policy() -> Policy {
         republish_after: super::REPUBLISH_AFTER,
         reply_bound: super::REPLY_BOUND,
     }
+}
+
+/// The status in words, as the daemon's log says it: the core's snapshot
+/// through the one renderer (`shekyl_tor_status::render`). Read late
+/// enough that no age is negative. The one age the renderer speaks is the
+/// quiet line's; a test that reads it asks at its own time ([`said_at`]).
+fn said(core: &Core) -> String {
+    said_at(core, u64::MAX)
+}
+
+/// The status in words, asked at `now`.
+fn said_at(core: &Core, now: u64) -> String {
+    shekyl_tor_status::render(&core.view(now), Some("/data"))
+}
+
+/// A hand-built status in words, under a managed Tor.
+fn said_of(status: &Status) -> String {
+    shekyl_tor_status::render(
+        &super::super::snapshot(status, managed(false), u64::MAX),
+        Some("/data"),
+    )
 }
 
 fn managed(clearnet_on: bool) -> Connectors {
@@ -216,14 +237,14 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
     ));
     step = core.on(Input::SpawnFailed, ns(&clock));
     assert_eq!(announces(&step), 1);
-    let mut said = 1usize;
+    let mut told = 1usize;
     let mut pin_at = Vec::new();
     let mut fresh = Vec::new();
     while pin_at.len() < 4 {
         let due = step.deadline.expect("a retry is armed");
         clock.set(Tick::new(due));
         step = core.on_deadline(ns(&clock));
-        said += announces(&step);
+        told += announces(&step);
         if step
             .actions
             .iter()
@@ -233,7 +254,7 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
             step = core.on(Input::PinAccepted, ns(&clock));
             fresh.push(fresh_directory(&step));
             step = core.on(Input::SpawnFailed, ns(&clock));
-            said += announces(&step);
+            told += announces(&step);
         }
     }
     assert_eq!(
@@ -243,7 +264,7 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
     );
     assert_eq!(fresh, vec![false, false, true, true]);
     assert_eq!(
-        said, 2,
+        told, 2,
         "the first fault and one more at the cap, not each retry"
     );
     core.on(
@@ -253,7 +274,7 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
         }),
         ns(&clock),
     );
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.contains(
             "waiting for Tor and holding its own transactions. It is syncing over clearnet."
@@ -377,7 +398,7 @@ fn an_open_file_limit_degrades_without_a_respawn() {
         .any(|action| matches!(action, Action::CheckPin)));
     assert!(!spawns(&step));
     assert_eq!(core.status().shown, Shown::Degraded);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("open-file limit (1024 open)"), "{text}");
 }
 
@@ -419,7 +440,7 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
     // The sessions over the dead Tor close, and the relay withdraws its
     // verdict: that, not the death, is what moves Health and `OwnTx`.
     core.on(held(), 5_000_000_000);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         !text.contains("exit code"),
         "the first stop names no code: {text}"
@@ -460,7 +481,7 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
         assert_eq!(announces(&step), 1, "the hold is said once per cap");
     }
     assert!(retried, "the pin is retried when the cap elapses");
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(text.contains("failed its check"), "{text}");
     assert!(text.contains("holding its own transactions"), "{text}");
     assert!(!text.contains("clearnet-only"), "{text}");
@@ -481,7 +502,7 @@ fn an_unavailable_platform_is_fixed_and_announced_once_per_cap() {
     let step = core.on(Input::Unavailable, 0);
     assert!(!spawns(&step));
     assert_eq!(announces(&step), 1);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.contains("This release has no Tor for this platform yet"),
         "{text}"
@@ -516,19 +537,12 @@ fn an_unavailable_platform_is_fixed_and_announced_once_per_cap() {
 #[test]
 fn a_missing_directory_is_held_without_an_install_fix() {
     let (mut core, _) = Core::start(policy(), managed(false), 0);
-    let path = std::path::PathBuf::from("/var/lib/shekyl");
-    let step = core.on(
-        Input::DirectoryUnusable {
-            path: path.clone(),
-            space: None,
-        },
-        0,
-    );
+    let step = core.on(Input::DirectoryUnusable { space: None }, 0);
     assert!(!spawns(&step));
     assert_eq!(core.status().shown, Shown::RestartingHeld);
     assert_eq!(
         core.status().cause,
-        Cause::DirectoryUnusable { path, space: None }
+        Cause::DirectoryUnusable { space: None }
     );
     assert!(core.status().fixes.is_empty());
 }
@@ -586,7 +600,7 @@ fn a_repeated_death_names_the_last_exit_code() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::ProcessEnded { exit_code: Some(9) }, 1);
-    let first = render(&core.status());
+    let first = said(&core);
     assert!(!first.contains("exit code"), "{first}");
     let due = core.deadline().expect("backoff");
     let during = core.on_deadline(due);
@@ -612,14 +626,14 @@ fn a_repeated_death_names_the_last_exit_code() {
     core.on(Input::BootstrapComplete, due);
     core.on(Input::RouteInstalled, due);
     core.on(Input::ProcessEnded { exit_code: Some(9) }, due + 1);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("The last exit code was 9"), "{text}");
     assert!(text.contains("stopped 2 times"), "{text}");
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(Input::ProcessEnded { exit_code: None }, 0);
     core.on(Input::ProcessEnded { exit_code: None }, 1);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("stopped 2 times"), "{text}");
     assert!(!text.contains("exit code"), "{text}");
 }
@@ -777,10 +791,7 @@ fn a_new_cause_is_said_at_once_and_a_repeat_waits_for_the_cap() {
         0,
         "a repeat waits"
     );
-    let unusable = Input::DirectoryUnusable {
-        path: std::path::PathBuf::from("/var/lib/shekyl"),
-        space: None,
-    };
+    let unusable = Input::DirectoryUnusable { space: None };
     assert_eq!(
         announces(&core.on(unusable, 2 * second)),
         1,
@@ -795,14 +806,9 @@ fn a_new_cause_is_said_at_once_and_a_repeat_waits_for_the_cap() {
 #[test]
 fn a_new_detail_of_the_same_cause_is_a_repeat() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    let path = std::path::PathBuf::from("/var/lib/shekyl");
-    let unusable = Input::DirectoryUnusable {
-        path: path.clone(),
-        space: None,
-    };
+    let unusable = Input::DirectoryUnusable { space: None };
     assert_eq!(announces(&core.on(unusable, 0)), 1);
     let short = Input::DirectoryUnusable {
-        path,
         space: Some(super::Space {
             available: 0,
             needed: 35_000_000,
@@ -830,10 +836,7 @@ fn a_new_detail_of_the_same_cause_is_a_repeat() {
 #[test]
 fn a_held_repeat_yields_to_its_pin_check_and_ends_with_the_spawn() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    let unusable = Input::DirectoryUnusable {
-        path: std::path::PathBuf::from("/var/lib/shekyl"),
-        space: None,
-    };
+    let unusable = Input::DirectoryUnusable { space: None };
     assert_eq!(announces(&core.on(unusable, 0)), 1);
     let cap = duration_ns(policy().cap);
     let step = core.on_deadline(cap);
@@ -931,12 +934,11 @@ fn the_backoff_starts_again_only_after_a_cap_of_usable_outbound() {
     );
 }
 
-/// The §5 row names the path and the shortfall.
+/// The §5 row names the path the caller passes and the shortfall.
 #[test]
 fn a_space_shortfall_names_the_path_and_both_sizes() {
     let status = Status {
         cause: Cause::DirectoryUnusable {
-            path: std::path::PathBuf::from("/var/lib/shekyl"),
             space: Some(super::Space {
                 available: 0,
                 needed: 35_000_000,
@@ -944,10 +946,51 @@ fn a_space_shortfall_names_the_path_and_both_sizes() {
         },
         ..held_status()
     };
-    let text = render(&status);
-    assert!(text.contains("/var/lib/shekyl"), "{text}");
+    let text = said_of(&status);
+    assert!(text.contains("/data has 0 bytes free"), "{text}");
     assert!(text.contains("0 bytes free"), "{text}");
     assert!(text.contains("35.0 MB"), "{text}");
+}
+
+/// The snapshot's ages are `now` less the clock readings it holds: a status
+/// read twice, 10 s apart, reports every age 10 s larger: `tor.age`, the
+/// onion's in each state that has one, and the quiet line's (Rick,
+/// 2026-11-12; `TOR_STATUS_CRATE.md` §5). Fails if an age is a reading taken
+/// before the ask, or if the onion's age reads another state's start.
+#[test]
+fn every_age_on_the_wire_grows_with_the_asking_clock() {
+    use super::super::posture::{Inbound, InboundCause, TorQuiet};
+    use shekyl_tor_status::TorQuiet as WireQuiet;
+    let second = duration_ns(Duration::from_secs(1));
+    let ten = 10 * second;
+    for inbound in [
+        Inbound::Publishing { since: 7 * second },
+        Inbound::Reachable {
+            evidence_at: 7 * second,
+        },
+        Inbound::Unreachable {
+            cause: InboundCause::ProbeTimedOut,
+            since: 7 * second,
+        },
+    ] {
+        let status = Status {
+            since: 3 * second,
+            inbound,
+            tor_quiet: Some(TorQuiet::Unanswered { since: 5 * second }),
+            ..held_status()
+        };
+        let ask = 100 * second;
+        let first = super::super::snapshot(&status, managed(false), ask);
+        let later = super::super::snapshot(&status, managed(false), ask + ten);
+        assert_eq!(first.tor_quiet, Some(WireQuiet::Failing { age: 95 }));
+        assert_eq!(later.tor_quiet, Some(WireQuiet::Failing { age: 105 }));
+        let (first, later) = (first.tor.expect("managed"), later.tor.expect("managed"));
+        assert_eq!(first.age, 97, "{inbound:?}");
+        assert_eq!(later.age, first.age + 10, "{inbound:?}");
+        let (first, later) = (first.onion.expect("offered"), later.onion.expect("offered"));
+        assert_eq!(first.age, 93, "{inbound:?}");
+        assert_eq!(later.age, first.age + 10, "{inbound:?}");
+    }
 }
 
 fn held_status() -> Status {
@@ -971,7 +1014,7 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
         0,
     );
     let cap = duration_ns(policy().cap);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.starts_with("Tor is carrying this node's traffic."),
         "{text}"
@@ -991,7 +1034,7 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
     assert_eq!(status.own_tx, OwnTx::Held);
     assert_eq!(status.shown, Shown::Usable, "the link did not move");
     assert!(status.sync.tor, "the node still holds its Tor session");
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(
         text.starts_with(
             "This node is holding its own transactions. It is syncing over Tor and clearnet."
@@ -1078,7 +1121,7 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
     assert_eq!(announces(&lost), 1);
     // R1: the link is usable, so the node is not waiting for Tor and is
     // syncing over it; the hold's reason is GS-C2's typed value.
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.starts_with("This node is holding its own transactions. It is syncing over Tor."),
         "{text}"
@@ -1093,7 +1136,7 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
 fn a_held_origin_under_a_down_link_waits_for_tor() {
     let (core, _) = Core::start(policy(), managed(false), 0);
     assert_eq!(core.status().own_tx, OwnTx::Held);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.starts_with(
             "This node is waiting for Tor and holding its own transactions. It is not syncing."
@@ -1113,7 +1156,7 @@ fn the_node_syncs_over_the_connectors_that_hold_a_session() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(held(), 1);
-    let line = |core: &Core| render(&core.status());
+    let line = |core: &Core| said(core);
     let sessions = |clearnet, tor| Input::Sessions(Sessions { clearnet, tor });
     core.on(sessions(0, 3), 2);
     assert!(

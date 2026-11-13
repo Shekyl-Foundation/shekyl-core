@@ -257,7 +257,7 @@ jobs:
           [ "$rc" -eq 0 ]
           required=(clock_tests::an_awake_span_keeps_its_length_and_resolution)
           if [ "$RUNNER_OS" = Windows ]; then
-            required+=(clock_tests::on_windows_the_clock_is_the_unbiased_interrupt_time)
+            required+=(clock_tests::on_windows_the_origin_is_an_unbiased_reading)
           fi
           ../scripts/ci/require_live_tests.sh clock.out "${required[@]}"
 

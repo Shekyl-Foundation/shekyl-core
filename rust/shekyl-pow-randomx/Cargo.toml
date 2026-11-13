@@ -120,6 +120,16 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # both benches are **informational baselines** (recorded in
 # `BENCH_RESULTS.md`), not enforced PR gates.
 criterion = { version = "0.5", features = ["html_reports"] }
+# The instruction-count harness of `benches/verify_header_iai.rs`, at the
+# version every other gated bench uses.
+gungraun = "0.19"
+
+[[bench]]
+# One header's proof-of-work verification as an instruction count: the
+# gated row (BENCHMARK_ALIGNMENT.md BA-T42). `compute_hash` over a cache
+# derived outside the measured region.
+name = "verify_header_iai"
+harness = false
 
 [[bench]]
 # `Cache::derive(&KEY)` end-to-end (Argon2d 256 MiB + 8 ×
