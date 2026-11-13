@@ -933,6 +933,19 @@ BENCH_SELFTEST = [
     ("rust/shekyl-curve-io/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
     ("rust/shekyl-chain-ingest/src/target.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
     ("rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # The network and sync rows. Two subjects are reached through a
+    # dev-dependency edge, which the linked closure does not follow: the
+    # path set names their files.
+    ("rust/shekyl-chain-sync-runtime/src/serve.rs", {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/shekyl-daemon-rpc/src/reads.rs", {"shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::block_path_iai"}),
+    ("rust/shekyl-levin/src/reader.rs", {"shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::serve_bodies_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/shekyl-block-template/src/lib.rs", {"shekyl-chain-ingest::block_template_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/shekyl-noise/src/direction.rs", {"shekyl-p2p-transport::c5_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    # The transport also selects the rows whose path sets name a crate
+    # that links it (the sync runtime, the RPC server): a path set selects
+    # by package, so naming one file of a crate takes that crate's closure.
+    ("rust/shekyl-p2p-transport/src/channel.rs", {"shekyl-p2p-transport::c5_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-engine-core/src/lib.rs", set(), {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-p2p-transport::c5_iai"}),
     ("rust/Cargo.lock", "all", None),
     ("scripts/bench/compare.py", "all", None),
     (BENCH_WORKFLOW, "all", None),

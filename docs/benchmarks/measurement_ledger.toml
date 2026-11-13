@@ -1384,7 +1384,7 @@ spec = [
 
 [[gated_row]]
 bench = "shekyl-chain-ingest::block_path_iai"
-measured_by = ["BA-T2", "BA-T41"]
+measured_by = ["BA-T2", "BA-T41", "BA-T43"]
 path_set = "block-path"
 
 [[path_set]]
@@ -1398,6 +1398,105 @@ spec = [
 bench = "shekyl-pow-randomx::verify_header_iai"
 measured_by = ["BA-T42"]
 path_set = "randomx-header-verify"
+
+# --- gated rows: the daemon's network and sync path --------------------
+#
+# Four of these benches are `shekyl-chain-ingest`'s, because the store they
+# read or serve from is the block-path driver's. Each path set names the
+# crate whose call the row counts beside the bench's own files: two of the
+# subjects (`shekyl-chain-sync-runtime`, `shekyl-daemon-rpc`) are reached
+# through a dev-dependency edge, which the capture's linked closure does
+# not follow, so the row would not run on their change unless the path set
+# said so. Naming the bench's own crate also means a change to anything
+# `shekyl-chain-ingest` links runs these rows: wider than each subject,
+# and never narrower.
+
+[[path_set]]
+id = "sync-serve-bodies"
+spec = [
+  "rust/shekyl-chain-sync-runtime/src/serve.rs",
+  "rust/shekyl-levin/src",
+  "rust/shekyl-chain-store/src",
+  "rust/shekyl-store-codec/src",
+  "rust/shekyl-wire/src",
+  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/benches/serve_bodies_iai.rs",
+  "rust/shekyl-chain-ingest/benches/support",
+  "rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::serve_bodies_iai"
+measured_by = ["BA-T44"]
+path_set = "sync-serve-bodies"
+
+[[path_set]]
+id = "levin-bodies-decode"
+spec = [
+  "rust/shekyl-levin/src",
+  "rust/shekyl-portable-storage/src",
+  "rust/shekyl-chain-sync-runtime/src/serve.rs",
+  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/benches/levin_bodies_iai.rs",
+  "rust/shekyl-chain-ingest/benches/support",
+  "rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::levin_bodies_iai"
+measured_by = ["BA-T45"]
+path_set = "levin-bodies-decode"
+
+[[path_set]]
+id = "block-template-build"
+spec = [
+  "rust/shekyl-block-template/src",
+  "rust/shekyl-economics/src",
+  "rust/shekyl-wire/src",
+  "rust/shekyl-crypto-pq/src/kem.rs",
+  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/benches/block_template_iai.rs",
+  "rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_2in_2out_design.corpus",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::block_template_iai"
+measured_by = ["BA-T46"]
+path_set = "block-template-build"
+
+[[path_set]]
+id = "rpc-block-list"
+spec = [
+  "rust/shekyl-daemon-rpc/src/reads.rs",
+  "rust/shekyl-daemon-rpc/src/store_read_facts.rs",
+  "rust/shekyl-daemon-rpc/src/store_facts.rs",
+  "rust/shekyl-rpc-types/src",
+  "rust/shekyl-chain-store/src",
+  "rust/shekyl-store-codec/src",
+  "rust/shekyl-wire/src",
+  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/benches/wallet_block_read_iai.rs",
+  "rust/shekyl-chain-ingest/benches/support",
+  "rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::wallet_block_read_iai"
+measured_by = ["BA-T47"]
+path_set = "rpc-block-list"
+
+[[path_set]]
+id = "p2p-transport-c5"
+spec = [
+  "rust/shekyl-p2p-transport/src",
+  "rust/shekyl-p2p-transport/benches/c5_iai.rs",
+  "rust/shekyl-noise/src",
+]
+
+[[gated_row]]
+bench = "shekyl-p2p-transport::c5_iai"
+measured_by = ["BA-T24"]
+path_set = "p2p-transport-c5"
 
 # --- gated rows: the rows that were gated before the ledger named them --
 #

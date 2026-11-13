@@ -1,0 +1,167 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! A wallet's block read answered from the store (`BENCHMARK_ALIGNMENT.md`
+//! BA-T47): `shekyl_daemon_rpc::reads::block_list` over the production
+//! store facts (`StoreFacts`, whose `blocks_by_height` reads the bodies),
+//! and the reply serialized as the handler serializes it.
+//!
+//! The request names the last [`REQUESTED`] heights of a block-path
+//! fixture's chain with its subject connected: seven coinbase-only blocks
+//! and the subject, which lists four spends, unpruned. For each height the
+//! read takes the header facts, the block and each listed transaction's
+//! body, and the miner transaction's first output index. The caller is
+//! bounded, as a wallet's connection is; the request is inside the bound.
+//!
+//! The serialization is the handler's `framed` (`serde_json::to_value`)
+//! and then the value written to bytes, which the server does with every
+//! response.
+//!
+//! These reads consult nothing about the node beyond its store: the node
+//! facts the bench supplies answer "not ready" to every question, and
+//! setup asserts the whole reply, so a read that began asking the node
+//! would fail there.
+//!
+//! The bench is this crate's for the store (`bench_support.rs`).
+//! `shekyl-daemon-rpc` is a dev-dependency of this crate, so the ledger
+//! row's path set names it (a dev edge is not in the capture's linked
+//! closure).
+//!
+//! An instruction count on the CI runner's x86, never a floor figure
+//! (rule 76).
+
+use std::hint::black_box;
+use std::sync::Arc;
+
+use gungraun::{library_benchmark, library_benchmark_group, main};
+use shekyl_chain_ingest::bench_support::RULES;
+use shekyl_daemon_rpc::chain_facts::FactsFault;
+use shekyl_daemon_rpc::info_facts::{PeerFacts, PoolCounts, PoolScope, PoolState, SessionCounts};
+use shekyl_daemon_rpc::reads::block_list;
+use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, PoolBody, StoreFacts, SyncFacts};
+use shekyl_daemon_rpc::sync_facts::SyncViewFacts;
+use shekyl_pow_randomx::CacheStore;
+use shekyl_rpc_types::kinds::Height;
+use shekyl_rpc_types::wire::block::BlockListQuery;
+use shekyl_rpc_types::wire::shared::Slot;
+use shekyl_types::{KeyImage, TxHash};
+
+#[path = "support/block_path.rs"]
+#[allow(dead_code)]
+mod support;
+use support::connected;
+
+const SPEND_1IN_2OUT: &[u8] = include_bytes!("fixtures/block_path_spend_1in_2out_unit.corpus");
+
+/// The heights one request names.
+const REQUESTED: u64 = 8;
+
+/// A node that answers nothing: a block read is the store's alone.
+struct NoNode;
+
+impl NodeFacts for NoNode {
+    fn sync(&self) -> Result<SyncFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn pool_counts(&self, _: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn pool_spends(&self, _: &[KeyImage]) -> Result<Vec<bool>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn pool_bodies(
+        &self,
+        _: &[TxHash],
+        _: PoolScope,
+    ) -> Result<PoolState<Vec<Option<PoolBody>>>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn peers(&self) -> Result<PeerFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn sessions(&self) -> Result<SessionCounts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn free_space(&self) -> Result<u64, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+    fn now(&self) -> u64 {
+        0
+    }
+}
+
+/// The store facts over a prepared store, with what keeps the store's
+/// directory alive.
+struct Prepared {
+    facts: StoreFacts,
+    request: BlockListQuery,
+    _dir: tempfile::TempDir,
+}
+
+fn prepared(corpus: &[u8]) -> Prepared {
+    let chain = connected(corpus);
+    let tip = u64::try_from(chain.hashes().len()).expect("a short chain") - 1;
+    assert!(tip + 1 >= REQUESTED, "the chain holds the request");
+    let (store, file, dir) = chain.into_shared();
+    let facts = StoreFacts::new(
+        store,
+        file,
+        Arc::new(|height| RULES.in_force(height)),
+        Arc::new(NoNode),
+        NodeIdentity {
+            nettype: shekyl_rpc_types::Network::Mainnet,
+            release_build: false,
+            version: "bench".to_owned(),
+            start_time: 0,
+            protocol_version: 3,
+        },
+        Arc::new(CacheStore::new()),
+        shekyl_hash_budget::Budget::of_host(),
+    );
+    let request = BlockListQuery {
+        height: (tip + 1 - REQUESTED..=tip).map(Height).collect(),
+        prune: false,
+    };
+    let prepared = Prepared {
+        facts,
+        request,
+        _dir: dir,
+    };
+    let reply = block_list(&prepared.facts, &prepared.facts, &prepared.request, true)
+        .unwrap_or_else(|fault| panic!("the read answers: {fault:?}"));
+    assert_eq!(reply.len() as u64, REQUESTED);
+    match reply.last() {
+        Some(Slot::Item(block)) => assert_eq!(block.tx.len(), 4, "the subject's four spends"),
+        other => panic!("the tip is a block: {other:?}"),
+    }
+    prepared
+}
+
+#[library_benchmark]
+#[bench::tip_run(args = (SPEND_1IN_2OUT), setup = prepared)]
+fn crypto_bench_rpc_block_list(prepared: Prepared) -> (Prepared, Vec<u8>) {
+    let bytes = {
+        let reply = block_list(
+            &prepared.facts,
+            &prepared.facts,
+            black_box(&prepared.request),
+            true,
+        )
+        .unwrap_or_else(|fault| panic!("the read answers: {fault:?}"));
+        let value = serde_json::to_value(&reply).expect("the reply is a value");
+        black_box(serde_json::to_vec(&value).expect("the value is bytes"))
+    };
+    (prepared, bytes)
+}
+
+library_benchmark_group!(
+    name = wallet_block_read_group;
+    benchmarks = crypto_bench_rpc_block_list
+);
+
+main!(library_benchmark_groups = wallet_block_read_group);
