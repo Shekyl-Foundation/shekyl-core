@@ -1357,3 +1357,12 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   (`crypto_bench_randomx_verify_header`, `BA-T42`), the first gated rows
   on the daemon's block path. Sections previously numbered §§14–16 (Known
   gaps, Cross-references, Change log) renumbered to §§17–19.
+- 2026-11-13 SO-D12 4b (the switch, regenesis): the block-path fixtures
+  of §§14–15 are mined again. The switch moves the replay corpus to
+  format 4 and the block to a bundle section committed by the header's
+  `section_root`, with no coinbase attestation, so the corpora D1 wrote
+  no longer read (`every_block_path_fixture_replays` refused every
+  one). The shapes, sizes and history rule are unchanged. Function
+  names, classes and schema version (`shekyl_rust_v0`) unchanged; the
+  counts §§14–15 record stay the 2026-11-12 capture's, and this
+  change's counts follow.
