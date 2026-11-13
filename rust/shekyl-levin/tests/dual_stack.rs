@@ -33,6 +33,9 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
+#[path = "owner_socket_dir.rs"]
+mod owner_socket_dir;
+
 /// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
@@ -43,24 +46,10 @@ fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
 struct Daemon {
     child: Child,
     data_dir: PathBuf,
+    /// Not under `data_dir`: that path is too long for `sun_path` on macOS.
+    socket_dir: PathBuf,
     p2p_port: u16,
     rpc_port: u16,
-}
-
-/// A private directory for the owner's socket, mode 0700, under the data
-/// directory: a harness names one per daemon (`RPC_CHANNEL.md` §7.1).
-fn private_socket_dir(data_dir: &std::path::Path) -> PathBuf {
-    let dir = data_dir.join("socket");
-    // Only the Unix arm below sets a mode.
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&dir).expect("create the socket directory");
-    dir
 }
 
 impl Daemon {
@@ -78,7 +67,7 @@ impl Daemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-        let socket_dir = private_socket_dir(&data_dir);
+        let socket_dir = owner_socket_dir::owner_socket_dir(p2p_port);
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
@@ -110,6 +99,7 @@ impl Daemon {
         let mut daemon = Self {
             child,
             data_dir,
+            socket_dir,
             p2p_port,
             rpc_port,
         };
@@ -154,6 +144,7 @@ impl Drop for Daemon {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
+        drop(std::fs::remove_dir_all(&self.socket_dir));
     }
 }
 
