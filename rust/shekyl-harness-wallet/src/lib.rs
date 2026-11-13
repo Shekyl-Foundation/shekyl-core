@@ -67,7 +67,7 @@ use hkdf::Hkdf;
 use sha2::Sha512;
 use shekyl_crypto_pq::account::{account_from_seed, ml_kem_keypair_from_d_z, Network, SEED_BYTES};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_crypto_pq::kem::HybridKemSecretKey;
+use shekyl_crypto_pq::kem::{HybridKemSecretKey, ML_KEM_768_DK_LEN};
 use zeroize::Zeroizing;
 
 /// The seed the harness miner is derived from. **Public, and regtest-only**
@@ -239,12 +239,23 @@ impl MinerWallet {
     pub fn from_account(seed: &[u8; SEED_BYTES], network: Network) -> Self {
         let (_master, keys) =
             account_from_seed(seed, network).expect("the account derivation is total");
+        // Into the fields. A deref of `as_canonical_bytes` would leave an
+        // unwiped copy of the secret (rule 35).
+        let mut spend_secret = Zeroizing::new([0u8; 32]);
+        spend_secret.copy_from_slice(keys.spend_sk.as_canonical_bytes());
+        let mut kem_secret = HybridKemSecretKey {
+            x25519: [0u8; 32],
+            ml_kem: vec![0u8; ML_KEM_768_DK_LEN],
+        };
+        kem_secret
+            .x25519
+            .copy_from_slice(keys.view_sk.as_canonical_bytes());
+        kem_secret
+            .ml_kem
+            .copy_from_slice(keys.ml_kem_dk.as_canonical_bytes());
         Self {
-            spend_secret: Zeroizing::new(*keys.spend_sk.as_canonical_bytes()),
-            kem_secret: HybridKemSecretKey {
-                x25519: *keys.view_sk.as_canonical_bytes(),
-                ml_kem: keys.ml_kem_dk.as_canonical_bytes().to_vec(),
-            },
+            spend_secret,
+            kem_secret,
             recipient: Recipient {
                 spend_public: *keys.spend_pk.as_canonical_bytes(),
                 x25519_pk: keys.x25519_pk,
