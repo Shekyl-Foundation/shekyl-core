@@ -159,6 +159,10 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
             txid: txid.to_string(),
         }),
+        TxAlarm => bare(id, args, ResolvedCommand::TxAlarm),
+        TxResend => one_word(id, args, |txid| ResolvedCommand::TxResend {
+            txid: txid.to_string(),
+        }),
         RequestNew => parse_request_new(args),
         RequestList => parse_request_list(args),
         UriMake => parse_uri_make(args),
@@ -911,6 +915,15 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_alarm_and_tx_resend_parse() {
+        assert!(matches!(parse("tx alarm"), ResolvedCommand::TxAlarm));
+        match parse("tx resend abcdef") {
+            ResolvedCommand::TxResend { txid } => assert_eq!(txid, "abcdef"),
+            other => panic!("expected tx resend, got {other:?}"),
+        }
+    }
 
     #[test]
     fn tx_show_takes_the_id_and_an_optional_body() {

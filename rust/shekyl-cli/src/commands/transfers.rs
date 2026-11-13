@@ -16,7 +16,7 @@ use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
 use super::{format_amount, format_amount_str, require_open};
 use crate::outcome::CommandResult;
-use crate::rpc_client::RpcSession;
+use crate::rpc_client::{RpcError, RpcSession};
 
 /// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
 /// `stake_in` share this contract shape) that the confirm/submit flow needs.
@@ -139,7 +139,7 @@ pub(crate) fn submit_pending(rpc: &RpcSession, built: &BuiltPendingTx) -> Comman
         // build instead of silently rendering as a plain submit.
         Ok(val) => Ok(val),
         Err(e) => {
-            let reported = rpc.report("Failed to submit transaction", &e);
+            let reported = report_refusal(rpc, "Failed to submit transaction", &e);
             // The failed submit left the reservation live; release it so the
             // user's spendable balance is not silently tied up.
             discard_reservation(rpc, &built.id);
@@ -256,6 +256,13 @@ pub(crate) fn show_submit(val: &Value) {
                     ),
                     None => println!("Transaction already confirmed on chain: {tx_hash}"),
                 },
+            }
+            if !result.verdict_saved {
+                eprintln!(
+                    "Warning: the send went out and stands, but the wallet could not save \
+                     the daemon's answer (see the wallet log). The next save writes it; if \
+                     the wallet stops first, `tx alarm` lists this send when it reopens."
+                );
             }
         }
         Err(_) => {
@@ -415,6 +422,100 @@ pub fn cmd_abandon(rpc: &RpcSession, txid: &str) -> CommandResult {
     }
 }
 
+/// A submit or resend refusal, with the daemon's cause in plain words
+/// when it gave one (`-29106`'s `error.data.cause`). Without this the user
+/// read "submit rejected" and nothing more; the cause rode only in the
+/// error data, which human mode prints under `--debug` alone (alpha.11
+/// bug hunt §A19, sends 7–9).
+fn report_refusal(rpc: &RpcSession, context: &str, e: &RpcError) -> crate::outcome::CommandFailed {
+    let mut reported = rpc.report(context, e);
+    if let Some(why) = reported.data.as_ref().and_then(|data| refusal_words(data)) {
+        reported.message = format!("{context}: {why}");
+    }
+    reported
+}
+
+/// The daemon's refusal cause (`-29106`'s `cause`, `row` beside a
+/// consensus refusal) in words a user can act on.
+fn refusal_words(data: &Value) -> Option<String> {
+    let cause = data.get("cause")?.as_str()?;
+    Some(match cause {
+        "double_spend_conflict" => "the network already has a transaction spending one of \
+             its inputs — an earlier send of yours, or one from another copy of this wallet. \
+             Refresh and check your history before sending again"
+            .to_owned(),
+        "fee_too_low" => "the fee is below what the network accepts now; build it again".to_owned(),
+        "malformed" => {
+            "the daemon could not accept the transaction as built; build it again".to_owned()
+        }
+        "stale_root" | "reference_too_recent" | "reference_not_found" => {
+            "the block the transaction was built against cannot be used now; build it again"
+                .to_owned()
+        }
+        "consensus_rule" => match data.get("row").and_then(Value::as_str) {
+            Some(row) => format!("the chain refuses it under consensus rule {row}"),
+            None => "the chain refuses it under a consensus rule".to_owned(),
+        },
+        "unrecognized" => "the daemon refused it for a reason this wallet does not know".to_owned(),
+        _ => return None,
+    })
+}
+
+/// `tx alarm`: the held sends that need your decision (A19).
+pub fn cmd_tx_alarm(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("tx_alarm", json!({})) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to read the held sends", &e)),
+    }
+}
+
+/// `tx resend <txid>`: resend a held send's saved bytes, by your decision.
+pub fn cmd_tx_resend(rpc: &RpcSession, txid: &str) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("tx_resend", json!({ "id": txid })) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(report_refusal(rpc, "Failed to resend the send", &e)),
+    }
+}
+
+pub(crate) fn show_tx_alarm(val: &Value) {
+    let Some(sends) = val.as_array() else {
+        println!("(the wallet's answer was not a list)");
+        return;
+    };
+    if sends.is_empty() {
+        println!("No sends need your decision.");
+        return;
+    }
+    println!("Sends that need your decision:");
+    for send in sends {
+        let id = send.get("id").and_then(Value::as_str).unwrap_or("?");
+        let height = send
+            .get("sent_height")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
+        let why = match send.get("alarm").and_then(Value::as_str).unwrap_or("") {
+            "earlier-session" => {
+                "sent before the wallet last stopped; its result was not seen since"
+            }
+            "overdue" => "the daemon has held it longer than it should",
+            "untracked" => "the daemon has it but no record of publishing it",
+            "published-past-lookback" => "published, and still not mined",
+            "peerless" => "the daemon has no peers, so it cannot relay",
+            "offline" => "the daemon is offline, so it relays nothing",
+            "reference-stale" => "it can no longer be offered as built",
+            "bytes-missing" => "the wallet has no saved copy to resend",
+            _ => "(a reason this version does not know)",
+        };
+        println!("  {id}  sent at height {height}: {why}");
+    }
+    println!(
+        "Resend one with `tx resend <id>` (the same transaction, offered again), or give it \
+         up with `tx abandon <id>`."
+    );
+}
+
 pub(crate) fn show_abandoned(_val: &Value) {
     println!("Send abandoned: the wallet has given up on it.");
     println!(
@@ -426,7 +527,27 @@ pub(crate) fn show_abandoned(_val: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_built_pending_tx, MalformedBuild};
+    use super::{parse_built_pending_tx, refusal_words, MalformedBuild};
+
+    /// A19: a refusal's cause reaches the user in words. A double spend
+    /// says what it means (the A19 self-conflict among them), a consensus
+    /// refusal names its row, and data with no cause leaves the message as
+    /// the server wrote it.
+    #[test]
+    fn a_refusal_names_its_cause_in_words() {
+        let ds = refusal_words(&json!({"verdict": "rejected", "cause": "double_spend_conflict"}))
+            .expect("worded");
+        assert!(
+            ds.contains("already has a transaction spending one of its inputs"),
+            "{ds}"
+        );
+        let row = refusal_words(&json!({
+            "verdict": "rejected", "cause": "consensus_rule", "row": "CEN-J15"
+        }))
+        .expect("worded");
+        assert!(row.contains("CEN-J15"), "{row}");
+        assert_eq!(refusal_words(&json!({"detail": "x"})), None);
+    }
     use crate::resolve::FeePriority;
     use serde_json::json;
 

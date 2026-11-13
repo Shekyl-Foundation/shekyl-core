@@ -92,6 +92,29 @@ fn verdict_name(verdict: &Verdict) -> &'static str {
     }
 }
 
+/// A rejection's cause for the log line, by its wire keyword alone — never
+/// the consensus row it may carry (that stays with `verdict_name`'s rule).
+/// `none` for every verdict that is not a rejection. Without it the log
+/// said "rejected" and an operator could not tell a double spend from a
+/// fee refusal (alpha.11 bug hunt §A19, sends 7–9).
+fn cause_name(verdict: &Verdict) -> &'static str {
+    match verdict {
+        Verdict::Rejected { cause } => match cause {
+            Rejection::Malformed => "malformed",
+            Rejection::FeeTooLow => "fee-too-low",
+            Rejection::DoubleSpendConflict => "double-spend-conflict",
+            Rejection::StaleRoot => "stale-root",
+            Rejection::ReferenceTooRecent => "reference-too-recent",
+            Rejection::ReferenceUnknown => "reference-unknown",
+            Rejection::ConsensusRule(_) => "consensus-rule",
+            Rejection::Unrecognized => "unrecognized",
+        },
+        Verdict::Accepted | Verdict::AlreadyInPool { .. } | Verdict::AlreadyInChain { .. } => {
+            "none"
+        }
+    }
+}
+
 /// An internal fault — **never a verdict** (§3.4 / §4.2). The transport
 /// layer surfaces it as a transport-level error (the client's `Err` arm),
 /// so a daemon defect is not converted into a wallet rebuild.
@@ -252,6 +275,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         match &answer {
             Ok(verdict) => tracing::info!(
                 verdict = verdict_name(verdict),
+                cause = cause_name(verdict),
                 bytes = tx.len(),
                 total_ms,
                 phases = %clock,
@@ -786,6 +810,33 @@ mod clock_tests {
                 cause: Rejection::ConsensusRule(Text("CEN-J15".to_owned())),
             }),
             "rejected"
+        );
+    }
+
+    /// A rejection's log line names its cause by keyword, so an operator
+    /// can tell a double spend from a fee refusal; a consensus refusal is
+    /// named without its row, and a verdict that is not a rejection has
+    /// none.
+    #[test]
+    fn a_rejection_names_its_cause_without_the_row() {
+        let rejected = |cause| Verdict::Rejected { cause };
+        assert_eq!(
+            cause_name(&rejected(Rejection::DoubleSpendConflict)),
+            "double-spend-conflict"
+        );
+        assert_eq!(cause_name(&rejected(Rejection::FeeTooLow)), "fee-too-low");
+        assert_eq!(
+            cause_name(&rejected(Rejection::ConsensusRule(Text(
+                "CEN-J15".to_owned()
+            )))),
+            "consensus-rule"
+        );
+        assert_eq!(cause_name(&Verdict::Accepted), "none");
+        assert_eq!(
+            cause_name(&Verdict::AlreadyInChain {
+                mined_height: Height(7)
+            }),
+            "none"
         );
     }
 }
