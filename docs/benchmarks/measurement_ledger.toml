@@ -1399,6 +1399,21 @@ bench = "shekyl-pow-randomx::verify_header_iai"
 measured_by = ["BA-T42"]
 path_set = "randomx-header-verify"
 
+# One PreparedCache::derive in instructions: the hashing actor's rebuild
+# bound (RANDOMX_CACHE_ACTOR.md §5.8). BA-T14 is the cache derivation's
+# measurement; this row is its drift gate on a CI runner.
+[[path_set]]
+id = "randomx-cache-derive"
+spec = [
+  "rust/shekyl-pow-randomx/src",
+  "rust/shekyl-pow-randomx/benches/cache_derive_iai.rs",
+]
+
+[[gated_row]]
+bench = "shekyl-pow-randomx::cache_derive_iai"
+measured_by = ["BA-T14"]
+path_set = "randomx-cache-derive"
+
 # --- gated rows: the rows that were gated before the ledger named them --
 #
 # Each path set is the bench's own crate, sources and benches. The
