@@ -105,7 +105,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // The walk (IG-Q59): every refusal a start makes before it creates
     // anything, with nothing created. The check prints its verdict and
     // exits; a start goes on to the effects the walk withheld.
-    let walked = match verify::walk(&config, &resolved) {
+    let walked = match verify::walk(&config, &resolved, platform) {
         Ok(walked) => walked,
         Err(ds) => return refuse(&ds),
     };
@@ -159,8 +159,32 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     );
     announced.rest.extend(mining_notice(&config));
     announced.rest.extend(interrupt.line().map(str::to_owned));
+    announced.rest.extend(
+        walked
+            .owner_socket
+            .as_ref()
+            .map(|plan| owner_socket_line(network.name(), plan.instance_label(), &plan.path)),
+    );
     let lines = announced.into_lines();
     announce_all(&lines);
+
+    // The RPC's runtime and the owner's leg, dialled and bound before the
+    // node opens: a second daemon of this account, network and instance
+    // refuses here, with nothing opened (`RPC_CHANNEL.md` §7.1). The RPC
+    // serves it once the node is up.
+    let prepared = match shekyl_daemon_rpc::run::prepare(
+        walked
+            .owner_socket
+            .as_ref()
+            .map(|plan| (plan, network.name())),
+    ) {
+        Ok(prepared) => prepared,
+        Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return refuse(&[d]),
+        Err(shekyl_daemon_rpc::run::PrepareError::Runtime(e)) => {
+            tell(&mut std::io::stderr(), &format!("shekyld: the RPC's {e}"));
+            return EXIT_FAILED;
+        }
+    };
 
     // The settlement schedule, armed before the node whose first epoch
     // arithmetic would latch it exists; a value the owner refuses is the
@@ -179,7 +203,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // The managed Tor's inbox, before the node: the network publishes into
     // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
     // starts on it once the node is open.
-    let (tor_inbox, tor_feeds) = tor::prepare(&config.tor).unzip();
+    let (tor_inbox, tor_feeds) = tor::prepare();
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
@@ -193,7 +217,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         release_build: shekyl_version::IS_RELEASE,
         request_stop: Arc::new(signals::request_stop),
         plan: network::plan(&config, network_id),
-        supervisor: tor_feeds,
+        supervisor: Some(tor_feeds),
     }) {
         Ok(node) => node,
         Err(error) => {
@@ -254,7 +278,7 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         network,
         Arc::new(move |limits| link_owner.set_limits(limits)),
     ));
-    let status = supervise(&config, &pool, options, node, tor_inbox);
+    let status = supervise(&config, &pool, options, node, tor_inbox, prepared);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -290,38 +314,48 @@ fn supervise(
     pool: &shekyl_runtime::Pool,
     options: OptionsHandle,
     node: shekyl_node::Node,
-    tor_inbox: Option<tor::Prepared>,
+    tor_inbox: tor::Prepared,
+    prepared: shekyl_daemon_rpc::run::Prepared,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
-    // failed start: the node is torn down the one way.
-    let rpc =
-        match shekyl_daemon_rpc::run::start(&config.rpc, options, node.handles(), config.dev.rpc) {
-            Ok(rpc) => Some(rpc),
-            Err(refusal) => {
-                tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
-                None
-            }
-        };
+    // failed start: the node is torn down the one way. The owner's socket
+    // going stops the daemon through the one stop owner. The RPC asks the
+    // supervisor for `daemon_status`'s Tor fields; its inbox is made
+    // already, so an ask before the loop starts waits for it.
+    let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(signals::rendezvous_gone);
+    let rpc = match shekyl_daemon_rpc::run::start(
+        &config.rpc,
+        options,
+        node.handles(),
+        tor_inbox.asks(),
+        config.dev.rpc,
+        prepared,
+        gone,
+    ) {
+        Ok(rpc) => Some(rpc),
+        Err(refusal) => {
+            tracing::error!(target: "daemon", "the RPC did not start: {refusal}; stopping");
+            None
+        }
+    };
     // The notify runner, pushed from the chain's tip watch; its children
     // run on the signal owner's runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
     let notify_driver = pool.spawn(notify::drive_blocks(runner, node.tips()));
-    // The managed Tor starts with the node, which does not wait for it:
+    // The supervisor starts with the node, under every `tor` setting. A
+    // managed Tor starts with it, and the node does not wait for it:
     // clearnet, the listeners and the dialer are up already, and the
     // managed connector is parked until the supervisor publishes a route.
-    let supervisor = tor_inbox.and_then(|prepared| {
-        tor::begin(
-            prepared,
-            &config.tor,
-            config.clearnet_on(),
-            config.network.ports().p2p,
-            &config.data_dir,
-            pool.handle(),
-            node.network().clone(),
-        )
-    });
-    if let (Some(supervisor), Some(forward)) = (&supervisor, node.network().listening().tor_forward)
-    {
+    let supervisor = tor::begin(
+        tor_inbox,
+        &config.tor,
+        config.clearnet_on(),
+        config.network.ports().p2p,
+        &config.data_dir,
+        pool.handle(),
+        node.network().clone(),
+    );
+    if let Some(forward) = node.network().listening().tor_forward {
         supervisor.note_forward(forward);
     }
     let mut preserve_status = rpc.is_some();
@@ -346,7 +380,7 @@ fn supervise(
 /// `a_stops_last_line_reaches_the_log_file` reads this line from the file.
 fn finish(
     pool: &shekyl_runtime::Pool,
-    supervisor: Option<tor::Supervisor>,
+    supervisor: tor::Supervisor,
     rpc: Option<shekyl_daemon_rpc::run::Running>,
     preserve_status: bool,
     node: shekyl_node::Node,
@@ -360,8 +394,9 @@ fn finish(
     let closing = std::time::Instant::now();
     drop(node);
     let closed_in = closing.elapsed();
-    if let Some(supervisor) = supervisor {
-        pool.block_on(supervisor.shutdown());
+    let managed = supervisor.managed();
+    pool.block_on(supervisor.shutdown());
+    if managed {
         tracing::info!(target: "global", "the managed Tor was torn down");
     }
     tracing::info!(
@@ -439,7 +474,9 @@ enum StopReport {
 
 fn stop_report(cause: signals::StopCause) -> StopReport {
     match cause {
-        signals::StopCause::Signal(_) | signals::StopCause::Requested => {
+        signals::StopCause::Signal(_)
+        | signals::StopCause::Requested
+        | signals::StopCause::RendezvousGone => {
             StopReport::Announce(format!("stop requested by {cause}"))
         }
         signals::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
@@ -479,6 +516,21 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// on one and does not open the log beside the rolling writer. Standard
 /// error is prefixed `shekyld:`; the log line is the line alone. The
 /// closing [`shekyl_logging::flush`] delivers a line queued before it.
+/// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
+/// §7.1): the socket's name is a hash, so the operator is told which
+/// network and instance it serves and where it is.
+fn owner_socket_line(network: &str, instance: &str, path: &std::path::Path) -> String {
+    let leg = if cfg!(windows) {
+        "owner's rendezvous"
+    } else {
+        "owner's socket"
+    };
+    format!(
+        "{leg}: network {network}, instance {instance}, at {}",
+        path.display()
+    )
+}
+
 fn announce_all(lines: &[String]) {
     for line in lines {
         shekyl_logging::announce(&format!("shekyld: {line}"), line);
@@ -507,10 +559,14 @@ mod tests {
     /// this module.
     pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 
+    /// A logged-in account: its home, and a private session directory
+    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
             program_data: None,
+            session_dir: crate::test_session_dir(home),
+            service_rendezvous: None,
         }
     }
 
@@ -642,7 +698,8 @@ mod tests {
             &pool,
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
-            None,
+            crate::tor::prepare().0,
+            shekyl_daemon_rpc::run::prepare(None).expect("the RPC's runtime"),
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");

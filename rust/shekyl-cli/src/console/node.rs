@@ -29,8 +29,13 @@ use crate::daemon::DaemonClient;
 pub(super) fn show_difficulty(daemon: &DaemonClient) -> Result<String, String> {
     let status = fetch_status(daemon)?;
     let target = u128::from(shekyl_economics::economic_params().daa_target_seconds);
-    let hash_rate = status
-        .difficulty
+    let difficulty = super::info::disclosed(status.difficulty, "the difficulty", "chain")?;
+    let cumulative = super::info::disclosed(
+        status.difficulty_cumulative,
+        "the cumulative difficulty",
+        "chain",
+    )?;
+    let hash_rate = difficulty
         .get()
         .checked_div(target)
         .ok_or_else(|| "the difficulty target is zero".to_owned())?;
@@ -38,8 +43,8 @@ pub(super) fn show_difficulty(daemon: &DaemonClient) -> Result<String, String> {
         "BH: {}, TH: {}, DIFF: {}, CUM_DIFF: {}, HR: {hash_rate} H/s",
         chain_count(&status),
         hex::encode(status.hash.to_bytes()),
-        status.difficulty.get(),
-        status.difficulty_cumulative.get(),
+        difficulty.get(),
+        cumulative.get(),
     ))
 }
 
@@ -119,7 +124,8 @@ fn money(atomic: u64) -> String {
 pub(super) fn print_transaction_pool_stats(daemon: &DaemonClient) -> Result<String, String> {
     let stats = super::call::<wire::TxpoolStats>(daemon, &NoParams)?;
     let status = fetch_status(daemon)?;
-    Ok(render_pool_stats(&stats, status.block_weight_max.0))
+    let limit = super::info::disclosed(status.block_weight_max, "the block weight limit", "chain")?;
+    Ok(render_pool_stats(&stats, limit.0))
 }
 
 /// The pool's summary. Sizes are weights, as the wire carries them; the

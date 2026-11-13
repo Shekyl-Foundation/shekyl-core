@@ -330,6 +330,81 @@ impl<T: Schema> WithheldShape for Withheld<T> {
     }
 }
 
+/// A reply field the request selects with a switch (`RPC_WIRE.md` RW-Q4,
+/// amended 2026-11-12): present exactly when the request turned the
+/// switch on, and otherwise absent from the reply's shape, never `null`.
+/// Absence by grant is [`Withheld`]; absence because the request did not
+/// select the field is this.
+///
+/// The field carries `#[serde(default, skip_serializing_if =
+/// "Asked::is_unasked")]`. Serializing an unasked value is an error, so a
+/// field that forgets the attribute fails the first time it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Asked<T> {
+    /// The request selected the field.
+    Present(T),
+    /// The request did not select it.
+    #[default]
+    Unasked,
+}
+
+impl<T> Asked<T> {
+    /// Whether the request left the field unselected.
+    pub const fn is_unasked(&self) -> bool {
+        matches!(self, Self::Unasked)
+    }
+
+    /// The value, if selected.
+    pub fn present(self) -> Option<T> {
+        match self {
+            Self::Present(value) => Some(value),
+            Self::Unasked => None,
+        }
+    }
+
+    /// The value when `asked`, otherwise unasked: a handler's one way to
+    /// fill a selected field.
+    pub fn when(asked: bool, value: impl FnOnce() -> T) -> Self {
+        if asked {
+            Self::Present(value())
+        } else {
+            Self::Unasked
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for Asked<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Present(value) => value.serialize(serializer),
+            Self::Unasked => Err(serde::ser::Error::custom(
+                "an unasked field is absent, not written: the field lacks \
+                 skip_serializing_if = \"Asked::is_unasked\"",
+            )),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Asked<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+/// The shape of what an [`Asked`] field holds when selected. `Asked` has
+/// no [`Schema`] of its own, so it cannot be a field without the
+/// `[asked "switch"]` bracket that names the switch selecting it.
+pub trait AskedShape {
+    /// The selected value's shape.
+    fn inner_shape() -> Shape;
+}
+
+impl<T: Schema> AskedShape for Asked<T> {
+    fn inner_shape() -> Shape {
+        T::shape()
+    }
+}
+
 /// The shape of an optional request parameter when given. A reply field
 /// is never optional, so neither `Option<T>` nor a defaulted `bool` has a
 /// [`Schema`] of its own: they are fields only with the `[optional]`

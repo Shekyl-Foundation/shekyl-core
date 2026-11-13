@@ -15,6 +15,7 @@ on:
           - economics-sim-ignored
           - staking-sim-ignored
           - chain-ingest-ignored
+          - hasher-ignored
           - wire-ignored
           - trybuild-ignored
           - bench-full
@@ -99,6 +100,19 @@ jobs:
           list=$(cargo test --locked --release -p shekyl-timing-engine --lib -- --list)
           printf '%s\n' "$list" | grep -qx 'model::random_ops_match_a_scanned_reference: test'
           cargo test --locked --release -p shekyl-timing-engine --lib -- --exact model::random_ops_match_a_scanned_reference --nocapture
+
+      - name: Run the hasher core's model (8 192 cases)
+        # The per-PR run is proptest's default case count. The test's
+        # name is asserted first, so a rename cannot make this step pass
+        # over nothing (rule 47).
+        working-directory: rust
+        env:
+          PROPTEST_CASES: "8192"
+        run: |
+          set -eu
+          list=$(cargo test --locked --release -p shekyl-hasher --lib -- --list)
+          printf '%s\n' "$list" | grep -qx 'core::tests::random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request: test'
+          cargo test --locked --release -p shekyl-hasher --lib -- --exact core::tests::random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request --nocapture
 
   store-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
@@ -326,6 +340,44 @@ jobs:
         env:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_chain_ingest.sh
+
+  hasher-ignored:
+    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored' }}
+    # The hasher's `#[ignore]`d set (scripts/ci/ignored_set_hasher.sh): the
+    # core's property test driven through the real shell, with threads and
+    # hundreds of real 256 MiB RandomX derives
+    # (docs/design/RANDOMX_CACHE_ACTOR.md §8). It catches what the per-PR
+    # core test cannot see: a lost wake-up, a lease kept past its return, a
+    # deadlock between the hasher's lock and the budget. Budget: 172 s on a
+    # loaded 16-core workstation; 60 minutes for a 4-vCPU runner.
+    #
+    # Same matrix as above. The set is read from the checked-out ref's
+    # script, so each leg is judged by its own tree. The per-PR Rust job
+    # runs the script with `--check` and stops after that judgement.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+
+      - name: Run the hasher ignored set
+        # The set and its assertions are scripts/ci/ignored_set_hasher.sh,
+        # in the tree under test: each branch judges itself.
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: bash scripts/ci/ignored_set_hasher.sh
 
   wire-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
@@ -560,7 +612,7 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -577,6 +629,14 @@ jobs:
                 lines: [
                   'The `chain-ingest-ignored` job (shekyl-chain-ingest `--ignored`: the real-proof scenarios, the miner, the captured-chain replay and the measurements) failed.',
                   'If the job stopped before running anything, the crate\'s ignored set and the lane\'s list disagree (the error names each test): a new `#[ignore]` is added to `scripts/ci/ignored_set_chain_ingest.sh` or stops being ignored; a listed test that was renamed, deleted or un-ignored is corrected there.',
+                ],
+              },
+              'hasher-ignored': {
+                title: 'nightly hasher ignored set RED',
+                lines: [
+                  'The `hasher-ignored` job (shekyl-hasher `--ignored`: the core\'s property test driven through the real shell, with threads and real RandomX derives) failed.',
+                  'A hang or a timeout is a lost wake-up or a deadlock between the hasher\'s lock and the budget; a strong-count assertion at a free is a lease that kept its cache past its return; more than three places seen is the cap broken in the shell, not the core.',
+                  'If the job stopped before running anything, the crate\'s ignored set and the lane\'s list disagree (the error names each test): decide in `scripts/ci/ignored_set_hasher.sh`.',
                 ],
               },
               'store-ignored': {

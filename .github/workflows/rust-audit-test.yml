@@ -444,6 +444,10 @@ jobs:
         # split. The keypair's contract and the buffer's contract are these
         # docs, and both were clean when they landed.
         #
+        # `shekyl-hasher` joined when it landed: its crate docs are the
+        # hashing actor's contract (the cap, the queue, the lending types,
+        # and why it has no end for `Node::ended`).
+        #
         # `shekyl-tor-status` joined when it landed: its docs state the wire
         # contract every client of the Tor status reads.
         #
@@ -456,6 +460,7 @@ jobs:
           -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
           -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
+          -p shekyl-hasher
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
           -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
       - name: build shekyl-fcmp crate
@@ -645,6 +650,7 @@ jobs:
           bash scripts/ci/ignored_set_chain_ingest.sh --check
           bash scripts/ci/ignored_set_chain_store.sh --check
           bash scripts/ci/ignored_set_economics_sim.sh --check
+          bash scripts/ci/ignored_set_hasher.sh --check
           bash scripts/ci/ignored_set_staking_sim.sh --check
           bash scripts/ci/ignored_set_trybuild.sh --check
           bash scripts/ci/ignored_set_wire.sh --check

@@ -34,8 +34,10 @@ crate::wire_object! {
         /// `null` for a block off the main chain, which has none.
         pub weight_longterm: Nullable<Size>,
         pub tx_count: Count,
-        /// The proof-of-work hash, when asked for (IG-Q56); `null` when not.
-        pub pow: Nullable<HashHex>,
+        /// The proof-of-work hash, present exactly when the request asked
+        /// for it with `pow` (IG-Q56, RW-Q4); never `null`.
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub pow [asked "pow"]: crate::kinds::Asked<HashHex>,
         /// The coinbase transaction's id.
         pub coinbase: HashHex,
         pub curve_root: HashHex,
@@ -161,16 +163,21 @@ crate::wire_exclusive! {
 }
 
 crate::wire_object! {
-    /// A transaction of a block, and the txid's operands (`SB-Q2`). Under
-    /// `prune`, `body` is the pruned segment.
+    /// A transaction of a block. Without `prune` it is `{id, body}`, the
+    /// whole transaction. Under `prune` it is the skeleton entry: `body`
+    /// is the pruned segment, beside the txid's operands (IG-Q55, `SB-Q2`,
+    /// RW-Q4).
     ["tx"]
     pub struct BlockTx {
         pub id: HashHex,
         pub body: Bytes,
-        pub prunable_hash: HashHex,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub prunable_hash [asked "prune"]: crate::kinds::Asked<HashHex>,
         /// `null` where the identity has no third operand: the coinbase.
-        pub pqc_auth_hash: Nullable<HashHex>,
-        pub archival_size: Size,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub pqc_auth_hash [asked "prune"]: crate::kinds::Asked<Nullable<HashHex>>,
+        #[serde(default, skip_serializing_if = "crate::kinds::Asked::is_unasked")]
+        pub archival_size [asked "prune"]: crate::kinds::Asked<Size>,
     }
 }
 

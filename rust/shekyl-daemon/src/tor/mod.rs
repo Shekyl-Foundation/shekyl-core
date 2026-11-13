@@ -29,6 +29,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_daemon_rpc::chain_facts::FactsFault;
+use shekyl_daemon_rpc::tor_facts::{TorFacts, TorFuture, TorHandle};
 use shekyl_node::Network;
 use shekyl_p2p::{
     dial_profile, ConnectorId, DownCause, OriginVerdict, PerConnector, SupervisorFeeds, TorCensus,
@@ -46,13 +48,13 @@ use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
     Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy,
-    Sessions, Space, Status, Step, TorCensus as QuietCensus, TorSetting,
+    Sessions, Space, Step, TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
-use shekyl_tor_status::{held_at_start_sentence, install_sentence, render};
+use shekyl_tor_status::{held_at_start_sentence, install_sentence, render, TorStatus};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -112,7 +114,7 @@ fn sample_keys(reads_network: bool) -> Vec<String> {
     keys
 }
 
-/// The managed Tor's inbox, made before the node opens: the network's
+/// The supervisor's inbox, made before the node opens: the network's
 /// producers publish into it from their first value (`TOR_SUPERVISOR.md`
 /// §5). [`begin`] starts the supervisor on it.
 pub struct Prepared {
@@ -120,15 +122,48 @@ pub struct Prepared {
     inbox: Inbox,
 }
 
-/// The inbox for a managed Tor, and the feeds the network publishes into.
-/// Any other posture has no supervisor and returns `None`.
+impl Prepared {
+    /// The RPC's two asks of this supervisor (`daemon_status`'s `hiding`
+    /// and Tor status). Taken before the RPC starts: an ask posted before
+    /// the loop runs is answered by its first pass, and one after the stop
+    /// is refused as not ready. Holding it never holds off the stop.
+    #[must_use]
+    pub fn asks(&self) -> TorHandle {
+        Arc::new(TorAsks(self.owner.asker()))
+    }
+}
+
+/// The supervisor's asks, as `daemon_status` reads them.
+struct TorAsks(Option<inbox::Asker>);
+
+impl TorFacts for TorAsks {
+    fn hiding(&self) -> TorFuture<'_, bool> {
+        let answer = self.0.as_ref().and_then(inbox::Asker::ask_hiding);
+        Box::pin(async move { answered(answer).await })
+    }
+
+    fn status(&self) -> TorFuture<'_, TorStatus> {
+        let answer = self.0.as_ref().and_then(inbox::Asker::ask_status);
+        Box::pin(async move { answered(answer).await })
+    }
+}
+
+/// An ask's answer: not ready when the inbox is gone, or the loop ended
+/// before it answered.
+async fn answered<T>(answer: Option<tokio::sync::oneshot::Receiver<T>>) -> Result<T, FactsFault> {
+    answer
+        .ok_or(FactsFault::NotReady)?
+        .await
+        .map_err(|_| FactsFault::NotReady)
+}
+
+/// The supervisor's inbox, and the feeds the network publishes into, under
+/// every `tor` setting: the supervisor answers the node's status whether
+/// or not it runs the Tor (Rick, 2026-11-10).
 #[must_use]
-pub fn prepare(tor: &Tor) -> Option<(Prepared, SupervisorFeeds)> {
-    let Tor::Managed { .. } = tor else {
-        return None;
-    };
+pub fn prepare() -> (Prepared, SupervisorFeeds) {
     let (owner, inbox, feeds) = inbox();
-    Some((Prepared { owner, inbox }, feeds))
+    (Prepared { owner, inbox }, feeds)
 }
 
 /// The running supervisor. Dropping it stops the loop, as
@@ -137,9 +172,18 @@ pub fn prepare(tor: &Tor) -> Option<(Prepared, SupervisorFeeds)> {
 pub struct Supervisor {
     owner: Owner,
     task: JoinHandle<()>,
+    /// Whether it runs this node's Tor (`tor = managed`).
+    managed: bool,
 }
 
 impl Supervisor {
+    /// Whether it runs this node's Tor (`tor = managed`): what its stop
+    /// tears down.
+    #[must_use]
+    pub fn managed(&self) -> bool {
+        self.managed
+    }
+
     /// The zone host's forward listener, once step 8 has bound it.
     pub fn note_forward(&self, forward: SocketAddr) {
         self.owner.forward(forward);
@@ -149,13 +193,15 @@ impl Supervisor {
     /// from the one place that holds the state: it never waits on Tor, so
     /// a Tor that does not answer does not hold this (Rick, 2026-11-10).
     /// `None` once the loop has stopped.
-    pub async fn status(&self) -> Option<Status> {
+    pub async fn status(&self) -> Option<TorStatus> {
         self.owner.ask_status()?.await.ok()
     }
 
     /// Stop Tor and wait for the directory to be torn down.
     pub async fn shutdown(self) {
-        let Self { mut owner, task } = self;
+        let Self {
+            mut owner, task, ..
+        } = self;
         owner.stop();
         let _joined = task.await;
     }
@@ -246,10 +292,12 @@ fn say_pin_refusal(first: bool, error: &TorBinaryError) {
     }
 }
 
-/// Start the supervisor on its inbox when Tor is managed. Any other
-/// posture returns `None`. `network` is where the route, the onion and the
-/// inbound facet are published, and whose timing engine the supervisor's
-/// waits are owned by.
+/// Start the supervisor on its inbox, under every `tor` setting. A managed
+/// Tor is launched and supervised; under `off` or an operator's Tor the
+/// supervisor runs nothing and answers the status from what the network
+/// publishes. `network` is where the route, the onion and the inbound facet
+/// are published, and whose timing engine the supervisor's waits are owned
+/// by.
 #[must_use]
 pub fn begin(
     prepared: Prepared,
@@ -259,16 +307,18 @@ pub fn begin(
     data_dir: &Path,
     handle: &tokio::runtime::Handle,
     network: Network,
-) -> Option<Supervisor> {
-    let Tor::Managed { binary } = tor else {
-        return None;
+) -> Supervisor {
+    let supervises = match tor {
+        Tor::Managed { binary } => Supervises::Managed(PinSource::Discover(binary.clone())),
+        Tor::Operator { .. } => Supervises::Unmanaged(TorSetting::Operator),
+        Tor::Off => Supervises::Unmanaged(TorSetting::Off),
     };
+    let managed = matches!(supervises, Supervises::Managed(_));
     let Prepared { owner, inbox } = prepared;
-    let binary = binary.clone();
     let data_dir = data_dir.to_path_buf();
     let task = handle.spawn(async move {
         drive(
-            PinSource::Discover(binary),
+            supervises,
             policy(),
             clearnet_on,
             virtual_port,
@@ -278,7 +328,11 @@ pub fn begin(
         )
         .await;
     });
-    Some(Supervisor { owner, task })
+    Supervisor {
+        owner,
+        task,
+        managed,
+    }
 }
 
 /// Tor's log line in the daemon's log, under `tor` at Tor's severity
@@ -385,6 +439,14 @@ fn sessions_input(held: PerConnector<u32>) -> Input {
     })
 }
 
+/// What the supervisor supervises.
+enum Supervises {
+    /// A Tor this daemon launches, from this binary.
+    Managed(PinSource),
+    /// A Tor this node does not run: `off`, or an operator's.
+    Unmanaged(TorSetting),
+}
+
 /// Where the binary a launch runs comes from.
 enum PinSource {
     /// Discovered and checked against the pin: at the configured path, or
@@ -396,7 +458,7 @@ enum PinSource {
 }
 
 async fn drive(
-    binary: PinSource,
+    supervises: Supervises,
     policy: Policy,
     clearnet_on: bool,
     virtual_port: u16,
@@ -405,7 +467,7 @@ async fn drive(
     network: Network,
 ) {
     if let Some(drive) = Drive::start(
-        binary,
+        supervises,
         policy,
         clearnet_on,
         virtual_port,
@@ -422,7 +484,7 @@ impl Drive {
     /// folded; `None`, said, when the boot's secrets or a scheduler are
     /// not to be had.
     fn start(
-        binary: PinSource,
+        supervises: Supervises,
         policy: Policy,
         clearnet_on: bool,
         virtual_port: u16,
@@ -454,10 +516,11 @@ impl Drive {
                 return None;
             }
         };
-        let connectors = Connectors {
-            tor: TorSetting::Managed,
-            clearnet_on,
+        let (tor, binary) = match supervises {
+            Supervises::Managed(source) => (TorSetting::Managed, Some(source)),
+            Supervises::Unmanaged(setting) => (setting, None),
         };
+        let connectors = Connectors { tor, clearnet_on };
         let clock = owner.clock().clone();
         let poster = inbox.poster();
         let timer = Timer::start(owner, poster.clone());
@@ -509,7 +572,8 @@ struct Drive {
     step: Step,
     /// The process clock: the network's, which the dialer's stamps are on.
     clock: MonotonicClock,
-    binary: PinSource,
+    /// The binary's source, for a Tor this daemon launches.
+    binary: Option<PinSource>,
     data_dir: PathBuf,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
@@ -827,9 +891,10 @@ impl Drive {
             Arrival::Reply { number, answer } => inputs.extend(self.answered(number, *answer)),
             Arrival::Status(reply) => {
                 // Answered from the one place that holds the state, at once:
-                // nothing on this loop waits on Tor.
-                drop(reply.send(self.core.status()));
+                // nothing on this loop waits on Tor. Every age is taken now.
+                drop(reply.send(self.core.view(self.now())));
             }
+            Arrival::Hiding(reply) => drop(reply.send(self.core.hiding())),
             Arrival::Stop => inputs.push(Input::Shutdown),
         }
         self.fold_at(inputs, woke);
@@ -918,8 +983,14 @@ impl Drive {
         inputs
     }
 
+    /// Check the binary a managed Tor launches. The core asks for a pin
+    /// only while it runs this node's Tor (`AbsentDuty::Unmanaged` asks
+    /// for none). A pin with no binary is that promise broken.
     fn pin(&mut self) -> Input {
-        let verified = match &self.binary {
+        let source = self.binary.as_ref().expect(
+            "the Tor supervisor was asked to check a Tor binary under a tor setting that runs none",
+        );
+        let verified = match source {
             PinSource::Discover(Some(path)) => discover_and_verify_at(path),
             PinSource::Discover(None) => discover_and_verify(),
             #[cfg(all(test, unix))]
