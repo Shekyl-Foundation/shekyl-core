@@ -2231,6 +2231,29 @@ construction) instead of loopback TCP.
   in the tree, and the lane declined to substitute a model and report it as
   item 1; item 7 is unimplemented.
 
+**The label re-run on the rendezvous subdirectory (2026-11-12, at
+`acd3114d4`; Rick's ruling of that day).** Run by the Windows agent on the
+maintainer's Windows 11 laptop (23H2, 22631), not an estate host, through
+`shekyl-win-sec`'s probe `rendezvous_probe_leaves_its_objects`:
+
+- The data home `Shekyl`, its `rendezvous` subdirectory and a rendezvous
+  file each read back label policy 3 (no-write-up and no-read-up). `icacls`
+  shows the owner's full-control ACE alone on each, none inherited, and the
+  labels `(OI)(CI)(NW,NR)` on the data home and `(NW,NR)` on the
+  subdirectory and the file.
+- From a Medium prompt, listing both directories, reading the file,
+  appending to it and creating a file in the subdirectory all succeed.
+- From a Low prompt (`whoami` showing Low Mandatory Level), reading,
+  appending and creating are each refused with "Access is denied". Listing
+  either directory is refused too: cmd prints "File Not Found", and a Low
+  PowerShell's `Directory.GetFileSystemEntries` on each gets
+  `UnauthorizedAccessException` (0x80070005). A Low process can still
+  `cd` into the data home (the label does not stop traversal), and cannot
+  `cd` into the subdirectory. Nothing written at Low reached the
+  subdirectory.
+- The check refuses a directory made with the default descriptor, and
+  stops refusing it when the check is removed (the red edit, run).
+
 ## 10. Open items
 
 Every item is ruled. What message 4 carries is RT-O30 (§6.2), ruled

@@ -50,11 +50,13 @@ pub struct Running {
     shutdown: watch::Sender<bool>,
     rt: Pool,
     serve: tokio::task::JoinHandle<()>,
+    #[cfg(unix)]
     owner: Option<Owner>,
 }
 
 /// The owner's socket while it is served: the rendezvous that removes it,
 /// and the watch that stops the daemon if it goes first.
+#[cfg(unix)]
 struct Owner {
     rendezvous: crate::owner::Rendezvous,
     watch_stop: watch::Sender<bool>,
@@ -119,6 +121,7 @@ pub fn start(
     // Level-triggered: a stop that lands before any acceptor has polled is
     // still observed by `wait_for`. One sender, cloned into every acceptor.
     let (shutdown, shutdown_rx) = watch::channel(false);
+    #[cfg(unix)]
     let (owner, owner_listener) = match owner {
         Some((socket, gone)) => {
             let (listener, rendezvous) = socket.into_parts();
@@ -134,6 +137,13 @@ pub fn start(
             )
         }
         None => (None, None),
+    };
+    // Windows' owner leg is a pipe, which this build does not serve: the
+    // walk plans none, so there is never a socket here.
+    #[cfg(not(unix))]
+    let owner_listener: Option<crate::owner::OwnerListener> = match owner {
+        None => None,
+        Some((socket, _gone)) => match socket {},
     };
     let serve = rt.spawn(async move {
         if let Err(e) = serve_listeners(
@@ -153,6 +163,7 @@ pub fn start(
         shutdown,
         rt,
         serve,
+        #[cfg(unix)]
         owner,
     })
 }
@@ -166,11 +177,13 @@ impl Running {
             shutdown,
             rt,
             serve,
+            #[cfg(unix)]
             owner,
         } = self;
         // The owner's socket first: the watch stops, so removing the socket
         // is not read as its going, and then the socket is removed, so no
         // client reaches a daemon that is draining (`RPC_CHANNEL.md` §7.1).
+        #[cfg(unix)]
         if let Some(Owner {
             rendezvous,
             watch_stop,

@@ -121,11 +121,12 @@ pub fn plan(
 /// # Errors
 ///
 /// `config.service.rendezvous`, naming the condition that failed.
+#[cfg(unix)]
 pub fn service_rendezvous(
     config: &DaemonConfig,
     platform: &Platform,
 ) -> Result<Option<PathBuf>, Diagnostic> {
-    if config.run_mode != RunMode::Service || cfg!(windows) {
+    if config.run_mode != RunMode::Service {
         return Ok(None);
     }
     let refuse = |path: &str, found: String| {
@@ -140,19 +141,27 @@ pub fn service_rendezvous(
             "this platform names no service rendezvous directory".to_owned(),
         ));
     };
-    check_service_dir(dir, euid())
+    check_service_dir(dir, rustix::process::geteuid().as_raw())
         .map(|()| Some(dir.clone()))
         .map_err(|found| refuse(&dir.display().to_string(), found))
 }
 
-#[cfg(unix)]
-fn euid() -> u32 {
-    rustix::process::geteuid().as_raw()
-}
-
+/// On Windows `service` waits for RT-W14, and a start refuses it before
+/// the walk (`sections::build`), so there is no directory to check yet.
+///
+/// # Errors
+///
+/// None on Windows.
 #[cfg(not(unix))]
-fn euid() -> u32 {
-    u32::MAX
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "one signature on every platform; Unix refuses here"
+)]
+pub fn service_rendezvous(
+    _config: &DaemonConfig,
+    _platform: &Platform,
+) -> Result<Option<PathBuf>, Diagnostic> {
+    Ok(None)
 }
 
 /// The service directory's conditions for the account `me`, in the order a
@@ -187,11 +196,6 @@ fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
             "{shown} is writable by its group or by others (mode {mode:04o})"
         ));
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_service_dir(_dir: &std::path::Path, _me: u32) -> Result<(), String> {
     Ok(())
 }
 

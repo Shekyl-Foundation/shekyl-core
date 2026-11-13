@@ -35,12 +35,12 @@
 pub use unix::{serve_ready, watch, OwnerListener, OwnerSocket, Place, Rendezvous};
 
 #[cfg(not(unix))]
-pub use windows::{serve_ready, watch, OwnerListener, OwnerSocket, Place, Rendezvous};
+pub use windows::{OwnerListener, OwnerSocket};
 
 /// Windows serves its owner on a pipe, which this build does not serve
 /// yet. The walk plans no owner's socket there
-/// (`shekyl_daemon_config::owner_socket::plan`), so none of these values
-/// exists: each type is empty and each function is unreachable.
+/// (`shekyl_daemon_config::owner_socket::plan`), so no value of these
+/// types exists, and the server's and the run's owner paths are Unix's.
 #[cfg(not(unix))]
 mod windows {
     use shekyl_daemon_config::OwnerSocketPlan;
@@ -48,10 +48,6 @@ mod windows {
 
     /// No owner's socket is held on Windows.
     pub enum OwnerSocket {}
-    /// No rendezvous is held on Windows.
-    pub enum Rendezvous {}
-    /// No place is watched on Windows.
-    pub enum Place {}
     /// No owner listener is served on Windows.
     pub enum OwnerListener {}
 
@@ -66,38 +62,6 @@ mod windows {
                 .param("path", plan.dir.display().to_string())
                 .param("found", "Windows serves its owner on a pipe, not a socket"))
         }
-
-        /// Unreachable: no value of this type exists.
-        #[must_use]
-        pub fn into_parts(self) -> (OwnerListener, Rendezvous) {
-            match self {}
-        }
-    }
-
-    impl Rendezvous {
-        /// Unreachable: no value of this type exists.
-        #[must_use]
-        pub fn place(&self) -> Place {
-            match *self {}
-        }
-    }
-
-    /// Unreachable: no value of [`Place`] exists.
-    pub async fn watch(
-        place: Place,
-        _gone: std::sync::Arc<dyn Fn() + Send + Sync>,
-        _stop: tokio::sync::watch::Receiver<bool>,
-    ) {
-        match place {}
-    }
-
-    /// Unreachable: no value of [`OwnerListener`] exists.
-    ///
-    /// # Errors
-    ///
-    /// None: there is no listener.
-    pub fn serve_ready(listener: OwnerListener) -> std::io::Result<tokio::net::TcpListener> {
-        match listener {}
     }
 }
 
