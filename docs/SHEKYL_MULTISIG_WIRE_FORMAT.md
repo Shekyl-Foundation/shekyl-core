@@ -41,8 +41,9 @@ Offset   Size     Field             Notes
 25+C     16       tag               Poly1305
 ```
 
-A file is `plaintext_len + 41` bytes. Shorter than 41 bytes is not a
-ceremony file.
+A file is `plaintext_len + 41` bytes: `MIN_FILE_LEN = 3,500` for an empty
+body, `MAX_FILE_LEN = MIN_FILE_LEN + MAX_BODY_LEN` for a full one. A file
+outside those bounds is not a ceremony file.
 
 ### 1.2 Plaintext layout
 
@@ -102,8 +103,10 @@ Nothing in a file names its group, so a wallet finds the group by **trial
 decryption**. It checks, in this order, and refuses at the first
 failure; the body reaches nothing before every check has passed:
 
-1. `format_version` is `0x02` (read once, before any key is tried).
-   Version `0x01`, the clear-header layout, is refused by name.
+1. `format_version` is `0x02`, and the file's length is within
+   `MIN_FILE_LEN..=MAX_FILE_LEN` (§1.1); both read once, before any key is
+   tried, so an unauthenticated file costs nothing per group. Version
+   `0x01`, the clear-header layout, is refused by name.
 2. The file opens under one of the wallet's groups' keys (§4). Under
    none: "not for this wallet".
 3. The plaintext parses exactly (§1.2).

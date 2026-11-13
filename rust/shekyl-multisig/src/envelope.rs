@@ -15,10 +15,13 @@
 //! id (`shekyl_crypto_pq::multisig_envelope`), so a member who holds the
 //! group transport secret still cannot write a file "from" another member.
 //!
-//! **Import is trial decryption.** A wallet tries each of its groups;
-//! a file that opens under none is "not for this wallet". A file that opens
-//! is then checked in this order, each failure a named refusal, and its body
-//! reaches nothing before every check has passed:
+//! **Import is trial decryption.** Before any key is tried, the file's
+//! version byte and its length are checked once: a length outside
+//! [`MIN_FILE_LEN`]`..=`[`MAX_FILE_LEN`] cannot hold a plaintext, so an
+//! unauthenticated file costs no copy or tag check per group. The wallet then
+//! tries each of its groups; a file that opens under none is "not for this
+//! wallet". A file that opens is then checked in this order, each failure a
+//! named refusal, and its body reaches nothing before every check has passed:
 //!
 //! 1. the plaintext parses exactly, every length bounded before it is read;
 //! 2. the fingerprint is that group's;
@@ -28,7 +31,9 @@
 
 use rand::{CryptoRng, RngCore};
 use shekyl_address::multisig_address::address_fingerprint;
-use shekyl_crypto_pq::multisig_blob::{check_blob_version, open_blob, seal_blob, BlobError};
+use shekyl_crypto_pq::multisig_blob::{
+    check_blob_version, open_blob, seal_blob, BlobError, BLOB_OVERHEAD,
+};
 use shekyl_crypto_pq::multisig_envelope::{
     envelope_message, sign_multisig_envelope, verify_multisig_envelope, EnvelopeFields,
 };
@@ -51,6 +56,16 @@ pub const SENDER_SIG_LEN: usize = HybridSignature::CANONICAL_LEN;
 
 const LEN_PREFIX: usize = 4;
 
+/// The shortest file a sealed plaintext can make: an empty body.
+pub const MIN_FILE_LEN: usize =
+    BLOB_OVERHEAD + PLAINTEXT_HEADER_LEN + 2 * LEN_PREFIX + SENDER_SIG_LEN;
+
+/// The longest file a sealed plaintext can make: a body of
+/// [`MAX_BODY_LEN`]. A longer file is refused before any key is tried, so
+/// an unauthenticated file cannot make a wallet copy and authenticate
+/// megabytes per group.
+pub const MAX_FILE_LEN: usize = MIN_FILE_LEN + MAX_BODY_LEN;
+
 /// Why a file could not be written.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SealError {
@@ -72,6 +87,9 @@ pub enum ImportRefusal {
     /// Too short to be a ceremony file.
     #[error("not a ceremony file")]
     Truncated,
+    /// Longer than any ceremony file ([`MAX_FILE_LEN`]).
+    #[error("a file of {0} bytes is longer than any ceremony file")]
+    TooLong(usize),
     /// A version-1 file, the clear-header layout nothing shipped.
     #[error("a version-1 ceremony file is not accepted")]
     ClearHeaderVersion,
@@ -98,8 +116,7 @@ pub enum ImportRefusal {
     UnknownMessageType(u8),
 }
 
-/// A file that passed every check.
-#[derive(Debug)]
+/// A file that passed every check. Its `Debug` prints no body (rule 35).
 pub struct OpenedEnvelope {
     /// Which of the caller's groups the file is for: an index into the
     /// slice [`open_envelope`] was given.
@@ -112,6 +129,17 @@ pub struct OpenedEnvelope {
     pub message_type: MessageType,
     /// The body. It may carry FROST material, so it is wiped on drop.
     pub body: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for OpenedEnvelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenedEnvelope")
+            .field("group", &self.group)
+            .field("sender_index", &self.sender_index)
+            .field("message_type", &self.message_type)
+            .field("body", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// A parsed plaintext, before any check but its shape.
@@ -267,6 +295,12 @@ pub fn open_envelope(
         BlobError::UnknownVersion(v) => ImportRefusal::UnknownVersion(v),
         _ => ImportRefusal::Truncated,
     })?;
+    if file.len() < MIN_FILE_LEN {
+        return Err(ImportRefusal::Truncated);
+    }
+    if file.len() > MAX_FILE_LEN {
+        return Err(ImportRefusal::TooLong(file.len()));
+    }
     let (group, plaintext) = groups
         .iter()
         .enumerate()
@@ -448,6 +482,43 @@ mod tests {
             open_envelope(&[&members[1]], &NET, &file[..10]).unwrap_err(),
             ImportRefusal::Truncated
         );
+    }
+
+    /// The length is bounded before any key is tried: a version-2 file one
+    /// byte too short or too long for any plaintext is refused by length,
+    /// not by trial decryption; the bounds themselves are the lengths of an
+    /// empty body's file and a full one's.
+    #[test]
+    fn a_file_outside_the_length_bounds_is_refused_before_any_key() {
+        let members = group(2, 0xA1);
+        let empty = seal(&members[0], MessageType::Proposal, b"");
+        assert_eq!(empty.len(), MIN_FILE_LEN);
+        assert!(open_envelope(&[&members[1]], &NET, &empty).is_ok());
+        let mut short = empty.clone();
+        short.pop();
+        assert_eq!(
+            open_envelope(&[&members[1]], &NET, &short).unwrap_err(),
+            ImportRefusal::Truncated
+        );
+        let full = seal(&members[0], MessageType::FinalTx, &vec![0; MAX_BODY_LEN]);
+        assert_eq!(full.len(), MAX_FILE_LEN);
+        assert!(open_envelope(&[&members[1]], &NET, &full).is_ok());
+        let mut long = full;
+        long.push(0);
+        assert_eq!(
+            open_envelope(&[&members[1]], &NET, &long).unwrap_err(),
+            ImportRefusal::TooLong(MAX_FILE_LEN + 1)
+        );
+    }
+
+    #[test]
+    fn an_opened_file_prints_no_body() {
+        let members = group(2, 0xA1);
+        let file = seal(&members[0], MessageType::Proposal, b"secret body");
+        let opened = open_envelope(&[&members[1]], &NET, &file).unwrap();
+        let shown = format!("{opened:?}");
+        assert!(shown.contains("REDACTED"), "{shown}");
+        assert!(!shown.contains("115, 101, 99"), "{shown}");
     }
 
     #[test]

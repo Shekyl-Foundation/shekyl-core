@@ -102,8 +102,9 @@ pub fn mint_multisig_envelope_keypair(
 
 /// The fields of a ceremony file's plaintext that its sender signs: every
 /// field but the signature. The format version is
-/// [`BLOB_FORMAT_VERSION`], the only one sealed.
-#[derive(Debug, Clone, Copy)]
+/// [`BLOB_FORMAT_VERSION`], the only one sealed. No `Debug`: the body may
+/// carry ceremony material (rule 35).
+#[derive(Clone, Copy)]
 pub struct EnvelopeFields<'a> {
     /// The group's address fingerprint.
     pub address_fingerprint: &'a [u8; 32],
