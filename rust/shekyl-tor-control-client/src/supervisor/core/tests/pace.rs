@@ -28,7 +28,7 @@ fn sample(progress: u8, read: Option<u64>) -> Input {
 /// A core bootstrapping since 0, with a first count at 0.
 fn bootstrapping() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(sample(10, Some(0)), 0);
     core
@@ -125,7 +125,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     );
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(sample(30, None), 1);
     core.on_deadline(secs(4));
@@ -133,7 +133,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     assert_eq!(core.status().pace, None, "no count: unknown, never stalled");
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The percent stays at the incarnation's 0, so only the window decides.
     core.on(sample(0, Some(0)), secs(2));

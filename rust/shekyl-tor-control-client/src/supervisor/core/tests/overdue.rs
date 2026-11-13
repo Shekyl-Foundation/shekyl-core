@@ -292,7 +292,7 @@ fn a_clock_jump_gives_one_probe_or_none_with_one_in_flight() {
     );
 
     let (mut booting, _) = Core::start(policy(), managed(true), 0);
-    booting.on(Input::PinAccepted, 0);
+    booting.on(Input::accepted(), 0);
     booting.on(Input::Spawned, 0);
     let during = booting.on(Input::ClockJumped, secs(1));
     assert_eq!(

@@ -1,0 +1,1 @@
+- **A Tor launch can only be of a binary the pin check accepted** (`TOR_SUPERVISOR.md` §2). Each launch now carries the Tor that its own pin check verified. Nothing else holds a binary, so the node has no way to start a launch without a checked Tor. Nothing changes for operators.
