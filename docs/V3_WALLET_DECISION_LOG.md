@@ -7086,6 +7086,43 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge after the 4b switch: CF-2 retired, the shard-fill chain frozen, Chain B's criteria, Chain P's ramp
+
+**Decision** (Rick, on #1370 after #1327 merged; `CHAIN_FORGE.md` §1,
+`CF-R16`…`CF-R19`).
+
+- `CF-2` is retired as an increment, its number not reused: #1327
+  deleted the serve-credit input it was to sign. The driver's receipt
+  stand-in (`signed_record`) stays, gated test-only and listed on
+  `CF-1b`'s seedable-RNG gate; where it is defined, a comment says no
+  rule checks a delivery digest, so the production signer would change
+  no verdict. `CF-1c` adds the connect-path tamper test: each signed
+  field in turn, refused at CEN-J34 or J37 by name, beside an untampered
+  positive control. `CF-E34` is marked RETIRED with its reason, never
+  deleted: catalogue IDs are not reused.
+- The shard-fill chain (`shard-fill.bin`, 11.5 MB) is frozen until
+  `CF-5`: never regenerated or re-committed, because its bytes do not
+  reproduce and each regeneration would add its size to history for
+  good. It takes no new consumers (a gate holds both). `CF-5`'s forged
+  replacement covers every current consumer's test before the file is
+  deleted, and `CF-5`'s plan lists them.
+- Chain B's state comparison is accepted, with four criteria for `CF-1c`:
+  recorded inputs replay through the producer's production seams behind
+  the test-only flag, with no separate replay path; the projection is
+  defined by exclusion, each excluded field with its reason and each row
+  category with a negative control; `CF-1c` shows the settlement outcome
+  is timing-independent under the cross-check's conditions, and if not,
+  the answer is tighter conditions or another check, never wider
+  tolerances; an input that cannot be recorded makes B's artifact the
+  only copy, an immutable digest-pinned release held in more than one
+  place.
+- Chain P's design-load segment cannot start at genesis (limit 600,000
+  against about 635,520 for 30 spends, from the CI lane's #1365). P
+  grows the medians under the real rule, its miners taking the penalty,
+  before the segment, and again before the 4x segment; the plan says
+  whether that fits P's length (it does: two 51-block ramps). Pending
+  the design-load ruling.
+
 ## 2026-11-13 — Chain forge: the harness identity ends in CF-5, and the harness seed is public and regtest-only
 
 **Decision** (Rick, on `CF-1a`; `CHAIN_FORGE.md` §1, `CF-R15`).
