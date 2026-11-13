@@ -78,7 +78,6 @@ impl FixedClock {
 
 impl Substrate for FixedClock {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(Timestamp::from_raw(self.0.load(Ordering::Relaxed)))

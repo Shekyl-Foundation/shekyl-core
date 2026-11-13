@@ -116,7 +116,6 @@ impl Gated {
 
 impl Substrate for Gated {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         assert!(
@@ -438,7 +437,6 @@ struct FormFault;
 
 impl Substrate for Faulting {
     type Fault = FormFault;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(self.gate.local_clock().expect("the gate's clock"))

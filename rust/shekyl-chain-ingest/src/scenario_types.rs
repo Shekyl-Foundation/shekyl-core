@@ -125,7 +125,6 @@ pub struct FreeHash;
 
 impl Substrate for FreeHash {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(CLOCK_START)

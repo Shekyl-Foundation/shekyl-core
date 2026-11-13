@@ -317,7 +317,6 @@ struct HeldSubstrate<'a> {
 
 impl Substrate for HeldSubstrate<'_> {
     type Fault = SubstrateFault;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, SubstrateFault> {
         self.base.local_clock()

@@ -142,7 +142,7 @@ macro_rules! judge_block {
 /// Returns `Err(fault)` if the substrate could not answer — the clock, the
 /// verifier — which is not a judgement about the block; `Ok(Err(refused))`
 /// if a stateless rule refused; `Ok(Ok(formed))` otherwise.
-pub fn form<S: Substrate>(
+pub fn form<S: Substrate + ?Sized>(
     candidate: Candidate,
     claims: &FormClaims<'_>,
     substrate: &S,

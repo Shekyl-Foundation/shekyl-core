@@ -36,7 +36,6 @@ struct NoHash;
 
 impl Substrate for WallClock {
     type Fault = NoHash;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, NoHash> {
         Ok(self.0)
