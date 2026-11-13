@@ -94,9 +94,9 @@ class ParseTests(unittest.TestCase):
         """#1359's first capture: the derive row ran, printed its one
         unnamed header, and the envelope never held it.
 
-        Red edit: drop the `per_section[...] == 0` problem in `parse`, and
-        the header check alone still refuses this capture; drop both and
-        it passes with the row missing."""
+        Red edit: drop the `found == 0` problem in `parse`. The header
+        check still refuses this capture, but this problem is what names
+        the missing row."""
         with self.assertRaises(iai_parse.CaptureError) as caught:
             iai_parse.parse(RELAY + UNNAMED, ROWS)
         problems = caught.exception.problems
@@ -104,7 +104,7 @@ class ParseTests(unittest.TestCase):
                         problems)
 
     def test_an_empty_section_is_refused(self) -> None:
-        """Red edit: drop the `per_section[...] == 0` problem in `parse`."""
+        """Red edit: drop the `found == 0` problem in `parse`."""
         empty = ("==== shekyl-pow-randomx::cache_derive_iai ====\n"
                  "error: no benchmark ran\n")
         with self.assertRaises(iai_parse.CaptureError) as caught:
@@ -114,7 +114,7 @@ class ParseTests(unittest.TestCase):
                           "but its section yields no entry"])
 
     def test_a_registered_row_with_no_section_is_refused(self) -> None:
-        """Red edit: drop the `not in per_section` problem in `parse`."""
+        """Red edit: drop the `found is None` problem in `parse`."""
         with self.assertRaises(iai_parse.CaptureError) as caught:
             iai_parse.parse(RELAY, ROWS)
         self.assertEqual(caught.exception.problems,

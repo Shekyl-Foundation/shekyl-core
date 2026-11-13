@@ -125,11 +125,12 @@ def parse(text: str, rows: list[tuple[str, str]]) -> list[dict]:
         key = (crate, bench)
         per_section[key] = per_section.get(key, 0) + found
     for crate, bench in rows:
-        if (crate, bench) not in per_section:
+        found = per_section.get((crate, bench))
+        if found is None:
             problems.append(
                 f"{crate}::{bench}: registered, but the capture has no "
                 f"section for it")
-        elif per_section[(crate, bench)] == 0:
+        elif found == 0:
             problems.append(
                 f"{crate}::{bench}: registered, but its section yields no "
                 f"entry")
