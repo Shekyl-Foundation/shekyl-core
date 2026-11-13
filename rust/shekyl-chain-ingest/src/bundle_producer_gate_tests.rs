@@ -302,9 +302,10 @@ fn queued(scenario: &Scenario<FreeHash>) -> Vec<shekyl_chain_store::store::Queue
 
 /// One more block, then the producer's turn. With bundles queued, the
 /// block takes them through 4a's door; the verdicts come back. A block
-/// that admitted a bundle forms again from its own record, as a second
-/// driver forms it ([`Scenario::form_mined`]): the record keeps the
-/// section the header commits.
+/// that admitted a bundle is the block the store recorded: its record's
+/// candidate ([`Mined::candidate`]) carries the section the store holds at
+/// its height, so a second driver offered it gets the section the header
+/// commits.
 async fn step(
     scenario: &mut Scenario<FreeHash>,
     chain: &mut Vec<Mined>,
@@ -318,12 +319,18 @@ async fn step(
             .await
             .unwrap_or_else(|outcome| panic!("the block lands: {outcome}"));
         if !admitted.is_empty() {
-            if let Err(refused) = scenario.form_mined(&mined) {
-                panic!(
-                    "block {} admitted a bundle and its record does not form: {refused}",
-                    mined.height
-                );
-            }
+            let recorded = scenario
+                .store()
+                .begin_read()
+                .expect("snapshot")
+                .bundle_references_at(mined.height)
+                .expect("the section reads");
+            assert_eq!(
+                recorded,
+                shekyl_chain_rules::AtHeight::Recorded(mined.candidate().bundle_references),
+                "block {}'s record carries the section the store recorded for it",
+                mined.height
+            );
         }
         chain.push(mined);
         admitted

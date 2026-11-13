@@ -201,7 +201,7 @@ pub struct Mined {
 impl Mined {
     /// The block as a candidate: the template's block, its listed bodies,
     /// and the section it carried. A block's header commits its section, so
-    /// a candidate without it forms only when the section was empty.
+    /// without it a block that admitted a bundle is refused at CEN-J29.
     #[must_use]
     pub fn candidate(&self) -> Candidate {
         Candidate::new(

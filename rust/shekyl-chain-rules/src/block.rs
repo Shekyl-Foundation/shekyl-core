@@ -115,8 +115,10 @@ pub struct Candidate {
     /// The bundle references carried beside the block — **not in it**
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section the header's
     /// `section_root` commits, undecoded, `None` when the block admits no
-    /// bundle. The operand of CEN-J29 through J37: `form` holds the root to
-    /// them, and `validate` admits each. The verdict carries them to the
+    /// bundle. The operand of CEN-J29 through J37, all `validate`'s: J29
+    /// holds the root to them and the rest admit each. A body that arrives
+    /// behind its judged header is held to the root at arrival too
+    /// ([`bind_body`](crate::bind_body)). The verdict carries them to the
     /// store, which records them at the block's height.
     pub bundle_references: Option<BundleReferences>,
     /// The body each reference names, in section order: body `i` is the

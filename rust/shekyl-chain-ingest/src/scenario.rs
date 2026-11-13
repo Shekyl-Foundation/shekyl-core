@@ -52,7 +52,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target, Verdict,
+    StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -570,28 +570,10 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
-        let formed = self
-            .form_mined(mined)
-            .expect("a block another driver connected forms");
-        self.connector
-            .ask(OfferAlt(formed))
-            .await
-            .map_err(handler_error)
-    }
-
-    /// `mined` — a block this or another driver connected — formed here as
-    /// [`Self::offer`] forms it: its whole candidate, section included,
-    /// under the seed and target its producer claimed, with no reference
-    /// claims.
-    ///
-    /// # Errors
-    ///
-    /// The block's refusal.
-    pub fn form_mined(&self, mined: &Mined) -> Verdict<StructurallyValid> {
         // This driver's own substrate, so the form can look the cache up.
         // An untrusted alternative on the live service never pins.
         self.substrate.pin_seed(&mined.seed);
-        form(
+        let formed = form(
             mined.candidate(),
             &FormClaims {
                 rule_set: &self.rules.in_force(mined.height),
@@ -604,6 +586,11 @@ where
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
+        .expect("a block another driver connected forms");
+        self.connector
+            .ask(OfferAlt(formed))
+            .await
+            .map_err(handler_error)
     }
 
     /// Build the next block on `facts` without connecting it.

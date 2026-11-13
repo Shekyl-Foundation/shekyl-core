@@ -332,7 +332,7 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 /// transaction's txid (CEN-G2, a skeleton through
 /// [`Transaction::hash_with_supplied_components`]), and the header's root
 /// against the bundle references beside it (CEN-J29 and J31's stateless
-/// half, [`bind_section`]).
+/// half, `bind_section`).
 ///
 /// A mismatch is the row `validate` would name. What a session does with
 /// it is the caller's.
