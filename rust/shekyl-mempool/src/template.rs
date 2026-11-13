@@ -21,9 +21,9 @@
 //! transaction waits for the reconcile to judge it again.
 //!
 //! The rows that hold across a block's transactions are asked as each is
-//! selected: CEN-L1 by the key images already selected (above), and CEN-G7,
-//! G9 and G10 — one serve credit per `(P, shard, E)`, one emission claim per
-//! `(P, E)`, one bond post per `P` — by the validator's
+//! selected: CEN-L1 by the key images already selected (above), and CEN-G9
+//! and G10 — one emission claim per `(P, E)`, one bond post per `P` — by the
+//! validator's
 //! [`BlockArchivalKeys`]. Two transactions each valid against the parent
 //! may still be refused together: two JoinMarket posts by one persona,
 //! funded by different key images, is the case. The later one is not
@@ -81,7 +81,7 @@ pub struct Selected {
     /// refused, not selected — the reconcile judges them again.
     pub stale: Vec<TxHash>,
     /// Candidates valid against the parent that a block listing them after
-    /// the selected ones is refused on, with the row (G7, G9 or G10): not
+    /// the selected ones is refused on, with the row (G9 or G10): not
     /// selected, and not evicted.
     pub conflicted: Vec<(TxHash, CenRow)>,
     /// Candidates valid against the parent that the producer's admission

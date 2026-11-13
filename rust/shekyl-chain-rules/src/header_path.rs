@@ -26,8 +26,8 @@ use crate::fault::{Fault, FormAttempt, Stale};
 use crate::header_facts::{prove_header, FormedHeader, HeaderFacts, HeaderProof, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
-use crate::rules::attestation::B4;
 use crate::rules::body::G2;
+use crate::rules::bundle_admission::bind_section;
 use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2};
 use crate::rules::HeaderContext;
@@ -330,8 +330,9 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 
 /// A body matches its header: the block's identity, every carried
 /// transaction's txid (CEN-G2, a skeleton through
-/// [`Transaction::hash_with_supplied_components`]), and the witness's root
-/// (CEN-B4's stateless half). The countersignatures stay `validate`'s.
+/// [`Transaction::hash_with_supplied_components`]), and the header's root
+/// against the bundle references beside it (CEN-J29 and J31's stateless
+/// half, `bind_section`).
 ///
 /// A mismatch is the row `validate` would name. What a session does with
 /// it is the caller's.
@@ -350,11 +351,11 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
         carried.push(hash);
     }
     G2::listed_match(&block.transaction_hashes, &carried)?;
-    let root = *block.header.attestation_root.as_bytes();
-    B4::bind_root(
-        &block.miner_transaction.prefix.extra,
-        &body.attestation_witness,
-        &root,
+    bind_section(
+        &body.bundle_references,
+        block.header.section_root.as_bytes(),
+        header.connecting(),
+        &header.rule_set(),
     )?;
     Ok(())
 }

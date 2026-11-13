@@ -74,11 +74,6 @@ pub(crate) enum TxClass {
         /// How many.
         spends: usize,
     },
-    /// Serve-credit responses and nothing else (gate-2 §5).
-    ServeCreditOnly {
-        /// How many.
-        credits: usize,
-    },
     /// One bond post, with its funding spends (E3 Q3 arity 1).
     ///
     /// `credit` and `debit` are that post's terms, copied at derivation.
@@ -105,7 +100,6 @@ pub(crate) enum TxClass {
 struct Counts {
     gen: usize,
     spends: usize,
-    credits: usize,
     bond_posts: usize,
     emissions: usize,
     credit: u64,
@@ -135,7 +129,6 @@ impl TxClass {
             match input {
                 Input::Gen(_) => n.gen += 1,
                 Input::ToKey { .. } => n.spends += 1,
-                Input::ServeCredit { .. } => n.credits += 1,
                 Input::BondPost(bond) => {
                     n.bond_posts += 1;
                     n.credit = bond.bond_credit;
@@ -152,21 +145,15 @@ impl TxClass {
             return Err(InvalidBlock::new(H5::ROW, locus));
         }
         coverage.insert(H5::ROW);
-        // CEN-H6, the archival mixings, in the C++'s order: serve credits
-        // mix with nothing; at most one bond post; at most one emission;
-        // emission and bond post never co-reside.
-        let mixed = (n.credits > 0 && n.spends + n.bond_posts + n.emissions > 0)
-            || n.bond_posts > 1
-            || n.emissions > 1
-            || (n.emissions == 1 && n.bond_posts > 0);
+        // CEN-H6, the archival mixings: at most one bond post; at most one
+        // emission; emission and bond post never co-reside.
+        let mixed = n.bond_posts > 1 || n.emissions > 1 || (n.emissions == 1 && n.bond_posts > 0);
         if mixed {
             return Err(InvalidBlock::new(H6::ROW, locus));
         }
         coverage.insert(H6::ROW);
-        // With H5 and H6 passed the four shapes are exhaustive.
-        Ok(if n.credits > 0 {
-            Self::ServeCreditOnly { credits: n.credits }
-        } else if n.bond_posts == 1 {
+        // With H5 and H6 passed the three shapes are exhaustive.
+        Ok(if n.bond_posts == 1 {
             Self::BondPost {
                 spends: n.spends,
                 credit: n.credit,
@@ -354,10 +341,9 @@ impl TxRule for H9 {
             .iter()
             .try_fold(0u64, |acc, input| match input {
                 Input::ToKey { amount, .. } => acc.checked_add(*amount),
-                Input::Gen(_)
-                | Input::ServeCredit { .. }
-                | Input::BondPost(_)
-                | Input::ArchivalRewardEmission { .. } => Some(acc),
+                Input::Gen(_) | Input::BondPost(_) | Input::ArchivalRewardEmission { .. } => {
+                    Some(acc)
+                }
             });
         if inputs.is_none() {
             return refuse();
@@ -526,62 +512,6 @@ impl H19 {
     }
 }
 
-/// CEN-H20: the serve-credit-only CT shape (`ver_non_input_consensus`'s
-/// serve-credit arm + `verCtSemanticsFeeOnly`): no `pqc_auths`, no outputs,
-/// zero fee, `CTTypeFcmpPlusPlusPqc`, no spend material (no BP+, no FCMP++
-/// proof, no pseudo-outs). The fee-only balance `Σ masks + fee·H = identity`
-/// is then **vacuous** — no masks, `fee = 0` — which is what the C++'s call
-/// into `shekyl_verify_ct_balance` with empty masks and zero fee computes,
-/// so the row is complete without a curve operation. Applies to the
-/// serve-credit-only class; recorded vacuous on every other class.
-///
-/// **The prunable region is required (`RF-D1`).** A serve-credit body with
-/// no region fails the live C++'s parse; this row first admitted
-/// `prunable: None`, which the chain store cannot hold (`SHT-9`): a
-/// conformance correction, recorded in `CHAIN_RULES_SLICE_5.md` §5.
-///
-/// **The shape only.** How many records the region holds and how long each
-/// is is CEN-J2's ([`crate::rules::tx_inputs::J2`]); what each record holds —
-/// its structure, `P`'s countersignature, the retention-proof legs — is
-/// CEN-J10's.
-pub(crate) struct H20;
-
-impl Rule for H20 {
-    const ROW: CenRow = CenRow::H20;
-}
-
-impl TxRule for H20 {
-    const SCOPE: TxScope = TxScope::NonCoinbase;
-
-    fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        if !matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
-            return Ok(());
-        }
-        let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
-        let Ct::Fcmp {
-            fee,
-            pqc_auths,
-            prunable: Some(p),
-            base,
-            ..
-        } = &cx.tx.ct
-        else {
-            return refuse();
-        };
-        if *fee != 0
-            || !pqc_auths.is_empty()
-            || !cx.tx.prefix.outputs.is_empty()
-            || !base.commitments.is_empty()
-            || !p.bulletproofs.is_empty()
-            || !p.fcmp_proof.is_empty()
-            || !p.pseudo_outs.is_empty()
-        {
-            return refuse();
-        }
-        Ok(())
-    }
-}
-
 // ---- the adopted crypto rows -------------------------------------------
 //
 // H7, H17, H18, H21, H22 call the Rust bodies the C++ already marshals to —
@@ -714,7 +644,7 @@ impl TxRule for H17 {
 /// CEN-H18: the plain spend's cleartext balance —
 /// `Σ pseudoOuts = Σ masks + fee·H`, canonical points
 /// (`verCtSemanticsSimple` → `shekyl_verify_ct_balance`). Applies to the
-/// spend class; the archival shapes carry their own balance (H20–H22) and
+/// spend class; the archival shapes carry their own balance (H21, H22) and
 /// record this row vacuous.
 pub(crate) struct H18;
 

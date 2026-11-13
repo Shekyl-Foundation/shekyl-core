@@ -333,8 +333,9 @@ impl LedgerBlock {
 
     /// The chain count this wallet is synced through: `0` when it has
     /// never scanned a block, otherwise the newest ingested block's height
-    /// plus one. The same quantity as the daemon's `get_height` count, so
-    /// the two compare directly; [`Self::height`] does not (a synced wallet
+    /// plus one. The same quantity as the daemon's block count (its
+    /// `chain_height` reply plus one, `shekyl_rpc_client::Rpc::get_height`),
+    /// so the two compare directly; [`Self::height`] does not (a synced wallet
     /// reads one behind, and an unscanned one reads as having scanned
     /// genesis). `None` only for a tip at `u64::MAX`, which no chain can
     /// reach and only a corrupt file can hold.

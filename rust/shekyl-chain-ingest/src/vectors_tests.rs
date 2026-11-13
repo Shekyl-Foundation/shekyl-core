@@ -55,12 +55,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{GenesisPin, InvalidBlock, Substrate};
-use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_types::BlockHeight;
 
-use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
 use crate::pipeline::RunReport;
-use crate::source::{IngestEvent, Injection, Source};
 use crate::substrate::ProductionSubstrate;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
@@ -75,7 +73,7 @@ pub(crate) mod replay;
 mod too_many_inputs;
 pub(crate) use replay::replay_keeping_store;
 
-/// `manifest.json`, as the capture writes it (format 4).
+/// `manifest.json`, as the capture writes it (format 5).
 #[derive(Deserialize, Debug)]
 pub(crate) struct Manifest {
     format_version: u32,
@@ -110,102 +108,6 @@ pub(crate) struct Manifest {
     /// one tree built the daemon and the baseline.
     #[serde(default)]
     baseline_built_at_dev_sha: String,
-    /// Every row in the daemon's state that **no block produced** — a
-    /// regtest injector's direct LMDB write. Required, so a manifest asserts
-    /// "wholly block-derived" positively (`[]`) rather than by silence: a
-    /// block-driven replay cannot reach such a row, and an archival digest
-    /// over the chain diverges by construction at exactly the height a
-    /// writer bug would (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1). Format 4: each
-    /// row is the injector's receipt in the corpus's one spelling, so the
-    /// corpus's `Inject` records can be held to it.
-    out_of_band_writes: Vec<OutOfBandWrite>,
-}
-
-/// One `out_of_band_writes` row: what kind of row, and the receipt the
-/// fetch was given for it (`Injection`'s spelling — the credit and the
-/// height the daemon attributed it to).
-#[derive(Deserialize, Debug)]
-struct OutOfBandWrite {
-    kind: String,
-    receipt: Injection,
-}
-
-/// The one row kind the corpus admits out of band (DRS-E4 §3.8 item 3).
-const OUT_OF_BAND_KIND: &str = "archival_serve_credit";
-
-/// The captured chains whose state is not wholly block-derived: none.
-/// Every captured chain's state is produced by its blocks; `emission-claim`
-/// returns with SO-D12 4b's evidence run, captured with no injected writes
-/// (`docs/FOLLOWUPS.md`; `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 4).
-/// Enumerated, not discovered: a new capture that injects must be added
-/// here **and** in its manifest, and a chain listed here that stops
-/// injecting must leave.
-const CHAINS_WITH_OUT_OF_BAND_WRITES: [&str; 0] = [];
-
-/// The corpus says which of its rows no block produced, and it is exactly
-/// the chains listed above (ARW-1). Both directions: a chain
-/// that injects and does not say so mislabels the corpus; a chain listed as
-/// injecting that does not is a stale claim about the data. And the two
-/// halves of the capture agree: the manifest's receipts are exactly the
-/// `Inject` records the corpus carries, at exactly those heights — the
-/// trace half of §3.8 item 3's "present iff the manifest names one".
-#[test]
-fn only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those() {
-    for (dir, manifest) in captured_chains() {
-        let expected = CHAINS_WITH_OUT_OF_BAND_WRITES.contains(&manifest.shape.as_str());
-        assert_eq!(
-            !manifest.out_of_band_writes.is_empty(),
-            expected,
-            "{}: out_of_band_writes = {:?}; CHAINS_WITH_OUT_OF_BAND_WRITES says {expected}",
-            dir.display(),
-            manifest.out_of_band_writes
-        );
-        for row in &manifest.out_of_band_writes {
-            assert_eq!(
-                row.kind,
-                OUT_OF_BAND_KIND,
-                "{}: the only out-of-band row kind the corpus admits is the injected serve credit",
-                dir.display()
-            );
-        }
-        let in_manifest: Vec<Injection> = manifest
-            .out_of_band_writes
-            .iter()
-            .map(|r| r.receipt)
-            .collect();
-        assert_eq!(
-            corpus_injections(&dir),
-            in_manifest,
-            "{}: the corpus's Inject records and the manifest's out_of_band_writes disagree",
-            dir.display()
-        );
-    }
-}
-
-/// Every `Inject` record in a captured corpus, with the height it sits
-/// at — the one the corpus law held to the tip when it was written.
-fn corpus_injections(dir: &Path) -> Vec<Injection> {
-    let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader =
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
-    let mut tip: Option<BlockHeight> = None;
-    let mut found = Vec::new();
-    while let Some(event) = reader.next().expect("corpus reads") {
-        match event.event {
-            IngestEvent::Extend(_) => {
-                tip = Some(tip.map_or(reader.first_height(), |t| {
-                    t.checked_add(BlockCount::ONE)
-                        .expect("a captured chain is short")
-                }));
-            }
-            IngestEvent::Rewind { to } => tip = Some(to),
-            IngestEvent::Inject(credit) => found.push(Injection {
-                at: tip.expect("the corpus law refuses an inject before any block"),
-                credit,
-            }),
-        }
-    }
-    found
 }
 
 /// `YYYY-MM-DD <rationale>`, the shape rule 50 requires of a recorded
@@ -243,7 +145,7 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
             );
             assert_eq!(
                 manifest.format_version,
-                4,
+                5,
                 "{}: capture format {} is not the one this test reads",
                 p.display(),
                 manifest.format_version
@@ -552,23 +454,6 @@ fn hold(dir: &Path, manifest: &Manifest, report: &RunReport) {
         "{}: the corpus's block 0 is not the genesis the manifest names",
         manifest.shape
     );
-    // DRS-E4 §3.8 item 3: the replay applied exactly the injections the
-    // manifest names, each at the height the daemon attributed it to — the
-    // report's half of the out-of-band contract (the corpus's half is
-    // `only_the_named_chains_carry_out_of_band_writes_and_the_corpus_carries_exactly_those`).
-    // A chain that predates a rule applies exactly those attributed below
-    // the refusal, and the rest wait on the regeneration with the tip.
-    let named: Vec<Injection> = manifest
-        .out_of_band_writes
-        .iter()
-        .map(|r| r.receipt)
-        .filter(|r| r.at.to_raw() < expected_connected)
-        .collect();
-    assert_eq!(
-        report.injected, named,
-        "{}: the replay's committed injections are not the manifest's receipts below height {}",
-        manifest.shape, expected_connected
-    );
     if let Some(txid) = &manifest.spend_txid {
         assert_eq!(
             txid.len(),
@@ -726,14 +611,12 @@ async fn every_captured_chain_replays_and_matches_the_daemons_digest() {
         };
         eprintln!(
             "{}: {} blocks connected, {tip}, roots MATCH at all {} heights, weights MATCH at \
-             all {} heights, accumulator and burn MATCH at all {} heights, {} injection(s) \
-             applied, rows exercised: {}",
+             all {} heights, accumulator and burn MATCH at all {} heights, rows exercised: {}",
             manifest.shape,
             report.connected.len(),
             report.roots.compared(),
             report.weights.compared(),
             report.emission.compared(),
-            report.injected.len(),
             report.exercised.len()
         );
     }

@@ -14,13 +14,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
-use shekyl_archival_retention::{pass_delivery_digest, verify_pass_transcript};
-use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_archival_retention::{pass_delivery_digest, verify_receipt_transcript};
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::BlockHeight;
 use shekyl_p_serve::{
-    PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestKeySigner,
-    IDENTITY_ENVELOPE_LEN, REQUEST_HEADER_NAME,
+    PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestReceiptKeySigner,
+    RECEIPT_ENVELOPE_LEN, REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_types::ShardId;
@@ -45,14 +45,13 @@ fn shard(n: u64) -> ShardId {
     ShardId::from_raw(n)
 }
 
-async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let ep = PServeEndpoint::bind(
-        provider,
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
-    )
-    .await
-    .expect("bind endpoint");
+async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestReceiptKeySigner>) {
+    let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+        OWN_HEIGHT,
+    )));
+    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
+        .await
+        .expect("bind endpoint");
     (ep, signer)
 }
 
@@ -76,15 +75,15 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
 }
 
 /// Split a 200 response after its head into (countersignature, body).
-fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
+fn envelope_of(response: &[u8]) -> (FnDsaHybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
     let after_head = &response[end + 4..];
-    let (body, sig) = after_head.split_at(after_head.len() - IDENTITY_ENVELOPE_LEN);
+    let (body, sig) = after_head.split_at(after_head.len() - RECEIPT_ENVELOPE_LEN);
     (
-        HybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature"),
+        FnDsaHybridSignature::from_canonical_bytes(sig).expect("served body ends with a signature"),
         body,
     )
 }
@@ -99,14 +98,18 @@ async fn served_shard_is_the_put_frame() {
     let response = fetch(ep.addr(), "/shard/0").await;
     let (signature, body) = envelope_of(&response);
 
-    verify_pass_transcript(
+    verify_receipt_transcript(
         signer.public_key(),
-        shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
-        BlockHeight::from_raw(ANCHOR_HEIGHT),
-        &ANCHOR_HASH,
-        0,
-        &pass_delivery_digest(&NONCE, body),
+        &shekyl_archival_retention::PassTranscript::new(
+            shekyl_archival_retention::PassRequestHeader::from_parts(
+                shekyl_archival_retention::PassStream::Economy,
+                NONCE,
+                BlockHeight::from_raw(ANCHOR_HEIGHT),
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            0,
+            pass_delivery_digest(&NONCE, body),
+        ),
         &signature,
     )
     .expect("the countersignature covers this request's header, shard id and delivered bytes");

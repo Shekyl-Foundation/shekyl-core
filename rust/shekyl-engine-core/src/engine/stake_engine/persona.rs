@@ -8,10 +8,8 @@
 use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
-use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_archival_retention::{HoldingsDescriptor, PassTranscript};
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
-use shekyl_crypto_pq::signature::HybridSignature;
-use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use shekyl_crypto_pq::archival_p::PersonaDestination;
@@ -177,77 +175,18 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
     }
 }
 
-/// Countersign one SF-D8 pass transcript with the held persona's bond
-/// identity key — the SH-2 resident-key handoff into `PersonaServingHost`.
-///
-/// This is the §7.2(iii) ruling applied to a key that is *stronger* than
-/// the onion keypair, and the shape differs accordingly. The onion handoff can
-/// export an expanded credential because the credential authorises exactly
-/// one thing. `hybrid_sign_sk` authorises three: the bond post
-/// (`PQC_AUTH_TX`), the emission claim (`EMISSION_CLAIM`) and the attestation
-/// pass (`ATTESTATION`), separated only by the domain byte the signer chooses.
-/// A copy of it in the serving role would be restricted at the API, not by the
-/// key — one edit from a serving task that signs a claim. So **the secret does
-/// not cross the actor boundary at all**: the serving role sends the
-/// 113-byte transcript in and receives the signature out, per served shard
-/// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
-///
-/// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
-/// call for the identity key. This handler cannot sign anything else with
-/// that key even if asked. The receipt key has its own call,
-/// [`shekyl_p_host::sign_receipt_transcript`], reached through
-/// [`SignReceiptTranscript`].
-///
-/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
-/// other slot boundary. The handler does **not** also gate on the
-/// [`HeldPersona::Bonded`] tag: that tag is a reconcilable persistence hint,
-/// not a statement of chain truth, and the host already cannot start without
-/// a connected bond record — a second gate on a hint would add false refusals
-/// and no security.
-pub(crate) struct SignPassTranscript {
-    pub p_slot: PSlot,
-    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-}
-
-impl Message<SignPassTranscript> for StakeEngine {
-    type Reply = Result<HybridSignature, StakeEngineError>;
-
-    async fn handle(
-        &mut self,
-        msg: SignPassTranscript,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let held = self
-            .held
-            .get(&msg.p_slot)
-            .ok_or(StakeEngineError::LookaheadExhausted {
-                requested: msg.p_slot,
-            })?;
-        // Identity key, live scheme. The receipt key is a second message
-        // ([`SignReceiptTranscript`]). The cutover selects
-        // `ResidentReceiptKey`; it does not replace this argument.
-        sign_pass_transcript(&held.keys().hybrid_sign_sk, &msg.message)
-            .map_err(StakeEngineError::PassCountersign)
-    }
-}
-
 /// Sign one pass transcript with the held persona's **receipt key** —
 /// Ed25519 + FN-DSA-1024, hybrid scheme 3, under `SCHEME_DOMAIN_RECEIPT`
 /// (`FN_DSA_HYBRID.md` §6, increment 4).
 ///
-/// **STAGED.** The receipt-key counterpart of [`SignPassTranscript`], with
-/// one production sender, `serving::receipt_key::ResidentReceiptKey`, which
-/// the serving task is not started with. [`SignPassTranscript`] stays the
-/// live signer until the settlement lane's cutover switches the serve path
-/// in the change that makes a verifier accept scheme-3 receipts.
-///
-/// The shape is [`SignPassTranscript`]'s for the same reason: the secret
-/// does not cross the actor boundary. The 113-byte transcript goes in, the
-/// signature comes out. The domain is fixed by
-/// [`shekyl_p_host::sign_receipt_transcript`], which
-/// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot
-/// sign anything else with the key even if asked. The transcript is the one
-/// the identity key signs today, unchanged.
+/// Its one production sender is `serving::receipt_key::ResidentReceiptKey`,
+/// the serving task's signer, and the shape is the SH-2 resident-key
+/// handoff's (`SF-D13`, "injection, not custody";
+/// `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1): **the secret does not cross the
+/// actor boundary**. The 113-byte transcript goes in, the signature comes
+/// out. The domain is fixed by [`shekyl_p_host::sign_receipt_transcript`],
+/// which [`HeldPersona::sign_receipt_transcript`] calls, so this handler
+/// cannot sign anything else with the key even if asked.
 ///
 /// The first message for a persona decodes its receipt key and every later
 /// one signs from the held key ([`HeldReceiptKey`], `FND-4`). The first
@@ -259,12 +198,15 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// signature fails is [`StakeEngineError::ReceiptSign`], a different variant
 /// (`HeldPersona::sign_receipt_transcript`).
 ///
-/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], and there is
-/// no gate on the [`HeldPersona::Bonded`] tag, both as in
-/// [`SignPassTranscript`] and for its reasons.
+/// An unheld slot is [`StakeEngineError::LookaheadExhausted`], as at every
+/// other slot boundary. There is no gate on the [`HeldPersona::Bonded`]
+/// tag: that tag is a reconcilable persistence hint, not a statement of
+/// chain truth, and the host already cannot start without a connected bond
+/// record — a second gate on a hint would add false refusals and no
+/// security.
 pub(crate) struct SignReceiptTranscript {
     pub p_slot: PSlot,
-    pub message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    pub transcript: PassTranscript,
 }
 
 impl Message<SignReceiptTranscript> for StakeEngine {
@@ -283,7 +225,7 @@ impl Message<SignReceiptTranscript> for StakeEngine {
             })?;
         // Undecodable and a failed signature come back as two variants;
         // the capability's pre-flight latches on the first only.
-        held.sign_receipt_transcript(&msg.message)
+        held.sign_receipt_transcript(&msg.transcript)
     }
 }
 

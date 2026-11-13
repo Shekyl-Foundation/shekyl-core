@@ -237,7 +237,7 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-15** | One fee loop over a pricing function: the ordinary fee is the lattice-rounded fixed point of weight and rate, paid as the wallet pays it (`shekyl_economics::quantized_fee`), and §4's unrounded-fee row is deleted. The loop is judged against seven properties (the brief's §A.2a, ruled 2026-10-24; [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12): never under-pays; least (the least fixed point, from a seed at or below it); bounded over-payment (`f − rate × weight(f) < MASK` at the final weight); exact; fails closed (`None`, never a saturated fee); terminates by agreement (two successive passes equal, never the pass limit); one lattice on both sides. Its own step, after ESR-9 and before ESR-10 runs (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone. Its PR records the lattice's size as an open fee-ladder row with its current ground, and prints the lattice step as basis points of the ordinary fee (ruling 7, 2026-10-24); the six decimals stay until ruled. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`; a loop output that fails one of the seven properties on any registered cell. |
 | **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9; the completion's placement ruled 2026-10-29, §5.26). Three generated structs, one source file each, the file boundary the digest boundary: `EconomicParams` is chain identity in the params digest, every economic consensus constant a field, promoted so each digest and the C4 fixture move once; `ArchivalParams` is the archival consensus set, in the consensus digest; `RelayPolicy` (G, the admission slack, the fee decimals, `w_ref`, the rung ratios, the emission-claim hold) stays outside both, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. A sim run is that baseline plus named overrides, each through its struct's validator. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
 | **ESR-17** | The pool the Rust daemon holds (`shekyl-mempool`, CEN-M10, the rulings of 2026-10-17), before ESR-10 (ruled 2026-11-06). The waiting transactions are cohorts, each keeping the fee and weight it was built with. A cohort leaves when its reference leaves CEN-I11's window: the wallet's reference is `select_reference_height` at the tip it built on, and the window is `admissible_references` at the connecting height, both called. The pool holds at most `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit. Admission evicts entries paying strictly less per unit of weight, cheapest first, and refuses a transaction it cannot make room for. The template offers by fee per unit of weight, then the hour received. The cap's arithmetic and both orders are called from `shekyl-mempool`'s store-free policy, not restated. The C++ livetime defines, the sim's copy and §4's two pool rows are deleted. Predictions in §5.27. | A cohort that re-prices, or one held past the window; a pool over its cap; a template order that differs from `AdmissionRank::template` on a pool where they can be compared; carried per block moving in any scenario. |
-| **ESR-18** | The narrations re-pinned under the surge re-sign (S = 3, #1323), which merged without regenerating them, and the record of what it moved written after the fact (§5.30). The gap closes with it: `rust-audit-test.yml`'s `economics-sim-narrations` job runs the narration pins on every pull request whose Rust test scope reaches the sim (`scripts/ci/change_scope.py`, `sim_narrations`), so a change to a value the sim reads fails at review, not on the nightly. | The pins pass at #1323's parent and fail at its merge; nothing between the merge and the re-pin moves them; `change_scope.py` answers `sim_narrations=run` on #1323's diff. |
+| **ESR-18** | The narrations re-pinned under the surge re-sign (S = 3, #1323), which merged without regenerating them, and the record of what it moved written after the fact (§5.31). The gap closes with it: `rust-audit-test.yml`'s `economics-sim-narrations` job runs the narration pins on every pull request whose Rust test scope reaches the sim (`scripts/ci/change_scope.py`, `sim_narrations`), so a change to a value the sim reads fails at review, not on the nightly. | The pins pass at #1323's parent and fail at its merge; nothing between the merge and the re-pin moves them; `change_scope.py` answers `sim_narrations=run` on #1323's diff. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -2338,7 +2338,7 @@ on `shekyl-curve-tree`:
 | shard length | `SHARD_LENGTH`, generated in `shekyl-types` from `archival_shard_length_bytes` | types, chain-rules, chain-ingest, p-fetch, p-loopback, rpc-types | Kept, structural: the unit the closed-shard count, the shard ids and the partition are cut in (rule 18, state-shaped). Reopens if EUP-5 I's bond-floor derivation sweeps shard size: the floor is quoted per shard, so the two move together. |
 | holdings cap | `MAX_HOLDINGS_SHARDS`, generated in `shekyl-types` (4 096) | nine production crates, wire and store-codec among them | Kept, structural: a record's shard-set bound on the wire. |
 | segment leaf count | `SEGMENT_LEAF_COUNT` (25 992) | archival-retention, curve-tree, fcmp | Kept, derived: `38 × 18 × 38`, the curve-tree widths. |
-| attestation anchor lag `L` | `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (4) | archival-retention `pass_anchor`; FFI | Kept, structural. The placement first made it a field; the code says otherwise. It sizes the anchor window, `PASS_ANCHOR_WINDOW_LEN = L + 1`, the length of the height and hash tables a caller passes across the FFI, and it is tied at compile time to the reorg depth, which is kept: `W₂ + L ≤ D`, and `D + L` is the lowest predecessor with a window. A field would make those tables runtime-sized. |
+| pass anchor lag `L` | `ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS` (4) | archival-retention `pass_anchor` | Kept, structural. The placement first made it a field; the code says otherwise. It is tied at compile time to the reorg depth, which is kept: `W₂ + L ≤ D` on every rule set's schedule, so a field would move a compile-time check to run time. |
 | emission epochs cap | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, a hand `15` in `emission_wire.rs`; the JSON key `max_settlement_epochs_per_emission` (15) was read by nothing but the digest | archival-retention, chain-rules, engine-core, FFI | Kept, structural (the parse bound), generated from its key (ruling 3), with a test. |
 
 *`RelayPolicy`* (`shekyl-economics`, outside every digest), generated
@@ -3244,7 +3244,7 @@ and the fixture's header names the parameter set it was folded under, whose
 surge factor is 3. None of that fixture's rows moved: the baseline's demand
 never reaches the surge cap. The narrations did move, in every scenario whose
 bursts reach the cap and on the inherited arm of `--esr10` only, and were
-re-pinned by ESR-18; §5.30 records what moved.
+re-pinned by ESR-18; §5.31 records what moved.
 
 **Cost.** The full narration, 144 folds of 60 years, takes 379 s wall and
 85 CPU-minutes on 16 threads (load 5 to 16). The nightly lane already runs
@@ -3294,7 +3294,44 @@ once, the narration and the reach probe). The committed narrations move
 only under a cited decision in this document (`committed_fixture.rs`,
 rule 50).
 
-### 5.30 ESR-18, what the surge re-sign moved: a record after the fact (2026-11-13)
+### 5.30 A5 of record is the test≡job arm; the pre-TJ opening arm is deleted (2026-11-12)
+
+**Decision (Rick, 2026-11-12, on `SO-D12` 4b, PR #1327).** TJ R1
+(`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md` §0) already decided this: a
+challenge moves the whole shard. The pre-TJ opening arm is deleted with
+`shekyl-archival-retention`'s `path.rs`: `RESPONSE_BYTES` (6 784 B, one
+challenged leaf and its segment co-path), `a5_proxy_report`, and the two
+tests that pinned it
+(`refetch_beats_storage_at_bulk_transit_but_not_at_retail_egress`,
+`w10_fails_at_bulk_transit_and_the_retail_end_no_longer_free_rides`). They
+are not re-pinned. `tj_shard_payload_report` is A5 of record, with
+`shard_payload_flips_the_margin_on_bandwidth_alone` and `q_risk_star`.
+
+**A5, stated as TJ §5.3 and §5.4 state it.** At metered bandwidth,
+whole-shard reads put the proxy above storage: at 0.01 $/GB the re-fetch
+costs $0.369 an epoch against $0.00468 to hold 12.3 GB, so the margin is
+positive at `q = 0`. At zero byte price (free ingress, flat-rate
+residential) the bandwidth leg vanishes and the deterrent rests on
+`T_risk`: the deadline must force a re-fetch failure rate of
+`q_risk* ≈ 0.10` with the reward forfeit (0.28 bond-only). A5 is not
+restated as "W10 passes".
+
+**What moved.** Both trees' four narrations were rendered and compared:
+this PR's branch against `dev` at `5ea4bff87`. Only the A5 block moves, in
+the two stage-2 narrations
+(`stage2_narration.txt`, `stage2_narration_flat_control.txt`, 41 changed
+lines each): the opening arm's table and verdict go, the TJ arm's header
+says it is A5, the residual-against-the-opening-band paragraph goes, and
+the closing A5 line is added. No number elsewhere moves. The esr10
+narrations do not move. The fixtures take exactly that hunk.
+
+**Not moved here.** The committed narrations already differ from what
+`dev` renders, outside A5, since the nightly of 2026-11-10 (the sim lane
+went red between the 2026-11-09 and 2026-11-10 runs: closed-shard counts,
+fees and A1 onsets moved). That drift is not this decision's: it is the
+surge re-sign's (S = 3, #1323), recorded and regenerated in §5.31.
+
+### 5.31 ESR-18, what the surge re-sign moved: a record after the fact (2026-11-13)
 
 **This is a record, not a prediction.** #1323 (merged 2026-11-09) moved the
 short-term surge factor `block_weight_short_term_surge_factor` from 4 to 3:

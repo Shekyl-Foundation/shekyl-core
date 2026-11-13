@@ -22,7 +22,10 @@
 //!    nothing withdraws the job and says why ([`Posting`]). A shown-set
 //!    change at this tip (the relay's fluff event, Q9) wakes this task the
 //!    same way a parked body does, so the posted job lists the newly
-//!    shown body without waiting for the next tip.
+//!    shown body without waiting for the next tip. A bundle the queue
+//!    admits at this tip wakes it through the same `Notify`, so the job
+//!    for `tip + 1` carries the section that names it
+//!    (`connector_bundles`).
 //!
 //! **One posting.** Each post writes one record: the job and the bodies it
 //! listed, under the generation the board minted for it. The board keeps
@@ -305,6 +308,9 @@ pub(crate) struct KeptPosting {
     pub(crate) job: Job,
     /// The bodies it listed, in the block's order.
     pub(crate) bodies: Vec<Transaction>,
+    /// Its bundle section, when the block admits any: the door attaches it
+    /// to a block mined on this job (`Door::offer_local`).
+    pub(crate) section: Option<crate::template::PostedSection>,
 }
 
 /// The postings still kept, by generation. The service owns the map. The
@@ -787,6 +793,7 @@ where
         KeptPosting {
             job: produced.job,
             bodies: produced.transactions,
+            section: produced.section,
         },
     );
     while kept.len() > KEPT_JOBS {
@@ -818,7 +825,8 @@ impl Unposted {
             Self::Store(store)
             | Self::Template(
                 NoTemplate::Facts(FactsStop::Read(ViewRead::View(store)))
-                | NoTemplate::Claim(ClaimStop::Store(store)),
+                | NoTemplate::Claim(ClaimStop::Store(store))
+                | NoTemplate::Section(Fault::View(store)),
             ) => {
                 shared.fail(ServiceFault::Store(store));
                 why(Unbuilt::StoreFault)
@@ -834,6 +842,16 @@ impl Unposted {
             Self::Template(NoTemplate::Selection(fault)) => {
                 shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
                 why(Unbuilt::Selection)
+            }
+            // The section's reads are the snapshot's, as the facts are: a
+            // store fault stops the service, and so does a corrupt set.
+            Self::Template(NoTemplate::Section(Fault::Corrupt(corrupt))) => {
+                crate::service::record_store_read(shared, ViewRead::Corrupt(corrupt));
+                why(Unbuilt::StoreCorrupt)
+            }
+            Self::Template(NoTemplate::Section(Fault::Stale(stale))) => {
+                tracing::error!("no template: the section's read went stale: {stale}");
+                why(Unbuilt::StoreCorrupt)
             }
             Self::Template(NoTemplate::PoolFile(store)) => {
                 shared.pool_dead(&store);

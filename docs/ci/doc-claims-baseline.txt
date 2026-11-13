@@ -105,7 +105,13 @@
 # Those tokens do not resolve: the file is `rust/randomx-v2-sys/src/lib.rs`.
 # The row now names the `full-dataset` feature instead of those ranges.
 # The fork pin stays `Cargo.toml:48-49`.
-dead-citations: 38
+# Lowered 38 -> 37 on 2026-11-12 (the switch's C7, post_kind 0, PR #1327):
+# deleting the keyless kind moved shekyl-wire/src/transaction.rs's lines,
+# and the citations into it were re-anchored to the 2-output floor's
+# message and to validate / validate_context_free_pruned. IMPLEMENTATION_INDEX
+# cited the floor as `shekyl-wire/transaction.rs:1868`, a path that does
+# not resolve; it is now `shekyl-wire/src/transaction.rs:2009`.
+dead-citations: 37
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a

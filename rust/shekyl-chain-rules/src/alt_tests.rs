@@ -158,7 +158,7 @@ fn the_cheap_tier_evaluates_the_header_ladder_and_the_alt_arms_and_nothing_else(
             valid.coverage().iter().collect::<Vec<_>>(),
             expected.iter().collect::<Vec<_>>()
         );
-        for absent in [CenRow::B4, CenRow::B5, CenRow::G6, CenRow::F14b] {
+        for absent in [CenRow::J29, CenRow::B5, CenRow::G6, CenRow::F14b] {
             assert!(
                 !valid.coverage().contains(absent),
                 "{absent} is a chain-state row"

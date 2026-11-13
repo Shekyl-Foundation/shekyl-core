@@ -301,7 +301,8 @@ impl Node {
             move |ids| departures.departed(ids)
         });
         // Q9: fluff at this tip rebuilds the posted job. Same Notify the
-        // follower waits on for parked bodies.
+        // follower waits on for parked bodies, and the one the bundle
+        // queue's admission fires (the service hands it to the connector).
         let shown = Arc::new(Notify::new());
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let store_slot: pool_door::StoreSlot = Arc::new(Mutex::new(Some(Arc::clone(&store))));

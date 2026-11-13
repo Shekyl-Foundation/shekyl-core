@@ -9,10 +9,9 @@
 //! messages share, so a new message maps a fault by calling [`fault_reply`]
 //! rather than growing another copy of the stale arms.
 
-use crate::source::ServeCredit;
 use shekyl_chain_rules::{Corrupt, Fault, ReferenceMismatch, Retry, Stale, Target, TxSlot};
 use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// Why the writer is over: store-terminal faults only. `Copy` data, so it
 /// can be repeated on every later `Apply` / `Rewind`.
@@ -37,11 +36,10 @@ impl RunEnd {
             | RunFault::StaleReference { .. }
             | RunFault::StaleRuleSet { .. }
             | RunFault::StaleNetwork { .. }
+            | RunFault::StaleBundleBody { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
             | RunFault::RewindTarget { .. }
-            | RunFault::InjectNotPermitted { .. }
-            | RunFault::IssueNotPermitted { .. }
             | RunFault::NotAlternative { .. }
             | RunFault::StalePlan { .. }
             | RunFault::PlanMismatch { .. }
@@ -63,7 +61,7 @@ pub enum PlanMismatchReason {
     IncumbentKept,
     /// The formed promotions are not one per alternative-chain entry.
     PromotedLength,
-    /// A formed promotion is not its alt row's identity or witness.
+    /// A formed promotion is not its alt row's identity or references.
     PromotedRow,
     /// The formed demotions are not the recorded chain above the fork.
     DemotedChain,
@@ -78,8 +76,8 @@ impl std::fmt::Display for PlanMismatchReason {
             Self::AlternativeTipRecorded => "the plan's alternative tip is a recorded block",
             Self::IncumbentKept => "the fork choice keeps the incumbent",
             Self::PromotedLength => "the promoted blocks are not the alternative chain's entries",
-            Self::PromotedRow => "a promoted block is not its alt row (identity or witness)",
-            Self::DemotedChain => "the demoted blocks are not the recorded chain above the fork point (identity or witness)",
+            Self::PromotedRow => "a promoted block is not its alt row (identity or references)",
+            Self::DemotedChain => "the demoted blocks are not the recorded chain above the fork point (identity or references)",
             Self::RefusedBlockUnheld => "the block form refused is not an entry of the alternative chain",
         })
     }
@@ -160,6 +158,19 @@ pub enum RunFault {
         /// What the validator would allow next.
         retry: Retry,
     },
+    /// The candidate did not carry the body a bundle reference names
+    /// ([`Stale::BundleBody`]): its bodies are resolved by hash before
+    /// `form`, so this is a driver defect, never a verdict on the block.
+    /// The writer stays up.
+    #[error("driver defect: the candidate at height {height} lacks the body bundle reference #{position} names ({retry:?})")]
+    StaleBundleBody {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The reference's position in the section.
+        position: usize,
+        /// What the validator would allow next.
+        retry: Retry,
+    },
     /// The source's height for an `Extend` is not the height the chain
     /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
     /// rule set and the record are both keyed by the connecting height,
@@ -188,28 +199,6 @@ pub enum RunFault {
         to: BlockHeight,
         /// The tip at the time.
         tip: Option<BlockHeight>,
-    },
-    /// An [`super::Inject`] under rules whose network's row does not permit
-    /// the write (DRS-E4 §3.8 item 3; `NETWORK_IDENTITY.md` NI-R6): refused
-    /// here, before the store sees it, so a source that carries one into a
-    /// replay of another network is a driver fault and not a store-terminal
-    /// one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) on {network}: its row does not permit the serve-credit write", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectNotPermitted {
-        /// The credit refused.
-        credit: ServeCredit,
-        /// The network the connector runs on.
-        network: shekyl_network::Network,
-    },
-    /// An [`super::IssueDraws`] under rules whose network's row does not
-    /// permit the write, refused here for the same reason as
-    /// [`Self::InjectNotPermitted`].
-    #[error("issue of draws for epoch {epoch} on {network}: its row does not permit the issued-draws write")]
-    IssueNotPermitted {
-        /// The epoch the draws were for.
-        epoch: SettlementEpoch,
-        /// The network the connector runs on.
-        network: shekyl_network::Network,
     },
     /// An [`super::OfferAlt`] for a block whose parent is the recorded tip:
     /// an extension, which is an [`super::Apply`]'s. A driver defect; the
@@ -297,6 +286,11 @@ pub(crate) fn fault_reply(
             height,
             formed_under,
             in_force,
+            retry,
+        },
+        Fault::Stale(Stale::BundleBody { position, retry }) => RunFault::StaleBundleBody {
+            height,
+            position,
             retry,
         },
     }

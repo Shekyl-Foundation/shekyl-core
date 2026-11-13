@@ -25,7 +25,7 @@ use shekyl_chain_rules::{
     DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
     RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
@@ -38,9 +38,9 @@ use crate::schema::SPENT_KEYS;
 mod grown;
 
 pub(super) use grown::{
-    anchor, at, body, connect_chain, connect_chain_anchored, connect_chain_burning, credited,
-    endow_genesis, grown_over, height_maturing, key_images, output_of, prefix_to, serve_credit,
-    spend, spend_paying, spendable_prefix, spends, Grown, Listed, FIRST_SPEND_HEIGHT,
+    anchor, at, connect_chain, connect_chain_anchored, connect_chain_burning, endow_genesis,
+    grown_over, height_maturing, key_images, output_of, prefix_to, spend, spend_paying,
+    spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 
 /// The coinbase for `height`: the rules harness's, which satisfies every
@@ -82,11 +82,9 @@ pub(super) fn candidate_over(
             previous,
             nonce: 7,
             curve_tree_root: root,
-            // The empty set's root: a candidate carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            // The empty section's root: a candidate carrying no references is
+            // judged against it (CEN-J29).
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),

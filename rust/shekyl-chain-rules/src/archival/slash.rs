@@ -661,6 +661,20 @@ mod support_settlement_tests {
     }
 
     impl<'id> ChainView<'id> for SupportIndex<'_, 'id> {
+        type Bundles<'m>
+            = crate::harness::NoBundleRows<Infallible>
+        where
+            Self: 'm;
+
+        fn bundles<'m>(
+            &'m self,
+            _: &'m crate::DrawableMemo,
+            _: BlockHeight,
+            _: shekyl_archival_retention::SettlementSchedule,
+        ) -> Self::Bundles<'m> {
+            crate::harness::NoBundleRows::new()
+        }
+
         fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
             self.inner.has_key_image(key_image)
         }
@@ -716,19 +730,22 @@ mod support_settlement_tests {
             self.inner.outputs_at(height)
         }
 
-        fn support_issued(
+        crate::archival_reads!(delegate inner, support_issued from planted_support);
+    }
+
+    impl SupportIndex<'_, '_> {
+        /// The planted support draws of the one epoch this view holds.
+        fn planted_support(
             &self,
             epoch: SettlementEpoch,
             _floor: EpochFloor<Settling>,
-        ) -> Result<Vec<IndexedDraw>, Infallible> {
+        ) -> Vec<IndexedDraw> {
             if epoch == self.epoch {
-                Ok(self.draws.clone())
+                self.draws.clone()
             } else {
-                Ok(Vec::new())
+                Vec::new()
             }
         }
-
-        crate::archival_reads!(delegate inner);
     }
 
     /// The shortest epoch that still has a response window. `W₂` is one

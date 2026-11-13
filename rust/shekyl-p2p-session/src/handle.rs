@@ -22,9 +22,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use shekyl_levin::{
-    notify, Command, GetTxpoolComplement, NewCompactBlock, NewTransactions, PayloadError,
-    PortableMap, RequestBodies, RequestCompactMissingTx, RequestHeaders, ResponseBodies,
-    ResponseHeaders,
+    notify, Command, GetTxpoolComplement, NewBundle, NewCompactBlock, NewTransactions,
+    PayloadError, PortableMap, RequestBodies, RequestBundleBodies, RequestCompactMissingTx,
+    RequestHeaders, ResponseBodies, ResponseBundleBodies, ResponseHeaders,
 };
 use shekyl_transport_layer::{CloseCause, ConnectorId, Direction, SocketId};
 
@@ -51,6 +51,12 @@ pub enum Message {
     RequestBodies(RequestBodies),
     /// 2014: a body response.
     ResponseBodies(ResponseBodies),
+    /// 2015: a bundle relayed between queues.
+    NewBundle(NewBundle),
+    /// 2016: bundle bodies asked for by hash.
+    RequestBundleBodies(RequestBundleBodies),
+    /// 2017: the bundle bodies held.
+    ResponseBundleBodies(ResponseBundleBodies),
 }
 
 impl Message {
@@ -66,6 +72,9 @@ impl Message {
             Self::ResponseHeaders(_) => Command::ResponseHeaders,
             Self::RequestBodies(_) => Command::RequestBodies,
             Self::ResponseBodies(_) => Command::ResponseBodies,
+            Self::NewBundle(_) => Command::NewBundle,
+            Self::RequestBundleBodies(_) => Command::RequestBundleBodies,
+            Self::ResponseBundleBodies(_) => Command::ResponseBundleBodies,
         }
     }
 
@@ -87,6 +96,9 @@ impl Message {
             Self::ResponseHeaders(m) => m.store()?,
             Self::RequestBodies(m) => m.store()?,
             Self::ResponseBodies(m) => m.store()?,
+            Self::NewBundle(m) => m.store()?,
+            Self::RequestBundleBodies(m) => m.store()?,
+            Self::ResponseBundleBodies(m) => m.store()?,
         };
         let command = self.command();
         let max = usize::try_from(command.payload_cap()).unwrap_or(usize::MAX);

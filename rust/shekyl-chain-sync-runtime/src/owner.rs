@@ -46,15 +46,27 @@
 //! - **Relay** is the model's decision ([`Command::Relay`]): a block that
 //!   connected as the new tip while this node, with it, is not `Behind`,
 //!   however it arrived. The owner builds that compact announcement (the
-//!   block and its witness, no transactions) and sends it as 2008 to every
+//!   block and its bundle references, no transactions) and sends it as 2008 to every
 //!   established session but the one that supplied it. A block no session
 //!   supplied, such as one this node mined, goes to every established
 //!   session.
+//! - **Bundles** (2015–2017, [`crate::bundles`]) travel between queues. A
+//!   peer's 2015 whose body is its reference's goes to the queue's
+//!   admission through the door, off this task, with its permit held to
+//!   the verdict; a bundle the queue admitted goes on as 2015 to every
+//!   established session but its supplier. A bundle this node filed
+//!   arrives on the door's feed and goes to every established session. A
+//!   2016 is served from the body store like any other request. When the
+//!   model asks for a block's bundle bodies (`RequestBundleBodies`), what
+//!   the body store holds goes back at once and the rest is asked of the
+//!   sender as 2016; its 2017 answers the oldest ask to that session and
+//!   is accepted body by body, and a 2017 nothing asked for closes it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use shekyl_chain_ingest::connector::{BundleOffered, FiledBundle};
 use shekyl_chain_ingest::service::{
     Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SessionId, SlotPair,
 };
@@ -66,7 +78,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
     CoreSyncData, GetTxpoolComplement, NewCompactBlock, PortableMap, RequestBodies,
-    RequestCompactMissingTx, RequestHeaders, HASH_SIZE,
+    RequestBundleBodies, RequestCompactMissingTx, RequestHeaders, HASH_SIZE,
 };
 use shekyl_p2p_session::{
     ClaimCarrier, CloseCause, CloseKind, Encoded, Established, Message, SocketId, SyncInbound,
@@ -80,6 +92,7 @@ use shekyl_wire::{BlockBody, TxBody};
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
+use crate::bundles::{relay_message, relayed, serve_bundle_bodies};
 use crate::executor::Executor;
 use crate::outcome;
 use crate::port::Inbound;
@@ -378,6 +391,14 @@ enum Input {
         session: Session,
         served: Served,
     },
+    /// The queue's verdict on a bundle a session relayed, with the 2015
+    /// that relays it on when it was queued.
+    BundleOffered {
+        session: Session,
+        h: BlockHeight,
+        offered: Result<BundleOffered, String>,
+        relay: Option<Encoded>,
+    },
     /// The latch write a `RaiseAlarm` asked for was refused.
     AlarmRefused,
 }
@@ -411,6 +432,7 @@ enum ServeRequest {
     Headers(RequestHeaders),
     Bodies(RequestBodies),
     MissingTxs(RequestCompactMissingTx),
+    BundleBodies(RequestBundleBodies),
 }
 
 /// Frame an answer on the serving thread, so the owner's task sends it
@@ -470,6 +492,18 @@ struct Owner<C: Clock + Clone, R> {
     seen_seeds: Option<SlotPair>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
+    /// The 2016s each session has been sent and not yet answered, oldest
+    /// first: the block each asks for and the references it names. A
+    /// session answers in the order it was asked, so a 2017 answers the
+    /// first.
+    bundle_asks: HashMap<Session, VecDeque<BundleAsk>>,
+}
+
+/// One 2016 this owner sent: the block whose section names the bodies, and
+/// the references it asked for, opened.
+struct BundleAsk {
+    block: BlockHash,
+    references: Vec<shekyl_archival_retention::BundleRef>,
 }
 
 /// The owner's `select`. Tokio 1.51 does not take `#[cfg]` on an arm, and
@@ -540,6 +574,7 @@ async fn run<C, R>(
     let wakes = Arc::clone(&timer);
     let mut seeds = door.seeds();
     let seen_seeds = *seeds.borrow_and_update();
+    let mut filed = Some(door.filed());
     let mut owner = Owner {
         sync: Model::new(rules.trust(), schedule)
             .with_requesting(requesting)
@@ -564,6 +599,7 @@ async fn run<C, R>(
         seen_seeds,
         state_tx,
         published,
+        bundle_asks: HashMap::new(),
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -613,6 +649,11 @@ async fn run<C, R>(
                 let pair = *seeds.borrow_and_update();
                 owner.seeds_published(pair);
             },
+            bundle = next_filed(&mut filed), if filed.is_some() => {
+                if let Some(bundle) = bundle {
+                    owner.relay_filed(&bundle);
+                }
+            },
             inbound_one = inbound.recv() => {
                 let Some(inbound_one) = inbound_one else {
                     end.how = Ended::Failed(EndCause::PortClosed);
@@ -661,6 +702,26 @@ async fn run<C, R>(
         );
     }
     let _gone = owner.timer.deregister();
+}
+
+/// The next bundle this node filed. A receiver that fell behind skips the
+/// bundles it missed and says how many; a feed whose sender is gone is
+/// the service stopping, and is not read again.
+async fn next_filed(
+    filed: &mut Option<tokio::sync::broadcast::Receiver<FiledBundle>>,
+) -> Option<FiledBundle> {
+    let receiver = filed.as_mut()?;
+    match receiver.recv().await {
+        Ok(bundle) => Some(bundle),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+            tracing::warn!(missed, "the relay fell behind the bundles this node filed");
+            None
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+            *filed = None;
+            None
+        }
+    }
 }
 
 /// Whether the timing engine has delivered a wake. `Some` takes it, so the
@@ -842,15 +903,17 @@ where
                 }
                 self.transit.forget_session(session);
                 self.serving.remove(&session);
+                self.bundle_asks.remove(&session);
                 self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
             }
         }
     }
 
-    /// One of the owner's six commands. A response goes to the model
+    /// One of the owner's nine commands. A response goes to the model
     /// now, and `taken` drops with it; a request is served, and `taken`
-    /// is held until the answer is sent.
+    /// is held until the answer is sent. A relayed bundle is held to the
+    /// queue's verdict the same way.
     fn message(&mut self, session: Session, message: SyncInbound, taken: Taken) {
         match message {
             SyncInbound::NewCompactBlock(payload) => {
@@ -921,6 +984,190 @@ where
                     self.close(session);
                 }
             },
+            SyncInbound::NewBundle(payload) => self.bundle_relayed(session, &payload, taken),
+            SyncInbound::RequestBundleBodies(payload) => {
+                match RequestBundleBodies::load(&payload) {
+                    Ok(request) => {
+                        self.serve(session, ServeRequest::BundleBodies(request), taken);
+                    }
+                    Err(err) => {
+                        tracing::debug!(%session, %err, "a bundle body request that does not decode");
+                        self.close(session);
+                    }
+                }
+            }
+            SyncInbound::ResponseBundleBodies(payload) => {
+                drop(taken);
+                self.bundle_bodies_answered(session, &payload);
+            }
+        }
+    }
+
+    /// A bundle a session relayed (2015): its body must be the one its
+    /// reference names, or the session closes. The queue judges the rest,
+    /// against this node's tip, off this task; `taken` is held until it
+    /// answers, so a session has one bundle being judged at a time.
+    fn bundle_relayed(&mut self, session: Session, payload: &[u8], taken: Taken) {
+        let (reference, body) = match relayed(payload) {
+            Ok(bundle) => bundle,
+            Err(refused) => {
+                tracing::debug!(%session, ?refused, "a relayed bundle that does not hold");
+                drop(taken);
+                self.close(session);
+                return;
+            }
+        };
+        let door = self.door.clone();
+        let inputs = self.inputs.clone();
+        let h = reference.h();
+        tokio::spawn(async move {
+            // Encoded before the offer takes the two: sent only if queued.
+            let relay = encode(&relay_message(&reference, &body)).ok();
+            let offered = door
+                .offer_bundle(reference, body)
+                .await
+                .map_err(|fault| fault.to_string());
+            let _gone = inputs.send(Input::BundleOffered {
+                session,
+                h,
+                offered,
+                relay,
+            });
+            drop(taken);
+        });
+    }
+
+    /// A block's section names bodies its sender did not send (the model's
+    /// `RequestBundleBodies`). What this node's body store holds is
+    /// returned, for the model after the batch, with whether the rest was
+    /// asked of `session` (2016, one block per request). The model reads
+    /// the store's part as the store's, never as the session's answer, and
+    /// counts the ask until that answer or until no 2016 went out.
+    ///
+    /// **The asks a session may leave unanswered are bounded**, at the
+    /// model's own per-session bound ([`shekyl_chain_sync::AWAITING_PER_SESSION`]).
+    /// A session answers every 2016, if only with nothing (`SCS-P27`), and
+    /// the transport keeps its answers in order, so matching a 2017 to the
+    /// oldest ask is sound. The model counts each ask until this owner
+    /// matches its 2017, whether or not the block still waits, so it asks a
+    /// session past the bound only after one of its asks has gone
+    /// unanswered for [`shekyl_chain_sync::AWAITING_AGE`]. A session that
+    /// already has that many asks unanswered is then not keeping up its
+    /// side and is closed; dropping one ask instead would match its next
+    /// answer to the wrong block. Over every session the asks are at most
+    /// that bound times the sessions open.
+    fn ask_bundle_bodies(
+        &mut self,
+        session: Session,
+        block: BlockHash,
+        references: &[Vec<u8>],
+    ) -> Option<Event<Session>> {
+        let mut held = Vec::new();
+        let mut rest = Vec::new();
+        let snapshot = self.store.begin_read();
+        for (position, bytes) in references.iter().enumerate() {
+            let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
+                continue;
+            };
+            let stored = snapshot
+                .as_ref()
+                .ok()
+                .and_then(|snap| snap.bundle_body(reference.prunable_hash()).ok().flatten());
+            match stored {
+                Some(body) => held.push(body.as_bytes().to_vec()),
+                None => rest.push(reference),
+            }
+        }
+        drop(snapshot);
+        let asked = !rest.is_empty() && self.send_bundle_ask(session, block, rest);
+        // Asked with nothing held, the session's 2017 is all the model
+        // hears of this command.
+        if asked && held.is_empty() {
+            return None;
+        }
+        Some(Event::HeldBundleBodies {
+            session,
+            block,
+            bodies: held,
+            asked,
+        })
+    }
+
+    /// Send `session` a 2016 for `references`, `block`'s bodies the store
+    /// does not hold, and queue it for its 2017. `false` when no 2016 went
+    /// out: the session is gone, or is closed at the bound
+    /// ([`Self::ask_bundle_bodies`]).
+    fn send_bundle_ask(
+        &mut self,
+        session: Session,
+        block: BlockHash,
+        references: Vec<shekyl_archival_retention::BundleRef>,
+    ) -> bool {
+        if !self.sessions.contains_key(&session) {
+            return false;
+        }
+        let outstanding = self.bundle_asks.get(&session).map_or(0, VecDeque::len);
+        if outstanding >= shekyl_chain_sync::AWAITING_PER_SESSION {
+            tracing::debug!(%session, outstanding, "a session left its bundle body requests unanswered");
+            self.close(session);
+            return false;
+        }
+        let request = RequestBundleBodies {
+            hashes: references
+                .iter()
+                .map(|reference| *reference.prunable_hash())
+                .collect(),
+        };
+        self.send(session, &Message::RequestBundleBodies(request));
+        self.bundle_asks
+            .entry(session)
+            .or_default()
+            .push_back(BundleAsk { block, references });
+        true
+    }
+
+    /// A session's 2017. It answers the oldest 2016 this owner sent it; a
+    /// 2017 with none outstanding is the sender's fault and closes the
+    /// session, as does one that is not an answer to the references asked
+    /// (`accept_bundle_bodies`). The bodies it carries go to the model,
+    /// which decides what an empty answer means.
+    fn bundle_bodies_answered(&mut self, session: Session, payload: &[u8]) {
+        let Some(ask) = self
+            .bundle_asks
+            .get_mut(&session)
+            .and_then(VecDeque::pop_front)
+        else {
+            tracing::debug!(%session, "a bundle body response nothing asked for");
+            self.close(session);
+            return;
+        };
+        let accepted = shekyl_levin::ResponseBundleBodies::load(payload)
+            .map_err(|err| err.to_string())
+            .and_then(|response| {
+                crate::bundles::accept_bundle_bodies(&ask.references, &response)
+                    .map_err(|refused| format!("{refused:?}"))
+            });
+        match accepted {
+            Ok(bodies) => self.event(Event::BundleBodies {
+                session,
+                block: ask.block,
+                bodies: bodies
+                    .into_iter()
+                    .map(|(_, body)| body.as_bytes().to_vec())
+                    .collect(),
+            }),
+            Err(why) => {
+                tracing::debug!(%session, %why, "a bundle body response that is not an answer");
+                self.close(session);
+            }
+        }
+    }
+
+    /// Relay a bundle this node filed (2015) to every established session.
+    fn relay_filed(&mut self, filed: &FiledBundle) {
+        match encode(&relay_message(&filed.reference, &filed.body)) {
+            Ok(encoded) => relay::fan_out(self.sessions.iter(), None, &encoded),
+            Err(err) => tracing::error!(%err, "a filed bundle did not encode"),
         }
     }
 
@@ -944,6 +1191,10 @@ where
                 ServeRequest::Bodies(request) => serve_bodies(&store, &request)
                     .map_err(|err| err.to_string())
                     .and_then(|response| encode(&Message::ResponseBodies(response)))
+                    .map(Served::Send),
+                ServeRequest::BundleBodies(request) => serve_bundle_bodies(&store, &request)
+                    .map_err(|err| err.to_string())
+                    .and_then(|response| encode(&Message::ResponseBundleBodies(response)))
                     .map(Served::Send),
                 ServeRequest::MissingTxs(request) => serve_missing_txs(&store, &request)
                     .map_err(|err| err.to_string())
@@ -996,6 +1247,29 @@ where
             // `event` would drop it when the store cannot be read, and
             // `Idle` is the only state that accepts new evidence.
             Input::AlarmRefused => self.alarm_refused(),
+            Input::BundleOffered {
+                session,
+                h,
+                offered,
+                relay,
+            } => match offered {
+                // Admitted against this node's tip: on to every other
+                // session, as the supplier had it (`SCS-P25`).
+                Ok(BundleOffered::Queued { .. }) => {
+                    if let Some(encoded) = relay {
+                        relay::fan_out(self.sessions.iter(), Some(session), &encoded);
+                    }
+                }
+                // Already held, already revealed, or refused against this
+                // node's tip: none of these is the sender's fault, since a
+                // tip that differs from ours can admit what ours refuses.
+                Ok(other) => {
+                    tracing::debug!(%session, h = h.to_raw(), ?other, "a relayed bundle not queued");
+                }
+                Err(err) => {
+                    tracing::error!(%err, h = h.to_raw(), "the queue did not answer a relayed bundle");
+                }
+            },
             Input::Served { session, served } => {
                 match served {
                     // A refused send is the transport's close, not sync's.
@@ -1018,7 +1292,7 @@ where
     }
 
     /// An announced block (2008): the block, the transactions it
-    /// carried, and its witness. A payload that does not decode, or a
+    /// carried, and its bundle references. A payload that does not decode, or a
     /// pruned entry, is the sender's form failure.
     fn announce(&mut self, session: Session, payload: &[u8]) {
         let announced = match NewCompactBlock::load(payload) {
@@ -1042,14 +1316,15 @@ where
                 .into_iter()
                 .map(|tx| TxBody::Full(tx.blob))
                 .collect(),
-            attestation_witness: announced.b.attestation_witness,
+            bundle_references: announced.b.bundle_references,
+            bundle_bodies: Vec::new(),
         };
         self.event(Event::Announce { session, body });
     }
 
     /// Relay a block the model relays (module docs): the block with its
-    /// witness and no transactions, as 2008, to every established session
-    /// but `from`, its supplier. A block no session supplied, such as one
+    /// bundle references and no transactions, as 2008, to every established
+    /// session but `from`, its supplier. A block no session supplied, such as one
     /// this node mined, goes to every established session.
     fn relay(&mut self, hash: BlockHash, from: Option<Session>) {
         let compact = match relay::announcement(&self.store, &hash) {
@@ -1249,6 +1524,10 @@ where
         // the slots changed, after this batch. `seeds_published` would see
         // the pair as already told: the watch fired before the gate closed.
         let mut release_seed = None;
+        // Bundle bodies the store held for a waiting block: told to the
+        // model after this batch, as `Event::Seeds` is, so its handling
+        // never runs while this batch is being drained.
+        let mut held_bodies = Vec::new();
         for command in out {
             match command {
                 Command::Publish { state } => {
@@ -1351,6 +1630,11 @@ where
                     self.send(session, &Message::GetTxpoolComplement(request));
                 }
                 Command::Relay { hash, from } => self.relay(hash, from),
+                Command::RequestBundleBodies {
+                    session,
+                    block,
+                    references,
+                } => held_bodies.extend(self.ask_bundle_bodies(session, block, &references)),
                 Command::RequestMissingTxs {
                     session,
                     block,
@@ -1376,6 +1660,9 @@ where
             self.seen_seeds = Some(pair);
             // `Event::Seeds` does not emit `SeedNotHeld`, so this does not recur.
             self.event(Event::Seeds);
+        }
+        for held in held_bodies {
+            self.event(held);
         }
         self.publish_view();
     }
@@ -1406,7 +1693,8 @@ where
                     judged: header,
                     block: body.block,
                     bodies: body.txs,
-                    attestation_witness: body.attestation_witness,
+                    bundle_references: body.bundle_references,
+                    bundle_bodies: body.bundle_bodies,
                 }
             })
             .collect();

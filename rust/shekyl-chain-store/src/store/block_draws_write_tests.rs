@@ -16,7 +16,7 @@
 use shekyl_archival_retention::{draw_count, draw_horizon};
 use shekyl_chain_rules::{BlockDrawsFloor, Corrupt, DrawCountFault, RuleSet};
 use shekyl_store_codec::Canonical;
-use shekyl_types::archival::{BlockDraws, SupportSeats};
+use shekyl_types::archival::{BlockDraws, SupportRow, SupportSeats};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::apply_policy::ApplyPolicy;
@@ -42,8 +42,9 @@ fn support_of(
     store
         .begin_read()
         .expect("read")
-        .support_block_seats(height, floor)
+        .support_row(height, floor)
         .expect("the floor admits the read")
+        .map(|row| row.seats)
 }
 
 /// A windowless schedule writes a zero row at every height, including the
@@ -70,7 +71,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     for height in 0u64..=3 {
         let delta = connect_empty(&store, &mut grown, rules);
         assert_eq!(delta.draws(), zero);
-        assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
+        assert_eq!(delta.support_row(), &SupportRow::EMPTY);
         assert_eq!(
             draws_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
             Some(zero)
@@ -96,7 +97,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     // Height 4 is the boundary of B = 2. Rows strictly below `(2 − 1)·2` go.
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
+    assert_eq!(delta.support_row(), &SupportRow::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None
@@ -149,7 +150,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     let refused_support = store
         .begin_read()
         .expect("read")
-        .support_block_seats(BlockHeight::ZERO, floor)
+        .support_row(BlockHeight::ZERO, floor)
         .unwrap_err();
     assert!(
         matches!(
@@ -178,7 +179,7 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(delta.support_seats(), &SupportSeats::EMPTY);
+    assert_eq!(delta.support_row(), &SupportRow::EMPTY);
     assert_eq!(
         draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
         None

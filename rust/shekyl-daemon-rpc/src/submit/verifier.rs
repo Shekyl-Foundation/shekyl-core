@@ -59,13 +59,6 @@
 //!
 //! ## Reachability honesty (the remaining refusal arms)
 //!
-//! - **Serve-credit-only** carries `fee == 0` by consensus (Phase A pins
-//!   it), and the engine's Phase-C fee floor rejects zero fee before the
-//!   crypto battery runs — the SP-T4a contradiction, reproduced for parity
-//!   (`docs/FOLLOWUPS.md`). Reopening criterion (rule 21): the SP-T4a
-//!   fee-floor resolution lands; re-evaluation shape: extend
-//!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
-//!   the serve-credit battery (SC1–SC8) in this match arm.
 //! - **Reinstate** (wire `BondPostKind::Other`): the semantic verify exists
 //!   in `shekyl-archival-retention` and the block path runs it today, but
 //!   **no wallet constructs it**. Building its submit-side fact set now
@@ -146,21 +139,6 @@ impl TxVerifier for DaemonTxVerifier {
             SubmitTxKind::Spend => verify_spend(parsed, facts, network),
             SubmitTxKind::BondPost => verify_bond_post(parsed, facts, network),
             SubmitTxKind::Emission => verify_emission(parsed, facts, network),
-            // Unreachable today (the engine's Phase-C fee floor rejects the
-            // zero-fee consensus shape first) — see the module docs'
-            // reachability section for the SP-T4a reopening criterion
-            // (rule 21).
-            SubmitTxKind::ServeCreditOnly => {
-                tracing::error!(
-                    kind = ?parsed.kind,
-                    "TxVerifier reached by the serve-credit arm the engine's \
-                     fee floor rejects today (SP-T4a); refusing (no battery \
-                     is implemented for this arm)"
-                );
-                Err(VerifyReject::malformed(
-                    "serve-credit arm has no battery (SP-T4a; engine fee floor should have rejected first)",
-                ))
-            }
         }
     }
 }
@@ -554,7 +532,6 @@ fn verify_emission(
                 .iter()
                 .map(|b| EpochCloseBond {
                     join_settlement_epoch: b.join_settlement_epoch,
-                    is_support_complete_tree: b.is_support_complete_tree,
                     bad_intervals: &b.bad_intervals,
                 })
                 .collect()

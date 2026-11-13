@@ -320,13 +320,13 @@ pub enum Malformed {
     /// long of agreed `N`), not at a parse that happened to finish.
     FrameLong {
         /// Content bytes left between the frame's end and the envelope.
-        /// A whole frame closed with a wider envelope than the target's
-        /// scheme leaves exactly the difference between the two widths.
+        /// A whole frame closed with an envelope wider than a receipt
+        /// leaves exactly the difference between the two widths.
         left: u64,
     },
-    /// The trailing envelope bytes are not a canonical signature of the
-    /// target's scheme (`PassVerifyingKey`). Another scheme's signature is
-    /// this, whatever key it would verify under: it is not tried.
+    /// The trailing envelope bytes are not a canonical receipt. Another
+    /// scheme's signature is this, whatever key it would verify under: it
+    /// is not tried.
     Envelope,
 }
 

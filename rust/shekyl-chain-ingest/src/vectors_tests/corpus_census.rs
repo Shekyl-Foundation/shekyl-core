@@ -20,7 +20,7 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::Candidate;
 
 use crate::corpus::CorpusReader;
-use crate::mutation::{ArchivalKind, Before, Environment, Mutation, Unmutable};
+use crate::mutation::{Before, Environment, Mutation, Unmutable};
 use crate::source::{IngestEvent, Source};
 use crate::test_support::h;
 
@@ -78,9 +78,6 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
                 };
                 height = to.to_raw() + 1;
             }
-            // An inject occupies no height and lists no body: nothing a
-            // block mutation could take as an operand.
-            IngestEvent::Inject(_) => {}
         }
     }
     chain
@@ -177,13 +174,11 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     // signed by a wallet this census does not hold; `DoubleSpend` at a
     // chain's first spend also has nothing spent before it. `DuplicateBondPost`: this
     // census supplies no twins, and the *other* cause —
-    // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
+    // `NoBondPostToDuplicate` — is the heights that carry no post,
     // which is a reading of the corpus: the bond-post capture carries the
     // body (its JoinMarket at 98), so a twin supply would reach it. (`DuplicateClaim` was the
     // fifth until slice 8 row 9 retired it to the driver — `Mutation`
-    // docs.) `DuplicateServeCredit` needs no supply (its
-    // twin is the body itself) and is unreachable on the corpus alone: no
-    // captured chain carries a serve credit. `ReorderedBodies` was the
+    // docs.) `ReorderedBodies` was the
     // corpus's until 2026-09-28 — every captured block listed at most one
     // body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class) —
     // and is reachable since the `median-full` capture (slice 7 commit
@@ -198,23 +193,10 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
                 vec![Unmutable::NoPowEnvironment]
             ),
             (
-                Mutation::DuplicateServeCredit,
-                vec![Unmutable::NoArchivalBodyToDuplicate {
-                    kind: ArchivalKind::ServeCredit
-                }]
-            ),
-            (
                 Mutation::DuplicateBondPost,
                 // The other chains carry no post; `bond-post` carries one,
                 // a key-carrying JoinMarket, and only its twin is missing.
-                vec![
-                    Unmutable::NoArchivalBodyToDuplicate {
-                        kind: ArchivalKind::BondPost
-                    },
-                    Unmutable::NoTwinSupplied {
-                        kind: ArchivalKind::BondPost
-                    }
-                ]
+                vec![Unmutable::NoBondPostToDuplicate, Unmutable::NoTwinSupplied]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
             (

@@ -34,8 +34,10 @@
 //! Each [`Command`] arm has a named cap. The handshake peerlist's
 //! derivation terminates on its length bound. 2008 / 2009 / 2010 keep their
 //! inherited envelopes until a tighter bound exists on this seam — they do
-//! **not** take the packet limit. 2002 (PWD-B12) is the only arm that sits
-//! at [`DEFAULT_MAX_PACKET_SIZE`].
+//! **not** take the packet limit. 2002 (PWD-B12), the body response 2014,
+//! and the bundle relay and bundle-body response 2015 / 2017 sit at
+//! [`DEFAULT_MAX_PACKET_SIZE`]: a bundle's size grows with the drawable
+//! pairs `D`, which is chain state (`crate::CAP_NEW_BUNDLE`).
 //!
 //! # Retired
 //!
@@ -52,11 +54,12 @@ use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
-    Error, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
-    COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    Error, CAP_NEW_BUNDLE, CAP_REQUEST_BODIES, CAP_REQUEST_BUNDLE_BODIES, CAP_REQUEST_HEADERS,
+    CAP_RESPONSE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE,
+    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_BUNDLE,
     NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
-    NOTIFY_RESPONSE_HEADERS,
+    NOTIFY_REQUEST_BUNDLE_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS,
+    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_BUNDLE_BODIES, NOTIFY_RESPONSE_HEADERS,
 };
 
 /// The four defined Levin flag bits. Bits outside this mask are unknown at
@@ -129,8 +132,8 @@ const _: () = assert!(CAP_HANDSHAKE < 65_536);
 const _: () = assert!(CAP_NEW_COMPACT_BLOCK == 4 * 1024 * 1024);
 const _: () = assert!(HASH_SIZE == 32);
 
-/// The closed set of Levin commands this protocol speaks: the ten live
-/// commands, each with its wire id and its payload cap. Wire ids stay
+/// The closed set of Levin commands this protocol speaks: the thirteen
+/// live commands, each with its wire id and its payload cap. Wire ids stay
 /// `u32` on the header; [`Command::from_wire`] is the one place an unknown
 /// id becomes `None`, and that is the set a Q/S-flagged bucket may name.
 /// The retired commands (module docs) are **not** in this set.
@@ -161,13 +164,19 @@ pub enum Command {
     RequestBodies,
     /// `NOTIFY_RESPONSE_BODIES` (2014).
     ResponseBodies,
+    /// `NOTIFY_NEW_BUNDLE` (2015).
+    NewBundle,
+    /// `NOTIFY_REQUEST_BUNDLE_BODIES` (2016).
+    RequestBundleBodies,
+    /// `NOTIFY_RESPONSE_BUNDLE_BODIES` (2017).
+    ResponseBundleBodies,
 }
 
 impl Command {
     /// Every arm, in declaration order. [`Self::wire_id`] and
     /// [`Self::from_wire`] match the same set, so a new command is a new
     /// arm in all three.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 13] = [
         Self::Handshake,
         Self::TimedSync,
         Self::NewTransactions,
@@ -178,6 +187,9 @@ impl Command {
         Self::ResponseHeaders,
         Self::RequestBodies,
         Self::ResponseBodies,
+        Self::NewBundle,
+        Self::RequestBundleBodies,
+        Self::ResponseBundleBodies,
     ];
 
     /// Wire id this arm speaks.
@@ -194,6 +206,9 @@ impl Command {
             Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
             Self::RequestBodies => NOTIFY_REQUEST_BODIES,
             Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
+            Self::NewBundle => NOTIFY_NEW_BUNDLE,
+            Self::RequestBundleBodies => NOTIFY_REQUEST_BUNDLE_BODIES,
+            Self::ResponseBundleBodies => NOTIFY_RESPONSE_BUNDLE_BODIES,
         }
     }
 
@@ -212,6 +227,9 @@ impl Command {
             NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
             NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
             NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
+            NOTIFY_NEW_BUNDLE => Some(Self::NewBundle),
+            NOTIFY_REQUEST_BUNDLE_BODIES => Some(Self::RequestBundleBodies),
+            NOTIFY_RESPONSE_BUNDLE_BODIES => Some(Self::ResponseBundleBodies),
             _ => None,
         }
     }
@@ -230,6 +248,9 @@ impl Command {
             Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
             Self::RequestBodies => CAP_REQUEST_BODIES,
             Self::ResponseBodies => CAP_RESPONSE_BODIES,
+            Self::NewBundle => CAP_NEW_BUNDLE,
+            Self::RequestBundleBodies => CAP_REQUEST_BUNDLE_BODIES,
+            Self::ResponseBundleBodies => CAP_RESPONSE_BUNDLE_BODIES,
         }
     }
 }
@@ -263,12 +284,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_command_set_has_ten_arms() {
-        // 10 live commands: ping gone (PWD-B10), support flags gone
+    fn the_command_set_has_thirteen_arms() {
+        // 13 live commands: ping gone (PWD-B10), support flags gone
         // (2026-10-19), 2001 gone (PWD-B6), and 2003, 2004, 2006 and 2007
         // retired by chain sync's cutover (CS-5), whose 2011–2014 are in
-        // the one set (RC-Q1: one dispatch table, one command enum).
-        assert_eq!(Command::ALL.len(), 10);
+        // the one set (RC-Q1: one dispatch table, one command enum), as
+        // is the bundle transport's 2015–2017 (SO-D12 4b).
+        assert_eq!(Command::ALL.len(), 13);
         for retired in [1003, 1007, 2001, 2003, 2004, 2006, 2007] {
             assert!(Command::from_wire(retired).is_none(), "{retired}");
         }

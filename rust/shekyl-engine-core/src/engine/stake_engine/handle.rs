@@ -12,10 +12,9 @@ use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 
 use super::body_store_actor::{BodyStoreHandle, WeakBodyStoreHandle};
 use kameo::error::SendError;
-use shekyl_archival_retention::{HoldingsDescriptor, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
+use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature;
-use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
@@ -28,7 +27,7 @@ use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaPaymentDestination, BondPostPlacement,
-    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost, SignPassTranscript,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
     SignReceiptTranscript,
 };
 use super::release::{AssembleRelease, AssembledReleasePost};
@@ -286,43 +285,23 @@ impl StakeEngineHandle {
         }
     }
 
-    /// Countersign one SF-D8 pass transcript with the held persona at
-    /// `p_slot`, from a **blocking** context — the SH-2 resident-key handoff
-    /// into `PersonaServingHost`.
+    /// Sign one pass transcript with the **receipt key** of the held persona
+    /// at `p_slot`, from a **blocking** context — the serving task's
+    /// capability calls it (`serving::receipt_key`).
     ///
     /// `PassKey::sign_pass` is synchronous and runs on the blocking pool
     /// (`shekyl-p-serve` wraps both key calls in `spawn_blocking`), so this
     /// parks the calling thread on the actor's reply. It must never be called
     /// from an async executor thread: `oneshot::Receiver::blocking_recv`
     /// panics there by design. The signature is the only thing that crosses
-    /// the boundary; see [`SignPassTranscript`] for why the key does not.
-    pub(crate) fn sign_pass_transcript_blocking(
-        &self,
-        p_slot: PSlot,
-        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, StakeEngineError> {
-        self.actor
-            .ask(SignPassTranscript { p_slot, message })
-            .blocking_send()
-            .map_err(collapse_send_error)
-    }
-
-    /// Sign one pass transcript with the **receipt key** of the held persona
-    /// at `p_slot`, from a **blocking** context — the receipt-key counterpart
-    /// of [`Self::sign_pass_transcript_blocking`], and STAGED with it
-    /// (`serving::receipt_key`): no live path calls this.
-    ///
-    /// The same contract: it parks the calling thread on the actor's reply,
-    /// so it runs on the blocking pool and never on an async executor
-    /// thread, and the signature is the only thing that crosses the
-    /// boundary ([`SignReceiptTranscript`]).
+    /// the boundary ([`SignReceiptTranscript`]).
     pub(crate) fn sign_receipt_transcript_blocking(
         &self,
         p_slot: PSlot,
-        message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        transcript: shekyl_archival_retention::PassTranscript,
     ) -> Result<FnDsaHybridSignature, StakeEngineError> {
         self.actor
-            .ask(SignReceiptTranscript { p_slot, message })
+            .ask(SignReceiptTranscript { p_slot, transcript })
             .blocking_send()
             .map_err(collapse_send_error)
     }

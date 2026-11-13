@@ -48,15 +48,16 @@ later the same day — the second amendment is the one that landed: both
 callers send requester-random bytes plus a **chain anchor**
 `anchor_height ‖ anchor_hash` at `tip − archival_reorg_depth_blocks`;
 `P` gates `anchor_height` against its own height (±`L`) and signs the
-decoded 72-byte header ‖ `shard_id_le[8]` ‖ a nonce-salted digest of the
-delivered response (the digest term AMENDED 2026-10-04); admission looks
-the anchor hash up on the connecting chain inside `[h−720−L, h−720]`; the
+decoded header (73 bytes with the leading stream byte of
+[`ARCHIVAL_SUPPORT_DRAW.md`](ARCHIVAL_SUPPORT_DRAW.md) §5) ‖ `shard_id_le[8]` ‖ a nonce-salted digest of the
+delivered response (the digest term AMENDED 2026-10-04); admission requires
+`anchor_height < h` (CEN-J36) and looks the anchor hash up by height on
+the connecting chain; the
 challenge tuple and `cb_out_key` are not in the fetch signature; the
 response body is the shard body (`shekyl_wire::shard_frame` since the
 2026-10-08 amendment) followed by an outer binary envelope of the bound
-scheme's width — the live binding carries the canonical `HybridSignature`
-at `IDENTITY_ENVELOPE_LEN` (3,385), and the receipt width is staged and
-not selected (AMENDED 2026-10-13)) — the
+scheme's width — the receipt key's scheme-3 signature at
+`RECEIPT_ENVELOPE_LEN` (1,356)) — the
 things an implementer would otherwise have decided silently at the
 keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
 80, home `shekyl-curve-tree`). Outbound SOCKS reuse is `SF-D2`. SOCKS
@@ -773,7 +774,7 @@ an implementation.
 | Complete-head that is not `200`, `400`, `404` or `503` with exactly `content-type` + `content-length` (`301`, `500`, extra headers, wrong content-type), or a `400`/`404`/`503` declaring a body | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id ‖ D` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Countersignature invalid for `SF-D8`'s transcript (the decoded header ‖ `shard_id` ‖ `D`) under P's bond-record receipt key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 
 - **Above this table, for a challenge (2026-10-07):** "miss" in the
   challenge column is the outcome of one read. Under the secret draw the
@@ -802,8 +803,7 @@ an implementation.
   stall retry of the assigned `P` would make a later pass record fail
   admission (wrong random). Retries are also why `L` is sized by
   fetch-plus-retry span, not by fetch alone: the anchor is fixed at
-  first attempt and admission needs it inside `[h−720−L, h−720]` at
-  the block that finally carries it.
+  first attempt, and `P`'s gate must still accept it on the last retry.
 - **Constraint:** retries must not become a distinguishable challenge
   pattern — the retry policy is a property of the client, not of the
   caller. Isolation shape is not a way to violate that: `SF-D3` gives
@@ -1013,7 +1013,7 @@ hole per call.
 
 ### `SF-D13` — countersigning key — RULED 2026-09-13
 
-> **Live, and replaced at the FN-DSA integration (rule 21 reopening, 2026-10-07).** The text below describes the code as it is: the identity key countersigns. The ruled form is a separate receipt key, Ed25519 + FN-DSA-1024, derived from the wallet master seed when the engine is assembled and carried in the bond record beside the identity key ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.2, §6.3). The identity key is unchanged and still defines `p_canonical_id`.
+> **Replaced at the FN-DSA integration (rule 21 reopening, 2026-10-07).** `P` countersigns with a separate receipt key, Ed25519 + FN-DSA-1024, derived from the wallet master seed when the engine is assembled and carried in the bond record beside the identity key ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.2, §6.3). The serving task holds `ResidentReceiptKey`, and no identity-key signer serves. The identity key is unchanged and still defines `p_canonical_id`. The ruling below, for the identity key, is the record the receipt key replaced.
 
 The countersignature uses P's stable **hybrid identity key** from the
 bond record (`shekyl_wire::BondPost.hybrid_public_key`), both Ed25519
@@ -1042,9 +1042,8 @@ substitute for a countersigned loopback test. *The receipt key (Slice C
 Round 0 ruling, 2026-10-07):* the bond record carries a **separate
 FN-DSA-1024 receipt key**, and the identity stays ML-DSA-65. A second
 capability, `ResidentReceiptKey`, signs with it in the same in-actor
-shape, behind the same weak handle and loopback harness. It is built and
-not selected: `ResidentPassKey` is what the serving task holds.
-Selection is owned by `FN_DSA_HYBRID.md` §9.4.
+shape, behind the same weak handle and loopback harness. It is the key
+the serving task holds.
 
 **Named residency: the serving host becomes a hot signer.** Every
 read now costs a hybrid signature with `P`'s identity secret, so that
@@ -1124,7 +1123,7 @@ not remove it.
 
 ### `SF-D8` — returned signature and verify seam — RULED 2026-09-13
 
-> **Specification:** what `P` signs and the delivery digest are this section's and stand. How a receipt is admitted on chain is [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §5, §7.2 and §9.1: the nonce is bound to `(h, j)`, the record carries `j` in place of the nonce, and admission checks no bound on the anchor (`SCS-P7`). The admission window below (`[h − 720 − L, h − 720]` on the including block's predecessor) is live code, and is deleted with the implementation, with its reason, in the specification's §11.1.
+> **Specification:** the delivery digest is this section's and stands. What `P` signs is the [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §6.1 transcript: this section's, with a leading stream byte, signed with the receipt key under `SCHEME_DOMAIN_RECEIPT`. How a receipt is admitted on chain is that specification's §5, §7.2 and §9.1: the nonce is bound to `(h, j)`, the record carries `j` in place of the nonce, and admission checks only that `anchor_height` is below `h` (CEN-J36, `SCS-P7`, `SCS-P32`). The admission window, the attestation record, its domain and its verifier context below are the attestation path's ruling record; each is deleted, with its reason, in the specification's §11.1.
 
 The original `R_k`-only lean was incomplete. The fetcher's output is a
 **typed result both callers consume**, produced only after all three
@@ -1417,15 +1416,10 @@ needed a home that is neither the inner frame nor a header:
   segment bytes~~), followed by an outer binary response envelope carrying
   the canonical signature of the scheme the target is bound to, at that
   scheme's canonical length, as the response's **last** bytes. The width
-  is `PassVerifyingKey::ENVELOPE_LEN` on the fetch side and `W` on
-  `PassSigner<W>` on the serve side. **AMENDED 2026-10-13:** the live
-  binding, on both ends, is the identity scheme — `HybridSignature`,
-  `IDENTITY_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN` (3,385). The
-  receipt scheme's width (`RECEIPT_ENVELOPE_LEN`, 1,356,
-  `FnDsaHybridSignature`) is built and **STAGED**; no production target
-  or endpoint is bound at it ([`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §9).
-  The single global `SIGNATURE_ENVELOPE_LEN` is gone. A response is one
-  scheme, decided by the key's type; nothing reads the bytes to choose.
+  is the receipt scheme's on both ends, `RECEIPT_ENVELOPE_LEN =
+  FnDsaHybridSignature::CANONICAL_LEN` (1,356; `shekyl_p_fetch::target`,
+  `shekyl_p_serve::countersign`). A response is one scheme; nothing
+  reads the bytes to choose.
 - **The envelope closes the body because the signature covers it.**
   `D` is a digest of every byte ahead of the envelope, so the signature
   is the last thing `P` can send. `P` reads the shard **once**: it
@@ -1460,12 +1454,10 @@ needed a home that is neither the inner frame nor a header:
   Because that length is fixed by the scheme, the envelope adds no
   length field and its offset is `content-length` minus the scheme's
   envelope width. The client **reads exactly `content-length` bytes and
-  takes the last `K::ENVELOPE_LEN` bytes as the envelope**
-  (`PassVerifyingKey`). On the live binding that width is
-  `IDENTITY_ENVELOPE_LEN` (3,385) and the bytes parse as a
-  `HybridSignature`. It does not stream-parse the signature by trusting
-  inner length fields, and it does not try a second scheme: a response
-  of the other width fails this key's checks. The serve crate obtains
+  takes the last `RECEIPT_ENVELOPE_LEN` (1,356) bytes as the
+  envelope**, which parse as an `FnDsaHybridSignature`. It does not
+  stream-parse the signature by trusting inner length fields. The serve
+  crate obtains
   the signature from the `SF-D13`
   callback; it does not load the secret.
 - **Verify placement:** inside the fetch call. The client returns only
@@ -1560,14 +1552,10 @@ by not sending them.
   sent them; the signature decides `P`'s credit, not the bytes' truth.
   The refusal trailer is still read before any verification
   (`Unsigned`).
-- **Ceiling.** `ExpectedShard::max_response_len::<K>()` is the frame
+- **Ceiling.** `ExpectedShard::max_response_len()` is the frame
   ceiling (`frame_len_ceiling`: `1 + 10 + Σ (archival_len_i + 3·10)`)
-  plus that target's scheme's envelope width
-  (`PassVerifyingKey::ENVELOPE_LEN`). The constructor checks the frame
-  ceiling against the wider of the two schemes, so either scheme's
-  `max_response_len` fits. The live width is `IDENTITY_ENVELOPE_LEN`
-  (3,385). The receipt width (`RECEIPT_ENVELOPE_LEN`, 1,356) is staged
-  and not what a production target asks for (AMENDED 2026-10-13).
+  plus the envelope width, `RECEIPT_ENVELOPE_LEN` (1,356). The
+  constructor checks that the sum fits.
   Exactness is still enforced by the read (a frame that does not end at
   `content-length` minus the envelope is `Malformed`). `SF-D7`'s memory
   leg is as the 2026-10-03 amendment states it: `N` times one entry's

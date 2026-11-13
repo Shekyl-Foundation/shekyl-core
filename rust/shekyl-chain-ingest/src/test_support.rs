@@ -53,7 +53,6 @@ use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{Candidate, RecordedWeights, RuleSet, ViewRead};
-use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
@@ -61,9 +60,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{base_block_reward, EconomicParams};
 use shekyl_harness_spender::{first_spending_height, MinerWallet};
 use shekyl_harness_wallet::coinbase::repay;
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight,
-};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, SectionRoot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
@@ -230,16 +227,6 @@ pub fn at(height: u64) -> usize {
     usize::try_from(height).expect("a fixture height fits usize")
 }
 
-/// A **fixture** body `tx` anchored for a block at `height` on the chain
-/// whose block hashes so far are `hashes`: the harness's
-/// [`fixture::anchored_at`] — the newest reference CEN-I11 admits. For the
-/// archival bodies (a join, a serve credit, which is left as it is); a
-/// real spend carries its reference inside its proof and is never passed
-/// here — rewriting it would be the forged-reference shape, not an anchor.
-pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-    fixture::anchored_at(hashes, height, tx)
-}
-
 /// A block at `height` on `previous`, listing `listed`, with `nonce`, whose
 /// header carries `root` — the tree state going into `height`
 /// ([`GrownTree::root_going_into`]; CEN-B5) — and whose coinbase pays
@@ -274,11 +261,9 @@ pub fn block_with_nonce(
             previous,
             nonce,
             curve_tree_root: root,
-            // The empty set's root: a block carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            // The empty section's root: a block carrying no references is
+            // judged against it (CEN-J29).
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction,
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
@@ -560,38 +545,21 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<KeyImage> {
         .collect()
 }
 
-/// What a test trace's covered-tip checkpoint records. The checkpoint's two
-/// encodings travel together (`trace.rs`), so this names both at once.
-#[derive(Clone, Copy, Debug)]
-pub enum Pinned<'a> {
-    /// The grown tree's own state after the tip: its digest, and the
-    /// archival rows the store writes for a chain that posts no bonds
-    /// ([`GrownTree::archival_snapshot_after`]).
-    OfTree,
-    /// A state read from a reference store — the pair as the LMDB walker
-    /// would have taken it, for chains the tree cannot derive (bond posts,
-    /// an injected credit).
-    Read {
-        /// The reference digest.
-        digest: Digest,
-        /// The reference rows.
-        archival: &'a ArchivalSnapshot,
-    },
-}
-
 /// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
 /// of this chain and its three weight values are the tree's derivation at
 /// that height ([`GrownTree::weights_of`], [`GrownTree::median_for`]);
 /// `economics` supplies the rest and is called once per height, from
-/// genesis, in order. `pinned` appends the checkpoint — both encodings —
-/// after the tip, when given.
+/// genesis, in order. With `checkpoint`, the covered-tip checkpoint follows
+/// the tip in both encodings: the grown tree's digest, and the archival
+/// rows the store writes for a chain that posts no bonds
+/// ([`GrownTree::archival_snapshot_after`]).
 ///
 /// Heights are the chain's indices. A chain whose first block is not
 /// genesis is not this constructor's input.
-pub fn trace_pinned(
+pub fn trace_with(
     chain: &[(Block, Vec<Transaction>)],
     mut economics: impl FnMut(u64) -> TraceEconomics,
-    pinned: Option<Pinned<'_>>,
+    checkpoint: bool,
 ) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     let tree = GrownTree::over(chain);
@@ -600,54 +568,23 @@ pub fn trace_pinned(
         let facts = economics(height).over(&tree, height);
         w.push_facts(h(height), &facts).expect("facts");
     }
-    if let Some(pinned) = pinned {
-        let (digest, archival) = match pinned {
-            Pinned::OfTree => {
-                let tip = chain
-                    .len()
-                    .checked_sub(1)
-                    .and_then(|t| u64::try_from(t).ok())
-                    .expect("a checkpoint of the tree needs a tip: the chain is empty");
-                (
-                    digest_of(chain, &tree.root_after(h(tip))),
-                    tree.archival_snapshot_after(h(tip)),
-                )
-            }
-            Pinned::Read { digest, archival } => (digest, archival.clone()),
-        };
-        w.push_checkpoint(&digest).expect("checkpoint");
-        w.push_archival_snapshot(&archival)
+    if checkpoint {
+        let tip = chain
+            .len()
+            .checked_sub(1)
+            .and_then(|t| u64::try_from(t).ok())
+            .expect("a checkpoint of the tree needs a tip: the chain is empty");
+        w.push_checkpoint(&digest_of(chain, &tree.root_after(h(tip))))
+            .expect("checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(tip)))
             .expect("archival snapshot");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
 }
 
-/// [`trace_pinned`] with the tree's own checkpoint, or none.
-pub fn trace_with(
-    chain: &[(Block, Vec<Transaction>)],
-    economics: impl FnMut(u64) -> TraceEconomics,
-    checkpoint: bool,
-) -> Trace {
-    trace_pinned(chain, economics, checkpoint.then_some(Pinned::OfTree))
-}
-
 /// [`trace_with`] with the synthetic economics: distinct per height, zero burn.
 pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
     trace_with(chain, synthetic_economics, checkpoint)
-}
-
-/// [`trace_pinned`] with the synthetic economics and a checkpoint read
-/// from a reference store ([`Pinned::Read`]).
-pub fn trace_read(
-    chain: &[(Block, Vec<Transaction>)],
-    digest: Digest,
-    archival: &ArchivalSnapshot,
-) -> Trace {
-    trace_pinned(
-        chain,
-        synthetic_economics,
-        Some(Pinned::Read { digest, archival }),
-    )
 }
 
 /// The redb-shaped digest of `chain` given the root after its tip.

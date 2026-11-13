@@ -33,7 +33,7 @@ use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::sync::mpsc;
 
-use crate::bundle_producer::{spawn_read, ReadFn, SchemeLine};
+use crate::bundle_producer::{spawn_read, ReadFn};
 use crate::connector::{BundleOffered, LearnDraws, Learned, OfferBundle};
 use crate::scenario::{FreeHash, Mined, Scenario, RULES};
 
@@ -151,6 +151,30 @@ async fn an_offered_bundle_is_queued_once() {
     scenario.close().await;
 }
 
+/// A node that holds `h`'s bundle drops any other for `h` before judging
+/// it (§9.1): a second bundle whose seed does not open the commitment is
+/// `AlreadyQueued`, not a J33 refusal, and the first stays. Red edit: move
+/// the held check after the judgment — the second offer is then `Refused`
+/// at J33, a signature check spent on a height already held.
+#[tokio::test]
+async fn a_second_bundle_for_a_queued_height_is_dropped_before_it_is_judged() {
+    let witness = Witness::new(0x36);
+    let (scenario, ours) = committed("bundle-queue-held-first", &witness, 3).await;
+    let first = witness.bundle(ours.height, witness.seed);
+    assert!(matches!(
+        offer(&scenario, first.clone()).await,
+        BundleOffered::Queued { .. }
+    ));
+    assert_eq!(
+        offer(&scenario, witness.bundle(ours.height, [0x77; 32])).await,
+        BundleOffered::AlreadyQueued { h: ours.height }
+    );
+    let entries = queued(&scenario);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].queued.reference, first.0, "the first one stays");
+    scenario.close().await;
+}
+
 /// A seed that does not open the block's `0x0C` is refused by the rule at
 /// J33, and nothing is queued: the queue's admission is the self-check.
 /// Red edit: compare the commitment against the wrong block — the bundle
@@ -190,8 +214,9 @@ async fn an_entry_leaves_when_its_window_closes() {
 
 /// After a reorg pops the tip an entry was admitted against, the queue
 /// judges it again by the same rule and keeps it, at the new tip. A pop of
-/// the bundle's own block refuses it, and it leaves. Red edit: skip the
-/// re-judge — the entry keeps its old tip.
+/// the bundle's own block removes the entry (§7.5). Red edits: skip the
+/// re-judge — the entry keeps its old tip; skip `unqueue_bundle` in `pop`
+/// — the entry is still queued after its block is gone.
 #[tokio::test]
 async fn a_reorg_judges_an_entry_again() {
     let witness = Witness::new(0x34);
@@ -208,17 +233,15 @@ async fn a_reorg_judges_an_entry_again() {
     assert_eq!(entries.len(), 1, "judged again and kept");
     assert_eq!(entries[0].queued.tip_height, to);
 
-    // Pop the bundle's block and connect another at its height: the
-    // commitment there is not the bundle's, and the rule refuses it.
+    // Pop the bundle's own block. The entry leaves with it (§7.5),
+    // rather than waiting above the tip for a later block to refuse it.
     scenario
         .rewind_to(BlockHeight::from_raw(ours.height.to_raw() - 1))
         .await
         .expect("the rewind lands");
-    assert_eq!(queued(&scenario).len(), 1, "above the tip it waits");
-    scenario.mine(2).await;
     assert!(
         queued(&scenario).is_empty(),
-        "another block at h refuses it"
+        "an entry leaves when its block is popped"
     );
     scenario.close().await;
 }
@@ -302,18 +325,6 @@ async fn the_producer_claims_what_its_ring_drew() {
     drop(snap);
     drop(store);
     scenario.close().await;
-}
-
-/// The serving-scheme line is logged once per block. Red edit: log on
-/// every offer — the second assertion fails.
-#[test]
-fn the_serving_scheme_line_is_once_per_block() {
-    let mut line = SchemeLine::default();
-    let h = BlockHeight::from_raw(7);
-    assert!(!line.due(h, false), "a block with receipts logs nothing");
-    assert!(line.due(h, true));
-    assert!(!line.due(h, true), "once per block");
-    assert!(line.due(BlockHeight::from_raw(8), true));
 }
 
 /// A producer with one block of ours claimed, its one draw learned, and

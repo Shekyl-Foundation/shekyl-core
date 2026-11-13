@@ -340,8 +340,8 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 HashHex::from_bytes(block.header.curve_tree_root.to_bytes())
             );
             assert_eq!(
-                header.attestation_root,
-                HashHex::from_bytes(block.header.attestation_root.to_bytes())
+                header.section_root,
+                HashHex::from_bytes(block.header.section_root.to_bytes())
             );
             assert_eq!(
                 header.difficulty.0,

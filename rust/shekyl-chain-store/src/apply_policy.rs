@@ -91,17 +91,16 @@ macro_rules! archival_families {
 }
 
 archival_families! {
-    /// `archival_serve_credit`
-    ServeCredit => "archival_serve_credit",
     /// `archival_settlement` — the C++ store has no writer for it, and its
     /// revert is vacuous over an unwritten table. Named exclusion. In the
     /// Rust store the family governs the slash pass's row write
     /// (`archival_write.rs`, phase 9; `SO-D10`).
     Settlement => "archival_settlement",
-    /// `archival_attestation_witness`
-    AttestationWitness => "archival_attestation_witness",
-    /// `archival_alt_attestation_witness`
-    AltAttestationWitness => "archival_alt_attestation_witness",
+    /// `archival_bundle_references`
+    BundleReferences => "archival_bundle_references",
+    /// `archival_alt_section_references`: an alt block's section references,
+    /// held as a field of its `alt_blocks` record (`FOLDED_INTO`).
+    AltSectionReferences => "archival_alt_section_references",
     /// `archival_bond`
     Bond => "archival_bond",
     /// `archival_shard_segment`

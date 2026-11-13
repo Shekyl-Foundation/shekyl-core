@@ -82,7 +82,7 @@ fn refused_message(shape: TxShape, slot: TxSlot, site: &str, refused: &InvalidBl
 #[test]
 fn every_well_formed_shape_passes_at_every_slot_it_names() {
     let shapes = TxShape::all();
-    assert_eq!(shapes.len(), 4, "the chain reaches every variant");
+    assert_eq!(shapes.len(), 3, "the chain reaches every variant");
     for shape in shapes {
         let tx = shape.build();
         for &slot in shape.valid_at() {

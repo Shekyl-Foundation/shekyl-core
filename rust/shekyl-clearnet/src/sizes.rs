@@ -100,6 +100,8 @@ mod present {
         TxRelay,
         /// A new block and the transactions it is missing.
         BlockRelay,
+        /// A relayed bundle and the bundle bodies asked for by hash.
+        BundleRelay,
         /// Chain sync: chain entries, headers, bodies and objects.
         Sync,
         /// A command the closed set does not name.
@@ -120,6 +122,11 @@ mod present {
                     | Command::RequestBodies
                     | Command::ResponseBodies,
                 ) => Self::Sync,
+                Some(
+                    Command::NewBundle
+                    | Command::RequestBundleBodies
+                    | Command::ResponseBundleBodies,
+                ) => Self::BundleRelay,
                 None => Self::Unknown,
             }
         }
@@ -129,6 +136,7 @@ mod present {
                 Self::Control => "control",
                 Self::TxRelay => "tx_relay",
                 Self::BlockRelay => "block_relay",
+                Self::BundleRelay => "bundle_relay",
                 Self::Sync => "sync",
                 Self::Unknown => "unknown",
             }

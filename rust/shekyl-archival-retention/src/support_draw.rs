@@ -54,6 +54,17 @@ impl SupportUnissued {
         self.0
     }
 
+    /// A count as a support row's `carry_after` stores it. `None` past the
+    /// cap: no transition writes one, so a row above it is not a count.
+    #[must_use]
+    pub const fn stored(count: u32) -> Option<Self> {
+        if count > SUPPORT_DRAWS_PER_EPOCH {
+            None
+        } else {
+            Some(Self(count))
+        }
+    }
+
     /// One carried draw re-seated: the tree is owed one fewer. Zero stays
     /// zero.
     #[must_use]

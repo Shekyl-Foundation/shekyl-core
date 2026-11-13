@@ -1,8 +1,0 @@
-# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
-#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
-# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-codec = support_seats
-fixed_width = variable
-[fixtures]
-empty = 00000000
-two = 0200000010101010101010101010101010101010101010101010101010101010101010103030303030303030303030303030303030303030303030303030303030303030

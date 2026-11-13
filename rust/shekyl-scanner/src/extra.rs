@@ -118,7 +118,7 @@ impl ExtraField {
             TxExtraField::PqcMultisig(entries) => Some(ExtraField::PqcMultisig(entries)),
             // The coinbase's draw commitment is the validator's and the
             // challenger's; a scan reads no output from it.
-            TxExtraField::ArchivalAttestation(_) | TxExtraField::DrawCommitment(_) => None,
+            TxExtraField::DrawCommitment(_) => None,
         }
     }
 
@@ -476,28 +476,29 @@ mod pqc_leaf_entries_tests {
     }
 
     /// A genesis tag the scanner does not consume must not hide `0x06`/`0x07`.
-    /// The inherited Extra::read stopped at the first unknown tag; `0x0B` is
+    /// The inherited Extra::read stopped at the first unknown tag; `0x0C` is
     /// in the grammar, so stopping would drop the PQC scan fields whenever
-    /// an attestation appears before them.
+    /// a draw commitment appears before them.
     #[test]
-    fn attestation_does_not_hide_pqc_scan_fields() {
+    fn a_draw_commitment_does_not_hide_pqc_scan_fields() {
         use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
         let pk = ED25519_BASEPOINT_POINT.compress().to_bytes();
         let kem = vec![0xAA; HYBRID_KEM_CT_LEN];
         let leaf = leaf_blob(32);
         let wire = tx_extra::serialize(&[
-            TxExtraField::ArchivalAttestation(vec![0xA7; 16]),
+            TxExtraField::DrawCommitment(tx_extra::CONFORMING_DRAW_COMMITMENT),
             TxExtraField::PubKey(pk),
             TxExtraField::PqcKemCiphertext(kem.clone()),
             TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .expect("genesis extra serializes");
-        let parsed = Extra::read(&mut wire.as_slice()).expect("attestation-bearing extra parses");
+        let parsed =
+            Extra::read(&mut wire.as_slice()).expect("an extra with a draw commitment parses");
         assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
         assert_eq!(parsed.pqc_leaf_entries(), Some(leaf.as_slice()));
         assert!(
             parsed.keys().is_some(),
-            "tx pubkey after an attestation field must still be visible"
+            "tx pubkey after a draw commitment must still be visible"
         );
     }
 }

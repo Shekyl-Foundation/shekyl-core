@@ -47,7 +47,7 @@
 # `sim_narrations`). A change to a value the sim reads moves a narration
 # without failing any per-PR test: #1323 (the surge factor, 4 to 3) merged
 # green and turned this lane red for three nights
-# (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30).
+# (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.31).
 #
 # The crate is a binary with no library target: the tests are in
 # `--bin shekyl-economics-sim`.

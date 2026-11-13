@@ -26,17 +26,16 @@
 //! recompute of `Σwork(E)` is then over the rows the pass saw, and the
 //! compare with the frozen row (`EmissionVerifyError::SigmaWorkMismatch`)
 //! can fail only on a claim that lies, never on a snapshot that drifted.
-//! The bond records are read as they are now, except for one field. The
-//! pass gathered after `E`'s own slashes, so a record slashed for `E` is
-//! out of `E`'s market in both readings, a later interval opens at a later
-//! epoch, and the join epoch never moves. The complete-tree flag can: a
-//! complete tree that is slashed or released afterwards holds a compact
-//! set, and `market_member_at_epoch` reads that flag. So the pass froze
-//! the flag beside `Σwork(E)` — the complete trees it excluded from `E`'s
-//! market (A22, SI-31; `SO-D12h`) — and the re-gather takes every bond's
-//! flag from that set and never from the record. The C++, consensus until
-//! `DEL-008`, gathers at the epoch close on any pass and reads the shard
-//! segments and bond values as they are now.
+//! The bond records are read as they are now. The pass gathered after
+//! `E`'s own slashes, so a record slashed for `E` is out of `E`'s market
+//! in both readings, a later interval opens at a later epoch, and the join
+//! epoch never moves. A complete tree is never in `E`'s market in either
+//! reading: it lists no shard (CEN-J14, `CompleteTreeWithShardIds`), so it
+//! is drawn on the support stream only and no economy row credits it, and
+//! a release or a slash that leaves it compact leaves it with no shard
+//! either. The C++, consensus until `DEL-008`, gathers at the epoch close
+//! on any pass and reads the shard segments and bond values as they are
+//! now.
 //!
 //! **What the verify consumes and what it yields.** The crossing's inputs
 //! are the vin ([`J19::parse`]), the connecting height, the claimant's
@@ -78,13 +77,12 @@ use shekyl_archival_retention::{
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
 use shekyl_network::NetworkId;
-use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::{gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, ViewRead};
+use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
 use crate::rules::tx_against::ReferenceContext;
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
@@ -108,10 +106,7 @@ use crate::{Claimable, EpochFloor};
 /// read ([`gather_universe`]) and A11's records, with the claimant named
 /// so its index among the bonds is the source's `claimant_bond_idx`; the
 /// credits are the Served rows ([`ServedAt`]) — a settled epoch's rows are
-/// all recorded, and one read per persona covers every epoch the claim cites;
-/// the complete-tree flags are the set the pass froze (A22). A settled
-/// epoch without that set is a lost row, [`Corrupt::CompleteTreesAbsent`],
-/// never a refusal of the claim.
+/// all recorded, and one read per persona covers every epoch the claim cites.
 pub(crate) struct J23;
 
 impl Rule for J23 {
@@ -129,9 +124,6 @@ struct CitedEpoch {
     close_height: BlockHeight,
     sigma_work_milli: u64,
     budget: u64,
-    /// The complete trees the epoch's pass froze (A22): every bond's
-    /// complete-tree flag in the re-gather.
-    complete_trees: CompleteTreeSet,
 }
 
 impl CitedEpoch {
@@ -152,19 +144,8 @@ impl CitedEpoch {
             .settlement_schedule()
             .close_height(raw)
             .map(BlockHeight::from_raw);
-        // Written in the pass's write set with `Σwork(E)` (SI-31). A settled
-        // epoch without the set is a lost row, whether or not the budget or
-        // the close height is present yet.
-        let complete_trees = match sigma_work {
-            Some(_) => Some(
-                view.complete_trees(epoch, floor)
-                    .map_err(ViewRead::View)?
-                    .ok_or(ViewRead::Corrupt(Corrupt::CompleteTreesAbsent { epoch }))?,
-            ),
-            None => None,
-        };
-        let (Some(budget), Some(sigma_work), Some(close_height), Some(complete_trees)) =
-            (budget, sigma_work, close_height, complete_trees)
+        let (Some(budget), Some(sigma_work), Some(close_height)) =
+            (budget, sigma_work, close_height)
         else {
             return Ok(None);
         };
@@ -174,7 +155,6 @@ impl CitedEpoch {
             close_height,
             sigma_work_milli: sigma_work.to_raw(),
             budget: budget.to_raw(),
-            complete_trees,
         }))
     }
 }
@@ -226,15 +206,8 @@ impl J23 {
         )?;
         let mut gathered = Vec::with_capacity(cited.len());
         for cited in cited {
-            let snapshot = gather_claimed_epoch(
-                view,
-                rule_set,
-                records,
-                persona,
-                &credits,
-                cited.epoch,
-                &cited.complete_trees,
-            )?;
+            let snapshot =
+                gather_claimed_epoch(view, rule_set, records, persona, &credits, cited.epoch)?;
             gathered.push(GatheredEpoch {
                 epoch: cited.raw,
                 close_height: cited.close_height,
@@ -257,7 +230,6 @@ fn gather_claimed_epoch<'id, 'r, V: ChainView<'id>>(
     persona: &PCanonicalId,
     credits: &ServedAt,
     epoch: SettlementEpoch,
-    complete_trees: &CompleteTreeSet,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
     let universe = gather_universe(
         view,
@@ -266,21 +238,14 @@ fn gather_claimed_epoch<'id, 'r, V: ChainView<'id>>(
         epoch,
     )?;
     let rows = records.iter().map(|(persona, record)| (persona, record));
-    gather_epoch_snapshot(
-        view,
-        &universe,
-        rows,
-        Some(persona),
-        complete_trees,
-        |holder| {
-            Ok(credits
-                .shards(holder, epoch)
-                .iter()
-                .copied()
-                .map(ShardId::to_raw)
-                .collect())
-        },
-    )
+    gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
+        Ok(credits
+            .shards(holder, epoch)
+            .iter()
+            .copied()
+            .map(ShardId::to_raw)
+            .collect())
+    })
 }
 
 /// One settlement epoch's close facts as CEN-J23 reads them for an
@@ -354,8 +319,6 @@ pub struct EmissionEpochSnapshot {
 pub struct EpochCloseBondFacts {
     /// The bond's join epoch.
     pub join_settlement_epoch: u64,
-    /// The foundation's complete-tree bond.
-    pub is_support_complete_tree: bool,
     /// Its bad intervals.
     pub bad_intervals: Vec<shekyl_types::archival::BadInterval>,
 }
@@ -376,8 +339,7 @@ pub struct EpochCloseBondFacts {
 /// # Errors
 ///
 /// The view's fault, or a shard close the gather cannot place
-/// ([`crate::Corrupt::ShardCloseUnplaced`]), or
-/// [`crate::Corrupt::CompleteTreesAbsent`] when a frozen `Σwork` has no set.
+/// ([`crate::Corrupt::ShardCloseUnplaced`]).
 pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
@@ -409,15 +371,8 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
         let standing = if let Some(window_floor) = floor.below(SettlementEpoch::from_raw(raw)) {
             EmissionEpochStanding::Expired { window_floor }
         } else if let Some(cited) = cited.get(&raw) {
-            let snapshot = gather_claimed_epoch(
-                view,
-                rule_set,
-                &records,
-                persona,
-                &credits,
-                cited.epoch,
-                &cited.complete_trees,
-            )?;
+            let snapshot =
+                gather_claimed_epoch(view, rule_set, &records, persona, &credits, cited.epoch)?;
             EmissionEpochStanding::Settled {
                 sigma_work_milli: cited.sigma_work_milli,
                 budget: cited.budget,
@@ -427,7 +382,6 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
                         .iter()
                         .map(|bond| EpochCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals.to_vec(),
                         })
                         .collect(),

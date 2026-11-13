@@ -12,7 +12,7 @@
 use super::*;
 use crate::coverage::RuleCoverage;
 use crate::harness::fixture::{
-    candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, serve_credit_only, G, TWO_G,
+    candidate_on, coinbase, coinbase_extra, listed, point, pqc_extra, G, TWO_G,
 };
 use crate::harness::{assert_refused, credited_to_this_falsifier, judge_on, MockChain};
 use crate::rule_set::RuleSet;
@@ -400,12 +400,6 @@ fn h14_loud_amounts_are_refused_except_on_an_emission() {
 
 /// Archival input fixtures. The class reads the variant, never the
 /// contents, so these carry the minimum the type requires.
-fn serve_credit() -> Input {
-    Input::ServeCredit {
-        canonical_bytes: Vec::new(),
-    }
-}
-
 pub(crate) fn emission() -> Input {
     Input::ArchivalRewardEmission {
         canonical_bytes: Vec::new(),
@@ -447,19 +441,15 @@ fn class_of(inputs: Vec<Input>) -> Verdict<TxClass> {
     TxContext::derive(&with_inputs(inputs), TxSlot::Lone, &mut coverage).map(|cx| cx.class)
 }
 
-/// The four non-coinbase shapes, each with its indices and counts, and the
+/// The three non-coinbase shapes, each with its indices and counts, and the
 /// empty vector (H4's, classified totally as a spend of nothing).
 #[test]
-fn the_classification_names_the_four_shapes_and_the_coinbase() {
+fn the_classification_names_the_three_shapes_and_the_coinbase() {
     assert_eq!(
         class_of(vec![spend(11), spend(12)]),
         Ok(TxClass::Spend { spends: 2 })
     );
     assert_eq!(class_of(Vec::new()), Ok(TxClass::Spend { spends: 0 }));
-    assert_eq!(
-        class_of(vec![serve_credit(), serve_credit()]),
-        Ok(TxClass::ServeCreditOnly { credits: 2 })
-    );
     assert_eq!(
         class_of(vec![spend(11), bond_post(), spend(12)]),
         Ok(TxClass::BondPost {
@@ -527,28 +517,20 @@ fn h5_gen_is_refused_outside_the_coinbase_position() {
     );
 }
 
-/// CEN-H6: each of the C++'s four mixings, refused; and the permitted
+/// CEN-H6: each of its three mixings, refused; and the permitted
 /// co-residencies (spends beside a bond post, spends beside an emission)
 /// pass.
 #[test]
 fn h6_the_archival_mixings_are_refused_and_the_permitted_ones_pass() {
     let lone = Locus::Tx { slot: TxSlot::Lone };
-    // Serve credits mix with nothing.
-    assert_refused(class_of(vec![serve_credit(), spend(11)]), CenRow::H6, lone);
-    assert_refused(
-        class_of(vec![serve_credit(), bond_post()]),
-        CenRow::H6,
-        lone,
-    );
-    assert_refused(class_of(vec![serve_credit(), emission()]), CenRow::H6, lone);
     // At most one bond post; at most one emission.
     assert_refused(class_of(vec![bond_post(), bond_post()]), CenRow::H6, lone);
     assert_refused(class_of(vec![emission(), emission()]), CenRow::H6, lone);
     // Emission and bond post never co-reside.
     assert_refused(class_of(vec![emission(), bond_post()]), CenRow::H6, lone);
     // Through both sites.
-    refused_lone(&with_inputs(vec![serve_credit(), spend(11)]), CenRow::H6);
-    refused_listed(&with_inputs(vec![serve_credit(), spend(11)]), CenRow::H6);
+    refused_lone(&with_inputs(vec![bond_post(), bond_post()]), CenRow::H6);
+    refused_listed(&with_inputs(vec![bond_post(), bond_post()]), CenRow::H6);
     // Permitted.
     assert!(class_of(vec![bond_post(), spend(11), spend(12)]).is_ok());
     assert!(class_of(vec![emission(), spend(11)]).is_ok());
@@ -656,7 +638,6 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::H16,
             CenRow::H17,
             CenRow::H18,
-            CenRow::H20,
             CenRow::H21,
             CenRow::H22,
             CenRow::I1,
@@ -669,7 +650,6 @@ fn a_well_formed_listed_transaction_records_every_landed_row() {
             CenRow::I16,
             CenRow::I19,
             CenRow::I20,
-            CenRow::J2,
             CenRow::J11,
             CenRow::J12,
             CenRow::J28,
@@ -750,7 +730,6 @@ fn h19_the_canonical_layout_is_one_proof_sized_to_the_outputs() {
         tree_depth: 0,
         fcmp_proof: vec![0xF0],
         pseudo_outs: vec![TWO_G],
-        serve_credit_pruned: Vec::new(),
     };
     // Exact fits and the padded ranges: 1 → 6 rounds; 2 → 7; 3, 4 → 8;
     // 5..=8 → 9; 9..=16 → 10.
@@ -815,112 +794,4 @@ fn h19_a_non_canonical_layout_is_refused_and_the_layout_alone_does_not_record() 
     assert!(!tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("the fixture")
         .contains(CenRow::H19));
-}
-
-// ---- CEN-H20 ------------------------------------------------------------
-
-/// Each departure from the serve-credit-only shape is refused on H20: a fee,
-/// a `pqc_auth`, an output (with its mask), spend material in the prunable
-/// region, no prunable region, a `Null` CT (that one is H15's first — the
-/// class is derived from the inputs, the CT type is H15's). The fixture
-/// shape passes and the row is vacuous on a spend. How many records the
-/// region holds is CEN-J2's (`tx_inputs_tests`).
-#[test]
-fn h20_every_departure_from_the_serve_credit_shape_is_refused() {
-    use shekyl_wire::{PqcAuth, Prunable};
-    let base = || serve_credit_only([0x77; 32]);
-    let mutate = |f: &dyn Fn(&mut Transaction)| {
-        let mut tx = base();
-        f(&mut tx);
-        tx
-    };
-    let fee = mutate(&|tx| {
-        if let Ct::Fcmp { fee, .. } = &mut tx.ct {
-            *fee = 1;
-        }
-    });
-    refused_lone(&fee, CenRow::H20);
-    refused_listed(&fee, CenRow::H20);
-    let auth = mutate(&|tx| {
-        if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
-            pqc_auths.push(PqcAuth {
-                auth_version: 1,
-                scheme_id: 1,
-                flags: 0,
-                hybrid_public_key: Vec::new(),
-                hybrid_signature: Vec::new(),
-            });
-        }
-    });
-    refused_lone(&auth, CenRow::H20);
-    let output = mutate(&|tx| {
-        tx.prefix.outputs.push(shekyl_wire::Output {
-            amount: 0,
-            key: G,
-            view_tag: 1,
-        });
-        if let Ct::Fcmp { base, .. } = &mut tx.ct {
-            base.commitments.push(TWO_G);
-            base.enc_amounts.push([0; 9]);
-            base.enc_labels.push([0; 9]);
-        }
-        // The extra fits the output so I19 (earlier in the order, here and
-        // in the C++) admits it and the departure reaches H20's arm.
-        tx.prefix.extra = pqc_extra(1);
-    });
-    refused_lone(&output, CenRow::H20);
-    let spend_material = mutate(&|tx| {
-        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
-            *prunable = Some(Prunable {
-                bulletproofs: Vec::new(),
-                tree_depth: 0,
-                fcmp_proof: vec![0xF0],
-                pseudo_outs: Vec::new(),
-                serve_credit_pruned: Vec::new(),
-            });
-        }
-    });
-    refused_lone(&spend_material, CenRow::H20);
-    // A prunable region holding only pass records (RF-D1's shape) is not
-    // spend material.
-    let pass_records = mutate(&|tx| {
-        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
-            *prunable = Some(Prunable {
-                bulletproofs: Vec::new(),
-                tree_depth: 0,
-                fcmp_proof: Vec::new(),
-                pseudo_outs: Vec::new(),
-                serve_credit_pruned: vec![vec![0x01, 0x02]],
-            });
-        }
-    });
-    assert!(tx_form(&pass_records, TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("pass records are not spend material")
-        .contains(CenRow::H20));
-    // No region at all: the pre-`RF-D1` body (`SHT-9`). The live C++ fails
-    // its parse and counts the records it would have held; this row first
-    // admitted it, and the store could not hold what it admitted.
-    let no_region = mutate(&|tx| {
-        if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
-            *prunable = None;
-        }
-    });
-    refused_lone(&no_region, CenRow::H20);
-    refused_listed(&no_region, CenRow::H20);
-    // The `Null` CT departure the doc above has named since slice 5 without
-    // a fixture asking for it (E6 slice 7 commit 2's sweep, the I14/H18
-    // class): the class is derived from the inputs, the CT type is H15's,
-    // and H15 fires before H20 sees the shape — now asked at both sites.
-    let null_ct = mutate(&|tx| {
-        tx.ct = Ct::Null(CtBase {
-            enc_amounts: Vec::new(),
-            enc_labels: Vec::new(),
-            commitments: Vec::new(),
-        });
-    });
-    refused_lone(&null_ct, CenRow::H15);
-    refused_listed(&null_ct, CenRow::H15);
-    assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("a spend")
-        .contains(CenRow::H20));
 }

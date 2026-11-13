@@ -23,7 +23,7 @@ use crate::daemon_tip::DaemonTipCache;
 use crate::runtime::{PriorityFailures, ServingPool};
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
-use crate::{PassKey, IDENTITY_ENVELOPE_LEN};
+use crate::PassKey;
 
 /// The serving identity and the shape of its published port.
 ///
@@ -46,18 +46,18 @@ pub struct PersonaServing {
     /// (SPIKE-PIN-1), not a derivation** — parameterized so the W₂ rig
     /// chooses it (see [`OnionServiceSpec`]).
     pub max_streams: u16,
-    /// The persona's attestation signing key for the `SF-D8` pass
-    /// countersignature. In production this is the engine's resident pass
-    /// key: a round-trip into the stake actor that holds the secret, which
-    /// never crosses into this crate (`SF-D13`).
+    /// The persona's receipt key for the `SF-D8` pass countersignature. In
+    /// production this is the engine's resident receipt key: a round-trip
+    /// into the stake actor that holds the secret, which never crosses into
+    /// this crate (`SF-D13`).
     ///
     /// **This field is where the host's scheme is chosen.** Its width is
-    /// the envelope's: the bond identity key's (hybrid scheme 1), 3,385
-    /// bytes. The signer the host builds over it and the endpoint it binds
-    /// take their width from this type and name none of their own. A host
-    /// that served receipts would declare the receipt width here, in the
-    /// change that makes a verifier accept them (`FN_DSA_HYBRID.md` §9).
-    pub key: Arc<dyn PassKey<IDENTITY_ENVELOPE_LEN>>,
+    /// the receipt envelope's (hybrid scheme 3, Ed25519 + FN-DSA-1024),
+    /// verified under the bond record's `receipt_sign_pk` and the receipt
+    /// domain (`FN_DSA_HYBRID.md` §9). The signer the host builds over it
+    /// and the endpoint it binds take their width from this type and name
+    /// none of their own.
+    pub key: Arc<dyn PassKey>,
     /// The `SF-D5` gate's height source: the configured daemon's tip,
     /// stamped by a producer the caller owns (see [`crate::signer`] for why
     /// the daemon and not the served store — `WSS-24`).
@@ -81,7 +81,7 @@ impl fmt::Debug for PersonaServing {
             .field("identity", &self.identity)
             .field("virtual_port", &self.virtual_port)
             .field("max_streams", &self.max_streams)
-            .field("key", &"<dyn PassKey<IDENTITY_ENVELOPE_LEN>>")
+            .field("key", &"<dyn PassKey>")
             .field("tip", &self.tip)
             .field("bodies", &"<dyn HeldShardSource>")
             .finish()
@@ -429,8 +429,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // gate height is the daemon's tip on `serving.tip` (`WSS-24`).
         let provider = StoreShardProvider::new(serving.bodies);
         // The width is `serving.key`'s; the endpoint is bound at it.
-        let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
-            Arc::new(HostSigner::new(serving.tip, serving.key));
+        let signer: Arc<dyn PassSigner> = Arc::new(HostSigner::new(serving.tip, serving.key));
         // The serving runtime first, then the bind *on* it: `tokio::spawn`
         // inside `bind` lands the accept loop on the runtime the bind future
         // runs on, and every connection task and blocking hop follows the

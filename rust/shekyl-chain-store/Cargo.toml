@@ -12,9 +12,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-# A network row's permit for the replay writes (NETWORK_IDENTITY.md NI-R6):
-# the store holds the permit, never the network (rule 71).
-shekyl-network = { path = "../shekyl-network" }
 redb = { workspace = true }
 # The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
 # `CodecError`, the four value shapes, and the codecs for types this crate
@@ -60,6 +57,8 @@ pool-commit-fault = []
 workspace = true
 
 [dev-dependencies]
+# HARNESS_NETWORK_ID for the bundle fixtures' witness signatures.
+shekyl-network = { path = "../shekyl-network" }
 # The manifest walk in `codec::snapshot_tests::workflow_gates_this_crate`
 # derives the set of crates whose code can change a stored byte from the
 # workspace's `Cargo.toml`s. A hand-rolled reader that skipped a spelling it
@@ -85,6 +84,11 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+# The decision-citation guard (`test_support::regen_decision_or_refuse`)
+# the shard-fill capture is written under (`store/shard_fill.rs`), the one
+# every armed regenerator in the workspace calls. Already a normal
+# dependency of shekyl-chain-rules (rule 17); test-only here.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already

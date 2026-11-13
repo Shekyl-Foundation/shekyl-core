@@ -344,9 +344,7 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let rules = corpus.rules_at(2);
     let mut node = Node::start("forged", rules, &steps[..1], 2, rng(), session_rng()).await;
     let genesis = node.chain.block(0);
-    let Step::Block { block, .. } = &steps[1] else {
-        panic!("height 1 is a block");
-    };
+    let Step { block, .. } = &steps[1];
     let mut forged = Block::from_bytes(block).expect("a block");
     let (prover, _) = substrate();
     let snap = node.chain.store.begin_read().expect("a read");
@@ -409,11 +407,11 @@ async fn a_substituted_body_closes_the_supplier_and_the_header_survives() {
     substituted("subst-body", Bodies::SubstituteBody, "Bind(G2)").await;
 }
 
-/// A witness that is not the block's closes the supplier at CEN-B4; the
+/// References that are not the block's close the supplier at CEN-J29; the
 /// header survives.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_substituted_witness_closes_the_supplier_and_the_header_survives() {
-    substituted("subst-witness", Bodies::SubstituteWitness, "Bind(B4)").await;
+async fn substituted_references_close_the_supplier_and_the_header_survives() {
+    substituted("subst-refs", Bodies::SubstituteReferences, "Bind(J29)").await;
 }
 
 async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
@@ -758,10 +756,8 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
     let main = chain.block(fork_at + 1);
     let bodies = steps
         .iter()
-        .find_map(|step| match step {
-            Step::Block { block, bodies } if *block == main.serialize() => Some(bodies.clone()),
-            _ => None,
-        })
+        .find(|step| step.block == main.serialize())
+        .map(|step| step.bodies.clone())
         .expect("the corpus holds the block");
     // The main block's sibling: the same parent and transactions, another
     // nonce. It is lighter than the main chain, so it is stored beside it.
@@ -775,7 +771,8 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
             origin: Origin::Local,
             block: sibling.serialize(),
             bodies,
-            attestation_witness: Vec::new(),
+            bundle_references: Vec::new(),
+            bundle_bodies: Vec::new(),
         })
         .expect("room");
     let reply = ticket.reply().await.reply;

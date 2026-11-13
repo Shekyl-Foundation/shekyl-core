@@ -16,5 +16,5 @@
   "tx_count": 1,
   "coinbase": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "curve_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-  "attestation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  "section_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

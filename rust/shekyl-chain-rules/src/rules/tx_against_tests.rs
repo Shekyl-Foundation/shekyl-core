@@ -30,7 +30,7 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt, PerHeightRecord, Stale};
 use crate::harness::fixture::{
     anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
-    listed_on, point, point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
+    listed_on, point, point_at, referencing, spend, spendable_chain, TWO_G,
 };
 use crate::harness::{
     assert_refused, credited_to_this_falsifier, defined, formed_on, judged, Faulted, FaultingView,
@@ -365,39 +365,6 @@ fn i10_refuses_an_unrecorded_reference() {
             CenRow::I10,
             Locus::Tx { slot: TxSlot::Lone },
         );
-    });
-}
-
-/// The reference rows are the regular spend's: a serve-credit-only body has
-/// no reference to look up, and the three are recorded vacuous, as the
-/// coinbase's are (`validate_tests::tx_entry_points_record_the_landed_rows`).
-///
-/// Called as the sequence, not through `tx_against`: since E6 slice 8 row
-/// 3 a serve credit over the mock is refused on CEN-J4 (`MockChain` holds
-/// no bonds by policy), so the whole-stage call no longer reaches the
-/// reference rows. The witness for a credit *through* `tx_against` is a
-/// driven chain that posted the bond (`shekyl-chain-ingest`).
-#[test]
-fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
-    let chain = spendable_chain();
-    let credit = serve_credit_only([0x5e; 32]);
-    chain.with_view(|view| {
-        let mut coverage = RuleCoverage::EMPTY;
-        let cx = TxContext::derive(&credit, TxSlot::Lone, &mut coverage)
-            .expect("a serve-credit-only body classifies")
-            .on_network(crate::HARNESS_NETWORK_ID);
-        let context = judged(judge_reference(
-            &cx,
-            &view,
-            None,
-            FormAttempt::FIRST,
-            &mut coverage,
-        ))
-        .expect("a serve credit has no reference to judge");
-        assert_eq!(context, None, "no context: nothing verifies against one");
-        for row in [CenRow::I10, CenRow::I11, CenRow::I12, CenRow::J21] {
-            assert!(coverage.contains(row), "{row} recorded vacuous");
-        }
     });
 }
 
@@ -900,68 +867,14 @@ fn i17_derives_the_wires_signing_preimage_and_records_the_row() {
     assert!(coverage.contains(CenRow::I17));
 }
 
-/// The serve-credit form has no signing preimage — not because it is
-/// unsigned, but because CEN-H20 forbids it `pqc_auths` and its hybrid
-/// countersignature is CEN-J10's, over the pass record. Two failure modes
-/// are pinned here for I17 and, by the same shape, for I18 (commit 8):
-///
-/// 1. **It does not reach for J10's object.** The derivation is bound to
-///    the class, not to the record: corrupting every byte of the pass record
-///    changes nothing — still zero hashes, still admitted through the
-///    signature sequence. A derivation that read the record would move.
-/// 2. **Zero-yield is exactly the classes with no `pqc_auths` by
-///    construction** — the serve credit and the coinbase — never an in-scope
-///    class that happened to produce nothing: a spend yields one per input.
-///
-/// The row is recorded **vacuous, not absent**, as I10–I12 are on the same
-/// body and as every out-of-scope row is (slice 5 Q2, `rules/mod.rs`): the
-/// bitset says the row was evaluated at this slot, so a block of serve
-/// credits can be complete and the pool cannot mis-declare a kind. What
-/// distinguishes a vacuous record from a judgment is (2): the class, which
-/// this test holds fixed.
+/// Zero-yield is exactly the class with no `pqc_auths` by construction —
+/// the coinbase — never an in-scope class that happened to produce
+/// nothing: a spend yields one per input. The row is recorded **vacuous,
+/// not absent** on the coinbase (slice 5 Q2, `rules/mod.rs`).
 #[test]
-fn i17_reads_none_of_a_serve_credits_pass_record_and_yields_only_where_pqc_auths_are() {
+fn i17_yields_only_where_pqc_auths_are() {
     let chain = spendable_chain();
-    let intact = serve_credit_only([0x5e; 32]);
-    let mut corrupt = intact.clone();
-    match &mut corrupt.prefix.inputs[0] {
-        Input::ServeCredit { canonical_bytes } => {
-            // Every payload byte flipped; the tag byte stays so the codec's
-            // shape check admits the body and I17 alone is under test.
-            for byte in &mut canonical_bytes[1..] {
-                *byte ^= 0xFF;
-            }
-        }
-        other => panic!("a serve-credit fixture carries a serve-credit input, not {other:?}"),
-    }
-    for (name, tx) in [("intact", &intact), ("corrupt record", &corrupt)] {
-        let mut coverage = RuleCoverage::EMPTY;
-        let cx = TxContext::derive(tx, TxSlot::Lone, &mut coverage)
-            .expect("a serve-credit-only body classifies")
-            .on_network(crate::HARNESS_NETWORK_ID);
-        assert!(
-            matches!(cx.class, crate::rules::tx::TxClass::ServeCreditOnly { .. }),
-            "{name}: the class the zero-yield follows from"
-        );
-        assert!(
-            I17::signed_hashes(&cx, &mut coverage).is_empty(),
-            "{name}: no pqc_auths, no preimage — the pass record is J10's, unread here"
-        );
-        assert!(
-            coverage.contains(CenRow::I17),
-            "{name}: recorded vacuous, not absent"
-        );
-        // The signature sequence, run as `tx_against` runs it, admits the
-        // body regardless of the record. It is called directly: on a chain
-        // with no record for the persona, `tx_against` refuses the intact
-        // body on J4 before I17 is reached (slice 8 row 3), and that
-        // refusal is the bond state's, not this row's.
-        judge_signatures(&cx, &mut coverage).unwrap_or_else(|refused| {
-            panic!("{name}: admitted regardless of the record; refused {refused:?}")
-        });
-    }
-    // (2): the coinbase is the other body with no `pqc_auths`; a spend yields
-    // one hash per input, so an empty yield can only be one of the two.
+    // The coinbase has no `pqc_auths`; a spend yields one hash per input.
     let mut coverage = RuleCoverage::EMPTY;
     let cb = coinbase(1);
     let cx = TxContext::derive(&cb, TxSlot::Miner, &mut coverage)
@@ -1114,40 +1027,6 @@ fn i18_refuses_a_signature_over_a_body_that_has_since_changed() {
             slot: TxSlot::Lone,
             input: 0,
         },
-    );
-}
-
-/// The boundary row 8 pinned before this row started: on the serve-credit
-/// form I18 verifies nothing — corrupt the pass record's countersignature
-/// legs and the verdict does not move — because the form's signature is
-/// CEN-J10's, over the pass record, and I17 yields no message here. A
-/// verifier that reached for J10's object would refuse a corrupt one; this
-/// is the falsifier for "does not reach". Recorded vacuous, not absent
-/// (slice 5 Q2), as the I17 test on the same body explains.
-///
-/// Called as the signature sequence, not through `tx_against`, for the
-/// reason the I10–I12 test above gives: over the mock a credit is CEN-J4's
-/// refusal first, and this test's subject is the row after it.
-#[test]
-fn i18_is_vacuous_on_a_serve_credit_and_does_not_reach_for_its_countersignature() {
-    let mut corrupt = serve_credit_only([0x5e; 32]);
-    match &mut corrupt.prefix.inputs[0] {
-        Input::ServeCredit { canonical_bytes } => {
-            for byte in &mut canonical_bytes[1..] {
-                *byte ^= 0xFF;
-            }
-        }
-        other => panic!("a serve-credit fixture carries a serve-credit input, not {other:?}"),
-    }
-    let mut coverage = RuleCoverage::EMPTY;
-    let cx = TxContext::derive(&corrupt, TxSlot::Lone, &mut coverage)
-        .expect("a serve-credit-only body classifies")
-        .on_network(crate::HARNESS_NETWORK_ID);
-    judge_signatures(&cx, &mut coverage)
-        .expect("J10's object is not this row's; the verdict does not move");
-    assert!(
-        coverage.contains(CenRow::I18),
-        "recorded vacuous, not absent"
     );
 }
 

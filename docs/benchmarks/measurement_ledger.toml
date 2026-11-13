@@ -156,6 +156,7 @@ stale_through = [
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-bulletproofs' crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the capture priced has moved." },
   { through = "cebbb746f1", note = "Test-only publics (2026-11-08): in this path set, one doc comment in shekyl-fcmp's tree.rs (leaves_to_bytes no longer says LMDB storage). Comment only; no function, constant or code path changed, and nothing the capture priced has moved." },
   { through = "ccc7c5f79a", note = "In this path set, shekyl-bulletproofs only. 3f2922f1ce replaces the folded verifier's variable-time multiexp of single-term (INV_EIGHT, P) pairs with one constant-time scalar multiplication per commitment, the product the prover already used. The points are unchanged; the time of that opening moves and has not been re-measured. ccc7c5f79a names the padded bit-length once for the prover and both verifiers and asserts reduce returns it, and adds no multiplication. The surge factor's Bp+ term was measured on the previous opening. The rows stay stale from PL-D3." },
+  { through = "6ecc1155ec", note = "signature.rs loses the SCHEME_DOMAIN_ATTESTATION constant and its doc. No sign or verify the block-weight composition prices is added, removed or reordered. Not re-measured." },
   { through = "24287ca482", note = "In this path set, signature.rs names the seeded ML-DSA nonce width ML_DSA_SIGNING_SEED_LEN, 32 bytes, and sign_with_ml_dsa_seed takes an array of that width. Both sit behind cfg(test) or the test-utils feature. Production SignatureScheme::sign and the nested verify that block verification prices are unchanged. Not re-measured; nothing the capture priced has moved. The rows stay stale from PL-D3." },
   { through = "8bf44cad1e", note = "63fc991496 (multisig E′ container v0x02): verify_pqc_auth takes the chain's network id and sends scheme 2 to the v0x02 checks; the scheme-1 arm the pi4_hybrid_sig cells time is the same parse and the same Ed25519 + ML-DSA verify. CEN-I18 passes cx.network(). shekyl-fcmp gains PqcKeyScalar::from_pqc_auth, which for a solo slot adds one length compare before the same H_ℓ over the same bytes. Nothing changes a solo block's weight or verify work. 8bf44cad1e, in this history, rewrites doc comments in signature.rs only." },
   { through = "e21cd906e7", note = "Multisig slice 2 (21e5e57a0c, e21cd906e7): in this path set, shekyl-fcmp's frost_sal.rs is rewritten over modular_frost's signing machines, frost_dkg.rs is deleted, lib.rs drops that module, and frost_sal_tests.rs is new, all behind the multisig feature. No verify, prove, SAL, leaf or tree function the capture times reads any of it, and none of them changed. Not re-measured; the rows stay stale on their carrier." },
@@ -164,6 +165,7 @@ stale_through = [
   { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): RerandomizedOutput::for_pseudo_out holds r_c = a − z. prove_with_rng and SalSigningParams::propose both call it, then the same with_commitment_blind the call sites called before. Same scalar subtraction, same rerandomization. Not re-measured; the rows stay stale." },
   { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. No hash, derivation or verify function changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "d51c1815ed", note = "The switch's C7 deletes the serve-credit input: in this path set, proofs.rs's I15 class match loses the ServeCreditOnly arm (a coinbase still skips the proof) and signature.rs loses SCHEME_DOMAIN_SERVE_CREDIT. A spend's proof verify and its hybrid signature verify are unchanged. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -229,19 +231,6 @@ measured_by = ["BA-T10"]
 status = "unmeasured"
 carrier = "BA-T10. Nothing is measured past depth 7; the depth-24 verify cost the surge factor is signed on is composed from per-layer slopes (BA-G4)."
 path_set = "fcmp-tree-depth"
-
-[[path_set]]
-id = "archival-attestation-cap"
-spec = ["rust/shekyl-crypto-pq/src/signature.rs"]
-
-[[constant]]
-name = "archival_max_attestation_records"
-defined_in = "rust/shekyl-types/src/archival/mod.rs"
-needle = "pub const MAX_ATTESTATION_RECORDS: usize = 256;"
-measured_by = ["BA-T10"]
-status = "unmeasured"
-carrier = "BA-T10 (BA-G16). Justified in place as bounding per-block admission cost; no measurement of that cost exists."
-path_set = "archival-attestation-cap"
 
 # --- relay privacy ----------------------------------------------------
 
@@ -405,6 +394,8 @@ stale_through = [
   { through = "d85697a328", note = "The body-store actor leaves the engine runtime for its own one-worker runtime, sk-body-store, whose threads lower themselves to serving nice before they take work. The redb read and the chunk decrypt of a served body run there for the whole session. The endpoint thread still only waits. Not re-measured; the rows stay stale." },
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
+  { through = "b0cbd52d72", note = "The switch's C6: the pass is signed with the persona's receipt key (the FN-DSA hybrid envelope) in place of the identity key, over a typed PassTranscript whose bytes are unchanged. The per-serve signature is a different primitive, so the captured serve does not price it. Not re-measured." },
+  { through = "6ecc1155ec", note = "The identity pass path goes: the serve loop and the fetch client lose their envelope-width generic and run at the receipt width only, which C6 already made the one live width; the identity wire-pin fixtures are deleted. The receipt, its sign and its verify are unchanged, and no read, digest or write on the serve or fetch path is added, removed or reordered. Not re-measured." },
 ]
 
 [[path_set]]
@@ -469,6 +460,8 @@ stale_through = [
   { through = "ec931d5858", note = "Only test files and the identity wire-pin fixtures changed: the fixtures were re-recorded because the derived persona keys moved (NI-R7). No serving or fetch code changed. Not re-measured." },
   { through = "a867b6840c", note = "Test fixtures only: the p-fetch and p-serve identity wire pins (src/wire_pin/*.hex) re-recorded because the derivation salt name_id || purpose moved the pinned persona keys. No serve or fetch code changed, no cost moved. Not re-measured." },
   { through = "d6e8da7d44", note = "Rules after the C++ removal (#1308): shekyl-p-fetch's crate root takes #![deny(unsafe_code)]; the crate holds no unsafe, so the attribute compiles to nothing and nothing the captures priced has moved." },
+  { through = "b0cbd52d72", note = "The switch's C6: the pass is signed with the persona's receipt key (the FN-DSA hybrid envelope) in place of the identity key, over a typed PassTranscript whose bytes are unchanged. The per-serve signature is a different primitive, so the captured serve does not price it. Not re-measured." },
+  { through = "6ecc1155ec", note = "The identity pass path goes: the serve loop and the fetch client lose their envelope-width generic and run at the receipt width only, which C6 already made the one live width; the identity wire-pin fixtures are deleted. The receipt, its sign and its verify are unchanged, and no read, digest or write on the serve or fetch path is added, removed or reordered. Not re-measured." },
   { through = "34255a8945", note = "rpc 4.0: shekyl-p-fetch's client gains PFetchClient::with_slots, so one client is sized to the producer's reads plus the view's two flights (VIEW_SLOTS, 2) instead of MAX_INFLIGHT (8). A fetch still dials, reads, hashes and checks; per-response serve work is unchanged. The composed cap can exceed 8 when both lanes run. Not re-measured; the rows stay stale." },
 ]
 
@@ -545,6 +538,8 @@ spec = [
 ]
 cleared = [
   { through = "2fb779723", reason = "The Android target_os gates are deleted. Linux still calls setpriority with SERVING_NICE 19, and the serving runtime's Linux test still reads that value back. The BA-T5 session 3 T1 capture still prices this tree." },
+  { through = "b0cbd52d72", reason = "runtime.rs changes only a test: the accept-loop test names the receipt width on signer_at_synced_tip. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
+  { through = "6ecc1155ec", reason = "runtime.rs changes only a test: the accept-loop test calls signer_at_synced_tip without a width. SERVING_NICE and the runtime are unchanged. The BA-T5 session 3 T1 capture still prices this tree." },
 ]
 
 [[constant]]
@@ -745,6 +740,7 @@ stale_through = [
   { through = "c0f6274413", note = "transport: the inbound reservation that skipped the accept-rate gate is deleted; harness tables are built with no gate and take accept_clearnet. The listener's accept checks the ban, the ceilings and the rate in the same order as before; no dial, handshake or gap I/O changes. Not re-measured." },
   { through = "623fa03dce", note = "Each connector publishes an admitted socket through a callback in place of the shared admission channel. The library listener still sends on that channel (publish_on), at the same point after the channel exists. The dial, the handshake and the gap do the same I/O, and no span constant moved. Not re-measured. The rows stay stale for the reasons already recorded." },
   { through = "63fcdd9d25", note = "profile.rs: the doc comment on Tor's δ names its 60 s basis as shekyl-p2p-session's TIMED_SYNC_MIN plus half TIMED_SYNC_JITTER, in place of the deleted C++ P2P_DEFAULT_HANDSHAKE_INTERVAL. A comment only; no dial, handshake, gap or shutdown wait changes. Not measured; the rows stay stale." },
+  { through = "a1ed698f8b", note = "The switch's C0 (bundle transport, 2015-2017): sizes.rs gains the bundle_relay traffic class for the three new commands, a name in the per-class byte tally. No dial, handshake or gap I/O changes. Not re-measured." },
   { through = "4943ebc7f7", note = "rpc 4.0: one module-doc line in shekyl-transport-layer's ban.rs renames set_bans to ban_add. Dial, handshake and gap I/O are unchanged. Not re-measured; the rows stay stale." },
 ]
 
@@ -963,6 +959,8 @@ stale_through = [
   { through = "8bf44cad1e", note = "8fd4ce7930 (multisig E′ constructor and receive check): construct_output is split into encapsulate_deterministic and construct_output_core with the same operations in the same order, so the sender's cost is unchanged. The solo scanner's per-output path is unchanged: the leaf comparison moved inside a match on the member context, which is None for every solo wallet. Only a multisig member's scanner does more, and only on an output its group owns: one more decapsulation, one ML-DSA-65 keygen, one AEAD open and one leaf commitment. The FA-6 budget prices outputs that are not the wallet's, which cost the same. 8bf44cad1e, in this history, rewrites a doc comment in output.rs only." },
   { through = "5861ad72b484", note = "The member verdict moved out of scan.rs into multisig_scan.rs. What remains in scan.rs is a match on the scanner's receive policy. The solo arm is the same leaf comparison as before, one constant-time compare of an entry the output already derived. The member's extra decapsulation is no longer in this path set. Not re-measured; the rows stay stale." },
   { through = "e5c7697e65", note = "In this path set, output.rs gains sign_emission_backing_for_output, which signs an emission's Framed64 binding message under the backing domain. The decapsulation and the output scan do not call it. Not re-measured." },
+  { through = "4a22840849", note = "The switch's C1: scan.rs renames the header field attestation_root to bundle_root in two test-block fixtures and fills it with the empty bundle root. Decapsulation and the output scan are unchanged. Not re-measured." },
+  { through = "1e6f95a13e", note = "IG-Q102 (the switch): scan.rs's two test-block fixtures rename the header field bundle_root to section_root and its type to SectionRoot. A rename only; decapsulation and the output scan are unchanged. Not re-measured." },
 ]
 
 [[constant]]

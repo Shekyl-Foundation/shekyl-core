@@ -29,8 +29,9 @@
 //!   own validator refuses, so the builder refuses first
 //!   ([`TemplateError::TimestampBeyondFutureLimit`]). `nonce` is zero: the
 //!   template is what the miner searches, not the result.
-//!   `attestation_root` is the caller's — the archival lane owns the credit
-//!   wire; the template carries the root, it does not derive one.
+//!   `section_root` is the caller's — it commits to the bundles the
+//!   caller's section admits; the template carries the root, it does not
+//!   derive one.
 //! - **Coinbase.** One `txin_gen` (CEN-F1) claiming `h` (CEN-F5);
 //!   `unlock_time = h + window` (CEN-F6); `CTTypeNull` with one committed
 //!   base per output (CEN-F3); **one output** above genesis (CEN-F4);
@@ -108,7 +109,7 @@ use shekyl_economics::{
     EmissionInputs, RewardArithmetic, SupplyInvariantViolation, TxVolume, REPRICING_PASSES,
 };
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, SectionRoot, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
@@ -166,8 +167,8 @@ pub struct TemplateContext<'a> {
     pub previous: BlockHash,
     /// The curve-tree state **at** `height` — CEN-B5.
     pub curve_tree_root: CurveTreeRoot,
-    /// The archival attestation root the header carries.
-    pub attestation_root: AttestationRoot,
+    /// The section root the header carries (`SCS-P34`).
+    pub section_root: SectionRoot,
     /// The header's `major_version` — the version the rule set in force
     /// admits (CEN-B1). The other version byte is not the producer's to
     /// choose: every template carries
@@ -215,7 +216,7 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("height", &self.height)
             .field("previous", &self.previous)
             .field("curve_tree_root", &self.curve_tree_root)
-            .field("attestation_root", &self.attestation_root)
+            .field("section_root", &self.section_root)
             .field("major_version", &self.major_version)
             .field("now", &self.now)
             .field("median_timestamp", &self.median_timestamp)
@@ -419,7 +420,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
             previous: cx.previous,
             nonce: 0,
             curve_tree_root: cx.curve_tree_root,
-            attestation_root: cx.attestation_root,
+            section_root: cx.section_root,
         },
         miner_transaction: paid.coinbase,
         transaction_hashes: tx_hashes,

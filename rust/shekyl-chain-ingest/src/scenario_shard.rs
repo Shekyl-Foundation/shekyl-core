@@ -265,8 +265,13 @@ pub fn settled_schedule() -> SettlementSchedule {
 }
 
 /// Coinbases a shard fill spends from. Those below it stay for the posts
-/// that ride the chain: a join spends coinbase 0.
+/// that ride the chain: a join spends coinbase 0. The captured shard-fill
+/// chain ([`load_shard_fill`]) leaves the same coinbases unspent.
 pub const FILL_FROM_COINBASE: u64 = 10;
+const _: () = assert!(
+    FILL_FROM_COINBASE == shekyl_harness_spender::captured::SHARD_FILL_RESERVED_COINBASES,
+    "the captured chain reserves the coinbases the posts spend"
+);
 
 /// Spends listed per fill block. One driven coinbase spend measures about
 /// 13.2 KB of archival good and a little more on the wire; sixteen sit
@@ -327,6 +332,61 @@ pub async fn mine_to(
 fn next_height(chain: &[Mined]) -> BlockHeight {
     ChainCount::from_raw(u64::try_from(chain.len()).expect("a test chain's length is a count"))
         .next_height()
+}
+
+/// A fresh scenario's chain from genesis through the block that closes
+/// shard `want − 1`, connected from the captured shard-fill chain
+/// (`shekyl-harness-spender`'s `captured`; Rick's shard-fill ruling,
+/// 2026-11-11): the spends were proved once and checked in, and each block
+/// is connected verbatim through the scenario's own door, so every rule
+/// still judges it. Coinbases below [`FILL_FROM_COINBASE`] are unspent.
+///
+/// Panics if the scenario has connected anything, if the capture does not
+/// close `want` shards, or if the producer's count of closed shards after
+/// the prefix is not `want`.
+pub async fn load_shard_fill(scenario: &mut Scenario<FreeHash>, want: u64) -> (Vec<Mined>, Filled) {
+    let chain = shekyl_harness_spender::captured::CapturedChain::shard_fill();
+    let blocks = chain
+        .blocks_closing(want - 1)
+        .unwrap_or_else(|| panic!("the captured chain closes fewer than {want} shards"));
+    let mut mined: Vec<Mined> = Vec::with_capacity(blocks);
+    for (height, captured) in chain.blocks[..blocks].iter().enumerate() {
+        let mut next = scenario
+            .next_template(captured.listed.clone())
+            .await
+            .unwrap_or_else(|outcome| panic!("the template at {height}: {outcome}"));
+        assert_eq!(
+            next_height(&mined).to_raw(),
+            u64::try_from(height).expect("small"),
+            "the capture loads into a fresh scenario"
+        );
+        next.template.block = captured.block.clone();
+        mined.push(
+            scenario
+                .connect_template(next)
+                .await
+                .unwrap_or_else(|outcome| {
+                    panic!(
+                        "captured block {height} connects (capture {}): {outcome}",
+                        chain.capture_rev
+                    )
+                }),
+        );
+    }
+    assert_eq!(
+        closed_shards(scenario).await,
+        want,
+        "the prefix closes {want} shards"
+    );
+    let closed = (0..want)
+        .map(|k| ClosedShard {
+            shard: ShardId::from_raw(k),
+            close_height: BlockHeight::from_raw(
+                u64::try_from(chain.blocks_closing(k).expect("closed")).expect("small") - 1,
+            ),
+        })
+        .collect();
+    (mined, Filled { closed })
 }
 
 /// Fill the chain with real spends until `want` shards are closed. Spends

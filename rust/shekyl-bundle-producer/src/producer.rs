@@ -75,7 +75,7 @@ use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use zeroize::Zeroizing;
 
-use crate::outcome::{Answered, ReadKey, ReadOutcome};
+use crate::outcome::{ReadKey, ReadOutcome};
 use crate::plan::ReadPlan;
 use crate::ring::WitnessRing;
 use crate::{CANDIDATE_DEPTH, FILING_MARGIN};
@@ -262,8 +262,6 @@ pub struct Filing {
     pub draws: usize,
     /// How many of them passed.
     pub passes: usize,
-    /// Whether a read met the identity scheme on the serving side.
-    pub serving_scheme_absent: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -307,7 +305,6 @@ struct BlockWork {
     /// next one does, which is how an unanswered block is retried.
     asked_on: Option<TipPublication>,
     stage: Stage,
-    serving_scheme_absent: bool,
 }
 
 /// The producer (module docs).
@@ -405,7 +402,6 @@ impl Producer {
                             popped_at: None,
                             asked_on: None,
                             stage: Stage::Learning,
-                            serving_scheme_absent: false,
                         },
                     );
                 }
@@ -595,12 +591,7 @@ impl Producer {
                     DrawState::Done
                 }
             }
-            ReadOutcome::Answered(answered) => {
-                if answered == Answered::ServingScheme {
-                    work.serving_scheme_absent = true;
-                }
-                DrawState::Done
-            }
+            ReadOutcome::Refused => DrawState::Done,
         };
     }
 
@@ -657,7 +648,6 @@ impl Producer {
                     body,
                     draws: draws.len(),
                     passes: passed,
-                    serving_scheme_absent: work.serving_scheme_absent,
                 }),
                 Some(Err(error)) => failed.push((h, error)),
                 None => {}

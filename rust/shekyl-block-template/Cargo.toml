@@ -26,7 +26,7 @@ license.workspace = true
 # The wire format: `Block`, `BlockHeader`, `Transaction`, the coinbase
 # `tx_extra` grammar's one constructor (`build_coinbase_extra`, TXE-Q6′).
 shekyl-wire = { path = "../shekyl-wire" }
-# Header/hash newtypes (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`,
+# Header/hash newtypes (`BlockHash`, `CurveTreeRoot`, `SectionRoot`,
 # `BlockHeight`, `BlockCount`, `Timestamp`, `TxHash`).
 shekyl-types = { path = "../shekyl-types" }
 shekyl-units = { path = "../shekyl-units" }

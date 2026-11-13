@@ -60,15 +60,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_archival_retention::pass_anchor::{
-    pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-};
+use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
 use shekyl_archival_retention::pass_delivery_digest;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, BlockHeight};
 use shekyl_p_serve::{
     PServeEndpoint, PassKey, PassSigner, ProviderError, ShardBody, ShardProvider,
-    StoreShardProvider, TestKeySigner, IDENTITY_ENVELOPE_LEN, MAX_INFLIGHT, REQUEST_HEADER_NAME,
+    StoreShardProvider, TestReceiptKeySigner, MAX_INFLIGHT, RECEIPT_ENVELOPE_LEN,
+    REQUEST_HEADER_NAME,
 };
 use shekyl_p_store::{BodyStore, StoreKey};
 use shekyl_runtime::{runtime_with_thread_hooks, Pool, RuntimeBudget, ThreadHooks, ThreadName};
@@ -260,7 +259,7 @@ fn check_whole(shard_id: u64, out: &[u8]) {
     // this length used to require is gone with the unframed body.
     assert_eq!(
         declared,
-        size_of(shard_id).1 + IDENTITY_ENVELOPE_LEN,
+        size_of(shard_id).1 + RECEIPT_ENVELOPE_LEN,
         "the declared length is the shard and its envelope"
     );
 }
@@ -424,7 +423,7 @@ fn endpoint_runtime() -> EndpointRuntime {
 struct Served {
     runtime: EndpointRuntime,
     endpoint: PServeEndpoint,
-    signer: Arc<TestKeySigner>,
+    signer: Arc<TestReceiptKeySigner>,
     provider: Arc<Shards>,
     lateness: Arc<Mutex<Vec<u64>>>,
     sampling: Arc<AtomicBool>,
@@ -471,11 +470,13 @@ impl Served {
         });
 
         let runtime = endpoint_runtime();
-        let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
+        let signer = Arc::new(TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(
+            OWN_HEIGHT,
+        )));
         let endpoint = runtime
             .block_on(PServeEndpoint::bind(
                 Arc::clone(&provider) as Arc<dyn ShardProvider>,
-                Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+                Arc::clone(&signer) as Arc<dyn PassSigner>,
             ))
             .expect("bind");
 
@@ -647,12 +648,17 @@ fn isolated_phases(served: &Served, label: &str, n: usize) {
         }
     }
     for i in 0..n {
-        let mut message = [0x33u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
-        message[..32].copy_from_slice(&nonce(0x33, i));
+        let transcript = shekyl_archival_retention::PassRequestHeader::from_parts(
+            shekyl_archival_retention::PassStream::Economy,
+            nonce(0x33, i),
+            shekyl_types::BlockHeight::from_raw(0x3333_3333_3333_3333),
+            shekyl_types::BlockHash::from_bytes([0x33; 32]),
+        )
+        .transcript(0x3333_3333_3333_3333, [0x33; 32]);
         let t = Instant::now();
-        let signature = served.signer.sign_pass(&message).expect("sign");
+        let signature = served.signer.sign_pass(&transcript).expect("sign");
         println!("PHASE\t{label}\tany\tsign\t{}", t.elapsed().as_micros());
-        drop(signature);
+        std::hint::black_box(signature);
     }
 }
 
