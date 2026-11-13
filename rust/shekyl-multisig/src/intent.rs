@@ -340,15 +340,8 @@ impl SpendIntent {
             return Err(SpendIntentError::AddressTooLong(long));
         }
 
-        let mut sorted = self.recipients.clone();
-        sorted.sort();
-        if sorted != self.recipients {
+        if self.recipients.windows(2).any(|w| w[0] >= w[1]) {
             return Err(SpendIntentError::RecipientsNotSorted);
-        }
-        for w in sorted.windows(2) {
-            if w[0] == w[1] {
-                return Err(SpendIntentError::RecipientsNotSorted);
-            }
         }
 
         Ok(())
@@ -363,9 +356,9 @@ impl SpendIntent {
     /// proof_expired}`, pinned against CEN-I11). Its end is the intent's
     /// deadline (R-13): the last block that can list the spend is
     /// `reference_block_height + MAX_AGE`, so the last tip at which a signer
-    /// can still submit is one below it. A reference block above this
-    /// member's tip is "not yet", not "expired": the member's node is
-    /// behind, and catching up clears it.
+    /// can still submit is one below it. A reference above this member's
+    /// tip has no connecting age, so it is neither expired nor submittable:
+    /// the member's node is behind, and catching up clears it.
     pub fn validate_temporal(
         &self,
         chain_tip_height: u64,
@@ -373,13 +366,6 @@ impl SpendIntent {
     ) -> Result<(), SpendIntentError> {
         let tip = BlockHeight::from_raw(chain_tip_height);
         let reference = BlockHeight::from_raw(self.reference_block_height);
-        let too_fresh = SpendIntentError::RefBlockTooFresh {
-            height: self.reference_block_height,
-            tip: chain_tip_height,
-        };
-        if reference > tip {
-            return Err(too_fresh);
-        }
         if reference::proof_expired(tip, reference) {
             return Err(SpendIntentError::RefBlockTooStale {
                 height: self.reference_block_height,
@@ -387,7 +373,10 @@ impl SpendIntent {
             });
         }
         if !reference::proof_submittable(tip, reference) {
-            return Err(too_fresh);
+            return Err(SpendIntentError::RefBlockTooFresh {
+                height: self.reference_block_height,
+                tip: chain_tip_height,
+            });
         }
 
         if self.reference_block_hash != *local_block_hash_at_ref_height {
