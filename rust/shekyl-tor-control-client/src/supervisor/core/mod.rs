@@ -30,6 +30,7 @@ mod requests;
 mod resume;
 mod running;
 
+use crate::binary::VerifiedTorBinary;
 use crate::control::{NetworkView, RelayFingerprint, ServiceDescriptor};
 use announce::{Announcements, Cadence};
 use backoff::Backoff;
@@ -213,6 +214,57 @@ pub const CLOCK_BEHIND_AFTER: Duration =
 /// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
 pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 
+/// The data directory a launch takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchDirectory {
+    /// The directory the last incarnation kept, or a new one when none is
+    /// kept.
+    Kept,
+    /// A new directory; a kept one is retired first. Taken once
+    /// [`Policy::fresh_directory_after`] launches in a row have failed.
+    Fresh,
+}
+
+/// [`LaunchDirectory`] read against the directory actually held.
+///
+/// `Fresh` with one held retires it, then creates another. `Kept` with one
+/// held reuses it. Either policy with nothing held creates one. The value
+/// moves with the outcome, so a retire cannot be asked for when nothing is
+/// held.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DirectoryPlan<T> {
+    /// Retire this directory, then create one.
+    Retire(T),
+    /// Create a directory. None was held.
+    New,
+    /// Reuse this directory.
+    Reuse(T),
+}
+
+impl LaunchDirectory {
+    /// This policy applied to `held`.
+    #[must_use]
+    pub fn plan<T>(self, held: Option<T>) -> DirectoryPlan<T> {
+        match (self, held) {
+            (Self::Fresh, Some(previous)) => DirectoryPlan::Retire(previous),
+            (Self::Fresh | Self::Kept, None) => DirectoryPlan::New,
+            (Self::Kept, Some(directory)) => DirectoryPlan::Reuse(directory),
+        }
+    }
+}
+
+/// One launch of Tor: the binary its own pin check accepted (`TSR-F6`) and
+/// the data directory it takes. A launch exists only with a binary, so the
+/// driver holds none of its own and cannot be asked to launch without one
+/// (Rick, 2026-11-12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    /// What the pin verified.
+    pub binary: VerifiedTorBinary,
+    /// Where it runs.
+    pub directory: LaunchDirectory,
+}
+
 /// What the driver does next.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -223,11 +275,8 @@ pub enum Action {
     /// given its grace to exit, and is killed past it. A request: the
     /// reply is [`Input::Replied`] alone, and the next launch waits behind it.
     Reap,
-    /// Spawn. `fresh_directory` drops the kept data directory first.
-    Spawn {
-        /// Take a new data directory.
-        fresh_directory: bool,
-    },
+    /// Spawn Tor: the binary its pin accepted, in the directory it takes.
+    Spawn(Launch),
     /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
     /// `traffic/read`. While Running the same reply also carries Tor's
     /// network view ([`Input::NetworkView`]); during a bootstrap those keys
@@ -337,8 +386,11 @@ impl ManagedRunning {
 /// What the driver observed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Input {
-    /// The pin accepted the binary.
-    PinAccepted,
+    /// The pin accepted the binary: the witness the next launch spawns.
+    PinAccepted {
+        /// What the pin verified.
+        binary: VerifiedTorBinary,
+    },
     /// The pin refused it.
     PinRefused,
     /// No bundle was found.
@@ -564,7 +616,7 @@ impl Input {
     fn answers_a_launch(&self) -> bool {
         matches!(
             self,
-            Self::PinAccepted
+            Self::PinAccepted { .. }
                 | Self::PinRefused
                 | Self::BundleMissing
                 | Self::Unavailable
@@ -808,9 +860,6 @@ impl Core {
 
     /// Fold one observation in.
     ///
-    /// CLIPPY: an observation is consumed by the transition. The driver does
-    /// not keep it, and a reference would only clone the fields out.
-    #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
         // A Tor this node does not run has no pin and no launch, so their
         // answers are not this core's: one folded would show an install or
@@ -819,7 +868,7 @@ impl Core {
             return self.step(now, Vec::new());
         }
         let actions = match input {
-            Input::PinAccepted => self.pin_accepted(),
+            Input::PinAccepted { binary } => self.pin_accepted(binary),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
@@ -1087,13 +1136,18 @@ impl Core {
         .min()
     }
 
-    fn pin_accepted(&mut self) -> Vec<Action> {
+    /// The pin accepted `binary`: the launch carries it, so every spawn is
+    /// of the binary its own pin check accepted (`TSR-F6`).
+    fn pin_accepted(&mut self, binary: VerifiedTorBinary) -> Vec<Action> {
         self.phase = Phase::Launching;
-        let fresh =
-            self.launch_failures >= self.policy.fresh_directory_after && self.launch_failures > 0;
-        vec![Action::Spawn {
-            fresh_directory: fresh,
-        }]
+        let directory = if self.launch_failures > 0
+            && self.launch_failures >= self.policy.fresh_directory_after
+        {
+            LaunchDirectory::Fresh
+        } else {
+            LaunchDirectory::Kept
+        };
+        vec![Action::Spawn(Launch { binary, directory })]
     }
 
     fn spawned(&mut self, now: u64) -> Vec<Action> {

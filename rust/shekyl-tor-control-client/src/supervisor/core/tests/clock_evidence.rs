@@ -25,7 +25,7 @@ fn relay(n: u8) -> RelayFingerprint {
 
 fn bootstrapping() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core
 }

@@ -79,7 +79,7 @@ fn cancels_probe(step: &Step) -> bool {
 /// the percent and the bytes still for ten minutes.
 fn stalled_before_a_sleep() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The launch, then the subscription; its `Replied` sends the first
     // sample, answered as every other.

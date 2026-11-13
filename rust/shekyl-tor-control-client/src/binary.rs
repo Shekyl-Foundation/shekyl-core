@@ -230,7 +230,9 @@ fn well_known_candidate(pin: &TorPin<'_>) -> Option<PathBuf> {
 /// a witness without a directory is not a witness. The launcher reads both
 /// from here, so the bytes hashed, the path spawned and the directory the
 /// loader is pointed at cannot name different places.
-#[derive(Debug, Clone)]
+/// Two witnesses are equal when they name the same file and directory; the
+/// supervisor's core compares the actions that carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedTorBinary {
     path: PathBuf,
     /// The directory whose contents the gate checked. On Linux this path is

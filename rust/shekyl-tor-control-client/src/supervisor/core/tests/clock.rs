@@ -200,7 +200,7 @@ fn the_clock_is_named_while_bootstrapping() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY), 0);
     assert_eq!(core.status().clock_behind, None, "no Tor yet");
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(
         Input::DirectorySample {
@@ -440,7 +440,7 @@ fn a_new_tor_keeps_a_named_clock() {
         "{:?}",
         step.actions
     );
-    core.on(Input::PinAccepted, due);
+    core.on(Input::accepted(), due);
     core.on(Input::Spawned, due);
     // The launch, then the subscription; its `Replied` sends the first
     // sample, answered as the driver answers it.
