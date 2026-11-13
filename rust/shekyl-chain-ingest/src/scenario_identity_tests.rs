@@ -27,13 +27,13 @@
 //!    rules, regtest's block 0 is refused by CEN-E1 at height 0; that
 //!    network's own table genesis connects through the same offer.
 //! 3. **Signatures and proofs.** Every listed transaction passes the
-//!    production stateless judgement under regtest's id and is refused by
-//!    CEN-I18, the signature sequence, under every other id. The judgement
-//!    stops at the first row, so the proof leg is held separately: each
-//!    spend's FCMP++ proof verifies over its `tx_signable` framed with
-//!    regtest's id and fails over every other's, by I15's own verifier
-//!    call. A validator that skipped the genesis pin still refuses the
-//!    chain transaction by transaction.
+//!    production stateless judgement under regtest's id. Under every other
+//!    id the signature sequence refuses it at CEN-I18, and the proof leg —
+//!    judged on its own, because that sequence stops at the first row —
+//!    refuses it at the class's proof row. This chain's one body is a
+//!    join, so that row is CEN-J27, whose body is CEN-I15's verifier. A
+//!    validator that skipped the genesis pin still refuses the chain
+//!    transaction by transaction.
 //! 4. **The wire.** A node of another network does not complete a
 //!    handshake with a regtest node: the transport's prefix is derived from
 //!    the network id (`PWD-T5`, `shekyl-network`'s `prefix_for`). That lock
@@ -43,17 +43,14 @@
 //!    a listener of each network closes every other network's prefix after
 //!    zero bytes and seals a session opened with its own.
 
-use std::collections::BTreeMap;
-
 use shekyl_chain_rules::{
-    judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaims, StatelessPass,
+    judge_claimed_proof, judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim,
+    ReferenceClaims, StatelessPass, TxSlot,
 };
-use shekyl_fcmp::leaf::PqcKeyScalar;
-use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_harness_spender::{coinbase_maturity, complete_tree, Linked, Persona, Spender};
 use shekyl_network::{Lever, Network, NetworkId};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
-use shekyl_wire::{Block, Ct, Input, Transaction};
+use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_wire::{Block, Transaction};
 
 use super::genesis::table_genesis;
 use super::{FreeHash, Scenario, StepOutcome};
@@ -171,83 +168,20 @@ async fn regtest_chain(name: &str) -> Chain {
     }
 }
 
-/// The claims a listed body's references resolve to, off the chain's own
-/// headers: each reference at its height with its header's root (CEN-B5),
-/// as `ReferenceClaims::from_headers` reads them.
+/// The claims for `connected`'s listed bodies, one per reference a body
+/// names that this chain holds, at that block's height with its header's
+/// root (CEN-B5). [`ReferenceClaims::gather`] is the constructor for a
+/// caller holding its chain by hash.
 fn claims_for(chain: &[Connected], connected: &Connected) -> ReferenceClaims {
-    let anchors: BTreeMap<BlockHash, (BlockHeight, CurveTreeRoot)> = chain
-        .iter()
-        .map(|c| (c.block.hash(), (c.height, c.block.header.curve_tree_root)))
-        .collect();
     let candidate = Candidate::new(connected.block.clone(), connected.listed.clone());
-    let mut claims = ReferenceClaims::EMPTY;
-    for reference in candidate.proof_references() {
-        let (height, root) = anchors[&reference];
-        claims.insert(reference, height, root);
-    }
-    claims
-}
-
-/// I15's verifier call over `tx`'s spends, its message framed with
-/// `network`: the key images and PQC keys at the `ToKey` slots, the proof
-/// and pseudo-outs from the prunable region, against the claimed anchor at
-/// the declared depth plus one layer (`rules/tx_against.rs`, `I15::verify`).
-fn fcmp_verifies(tx: &Transaction, claims: &ReferenceClaims, network: &NetworkId) -> bool {
-    let Ct::Fcmp {
-        pqc_auths,
-        reference_block,
-        prunable: Some(prunable),
-        ..
-    } = &tx.ct
-    else {
-        panic!("a listed spend carries its prunable region");
-    };
-    let slots: Vec<usize> = tx
-        .prefix
-        .inputs
-        .iter()
-        .enumerate()
-        .filter_map(|(slot, input)| matches!(input, Input::ToKey { .. }).then_some(slot))
-        .collect();
-    let key_images: Vec<KeyImage> = slots
-        .iter()
-        .map(|&slot| match &tx.prefix.inputs[slot] {
-            Input::ToKey { key_image, .. } => KeyImage::from_canonical_bytes(*key_image),
-            _ => unreachable!("a ToKey slot"),
+    ReferenceClaims::gather(&candidate, |reference| {
+        chain.iter().find_map(|block| {
+            (block.block.hash() == *reference).then_some(ReferenceClaim {
+                height: block.height,
+                root: block.block.header.curve_tree_root,
+            })
         })
-        .collect();
-    let pqc_keys: Vec<PqcKeyScalar> = slots
-        .iter()
-        .map(|&slot| {
-            let auth = &pqc_auths[slot];
-            PqcKeyScalar::from_pqc_auth(auth.scheme_id, &auth.hybrid_public_key)
-                .expect("a spend slot's key is a hybrid key")
-        })
-        .collect();
-    let claim = claims
-        .get(reference_block)
-        .expect("the spend's reference is claimed");
-    let layers = u8::try_from(prunable.tree_depth)
-        .ok()
-        .and_then(|depth| depth.checked_add(1))
-        .expect("a declared depth fits a layer count");
-    let fcmp = ShekylFcmpProof {
-        data: prunable.fcmp_proof.clone(),
-        num_inputs: u32::try_from(slots.len()).expect("under the cap"),
-        tree_depth: layers,
-    };
-    matches!(
-        proof::verify(
-            &fcmp,
-            &key_images,
-            &prunable.pseudo_outs,
-            &pqc_keys,
-            &claim.root,
-            layers,
-            tx.tx_signable(network),
-        ),
-        Ok(true)
-    )
+    })
 }
 
 /// The production stateless judgement of `tx` under `network`.
@@ -256,12 +190,13 @@ fn judged(
     chain: &Chain,
     connected: &Connected,
     network: &NetworkId,
+    claims: &ReferenceClaims,
 ) -> Result<StatelessPass, shekyl_chain_rules::InvalidBlock> {
     judge_lone_stateless(
         tx,
         &chain.scenario.rules.in_force(connected.height),
         network,
-        &claims_for(&chain.blocks, connected),
+        claims,
         None,
     )
 }
@@ -315,27 +250,31 @@ async fn a_regtest_chain_never_validates_as_another_network() {
         elsewhere.close().await;
     }
 
-    // Lock 3 — signatures and proofs, transaction by transaction.
+    // Lock 3 — signatures and proofs, transaction by transaction. The full
+    // judgement stops at CEN-I18, so the proof row is asked on its own.
     let mut judged_bodies = 0;
     for connected in &chain.blocks {
         for tx in &connected.listed {
-            judged(tx, &chain, connected, &regtest)
-                .unwrap_or_else(|refused| panic!("under regtest's id: {refused:?}"));
             let claims = claims_for(&chain.blocks, connected);
+            judged(tx, &chain, connected, &regtest, &claims)
+                .unwrap_or_else(|refused| panic!("under regtest's id: {refused:?}"));
+            let proven = judge_claimed_proof(tx, TxSlot::Lone, &regtest, &claims).unwrap_or_else(
+                |refused| panic!("under regtest's id the proof passes: {refused:?}"),
+            );
             assert!(
-                fcmp_verifies(tx, &claims, &regtest),
-                "the proof verifies over regtest's tx_signable"
+                proven.is_some(),
+                "the join's proof was verified against its claim"
             );
             for other in OTHERS {
                 let id = other.network_id();
-                match judged(tx, &chain, connected, &id) {
+                match judged(tx, &chain, connected, &id, &claims) {
                     Err(refused) => assert_eq!(refused.rule, CenRow::I18, "{other}: {refused:?}"),
                     Ok(_) => panic!("{other}'s id passed a regtest body"),
                 }
-                assert!(
-                    !fcmp_verifies(tx, &claims, &id),
-                    "{other}: the proof fails over another network's tx_signable"
-                );
+                match judge_claimed_proof(tx, TxSlot::Lone, &id, &claims) {
+                    Err(refused) => assert_eq!(refused.rule, CenRow::J27, "{other}: {refused:?}"),
+                    Ok(proven) => panic!("{other}'s id passed the join's proof: {proven:?}"),
+                }
             }
             judged_bodies += 1;
         }
