@@ -1076,6 +1076,7 @@ stale_through = [
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): in this path set, prove_with_rng calls RerandomizedOutput::for_pseudo_out, which subtracts the commitment mask from the pseudo-out blind and calls with_commitment_blind. The subtraction moved into that constructor; the prover does the same work. frost_sal.rs's proposer calls it too, behind the multisig feature. Not re-measured; the rows stay stale." },
   { through = "aebf8e3bdf", note = "Multisig slice 3 PR-B, R-13 (aebf8e3bdf): in this path set, shekyl-curve-tree reference.rs's proof_submittable and proof_expired add one block to the tip age before comparing it with the window, and a test sweeps them against CEN-I11. One addition in two predicates no spend path calls; tree build, path assembly and the prover do the same work. Not re-measured; the rows stay stale." },
   { through = "edfcd5795f", note = "Multisig R-11 (edfcd5795f): in this path set, frost_sal.rs's group-shape check refuses m below MIN_MULTISIG_THRESHOLD (2) where it refused m = 0, and its tests build 2-of-2 groups for 1-of-1. Multisig feature only; tree build, path assembly and the single-signer prover do the same work. Not re-measured; the rows stay stale." },
+  { through = "c12d69900d", note = "Multisig slice 3 PR-B, tx_counter ruling (c12d69900d): in this path set, one doc comment in shekyl-curve-tree reference.rs (REF_ANCHOR_AGE gives one block of reorg slack). Comment only; no code path changed. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
