@@ -3366,16 +3366,20 @@ burned, and fewer shards close.
   On the GF-7 band's steepest member (90 % at knee 500 000) the worst slew is
   0.7558 points an epoch penalty-free (was 1.0080) and 1.5119 at the legal 2×
   limit (was 2.0160); the reorg down-swing 0.0543 (was 0.0725); the flood's
-  fees about 322,368 SKL an epoch (was 429,862). The verdict line moves from
-  "see the slew reading below" to "no measurable adversarial slew": its
-  `< 1.0` point-an-epoch gate is the one ruled on 2026-10-24 (ruling 8),
-  under which this member was excluded from the band at S = 4. The slew
-  scales with S, and S is re-derived at BA-T10, so the member sits at the
-  gate's edge. Rick ruled on 2026-11-13: the gate is the ruling and band
-  membership is its output; the member stays excluded until BA-T10 sets S;
-  then a member is admitted only if it passes the gate across BA-T10's whole
-  plausible range of S, not at the S shipped that day; the band is decided at
-  EUP-5 F, after BA-T10. The verdict line is accurate at S = 3 and stays.
+  fees about 322,368 SKL an epoch (was 429,862). The verdict passes the gate
+  it failed: the `< 1.0` point-an-epoch gate ruled on 2026-10-24 (ruling 8),
+  under which this member was excluded from the band at S = 4. The line
+  states the measurement and the gate's result only, both branches built
+  the same way (`swing::a6_slew_verdict`): "worst penalty-free slew 0.7558
+  points an epoch at S = 3, under the 1.0 gate", or "at or over" it. It names
+  the penalty-free figure because that is the one the gate tests, and S
+  because the slew scales with S. Band membership is a ruling and is not
+  printed. S is re-derived at BA-T10, so the member sits at the gate's edge;
+  Rick ruled on 2026-11-13 that it stays excluded until BA-T10 sets S, and
+  the band is EUP-5 F's, after BA-T10. **PROPOSED** (a review recommendation
+  of 2026-11-13, Rick's to rule): a member is then admitted only if it
+  passes the gate across BA-T10's whole plausible range of S, not at the S
+  shipped that day.
 
 **The flat control** (16 lines) moves in A6 alone in substance (the same
 ceiling, slew and reorg figures; the flood's fees 7,174 → 5,380 SKL an
@@ -3402,7 +3406,13 @@ longer moves it.
 #1323's surge re-sign (S = 3, interim ruling 2026-11-08) moved the
 narrations; recorded after the fact in ECONOMICS_SIM_PRODUCTION_REBASE.md
 §5.30"`, through `regen_stage2_narration_fixtures` and
-`regen_esr10_narration_fixtures` (the four narration fixtures).
+`regen_esr10_narration_fixtures` (the four narration fixtures). The A6
+verdict's wording was then regenerated under
+`SHEKYL_PINNED_REGEN_DECISION="2026-11-13 ESR-18: the A6 verdict line names
+the worst penalty-free slew, the surge factor it was measured at and the
+gate's result (Rick, 2026-11-13, on Copilot's finding); the verdict is
+unchanged; recorded in ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30"`, through
+`regen_stage2_narration_fixtures`: one line in each stage2 fixture.
 
 **The gap, closed.** A change to a value the sim reads could not move a
 narration at review: the pins ran only at night. `rust-audit-test.yml`'s

@@ -425,7 +425,7 @@ settlement epoch when an adversary floods at the surge ceiling for the whole
 epoch — the worst case for §6.0's no-swing claim. Worst observed: 0.7558 points.
 The reorg column bounds the only DOWN-swing that exists (monotonicity holds in
 the canonical chain; a reorg can re-open at most 720 blocks' worth).
-VERDICT: no measurable adversarial slew.
+VERDICT: worst penalty-free slew 0.7558 points an epoch at S = 3, under the 1.0 gate
   -> §6.0/§6.1 SEPARATED, because they are different claims:
 (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is
 monotone and a single shard never moves it discontinuously; the family's

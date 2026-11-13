@@ -287,9 +287,10 @@ written (the year-1 Standard-rung fee was ratified 2026-11-06, and the
 Tail's wording with its `k` left open), and the authorization to start
 EUP-3's coupling half. Still Rick's, before EUP-4 runs: the tail's `k` (§4),
 §4.2's boom/bust emission fraction, and what the growth schedule does past
-its supply break (§4.1). The GF-7 asymptote is EUP-5 F's, after BA-T10: a
-band member is admitted only if it passes the slew gate across BA-T10's
-whole plausible range of S (Rick, 2026-11-13).
+its supply break (§4.1). The GF-7 asymptote is EUP-5 F's, after BA-T10: the
+steepest member stays excluded until BA-T10 sets S (Rick, 2026-11-13). Also
+Rick's: whether a member is then admitted only if it passes the slew gate
+across BA-T10's whole plausible range of S (a review recommendation).
 
 ---
 
