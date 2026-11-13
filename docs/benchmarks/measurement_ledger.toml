@@ -1356,13 +1356,19 @@ path_set = "rpc-hash-budget"
 # gate re-measures it on every run; it is here for its path set, the code
 # whose change can move its counts.
 
+# The spec names the crates whose code the rows enter. It is not the list of
+# everything they call: the capture's scope reaches a row through the
+# reverse closure over linked dependencies, so a change confined to a crate
+# these link (the curve crates, the hash crate, the hybrid combiner) puts a
+# listed crate in the closure and runs the row. The classifier's selftest
+# holds that for two such crates.
 [[path_set]]
 id = "block-path"
 spec = [
   "rust/shekyl-chain-rules/src",
   "rust/shekyl-chain-store/src",
   "rust/shekyl-store-codec/src",
-  "rust/shekyl-chain-ingest/src/bench_support.rs",
+  "rust/shekyl-chain-ingest/src",
   "rust/shekyl-chain-ingest/benches",
   "rust/shekyl-wire/src",
   "rust/shekyl-fcmp/src",

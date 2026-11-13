@@ -430,9 +430,11 @@ jobs:
     # scripts/bench/capture_rust_baseline.sh, so each leg is judged by its
     # own tree.
     runs-on: ubuntu-latest
-    # Not yet timed here: nine functions, each a form of a full block
-    # under callgrind or one in its setup. Size it from the first runs.
-    timeout-minutes: 300
+    # 33 minutes on the first dispatched run (2026-11-13, run 43332252269:
+    # twelve functions, each a form of a full block under callgrind or one
+    # in its setup). About three times that, for a cold registry and a
+    # slow runner.
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:

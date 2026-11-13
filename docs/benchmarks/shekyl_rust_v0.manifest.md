@@ -1044,11 +1044,14 @@ before by `bench-full-drift`), because forming the 45 spends of the smallest sha
 `form` judges each listed transaction on its own, so the four carry every
 term the 45 do; what the full block adds is the count.
 
-**Shapes owed.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An emission
-claim's own verification (its backing proof and its two signatures) is
-`validate`'s, not `form`'s, so its row needs a store holding a settled
-epoch: a fixture chain through a closed shard and about three epochs of
-the levered schedule the ingest's scenarios use. The
+**Shapes not here.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An
+emission claim's own verification (its backing proof and its two
+signatures) is `validate`'s, not `form`'s, so its row needs a store
+holding a settled epoch: a chain through a closed shard and about three
+epochs. No fixture here carries one. That row is the chain forge's (its
+F4 pilot consumer, over the first-settled-epoch snapshot), as is any
+bench that needs a closed shard, a settled epoch, a claim, a slash or a
+discard. The
 multisig container needs a builder of a scheme-2 spend, which the harness
 does not have (`docs/FOLLOWUPS.md`).
 

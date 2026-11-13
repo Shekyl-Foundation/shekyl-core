@@ -927,6 +927,11 @@ BENCH_SELFTEST = [
     ("rust/shekyl-engine-state/src/lib.rs", {"shekyl-engine-state::ledger_iai"}, {"shekyl-chain-ingest::block_path_iai", "shekyl-pow-randomx::verify_header_iai"}),
     ("rust/shekyl-chain-store/src/store/connect.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-engine-file::open_iai", "shekyl-pow-randomx::verify_header_iai"}),
     ("rust/shekyl-pow-randomx/src/vm.rs", {"shekyl-pow-randomx::verify_header_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # Crates the block path links and its path set does not list: the
+    # closure reaches the row through a listed crate that links them.
+    ("rust/shekyl-crypto-hash/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-curve-io/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-chain-ingest/src/target.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
     ("rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
     ("rust/Cargo.lock", "all", None),
     ("scripts/bench/compare.py", "all", None),

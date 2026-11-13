@@ -41,11 +41,20 @@
 //!
 //! [`every_block_path_fixture_replays`] runs in the default lane: each
 //! committed corpus replays into a fresh store and its subject block passes
-//! `form`, connects and pops. A consensus change that refuses a fixture
-//! fails there, by fixture name, and the fix is
-//! [`regenerate_block_path_fixtures`]: an `#[ignore]`d writer, never run by
-//! a lane, because a lane that rewrote a fixture and then replayed it would
-//! pass every night.
+//! `form`, connects and pops. It also holds each fixture to its name: every
+//! listed transaction has the shape's inputs, outputs and bond post, and a
+//! full block has no room for one more, so a cap that moved, or a corpus
+//! under the wrong name, fails here and does not go on being counted as
+//! the boundary it no longer is. A consensus change that refuses a fixture
+//! fails there too, by fixture name.
+//!
+//! The fix is [`regenerate_block_path_fixtures`]: an `#[ignore]`d writer,
+//! never run by a lane, because a lane that rewrote a fixture and then
+//! replayed it would pass every night. It is armed (rule 50): it refuses
+//! unless `SHEKYL_PINNED_REGEN_DECISION` cites the dated entry of the bench
+//! manifest's change log ([`DECISION_LOG`]) that records why the fixtures
+//! moved. A rewritten fixture moves every count taken over it, so the
+//! entry is also where the new counts go.
 
 #![cfg(test)]
 
@@ -56,7 +65,7 @@ use shekyl_harness_spender::{complete_tree, Persona, Spender};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::Network;
 use shekyl_types::BlockHeight;
-use shekyl_wire::transaction::{COINBASE_RESERVE, MAX_FCMP_INPUTS, MAX_OUTPUTS};
+use shekyl_wire::transaction::{Input, COINBASE_RESERVE, MAX_FCMP_INPUTS, MAX_OUTPUTS};
 use shekyl_wire::Transaction;
 
 use crate::archival_driver::{ENDPOINT, FEE};
@@ -97,6 +106,10 @@ struct Shape {
     name: &'static str,
     /// Coinbases each transaction spends.
     inputs_per_tx: u64,
+    /// Outputs each transaction pays.
+    outputs_per_tx: usize,
+    /// Whether each transaction carries a bond post.
+    posts_a_bond: bool,
     /// The spend of `coinbases` (their heights) connecting at `at`.
     build: fn(&Spender, &MinerWallet, &[BlockHeight], BlockHeight) -> Transaction,
 }
@@ -111,6 +124,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "spend_1in_2out",
         inputs_per_tx: 1,
+        outputs_per_tx: 2,
+        posts_a_bond: false,
         build: |spender, wallet, coinbases, at| {
             spender.spend_coinbase(wallet, coinbases[0], at, Family::Main.fee())
         },
@@ -120,6 +135,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "spend_8in_2out",
         inputs_per_tx: MAX_FCMP_INPUTS as u64,
+        outputs_per_tx: 2,
+        posts_a_bond: false,
         build: |spender, wallet, coinbases, at| {
             spender
                 .spend_coinbases(wallet, coinbases, at, Family::Main.fee())
@@ -131,6 +148,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "spend_1in_16out",
         inputs_per_tx: 1,
+        outputs_per_tx: MAX_OUTPUTS,
+        posts_a_bond: false,
         build: |spender, wallet, coinbases, at| {
             spender.spend_coinbase_paying(wallet, coinbases[0], at, Family::Main.fee(), MAX_OUTPUTS)
         },
@@ -143,6 +162,8 @@ const SHAPES: &[Shape] = &[
     Shape {
         name: "bond_post",
         inputs_per_tx: 1,
+        outputs_per_tx: 2,
+        posts_a_bond: true,
         build: |spender, wallet, coinbases, at| {
             // One persona a transaction: the slot is the coinbase's height.
             let slot = u32::try_from(coinbases[0].to_raw()).expect("a short chain");
@@ -242,10 +263,15 @@ fn corpus_of(mined: &[Mined]) -> Vec<u8> {
     writer.finish().expect("a finished corpus").into_inner()
 }
 
-/// Rewrite every fixture. Run by hand after a consensus change refuses one:
+/// Where a regeneration is recorded: the bench manifest's change log.
+const DECISION_LOG: &str = "docs/benchmarks/shekyl_rust_v0.manifest.md";
+
+/// Rewrite the fixtures. Run by hand after a consensus change refuses one,
+/// citing the manifest change-log entry that records the move:
 ///
 /// ```text
-/// cargo test -p shekyl-chain-ingest regenerate_block_path_fixtures -- --ignored --nocapture
+/// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+///   cargo test -p shekyl-chain-ingest regenerate_block_path_fixtures -- --ignored --nocapture
 /// ```
 #[tokio::test]
 #[ignore = "fixture regenerator: rewrites benches/fixtures/block_path_*.corpus; run by hand, never by a lane"]
@@ -253,6 +279,11 @@ async fn regenerate_block_path_fixtures() {
     // `BLOCK_PATH_FIXTURE=<shape>_<size>` rewrites that one fixture;
     // unset, all.
     let only = std::env::var("BLOCK_PATH_FIXTURE").ok();
+    // Before anything is mined or written.
+    shekyl_crypto_pq::test_support::regen_decision_in_log_or_refuse(
+        only.as_deref().unwrap_or("every block-path fixture"),
+        DECISION_LOG,
+    );
     let mut written = 0;
     for shape in SHAPES {
         for size in Size::ALL {
@@ -288,9 +319,52 @@ fn every_block_path_fixture_replays() {
             });
             let (mut chain, subject) = BlockPath::replayed(&corpus);
             let listed = u64::try_from(subject.transactions.len()).expect("fits");
+            let mut weight = 0;
+            for tx in &subject.transactions {
+                let spends = tx
+                    .prefix
+                    .inputs
+                    .iter()
+                    .filter(|input| matches!(input, Input::ToKey { .. }))
+                    .count();
+                let posts = tx
+                    .prefix
+                    .inputs
+                    .iter()
+                    .filter(|input| matches!(input, Input::BondPost(_)))
+                    .count();
+                assert_eq!(
+                    u64::try_from(spends).expect("fits"),
+                    shape.inputs_per_tx,
+                    "{name}: inputs"
+                );
+                assert_eq!(
+                    tx.prefix.outputs.len(),
+                    shape.outputs_per_tx,
+                    "{name}: outputs"
+                );
+                assert_eq!(posts, usize::from(shape.posts_a_bond), "{name}: bond posts");
+                assert_eq!(
+                    spends + posts,
+                    tx.prefix.inputs.len(),
+                    "{name}: no other input kind"
+                );
+                weight += tx.weight();
+            }
             match size {
                 Size::Unit => assert_eq!(listed, UNIT_TRANSACTIONS, "{name}"),
-                Size::Full => assert!(listed > UNIT_TRANSACTIONS, "{name}"),
+                // Full means full: one more transaction of the shape would
+                // pass the budget. A raised limit or a lighter transaction
+                // leaves the block short of the boundary it is named for.
+                Size::Full => {
+                    let one = subject.transactions[0].weight();
+                    assert!(weight <= listed_budget(), "{name}: within the budget");
+                    assert!(
+                        weight + one > listed_budget(),
+                        "{name}: {listed} transactions of {one} leave room in {}; regenerate",
+                        listed_budget()
+                    );
+                }
             }
             let claimed = chain.claims(&subject);
             let formed = chain.form(subject, &claimed);
