@@ -17,22 +17,23 @@
 //!
 //! [`ManagedRunning`] is built only on the transition into `Running`.
 
-mod clock_line;
 mod core;
 mod events;
 mod posture;
+mod view;
 
 pub use crate::control::{NetworkView, Reported};
 pub use core::{
-    Action, Core, DialTally, DirectoryAnswer, DirectoryFetch, Input, ManagedRunning, Policy,
-    RoundTally, Step, TorCensus, DESCRIPTOR_LIFETIME, REPLY_BOUND,
+    Action, Core, DialTally, DirectoryAnswer, DirectoryFetch, Input, Launch, LaunchDirectory,
+    ManagedRunning, Policy, RoundTally, Step, TorCensus, DESCRIPTOR_LIFETIME, REPLY_BOUND,
 };
 pub use events::{
     clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
     CERTIFICATE_OUT_OF_DATE,
 };
 pub use posture::{
-    fixes, held_at_start_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace,
-    Carriage, Cause, Connectors, Inbound, InboundCause, ManagedTorFix, OriginVerdict, OwnTx,
-    ReportedSkew, Sessions, Shown, Space, Status, Syncing, TorQuiet, TorSetting,
+    fixes, own_tx, BootstrapLine, BootstrapPace, Carriage, Cause, Connectors, Inbound,
+    InboundCause, ManagedTorFix, OriginVerdict, OwnTx, ReportedSkew, Sessions, Shown, Space,
+    Status, Syncing, TorQuiet, TorSetting,
 };
+pub use view::{snapshot, wire_cause};

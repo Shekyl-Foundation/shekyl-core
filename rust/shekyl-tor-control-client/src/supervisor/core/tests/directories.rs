@@ -139,9 +139,8 @@ fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
     let (mut core, asked) = checking(sent(1..=8, "cur", 0));
     assert_eq!(asked.len(), 8, "every directory the round reached is asked");
     core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
         "the directories are still out"
     );
     core.on(
@@ -163,7 +162,11 @@ fn found_at_every_directory_and_the_probe_arrives_is_reachable() {
             secs(20),
         );
     }
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     let last = core.on(
         answered(
             8,
@@ -194,9 +197,8 @@ fn the_probe_arriving_from_our_cache_with_the_directories_empty_is_a_miss() {
     }
     let first = core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(refetches(&first), 1, "a first miss refetches");
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
         "one miss is not a verdict"
     );
     // The refetch's reply, then its `Replied`, which sends the new check.
@@ -259,9 +261,8 @@ fn one_directory_withholding_is_still_reachable() {
         );
     }
     core.on(arrival(secs(15), secs(18)), secs(18));
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Publishing,
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
         "directory 8 is still out"
     );
     let bound = core.on_deadline(secs(75));
@@ -533,7 +534,11 @@ fn a_draw_that_arrives_while_judging_still_installs() {
         "the draw is still outstanding"
     );
     assert!(publishes_inbound(&arrived).is_empty());
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     let drawn = core.on(
         Input::DirectoriesDrawn {
             fetches: Vec::new(),
@@ -567,7 +572,11 @@ fn a_check_open_when_outbound_drops_is_discarded() {
     assert_eq!(refetches(&last), 0);
     assert_eq!(republishes(&last), 0);
     assert!(publishes_inbound(&last).is_empty());
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     assert_eq!(core.status().cause, Cause::ExternalBlocked);
 }
 
@@ -600,7 +609,11 @@ fn a_fetch_waits_from_when_tor_accepts_it() {
     let early = core.on_deadline(secs(75));
     let early = served(&mut core, early, secs(75));
     assert_eq!(refetches(&early), 0, "the accepted fetch is still out");
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     let bound = core.on_deadline(secs(100));
     let bound = served(&mut core, bound, secs(100));
     assert_eq!(refetches(&bound), 1, "both missing, and the probe arrived");
@@ -669,7 +682,11 @@ fn a_stale_directory_copy_is_a_miss() {
     }
     let first = core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(refetches(&first), 1, "every copy stale: a miss");
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
 
     // Ours at exactly half: still a miss.
     let (mut core, _) = checking(sent(1..=8, "cur", 0));

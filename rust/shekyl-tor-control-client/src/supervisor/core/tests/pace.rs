@@ -8,9 +8,10 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, BootstrapLine, BootstrapPace, Cause};
+use super::super::super::posture::{BootstrapLine, BootstrapPace, Cause};
 use super::super::{duration_ns, Core, Input};
 use super::{managed, policy, socks};
+use super::{said, said_of};
 
 fn secs(n: u64) -> u64 {
     duration_ns(Duration::from_secs(n))
@@ -78,7 +79,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
         advancing.pace,
         advancing.bootstrap.and_then(BootstrapLine::pace)
     );
-    let text = render(&advancing);
+    let text = said_of(&advancing);
     assert!(
         text.contains(
             "Tor is fetching the network directory (20%). 100 bytes arrived in the last 4 s."
@@ -89,7 +90,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
 
     core.on(sample(20, Some(5_000)), secs(8));
     assert_eq!(core.status().pace, Some(BootstrapPace::SlowButNormal));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("unchanged for 5 s"), "{text}");
     assert!(
         text.contains(
@@ -106,12 +107,12 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     );
     core.on(sample(20, Some(5_000)), secs(12));
     assert_eq!(core.status().pace, Some(BootstrapPace::Stalled));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("Nothing arrived in the last 4 s"), "{text}");
 
     core.on(sample(21, Some(5_000)), secs(13));
     assert_eq!(core.status().pace, Some(BootstrapPace::Advancing));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.contains("Tor is fetching the network directory (21%)."),
         "{text}"
@@ -163,7 +164,7 @@ fn a_cause_and_the_pace_are_said_together() {
     let status = core.status();
     assert_eq!(status.cause, Cause::ExternalBlocked);
     assert_eq!(status.pace, Some(BootstrapPace::Stalled));
-    let text = render(&status);
+    let text = said_of(&status);
     let cause = text
         .find("cannot reach the Tor network")
         .expect("the cause");

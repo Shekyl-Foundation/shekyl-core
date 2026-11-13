@@ -28,7 +28,7 @@ fn launching() -> Core {
     assert!(
         step.actions
             .iter()
-            .any(|action| matches!(action, Action::Spawn { .. })),
+            .any(|action| matches!(action, Action::Spawn(_))),
         "the launch is sent: {step:?}"
     );
     core
@@ -198,7 +198,7 @@ fn an_ended_tor_is_reaped_before_the_next_launch() {
         !pinned
             .actions
             .iter()
-            .any(|action| matches!(action, Action::Spawn { .. })),
+            .any(|action| matches!(action, Action::Spawn(_))),
         "the launch waits for the reap: {:?}",
         pinned.actions
     );
@@ -207,7 +207,7 @@ fn an_ended_tor_is_reaped_before_the_next_launch() {
         reaped
             .actions
             .iter()
-            .any(|action| matches!(action, Action::Spawn { .. })),
+            .any(|action| matches!(action, Action::Spawn(_))),
         "the reap's answer sends the launch: {:?}",
         reaped.actions
     );

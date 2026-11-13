@@ -163,8 +163,8 @@ impl Core {
             self.republish_failed(now);
             return Vec::new();
         }
-        self.uploads_accepted();
-        let mut actions = self.onion_published();
+        self.uploads_accepted(now);
+        let mut actions = self.onion_published(now);
         if !track.is_some_and(|track| track.triggered) {
             actions.extend(self.trigger(now, draw, self.republish_is_judging()));
         }

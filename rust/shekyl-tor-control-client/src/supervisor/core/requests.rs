@@ -34,8 +34,7 @@
 
 use std::collections::VecDeque;
 
-use super::Action;
-use crate::binary::VerifiedTorBinary;
+use super::{Action, Launch};
 use crate::control::RelayFingerprint;
 
 /// An action the loop used to run only after the request it followed.
@@ -62,12 +61,9 @@ pub(super) enum Request {
     /// the next launch ([`Action::Reap`]). It waits Tor's grace for an exit,
     /// so it runs off the loop like any other request.
     Reap,
-    /// Launch Tor ([`Action::Spawn`]), of the binary the pin accepted. The
-    /// request holds it until it is sent.
-    Launch {
-        fresh_directory: bool,
-        binary: VerifiedTorBinary,
-    },
+    /// Launch Tor ([`Action::Spawn`]). The request holds the launch, its
+    /// binary included, until it is sent.
+    Launch(Launch),
     /// Subscribe to the supervisor's events ([`Action::SubscribeEvents`]).
     Subscribe,
     /// The sample and the consensus clock ([`Action::Sample`]).
@@ -92,16 +88,7 @@ impl Request {
     pub(super) fn of(action: &Action) -> Option<Vec<Self>> {
         Some(match action {
             Action::Reap => vec![Self::Reap],
-            Action::Spawn {
-                fresh_directory,
-                binary,
-            } => vec![
-                Self::Launch {
-                    fresh_directory: *fresh_directory,
-                    binary: binary.clone(),
-                },
-                Self::Subscribe,
-            ],
+            Action::Spawn(launch) => vec![Self::Launch(launch.clone()), Self::Subscribe],
             Action::Sample => vec![Self::Sample],
             Action::SetConfAvoidDiskWrites => vec![Self::DeferDiskWrites],
             Action::RepublishOnion => vec![Self::DeleteOnion, Self::AddOnion],
@@ -116,13 +103,7 @@ impl Request {
     pub(super) fn action(&self) -> Action {
         match self {
             Self::Reap => Action::Reap,
-            Self::Launch {
-                fresh_directory,
-                binary,
-            } => Action::Spawn {
-                fresh_directory: *fresh_directory,
-                binary: binary.clone(),
-            },
+            Self::Launch(launch) => Action::Spawn(launch.clone()),
             Self::Subscribe => Action::SubscribeEvents,
             Self::Sample => Action::Sample,
             Self::DeferDiskWrites => Action::SetConfAvoidDiskWrites,

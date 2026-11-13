@@ -19,9 +19,10 @@
 //! core asks to say (an announcement or a progress line) is rendered, and
 //! the lines that name the clock are counted.
 
-use super::super::super::posture::{render, ReportedSkew};
+use super::super::super::posture::ReportedSkew;
 use super::super::{Action, Core, Input};
 use super::{managed, policy, replied};
+use super::{said, said_of};
 
 const SECOND: u64 = 1_000_000_000;
 const DAY: u64 = 86_400;
@@ -89,7 +90,7 @@ impl Said {
     fn hear(&mut self, core: &Core, actions: &[Action]) {
         for action in actions {
             if matches!(action, Action::Announce | Action::SayProgress) {
-                let line = render(&core.status());
+                let line = said(core);
                 if matches!(action, Action::Announce) {
                     self.announced.push(line.clone());
                 }
@@ -315,7 +316,7 @@ fn correcting_the_clock_says_the_recovery_once() {
     ] {
         let step = core.on(input, up);
         if step.actions.contains(&Action::Announce) {
-            recovery.push(render(&core.status()));
+            recovery.push(said(&core));
         }
     }
     assert_eq!(recovery.len(), 1, "the recovery, once: {recovery:#?}");
@@ -354,7 +355,7 @@ fn clock_status(
 #[test]
 fn tors_figure_and_the_lower_bound_are_one_sentence() {
     use super::super::super::posture::Cause;
-    let text = render(&clock_status(
+    let text = said_of(&clock_status(
         Cause::ClockSkew {
             skew: ReportedSkew::Measured(-259_201),
         },
@@ -380,7 +381,7 @@ fn tors_figure_and_the_lower_bound_are_one_sentence() {
 #[test]
 fn ahead_and_at_least_are_said_as_tor_gave_them() {
     use super::super::super::posture::Cause;
-    let ahead = render(&clock_status(
+    let ahead = said_of(&clock_status(
         Cause::ClockSkew {
             skew: ReportedSkew::Measured(2 * 86_400 + 5 * 3_600),
         },
@@ -392,7 +393,7 @@ fn ahead_and_at_least_are_said_as_tor_gave_them() {
         ),
         "{ahead}"
     );
-    let bound = render(&clock_status(
+    let bound = said_of(&clock_status(
         Cause::ClockSkew {
             skew: ReportedSkew::AtLeast(-7_200),
         },
@@ -412,7 +413,7 @@ fn ahead_and_at_least_are_said_as_tor_gave_them() {
 fn the_lower_bound_stands_in_for_a_figure_tor_did_not_give() {
     use super::super::super::posture::Cause;
     for cause in [Cause::None, Cause::CertificatesOutOfDate] {
-        let text = render(&clock_status(cause.clone(), Some(3 * 86_400 - 3_600)));
+        let text = said_of(&clock_status(cause.clone(), Some(3 * 86_400 - 3_600)));
         assert!(
             text.contains(
                 "This computer's clock is at least 2 d 23 h behind the Tor network's. Others may not be able to reach this node. Check this computer's date and time."
@@ -425,7 +426,7 @@ fn the_lower_bound_stands_in_for_a_figure_tor_did_not_give() {
             "{cause:?}: {text}"
         );
     }
-    let line = render(&clock_status(Cause::CertificatesOutOfDate, None));
+    let line = said_of(&clock_status(Cause::CertificatesOutOfDate, None));
     assert!(
         line.contains("Tor reports that this computer's date or time looks wrong"),
         "{line}"
@@ -455,16 +456,16 @@ fn a_lag_the_sample_rewrites_is_not_a_change() {
         blocked.actions.contains(&Action::Announce),
         "the block, named"
     );
-    let mut said = Vec::new();
+    let mut heard = Vec::new();
     for second in 7..13 {
         for input in [clock(WALL_AT_START + second), Input::ExternalBlocked] {
             let step = core.on(input, secs(second));
             if step.actions.contains(&Action::Announce) {
-                said.push((second, render(&core.status())));
+                heard.push((second, said(&core)));
             }
         }
     }
-    assert!(said.is_empty(), "said inside the cap: {said:#?}");
+    assert!(heard.is_empty(), "said inside the cap: {heard:#?}");
 }
 
 /// **The consensus check alone is said once too.** Tor reports nothing (its
@@ -491,7 +492,7 @@ fn unreachable_directories_leave_a_named_clock() {
     assert!(
         !step.actions.contains(&Action::Announce),
         "said: {}",
-        render(&core.status())
+        said(&core)
     );
     assert!(matches!(core.status().cause, Cause::ClockSkew { .. }));
 }
@@ -544,17 +545,17 @@ fn an_aging_consensus_does_not_retire_tors_report() {
     let report = ReportedSkew::Measured(-start_gap_i);
     let skew = core.on(Input::ClockSkew { skew: report }, SECOND);
     assert!(skew.actions.contains(&Action::Announce), "the report");
-    let mut said = Vec::new();
+    let mut heard = Vec::new();
     let last = start_gap - tolerance;
     for step in 0..=last {
         let at = (2 + step) * SECOND;
         let wall = valid_after - start_gap + step;
         let sample = core.on(Input::ConsensusClock { valid_after, wall }, at);
         if sample.actions.contains(&Action::Announce) {
-            said.push((step, render(&core.status())));
+            heard.push((step, said(&core)));
         }
     }
-    assert!(said.is_empty(), "aging said the clock: {said:#?}");
+    assert!(heard.is_empty(), "aging said the clock: {heard:#?}");
     assert!(
         matches!(core.status().cause, Cause::ClockSkew { skew } if skew == report),
         "the report was retired: {:?}",
@@ -570,7 +571,7 @@ fn an_aging_consensus_does_not_retire_tors_report() {
     assert!(
         !blocked.actions.contains(&Action::Announce),
         "aging gave the line to the block: {}",
-        render(&core.status())
+        said(&core)
     );
     assert!(
         matches!(core.status().cause, Cause::ClockSkew { .. }),
@@ -612,7 +613,7 @@ fn a_sleep_does_not_retire_tors_report() {
         assert!(
             !step.actions.contains(&Action::Announce),
             "{name}: {}",
-            render(&core.status())
+            said(&core)
         );
     }
     assert!(
@@ -624,7 +625,7 @@ fn a_sleep_does_not_retire_tors_report() {
     assert!(
         !blocked.actions.contains(&Action::Announce),
         "a sleep gave the line to the block: {}",
-        render(&core.status())
+        said(&core)
     );
     assert!(
         matches!(core.status().cause, Cause::ClockSkew { skew } if skew == report),
@@ -702,9 +703,9 @@ fn a_jump_after_an_ahead_report_gives_the_line_to_a_block() {
     assert!(
         blocked.actions.contains(&Action::Announce),
         "the block was not named: {}",
-        render(&core.status())
+        said(&core)
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("cannot reach the Tor network"), "{line}");
     assert!(!line.contains("clock is"), "{line}");
 }
@@ -725,9 +726,9 @@ fn a_skew_already_in_flight_does_not_take_the_line_back() {
     assert!(
         tail.actions.is_empty(),
         "the tail was said: {}",
-        render(&core.status())
+        said(&core)
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("cannot reach the Tor network"), "{line}");
     assert!(!line.contains("clock is"), "{line}");
 }
@@ -761,9 +762,9 @@ fn a_consensus_clear_leaves_the_block_with_the_clock() {
     assert!(
         !blocked.actions.contains(&Action::Announce),
         "the clear gave the line to the block: {}",
-        render(&core.status())
+        said(&core)
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("clock is"), "{line}");
     assert!(!line.contains("cannot reach the Tor network"), "{line}");
 }
@@ -801,9 +802,9 @@ fn a_repeat_of_the_yielded_figure_does_not_take_the_line_back() {
     assert!(
         blocked.actions.contains(&Action::Announce),
         "the block was not named: {}",
-        render(&core.status())
+        said(&core)
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("cannot reach the Tor network"), "{line}");
     assert!(!line.contains("clock is"), "{line}");
 }
@@ -831,9 +832,9 @@ fn a_figure_that_outlasts_the_handshake_stretch_owns_the_block_again() {
     assert!(
         !blocked.actions.contains(&Action::Announce),
         "the stretch never ended: {}",
-        render(&core.status())
+        said(&core)
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("clock is"), "{line}");
     assert!(!line.contains("cannot reach the Tor network"), "{line}");
 }
@@ -869,14 +870,14 @@ fn a_new_figure_takes_the_line_back_from_the_block() {
         1,
         "said more than once: {again:?}"
     );
-    let line = render(&core.status());
+    let line = said(&core);
     assert!(line.contains("clock is"), "{line}");
     assert!(!line.contains("cannot reach"), "{line}");
     let later = core.on(Input::ExternalBlocked, 5 * SECOND);
     assert!(
         !later.actions.contains(&Action::Announce),
         "the block took the line back: {}",
-        render(&core.status())
+        said(&core)
     );
-    assert!(render(&core.status()).contains("clock is"));
+    assert!(said(&core).contains("clock is"));
 }

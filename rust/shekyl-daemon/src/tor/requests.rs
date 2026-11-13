@@ -36,14 +36,13 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_consensus_valid_after, parse_network_view,
     parse_service_descriptor, parse_socks_listeners, parse_traffic_read, Command, ControlReply,
     RelayFingerprint, ServiceId, UploadRounds,
 };
 use shekyl_tor_control_client::supervisor::{
-    Action, DirectoryAnswer, DirectoryFetch, Input, REPLY_BOUND,
+    Action, DirectoryAnswer, DirectoryFetch, Input, Launch, LaunchDirectory, REPLY_BOUND,
 };
 use shekyl_tor_control_daemon::{
     ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
@@ -146,10 +145,7 @@ impl Drive {
         };
         let answered = match action {
             Action::Reap => self.send_reap(number),
-            Action::Spawn {
-                fresh_directory,
-                binary,
-            } => self.send_launch(number, *fresh_directory, binary.clone()),
+            Action::Spawn(launch) => self.send_launch(number, launch.clone()),
             Action::SubscribeEvents => self.send_subscribe(number),
             Action::Sample => self.send_sample(number),
             Action::SetConfAvoidDiskWrites => self.send_defer(number),
@@ -256,12 +252,8 @@ impl Drive {
     /// driver abandons the launch, and the task then stops that Tor and
     /// retires its directory itself, so the next launch, which waits for
     /// this task, finds nothing of it.
-    fn send_launch(
-        &mut self,
-        number: u64,
-        fresh_directory: bool,
-        binary: VerifiedTorBinary,
-    ) -> Option<Vec<Input>> {
+    fn send_launch(&mut self, number: u64, launch: Launch) -> Option<Vec<Input>> {
+        let Launch { binary, directory } = launch;
         // The core reaps an incarnation before the next launch, so none is
         // held here; one that is would be lost by the launch, so it is
         // stopped first, in the same order.
@@ -271,13 +263,13 @@ impl Drive {
                 say_retirement(&stray.stop_for_respawn().await.retire().await);
             });
         }
-        let fresh = fresh_directory || self.kept.is_none();
-        let old = if fresh_directory {
-            self.kept.take()
-        } else {
-            None
+        // A fresh launch retires the kept directory; a kept launch reuses it.
+        // Either one with nothing kept takes a new directory.
+        let (old, kept) = match directory {
+            LaunchDirectory::Fresh => (self.kept.take(), None),
+            LaunchDirectory::Kept => (None, self.kept.take()),
         };
-        let kept = self.kept.take();
+        let fresh = kept.is_none();
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
         let (abandon, abandoned) = watch::channel(false);
@@ -644,10 +636,7 @@ impl Drive {
                     self.kept = Some(directory);
                 }
                 match error {
-                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable {
-                        path: self.data_dir.clone(),
-                        space: None,
-                    },
+                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable { space: None },
                     _ => Input::SpawnFailed,
                 }
             }

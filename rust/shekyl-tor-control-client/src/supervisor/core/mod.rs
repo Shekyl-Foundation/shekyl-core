@@ -214,6 +214,29 @@ pub const CLOCK_BEHIND_AFTER: Duration =
 /// (`src/feature/hs/hs_descriptor.h:30`): 3 hours.
 pub const DESCRIPTOR_LIFETIME: Duration = Duration::from_secs(3 * 60 * 60);
 
+/// The data directory a launch takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchDirectory {
+    /// The directory the last incarnation kept, or a new one when none is
+    /// kept.
+    Kept,
+    /// A new directory; a kept one is retired first. Taken once
+    /// [`Policy::fresh_directory_after`] launches in a row have failed.
+    Fresh,
+}
+
+/// One launch of Tor: the binary its own pin check accepted (`TSR-F5`) and
+/// the data directory it takes. A launch exists only with a binary, so the
+/// driver holds none of its own and cannot be asked to launch without one
+/// (Rick, 2026-11-12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    /// What the pin verified.
+    pub binary: VerifiedTorBinary,
+    /// Where it runs.
+    pub directory: LaunchDirectory,
+}
+
 /// What the driver does next.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -224,15 +247,8 @@ pub enum Action {
     /// given its grace to exit, and is killed past it. A request: the
     /// reply is [`Input::Replied`] alone, and the next launch waits behind it.
     Reap,
-    /// Spawn. `fresh_directory` drops the kept data directory first.
-    Spawn {
-        /// Take a new data directory.
-        fresh_directory: bool,
-        /// The binary the pin accepted for this launch. A launch exists only
-        /// with one, so the driver holds no binary of its own and cannot be
-        /// asked to launch without one (Rick, 2026-11-12).
-        binary: VerifiedTorBinary,
-    },
+    /// Spawn Tor: the binary its pin accepted, in the directory it takes.
+    Spawn(Launch),
     /// One `GETINFO` of bootstrap progress, the SOCKS listeners, and
     /// `traffic/read`. While Running the same reply also carries Tor's
     /// network view ([`Input::NetworkView`]); during a bootstrap those keys
@@ -356,8 +372,6 @@ pub enum Input {
     /// The data directory cannot be used, or has too little free space for
     /// the spawn (the pre-spawn check).
     DirectoryUnusable {
-        /// The daemon's data directory.
-        path: std::path::PathBuf,
         /// The shortfall, when that was the reason.
         space: Option<Space>,
     },
@@ -787,20 +801,15 @@ impl Core {
 
     /// Fold one observation in.
     ///
-    /// CLIPPY: an observation is consumed by the transition. The driver does
-    /// not keep it, and a reference would only clone the fields out.
-    #[allow(clippy::needless_pass_by_value)]
     pub fn on(&mut self, input: Input, now: u64) -> Step {
         let actions = match input {
             Input::PinAccepted { binary } => self.pin_accepted(binary),
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
-            Input::DirectoryUnusable { path, space } => self.hold(
-                now,
-                Cause::DirectoryUnusable { path, space },
-                AbsentDuty::Held,
-            ),
+            Input::DirectoryUnusable { space } => {
+                self.hold(now, Cause::DirectoryUnusable { space }, AbsentDuty::Held)
+            }
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
@@ -818,7 +827,7 @@ impl Core {
             Input::HostAbsent => self.host_absent(),
             Input::RouteInstalled => self.route_installed(now),
             Input::ForwardAbsent => self.forward_absent(),
-            Input::OnionPublished => self.onion_published(),
+            Input::OnionPublished => self.onion_published(now),
             Input::UploadRoundStarted => self.round_started(now),
             Input::FirstUploaded { draw } => self.first_uploaded(now, draw),
             Input::UploadRoundEnded { tally, draw } => self.round_ended(now, tally, draw),
@@ -902,6 +911,11 @@ impl Core {
             Action::RefetchDescriptor => matches!(self.probe, probe::Probe::Refetching),
             _ => true,
         }
+    }
+
+    /// The connector settings this core runs under.
+    pub(in crate::supervisor) fn connectors(&self) -> Connectors {
+        self.connectors
     }
 
     /// The deadline fired. Each armed time is its own kind of work: a pin
@@ -1053,12 +1067,14 @@ impl Core {
     /// of the binary its own pin check accepted (`TSR-F5`).
     fn pin_accepted(&mut self, binary: VerifiedTorBinary) -> Vec<Action> {
         self.phase = Phase::Launching;
-        let fresh =
-            self.launch_failures >= self.policy.fresh_directory_after && self.launch_failures > 0;
-        vec![Action::Spawn {
-            fresh_directory: fresh,
-            binary,
-        }]
+        let directory = if self.launch_failures > 0
+            && self.launch_failures >= self.policy.fresh_directory_after
+        {
+            LaunchDirectory::Fresh
+        } else {
+            LaunchDirectory::Kept
+        };
+        vec![Action::Spawn(Launch { binary, directory })]
     }
 
     fn spawned(&mut self, now: u64) -> Vec<Action> {
@@ -1171,7 +1187,7 @@ impl Core {
     /// The onion is published: `ADD_ONION`'s reply, or a round's first
     /// upload. An onion offered for the first time is publishing. One that
     /// was unreachable stays so until a probe arrives.
-    fn onion_published(&mut self) -> Vec<Action> {
+    fn onion_published(&mut self, now: u64) -> Vec<Action> {
         if let Phase::Running { onion, .. } = &mut self.phase {
             *onion = Duty::Done;
             self.service_republish = false;
@@ -1179,7 +1195,7 @@ impl Core {
             // has nothing to put back.
             self.queued_send = None;
             if self.inbound == Inbound::NotOffered {
-                self.inbound = Inbound::Publishing;
+                self.inbound = Inbound::Publishing { since: now };
             }
         }
         Vec::new()
