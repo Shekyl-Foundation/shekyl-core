@@ -41,9 +41,22 @@ fn sync_line(status: &DaemonStatus) -> Option<String> {
     })
 }
 
-/// The difficulty line: the whole 128-bit value, in decimal.
+/// The difficulty line: the whole 128-bit value, in decimal. It is in the
+/// chain part, which a connection without the `chain` grant is not shown:
+/// withheld is said, never a difficulty of zero.
 fn difficulty_line(status: &DaemonStatus) -> String {
-    format!("  Difficulty:   {}", status.difficulty.get())
+    match status.difficulty.shown() {
+        Some(difficulty) => format!("  Difficulty:   {}", difficulty.get()),
+        None => "  Difficulty:   not disclosed".to_owned(),
+    }
+}
+
+/// The transaction count line, from the chain part like the difficulty.
+fn tx_count_line(status: &DaemonStatus) -> String {
+    match status.tx_count.shown() {
+        Some(count) => format!("  Tx count:     {}", count.0),
+        None => "  Tx count:     not disclosed".to_owned(),
+    }
 }
 
 /// The connections line.
@@ -76,7 +89,7 @@ pub(crate) fn show_chain(status: &DaemonStatus) {
         println!("{line}");
     }
     println!("{}", difficulty_line(status));
-    println!("  Tx count:     {}", status.tx_count.0);
+    println!("{}", tx_count_line(status));
     println!("{}", connections_line(status));
 }
 
@@ -242,7 +255,7 @@ fn coverage_row_line(row: &CoverageShard) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{connections_line, coverage_row_line, difficulty_line, sync_line};
+    use super::{connections_line, coverage_row_line, difficulty_line, sync_line, tx_count_line};
     use serde_json::{json, Value};
     use shekyl_rpc_client::{wire, RpcMethod};
     use shekyl_rpc_types::wire::archival::CoverageShard;
@@ -257,22 +270,12 @@ mod tests {
     }
 
     /// The Status part withheld, as a caller without the `status` grant
-    /// reads it: its members are absent.
+    /// reads it: the console fixture's own withholding, so the two cannot
+    /// disagree about which members the part holds.
     fn without_status_part(value: &mut Value) {
+        let withheld = crate::console::status_withheld(100);
         let members = value.as_object_mut().unwrap();
-        for key in [
-            "started",
-            "disk_free",
-            "data_size",
-            "revision",
-            "peer_outbound_count",
-            "peer_inbound_count",
-            "alt_count",
-            "rpc_connections",
-            "txpool_retired",
-        ] {
-            members.remove(key);
-        }
+        members.retain(|key, _| withheld.get(key).is_some());
         value["grant"] = json!(["health", "chain", "pool", "submit", "mining-work"]);
     }
 
@@ -376,6 +379,34 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// A withheld chain part (a connection without the `chain` grant) says
+    /// so; it is not a difficulty or a transaction count of zero. The decode
+    /// refuses a part that is partly present, so this list is the whole part.
+    #[test]
+    fn a_withheld_chain_part_is_not_disclosed_not_zero() {
+        let s = status(|v| {
+            let members = v.as_object_mut().unwrap();
+            for key in [
+                "difficulty",
+                "difficulty_cumulative",
+                "block_spacing",
+                "tx_count",
+                "block_weight_max",
+                "block_weight_median",
+                "time_adjusted",
+                "emission",
+                "emission_multiplier",
+                "burn",
+                "burn_total",
+                "stake_share",
+            ] {
+                members.remove(key);
+            }
+        });
+        assert_eq!(difficulty_line(&s), "  Difficulty:   not disclosed");
+        assert_eq!(tx_count_line(&s), "  Tx count:     not disclosed");
     }
 
     /// A withheld Status part is not a zero. A shown zero still prints as

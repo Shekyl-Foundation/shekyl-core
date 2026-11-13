@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The harness network id outlives the chains that need it unless `CF-5` deletes it.** `HARNESS_NETWORK_ID`, the all-zero id that chains which mine their own genesis sign under (`Trust::UNPINNED`), stays beside regtest's identity from `CF-1a` on. It is test-only: `CF-1b` puts it behind a `TEST_ONLY` `harness` feature on `shekyl-network` that the test-only feature gate holds, and `CF-5` deletes it, with `Trust::UNPINNED`, `GenesisPin::NONE` and `Persona::at`'s mainnet derivation, once every chain judged under `Trust::UNPINNED` is held to a genesis (`CHAIN_FORGE.md` §12.2). Falsify by: a build of the workspace at `CF-5`'s merge in which the name does not resolve.
+  - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R15`, `CF-5`)
+  - Target: pre-genesis
 - **The block path's gated benches have no multisig shape: nothing builds a scheme-2 spend a validator admits.** `DAEMON_REDB_STORE.md` §1.3a.7's shape 3 is the multisig container at its maximum signers, the heaviest post-quantum signature kind. `shekyl-harness-spender` signs single-signer inputs only, so `shekyl-chain-ingest`'s block-path fixtures (`bench_fixture_tests.rs`) cannot list one. Named blocker: a builder of a scheme-2 spend (the multisig completion's spend path). When it exists, the shape is one `Shape` entry and two regenerated fixtures.
   - Owner: the daemon benchmarks — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-T2)
   - Target: pre-genesis (trigger: a scheme-2 spend builder lands)
@@ -1099,7 +1102,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
-- **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`) and the send flow reads `OwnTx`, reporting `Held` as held and a `ClearnetOnly` send as sent, falsified by §11's two cases once increment 3's typed read and the RW field names exist, with the GUI's display tracked in `shekyl-gui-wallet`. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
+- **Report a held send as held.** The send flow reads `daemon_status`'s Tor status (4.2) through its one accessor, `TorStatus::own_tx_hides_address`, which fails closed on a value it does not know, and reports a held send as held and a `clearnet-only` send as sent, falsified by §11's two cases, with the GUI's display tracked in `shekyl-gui-wallet`. `shekyl-cli`'s `status` already speaks the status through the one renderer (`TSR-Q13`). — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
 

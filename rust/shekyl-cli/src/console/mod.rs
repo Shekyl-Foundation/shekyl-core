@@ -27,7 +27,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::{daemon_status_reply, route_server_recording};
+pub(crate) use tests::{daemon_status_reply, route_server_recording, status_withheld};
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
@@ -69,7 +69,7 @@ fn human_readable_timestamp(ts: u64) -> String {
 /// Built as lines and joined: writing to a `String` cannot fail, so
 /// `write!` here would only produce `Result`s to discard.
 fn render_block_header(h: &BlockHeader) -> String {
-    let pow_hash = h.pow.0.map_or_else(String::new, |p| p.to_string());
+    let pow_hash = h.pow.present().map_or_else(String::new, |p| p.to_string());
     let time = h.time.0;
     [
         format!("timestamp: {time} ({})", human_readable_timestamp(time)),

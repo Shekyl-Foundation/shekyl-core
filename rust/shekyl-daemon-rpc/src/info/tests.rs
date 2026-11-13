@@ -204,7 +204,27 @@ pub(super) fn status(
         &crate::methods::tests::facts(true, 0),
         disclosure,
         rpc_connections,
+        tor_read(disclosure),
     )
+}
+
+/// What the supervisor answers `disclosure`: `hiding`, and an operator's
+/// Tor's status only for a caller shown Status, as the handler asks it.
+pub(super) fn tor_read(disclosure: Disclosure) -> crate::tor_facts::TorRead {
+    use shekyl_tor_status::{Clearnet, Connector, Origination, Posture, TorSetting, TorStatus};
+    crate::tor_facts::TorRead {
+        hiding: true,
+        status: disclosure.status().then(|| TorStatus {
+            posture: Posture {
+                tor: TorSetting::Operator,
+                clearnet: Clearnet::Off,
+            },
+            origination: Origination::AddressHiding,
+            sync_connector: vec![Connector::Tor],
+            tor_quiet: None,
+            tor: None,
+        }),
+    }
 }
 
 pub(super) fn ours(facts: &FakeInfoFacts, disclosure: Disclosure) -> serde_json::Value {
@@ -213,7 +233,7 @@ pub(super) fn ours(facts: &FakeInfoFacts, disclosure: Disclosure) -> serde_json:
 }
 
 /// The keys the Status part carries.
-const STATUS_KEYS: [&str; 9] = [
+const STATUS_KEYS: [&str; 14] = [
     "started",
     "disk_free",
     "data_size",
@@ -223,6 +243,11 @@ const STATUS_KEYS: [&str; 9] = [
     "alt_count",
     "rpc_connections",
     "txpool_retired",
+    "posture",
+    "origination",
+    "sync_connector",
+    "tor_quiet",
+    "tor",
 ];
 
 // ── what a synchronized node is told ───────────────────────────────────
@@ -319,7 +344,14 @@ fn a_syncing_degraded_node_says_so() {
 fn a_halted_writer_is_told_to_every_caller() {
     let mut chain = crate::methods::tests::facts(true, 0);
     chain.tip.as_mut().expect("a tip").halt = Some((shekyl_types::BlockHeight::from_raw(5), 3));
-    let reply = daemon_status(&synced_facts(), &chain, Disclosure::VIEW, 0).expect("answered");
+    let reply = daemon_status(
+        &synced_facts(),
+        &chain,
+        Disclosure::VIEW,
+        0,
+        tor_read(Disclosure::VIEW),
+    )
+    .expect("answered");
     assert_eq!(
         serde_json::to_value(reply).unwrap()["writer"],
         serde_json::json!({"halted": {"height": 5, "invariant": 3}})
@@ -548,7 +580,7 @@ fn block_spacing_is_the_difficulty_target() {
     facts.chain.difficulty_target = 77;
     assert_eq!(
         status(&facts, Disclosure::FULL, 0).unwrap().block_spacing,
-        Duration(77)
+        shekyl_rpc_types::kinds::Withheld::Shown(Duration(77))
     );
 }
 
@@ -621,7 +653,7 @@ fn txpool_count_is_the_public_count_for_every_caller() {
     for disclosure in [Disclosure::VIEW, Disclosure::FULL] {
         assert_eq!(
             status(&facts, disclosure, 0).unwrap().txpool_count,
-            Nullable(Some(Count(9))),
+            shekyl_rpc_types::kinds::Withheld::Shown(Nullable(Some(Count(9)))),
             "{disclosure:?}"
         );
     }
@@ -629,7 +661,7 @@ fn txpool_count_is_the_public_count_for_every_caller() {
     facts.pool_unbroadcast = 1_000;
     assert_eq!(
         status(&facts, Disclosure::FULL, 0).unwrap().txpool_count,
-        Nullable(Some(Count(9)))
+        shekyl_rpc_types::kinds::Withheld::Shown(Nullable(Some(Count(9))))
     );
 }
 
@@ -700,3 +732,74 @@ fn a_retired_pool_answers_null_counts_and_the_chain() {
 
 #[path = "peer_facts_tests.rs"]
 mod peers;
+
+/// **`health` carries liveness only** (`RPC_CHANNEL.md` §6.1, Rick
+/// 2026-11-12). A connection whose grant set holds `health` and nothing
+/// else is told whether the node is usable now and the grants it holds:
+/// no chain fact, no pool count, no part of this node. `chain` adds the
+/// chain's part and `pool` the relayed count, each alone. The grant sets
+/// are built from the type, not from a preset, so the test holds before
+/// any custom ceiling exists. Red edit: put a chain field back in the
+/// base fields.
+#[test]
+fn a_health_only_caller_is_told_liveness_and_nothing_more() {
+    use shekyl_rpc_types::method::{Grant, GrantSet};
+    let facts = synced_facts();
+    let keys = |grants: &[Grant]| {
+        let reply = status(&facts, Disclosure::of(GrantSet::of(grants), false), 0)
+            .unwrap_or_else(|_| panic!("daemon_status answers {grants:?}"));
+        let value = serde_json::to_value(reply).expect("a reply serializes");
+        let mut keys: Vec<String> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let liveness = [
+        "degraded",
+        "grant",
+        "hash",
+        "height",
+        "hiding",
+        "offline",
+        "peered",
+        "protocol_version",
+        "synchronized",
+        "syncing",
+        "target_height",
+        "writer",
+    ];
+    assert_eq!(keys(&[Grant::Health]), liveness, "health alone");
+    let chain = [
+        "block_spacing",
+        "block_weight_max",
+        "block_weight_median",
+        "burn",
+        "burn_total",
+        "difficulty",
+        "difficulty_cumulative",
+        "emission",
+        "emission_multiplier",
+        "stake_share",
+        "time_adjusted",
+        "tx_count",
+    ];
+    let mut with_chain: Vec<&str> = liveness.iter().chain(&chain).copied().collect();
+    with_chain.sort_unstable();
+    assert_eq!(
+        keys(&[Grant::Health, Grant::Chain]),
+        with_chain,
+        "chain adds its part"
+    );
+    let mut with_pool: Vec<&str> = liveness.to_vec();
+    with_pool.push("txpool_count");
+    with_pool.sort_unstable();
+    assert_eq!(
+        keys(&[Grant::Health, Grant::Pool]),
+        with_pool,
+        "pool adds its count"
+    );
+}

@@ -222,7 +222,7 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
 
 /// Bring `core` to Running at `at`, after failures and life from before.
 fn running_at(core: &mut Core, at: u64) {
-    core.on(Input::PinAccepted, at);
+    core.on(Input::accepted(), at);
     core.on(Input::Spawned, at);
     // Launch, subscription, and the sample `Spawned` queued. The progress
     // line is not said from behind a request the test has already treated
@@ -343,7 +343,7 @@ fn an_old_dials_success_still_counts() {
 #[test]
 fn tors_sampled_view_names_and_clears_a_blocked_link_only_while_running() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     let step = core.on(tor_says(Reported::Yes, Reported::No), 1);
     assert_eq!(announces(&step), 0);

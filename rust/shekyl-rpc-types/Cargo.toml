@@ -31,6 +31,10 @@ shekyl-units = { path = "../shekyl-units" }
 shekyl-address = { path = "../shekyl-address" }
 # The grants the method table's policy column names (RPC_CHANNEL.md §6.1).
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+# The Tor status's one shape (`TOR_STATUS_CRATE.md`): `daemon_status`'s Tor
+# fields are its types, so the daemon and every client read the same values.
+# serde only, no I/O.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # A body's one encoding on the wire: base64, RFC 4648 §4, padded (RW-Q4,
 # IG-6 `bytes`). Already in the tree (shekyl-cli, shekyl-wallet-rpc).
 base64 = "0.22"

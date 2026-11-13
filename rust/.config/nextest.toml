@@ -44,3 +44,15 @@ path = "junit.xml"
 # nightly `trybuild-ignored` lane (scripts/ci/ignored_set_trybuild.sh);
 # the one left in this run (shekyl-logging's) checks little and needs no
 # slot of its own.
+
+# The hasher's shell tests (shekyl-hasher src/shell_tests.rs) derive real
+# RandomX caches, 256 MiB each, and one test holds up to three: 768 MiB.
+# nextest runs each test in its own process, so the in-binary lock those
+# tests take does not serialise them here; this group does, in every
+# profile (the `default` profile's overrides apply to `ci` too).
+[test-groups]
+hasher-shell = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(shekyl-hasher) & test(/^shell_tests::/)'
+test-group = 'hasher-shell'

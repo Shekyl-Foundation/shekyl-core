@@ -476,6 +476,10 @@ impl Regtest {
                 .expect("utf8 config"),
             "--log-file",
             data_dir.join("shekyld.log").to_str().expect("utf8 log"),
+            // The owner's socket in the private configuration directory:
+            // a harness names it (`RPC_CHANNEL.md` §7.1).
+            "--rpc-socket-dir",
+            config_dir.to_str().expect("utf8 config"),
             "--log-level",
             "info",
             "--mine-address",

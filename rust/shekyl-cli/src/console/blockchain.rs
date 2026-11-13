@@ -136,8 +136,13 @@ pub(super) fn print_blockchain_dynamic_stats(
     out.push(format!(
         "Block count: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
         height,
-        status.difficulty.get(),
-        status.difficulty_cumulative.get(),
+        super::info::disclosed(status.difficulty, "the difficulty", "chain")?.get(),
+        super::info::disclosed(
+            status.difficulty_cumulative,
+            "the cumulative difficulty",
+            "chain"
+        )?
+        .get(),
     ));
     if nblocks == 0 {
         return Ok(out.join("\n"));

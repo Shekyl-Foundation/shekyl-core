@@ -1,0 +1,25 @@
+[
+  {
+    "version_major": 3,
+    "version_minor": 3,
+    "time": 1767369360,
+    "parent": "8888888888888888888888888888888888888888888888888888888888888888",
+    "nonce": 2914736,
+    "orphan": false,
+    "height": 1198,
+    "depth": 1,
+    "hash": "9999999999999999999999999999999999999999999999999999999999999999",
+    "difficulty": "0x2a3f1c",
+    "difficulty_cumulative": "0x6f2e8d41b7",
+    "reward": "41875000000",
+    "weight": 1984,
+    "weight_longterm": 1984,
+    "tx_count": 1,
+    "coinbase": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "curve_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "attestation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  {
+    "missing": null
+  }
+]

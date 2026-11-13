@@ -18,7 +18,7 @@
 use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 use shekyl_rpc_types::hash::HashHex;
 use shekyl_rpc_types::hex128::HexU128;
-use shekyl_rpc_types::kinds::{Bytes, Count, Height, Integer, Micro, Milli, Size, Time};
+use shekyl_rpc_types::kinds::{Asked, Bytes, Count, Height, Integer, Micro, Milli, Size, Time};
 use shekyl_rpc_types::method::caller_bounded;
 use shekyl_rpc_types::nullable::Nullable;
 use shekyl_rpc_types::wire::{archival, block, chain, shared, tx};
@@ -143,11 +143,20 @@ pub fn chain_height(facts: &dyn ChainFacts) -> Result<chain::ChainHeight, RpcFau
     })
 }
 
-/// A header's facts on the wire. `pow` is the hash recorded at validation
-/// when it was asked for and is held; `null` otherwise (IG-Q56).
-#[must_use]
-pub fn header(facts: &BlockHeaderFacts) -> block::BlockHeader {
-    block::BlockHeader {
+/// A header's facts on the wire. `pow` is the hash recorded at validation,
+/// present exactly when the request asked for it (IG-Q56, RW-Q4).
+///
+/// # Errors
+///
+/// A header asked for `pow` whose facts carry none: the facts cannot
+/// supply what the request selected, which is their fault, never a blank.
+pub fn header(facts: &BlockHeaderFacts, pow: bool) -> Result<block::BlockHeader, RpcFault> {
+    let pow = match (pow, facts.pow_hash) {
+        (true, Some(bytes)) => Asked::Present(hash(bytes)),
+        (true, None) => return Err(RpcFault::Facts(FactsFault::Inconsistent)),
+        (false, _) => Asked::Unasked,
+    };
+    Ok(block::BlockHeader {
         version_major: Integer(u64::from(facts.major_version)),
         version_minor: Integer(u64::from(facts.minor_version)),
         time: Time(facts.timestamp),
@@ -163,11 +172,11 @@ pub fn header(facts: &BlockHeaderFacts) -> block::BlockHeader {
         weight: Size(facts.block_weight),
         weight_longterm: facts.long_term_weight.map(Size).into(),
         tx_count: Count(facts.num_txes),
-        pow: facts.pow_hash.map(hash).into(),
+        pow,
         coinbase: hash(facts.miner_tx_hash.to_bytes()),
         curve_root: hash(facts.curve_tree_root.to_bytes()),
         attestation_root: hash(facts.attestation_root.to_bytes()),
-    }
+    })
 }
 
 /// How many times [`tip_header`] re-reads a tip that moved.
@@ -227,7 +236,7 @@ pub fn block_header_show(
 ) -> Result<block::BlockHeader, RpcFault> {
     let select = request.0;
     let (lookup, what) = match select.select {
-        shared::Selector::Tip => return Ok(header(&tip_header(facts, select.pow)?)),
+        shared::Selector::Tip => return header(&tip_header(facts, select.pow)?, select.pow),
         shared::Selector::Height(height) => (
             BlockLookup::Height(BlockHeight::from_raw(height.0)),
             format!("at height {}", height.0),
@@ -237,8 +246,8 @@ pub fn block_header_show(
     let at = facts.block_header_at(lookup, select.pow)?;
     at.header
         .as_ref()
-        .map(header)
-        .ok_or_else(|| missing_block(&what, at.chain_height))
+        .map(|found| header(found, select.pow))
+        .ok_or_else(|| missing_block(&what, at.chain_height))?
 }
 
 /// `block_header_list`: an inclusive range of headers, or headers by hash
@@ -268,10 +277,10 @@ pub fn block_header_list(
                 .map(|id| {
                     let at =
                         facts.block_header_at(BlockLookup::Hash(id.to_bytes()), request.pow)?;
-                    Ok(at.header.as_ref().map_or(
-                        shared::Slot::State(shared::SlotState::Missing(shared::Null)),
-                        |found| shared::Slot::Item(header(found)),
-                    ))
+                    Ok(match at.header.as_ref() {
+                        Some(found) => shared::Slot::Item(header(found, request.pow)?),
+                        None => shared::Slot::State(shared::SlotState::Missing(shared::Null)),
+                    })
                 })
                 .collect()
         }
@@ -308,10 +317,10 @@ pub fn block_header_list(
                     )?;
                     // A height that vanished mid-read means the chain shortened
                     // under the range: the range left the chain.
-                    at.header
-                        .as_ref()
-                        .map(|found| shared::Slot::Item(header(found)))
-                        .ok_or_else(|| missing_block(&format!("at height {raw}"), at.chain_height))
+                    let found = at.header.as_ref().ok_or_else(|| {
+                        missing_block(&format!("at height {raw}"), at.chain_height)
+                    })?;
+                    Ok(shared::Slot::Item(header(found, request.pow)?))
                 })
                 .collect()
         }
@@ -334,19 +343,39 @@ fn body_form(id: TxHash, body: &TxBody, prune: bool) -> Result<Bytes, shared::Ar
     }
 }
 
-fn block_tx(id: TxHash, body: &TxBody, prune: bool) -> shared::OrArchived<block::BlockTx> {
-    match body_form(id, body, prune) {
-        Ok(bytes) => shared::OrArchived::Item(block::BlockTx {
-            id: hash(id.to_bytes()),
-            body: bytes,
-            prunable_hash: hash(body.skeleton.prunable_hash.to_bytes()),
-            pqc_auth_hash: body
-                .skeleton
+/// The three operands `prune` selects (RW-Q4): present together, or all
+/// unasked. One transaction carries them on `tx_show` and inside a block.
+struct PrunedOperands {
+    prunable_hash: Asked<HashHex>,
+    pqc_auth_hash: Asked<Nullable<HashHex>>,
+    archival_size: Asked<Size>,
+}
+
+fn pruned_operands(body: &TxBody, prune: bool) -> PrunedOperands {
+    PrunedOperands {
+        prunable_hash: Asked::when(prune, || hash(body.skeleton.prunable_hash.to_bytes())),
+        pqc_auth_hash: Asked::when(prune, || {
+            body.skeleton
                 .pqc_auth_hash
                 .map(|auth| hash(auth.to_bytes()))
-                .into(),
-            archival_size: Size(body.skeleton.archival_len.to_raw()),
+                .into()
         }),
+        archival_size: Asked::when(prune, || Size(body.skeleton.archival_len.to_raw())),
+    }
+}
+
+fn block_tx(id: TxHash, body: &TxBody, prune: bool) -> shared::OrArchived<block::BlockTx> {
+    match body_form(id, body, prune) {
+        Ok(bytes) => {
+            let pruned = pruned_operands(body, prune);
+            shared::OrArchived::Item(block::BlockTx {
+                id: hash(id.to_bytes()),
+                body: bytes,
+                prunable_hash: pruned.prunable_hash,
+                pqc_auth_hash: pruned.pqc_auth_hash,
+                archival_size: pruned.archival_size,
+            })
+        }
         Err(archived) => shared::OrArchived::Archived(shared::ArchivedState::Archived(archived)),
     }
 }
@@ -409,7 +438,7 @@ pub fn block_show(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(block::Block {
         output_index: first_output_index(read, found.header.miner_tx_hash)?,
-        header: header(&found.header),
+        header: header(&found.header, select.pow)?,
         body: Bytes(found.blob),
         tx,
     })
@@ -458,7 +487,8 @@ pub fn block_list(
                 .ok_or(RpcFault::Facts(FactsFault::Inconsistent))?;
             Ok(shared::Slot::Item(block::Block {
                 output_index: first_output_index(read, found.miner_tx_hash)?,
-                header: header(&found),
+                // `block_list` takes no `pow` switch.
+                header: header(&found, false)?,
                 body: Bytes(body.block),
                 tx: body
                     .txs
@@ -501,16 +531,13 @@ fn tx_entry(
             ))
         }
     };
+    let pruned = pruned_operands(body, prune);
     Some(shared::OrArchived::Item(tx::TxEntry {
         id: hash(id.to_bytes()),
         body: body_bytes,
-        prunable_hash: hash(body.skeleton.prunable_hash.to_bytes()),
-        pqc_auth_hash: body
-            .skeleton
-            .pqc_auth_hash
-            .map(|auth| hash(auth.to_bytes()))
-            .into(),
-        archival_size: Size(body.skeleton.archival_len.to_raw()),
+        prunable_hash: pruned.prunable_hash,
+        pqc_auth_hash: pruned.pqc_auth_hash,
+        archival_size: pruned.archival_size,
         pooled,
         mined_height: mined.as_ref().map(|(at, _, _)| Height(*at)).into(),
         // Against the count read once for the whole gather.

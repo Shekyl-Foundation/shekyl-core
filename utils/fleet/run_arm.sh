@@ -252,7 +252,9 @@ while read -r host an as cn cs; do
       for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
         i=\$(basename \"\$cf\" .toml); i=\${i#node-}
+        mkdir -p -m 0700 $FLEET_ROOT/sock/node-\$i
         nohup setsid $BIN --network stagenet --config-file \"\$cf\" \\
+          --rpc-socket-dir $FLEET_ROOT/sock/node-\$i \\
           >$FLEET_ROOT/log/node-\$i.out 2>&1 </dev/null &
         d=\$((d+1))
         sleep $START_STAGGER
@@ -313,7 +315,9 @@ MAP
       for cf in $FLEET_ROOT/etc/node-*.toml; do
         [ -e \"\$cf\" ] || continue
         i=\$(basename \"\$cf\" .toml); i=\${i#node-}
+        mkdir -p -m 0700 $FLEET_ROOT/sock/node-\$i
         nohup setsid $BIN --network stagenet --config-file \"\$cf\" \\
+          --rpc-socket-dir $FLEET_ROOT/sock/node-\$i \\
           >$FLEET_ROOT/log/node-\$i.out 2>&1 </dev/null &
         d=\$((d+1))
         sleep $START_STAGGER
