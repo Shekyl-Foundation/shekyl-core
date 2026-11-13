@@ -3,37 +3,43 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The AEAD for an Option E′ ceremony blob (`docs/PQC_MULTISIG.md` §12.3;
-//! `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md` §4; Round 0 ruling R-4).
+//! The sealed file an Option E′ ceremony passes between members
+//! (`docs/SHEKYL_MULTISIG_WIRE_FORMAT.md` §1, §4; `docs/PQC_MULTISIG.md`
+//! §12.3; rulings R-4, R-9, R-10).
 //!
 //! Every member holds the group transport secret (the member file,
 //! `derivation::derive_group_transport_secret`, derived under `salt_for`).
-//! A blob is sealed under a key expanded from that secret for one
-//! [`BlobHeader`], with XChaCha20-Poly1305 and a **random** 24-byte nonce
-//! carried at the front of the sealed bytes:
+//! One key per group is expanded from it, and every file is sealed under
+//! that key with XChaCha20-Poly1305 and a **random** 24-byte nonce:
 //!
 //! ```text
-//! key    = HKDF-SHA-512(ikm = transport_secret)
-//!            .expand(LABEL_MULTISIG_BLOB_KEY ‖ intent_hash ‖ u8(message_type) ‖ u8(sender_index), 32)
-//! aad    = version ‖ address_fingerprint ‖ intent_hash ‖ u8(sender_index)
-//! sealed = nonce(24) ‖ XChaCha20-Poly1305(key, nonce, aad, payload) ‖ tag(16)
+//! key  = HKDF-SHA-512(ikm = transport_secret, info = LABEL_MULTISIG_BLOB_KEY)
+//! aad  = format_version
+//! file = format_version(1) ‖ nonce(24) ‖ XChaCha20-Poly1305(key, nonce, aad, plaintext) ‖ tag(16)
 //! ```
 //!
-//! The associated data is those four fields and no others. They are known
-//! before the ciphertext exists, and they are the envelope's first
-//! [`BLOB_AAD_LEN`] bytes (`MultisigEnvelope::to_bytes`). The message type
-//! stays out of the associated data: it lives inside the payload so a
-//! relay cannot see the role (SS12.5), and the key binds it instead. The
-//! sender's signature stays out too. Its preimage is the sealed payload, so
-//! putting the signature in the associated data would make sealing and
-//! signing depend on each other. When that signer lands it authenticates
-//! the ciphertext on its own; it does not re-enter this AEAD.
+//! **Nothing but the format version is in the clear** (R-10). A file shows
+//! its size and that it is a Shekyl multisig file; which group, which
+//! intent, which member and which step are inside the ciphertext, so files
+//! carried by email, a messenger or a USB stick (R-9) are not linkable by
+//! whoever carries or finds them. The plaintext's layout — header, body,
+//! sender signature — is `shekyl-multisig`'s; this module seals and opens
+//! bytes.
+//!
+//! Because nothing names the group, a wallet finds a file's group by **trial
+//! decryption**: it opens the file under each of its groups' secrets, and
+//! [`BlobError::Unauthentic`] from all of them means the file is for none of
+//! them.
 //!
 //! The nonce is random because a nonce derived from a persisted counter
 //! repeats when a wallet is restored from a backup, and a repeated nonce
-//! under ChaCha20-Poly1305 leaks the XOR of two payloads and the Poly1305
-//! key. At 192 bits a random nonce does not repeat. A ceremony's counter
-//! still orders blobs and refuses replays; it is not an input to this AEAD.
+//! under ChaCha20-Poly1305 leaks the XOR of two plaintexts and the Poly1305
+//! key. At 192 bits a random nonce under one key does not repeat for any
+//! number of files a group will ever make.
+//!
+//! Version `1` was the clear-header layout of slice 3 PR-A (fingerprint,
+//! intent hash and sender index in the clear, the key per intent, type and
+//! sender). Nothing shipped it; a file of that version is refused by name.
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Tag, XChaCha20Poly1305, XNonce};
@@ -42,199 +48,146 @@ use rand::{CryptoRng, RngCore};
 use sha2::Sha512;
 use zeroize::Zeroizing;
 
-/// The HKDF info label a ceremony blob's key expands under
-/// (`CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 2).
+/// The HKDF info label a group's blob key expands under
+/// (`CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 2). The label is the whole info.
 pub const LABEL_MULTISIG_BLOB_KEY: &[u8] = b"shekyl/multisig-blob-key-v1";
 
-/// Bytes of the random nonce at the front of a sealed blob.
+/// The format version this module seals, and the only one it opens. It is
+/// the file's first byte and the AEAD's associated data.
+pub const BLOB_FORMAT_VERSION: u8 = 2;
+
+/// The clear-header layout of slice 3 PR-A. Never shipped; refused by name.
+const CLEAR_HEADER_VERSION: u8 = 1;
+
+/// Bytes of the format version at the front of a file.
+pub const BLOB_VERSION_LEN: usize = 1;
+
+/// Bytes of the random nonce after the version.
 pub const BLOB_NONCE_LEN: usize = 24;
 
-/// Bytes of the Poly1305 tag at the end of a sealed blob.
+/// Bytes of the Poly1305 tag at the end of a file.
 pub const BLOB_TAG_LEN: usize = 16;
 
-/// Bytes of an intent hash, in the key and in the associated data.
-pub const INTENT_HASH_LEN: usize = 32;
-
-/// Bytes of a group's address fingerprint, in the associated data.
-pub const ADDRESS_FINGERPRINT_LEN: usize = 32;
-
-/// Bytes of the envelope version in the associated data.
-const VERSION_LEN: usize = 1;
-
-/// Bytes of the sender index, in the key and in the associated data.
-const SENDER_INDEX_LEN: usize = 1;
-
-/// Bytes of the message type in the key. It is not associated data.
-const MESSAGE_TYPE_LEN: usize = 1;
-
-const FINGERPRINT_AT: usize = VERSION_LEN;
-const INTENT_AT: usize = FINGERPRINT_AT + ADDRESS_FINGERPRINT_LEN;
-const SENDER_AT: usize = INTENT_AT + INTENT_HASH_LEN;
-
-/// Bytes of the associated data: the envelope prefix through `sender_index`.
-///
-/// `SHEKYL_MULTISIG_WIRE_FORMAT.md` §4.3 and `PQC_MULTISIG.md` §12.3 both
-/// state this width as 66.
-pub const BLOB_AAD_LEN: usize = SENDER_AT + SENDER_INDEX_LEN;
+/// Bytes of a file around its plaintext: version, nonce and tag.
+pub const BLOB_OVERHEAD: usize = BLOB_VERSION_LEN + BLOB_NONCE_LEN + BLOB_TAG_LEN;
 
 const _: () = assert!(
-    BLOB_AAD_LEN == 66,
-    "the wire format states a 66-byte header"
-);
-const _: () = assert!(
-    sealed_len(0) == 40,
-    "a sealed blob is plaintext plus nonce and tag"
+    sealed_len(0) == 41,
+    "a file is its plaintext plus version, nonce and tag"
 );
 
-/// Bytes of a sealed blob whose plaintext is `payload_len` bytes.
+/// Bytes of a file whose plaintext is `plaintext_len` bytes.
 #[must_use]
-pub const fn sealed_len(payload_len: usize) -> usize {
-    BLOB_NONCE_LEN + payload_len + BLOB_TAG_LEN
+pub const fn sealed_len(plaintext_len: usize) -> usize {
+    BLOB_OVERHEAD + plaintext_len
 }
 
-/// Who a blob is sealed for. The key and the associated data are both
-/// functions of this value, so a caller cannot expand the key for one
-/// header and bind another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlobHeader<'a> {
-    /// The envelope version byte.
-    pub version: u8,
-    /// The group's address fingerprint.
-    pub address_fingerprint: &'a [u8; ADDRESS_FINGERPRINT_LEN],
-    /// The intent this blob belongs to.
-    pub intent_hash: &'a [u8; INTENT_HASH_LEN],
-    /// The ceremony message type. Inside the payload, and a key field.
-    pub message_type: u8,
-    /// The sending member's index.
-    pub sender_index: u8,
-}
-
-impl BlobHeader<'_> {
-    /// The key's domain: intent, message type, sender. The message type is
-    /// not on the envelope in the clear.
-    #[must_use]
-    pub fn context(&self) -> BlobContext {
-        BlobContext {
-            intent_hash: *self.intent_hash,
-            message_type: self.message_type,
-            sender_index: self.sender_index,
-        }
-    }
-
-    /// The associated data, which is the envelope's first [`BLOB_AAD_LEN`]
-    /// bytes: version, address fingerprint, intent hash, sender index.
-    #[must_use]
-    pub fn associated_data(&self) -> [u8; BLOB_AAD_LEN] {
-        let mut aad = [0u8; BLOB_AAD_LEN];
-        aad[0] = self.version;
-        aad[FINGERPRINT_AT..INTENT_AT].copy_from_slice(self.address_fingerprint);
-        aad[INTENT_AT..SENDER_AT].copy_from_slice(self.intent_hash);
-        aad[SENDER_AT] = self.sender_index;
-        aad
-    }
-}
-
-/// The triple the blob key expands for. A payload sealed for one intent,
-/// message type or sender does not open as another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlobContext {
-    /// The intent the ceremony is for.
-    pub intent_hash: [u8; INTENT_HASH_LEN],
-    /// The ceremony message type.
-    pub message_type: u8,
-    /// The sending member's index.
-    pub sender_index: u8,
-}
-
-/// Why a blob cannot be sealed or opened.
+/// Why a file cannot be sealed or opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BlobError {
-    /// Shorter than a nonce and a tag: not a sealed blob.
-    #[error("a sealed blob is at least {} bytes", BLOB_NONCE_LEN + BLOB_TAG_LEN)]
+    /// Shorter than a version, a nonce and a tag: not a sealed file.
+    #[error("a sealed multisig file is at least {BLOB_OVERHEAD} bytes")]
     Truncated,
-    /// The tag does not verify: wrong secret, wrong header, or an edited
-    /// ciphertext. One variant for all of them, so the failure is no oracle
-    /// for which.
-    #[error("the blob does not open under this group's key for this header")]
+    /// Version 1, the clear-header layout. Nothing shipped it.
+    #[error("a version-1 multisig file (clear header) is not accepted")]
+    ClearHeaderVersion,
+    /// A version this build does not know.
+    #[error("unknown multisig file version {0}")]
+    UnknownVersion(u8),
+    /// The tag does not verify: another group's file, a wrong secret, or an
+    /// edited file. One variant for all of them, so the failure is no
+    /// oracle for which.
+    #[error("the file does not open under this group's key")]
     Unauthentic,
-    /// The AEAD refused to seal (a payload past the cipher's length limit).
-    #[error("the blob could not be sealed")]
+    /// The AEAD refused to seal (a plaintext past the cipher's length limit).
+    #[error("the file could not be sealed")]
     Seal,
 }
 
-/// Seal `payload` for `header`.
+/// Seal `plaintext` into a version-[`BLOB_FORMAT_VERSION`] file under the
+/// group's key.
 ///
 /// The plaintext copy lives in a [`Zeroizing`] buffer. Encryption overwrites
-/// it, and a refusal drops that buffer wiped; only the ciphertext is returned.
+/// it, and a refusal drops that buffer wiped; only the file is returned.
 ///
 /// # Errors
 ///
-/// [`BlobError::Seal`] if the AEAD refuses the payload.
+/// [`BlobError::Seal`] if the AEAD refuses the plaintext.
 pub fn seal_blob(
     transport_secret: &[u8; 32],
-    header: &BlobHeader<'_>,
-    payload: &[u8],
+    plaintext: &[u8],
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<Vec<u8>, BlobError> {
-    let aad = header.associated_data();
-    let key = blob_key(transport_secret, &header.context());
+    let aad = [BLOB_FORMAT_VERSION];
+    let key = blob_key(transport_secret);
     let mut nonce = [0u8; BLOB_NONCE_LEN];
     rng.fill_bytes(&mut nonce);
-    let mut body = Zeroizing::new(payload.to_vec());
+    let mut body = Zeroizing::new(plaintext.to_vec());
     let tag = XChaCha20Poly1305::new((&*key).into())
         .encrypt_in_place_detached(&XNonce::from(nonce), &aad, body.as_mut_slice())
         .map_err(|_| BlobError::Seal)?;
-    let mut sealed = Vec::with_capacity(sealed_len(body.len()));
-    sealed.extend_from_slice(&nonce);
-    sealed.extend_from_slice(&body);
-    sealed.extend_from_slice(&tag);
-    Ok(sealed)
+    let mut file = Vec::with_capacity(sealed_len(body.len()));
+    file.push(BLOB_FORMAT_VERSION);
+    file.extend_from_slice(&nonce);
+    file.extend_from_slice(&body);
+    file.extend_from_slice(&tag);
+    Ok(file)
 }
 
-/// Open a blob [`seal_blob`] made for `header`. The plaintext may carry a
-/// member's FROST share or signature material, so it is returned wiped-on-drop.
+/// Read a file's format version without a key: the length and the version
+/// byte, which a trial decryption checks once before it tries any group.
 ///
 /// # Errors
 ///
-/// [`BlobError::Truncated`] for bytes too short to be a sealed blob;
-/// [`BlobError::Unauthentic`] when the tag does not verify.
-pub fn open_blob(
-    transport_secret: &[u8; 32],
-    header: &BlobHeader<'_>,
-    sealed: &[u8],
-) -> Result<Zeroizing<Vec<u8>>, BlobError> {
-    if sealed.len() < BLOB_NONCE_LEN + BLOB_TAG_LEN {
+/// [`BlobError::Truncated`], [`BlobError::ClearHeaderVersion`] or
+/// [`BlobError::UnknownVersion`].
+pub fn check_blob_version(file: &[u8]) -> Result<(), BlobError> {
+    if file.len() < BLOB_OVERHEAD {
         return Err(BlobError::Truncated);
     }
-    let (nonce, rest) = sealed.split_at(BLOB_NONCE_LEN);
+    match file[0] {
+        BLOB_FORMAT_VERSION => Ok(()),
+        CLEAR_HEADER_VERSION => Err(BlobError::ClearHeaderVersion),
+        other => Err(BlobError::UnknownVersion(other)),
+    }
+}
+
+/// Open a file [`seal_blob`] made under this group's secret. The plaintext
+/// may carry a member's FROST share or signature material, so it is
+/// returned wiped-on-drop.
+///
+/// # Errors
+///
+/// The refusals of [`check_blob_version`], then
+/// [`BlobError::Unauthentic`] when the tag does not verify under this key.
+pub fn open_blob(
+    transport_secret: &[u8; 32],
+    file: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, BlobError> {
+    check_blob_version(file)?;
+    let (aad, rest) = file.split_at(BLOB_VERSION_LEN);
+    let (nonce, rest) = rest.split_at(BLOB_NONCE_LEN);
     let (ciphertext, tag) = rest.split_at(rest.len() - BLOB_TAG_LEN);
     let nonce: [u8; BLOB_NONCE_LEN] = nonce.try_into().expect("split at the nonce length");
     let tag: [u8; BLOB_TAG_LEN] = tag.try_into().expect("split at the tag length");
-    let key = blob_key(transport_secret, &header.context());
-    let mut payload = Zeroizing::new(ciphertext.to_vec());
+    let key = blob_key(transport_secret);
+    let mut plaintext = Zeroizing::new(ciphertext.to_vec());
     XChaCha20Poly1305::new((&*key).into())
         .decrypt_in_place_detached(
             &XNonce::from(nonce),
-            &header.associated_data(),
-            payload.as_mut_slice(),
+            aad,
+            plaintext.as_mut_slice(),
             &Tag::from(tag),
         )
         .map_err(|_| BlobError::Unauthentic)?;
-    Ok(payload)
+    Ok(plaintext)
 }
 
-/// The blob key for `context`, expanded from the transport secret.
-fn blob_key(transport_secret: &[u8; 32], context: &BlobContext) -> Zeroizing<[u8; 32]> {
-    let mut info = Vec::with_capacity(
-        LABEL_MULTISIG_BLOB_KEY.len() + INTENT_HASH_LEN + MESSAGE_TYPE_LEN + SENDER_INDEX_LEN,
-    );
-    info.extend_from_slice(LABEL_MULTISIG_BLOB_KEY);
-    info.extend_from_slice(&context.intent_hash);
-    info.push(context.message_type);
-    info.push(context.sender_index);
+/// The group's blob key, expanded from its transport secret.
+fn blob_key(transport_secret: &[u8; 32]) -> Zeroizing<[u8; 32]> {
     let mut key = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha512>::new(None, transport_secret)
-        .expand(&info, key.as_mut())
+        .expand(LABEL_MULTISIG_BLOB_KEY, key.as_mut())
         .expect("32 bytes is within HKDF-SHA-512's output limit");
     key
 }
@@ -245,127 +198,101 @@ mod tests {
     use rand::rngs::OsRng;
 
     const SECRET: [u8; 32] = [0x7A; 32];
-    const FINGERPRINT: [u8; ADDRESS_FINGERPRINT_LEN] = [0x22; ADDRESS_FINGERPRINT_LEN];
-    const INTENT: [u8; INTENT_HASH_LEN] = [0x11; INTENT_HASH_LEN];
 
-    fn header() -> BlobHeader<'static> {
-        BlobHeader {
-            version: 1,
-            address_fingerprint: &FINGERPRINT,
-            intent_hash: &INTENT,
-            message_type: 3,
-            sender_index: 1,
-        }
-    }
-
-    fn sealed(payload: &[u8]) -> Vec<u8> {
-        seal_blob(&SECRET, &header(), payload, &mut OsRng).unwrap()
+    fn sealed(plaintext: &[u8]) -> Vec<u8> {
+        seal_blob(&SECRET, plaintext, &mut OsRng).unwrap()
     }
 
     /// The key derivation, pinned: HKDF-SHA-512 with an empty salt over the
-    /// transport secret, info = label ‖ intent ‖ type ‖ sender. The vector
-    /// was computed with Python's `hmac`/`hashlib`, independently of this
-    /// crate's HKDF. The header's associated data is not an input to the key.
+    /// transport secret, info = the label alone. The vector was computed
+    /// with Python's `hmac`/`hashlib`, independently of this crate's HKDF.
     #[test]
     fn the_blob_key_is_pinned() {
         let expected: [u8; 32] = [
-            0xf5, 0x07, 0xd7, 0x74, 0xbe, 0xfd, 0x95, 0x43, 0xeb, 0x9f, 0x06, 0xfa, 0x92, 0xc6,
-            0x8e, 0x83, 0xb0, 0x73, 0x20, 0x58, 0x83, 0xa3, 0x51, 0xee, 0x8b, 0xfb, 0xe5, 0x8c,
-            0xd2, 0x5c, 0xe9, 0xaf,
+            0x9a, 0x17, 0x48, 0x9d, 0x48, 0x5f, 0x21, 0xa6, 0x38, 0x33, 0x89, 0x45, 0xec, 0x24,
+            0xdf, 0x73, 0xdd, 0x6b, 0x87, 0xce, 0xe3, 0x64, 0x75, 0x59, 0x12, 0xd1, 0x2d, 0xbe,
+            0xb3, 0x19, 0x1f, 0x81,
         ];
-        assert!(*blob_key(&SECRET, &header().context()) == expected);
-    }
-
-    /// The associated data is the envelope prefix through the sender index,
-    /// and the message type is not in it.
-    #[test]
-    fn the_associated_data_is_the_envelope_prefix() {
-        let aad = header().associated_data();
-        assert_eq!(aad.len(), BLOB_AAD_LEN);
-        assert_eq!(aad[0], 1);
-        assert_eq!(&aad[FINGERPRINT_AT..INTENT_AT], &FINGERPRINT);
-        assert_eq!(&aad[INTENT_AT..SENDER_AT], &INTENT);
-        assert_eq!(aad[SENDER_AT], 1);
-        let mut other = header();
-        other.message_type = header().message_type.wrapping_add(1);
-        assert_eq!(other.associated_data(), aad);
-        assert_ne!(other.context(), header().context());
+        assert!(*blob_key(&SECRET) == expected);
     }
 
     #[test]
-    fn a_sealed_blob_opens_to_its_payload() {
-        for payload in [&b""[..], b"x", &[0x55; 4096]] {
-            let blob = sealed(payload);
-            assert_eq!(blob.len(), sealed_len(payload.len()));
-            assert_eq!(
-                open_blob(&SECRET, &header(), &blob).unwrap().as_slice(),
-                payload
-            );
+    fn a_sealed_file_opens_to_its_plaintext() {
+        for plaintext in [&b""[..], b"x", &[0x55; 4096]] {
+            let file = sealed(plaintext);
+            assert_eq!(file.len(), sealed_len(plaintext.len()));
+            assert_eq!(file[0], BLOB_FORMAT_VERSION);
+            assert_eq!(open_blob(&SECRET, &file).unwrap().as_slice(), plaintext);
         }
     }
 
-    /// Two seals of one payload under one header differ: the nonce is
-    /// random, not a function of anything a restored wallet repeats.
+    /// Two seals of one plaintext share nothing after the version: the
+    /// nonces differ, and no aligned 8-byte window of the two files is equal
+    /// (a chance match of 8 bytes is 2^-64 per window). Not "every byte
+    /// differs": two random bytes are equal one time in 256.
     #[test]
     fn every_seal_draws_a_fresh_nonce() {
-        let a = sealed(b"same");
-        let b = sealed(b"same");
-        assert_ne!(a[..BLOB_NONCE_LEN], b[..BLOB_NONCE_LEN]);
-        assert_ne!(a, b);
+        let plaintext = [0x33; 512];
+        let a = sealed(&plaintext);
+        let b = sealed(&plaintext);
+        assert_eq!(a[0], b[0]);
+        let nonce = BLOB_VERSION_LEN..BLOB_VERSION_LEN + BLOB_NONCE_LEN;
+        assert_ne!(a[nonce.clone()], b[nonce]);
+        for (wa, wb) in a[BLOB_VERSION_LEN..]
+            .chunks_exact(8)
+            .zip(b[BLOB_VERSION_LEN..].chunks_exact(8))
+        {
+            assert_ne!(wa, wb);
+        }
     }
 
     #[test]
-    fn a_blob_opens_only_for_its_secret_and_header() {
-        let blob = sealed(b"payload");
-        let other_fingerprint = [0x23; ADDRESS_FINGERPRINT_LEN];
-        let other_intent = [0x12; INTENT_HASH_LEN];
-        let refused = |header: BlobHeader<'_>| {
-            assert_eq!(
-                open_blob(&SECRET, &header, &blob).err(),
-                Some(BlobError::Unauthentic)
-            );
-        };
-        let mut edited = header();
-        edited.version = 2;
-        refused(edited);
-        edited = header();
-        edited.address_fingerprint = &other_fingerprint;
-        refused(edited);
-        edited = header();
-        edited.intent_hash = &other_intent;
-        refused(edited);
-        edited = header();
-        edited.message_type = edited.message_type.wrapping_add(1);
-        refused(edited);
-        edited = header();
-        edited.sender_index = edited.sender_index.wrapping_add(1);
-        refused(edited);
+    fn a_file_opens_only_under_its_groups_secret() {
+        let file = sealed(b"plaintext");
         assert_eq!(
-            open_blob(&[0x7B; 32], &header(), &blob).err(),
+            open_blob(&[0x7B; 32], &file).err(),
             Some(BlobError::Unauthentic)
         );
     }
 
     #[test]
-    fn an_edited_or_short_blob_is_refused() {
-        let blob = sealed(b"payload");
-        for at in [0, BLOB_NONCE_LEN, blob.len() - 1] {
-            let mut edited = blob.clone();
+    fn an_edited_or_short_file_is_refused() {
+        let file = sealed(b"plaintext");
+        for at in [
+            BLOB_VERSION_LEN,
+            BLOB_VERSION_LEN + BLOB_NONCE_LEN,
+            file.len() - 1,
+        ] {
+            let mut edited = file.clone();
             edited[at] ^= 1;
             assert_eq!(
-                open_blob(&SECRET, &header(), &edited).err(),
+                open_blob(&SECRET, &edited).err(),
                 Some(BlobError::Unauthentic),
                 "byte {at}"
             );
         }
         assert_eq!(
-            open_blob(
-                &SECRET,
-                &header(),
-                &blob[..BLOB_NONCE_LEN + BLOB_TAG_LEN - 1]
-            )
-            .err(),
+            open_blob(&SECRET, &file[..BLOB_OVERHEAD - 1]).err(),
             Some(BlobError::Truncated)
         );
+    }
+
+    /// The version byte is read before any key: version 1 by name, any other
+    /// unknown version with its value. A sealed file relabelled as another
+    /// version is refused at the byte, not at the tag.
+    #[test]
+    fn a_version_other_than_two_is_refused_by_name() {
+        let mut file = sealed(b"plaintext");
+        file[0] = 1;
+        assert_eq!(
+            open_blob(&SECRET, &file).err(),
+            Some(BlobError::ClearHeaderVersion)
+        );
+        file[0] = 3;
+        assert_eq!(
+            open_blob(&SECRET, &file).err(),
+            Some(BlobError::UnknownVersion(3))
+        );
+        assert_eq!(check_blob_version(&file), Err(BlobError::UnknownVersion(3)));
     }
 }

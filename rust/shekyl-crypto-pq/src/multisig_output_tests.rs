@@ -551,3 +551,29 @@ fn a_member_signature_verifies_only_as_that_member_over_that_message() {
         Some(MultisigSignError::GroupSize)
     );
 }
+
+/// The member keypair derivation, pinned: HKDF-SHA-512 over `ss_i` under
+/// `shekyl-v31-hybrid-sign` to 64 bytes, the first half the Ed25519 seed and
+/// the second the ML-DSA-65 seed, expanded through ChaCha20 (zero nonce,
+/// counter 0) into FIPS 204's `xi`. The vectors were computed in Python,
+/// independently of this crate: HKDF with `hmac`/`hashlib`, the Ed25519
+/// public key with `cryptography`, and `rho = SHAKE256(xi ‖ 6 ‖ 5)[..32]`
+/// (the ML-DSA public key's first 32 bytes) over a hand-written ChaCha20
+/// block. A change to the label, the split or either keygen moves them.
+#[test]
+fn the_member_keypair_derivation_is_pinned() {
+    let (public, _secret) = derive_multisig_member_keypair(&[0x5C; 64]).unwrap();
+    let ed25519: [u8; 32] = [
+        0x73, 0xa2, 0xa6, 0x93, 0xbd, 0x49, 0x76, 0x26, 0xf2, 0x16, 0x89, 0x17, 0x58, 0x3c, 0x5d,
+        0xbb, 0xca, 0x7c, 0x72, 0xf5, 0x28, 0xb4, 0xbe, 0x3c, 0x6b, 0x9c, 0x66, 0xad, 0x96, 0x28,
+        0xe3, 0xe9,
+    ];
+    let rho: [u8; 32] = [
+        0x07, 0x4c, 0x4e, 0x99, 0x58, 0x2d, 0xf0, 0x1d, 0xef, 0x53, 0xf0, 0xd8, 0x95, 0x2b, 0x1c,
+        0x0b, 0x7b, 0x80, 0x8d, 0xbd, 0x62, 0xf3, 0x04, 0xce, 0x58, 0xfd, 0xa8, 0xe9, 0xab, 0xa2,
+        0xac, 0xad,
+    ];
+    assert_eq!(public.ed25519, ed25519);
+    assert_eq!(public.ml_dsa[..32], rho);
+    assert_eq!(public.ml_dsa.len(), crate::derivation::ML_DSA_65_PK_LEN);
+}
