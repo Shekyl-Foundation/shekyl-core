@@ -6887,10 +6887,10 @@ forges, instead of each test building its own history or replaying a chain
 captured from a live daemon.
 
 - **As many chains as the testing needs require, no fewer** (`CF-R1`).
-  Needs that do not fit one chain are not forced into it. Round 0 found
-  four: L (the lifecycle, on the settled archival schedule), B (the bundle
-  producer's own epoch), P (the production schedule under the design load)
-  and W (live LWMA difficulty).
+  Needs that do not fit one chain are not forced into it. The starting
+  set is Chain L (the lifecycle, on a levered schedule), Chain P (the
+  production schedule under load) and a short LWMA chain; the event
+  catalogue decides whether more are needed.
 - **Byte-for-byte deterministic regeneration** (`CF-R2`). A chain is a
   KAT: at the same commit it regenerates exactly, and at a new commit the
   first block that differs names the consensus change.
@@ -6919,8 +6919,11 @@ the committed corpus.
   time with a daemon built at the head. A forged chain regenerates from
   the commit alone.
 
-**Open with Rick at the ruling** (`CHAIN_FORGE.md` §13): whether Chain L's
-bytes are committed or pinned as an asset, given that chain bytes do not
-compress or delta (`CF-Q1`); reading two corpus layouts during migration
-(`CF-Q2`); the forge's runnable as an example target rather than a binary
-(`CF-Q3`); and where the no-injectable-RNG line is held (`CF-Q4`).
+**Not part of the ruling.** The lane's Round 0 (`CHAIN_FORGE.md`) proposes
+the chain set from its catalogue (L, a bundle-producer chain B, P and an
+LWMA chain W, with L's own split undecided) and puts four questions to
+Rick (§13, `CF-Q1`…`CF-Q4`): whether Chain L's bytes are committed or
+pinned as an asset, given that chain bytes do not compress or delta;
+reading two corpus layouts during migration; the forge's runnable as an
+example target rather than a binary; and where the no-injectable-RNG line
+is held. Those are recorded there, not here, until Rick rules on them.
