@@ -107,8 +107,8 @@ use super::{Canonical, CodecError};
 ///   → `Present` (the 56-byte pack becomes a component-wise key);
 ///   `archival_r_market` → `(u64, u64) → Coded<RMarket>`;
 ///   `archival_sigma_work` → `Coded<SigmaWorkMilli>`; `archival_budget` →
-///   `Coded<AtomicUnits>`; `archival_attestation_witness` →
-///   `Blob<AttestationWitnessBytes>`; and `properties` gains the
+///   `Coded<AtomicUnits>`; `archival_bundle_references` →
+///   `Blob<BundleReferencesBytes>`; and `properties` gains the
 ///   `archival_last_slash_epoch` cell. Five codec fixtures are born
 ///   (`bond_record`, `r_market`, `sigma_work_milli`, `settlement_epoch`,
 ///   `shard_id`). The digest's families do not move (§7.1.1 excludes
@@ -392,8 +392,40 @@ use super::{Canonical, CodecError};
 ///   the settlement compare would refuse. A `34` file is refused at open.
 ///   Rebuild from the block corpus, as at every bump.
 ///
+/// - `36` — the switch (`SO-D12` 4b; `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3,
+///   `SCS-P34`): the header's last 32 bytes are the section root, a root
+///   over the references of the bundles a block admits, and every
+///   network's genesis commits the empty section's root, so every genesis
+///   hash and network id moved. The block's sidecar becomes its bundle
+///   references (§7.5): `archival_attestation_witness` is
+///   `archival_bundle_references`, keyed by height as before, its value
+///   `BundleReferences::encode` (a length-framed section) where it was
+///   witness bytes, and `alt_block`'s optional witness is the same section.
+///   The table keeps its ordinal; the digest's family keeps its position.
+///   The support carry moves onto the block's row (SI-43 restated):
+///   `archival_support_block[h]` is `support_row`, the seats and the carry
+///   the block leaves (`carry_after`, sparse), and the next block steps
+///   from it. `archival_support_unissued` is deleted, so the five tables
+///   after it each move up one ordinal (`archival_support_block` 44 through
+///   `archival_bundle_body` 48). `support_row.snap` replaces
+///   `support_seats.snap` and `support_count.snap`, and `tables.snap`
+///   re-pins. `archival_complete_trees` (layout 29) is deleted with SI-31:
+///   a complete tree lists no shard (CEN-J14), so no gather credits one
+///   and the set each pass froze was always empty. The five tables after
+///   it move up one ordinal again (`archival_support_block` 43 through
+///   `archival_bundle_body` 47), and `complete_tree_set.snap` is removed.
+///   `archival_serve_credit` (ordinal 16) is deleted with the serve-credit
+///   input (the switch's C7), and with it SI-15 and the reads A3–A5: every
+///   table after it moves up one ordinal, and `tables.snap` re-pins. The
+///   `ServeCredit` archival family goes too, so each later family's bit in
+///   a stored `family_set` moves down one and `family_set.snap` re-pins.
+///   The alt-chain family is named for what it holds:
+///   `archival_alt_attestation_witness` is `archival_alt_section_references`,
+///   its bit unchanged. A `35` file is refused at open. Rebuild from the block corpus, as at
+///   every bump.
+///
 /// [`FamilySet`]: crate::family_set::FamilySet
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(35);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(36);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -450,10 +482,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(35));
-        assert_eq!(SCHEMA_VERSION.encode(), [35, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(36));
+        assert_eq!(SCHEMA_VERSION.encode(), [36, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[35, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[36, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

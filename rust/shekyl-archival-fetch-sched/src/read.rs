@@ -33,10 +33,8 @@ use std::sync::Arc;
 use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, PassStream, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
 };
-use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
-    ExpectedShard, FetchError, NextMove, PFetchClient, PassVerifyingKey, RequestHeader, TxSink,
-    VerifiedShard,
+    ExpectedShard, FetchError, NextMove, PFetchClient, RequestHeader, TxSink, VerifiedShard,
 };
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
@@ -149,13 +147,11 @@ impl HolderRetries {
 /// A completed read: the body went through the caller's sink one
 /// transaction at a time, and this is what the requester keeps.
 ///
-/// `K` is the scheme of the holder that was dialled. A drawn read is the
-/// live scheme's. A nonce read is whatever scheme its caller named the
-/// holder under, so a read over a receipt-key target carries the receipt.
+/// The shard's receipt is under the dialled holder's receipt key.
 #[derive(Clone, Debug)]
-pub struct Read<K: PassVerifyingKey = HybridPublicKey> {
+pub struct Read {
     /// The verified shard: view hash, delivery digest, `P`'s signature.
-    pub shard: VerifiedShard<K>,
+    pub shard: VerifiedShard,
     /// Who served it.
     pub holder: PCanonicalId,
     /// The header `P` signed over — the pass record's anchor and nonce.
@@ -300,21 +296,21 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     ///
     /// As [`Self::read_from`], except [`ReadFailure::NoHolders`]: the
     /// holder source is not read, so there is no urn to find empty.
-    pub async fn read_from_nonce<K: PassVerifyingKey>(
+    pub async fn read_from_nonce(
         &self,
-        assigned: &Holder<K>,
+        assigned: &Holder,
         shard_id: ShardId,
         nonce: SuppliedNonce,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Read<K>, ReadFailure> {
+    ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
         match self
             .attempt(assigned, &closed.expected, sink, budget, Some(nonce))
             .await?
         {
             HolderOutcome::Served(shard, header) => Ok(Read {
-                shard,
+                shard: *shard,
                 holder: assigned.id,
                 header,
                 close: closed.close,
@@ -378,7 +374,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             {
                 HolderOutcome::Served(shard, header) => {
                     return Ok(Read {
-                        shard,
+                        shard: *shard,
                         holder: holder.id,
                         header,
                         close: closed.close,
@@ -419,15 +415,10 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             .block_hash_at(anchor)?
             .ok_or(FactsFault::Inconsistent)?;
         match nonce {
-            Some(SuppliedNonce { stream, nonce }) => Ok(RequestHeader::on_stream(
-                stream,
-                nonce,
-                anchor,
-                hash.to_bytes(),
-            )),
-            None => {
-                RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
+            Some(SuppliedNonce { stream, nonce }) => {
+                Ok(RequestHeader::on_stream(stream, nonce, anchor, hash))
             }
+            None => RequestHeader::fresh(anchor, hash).map_err(|_| DrawFault::Entropy.into()),
         }
     }
 
@@ -437,14 +428,14 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// order. `Err` is a fault of the requester's own (facts, entropy)
     /// that ends the need — a different type from a spent holder, so `?`
     /// cannot turn one into the other.
-    async fn attempt<K: PassVerifyingKey>(
+    async fn attempt(
         &self,
-        holder: &Holder<K>,
+        holder: &Holder,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
         nonce: Option<SuppliedNonce>,
-    ) -> Result<HolderOutcome<K>, ReadFailure> {
+    ) -> Result<HolderOutcome, ReadFailure> {
         let mut header = self.fresh_header(nonce)?;
         let mut retries = HolderRetries::new(budget);
         let mut errors = Vec::new();
@@ -454,7 +445,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 .fetch(&holder.target, &header, expected, Arc::clone(&sink))
                 .await
             {
-                Ok(shard) => return Ok(HolderOutcome::Served(shard, header)),
+                Ok(shard) => return Ok(HolderOutcome::Served(Box::new(shard), header)),
                 Err(error) => error,
             };
             let next = retries.after(&error);
@@ -557,14 +548,14 @@ pub enum ChallengeReadError {
 ///
 /// [`ChallengeReadError::AttemptBound`] when `attempt ≥ K`; otherwise a
 /// [`ReadFailure`].
-pub async fn challenge_read<F: ShardFacts, H: HolderSource, K: PassVerifyingKey>(
+pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
     scheduler: &FetchScheduler<F, H>,
-    assigned: &Holder<K>,
+    assigned: &Holder,
     shard_id: ShardId,
     draw: ChallengeDraw,
     sink: Arc<dyn TxSink>,
     budget: NeedBudget,
-) -> Result<Read<K>, ChallengeReadError> {
+) -> Result<Read, ChallengeReadError> {
     if draw.attempt >= CHALLENGE_READS {
         return Err(ChallengeReadError::AttemptBound {
             attempt: draw.attempt,
@@ -587,9 +578,10 @@ fn support_turn(had_drawn: bool, tried: usize) -> bool {
 
 /// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder
 /// moves the need on, and a requester fault ends it.
-enum HolderOutcome<K: PassVerifyingKey> {
-    /// The body verified. The header is the one `P` signed over.
-    Served(VerifiedShard<K>, RequestHeader),
+enum HolderOutcome {
+    /// The body verified. The header is the one `P` signed over. Boxed:
+    /// the shard carries its receipt inline.
+    Served(Box<VerifiedShard>, RequestHeader),
     /// This holder is done with. The attempts are in dial order.
     Spent(Vec<Attempt>),
 }

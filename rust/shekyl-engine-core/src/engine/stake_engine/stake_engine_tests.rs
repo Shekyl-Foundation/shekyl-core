@@ -886,7 +886,7 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             active: None,
             network: shekyl_network::HARNESS_NETWORK_ID,
             #[cfg(feature = "conformance")]
-            self_cert: TestSelfCert::Skip,
+            self_cert: crate::engine::stake_engine::types::TestSelfCert::Skip,
             observer: Box::new(Recorder(Arc::clone(&recorded))),
         }),
         bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),

@@ -24,8 +24,8 @@
 //!    someone decides whether it carries good. A runtime assertion alone would
 //!    let a new class through.
 //! 2. [`the_coinbase_carries_no_good_however_large_its_extra`] — the coinbase
-//!    leg, including a maximal-attestation coinbase: those records live in
-//!    `extra`, which is skeleton, not in a prunable region.
+//!    leg, including a coinbase whose `extra` is built for the most outputs
+//!    the grammar builds: `extra` is skeleton, not a prunable region.
 //! 3. [`the_counter_equals_the_predicate_over_a_mixed_chain`] — boundaries
 //!    derived from `cumulative_tx_count` equal boundaries from counting the
 //!    predicate directly, over a synthetic chain mixing every class with empty
@@ -33,7 +33,7 @@
 
 use super::*;
 use crate::coverage::RuleCoverage;
-use crate::harness::fixture::{coinbase, coinbase_extra, listed, point, serve_credit_only};
+use crate::harness::fixture::{coinbase, coinbase_extra, listed, point};
 use crate::verdict::TxSlot;
 use shekyl_wire::{
     carries_archival_good, BondPost, BondPostKind, Ct, Holdings, Input, Transaction,
@@ -156,15 +156,6 @@ fn emission_body_no_fees() -> Transaction {
     tx
 }
 
-/// `TxClass::ServeCreditOnly` in its **`RF-D1`** shape: the shared fixture,
-/// whose prunable region holds one pruned pass record per serve-credit vin
-/// and nothing else (CEN-H20 requires the region, CEN-J2 the count). The
-/// good here is the pass record — the case that would break a
-/// `pqc_auths`-only predicate.
-fn serve_credit_body() -> Transaction {
-    serve_credit_only([0x11; 32])
-}
-
 // ---- leg 1: the class equivalence, exhaustive at compile time ---------------
 
 /// **The invariant the ruling records:** the domain *is* every non-coinbase
@@ -175,7 +166,7 @@ fn serve_credit_body() -> Transaction {
 #[expect(
     clippy::match_same_arms,
     reason = "one arm per class, each carrying its own justification: collapsing \
-              them would put four classes' reasoning on one line and make a class \
+              them would put three classes' reasoning on one line and make a class \
               changing sides an invisible edit"
 )]
 fn the_domain_is_every_non_coinbase_class() {
@@ -184,7 +175,6 @@ fn the_domain_is_every_non_coinbase_class() {
         (bond_post_body(), TxSlot::Lone),
         (emission_body_with_fees(), TxSlot::Lone),
         (emission_body_no_fees(), TxSlot::Lone),
-        (serve_credit_body(), TxSlot::Lone),
         (coinbase(1), TxSlot::Miner),
     ] {
         let class = class_at(&tx, slot);
@@ -204,11 +194,6 @@ fn the_domain_is_every_non_coinbase_class() {
             // non-empty, so the component exists even when the FCMP++ proof
             // does not (`rules/tx.rs`, `H22::check`).
             TxClass::Emission { .. } => true,
-            // `ServeCreditOnly`: the `RF-D1` shape carries one non-empty pruned
-            // pass record per credit vin, length-checked by
-            // `check_serve_credit_pruned_blob`
-            // (`shekyl-wire/src/transaction.rs:592-600`).
-            TxClass::ServeCreditOnly { .. } => true,
             // The coinbase is outside the domain **by the definition**: `Ct::Null`
             // writes no prunable region and carries no `pqc_auths`.
             TxClass::Coinbase => false,
@@ -231,12 +216,13 @@ fn the_domain_is_every_non_coinbase_class() {
     }
 }
 
-/// The two legs of the predicate are **independently** load-bearing: the
-/// fee-less emission has the `pqc_auths` component and no prunable region, the
-/// serve-credit form has the region and no component. A predicate written with
-/// either leg alone would put one of them outside the domain.
+/// The `pqc_auths` leg is load-bearing on its own: the fee-less emission has
+/// the component and no prunable region, so a predicate that read the region
+/// alone would put it outside the domain. No class carries the region
+/// without the component, so the region leg has no class of its own; the
+/// ruling (`SHT-Q1`) keeps both.
 #[test]
-fn each_leg_of_the_predicate_is_the_only_good_some_class_has() {
+fn the_pqc_auths_leg_alone_carries_the_fee_less_emission() {
     let emission = emission_body_no_fees();
     let parts = emission.txid_parts();
     assert!(parts.pqc_auth_hash.is_some(), "the emission's leg");
@@ -246,19 +232,6 @@ fn each_leg_of_the_predicate_is_the_only_good_some_class_has() {
         "the fee-less emission has no prunable region"
     );
     assert!(in_domain(&emission));
-
-    let credit = serve_credit_body();
-    let parts = credit.txid_parts();
-    assert!(
-        parts.pqc_auth_hash.is_none(),
-        "the serve-credit form is 3-part"
-    );
-    assert_ne!(
-        parts.prunable_hash,
-        shekyl_wire::empty_region_prunable_hash(),
-        "the serve-credit form's good is its pass record"
-    );
-    assert!(in_domain(&credit));
 }
 
 // ---- leg 2: the coinbase, and the digest the predicate compares against -----
@@ -280,10 +253,11 @@ fn the_empty_region_digest_is_the_coinbases_row() {
     );
 }
 
-/// The coinbase carries no good **however large its `extra` grows**: attestation
-/// records live in `extra`, which is skeleton and is never discarded, not in a
-/// prunable region. Run at one output and at the largest the grammar builds, so
-/// the claim is about the ct and not about the fixture's size.
+/// The coinbase carries no good **however large its `extra` grows**: `extra`
+/// (the tx key, the KEM ciphertexts, the PQC leaf entries) is skeleton and is
+/// never discarded, not a prunable region. Run at one output and at the
+/// largest the grammar builds, so the claim is about the ct and not about the
+/// fixture's size.
 #[test]
 fn the_coinbase_carries_no_good_however_large_its_extra() {
     let small = coinbase(1);
@@ -294,12 +268,12 @@ fn the_coinbase_carries_no_good_however_large_its_extra() {
     maximal.prefix.extra = coinbase_extra(256);
     assert!(
         maximal.prefix.extra.len() > baseline_extra,
-        "the maximal-attestation extra must actually be larger"
+        "the maximal extra must actually be larger"
     );
     assert!(matches!(maximal.ct, Ct::Null(_)), "still a Null ct");
     assert!(
         !in_domain(&maximal),
-        "a coinbase's attestation records are extra, not archival good"
+        "a coinbase's extra is not archival good, however large"
     );
     assert_eq!(
         maximal.txid_parts().prunable_hash,
@@ -331,7 +305,6 @@ fn the_counter_equals_the_predicate_over_a_mixed_chain() {
         vec![coinbase(2)],
         vec![
             coinbase(3),
-            serve_credit_body(),
             emission_body_no_fees(),
             emission_body_with_fees(),
         ],

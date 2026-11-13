@@ -14,6 +14,8 @@
 //! - [`executor`]: the model's prove jobs under the hasher budget.
 //! - [`serve`]: 2011, 2013 and a peer's 2009 answered from the store: the
 //!   one responder.
+//! - [`bundles`]: the bundle transport, 2015–2017: a relayed bundle's
+//!   form, the body server, and the asker's acceptance of a body.
 //!
 //! The model crate takes none of this crate's dependencies (tokio, the
 //! store, ingest, the session layer, RandomX), so ingest and the node
@@ -22,6 +24,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod bundles;
 pub mod executor;
 pub mod owner;
 pub mod port;

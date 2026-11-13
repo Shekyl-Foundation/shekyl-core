@@ -33,12 +33,10 @@ pub(crate) fn snapshot(epoch: u64) -> EpochSnapshot {
         bonds: vec![
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
             BondRow {
                 join_settlement_epoch: shape.join_settlement_epoch,
-                is_support_complete_tree: false,
                 bad_intervals: vec![],
             },
         ],
@@ -182,7 +180,6 @@ pub(crate) fn epoch_reply(e: &EpochSnapshot) -> reply::Epoch {
             .iter()
             .map(|b| reply::ClaimBond {
                 joined_epoch: integer(b.join_settlement_epoch),
-                complete_tree: b.is_support_complete_tree,
                 // Inclusive on the wire.
                 failure: b
                     .bad_intervals

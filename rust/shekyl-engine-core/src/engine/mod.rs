@@ -438,6 +438,7 @@ mod tx_weight_kat;
 pub mod view_material;
 
 pub use capability::Capability;
+pub use daemon::methods::DAEMON_METHODS;
 pub use daemon::{DaemonClient, DaemonExpectation};
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,

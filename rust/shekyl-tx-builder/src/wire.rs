@@ -257,7 +257,6 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
                 // *spends*, and a serve-credit vin cannot co-reside with one
                 // (the all-or-none mixing rule, §2.5). Pass records are built
                 // by the archival path, never here.
-                serve_credit_pruned: Vec::new(),
             }),
         },
     })

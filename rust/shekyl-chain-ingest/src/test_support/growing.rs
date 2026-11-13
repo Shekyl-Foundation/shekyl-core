@@ -18,7 +18,7 @@ use shekyl_harness_spender::{Linked, MinerWallet, PostedBond, Spender};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, Transaction};
 
-use super::{anchor, block_with_nonce, h, reward_for, Family, GrownTree, FIRST_SPEND_HEIGHT};
+use super::{block_with_nonce, h, reward_for, Family, GrownTree, FIRST_SPEND_HEIGHT};
 
 /// A chain under construction, with the two trees a real spend needs kept
 /// in step: the validator's ([`GrownTree`], what the headers and the
@@ -120,13 +120,6 @@ impl Growing {
             family.fee(),
             bond,
         )
-    }
-
-    /// A **fixture** archival body anchored for the block connecting next
-    /// ([`anchor`]); never a real spend.
-    #[must_use]
-    pub fn anchored(&self, tx: Transaction) -> Transaction {
-        anchor(&self.hashes, self.height().to_raw(), tx)
     }
 
     /// Extend with a block listing `listed`, built by [`block_with_nonce`]

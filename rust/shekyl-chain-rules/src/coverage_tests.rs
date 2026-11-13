@@ -121,22 +121,29 @@ fn complete_means_every_per_block_row_and_nothing_less() {
         .iter()
         .filter(|row| row.status() == RowStatus::HeldByStore)
         .count();
+    let retired = CenRow::ALL
+        .iter()
+        .filter(|row| row.status() == RowStatus::Retired)
+        .count();
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {
         coverage.insert(row);
     }
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
-    // Complete is `enforced − at-open − by-construction − held-by-store`:
+    // Complete is `enforced − at-open − by-construction − held-by-store −
+    // retired`:
     // the rows this crate enforces at another site (E5 at writer open,
     // slice 3; the alt tier's rows, DRS-E5 slice 9), the rows that hold by
     // construction (F2, F8, F19, slice 4) and the rows the store and its
     // writer hold (K1a, K2, K3, K8, slice 9; B3, the 2026-10-15 re-class;
     // K5, K5b, K6, K7, the switch, DRS-E5 a5; M2, M8, K9, the pool, PR-b;
     // A1, A4, the ingest router, DRS-X PR 2) can never be in a per-block
-    // coverage. The census denominator itself moves for none of them.
+    // coverage, nor can the rows retired by ruling (J1–J3, J7–J10;
+    // `SO-D12g`), which nothing runs. The census denominator itself moves
+    // for none of them.
     assert_eq!(
         coverage.len(),
-        CenRow::ALL.len() - at_open - by_construction - held_by_store
+        CenRow::ALL.len() - at_open - by_construction - held_by_store - retired
     );
     assert_eq!(
         at_open, 4,
@@ -149,6 +156,10 @@ fn complete_means_every_per_block_row_and_nothing_less() {
     assert_eq!(
         held_by_store, 14,
         "DRS-E5 slice 9: K1a, K2, K3, K8, and the 2026-10-15 re-class's B3, are held by the store; K5, K5b, K6, K7 by its writer's switch; M2, M8, K9 by the pool (PR-b); A1, A4 by the ingest router (DRS-X PR 2)"
+    );
+    assert_eq!(
+        retired, 7,
+        "the switch's C7: J1–J3 and J7–J10 are retired by ruling (SO-D12g)"
     );
     for row in [
         CenRow::A1,
@@ -166,6 +177,8 @@ fn complete_means_every_per_block_row_and_nothing_less() {
         CenRow::K4,
         CenRow::K8,
         CenRow::D5,
+        CenRow::J1,
+        CenRow::J10,
     ] {
         assert!(!coverage.contains(row));
         assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));
@@ -182,7 +195,7 @@ fn complete_means_every_per_block_row_and_nothing_less() {
     }
     assert_eq!(
         short.len(),
-        CenRow::ALL.len() - at_open - by_construction - held_by_store - 1
+        CenRow::ALL.len() - at_open - by_construction - held_by_store - retired - 1
     );
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }

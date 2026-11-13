@@ -6,9 +6,7 @@
 use std::io::Cursor;
 
 use shekyl_chain_rules::Candidate;
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch, ShardId,
-};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::*;
@@ -57,7 +55,7 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: bodies.iter().map(Transaction::hash).collect(),
@@ -94,7 +92,7 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
         );
         match event {
             IngestEvent::Extend(cand) => seen.push((seq, *cand)),
-            IngestEvent::Rewind { .. } | IngestEvent::Inject(_) => {
+            IngestEvent::Rewind { .. } => {
                 unreachable!("this corpus is Extend-only")
             }
         }
@@ -189,10 +187,18 @@ fn the_reader_re_verifies_and_refuses_a_tampered_body() {
     // reader does not trust the write-time check — it re-derives it.
     let (_, b0, t0) = blobs(0, 0);
     let (_, b1, t1) = blobs(1, 1);
+    let body = t1.last().expect("block 1 lists a transaction").clone();
     let mut bytes = write(&[(b0, t0), (b1, t1)]);
-    // Flip the last byte of the file: inside the second record's only body.
-    let last = bytes.len() - 1;
-    bytes[last] ^= 0x01;
+    // Flip the last byte of the second record's only body. The body is not
+    // the file's last bytes since format 4: the record's bundle section
+    // follows it.
+    let at = bytes
+        .windows(body.len())
+        .rposition(|window| window == body.as_slice())
+        .expect("the body is in the second record")
+        + body.len()
+        - 1;
+    bytes[at] ^= 0x01;
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     reader.next().expect("genesis is intact");
     let refused = reader.next().expect_err("tampered");
@@ -402,7 +408,6 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
         kinds.push(match ev.event {
             IngestEvent::Extend(c) => format!("E{}", c.block.transaction_hashes.len()),
             IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
-            IngestEvent::Inject(_) => unreachable!("the reorg family carries no inject"),
         });
     }
     // main: nothing listed below the floor, one spend at the floor and the
@@ -475,121 +480,86 @@ fn a_rewind_must_be_backward_inside_the_corpus_and_after_a_block() {
         matches!(last, Err(CorpusFault::RewindNotBackward { .. })),
         "{last:?}"
     );
-    // An unknown tag is refused as such.
-    let mut junk = write(&[(b0.clone(), t0)]);
+    // An unknown tag is refused as such, and `0x03` (version 3's
+    // out-of-band serve-credit record) is unknown to version 4.
     const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
-    junk[HEADER_LEN] = 0x7f;
-    let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
-    assert!(matches!(
-        reader.next().expect_err("tag"),
-        CorpusFault::UnknownTag(0x7f)
-    ));
-}
-
-// ---------------------------------------------------------------------------
-// Inject — the one out-of-band record (DRS-E4 §3.8 item 3)
-// ---------------------------------------------------------------------------
-
-fn credit(tag: u8) -> ServeCredit {
-    ServeCredit {
-        persona: PCanonicalId::from_bytes([tag; 32]),
-        shard: ShardId::from_raw(u64::from(tag) + 100),
-        epoch: SettlementEpoch::from_raw(u64::from(tag)),
+    for tag in [0x03, 0x7f] {
+        let mut junk = write(&[(b0.clone(), t0.clone())]);
+        junk[HEADER_LEN] = tag;
+        let mut reader = CorpusReader::open(Cursor::new(junk)).expect("open");
+        let refused = reader.next().expect_err("tag");
+        assert!(
+            matches!(refused, CorpusFault::UnknownTag(t) if t == tag),
+            "{tag:#04x}: {refused:?}"
+        );
     }
 }
 
-/// An inject sits beside the block it was attributed to, round-trips with
-/// every field, counts as a record and occupies no height, is a barrier,
-/// and does not disturb the extend after it.
+/// A block's bundle section rides its record (version 4, the switch's C4):
+/// the references and, in section order, each one's body come back on the
+/// candidate a replay judges. A body that is not its reference's is refused
+/// before the record is written. Red edit: drop the body check in
+/// `verified_section` — the swapped body is written.
 #[test]
-fn an_inject_round_trips_at_its_position_and_occupies_no_height() {
-    let (c0, b0, t0) = blobs(0, 0);
-    let (c1, b1, t1) = blobs(1, 1);
-    let (c2, b2, t2) = blobs(2, 0);
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
-        .expect("header");
-    w.append(&b0, &t0).expect("0");
-    w.append(&b1, &t1).expect("1");
-    w.inject(BlockHeight::from_raw(1), credit(0x5a))
-        .expect("at the tip");
-    w.append(&b2, &t2).expect("2 follows at the next height");
+fn a_record_carries_its_bundle_section_and_refuses_a_body_that_is_not_its_own() {
+    use shekyl_chain_rules::harness::bundle::BundleWorld;
+    use shekyl_chain_rules::RuleSet;
+
+    let (_, block, txs) = blobs(0, 1);
+    let one = BundleWorld::with(
+        BlockHeight::from_raw(7),
+        BundleWorld::SEED,
+        0,
+        &RuleSet::GENESIS,
+    );
+    let (reference, body) = one.bundle(&[]);
+    let other = BundleWorld::with(
+        BlockHeight::from_raw(8),
+        BundleWorld::SEED,
+        0,
+        &RuleSet::GENESIS,
+    );
+    let (_, foreign) = other.bundle(&[]);
+
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        Network::Stagenet,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    let refused = w
+        .append_carrying(
+            &block,
+            &txs,
+            &[reference.encode()],
+            &[foreign.as_bytes().to_vec()],
+        )
+        .expect_err("a body that is not the reference's");
+    assert!(
+        matches!(refused, CorpusFault::BadSection { .. }),
+        "{refused}"
+    );
+    w.append_carrying(
+        &block,
+        &txs,
+        &[reference.encode()],
+        &[body.as_bytes().to_vec()],
+    )
+    .expect("the section holds");
     let bytes = w.finish().expect("finish").into_inner();
 
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    assert_eq!(reader.declared(), 4, "the inject is a record");
-    let mut events = Vec::new();
-    while let Some(Sequenced { seq, event }) = reader.next().expect("event") {
-        events.push((seq.to_raw(), event));
-    }
-    assert_eq!(events.len(), 4);
-    assert_eq!(events[0].1, IngestEvent::Extend(Box::new(c0)));
-    assert_eq!(events[1].1, IngestEvent::Extend(Box::new(c1)));
-    assert_eq!(events[2].0, 2, "numbered like any event");
-    assert!(events[2].1.is_barrier(), "an inject is a barrier");
-    assert_eq!(events[2].1, IngestEvent::Inject(credit(0x5a)));
-    assert_eq!(events[3].1, IngestEvent::Extend(Box::new(c2)));
-}
-
-/// The inject law on both sides: a regtest corpus, a tip, and `at` equal
-/// to it. A refused inject writes nothing.
-#[test]
-fn an_inject_needs_a_regtest_corpus_a_tip_and_the_tips_height() {
-    let (_, b0, t0) = blobs(0, 0);
-    let (_, b1, t1) = blobs(1, 0);
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
-        .expect("header");
-    assert!(matches!(
-        w.inject(BlockHeight::ZERO, credit(1)).expect_err("no tip"),
-        CorpusFault::InjectOnEmpty
-    ));
-    w.append(&b0, &t0).expect("0");
-    w.append(&b1, &t1).expect("1");
-    let refused = w
-        .inject(BlockHeight::from_raw(2), credit(1))
-        .expect_err("not the tip");
-    assert!(
-        matches!(refused, CorpusFault::InjectNotAtTip { at, tip } if at.to_raw() == 2 && tip.to_raw() == 1),
-        "{refused}"
+    let IngestEvent::Extend(candidate) =
+        reader.next().expect("one record").expect("a record").event
+    else {
+        panic!("an extend record");
+    };
+    assert_eq!(
+        candidate
+            .bundle_references
+            .as_ref()
+            .map(|section| section.as_slice().to_vec()),
+        Some(vec![reference.encode()])
     );
-    let refused = w
-        .inject(BlockHeight::from_raw(0), credit(1))
-        .expect_err("not the tip");
-    assert!(
-        matches!(refused, CorpusFault::InjectNotAtTip { at, tip } if at.to_raw() == 0 && tip.to_raw() == 1),
-        "{refused}"
-    );
-    let bytes = w.finish().expect("finish").into_inner();
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    assert_eq!(reader.declared(), 2, "the refused injects wrote nothing");
-    assert!(reader.next().expect("0").is_some());
-    assert!(reader.next().expect("1").is_some());
-    assert!(reader.next().expect("end").is_none());
-
-    // Off regtest: the writer refuses, and so does the reader when a
-    // regtest corpus's net tag is patched to another chain.
-    let mut main =
-        CorpusWriter::create(Cursor::new(Vec::new()), Network::Testnet, BlockHeight::ZERO)
-            .expect("header");
-    main.append(&b0, &t0).expect("0");
-    assert!(matches!(
-        main.inject(BlockHeight::ZERO, credit(1))
-            .expect_err("no injector off regtest"),
-        CorpusFault::InjectNotPermitted {
-            net: Network::Testnet
-        }
-    ));
-    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
-        .expect("header");
-    w.append(&b0, &t0).expect("0");
-    w.inject(BlockHeight::ZERO, credit(1)).expect("at the tip");
-    let mut bytes = w.finish().expect("finish").into_inner();
-    bytes[12] = Network::Testnet as u8;
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    assert!(reader.next().expect("0").is_some());
-    assert!(matches!(
-        reader.next().expect_err("the reader applies the same law"),
-        CorpusFault::InjectNotPermitted {
-            net: Network::Testnet
-        }
-    ));
+    assert_eq!(candidate.bundle_bodies, vec![body]);
 }

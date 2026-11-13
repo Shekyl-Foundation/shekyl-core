@@ -240,7 +240,7 @@ pub(crate) fn show_drain(val: &Value) {
             DrainVerdictView::AlreadyInChain => match result.confirmed_height {
                 Some(h) => println!(
                     "An identical earlier return is already confirmed on chain \
-                     (reported height {h}): {}",
+                     (at block {h}): {}",
                     result.tx_hash
                 ),
                 None => println!(
@@ -299,15 +299,15 @@ pub(crate) fn show_staked_outputs(val: &Value) {
         return;
     };
     println!(
-        "{:<14} {:>18} {:>6} {:>14}",
-        "Output", "Amount (SKL)", "Slot", "Unlock height"
+        "{:<14} {:>18} {:>6} {:>16}",
+        "Output", "Amount (SKL)", "Slot", "Unlocks at block"
     );
     for o in outputs {
         let gindex = o.get("gindex").and_then(|v| v.as_str()).unwrap_or("?");
         let amount = opt_amount(o, "amount");
         let slot = o.get("p_slot").and_then(Value::as_i64).unwrap_or(-1);
         let unlock = o.get("unlock_height").and_then(Value::as_i64).unwrap_or(0);
-        println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>14}");
+        println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>16}");
     }
 }
 
@@ -357,9 +357,15 @@ pub(crate) fn show_staking_info(val: &Value) {
         .and_then(Value::as_i64)
         .unwrap_or(0);
     println!("Staked outputs:  {count}");
-    match val.get("pscan_synced_height").and_then(Value::as_i64) {
-        Some(h) => println!("Staking scan height: {h}"),
-        None => println!("Staking scan height: not yet scanned"),
+    // `pscan_synced_height` is the scan's exclusive frontier, the first
+    // block it has not covered (`wallet_rpc.yaml`): it has scanned through
+    // the block before it.
+    match val.get("pscan_synced_height").and_then(Value::as_u64) {
+        Some(frontier) => println!(
+            "Staking scan:    through block {}",
+            crate::display::block_of_count_text(frontier, "none (nothing scanned yet)")
+        ),
+        None => println!("Staking scan:    not yet scanned"),
     }
     print_serving_posture(val);
     print_staking_work(val);
@@ -398,7 +404,7 @@ fn print_staking_work(val: &Value) {
         println!("Ended without completing:");
         for entry in &outcomes {
             println!(
-                "  {} {} at height {}: {}",
+                "  {} {} at block {}: {}",
                 kind_word(&entry.kind),
                 entry.outcome.replace('_', " "),
                 entry.at_height,
@@ -447,11 +453,11 @@ fn reserved_reading(entry: &InFlightEntry) -> ReservedReading {
     }
 }
 
-/// The record remains until the scan passes this height. Said for a zero
+/// The record remains until the scan has passed this block. Said for a zero
 /// hold and for an unread amount. It does not say the scan will decide
 /// whether the record was mined.
 fn record_stays_until(height: impl std::fmt::Display) -> String {
-    format!("This record stays until the staking scan passes height {height}.")
+    format!("This record stays until the staking scan has passed block {height}.")
 }
 
 /// What an entry still holds (WR-Q6) and, when it has an end date, that
@@ -467,7 +473,7 @@ fn funds_sentence(entry: &InFlightEntry) -> Option<String> {
             Some(match end {
                 Some(h) => format!(
                     "It holds {amount}; if its transaction was not mined, that returns \
-                     once the staking scan passes height {h}."
+                     once the staking scan has passed block {h}."
                 ),
                 None => format!("It holds {amount}."),
             })
@@ -490,7 +496,7 @@ fn in_flight_state_line(entry: &InFlightEntry) -> String {
     match (entry.state.as_str(), entry.dispatched_at_height.0) {
         ("pending", _) => format!("{kind}: waiting to be sent"),
         ("dispatched", Some(h)) => format!(
-            "{kind}: sent at height {h}, {} attempt{}",
+            "{kind}: sent at block {h}, {} attempt{}",
             entry.attempts,
             if entry.attempts == 1 { "" } else { "s" }
         ),
@@ -851,11 +857,11 @@ mod tests {
         );
         assert_eq!(
             in_flight_line(&entry("dispatched", Some(5_010), None)),
-            "return: sent at height 5010, 1 attempt"
+            "return: sent at block 5010, 1 attempt"
         );
         let refused = in_flight_line(&entry("refused", Some(5_010), Some(5_100)));
         assert!(refused.contains("fee as too low"), "{refused}");
-        assert!(refused.contains("passes height 5100"), "{refused}");
+        assert!(refused.contains("has passed block 5100"), "{refused}");
         assert!(in_flight_line(&entry("expired", None, Some(5_100))).contains("5100"));
         assert_eq!(
             in_flight_line(&entry("some_later_state", None, None)),
@@ -903,8 +909,8 @@ mod tests {
             refused(Some(2_500_000_000)),
             format!(
                 "return: refused. The node refused its fee as too low. It holds {}; if its \
-                 transaction was not mined, that returns once the staking scan passes height \
-                 5100.",
+                 transaction was not mined, that returns once the staking scan has passed \
+                 block 5100.",
                 super::format_amount(2_500_000_000)
             )
         );
@@ -912,14 +918,14 @@ mod tests {
         assert_eq!(
             nothing,
             "return: refused. The node refused its fee as too low. It holds nothing. This \
-             record stays until the staking scan passes height 5100."
+             record stays until the staking scan has passed block 5100."
         );
         let unknown = refused(None);
         assert_eq!(
             unknown,
             "return: refused. The node refused its fee as too low. What it holds shows once \
-             the staking scan has run. This record stays until the staking scan passes height \
-             5100."
+             the staking scan has run. This record stays until the staking scan has passed \
+             block 5100."
         );
         // A zero hold and an unread amount must not promise that passing
         // the end height will show whether the record was mined. A

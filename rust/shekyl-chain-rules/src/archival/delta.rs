@@ -8,8 +8,8 @@
 //! [`ArchivalDelta`] is the pin. The store writes what it is given.
 
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SupportSeats,
+    BlockDraws, BondRecord, DrawableDigest, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SupportRow,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -31,7 +31,6 @@ use shekyl_units::AtomicUnits;
 /// let delta = shekyl_chain_rules::ArchivalDelta {
 ///     records: Vec::new(),
 ///     releases: Vec::new(),
-///     serve_credits: Vec::new(),
 ///     settlements: Vec::new(),
 ///     support_settlements: Vec::new(),
 ///     gathers: Vec::new(),
@@ -51,7 +50,6 @@ use shekyl_units::AtomicUnits;
 pub struct ArchivalDelta {
     pub(super) records: Vec<RecordWrite>,
     pub(super) releases: Vec<ReleasePreImage>,
-    pub(super) serve_credits: Vec<ServeCreditKey>,
     pub(super) settlements: Vec<Settlement>,
     /// One support row per complete tree per epoch. Not keyed by shard.
     pub(super) support_settlements: Vec<SupportSettlement>,
@@ -64,10 +62,11 @@ pub struct ArchivalDelta {
     /// The draw count of the connecting block. Present at every height,
     /// including a schedule with no response window, which records zeros.
     pub(super) draws: BlockDraws,
-    /// The complete trees the connecting block seated on the support
-    /// stream, in persona order. Present at every height; the empty row is
-    /// a block that seated nobody, and a missing row is the hole.
-    pub(super) support_seats: SupportSeats,
+    /// The connecting block's support row: the trees it seated, in
+    /// persona order, and the carry it leaves. Present at every height; the
+    /// empty row is a block that seated nobody and left nothing owed, and a
+    /// missing row is the hole.
+    pub(super) support_row: SupportRow,
 }
 
 impl ArchivalDelta {
@@ -86,13 +85,6 @@ impl ArchivalDelta {
     #[must_use]
     pub fn releases(&self) -> &[ReleasePreImage] {
         &self.releases
-    }
-
-    /// The serve-credit keys this block's transactions earn, in block
-    /// order (§3.2 phase 2: each becomes a `Present` under its key).
-    #[must_use]
-    pub fn serve_credits(&self) -> &[ServeCreditKey] {
-        &self.serve_credits
     }
 
     /// The settlement rows this block's slash pass derives, by epoch, then
@@ -172,13 +164,13 @@ impl ArchivalDelta {
         self.draws
     }
 
-    /// The complete trees the connecting block seated on the support
-    /// stream, in persona order (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12`
-    /// S1). Written at every height. The length is the number of support
-    /// draws the block issued.
+    /// The connecting block's support row (`ARCHIVAL_SUPPORT_DRAW.md` §5;
+    /// `SO-D12` S1): the complete trees it seated, in persona order, whose
+    /// count is the support draws it issued, and the carry it leaves.
+    /// Written at every height.
     #[must_use]
-    pub const fn support_seats(&self) -> &SupportSeats {
-        &self.support_seats
+    pub const fn support_row(&self) -> &SupportRow {
+        &self.support_row
     }
 }
 
@@ -270,17 +262,6 @@ pub enum RecordWriteKind {
     Update,
 }
 
-/// A serve-credit key this block earns: `(persona, shard, epoch)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ServeCreditKey {
-    /// The serving persona.
-    pub persona: PCanonicalId,
-    /// The shard served.
-    pub shard: ShardId,
-    /// The settlement epoch credited.
-    pub epoch: SettlementEpoch,
-}
-
 /// One complete tree's support settlement for one epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SupportSettlement {
@@ -360,7 +341,6 @@ pub struct EpochGather {
     pub(super) epoch: SettlementEpoch,
     pub(super) r_market: Vec<(ShardId, RMarket)>,
     pub(super) sigma_work: SigmaWorkMilli,
-    pub(super) complete_trees: CompleteTreeSet,
 }
 
 impl EpochGather {
@@ -383,14 +363,5 @@ impl EpochGather {
     #[must_use]
     pub const fn sigma_work(&self) -> SigmaWorkMilli {
         self.sigma_work
-    }
-
-    /// The bonds the gather credited at `E` that it excluded from the
-    /// market as complete trees — the flag frozen at the pass, which a
-    /// claim's re-gather reads in place of the record's (`SO-D12h`). The
-    /// empty set is written like any other.
-    #[must_use]
-    pub const fn complete_trees(&self) -> &CompleteTreeSet {
-        &self.complete_trees
     }
 }

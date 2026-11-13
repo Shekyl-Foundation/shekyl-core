@@ -18,12 +18,11 @@ use shekyl_archival_fetch_sched::{
 use shekyl_archival_retention::{
     challenge_nonce, verify_receipt_transcript, PassStream, PASS_ANCHOR_DEPTH_BLOCKS,
 };
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_loopback::{
     client_through, endpoint_and_client, fixture_body, fixture_expectation, FIXTURE_SHARD_ID,
 };
-use shekyl_p_serve::{
-    PassSigner, TestKeySigner, TestReceiptKeySigner, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
-};
+use shekyl_p_serve::{PassSigner, TestReceiptKeySigner};
 use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -84,7 +83,7 @@ impl ShardFacts for Facts {
 
 /// The drawn holders of the fixture shard: one, under `key`. Only the
 /// organic read draws from it.
-struct Holders(shekyl_crypto_pq::signature::HybridPublicKey);
+struct Holders(FnDsaHybridPublicKey);
 
 impl HolderSource for Holders {
     fn holders_of(
@@ -133,8 +132,10 @@ fn due(
     }
 }
 
-fn identity_key() -> shekyl_crypto_pq::signature::HybridPublicKey {
-    TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
+/// A receipt key no endpoint here signs with: a drawn holder that is never
+/// read to a pass.
+fn another_receipt_key() -> FnDsaHybridPublicKey {
+    TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
         .public_key()
         .clone()
 }
@@ -153,11 +154,15 @@ async fn a_receipt_endpoint_answers_a_pass_the_verifier_opens() {
     let (_endpoint, client) = endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
         timeouts(),
     )
     .await;
-    let scheduler = FetchScheduler::new(Arc::new(Facts), Arc::new(Holders(identity_key())), client);
+    let scheduler = FetchScheduler::new(
+        Arc::new(Facts),
+        Arc::new(Holders(another_receipt_key())),
+        client,
+    );
     for stream in [PassStream::Economy, PassStream::Support] {
         let read = due(key.clone(), stream);
         let ReadOutcome::Pass(record) = read_due(&scheduler, &read).await else {
@@ -178,57 +183,29 @@ async fn a_receipt_endpoint_answers_a_pass_the_verifier_opens() {
         .expect("a scheme-3 receipt");
         verify_receipt_transcript(
             &key,
-            stream,
-            &read.nonce,
-            record.anchor_height,
-            anchor_hash.as_bytes(),
-            SHARD.to_raw(),
-            &record.delivery_digest,
+            &shekyl_archival_retention::PassTranscript::new(
+                shekyl_archival_retention::PassRequestHeader::from_parts(
+                    stream,
+                    read.nonce,
+                    record.anchor_height,
+                    shekyl_types::BlockHash::from_bytes(*anchor_hash.as_bytes()),
+                ),
+                SHARD.to_raw(),
+                record.delivery_digest,
+            ),
             &receipt,
         )
         .expect("the receipt verifies on the draw's stream");
     }
 }
 
-/// The live serving host signs with the identity key. The producer's read
-/// of it is one completed exchange that is not a receipt, classified as
-/// the serving side's scheme: the bundle files with no passes and the log
-/// says why. Red edit: classify it `Refused` — the block's log line never
-/// fires.
-#[tokio::test]
-async fn an_identity_endpoint_is_the_serving_sides_scheme() {
-    let signer = Arc::new(TestKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT)));
-    let (_endpoint, client) = endpoint_and_client(
-        FIXTURE_SHARD_ID,
-        fixture_body(),
-        Arc::clone(&signer) as Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
-        timeouts(),
-    )
-    .await;
-    let scheduler = FetchScheduler::new(
-        Arc::new(Facts),
-        Arc::new(Holders(signer.public_key().clone())),
-        client,
-    );
-    let receipt_key = TestReceiptKeySigner::ephemeral(BlockHeight::from_raw(OWN_HEIGHT))
-        .public_key()
-        .clone();
-    let outcome = read_due(&scheduler, &due(receipt_key, PassStream::Economy)).await;
-    assert_eq!(outcome, ReadOutcome::Answered(Answered::ServingScheme));
-}
-
-/// An excess past what an identity envelope can add is not the serving
-/// side's scheme, a frame with other than exactly the envelopes'
-/// difference left over is not, and neither is any other malformation.
-/// Red edits: drop the bound on the excess — a hostile oversized reply
-/// logs as the identity scheme; ignore the leftover count — any long frame
-/// does.
+/// Every completed exchange that is not a pass is `Refused`, a reply in
+/// another scheme among them (a long frame or an oversize declaration):
+/// the draw is done. Red edit: classify a malformed reply as `Stall` — the
+/// draw is read again against a host that answered.
 #[test]
-fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
-    use shekyl_archival_fetch_sched::{
-        Attempt, FetchError, Malformed, ReadFailure, IDENTITY_ENVELOPE_LEN, RECEIPT_ENVELOPE_LEN,
-    };
-    let wider = u64::try_from(IDENTITY_ENVELOPE_LEN - RECEIPT_ENVELOPE_LEN).expect("fits");
+fn a_completed_exchange_that_is_not_a_pass_is_refused() {
+    use shekyl_archival_fetch_sched::{Attempt, FetchError, Malformed, ReadFailure};
     let ended = |error: FetchError| {
         classify(&ReadFailure::Exhausted {
             attempts: vec![Attempt {
@@ -237,36 +214,17 @@ fn only_an_identity_envelopes_excess_is_the_serving_sides_scheme() {
             }],
         })
     };
-    let oversize = |declared: u64| {
+    for error in [
         FetchError::Malformed(Malformed::Oversize {
-            declared,
+            declared: 3_029,
             max: 1_000,
-        })
-    };
-    assert_eq!(
-        ended(oversize(1_000 + wider)),
-        ReadOutcome::Answered(Answered::ServingScheme)
-    );
-    assert_eq!(
-        ended(oversize(1_001 + wider)),
-        ReadOutcome::Answered(Answered::Refused)
-    );
-    let long = |left: u64| FetchError::Malformed(Malformed::FrameLong { left });
-    assert_eq!(
-        ended(long(wider)),
-        ReadOutcome::Answered(Answered::ServingScheme)
-    );
-    for left in [1, wider - 1, wider + 1] {
-        assert_eq!(
-            ended(long(left)),
-            ReadOutcome::Answered(Answered::Refused),
-            "{left} bytes left"
-        );
+        }),
+        FetchError::Malformed(Malformed::FrameLong { left: 2_029 }),
+        FetchError::Malformed(Malformed::Envelope),
+        FetchError::Miss,
+    ] {
+        assert_eq!(ended(error), ReadOutcome::Refused);
     }
-    assert_eq!(
-        ended(FetchError::Miss),
-        ReadOutcome::Answered(Answered::Refused)
-    );
 }
 
 /// Stall-class failures read again; a requester that could not dial reads
@@ -332,8 +290,8 @@ async fn tap(target: std::net::SocketAddr) -> (std::net::SocketAddr, Arc<Mutex<V
 /// The one-machinery rule end to end through the producer's caller
 /// (§5.1): the producer's challenge read and an organic read of the same
 /// shard put byte-identical requests on the wire apart from the nonce.
-/// The organic read draws an identity holder and the challenge names a
-/// receipt-key holder; the request does not carry the scheme. Red edit:
+/// The organic read draws a holder under another receipt key and the
+/// challenge names the endpoint's; the request does not carry the key. Red edit:
 /// give the challenge read a header of its own (another anchor, or a
 /// caller tag) — a byte outside the nonce differs.
 #[tokio::test]
@@ -345,20 +303,24 @@ async fn a_challenge_read_and_an_organic_read_differ_only_in_the_nonce() {
     let (endpoint, _direct) = endpoint_and_client(
         FIXTURE_SHARD_ID,
         fixture_body(),
-        signer as Arc<dyn PassSigner<RECEIPT_ENVELOPE_LEN>>,
+        signer as Arc<dyn PassSigner>,
         timeouts(),
     )
     .await;
     let (tapped, heads) = tap(endpoint.addr()).await;
     let client = client_through(tapped, timeouts()).await;
-    let scheduler = FetchScheduler::new(Arc::new(Facts), Arc::new(Holders(identity_key())), client);
+    let scheduler = FetchScheduler::new(
+        Arc::new(Facts),
+        Arc::new(Holders(another_receipt_key())),
+        client,
+    );
 
     let challenge = due(key, PassStream::Economy);
     let ReadOutcome::Pass(_) = read_due(&scheduler, &challenge).await else {
         panic!("the challenge read passes");
     };
-    // The organic read meets the receipt endpoint under an identity key
-    // and fails; its request is on the wire all the same.
+    // The organic read meets the endpoint under another receipt key and
+    // fails; its request is on the wire all the same.
     let budget = NeedBudget {
         holders: 1.try_into().expect("one"),
         stall_redials: 0,

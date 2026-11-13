@@ -431,17 +431,11 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
             .await;
             (outcome, AT)
         }
-        // A chain whose block `AT` lists one archival body of the kind the
-        // mutation duplicates, beside (or riding) the spend `chain(n)`
-        // would list. The serve credit's twin is the body itself,
-        // `unlock_time` moved; the bond post's is signed over its content,
+        // A chain whose block `AT` lists a bond post beside the spend
+        // `chain(n)` would list. The bond post is signed over its content,
         // so the run supplies a second valid body with the same key — a
         // second **join** for the persona (a Release over no record is
-        // J16's in the slot loop, before G10). A credit names a persona
-        // with a record read off the view before its block (CEN-J4), so
-        // the block below `AT` lists the persona's join; the credit's
-        // epoch is past the join's (CEN-J5). (G9's pair is the driver's —
-        // `Mutation` docs.)
+        // J16's in the slot loop, before G10).
         //
         // The joins are **real**: the persona's post through the
         // production constructor, riding the block's own coinbase spend
@@ -450,52 +444,26 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         // post's funding spend as I13/I15 judge a regular spend's, and a
         // fixture join is refused there before G10 is reached. The twin
         // spends the coinbase that matured one block earlier and no block
-        // spent (block `AT − 1` lists nothing in that case), so both joins
-        // are admissible at `AT` alone and G10 counts the second. The
-        // credit is the one fixture body left: a serve-credit-only
-        // transaction has no funding spend (CEN-H20) and J27 is vacuous on
-        // it. (*Was:* fixture joins with filler proofs, anchored where
-        // listed; green while the funding half was unjudged on the class.)
-        Mutation::DuplicateServeCredit | Mutation::DuplicateBondPost => {
+        // spent (block `AT − 1` lists nothing), so both joins are
+        // admissible at `AT` alone and G10 counts the second.
+        Mutation::DuplicateBondPost => {
             let persona = Persona::at(1);
             let mut growing = Growing::over(&chain(AT - 1));
-            // Block `AT − 1`: the first spendable coinbase, posting the
-            // join the credit will be judged against — or nothing, so that
-            // coinbase stays for the bond post's twin.
-            let below: Vec<Transaction> = match mutation {
-                Mutation::DuplicateServeCredit => vec![growing.spend_of_posting(
-                    AT - 1 - FIRST_SPEND_HEIGHT,
-                    Family::Main,
-                    Some(&persona.join(complete_tree(), ENDPOINT)),
-                )],
-                _ => Vec::new(),
-            };
-            growing.extend(below, 7);
+            // Block `AT − 1` lists nothing, so its coinbase stays for the
+            // twin.
+            growing.extend(Vec::new(), 7);
             // Block `AT`, and the twin built at its height before it is
             // extended (the spender anchors at the connecting height).
-            let (at_block, twins): (Vec<Transaction>, Vec<Transaction>) = match mutation {
-                Mutation::DuplicateServeCredit => (
-                    vec![
-                        growing
-                            .spend_matured(Family::Main)
-                            .expect("a coinbase has matured for AT"),
-                        growing.anchored(persona.serve_credit(7, 11)),
-                    ],
-                    Vec::new(),
-                ),
-                _ => (
-                    vec![growing.spend_of_posting(
-                        AT - FIRST_SPEND_HEIGHT,
-                        Family::Main,
-                        Some(&persona.join(complete_tree(), ENDPOINT)),
-                    )],
-                    vec![growing.spend_of_posting(
-                        AT - 1 - FIRST_SPEND_HEIGHT,
-                        Family::Main,
-                        Some(&persona.join(complete_tree(), ENDPOINT)),
-                    )],
-                ),
-            };
+            let at_block = vec![growing.spend_of_posting(
+                AT - FIRST_SPEND_HEIGHT,
+                Family::Main,
+                Some(&persona.join(complete_tree(), ENDPOINT)),
+            )];
+            let twins = vec![growing.spend_of_posting(
+                AT - 1 - FIRST_SPEND_HEIGHT,
+                Family::Main,
+                Some(&persona.join(complete_tree(), ENDPOINT)),
+            )];
             growing.extend(at_block, 7);
             let chain = growing.finish();
             assert_eq!(chain.len() as u64, n, "the mutated block is the tip");
@@ -589,7 +557,7 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
-        | Mutation::WrongAttestationRoot
+        | Mutation::WrongSectionRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward

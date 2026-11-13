@@ -16,16 +16,16 @@ use std::path::Path;
 
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::archival::{
-    BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, BundleReferences, HoldingsKind, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, MAX_SECTION_REFERENCES,
 };
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
+    BondRecord, BundleReferencesBytes, FirstPayingHeight, HeldShard, Holdings, HoldingsError,
+    RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -309,7 +309,7 @@ fn holdings_answer_held_at_tip_and_project_the_wire_descriptor() {
 }
 
 #[test]
-fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
+fn the_close_row_scalars_are_the_raw_le_word_and_the_references_are_a_section() {
     assert_eq!(RMarket::from_raw(1).encode(), [1, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(RMarket::decode(&[0; 8]), Ok(RMarket::from_raw(0)));
     assert_eq!(
@@ -323,36 +323,53 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
             ..
         })
     ));
-    assert!(AttestationWitnessBytes::well_formed(&[]).is_err());
-    assert!(AttestationWitnessBytes::well_formed(&[1]).is_ok());
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES]).is_ok()
-    );
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES + 1])
-            .is_err()
-    );
+    // A stored section is `BundleReferences::encode`'s bytes and nothing
+    // else: not empty, not a zero count, not past the bound, not padded.
+    let section = BundleReferences::new(vec![vec![1u8; 80]; MAX_SECTION_REFERENCES])
+        .expect("a full section")
+        .encode();
+    assert!(BundleReferencesBytes::well_formed(&section).is_ok());
+    assert!(BundleReferencesBytes::well_formed(&[]).is_err());
+    assert!(BundleReferencesBytes::well_formed(&0u32.to_le_bytes()).is_err());
+    let over = u32::try_from(MAX_SECTION_REFERENCES + 1).expect("fits");
+    assert!(BundleReferencesBytes::well_formed(&over.to_le_bytes()).is_err());
+    let mut padded = section;
+    padded.push(0);
+    assert!(BundleReferencesBytes::well_formed(&padded).is_err());
 }
 
-/// The frozen complete-tree set (`SO-D12h`): the empty set is written as a
-/// count of zero and read back as a value, and the decode refuses each
-/// shape the type cannot hold — a repeat, a descent, a count past the
-/// bytes, a trailing byte. Red edit: decode through `FromIterator`, which
-/// sorts — the descent then round-trips into a different encoding.
+/// The support row refuses what its type cannot hold, in either half: a
+/// repeated or descending seat, a repeated or descending carried tree, a
+/// carried tree owed nothing, a count past the bytes, a trailing byte.
+/// Seat `j` is bit `j` of the support bitmap, so an order the type sorted
+/// away would renumber the draws; a carried tree owed nothing is not in
+/// the sparse carry. Red edits: decode the seats through `FromIterator`,
+/// which sorts (the descent round-trips into a different encoding); drop
+/// the owes-nothing check (a zero entry round-trips).
 #[test]
-fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
+fn the_support_row_refuses_what_its_type_cannot_hold() {
+    use shekyl_types::archival::{SupportCarryAfter, SupportCount, SupportRow};
     let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
     let invalid = |reason: &'static str| CodecError::Invalid {
-        codec: CompleteTreeSet::NAME,
+        codec: SupportRow::NAME,
         reason,
     };
-    let empty = CompleteTreeSet::default();
-    assert_eq!(empty.encode(), [0, 0, 0, 0]);
-    assert_eq!(CompleteTreeSet::decode(&[0, 0, 0, 0]), Ok(empty));
-    let two = CompleteTreeSet::new(vec![id(1), id(2)]).expect("ascending");
-    assert_eq!(CompleteTreeSet::decode(&two.encode()), Ok(two.clone()));
+    assert_eq!(SupportRow::EMPTY.encode(), [0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        SupportRow::decode(&[0, 0, 0, 0, 0, 0, 0, 0]),
+        Ok(SupportRow::EMPTY)
+    );
+    let row = SupportRow {
+        seats: SupportSeats::new(vec![id(1), id(2)]).expect("ascending"),
+        carry_after: SupportCarryAfter::new(vec![
+            (id(1), SupportCount::new(2)),
+            (id(3), SupportCount::new(1)),
+        ])
+        .expect("ascending, each owed"),
+    };
+    assert_eq!(SupportRow::decode(&row.encode()), Ok(row.clone()));
 
-    let raw = |ids: &[u8]| {
+    let seats = |ids: &[u8]| {
         let mut out = u32::try_from(ids.len())
             .expect("fits")
             .to_le_bytes()
@@ -362,70 +379,53 @@ fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
         }
         out
     };
-    let unordered = invalid("personas are not strictly increasing");
-    assert_eq!(CompleteTreeSet::decode(&raw(&[1, 1])), Err(unordered));
-    assert_eq!(CompleteTreeSet::decode(&raw(&[2, 1])), Err(unordered));
-    let mut short = raw(&[1, 2]);
-    short.truncate(4 + 32);
-    assert_eq!(
-        CompleteTreeSet::decode(&short),
-        Err(invalid(
-            "element count exceeds what the row's bytes can hold"
-        ))
-    );
-    let mut long = two.encode();
-    long.push(0);
-    assert_eq!(
-        CompleteTreeSet::decode(&long),
-        Err(invalid("trailing bytes after the complete-tree set"))
-    );
-}
-
-/// A block's support seats (`SO-D12` S1): the empty row is a count of zero
-/// and reads back as a value, and the decode refuses each shape the type
-/// cannot hold — a repeat, a descent, a count past the bytes, a trailing
-/// byte. Seat `j` is bit `j` of the support bitmap, so an order the type
-/// sorted away would renumber the draws. Red edit: decode through
-/// `FromIterator`, which sorts — the descent then round-trips into a
-/// different encoding.
-#[test]
-fn the_support_seats_refuse_an_order_the_type_cannot_hold() {
-    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
-    let invalid = |reason: &'static str| CodecError::Invalid {
-        codec: SupportSeats::NAME,
-        reason,
-    };
-    assert_eq!(SupportSeats::EMPTY.encode(), [0, 0, 0, 0]);
-    assert_eq!(SupportSeats::decode(&[0, 0, 0, 0]), Ok(SupportSeats::EMPTY));
-    let two = SupportSeats::new(vec![id(1), id(2)]).expect("ascending");
-    assert_eq!(SupportSeats::decode(&two.encode()), Ok(two.clone()));
-
-    let raw = |ids: &[u8]| {
-        let mut out = u32::try_from(ids.len())
+    let carry = |entries: &[(u8, u32)]| {
+        let mut out = u32::try_from(entries.len())
             .expect("fits")
             .to_le_bytes()
             .to_vec();
-        for &b in ids {
+        for &(b, owed) in entries {
             out.extend_from_slice(&[b; 32]);
+            out.extend_from_slice(&owed.to_le_bytes());
         }
         out
     };
-    let unordered = invalid("personas are not strictly increasing");
-    assert_eq!(SupportSeats::decode(&raw(&[1, 1])), Err(unordered));
-    assert_eq!(SupportSeats::decode(&raw(&[2, 1])), Err(unordered));
-    let mut short = raw(&[1, 2]);
+    let with = |s: Vec<u8>, c: Vec<u8>| [s, c].concat();
+    let unordered = invalid("seats are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[1, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[2, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    let carried = invalid("carried personas are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(2, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 0)]))),
+        Err(invalid("a carried persona owes nothing"))
+    );
+    let mut short = with(seats(&[1, 2]), carry(&[]));
     short.truncate(4 + 32);
     assert_eq!(
-        SupportSeats::decode(&short),
+        SupportRow::decode(&short),
         Err(invalid(
             "element count exceeds what the row's bytes can hold"
         ))
     );
-    let mut long = two.encode();
+    let mut long = row.encode();
     long.push(0);
     assert_eq!(
-        SupportSeats::decode(&long),
-        Err(invalid("trailing bytes after the support seats"))
+        SupportRow::decode(&long),
+        Err(invalid("trailing bytes after the support row"))
     );
 }
 

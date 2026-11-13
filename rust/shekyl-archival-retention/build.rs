@@ -180,7 +180,7 @@ fn main() {
          pub const ARCHIVAL_REWARD_AGE_WEIGHT_MILLI: u64 = {age_weight};\n\
          pub const MAX_CLAIM_AGE_W: u64 = {max_claim_age_w};\n\
          pub const RELEASE_COOLDOWN_EPOCHS: u64 = {release_cooldown_epochs};\n\
-         pub const ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS: u64 = {anchor_lag_blocks};\n\
+         pub const ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS: u64 = {anchor_lag_blocks};\n\
          pub const BOND_DURATION_BASE_EPOCHS: u64 = {bond_duration_base_epochs};\n\
          pub const BOND_DURATION_AGE_SCALE: u64 = {bond_duration_age_scale};\n"
     );

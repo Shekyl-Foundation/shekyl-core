@@ -41,7 +41,9 @@ crate::wire_object! {
         /// The coinbase transaction's id.
         pub coinbase: HashHex,
         pub curve_root: HashHex,
-        pub attestation_root: HashHex,
+        /// The root of the block's bundle section (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+        /// §7.5).
+        pub section_root: HashHex,
     }
 }
 
@@ -190,6 +192,13 @@ crate::wire_object! {
         pub tx: Vec<OrArchived<BlockTx>>,
         /// The global index of the block's first output (RW-Q5).
         pub output_index: Integer,
+        /// The block's bundle references, in section order, as its header's
+        /// `section_root` commits them. Empty when the block admits no
+        /// bundle.
+        pub section: Vec<Bytes>,
+        /// The body of each reference this node still holds, in no set
+        /// order: a reader matches each to its reference by hash.
+        pub section_body: Vec<Bytes>,
     }
 }
 

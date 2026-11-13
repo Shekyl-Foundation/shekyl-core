@@ -6877,6 +6877,66 @@ re-derived from the 2026-11-03 custody seeds: one of those seeds was
 printed into a working session transcript while this change was prepared,
 so that set is retired.
 
+## 2026-11-10 — The switch deletes the serve-credit input and what only it needed
+
+**Decision** (Rick, the C7 rulings on PR #1327, `SO-D12` 4b). After the
+switch a pass is credited only from an admitted bundle, so the carrier and
+the machinery that served it are deleted, not retired in code:
+
+- **The serve-credit input** (`Input::ServeCredit`) with its whole surface:
+  the pruned pass records, the blob checks and their caps, retention's wire
+  record, the empty-`pqc_auths` form, the KAT fixtures that carried one, the
+  transaction class and the submit engine's kind, the `archival_serve_credit`
+  table with its reads A3–A5, SI-15, and the challenge helpers. Input tag
+  `0x02` is unassigned and refused as any unknown input tag (CEN-G2), with
+  no constant and no typed error: before genesis there is no history to
+  protect. `0x03` and `0x04` keep their values.
+- **The census rows.** J1–J3 and J7–J10 are retired by ruling (`SO-D12g`),
+  each naming the bundle rows that carry its subject (J29–J37). J4–J6, G7
+  and H20, which judged only the deleted class, leave the registry.
+- **The pass-anchor window** and its floor and length constants. The lag
+  stays as `ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS`.
+- **The coinbase `0x0B` attestation tag**, with no retired note.
+- **The frozen complete-tree set** (`SO-D12h`), the A22 table, SI-31 and the
+  gather's complete-tree flag: a complete tree lists no shard (CEN-J14), so
+  no gather credits one and the set was always empty.
+
+**Why.** Rule 15: removing the last reader means deleting the thing. A
+retired list protects data mainnet has already parsed, and there is none.
+
+**Fixtures.** The gate-2 serve-credit KAT goes whole. The gate-4 lifecycle
+fixture took its persona from gate-2's, so it is regenerated under this
+entry with its own persona, and its pinned join becomes the keyed
+JoinMarket. The PQC signing-preimage KAT drops its serve-credit subject.
+
+## 2026-11-11 — The shard fill is a captured chain of real spends
+
+**Decision** (Rick, the shard-fill rulings on PR #1327). The store's prune
+and slash-scan tests built their shards from padded serve credits, whose
+input the previous entry deletes. They now load a chain of real spends,
+built once and checked in at `rust/shekyl-harness-spender/vectors/shard-fill.bin`:
+
+- **Option A, the fan-out.** Each spend takes one output and pays the miner
+  two, which the chain spends once they drain into the tree, so a block
+  fills to 280 000 weight and a shard closes in about fourteen blocks. It
+  is built with the harness spender's watched-output path
+  (`Spender::own`, `owned_input`, `spend_owned`), not a second fixture.
+- **One chain, every consumer.** Each test connects the prefix it needs.
+  The two long ingest scenarios connect the prefix that closes shard 0.
+  Coinbases 0–9 are left unspent for the ingest's bond posts.
+- **Lengths, not bytes, are the recapture check.** Proving draws fresh
+  randomness, so a rebuild's bytes differ and its archival lengths do not.
+  The store's `#[ignore]`d real-spends test rebuilds the chain nightly and
+  fails if a block's lengths differ from the vector's. The vector moves
+  only under a decision cited to `capture_the_shard_fill_chain`.
+- **The exact-length properties** (a transaction starting at `k·W`, a
+  straddle) are tests of `shard_of` with any lengths. The store asserts
+  the straddle from measured lengths.
+
+**Why.** Rule 50: a test's bytes are ones every landed rule verifies.
+Proving them in every run costs minutes; verifying the captured chain
+costs seconds.
+
 ---
 
 ## 2026-11-12 — Canonical test chains: as many as testing needs, forged byte for byte, regtest only

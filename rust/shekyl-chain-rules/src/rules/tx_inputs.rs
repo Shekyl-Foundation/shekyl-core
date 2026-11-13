@@ -29,8 +29,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
-    ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES, MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN,
-    PQC_MAX_PUBLIC_KEY_BLOB,
+    MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
 use shekyl_wire::{Ct, Input};
 
@@ -51,12 +50,11 @@ use shekyl_wire::{Ct, Input};
 // and I14 therefore judge `TxClass::Spend` and record as evaluated — the
 // premise checked, the count another row's — on the archival classes. The
 // census names the split: I9 "regular spend; archival shapes use their
-// spend-subset counts, CEN-H21/H22"; I8 "serve-credit excepted".
+// spend-subset counts, CEN-H21/H22".
 
-/// CEN-I1: a non-serve-credit transaction has at least two outputs
-/// (`blockchain.cpp`: *"has fewer than two outputs"*, `tx.version >= 2 &&
-/// !is_archival_serve_credit_only`). Spend, bond post and emission alike;
-/// the serve-credit response has none by H20. Ratified `≥ 2`
+/// CEN-I1: a non-coinbase transaction has at least two outputs
+/// (`blockchain.cpp`: *"has fewer than two outputs"*). Spend, bond post and
+/// emission alike. Ratified `≥ 2`
 /// (`GENESIS_TX_WIRE_FORMAT.md` :167 — *"earlier 'exactly one' was
 /// over-strict"*). Non-coinbase: the coinbase's count is CEN-F4's.
 pub(crate) struct I1;
@@ -69,9 +67,6 @@ impl TxRule for I1 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        if matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
-            return Ok(());
-        }
         if cx.tx.prefix.outputs.len() < 2 {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
         }
@@ -182,9 +177,8 @@ impl TxRule for I6 {
 }
 
 /// CEN-I8, the regular spend's arm: `pqc_auths.len() == vin.len()`
-/// (`blockchain.cpp` *"pqc_auths count N does not match input count"*,
-/// `!is_archival_serve_credit_only`). The serve-credit exception is H20's
-/// (*must be zero*); the bond-post and emission counts are H21's and H22's
+/// (`blockchain.cpp` *"pqc_auths count N does not match input count"*).
+/// The bond-post and emission counts are H21's and H22's
 /// (module section docs). Evaluated on every class; decides on `Spend`.
 pub(crate) struct I8;
 
@@ -322,48 +316,6 @@ impl TxRule for I16 {
 #[cfg(test)]
 #[path = "tx_inputs_tests.rs"]
 mod tx_inputs_tests;
-
-// ---- census 4.J, the stateless serve-credit row ---------------------------
-
-/// CEN-J2: one pruned pass record per serve-credit vin, in vin order, each
-/// non-empty and within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (`RF-D1`).
-/// The live C++ states it in the serve-credit arm of `check_tx_inputs`
-/// (the record count against the vins, then each record's length in
-/// `check_archival_serve_credit_input`) before any chain read, so it is
-/// `tx_form`'s.
-///
-/// It runs after H20, which has already required the region: an absent
-/// region is H20's, never this row's. Order only pairs a record with its
-/// vin; what a record holds is CEN-J10's.
-pub(crate) struct J2;
-
-impl Rule for J2 {
-    const ROW: CenRow = CenRow::J2;
-}
-
-impl TxRule for J2 {
-    const SCOPE: TxScope = TxScope::NonCoinbase;
-
-    fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let TxClass::ServeCreditOnly { credits } = cx.class else {
-            return Ok(());
-        };
-        let records: &[Vec<u8>] = match &cx.tx.ct {
-            Ct::Fcmp {
-                prunable: Some(p), ..
-            } => &p.serve_credit_pruned,
-            _ => &[],
-        };
-        if records.len() != credits
-            || records
-                .iter()
-                .any(|r| r.is_empty() || r.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
-        {
-            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
-        }
-        Ok(())
-    }
-}
 
 // ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------
 //

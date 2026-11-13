@@ -212,6 +212,20 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         }
     }
     impl<'id> ChainView<'id> for NoRoots {
+        type Bundles<'m>
+            = crate::harness::NoBundleRows<core::convert::Infallible>
+        where
+            Self: 'm;
+
+        fn bundles<'m>(
+            &'m self,
+            _: &'m crate::DrawableMemo,
+            _: shekyl_types::BlockHeight,
+            _: shekyl_archival_retention::SettlementSchedule,
+        ) -> Self::Bundles<'m> {
+            crate::harness::NoBundleRows::new()
+        }
+
         fn has_key_image(&self, _: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
             Ok(false)
         }

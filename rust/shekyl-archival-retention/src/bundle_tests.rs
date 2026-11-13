@@ -41,10 +41,10 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// [`bundle_root`] over a section every test here can hold: far fewer than
+/// [`section_root`] over a section every test here can hold: far fewer than
 /// 2³² references, so the one refusal is not this helper's.
 fn root(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// Record `k` of the vectors: `attempt = k mod 3`, `anchor_height =
@@ -503,27 +503,27 @@ fn the_bundle_commitment_matches_its_vectors() {
     };
     assert_eq!(
         commit(H, 0, &[], &[]),
-        "fca47f3be267d7a80ddf41164a76392591948c92b29c548597aa780715fb04b9efe0ee902eeedfd21404a4ff844860308b644525e8881a765112e458c3248839"
+        "7f99a011490dddebb1d00f249d9215f111b97ec58ef741035ffab50fa50114b97cf73dddee42d02d6c13de12badb153759a5ebed1a70460851b28f9ef4b3e15a"
     );
     assert_eq!(
         commit(H, 8, &[0x00], &[]),
-        "cc1c660a85be2d8b8ca8ed1d7ee0083cfd44f80755fbc9aa3a5d7e22d7f42c79ede54d02f0cbc58386b91c518a10306b3e05dd9619f884f6c9d4c3e2944fd6a5"
+        "1afbfbdaf3efa5453ff46198d75ecaa5bfb057192fc83f544b084dbf330de4cfad24ccdbdd70db909cd0fd8bc29cc3db5a46211d336220408252b61dbe15fb76"
     );
     assert_eq!(
         commit(H, 1, &[0x01], &record(0).encode()),
-        "9826b35755be487c37e8d6afd6b060d0876176c573b67aa180f94bae16565da3bb000c94cdad209cc500cfe4c55ccce2f130a95ca2a431580bf975423955bc92"
+        "5ba8260520cddc8b4660626a1cc473f2e49422b051a0093963b6ddaae9dde1dec783e8bcd1648f788d3708a141ce5cac85b5ab952ecfff891d712d71af12fdfd"
     );
     assert_eq!(
         commit(H, 12, &[0x01, 0x0A], &three),
-        "5dadd6089ff5611da1711d21b5312ad8e2a008dabde3912ed867be2a953c05f857063de917ab8e9f7cc85fc02a3df42f6b7b374cc85626e53df4f0ca04695b36"
+        "031966f2dbfbb5769bc26dfcb2181627e035b43d824ed678070ea075f8aaf87653e1446aa94b06786692c2a6b899a87498dae268513d8734423451fa0adc65e1"
     );
     assert_eq!(
         commit(BlockHeight::from_raw(1_000_001), 12, &[0x01, 0x0A], &three),
-        "8f0326bd71daf78d8d07b8146d5e972d183e18d2325870300404bb184ae619d90addd6d4a0f9d2d4ab35401a2660e4cb7d52bd19b522a0a4ade043dc07666144"
+        "62974c316e84acf7268e1d1b8e3f89af737dfa5906204793597a27696155af998bcdf4e578e07fd59e39f34764a369d7d3ab866ec61eb3a779dc4827b97c75f2"
     );
     assert_eq!(
         commit(H, 12, &[0x09, 0x0A], &three),
-        "9d116525e7d6c77109c93f36ab2f0fbb0d9768b22ffc2497b2ad4023441dfeab72e83f29492836179f773dd94d1fdd9c93da836cb78bf78640a5948b4b8ffbf7"
+        "342468b77461f1c6bb549d0ecff3f61baa705d4fb1b438a30674c8b8bc2f25ece14bfeb1b5adce715cd177a4990b4a67711ae15b2be0442e2499385049570bc9"
     );
 }
 
@@ -611,8 +611,11 @@ fn the_bundle_labels_are_distinct() {
         BUNDLE_COMMITMENT.customization(),
         BUNDLE_PRUNABLE_CUSTOMIZATION
     );
-    assert_ne!(BUNDLE_COMMITMENT.customization(), BUNDLE_ROOT_CUSTOMIZATION);
-    assert_ne!(BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_ROOT_CUSTOMIZATION);
+    assert_ne!(
+        BUNDLE_COMMITMENT.customization(),
+        SECTION_ROOT_CUSTOMIZATION
+    );
+    assert_ne!(BUNDLE_PRUNABLE_CUSTOMIZATION, SECTION_ROOT_CUSTOMIZATION);
 }
 
 // ---------------------------------------------------- prunable hash, root
@@ -633,6 +636,25 @@ fn the_prunable_hash_matches_its_vectors() {
         body(3).prunable_hash(),
         bundle_prunable_hash(body(3).as_bytes())
     );
+}
+
+/// Each reference finds the carried bytes that hash to its prunable hash,
+/// whatever order they came in and however often; a reference whose body
+/// was not carried finds none. Red edit: index only the first body carried.
+#[test]
+fn a_reference_finds_its_carried_body_by_its_hash() {
+    let (first, second) = vector_refs();
+    let carried = [
+        body(2).as_bytes().to_vec(),
+        body(3).as_bytes().to_vec(),
+        body(3).as_bytes().to_vec(),
+        body(0).as_bytes().to_vec(),
+    ];
+    let index = CarriedBodies::index(carried.iter().map(Vec::as_slice));
+    assert_eq!(index.named_by(&first), Some(body(3).as_bytes()));
+    assert_eq!(index.named_by(&second), Some(body(0).as_bytes()));
+    let not_carried = BundleRef::new(kept_at(H, 12, &[0x01, 0x0A]), body(1).prunable_hash());
+    assert_eq!(index.named_by(&not_carried), None);
 }
 
 /// The two references of the root's vectors: a bundle of twelve draws with
@@ -789,7 +811,7 @@ fn a_section_the_root_cannot_count_has_no_root() {
     assert_eq!(section_reference_count(1), Ok(1));
     let (first, second) = vector_refs();
     assert_eq!(
-        bundle_root(&[first, second]).map(|root| hex(&root)),
+        section_root(&[first, second]).map(|root| hex(&root)),
         Ok("0c7f9da64f6d3cf7edee74761c6e92cd9099bcdd51e8d9333eb691d1de1af8e5".to_string())
     );
     // The boundary itself needs a `usize` wider than 32 bits to state.
@@ -1028,4 +1050,46 @@ fn with_c(c: u64) -> ArchivalParams {
         bundle_section_budget_multiple: c,
         ..ArchivalParams::SHIPPED
     }
+}
+
+// ------------------------------------------------------- a fetched body
+
+/// A body is accepted for its reference only at the length the
+/// reference's bitmaps fix and only on hash equality (§7.5). The length is
+/// read first: one byte short or long is `Length` whatever the bytes hash
+/// to. Red edits: accept `>=` the length (the long case is then accepted
+/// or reaches the hash), or skip the hash (the flipped byte is accepted).
+#[test]
+fn a_body_is_accepted_only_at_its_length_and_its_hash() {
+    let three = body(3);
+    let reference = BundleRef::new(kept_at(H, 3, &[0x07]), three.prunable_hash());
+    assert_eq!(reference.accept_body(three.as_bytes()), Ok(three.clone()));
+
+    let mut long = three.as_bytes().to_vec();
+    long.push(0);
+    assert_eq!(
+        reference.accept_body(&long),
+        Err(BodyRefused::Length {
+            expected: reference.body_len(),
+            found: long.len(),
+        })
+    );
+    let short = &three.as_bytes()[..three.as_bytes().len() - 1];
+    assert_eq!(
+        reference.accept_body(short),
+        Err(BodyRefused::Length {
+            expected: reference.body_len(),
+            found: short.len(),
+        })
+    );
+    // A whole record more is a body of a valid shape, of the wrong length
+    // for this reference.
+    assert!(matches!(
+        reference.accept_body(body(4).as_bytes()),
+        Err(BodyRefused::Length { .. })
+    ));
+
+    let mut flipped = three.as_bytes().to_vec();
+    flipped[BUNDLE_WITNESS_LEN] ^= 1;
+    assert_eq!(reference.accept_body(&flipped), Err(BodyRefused::Hash));
 }

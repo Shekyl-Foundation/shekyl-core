@@ -62,7 +62,7 @@ mod producer;
 pub mod read;
 mod ring;
 
-pub use outcome::{Answered, ReadKey, ReadOutcome};
+pub use outcome::{ReadKey, ReadOutcome};
 pub use producer::{
     DrawTarget, DueRead, Filing, Learn, Lost, Observed, Producer, Recorded, Targets,
     TipPublication, Window,

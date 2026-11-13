@@ -482,7 +482,7 @@ impl SyncPeer for CompactAsker {
 
 /// A peer asking for an announced block's missing transactions (2009) is
 /// answered by the owner from the store (CS-5 §6): one 2008 carrying the
-/// block, its witness and the transactions asked for. A duplicate index,
+/// block, its references and the transactions asked for. A duplicate index,
 /// an index past the block's list and a block the node does not hold each
 /// close the asking session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -31,21 +31,6 @@ pub struct ReadKey {
     pub attempt: u8,
 }
 
-/// A completed exchange that is not a pass, by what `P` answered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Answered {
-    /// The reply closed with a signature of another scheme than the
-    /// receipt key's. Until the cutover (4b) the live serving host signs
-    /// with its identity key, so this is every live read: the producer
-    /// logs "no receipt scheme on the serving side yet" once for the
-    /// block and files it with no passes.
-    ServingScheme,
-    /// Anything else `SF-D6` calls a completed exchange: a 404, a 503,
-    /// the refusal trailer, a malformed or overlong reply, a bad
-    /// countersignature, refused content, or a second 400.
-    Refused,
-}
-
 /// How a read ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReadOutcome {
@@ -54,6 +39,9 @@ pub enum ReadOutcome {
     /// No exchange completed. The draw is read again at its plan's next
     /// height, if the plan has one.
     Stall,
-    /// `P` answered and it was not a pass. The draw is done.
-    Answered(Answered),
+    /// `P` answered and it was not a pass: anything `SF-D6` calls a
+    /// completed exchange — a 404, a 503, the refusal trailer, a malformed
+    /// or overlong reply (a reply in another scheme among them), a bad
+    /// receipt, refused content, or a second 400. The draw is done.
+    Refused,
 }

@@ -633,7 +633,7 @@ pub const MULTISIG_ADDRESS_FINGERPRINT: NameDomain<1> =
 /// (0x06) differ by one padding byte and fail *silently* — a different fingerprint,
 /// no diagnostic. cSHAKE256 has one meaning, and its customization string makes the
 /// domain separation structural instead of definitional. This matches the house
-/// pattern for every new domain-separated artifact (`shekyl/archival-serve-credit-response-v1`,
+/// pattern for every new domain-separated artifact (`shekyl/archival-bundle-root-v1`,
 /// `shekyl/receive-label-hash-v1`); `shekyl_crypto_hash::keccak256` keeps exactly
 /// the consumers that require parity.
 pub fn address_fingerprint(payload: &MultisigAddressPayload) -> [u8; 32] {

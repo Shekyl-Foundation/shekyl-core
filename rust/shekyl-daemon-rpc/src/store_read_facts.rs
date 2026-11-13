@@ -410,7 +410,27 @@ impl ChainReadFacts for StoreFacts {
                     body: chain_body(&snap, hash, &record, || fold.shard(id).map_err(store_fault))?,
                 });
             }
-            blocks.push(BlockRead { block, txs });
+            // The section and the bodies this store holds for it, as a
+            // 2014 server sends them: a block within the undo retention
+            // holds its own (`bundle_holders.rs`).
+            let references = match snap.bundle_references_at(height).map_err(store_fault)? {
+                AtHeight::Recorded(Some(section)) => Some(section),
+                AtHeight::Recorded(None) | AtHeight::AboveTip => None,
+            };
+            let bundle_bodies = snap
+                .held_section_bodies(references.as_ref())
+                .map_err(store_fault)?
+                .iter()
+                .map(|body| body.as_bytes().to_vec())
+                .collect();
+            blocks.push(BlockRead {
+                block,
+                txs,
+                bundle_references: references
+                    .map(shekyl_types::archival::BundleReferences::into_inner)
+                    .unwrap_or_default(),
+                bundle_bodies,
+            });
         }
         Ok(BlocksAt {
             blocks,
@@ -596,7 +616,8 @@ impl ChainReadFacts for StoreFacts {
         let bond = match view.bond_record(persona).map_err(store_fault)? {
             None => None,
             Some(record) => {
-                let maxima = release_last_served(&view, persona, &record).map_err(store_fault)?;
+                let maxima =
+                    release_last_served(&view, &rule_set, persona, &record).map_err(store_fault)?;
                 Some(ClaimantBond {
                     join_settlement_epoch: record.join_settlement_epoch,
                     holdings_kind: record.holdings.kind(),

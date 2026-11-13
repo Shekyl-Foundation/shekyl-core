@@ -114,7 +114,7 @@ pub(crate) fn judge_proofs(
         TxClass::Spend { .. } => (I15::ROW, true),
         TxClass::Emission { .. } => (J26::ROW, true),
         TxClass::BondPost { .. } => (J27::ROW, true),
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => (I15::ROW, false),
+        TxClass::Coinbase => (I15::ROW, false),
     };
     for vacuous in PROOF_ROWS {
         if !verifies || vacuous != row {

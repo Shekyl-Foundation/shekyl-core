@@ -62,8 +62,7 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_fold::{self, BlockArchivalFold};
 use super::archival_reads::{
-    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    ServedShard, SettlementRow, SupportSeats,
+    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -975,37 +974,6 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A3.** Latest epoch `persona` served `shard`, one reverse seek.
-    /// `None` is never-served. SI-15 when rows exist and the persona has no
-    /// bond record.
-    pub fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(&self.txn, persona, shard)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A4.** Every shard `persona` served, each with its latest epoch.
-    /// One reverse seek per served shard. Empty when the persona never served.
-    pub fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(&self.txn, persona)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A5.** Pass bits for `(persona, shard, epoch)`. [`PassCount::ZERO`]
-    /// when none.
-    pub fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(&self.txn, persona, shard, epoch)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
     /// **A6.** Co-holder count at `(shard, epoch)`. `None` is an epoch that
     /// never closed; a written zero is a closed epoch with no co-holders.
     pub fn r_market(
@@ -1101,8 +1069,8 @@ impl ReadSnapshot<'_> {
     /// **SAL-13.** The recorded block at `height` as the candidate it was:
     /// the block, every listed transaction's whole wire bytes (`pruned ‖
     /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
-    /// order, and its attestation witness (A10; CEN-K5b: the witness is
-    /// captured off its height row before the pop). What a switch reads for
+    /// order, and its bundle references (A10; CEN-K5b: they are captured
+    /// off their height row before the pop). What a switch reads for
     /// each block it is about to demote, on the snapshot taken before the
     /// pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the cheap tier judges it, its
     /// row is written from that verdict, and its listed bodies go back to
@@ -1114,7 +1082,7 @@ impl ReadSnapshot<'_> {
     /// must hold is discarded (the retention prune keeps every body above
     /// the undo floor, so a body missing there is a store that disagrees
     /// with its own floor), the reassembled bytes do not parse as a
-    /// transaction, or the witness row is not a witness; whatever
+    /// transaction, or the references row is not a section; whatever
     /// [`block`](Self::block) and the per-transaction reads return; engine
     /// errors.
     pub fn candidate_at(
@@ -1162,29 +1130,29 @@ impl ReadSnapshot<'_> {
                 .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
             transactions.push(tx);
         }
-        let witness = match self.attestation_witness_at(height)? {
-            AtHeight::Recorded(bytes) => bytes,
+        let references = match self.bundle_references_at(height)? {
+            AtHeight::Recorded(references) => references,
             AtHeight::AboveTip => unreachable!("the block at this height was just read"),
         };
-        let witness = witness
-            .map(shekyl_types::archival::AttestationWitness::new)
-            .transpose()
-            .map_err(|_| corrupt("archival_attestation_witness", "the row is not a witness"))?;
+        // The block holds its section's bodies while it is within the undo
+        // retention, which a demotion is (`bundle_holders.rs`).
+        let bodies = self.section_bodies(references.as_ref())?;
         Ok(AtHeight::Recorded(
             shekyl_chain_rules::Candidate::new(body.block, transactions)
-                .with_attestation_witness(witness),
+                .with_bundle_references(references)
+                .with_bundle_bodies(bodies),
         ))
     }
 
-    /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
-    /// past the tip; `Recorded(None)` when the recorded block stored no row;
-    /// `Recorded(Some(bytes))` for a non-empty row within the witness cap.
-    /// An empty or over-cap row is SI-7.
-    pub fn attestation_witness_at(
+    /// **A10.** A recorded block's bundle references, undecoded.
+    /// [`AtHeight::AboveTip`] past the tip; `Recorded(None)` when the
+    /// recorded block admitted no bundle; `Recorded(Some(references))` for
+    /// a row that is a section. Any other row is SI-7.
+    pub fn bundle_references_at(
         &self,
         height: BlockHeight,
-    ) -> Result<AtHeight<Option<Vec<u8>>>, StoreError> {
-        archival_reads::attestation_witness_at(&self.txn, height)
+    ) -> Result<AtHeight<Option<shekyl_types::archival::BundleReferences>>, StoreError> {
+        archival_reads::bundle_references_at(&self.txn, height)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1296,16 +1264,17 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **A23.** The complete trees the block at `height` seated, in persona
-    /// order, or `None` for a block no row was written for.
-    /// [`SupportSeats::EMPTY`] is a block that seated nobody. A height below `floor` is SI-34, the
-    /// same window as [`Self::block_draws`].
-    pub fn support_block_seats(
+    /// **A23.** The block at `height`'s support row: the complete trees it
+    /// seated, in persona order, and the carry it left, or `None` for a
+    /// block no row was written for. [`SupportRow::EMPTY`] is a block that
+    /// seated nobody and left nothing owed. A height below `floor` is
+    /// SI-34, the same window as [`Self::block_draws`].
+    pub fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(&self.txn, height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1318,18 +1287,6 @@ impl ReadSnapshot<'_> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(&self.txn, epoch, floor)
-            .map_err(chain_reads::ReadFault::into_plain)
-    }
-
-    /// **A22.** The complete trees `epoch`'s slash pass excluded from its
-    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
-    /// settled. An empty set is a value.
-    pub fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, StoreError> {
-        archival_reads::complete_trees(&self.txn, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

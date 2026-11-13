@@ -18,7 +18,7 @@
     "pow": "7777777777777777777777777777777777777777777777777777777777777777",
     "coinbase": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "curve_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "attestation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    "section_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   },
   {
     "missing": null

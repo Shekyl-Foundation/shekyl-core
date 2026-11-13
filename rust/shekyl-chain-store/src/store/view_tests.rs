@@ -14,7 +14,7 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
     validate, AtHeight, Candidate, ChainView, Fault, HeaderView, RuleSet, Trust,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use super::connect_fixtures::{formed, priced};
@@ -23,8 +23,8 @@ use super::*;
 use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, LeafCount, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, BLOCKS, BLOCK_INFO, CURVE_TREE_LEAF_COUNTS,
-    CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_SUPPORT_BLOCK, BLOCKS, BLOCK_INFO,
+    CURVE_TREE_LEAF_COUNTS, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG,
 };
 
 /// The store's fault is the only outer arm these tests expect; the
@@ -57,7 +57,7 @@ fn block(height: u64, timestamp: u64) -> Block {
             // (not through `validate`), so this header is not judged under
             // CEN-B5; the value is a placeholder, as it is in LMDB fixtures.
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: Vec::new(),
@@ -110,8 +110,9 @@ fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreEr
         .insert(key, LeafCount::from_raw(0).encoded().as_encoded())
 }
 
-/// The zero draw row a connect writes, and epoch 0's empty digest. The
-/// count of the next block reads both.
+/// The zero draw row and the empty support row a connect writes, and
+/// epoch 0's empty digest. The count of the next block reads all three:
+/// the support step reads the carry the row before it left.
 fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<(), StoreError> {
     let row = shekyl_types::archival::BlockDraws {
         count: 0,
@@ -122,7 +123,15 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<()
     };
     batch
         .open_insert_table(ARCHIVAL_BLOCK_DRAWS, PROBE_ROW)?
-        .insert(height.to_raw(), row.encoded().as_encoded())
+        .insert(height.to_raw(), row.encoded().as_encoded())?;
+    batch
+        .open_insert_table(ARCHIVAL_SUPPORT_BLOCK, PROBE_ROW)?
+        .insert(
+            height.to_raw(),
+            shekyl_types::archival::SupportRow::EMPTY
+                .encoded()
+                .as_encoded(),
+        )
 }
 
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
@@ -421,13 +430,13 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // 0 left. The title's claim is now the verdict, not just the type.
         // Since wave B the coinbase must also pay what the block owes
         // (CEN-F18), priced against the same view; since slice 8 row 10 a
-        // candidate with no witness is judged against the empty set's root
-        // (CEN-B4), so the placeholder root is replaced for this one too.
+        // candidate with no references is judged against the empty section's
+        // root (CEN-J29), so the placeholder root is replaced for this one too.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
-        b1.header.attestation_root =
-            AttestationRoot::from_bytes(shekyl_archival_retention::empty_attestation_root());
+        b1.header.section_root =
+            SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root());
         let b1 = priced(&view, Candidate::new(b1, Vec::new()))?;
         let valid = validate(
             formed(&view, b1)?,

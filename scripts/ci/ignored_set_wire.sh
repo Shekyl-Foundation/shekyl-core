@@ -17,7 +17,7 @@
 # release. An ignored test no scheduled lane runs is a deleted test with a
 # comment on it.
 #
-# Helpers, never run here: the five fixture and vector writers and the
+# Helpers, never run here: the four fixture and vector writers and the
 # regtest-address printer. They WRITE committed files or print a value for
 # a regeneration; a lane that regenerated a fixture and then compared
 # against it would pass every night.
@@ -49,8 +49,7 @@ helpers='emit_rpc_types_miner_tx_vectors
 emit_regtest_mining_address
 emit_pqc_signing_preimage_kat_inputs
 regenerate_prunable_digest_parity_fixture
-regenerate_pruned_tx_hash_parity_fixture
-regenerate_serve_credit_tx_parity_fixture'
+regenerate_pruned_tx_hash_parity_fixture'
 
 want=$(printf '%s\n' "$run_tests" | awk 'NF { n++ } END { print n + 0 }')
 if [ "$want" -eq 0 ]; then

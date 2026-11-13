@@ -19,7 +19,7 @@ pub use shekyl_types::ARCHIVAL_REORG_DEPTH_BLOCKS;
 // compute. Neither is near `u64::MAX`; the assert keeps a re-pin honest.
 const _: () = assert!(
     ARCHIVAL_REORG_DEPTH_BLOCKS
-        .checked_add(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS)
+        .checked_add(ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS)
         .is_some(),
     "archival_reorg_depth_blocks + archival_attestation_anchor_lag_blocks fits u64"
 );

@@ -66,21 +66,20 @@ use crate::header_facts::{prove_header, HeaderProof};
 use crate::header_ladder;
 use crate::header_path::HeaderJudged;
 use crate::rule_set::RuleSet;
-use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
-use crate::rules::body::{G1, G10, G2, G7, G9};
+use crate::rules::body::{G1, G10, G2, G9};
 use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2, B5};
 use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
 use crate::rules::proofs::judge_proofs;
 use crate::rules::reward;
-use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
+use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H21, H22, H3, H4, H7, H9};
 use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
-use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
+use crate::rules::tx_bond::judge_bond_post;
 use crate::rules::tx_emission::{J19, J20, J22, J24};
 use crate::rules::tx_emission_against::judge_emission_claim;
 use crate::rules::tx_extra::{I19, I20};
-use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2, J28};
+use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J28};
 use crate::rules::{self, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
@@ -568,13 +567,15 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
 
     // View-bound block-level predicates (4.A–4.G). The header rules are the
     // ladder's three segments, written once and shared with the alt tier.
-    // Between them, the C++'s insertion points: B5 after the parent link;
-    // B4 (the attestation set) after the clock and before the coinbase
-    // rows, where `verify_block_attestation` runs; G1 before the slot loop,
-    // the only place it has a witness on a spend (slice 7 Q8). A coinbase
-    // extra that does not parse no longer reaches B4 through both stages:
-    // the miner slot's `tx_form` (CEN-I19) refuses it in `form`. The C++
-    // names B4 there; one refusal either way, the row differs.
+    // Between them: B5 after the parent link; the bundle section (CEN-J29
+    // through J37) after the clock and before the coinbase rows, the slot
+    // the deleted CEN-B4 held; G1 before the slot loop, the only place it
+    // has a witness on a spend (slice 7 Q8).
+    //
+    // The section files the epochs its window names into `memo` first,
+    // then admits through `&`, so the count below reads a memo admission
+    // has already filled (`archival::memo`'s contract). `memo` is reborrowed
+    // here and handed whole to the count after.
     if let Err(refused) = header_ladder::parent_link(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
@@ -582,7 +583,20 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     if let Err(refused) = header_ladder::clock(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
-    judge_block!(cx, view, coverage; B4);
+    let mut memo = memo;
+    let admitted = match rules::bundle_admission::admit(
+        cx.candidate(),
+        connecting,
+        view,
+        rule_set,
+        &network,
+        formed.attempt(),
+        memo.as_deref_mut(),
+        &mut coverage,
+    )? {
+        Ok(admitted) => admitted,
+        Err(refused) => return Ok(Err(refused)),
+    };
     if let Err(refused) = header_ladder::anchor(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
@@ -631,10 +645,10 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     // and runs once every slot has passed: each slot's view is the chain
     // before the block, so this is the only place the repeat is visible to
     // the validator. Last, as the C++'s `add_spent_key` refusal is. Beside
-    // it, the three archival cross-transaction passes (G7, G9, G10; slice
-    // 7): the same shape — a key twice among the block's inputs — over the
-    // serve-credit, emission and bond-post keys.
-    judge_block!(cx, view, coverage; L1, G7, G9, G10);
+    // it, the two archival cross-transaction passes (G9, G10; slice 7): the
+    // same shape — a key twice among the block's inputs — over the emission
+    // and bond-post keys.
+    judge_block!(cx, view, coverage; L1, G9, G10);
 
     // CEN-G6b: the block's weight and the long-term weight `connect`
     // records for it, under the medians derived above. After the loop so
@@ -708,6 +722,7 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
             weights,
             emission: paid,
             archival,
+            admitted,
             pow,
         },
     );
@@ -809,10 +824,10 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    every slot's `tx_form`, and I15 runs in `form` (`judge_proofs`),
     //    so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
-    judge_tx!(cx, coverage; H20, H21, H22);
+    judge_tx!(cx, coverage; H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
     judge_tx!(
-        cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J2, J11, J12, J28, J19, J20, J22, J24
+        cx, coverage; I1, I4, I5, I6, I8, I9, I14, I16, J11, J12, J28, J19, J20, J22, J24
     );
     Ok(coverage)
 }
@@ -878,14 +893,6 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     // the funding half at `:3654`). I13 and I15 join the spend's sequence
     // in `judge_reference`, not here.
     match rules::run_tx_against::<I7, _, _>(&cx, view, &mut coverage).map_err(ViewRead::View)? {
-        Ok(()) => {}
-        Err(refused) => return Ok(Err(refused)),
-    }
-    // The serve-credit arm of `check_tx_inputs`: the bond record read off
-    // the view before the block (J4), its join epoch against the credited
-    // one (J5), `good_through` (J6) — one read per vin, in that order. J7's
-    // window joins the sequence in `judge_serve_credit_bond` (Slice C).
-    match judge_serve_credit_bond(&cx, view, &mut coverage).map_err(ViewRead::View)? {
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }

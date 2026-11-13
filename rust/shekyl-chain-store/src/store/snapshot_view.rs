@@ -35,8 +35,7 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportSeats,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -98,7 +97,23 @@ impl<'id> HeaderView<'id> for SnapshotView<'_> {
     }
 }
 
-impl<'id> ChainView<'id> for SnapshotView<'_> {
+impl<'a, 'id> ChainView<'id> for SnapshotView<'a> {
+    /// The store's bundle view over this view and the memo the connect
+    /// loop filed (`super::bundle_view`). A memo miss is SI-35.
+    type Bundles<'m>
+        = super::bundle_view::StoreBundleView<'m, SnapshotView<'a>>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m shekyl_chain_rules::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_chain_rules::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        super::bundle_view::StoreBundleView::new(self, memo, h_incl, schedule)
+    }
+
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, StoreError> {
         chain_reads::has_key_image(self.snapshot.txn(), key_image).map_err(ReadFault::into_plain)
     }
@@ -214,29 +229,6 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         floor: SlashLogFloor,
     ) -> Result<Vec<SlashLogEntry>, StoreError> {
         archival_reads::slash_log_after(self.snapshot.txn(), persona, height, floor)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(self.snapshot.txn(), persona, shard)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(self.snapshot.txn(), persona).map_err(ReadFault::into_plain)
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(self.snapshot.txn(), persona, shard, epoch)
             .map_err(ReadFault::into_plain)
     }
 
@@ -356,12 +348,12 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
             .map_err(ReadFault::into_plain)
     }
 
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(self.snapshot.txn(), height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -371,15 +363,6 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.snapshot.txn(), epoch, floor)
-            .map_err(ReadFault::into_plain)
-    }
-
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, StoreError> {
-        archival_reads::complete_trees(self.snapshot.txn(), epoch, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -442,12 +425,12 @@ impl super::bundle_view::BundleRows for SnapshotView<'_> {
         <Self as ChainView<'static>>::issued_draws(self, epoch, floor)
     }
 
-    fn support_seats_row(
+    fn support_row_at(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        <Self as ChainView<'static>>::support_block_seats(self, height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        <Self as ChainView<'static>>::support_row(self, height, floor)
     }
 
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {

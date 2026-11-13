@@ -24,8 +24,6 @@
 # section	literal	note
 input-raw	shekyl/ek-bind-v1	input:SaltForKey: the site hashes the address's ML-KEM encapsulation key, a public key decoded from address bytes, not a key derived under salt_for; the binding needs a ruling (2026-11-07)
 input-raw	shekyl/archival-p-id-v1	input:SaltForKey: the site hashes the persona's public hybrid key, which every verifier reads off the wire; the key is derived under salt_for, its public half is not; the binding needs a ruling (2026-11-07)
-input-raw	shekyl/archival-attestation-scheme-v3	input:BlockHash: the site takes raw bytes, not the BlockHash newtype; owner SO-D12 4b, which moves the pass countersignature to the receipt key at the switch
-input-raw	shekyl/archival-receipt-scheme-v1	input:BlockHash: the site takes raw bytes, not the BlockHash newtype; owner SO-D12 4b, which moves the pass countersignature to the receipt key at the switch
 input-raw	shekyl/multisig-blob-key-v1	input:SaltForKey: the site (multisig_blob.rs blob_key) takes the group transport secret, a key derived under salt_for (R-4), as raw bytes; no SaltForKey type exists yet. Owner SO-D12, which mints the type
 input-raw	shekyl-subaddr-v1\0	input:SaltForKey: the input is the reduced view scalar, not an HKDF output, and the function's only callers are tests and KATs; its type needs a ruling (2026-11-07)
 input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: a wallet's and a persona's d_z derive under salt_for, but the harness miner's derives under its own fixture salt and its keys are pinned in every fixture chain; typing waits on a ruling for the harness (2026-11-07)
@@ -34,7 +32,5 @@ unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE 
 pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record
 pending	shekyl/archival-bundle-prunable-v1	ruled derived:, but no census rule states the body-to-reference match (it is the verifier's non-verdict BodyNotReferenced)
 pending	shekyl/archival-pass-delivery-digest-v1	ruled derived:, but CEN-B4 says the digest is verified through the signature, not recomputed
-pending	shekyl/archival-serve-credit-response-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
-pending	shekyl/archival-serve-credit-scheme-v1	ruled deleted with its code (2026-11-05); held for the CEN-J10 question
 pending	shekyl/rpc-static-fingerprint-v1	no binding ruled: a key-bundle fingerprint the daemon matches against its enrolment list
 pending	shekyl/noise-record-header-v1	no binding ruled: a record-layer key from a handshake whose prologue carries the id

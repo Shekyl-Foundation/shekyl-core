@@ -37,7 +37,7 @@ fn fetch_block_headers_range(
         .zip(from..)
         .map(|(slot, height)| match slot {
             Slot::Item(header) => Ok(header),
-            _ => Err(format!("the daemon holds no header at height {height}")),
+            _ => Err(format!("the daemon holds no header at block {height}")),
         })
         .collect()
 }
@@ -69,7 +69,7 @@ fn render_blockchain_info_entry(h: &BlockHeader) -> String {
         .map_or_else(|| "none".to_owned(), |w| w.0.to_string());
     [
         format!(
-            "height: {}, timestamp: {} ({}), weight: {} (long term {longterm}), transactions: {}",
+            "block number: {}, timestamp: {} ({}), weight: {} (long term {longterm}), transactions: {}",
             h.height.0,
             h.time.0,
             human_readable_timestamp(h.time.0),
@@ -134,7 +134,7 @@ pub(super) fn print_blockchain_dynamic_stats(
     let target = shekyl_economics::economic_params().daa_target_seconds;
     let mut out = Vec::new();
     out.push(format!(
-        "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
+        "Block count: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
         height,
         super::info::disclosed(status.difficulty, "the difficulty", "chain")?.get(),
         super::info::disclosed(
@@ -177,7 +177,7 @@ pub(super) fn print_blockchain_dynamic_stats(
             headers.len(),
             expected.len(),
             headers.first().map_or(String::new(), |h| format!(
-                ", starting at height {}",
+                ", starting at block {}",
                 h.height.0
             ))
         ));
