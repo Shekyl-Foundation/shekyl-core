@@ -6926,4 +6926,43 @@ Rick (§13, `CF-Q1`…`CF-Q4`): whether Chain L's bytes are committed or
 pinned as an asset, given that chain bytes do not compress or delta;
 reading two corpus layouts during migration; the forge's runnable as an
 example target rather than a binary; and where the no-injectable-RNG line
-is held. Those are recorded there, not here, until Rick rules on them.
+is held. Rick ruled all four the same day (the next entry).
+
+---
+
+## 2026-11-12 — Chain forge Round 0 rulings: storage, layouts, the RNG line, the split of CF-1
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R6`…`CF-R10`).
+
+- **Storage** (`CF-R6`). Chain bytes up to 5 MB are committed. Above that,
+  the manifest, the block-hash list and the trace are committed, and the
+  bytes are a release asset pinned by SHA-256. The asset is a cache:
+  deterministic regeneration at the pinned commit is the source of truth.
+  The five old corpora move to this scheme when they are next regenerated.
+- **Corpus layouts** (`CF-R7`). The reader takes both the old and the new
+  layout until the last old corpus is gone, then the old reader is
+  deleted. No live-daemon re-capture.
+- **The forge's runnable** (`CF-R8`) is a cargo example, and CI builds the
+  examples.
+- **The RNG line** (`CF-R9`) sits at Shekyl's signing and proving entry
+  points. `prove_with_rng` becomes crate-private behind a test-only
+  `seeded-rng` feature that `shekyl-verify-cost` enables, and a gate
+  refuses seedable-RNG construction (`from_seed`, `seed_from_u64` and the
+  like) in production code outside test-only features.
+- **CF-1 splits in three** (`CF-R10`): `CF-1a` chain identity (regtest's
+  genesis, network id and name), `CF-1b` the RNG line (with the
+  forwarded-feature gate fix and `shekyl-crypto-pq` under the gate through
+  F-7), `CF-1c` the forge skeleton and the determinism check in CI.
+  Chain B is accepted, conditional on `CF-1c`: anything the bundle
+  producer depends on besides chain state is either by design, and B's
+  regeneration check then compares state digests, or a defect filed with
+  SO-D12.
+
+**Why.** The chains do not compress and git cannot delta one regeneration
+against the last, so committing a 20 MB chain costs its full size in
+history at every regeneration, and the five small corpora had already
+left 96 MB that way. Determinism makes the bytes reproducible from the
+commit, so a pinned asset loses nothing the tree needs. A cargo example
+keeps every edge into the test-only driver and seeds a dev edge, which
+the test-only feature gate already enforces. Splitting CF-1 keeps each
+change reviewable on one validation surface.
