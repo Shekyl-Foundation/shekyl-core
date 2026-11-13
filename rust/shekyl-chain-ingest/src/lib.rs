@@ -192,6 +192,8 @@ mod pool_submit_tests;
 /// The E2 corpus re-baselined from Rust: a store's chain written as the
 /// trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
 #[cfg(feature = "pipeline")]
+pub mod pow;
+#[cfg(feature = "pipeline")]
 pub mod rebaseline;
 /// Seats in the arrival window.
 #[cfg(feature = "pipeline")]
@@ -284,7 +286,7 @@ pub use connector::{
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
-pub use metrics::{Concurrency, Metrics, MetricsArtifact};
+pub use metrics::{Concurrency, Derives, Metrics, MetricsArtifact};
 pub use mutation::{Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
 pub use pipeline::{
@@ -297,5 +299,7 @@ pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-pub use substrate::{ProductionSubstrate, SubstrateFault};
+#[cfg(feature = "pipeline")]
+pub use pow::ProductionPow;
+pub use substrate::SubstrateFault;
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

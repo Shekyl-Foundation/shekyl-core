@@ -188,6 +188,7 @@ where
             store: Arc::clone(&opened),
             rules,
             bundle_queued: None,
+            ranked: None,
         });
         Self {
             connector,
@@ -823,6 +824,7 @@ where
             store: Arc::clone(&opened),
             rules: self.rules,
             bundle_queued: None,
+            ranked: None,
         });
         self.task = Some(task);
         self.connector = connector;

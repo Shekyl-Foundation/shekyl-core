@@ -3,77 +3,50 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The production [`Substrate`]: RandomX verification and the system clock
-//! (`DRS_E2_REPLAY_DRIVER.md` RD-Q3).
+//! What a hashing job's substrate can fail with, and the substrate a
+//! switch re-judges through.
 //!
-//! This is the one implementation every Shekyl validator runs — the replay
-//! driver, the live daemon, the wallet's own checks — and it is a thin
-//! adapter over `shekyl-pow-randomx`. [`CacheStore`] holds the two prepared
-//! caches, canonical and transient. [`longhash`](Substrate::longhash) is
-//! [`compute_hash`] on a cache [`CacheStore::lookup`] already holds.
-//! [`pin_seed`](shekyl_chain_rules::Substrate::pin_seed) and
-//! [`prepare_seed`](shekyl_chain_rules::Substrate::prepare_seed) are the
-//! only fills. Never the mining JIT; never `VmStatePool`, which is bench
-//! scaffolding (RD-F14). Parallel formation is N workers each holding a
-//! clone of this substrate — the cache store is shared behind its own
-//! `Arc`s, the scratchpad is per call.
+//! The production substrate is not a type a caller holds: it exists inside
+//! one hashing job, over the cache that job borrowed
+//! ([`ProductionPow`](crate::pow::ProductionPow), `RANDOMX_CACHE_ACTOR.md`
+//! §5.3). Its longhash hashes under the job's seed and no other.
 //!
 //! # Faults
 //!
-//! `compute_hash` cannot fail once the cache exists. A miss does not derive:
-//! building a 256 MiB cache is [`Substrate::pin_seed`](shekyl_chain_rules::Substrate::pin_seed)'s
-//! work, under the caller's hasher permit, and [`longhash`](Substrate::longhash)
-//! returns [`SubstrateFault::CacheAbsent`] instead of filling one a peer
-//! chose. The clock — a system time before the Unix epoch — is the other
-//! fault, never a timestamp of zero.
+//! `compute_hash` cannot fail once the job holds its cache, and a job
+//! always gets its cache (HA-R1). What is left:
 //!
-//! # Pinning the epoch (RD-F20)
-//!
-//! A hash does not fill a cache. [`longhash`](Substrate::longhash) looks
-//! up; a miss is [`SubstrateFault::CacheAbsent`]. The derive is
-//! [`pin_seed`](shekyl_chain_rules::Substrate::pin_seed), which makes that
-//! seed canonical through [`CacheStore::pin_canonical`], or
-//! [`prepare_seed`](shekyl_chain_rules::Substrate::prepare_seed), which
-//! builds a branch seed into the transient slot and leaves the canonical
-//! slot where it is. The pipeline pins each seed the window names before
-//! the blocks under it are formed, so the first block of an epoch never
-//! waits on a build.
-//!
-//! The store holds two prepared caches. A driver that hashed without
-//! pinning refilled 256 MiB at every seed switch: the first real run
-//! re-derived at window 16 on a 301-block chain with two seeds. Pinning
-//! is what ended that.
-//!
-//! # Measurement
-//!
-//! This is the first workload that runs RandomX verification at volume over
-//! a real chain, so the dataset-mode question (`RANDOMX_V2_RUST.md` §9,
-//! measure-first) is answered by numbers this pipeline emits (RD-F11). The
-//! metrics sink owns the timing; this adapter owns nothing but the calls.
-//! The sink is **shared with the pipeline** — [`ProductionSubstrate::new`]
-//! takes the `Arc` the pipeline snapshots — because the pipeline times each
-//! block's `form` into the same counters the substrate times hashes and
-//! derives into; a substrate recording into a sink nobody reads would make
-//! the artifact report zero hashes for a run that hashed every block.
-
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+//! - the clock: a system time before the Unix epoch, never a timestamp of
+//!   zero;
+//! - a longhash asked for a seed other than the job's
+//!   ([`SubstrateFault::SeedNotLent`]): a defect in the caller, which
+//!   named one seed to the job and another to the rule. It is a fault and
+//!   never a verdict: a valid block refused for it would split the chain;
+//! - a stop that reached a hash ([`SubstrateFault::Stopped`]): not a fault
+//!   at all, and never logged as one.
 
 use shekyl_chain_rules::Substrate;
-use shekyl_pow_randomx::{compute_hash, CacheOutcome, CacheStore, PreparedCache, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
 
-use crate::metrics::Metrics;
-
-/// What the production substrate could not answer.
+/// What a hashing job's substrate could not answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubstrateFault {
     /// The system clock reads before the Unix epoch. A timestamp cannot be
     /// made of that; the FTL rule (CEN-C1) is not asked.
     ClockBeforeEpoch,
-    /// `longhash` was asked for a seed that is not in a cache slot. The
-    /// caller pins seeds; a miss here does not fill a 256 MiB cache.
-    CacheAbsent,
+    /// `longhash` was asked for `asked` where no cache for it was lent:
+    /// inside a job that borrowed `lent`'s, or where no job was asked for
+    /// because every block's hash was on record. A job hashes under its
+    /// own seed only, and nothing is built here.
+    SeedNotLent {
+        /// The seed the rule named.
+        asked: BlockHash,
+        /// The seed the job borrowed a cache for; `None` outside a job.
+        lent: Option<BlockHash>,
+    },
+    /// The caller's stop flag ended a hash's permit wait. A stop, not a
+    /// fault: nothing was judged.
+    Stopped,
 }
 
 impl core::fmt::Display for SubstrateFault {
@@ -82,131 +55,25 @@ impl core::fmt::Display for SubstrateFault {
             Self::ClockBeforeEpoch => f.write_str(
                 "the system clock reads before the Unix epoch; no local time for the FTL rule",
             ),
-            Self::CacheAbsent => f.write_str(
-                "the RandomX cache for this seed is not held; verification does not derive one",
+            Self::SeedNotLent {
+                asked,
+                lent: Some(lent),
+            } => write!(
+                f,
+                "a hash was asked under seed {asked:?} inside a job that borrowed the cache \
+                 for seed {lent:?}; a job hashes under its own seed only"
             ),
+            Self::SeedNotLent { asked, lent: None } => write!(
+                f,
+                "a hash was asked under seed {asked:?} where no cache was lent: every block \
+                 there was to be answered from its recorded hash"
+            ),
+            Self::Stopped => f.write_str("the node is stopping; the hash did not run"),
         }
     }
 }
 
 impl core::error::Error for SubstrateFault {}
-
-/// RandomX through the verifier's cache path, and the system clock.
-#[derive(Clone)]
-pub struct ProductionSubstrate {
-    caches: Arc<CacheStore>,
-    /// The RandomX measurement sink (RD-F11); shared with the pipeline,
-    /// which times each block's `form` into the same counters.
-    metrics: Arc<Metrics>,
-}
-
-impl ProductionSubstrate {
-    /// A substrate over `caches` (the replay driver's own store, or the
-    /// daemon's at the store flip, DRS-X), recording into `metrics` — the same `Arc` the
-    /// pipeline is given (module docs). Callers that form in parallel clone
-    /// the value: the store is shared, derivation is de-duplicated inside
-    /// it, and each worker's `compute_hash` gets its own scratchpad.
-    #[must_use]
-    pub const fn new(caches: Arc<CacheStore>, metrics: Arc<Metrics>) -> Self {
-        Self { caches, metrics }
-    }
-
-    /// The sink this substrate records into.
-    #[must_use]
-    pub fn metrics(&self) -> &Arc<Metrics> {
-        &self.metrics
-    }
-
-    fn record_cache(&self, outcome: CacheOutcome, started: Instant) {
-        match outcome {
-            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
-            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
-            CacheOutcome::Hit => {}
-        }
-    }
-}
-
-impl Substrate for ProductionSubstrate {
-    type Fault = SubstrateFault;
-    /// The cache a preparation built or found. `None` is the default: no
-    /// preparation, so [`longhash_held`](Substrate::longhash_held) looks up.
-    type Held = Option<Arc<PreparedCache>>;
-
-    fn local_clock(&self) -> Result<Timestamp, SubstrateFault> {
-        let since_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SubstrateFault::ClockBeforeEpoch)?;
-        Ok(Timestamp::from_raw(since_epoch.as_secs()))
-    }
-
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, SubstrateFault> {
-        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        // Lookup only. A miss is a fault: deriving here would build a
-        // 256 MiB cache for a seed the caller did not pin, outside the
-        // hasher budget, and could evict the chain's cache.
-        let Some(cache) = self.caches.lookup(&seedhash) else {
-            return Err(SubstrateFault::CacheAbsent);
-        };
-        let hash = self.metrics.timed_hash(|| compute_hash(&cache, pow_blob));
-        Ok(PowHash::from_bytes(hash))
-    }
-
-    /// Make `seed`'s cache the canonical one, deriving it if needed
-    /// (module docs: pinning the epoch). One of the two derives this
-    /// substrate performs, with [`prepare_seed`](Substrate::prepare_seed).
-    /// The caller holds a hasher permit across it.
-    fn pin_seed(&self, seed: &BlockHash) {
-        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        let started = Instant::now();
-        let outcome = self.caches.pin_canonical(&seedhash);
-        self.record_cache(outcome, started);
-    }
-
-    /// Empty the cache store's transient slot if it holds `seed`, which
-    /// left the window (A2).
-    fn release_seed(&self, seed: &BlockHash) {
-        self.caches.release(&Seedhash::from_bytes(*seed.as_bytes()));
-    }
-
-    /// The cache store's two slots, as block ids.
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        let as_block = |seed: Seedhash| BlockHash::from_bytes(*seed.as_bytes());
-        let (canonical, transient) = self.caches.slots();
-        (canonical.map(as_block), transient.map(as_block))
-    }
-
-    fn cache_absent(&self, fault: &SubstrateFault) -> bool {
-        matches!(fault, SubstrateFault::CacheAbsent)
-    }
-
-    /// Build `seed`'s cache into the transient slot when no slot holds it,
-    /// and hand it over. The canonical slot does not move. The caller holds
-    /// a hasher permit across it.
-    fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
-        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        let started = Instant::now();
-        let (cache, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
-        self.record_cache(outcome, started);
-        Some(cache)
-    }
-
-    /// The longhash under the prepared cache when it is `seed`'s, with no
-    /// lookup: an eviction since the preparation does not fail it.
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        held: &Self::Held,
-    ) -> Result<PowHash, SubstrateFault> {
-        match held {
-            Some(cache) if cache.seedhash().as_bytes() == seed.as_bytes() => {
-                let hash = self.metrics.timed_hash(|| compute_hash(cache, pow_blob));
-                Ok(PowHash::from_bytes(hash))
-            }
-            _ => self.longhash(pow_blob, seed),
-        }
-    }
-}
 
 /// A substrate that answers [`Substrate::longhash`] from the proof-of-work
 /// hashes this node already recorded, and asks `inner` for anything else
@@ -227,12 +94,12 @@ impl Substrate for ProductionSubstrate {
 /// computed it and D1 accepted it, under the store-integrity belts the
 /// recorded cumulative difficulty sits under; no peer can reach it, and a
 /// corrupted value can only touch a block this node already accepted once.
-pub struct Recalled<'a, P> {
+pub struct Recalled<'a, P: ?Sized> {
     inner: &'a P,
     recorded: std::collections::HashMap<(BlockHash, BlockHash), PowHash>,
 }
 
-impl<'a, P> Recalled<'a, P> {
+impl<'a, P: ?Sized> Recalled<'a, P> {
     /// `inner`, answering from `recorded` — `(identity, seed, pow)` triples
     /// the store holds — where the key matches.
     pub fn new(
@@ -249,9 +116,8 @@ impl<'a, P> Recalled<'a, P> {
     }
 }
 
-impl<P: Substrate> Substrate for Recalled<'_, P> {
+impl<P: Substrate + ?Sized> Substrate for Recalled<'_, P> {
     type Fault = P::Fault;
-    type Held = P::Held;
 
     fn local_clock(&self) -> Result<Timestamp, P::Fault> {
         self.inner.local_clock()
@@ -264,106 +130,8 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
             None => self.inner.longhash(pow_blob, seed),
         }
     }
-
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.inner.pin_seed(seed);
-    }
-
-    fn release_seed(&self, seed: &BlockHash) {
-        self.inner.release_seed(seed);
-    }
-
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        self.inner.slots()
-    }
-
-    fn cache_absent(&self, fault: &P::Fault) -> bool {
-        self.inner.cache_absent(fault)
-    }
-
-    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
-        self.inner.prepare_seed(seed)
-    }
-
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        held: &P::Held,
-    ) -> Result<PowHash, P::Fault> {
-        let identity = shekyl_wire::identity_of_pow_blob(pow_blob);
-        match self.recorded.get(&(identity, *seed)) {
-            Some(pow) => Ok(*pow),
-            None => self.inner.longhash_held(pow_blob, seed, held),
-        }
-    }
 }
 
-/// `inner`, hashing each prepared seed under the cache its preparation
-/// returned (B2): no second lookup, so an eviction since the preparation
-/// does not fail the form. Every other seed is `inner`'s plain longhash.
-/// One seed for an alternative arrival; a switch's promoted run names one
-/// branch seed per seed point it crosses.
-#[cfg(feature = "pipeline")]
-pub(crate) struct Branch<'a, P: Substrate> {
-    inner: &'a P,
-    held: &'a [(BlockHash, P::Held)],
-}
-
-#[cfg(feature = "pipeline")]
-impl<'a, P: Substrate> Branch<'a, P> {
-    /// `inner` with `held`: each prepared seed and its cache.
-    pub(crate) const fn new(inner: &'a P, held: &'a [(BlockHash, P::Held)]) -> Self {
-        Self { inner, held }
-    }
-}
-
-#[cfg(feature = "pipeline")]
-impl<P: Substrate> Substrate for Branch<'_, P> {
-    type Fault = P::Fault;
-    type Held = P::Held;
-
-    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
-        self.inner.local_clock()
-    }
-
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
-        match self.held.iter().find(|(prepared, _)| prepared == seed) {
-            Some((_, held)) => self.inner.longhash_held(pow_blob, seed, held),
-            None => self.inner.longhash(pow_blob, seed),
-        }
-    }
-
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.inner.pin_seed(seed);
-    }
-
-    fn release_seed(&self, seed: &BlockHash) {
-        self.inner.release_seed(seed);
-    }
-
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        self.inner.slots()
-    }
-
-    fn cache_absent(&self, fault: &P::Fault) -> bool {
-        self.inner.cache_absent(fault)
-    }
-
-    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
-        self.inner.prepare_seed(seed)
-    }
-
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        held: &P::Held,
-    ) -> Result<PowHash, P::Fault> {
-        self.inner.longhash_held(pow_blob, seed, held)
-    }
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "pipeline"))]
 #[path = "substrate_tests.rs"]
 mod substrate_tests;
