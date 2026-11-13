@@ -638,10 +638,7 @@ impl Drive {
                     self.kept = Some(directory);
                 }
                 match error {
-                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable {
-                        path: self.data_dir.clone(),
-                        space: None,
-                    },
+                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable { space: None },
                     _ => Input::SpawnFailed,
                 }
             }

@@ -13,11 +13,12 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, Carriage, Cause, Inbound, InboundCause, OwnTx, Shown};
+use super::super::super::posture::{Carriage, Cause, Inbound, InboundCause, OwnTx, Shown};
 use super::super::{duration_ns, Action, Core, Input, RoundTally, Step};
 use super::{
     announces, bring_up, carrying, held, managed, policy, reach_usable, replied, socks, takes_down,
 };
+use super::{said, said_of};
 
 pub(super) fn secs(seconds: u64) -> u64 {
     duration_ns(Duration::from_secs(seconds))
@@ -125,7 +126,11 @@ pub(super) fn published() -> Core {
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
     replied(&mut core, 0);
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     core
 }
 
@@ -329,7 +334,7 @@ fn an_arrival_is_reachable_a_miss_republishes_and_a_refusal_respawns() {
     assert_eq!(status.shown, Shown::Degraded);
     assert_eq!(status.cause, Cause::None, "never an outbound cause");
     assert!(status.sync.tor, "the outbound facet still carries the sync");
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(
         text.contains("Peers cannot reach this node through Tor right now"),
         "{text}"
@@ -396,7 +401,11 @@ fn a_round_with_every_upload_failed_republishes_nothing() {
     let failed = core.on(not_uploaded(), secs(16));
     assert_eq!(cancels(&failed), 0, "the probe in flight stays");
     assert_eq!(republishes(&failed), 0, "no republish");
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     let landed = core.on(arrival(secs(15), secs(17)), secs(17));
     assert_eq!(
         publishes_inbound(&landed),
@@ -441,7 +450,11 @@ fn a_timely_arrival_folded_late_is_reachable_and_a_late_one_still_misses() {
     let bound = at + secs(60);
     let late = core.on(arrival(at, bound), bound);
     assert!(publishes_inbound(&late).is_empty());
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     let missed = core.on_deadline(bound);
     let missed = served(&mut core, missed, bound);
     assert_eq!(cancels(&missed), 1);
@@ -503,7 +516,11 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     replied(&mut core, due);
     let running = core.on(Input::BootstrapComplete, due);
     assert!(running.actions.contains(&Action::RepublishOnion));
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     core.on(Input::RouteInstalled, due);
     // The publish's `DEL_ONION`, then its `ADD_ONION`.
     replied(&mut core, due);
@@ -511,7 +528,11 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     replied(&mut core, due);
     let stale = core.on(arrival(secs(115), due + 1), due + 1);
     assert!(publishes_inbound(&stale).is_empty());
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
 
     // The new Tor's probe is in flight when the old one's arrival comes: it
     // names another probe and changes nothing. Only the current one counts.
@@ -521,7 +542,11 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     core.on(Input::ProbeDialed { minted_at: at }, at);
     let stale = core.on(arrival(secs(115), at + 1), at + 1);
     assert!(publishes_inbound(&stale).is_empty());
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     core.on(arrival(at, at + 2), at + 2);
     assert_eq!(
         core.status().inbound,
@@ -543,7 +568,11 @@ fn no_probe_runs_or_judges_while_outbound_is_not_usable() {
     core.on(Input::ExternalBlocked, secs(1));
     let step = run_to(&mut core, secs(15));
     assert_eq!(probes(&step), 0, "suppressed under a blocked link");
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
 
     core.on(Input::ExternalCleared, secs(20));
     core.on(uploaded(0), secs(30));
@@ -560,7 +589,11 @@ fn no_probe_runs_or_judges_while_outbound_is_not_usable() {
     assert_eq!(cancels(&bound), 1, "the dial is dropped");
     assert_eq!(republishes(&bound), 0, "a blocked link judges nothing");
     let status = core.status();
-    assert_eq!(status.inbound, Inbound::Publishing);
+    assert!(
+        matches!(status.inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        status.inbound
+    );
     assert_eq!(status.cause, Cause::ExternalBlocked, "Tor's cause stands");
 
     // A probe due while the onion is owed again (a republish in progress)
@@ -594,7 +627,11 @@ fn a_single_miss_refetches_and_an_arrival_after_it_is_reachable() {
     let (at, first) = run_timed(&mut core, secs(75));
     assert_eq!(refetches(&first), 1);
     assert_eq!(republishes(&first), 0);
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     assert_eq!(core.status().shown, Shown::Usable, "nothing is said down");
     let round = core.on(uploaded(0), at + 1);
     assert_eq!(probes(&round), 0);
@@ -735,7 +772,7 @@ fn a_version_warning_beside_an_unreachable_onion_leaves_the_link_carrying() {
         (Shown::Degraded, &Cause::DangerousVersion, OwnTx::Held)
     );
     assert_eq!(holding.carriage, Carriage::Carries);
-    let text = render(&holding);
+    let text = said_of(&holding);
     assert!(
         text.contains("This node is holding its own transactions.")
             && !text.contains("waiting for Tor"),
@@ -743,7 +780,7 @@ fn a_version_warning_beside_an_unreachable_onion_leaves_the_link_carrying() {
     );
 
     core.on(carrying(), at);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.starts_with("Tor is carrying this node's traffic."),
         "{text}"
@@ -753,7 +790,7 @@ fn a_version_warning_beside_an_unreachable_onion_leaves_the_link_carrying() {
     let blocked = core.status();
     assert_eq!(blocked.cause, Cause::DirectoryUnreachable);
     assert_eq!(blocked.carriage, Carriage::OpenOnly);
-    let text = render(&blocked);
+    let text = said_of(&blocked);
     assert!(
         text.starts_with("Connections already open through Tor still carry"),
         "{text}"

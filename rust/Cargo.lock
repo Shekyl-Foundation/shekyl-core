@@ -4178,6 +4178,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
+ "shekyl-tor-status",
  "shekyl-types",
  "shekyl-version",
  "shekyl-win-sec",
@@ -5394,6 +5395,7 @@ dependencies = [
  "shekyl-onion-key",
  "shekyl-onion-v3",
  "shekyl-timing-engine",
+ "shekyl-tor-status",
  "shekyl-win-sec",
  "tempfile",
  "tokio",
@@ -5427,6 +5429,14 @@ dependencies = [
  "shekyl-types",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "shekyl-tor-status"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -9,9 +9,10 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, Cause, Shown, TorQuiet};
+use super::super::super::posture::{Cause, Shown, TorQuiet};
 use super::super::{duration_ns, Action, Core, DialTally, Input, Step, TorCensus};
 use super::{announces, managed, policy, reach_usable, replied, socks, spawns, takes_down};
+use super::{said, said_at, said_of};
 use crate::control::{NetworkView, Reported};
 
 /// A tally of `unopened` failed Tor dials since the `opened`-th opened one,
@@ -138,7 +139,7 @@ fn ten_minutes_of_failed_dials_are_a_neutral_line_never_a_cause() {
     assert_eq!(status.shown, Shown::Usable);
     assert_eq!(status.respawn_count, 0);
     assert!(status.tor_quiet.is_some());
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(
         text.contains("Peers are known; none has answered through Tor for"),
         "{text}"
@@ -169,7 +170,7 @@ fn the_line_runs_from_the_judges_last_sign_of_life() {
         assert_eq!(says_progress(&[step]), 1, "{opened}: said once");
         assert_eq!(
             core.status().tor_quiet,
-            Some(TorQuiet::Unanswered(policy().quiet_after))
+            Some(TorQuiet::Unanswered { since: life })
         );
     }
 }
@@ -211,7 +212,7 @@ fn the_quiet_sentence_says_what_the_judge_observed() {
     reach_usable(&mut core);
     core.on(dials(0, 1, Some(secs(1))), secs(1));
     core.on(dials(0, 2, Some(secs(70))), secs(80));
-    let text = render(&core.status());
+    let text = said_at(&core, secs(80));
     assert!(
         text.contains("Peers are known; none has answered through Tor for 1 min 20 s."),
         "{text}"
@@ -393,7 +394,7 @@ fn the_sample_after_a_clock_jump_names_no_block() {
     let step = core.on(tor_says(Reported::Yes, Reported::No), 11);
     assert_eq!(announces(&step), 0, "nothing is said");
     assert_eq!(core.status().cause, Cause::None);
-    assert!(!render(&core.status()).contains("cannot reach"));
+    assert!(!said(&core).contains("cannot reach"));
     core.on(tor_says(Reported::Yes, Reported::Yes), 18);
     assert_eq!(core.status().cause, Cause::None);
 }
@@ -489,7 +490,7 @@ fn no_peers_known_yet_is_said_once() {
     let status = core.status();
     assert_eq!(status.tor_quiet, Some(TorQuiet::NoPeersKnown));
     assert_eq!(status.cause, Cause::None);
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(text.contains("No peers are known yet."), "{text}");
     assert!(!text.contains("answered"), "{text}");
 }
@@ -508,7 +509,7 @@ fn no_census_yet_says_nothing() {
     steps.extend(run_until(&mut core, secs(120)));
     assert_eq!(says_progress(&steps), 0);
     assert_eq!(core.status().tor_quiet, None);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(!text.contains("Peers are known"), "{text}");
     assert!(!text.contains("No peers are known"), "{text}");
 }
@@ -551,7 +552,7 @@ fn peers_learned_and_unanswered_switch_the_line_once() {
     );
     assert_eq!(
         core.status().tor_quiet,
-        Some(TorQuiet::Unanswered(policy().quiet_after)),
+        Some(TorQuiet::Unanswered { since: learned }),
         "the span is the run, not the empty stretch"
     );
     steps.push(step);
