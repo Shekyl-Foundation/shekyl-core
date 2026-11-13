@@ -47,6 +47,16 @@
 # revision, a `note`, and a `verdict` of `held` or `falsified` that the
 # check computes from the two and refuses when the row says otherwise.
 #
+# `[[gated_row]]` is a bench the capture script runs: `bench`
+# (`<crate>::<gungraun-target>`, its row in the script's `BENCHES` or
+# `NIGHTLY_BENCHES`), `measured_by` and `path_set`. Every row of those two
+# arrays has one, and the path set reaches the bench's own crate: a pull
+# request's capture runs the rows whose path sets its change can reach
+# (`scripts/ci/change_scope.py`), so a row with no entry would never run. It carries no status and no capture: the
+# gate re-measures it on every run, which is the first class under "NOT IN
+# THIS LEDGER" below. What it records is the path set, so a change can be
+# matched to the rows it can move.
+#
 # `[[toolchain]]` holds one acknowledgment per change to `toolchain_file`,
 # for the whole ledger. It is owed while any constant is current across the
 # change, because a compiler bump is on no path set's spec and moves them
@@ -1336,3 +1346,187 @@ capture = "docs/benchmarks/rt_w10_request_cost_20261102.md"
 capture_rev = "3d0bf6844c"
 rev_source = "the record's results name the build: git revision 3d0bf6844c on the floor device (docs/benchmarks/rt_w10_request_cost_20261102.md, Results). The header series' thread-CPU 99th percentile, which the hash budget charges once per hash."
 path_set = "rpc-hash-budget"
+
+# --- gated rows: the daemon's block path ------------------------------
+#
+# A gated row is a bench the capture script runs
+# (`scripts/bench/capture_rust_baseline.sh`: `BENCHES` on a pull request
+# and on the push to `dev`, `NIGHTLY_BENCHES` every night), named
+# `<crate>::<gungraun-target>`. It has no capture to go stale, because the
+# gate re-measures it on every run; it is here for its path set, the code
+# whose change can move its counts.
+
+# The spec names the crates whose code the rows enter. It is not the list of
+# everything they call: the capture's scope reaches a row through the
+# reverse closure over linked dependencies, so a change confined to a crate
+# these link (the curve crates, the hash crate, the hybrid combiner) puts a
+# listed crate in the closure and runs the row. The classifier's selftest
+# holds that for two such crates.
+[[path_set]]
+id = "block-path"
+spec = [
+  "rust/shekyl-chain-rules/src",
+  "rust/shekyl-chain-store/src",
+  "rust/shekyl-store-codec/src",
+  "rust/shekyl-chain-ingest/src",
+  "rust/shekyl-chain-ingest/benches",
+  "rust/shekyl-wire/src",
+  "rust/shekyl-fcmp/src",
+  "rust/shekyl-fcmp-proofs/src",
+  "rust/shekyl-oxide/crypto/fcmps",
+  "rust/shekyl-ct-balance/src",
+  "rust/shekyl-bulletproofs/src",
+  "rust/shekyl-crypto-pq/src/signature.rs",
+  "rust/shekyl-archival-retention/src",
+  "rust/shekyl-economics/src",
+  "rust/shekyl-difficulty/src",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::block_path_iai"
+measured_by = ["BA-T2", "BA-T41"]
+path_set = "block-path"
+
+[[path_set]]
+id = "randomx-header-verify"
+spec = [
+  "rust/shekyl-pow-randomx/src",
+  "rust/shekyl-pow-randomx/benches/verify_header_iai.rs",
+]
+
+[[gated_row]]
+bench = "shekyl-pow-randomx::verify_header_iai"
+measured_by = ["BA-T42"]
+path_set = "randomx-header-verify"
+
+# --- gated rows: the rows that were gated before the ledger named them --
+#
+# Each path set is the bench's own crate, sources and benches. The
+# capture's scope (`scripts/ci/change_scope.py`, `bench_rows`) runs a row
+# when the change's reverse closure over linked dependencies holds a
+# package its path set lies in, so the crates a bench links need not be
+# listed for the row to run when one of them changes.
+
+[[path_set]]
+id = "bench-engine-state"
+spec = [
+  "rust/shekyl-engine-state/src",
+  "rust/shekyl-engine-state/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-engine-state::ledger_iai"
+measured_by = ["BA-T21"]
+path_set = "bench-engine-state"
+
+[[gated_row]]
+bench = "shekyl-engine-state::balance_iai"
+measured_by = ["BA-T28"]
+path_set = "bench-engine-state"
+
+[[path_set]]
+id = "bench-engine-file"
+spec = [
+  "rust/shekyl-engine-file/src",
+  "rust/shekyl-engine-file/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-engine-file::open_iai"
+measured_by = ["BA-T17"]
+path_set = "bench-engine-file"
+
+[[path_set]]
+id = "bench-scanner"
+spec = [
+  "rust/shekyl-scanner/src",
+  "rust/shekyl-scanner/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-scanner::scan_block_iai"
+measured_by = ["BA-T15"]
+path_set = "bench-scanner"
+
+[[path_set]]
+id = "bench-tx-builder"
+spec = [
+  "rust/shekyl-tx-builder/src",
+  "rust/shekyl-tx-builder/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-tx-builder::transfer_e2e_iai"
+measured_by = ["BA-T20"]
+path_set = "bench-tx-builder"
+
+[[path_set]]
+id = "bench-engine-core"
+spec = [
+  "rust/shekyl-engine-core/src",
+  "rust/shekyl-engine-core/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-engine-core::engine_trait_bench_ledger_synced_height_iai"
+measured_by = ["BA-T28"]
+path_set = "bench-engine-core"
+
+[[gated_row]]
+bench = "shekyl-engine-core::engine_trait_bench_ledger_balance_iai"
+measured_by = ["BA-T28"]
+path_set = "bench-engine-core"
+
+[[gated_row]]
+bench = "shekyl-engine-core::engine_trait_bench_key_dispatch_baseline_iai"
+measured_by = ["BA-T28"]
+path_set = "bench-engine-core"
+
+[[gated_row]]
+bench = "shekyl-engine-core::engine_trait_bench_key_merge_projection_iai"
+measured_by = ["BA-T22"]
+path_set = "bench-engine-core"
+
+[[path_set]]
+id = "bench-verify-cost"
+spec = [
+  "rust/shekyl-verify-cost/src",
+  "rust/shekyl-verify-cost/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-verify-cost::relay_admission_verify_iai"
+measured_by = ["BA-T1"]
+path_set = "bench-verify-cost"
+
+[[path_set]]
+id = "bench-p-serve"
+spec = [
+  "rust/shekyl-p-serve/src",
+  "rust/shekyl-p-serve/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-p-serve::serve_response_iai"
+measured_by = ["BA-T3"]
+path_set = "bench-p-serve"
+
+[[path_set]]
+id = "bench-crypto-pq"
+spec = [
+  "rust/shekyl-crypto-pq/src",
+  "rust/shekyl-crypto-pq/benches",
+]
+
+[[gated_row]]
+bench = "shekyl-crypto-pq::fn_dsa_hybrid_iai"
+measured_by = ["BA-T33"]
+path_set = "bench-crypto-pq"
+
+# The block path at the weight limit: the nightly capture's row
+# (`NIGHTLY_BENCHES`), on the per-PR row's path set.
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::block_path_full_iai"
+measured_by = ["BA-T2", "BA-T41"]
+path_set = "block-path"
