@@ -35,8 +35,8 @@ proof construction is not assigned to a single permanent loser.
 - **Per-output forward privacy** via ephemeral KEM
 - **Dealer-mode setup** — owner is trusted KeyGen; no DKG in the
   default path
-- **Multi-relay transport** for censorship resistance
-- **File-based transport** for air-gapped operation
+- **Files are the transport**: members pass sealed ceremony files by any
+  means they choose; a file shows only that it is a Shekyl multisig file
 - ~~Rotating prover assignment / 1/N permanent loss~~ — **Option D only;
   deleted under E′**
 
@@ -161,8 +161,8 @@ data.
 
 **Daily operation:**
 - Either partner can propose a spend.
-- The other reviews and signs via relay (if both online) or file
-  transport (if one is offline).
+- The other reviews and signs; the partners pass the ceremony files
+  between their devices (§7).
 - For the 2-of-3 variant: the backup device key is used only if one
   partner is unavailable. Store it in a safe or with a trusted person.
 
@@ -186,8 +186,8 @@ spending.
 **Operations:**
 - Establish internal rules: "spending above X requires 24h delay for
   review" (enforced socially, not by protocol).
-- Use a shared relay for day-to-day operations plus file transport for
-  high-value transactions.
+- Agree how files travel (a shared folder, encrypted email, USB for
+  high-value transactions) and a time for each signing session (§7).
 - Assign one member as "consolidation lead" who periodically proposes
   consolidation transactions to reduce the impact of 1/N loss.
 
@@ -233,9 +233,9 @@ Any group member can propose a spend:
    wallet automatically selects inputs, computes the chain state
    fingerprint, and assigns provers.
 
-2. **Broadcast to group**: The SpendIntent is encrypted with the group's
-   shared secret and sent to all members via configured relays (or
-   exported as a file for air-gapped operation).
+2. **Send to the group**: The wallet writes a `Proposal` file, sealed
+   under the group's key and signed with your envelope key. Pass it to
+   the other signers by whatever means the group uses (§7).
 
 3. **14-check validation**: Each receiving member validates the intent
    against structural, temporal, chain-state, and balance checks.
@@ -344,13 +344,14 @@ If you suspect participant P's device is compromised:
 The Dashboard shows a yellow alert: "Signed intent not broadcast."
 
 **Causes:**
-- Relay was down during assembly.
+- A ceremony file never reached the member assembling the transaction.
 - Network issue prevented broadcast.
 - The assembler went offline mid-process.
 
 **What to do:**
-- If the intent hasn't expired: any member can retry the broadcast.
-- If the intent expired: create a new intent for the same transaction.
+- If the session hasn't expired (its reference block can still be used,
+  §7): any member can retry the broadcast.
+- If it expired: create a new intent for the same transaction.
   The `tx_counter` has not advanced (it only advances on-chain
   confirmation), so the new intent will work normally.
 
@@ -395,32 +396,34 @@ The Dashboard shows a red alert: "CounterProof verification failed."
 
 ---
 
-## 7. Relay Configuration
+## 7. Signing Sessions
 
-For censorship resistance, configure at least 3 relays operated by
-distinct operators:
+The wallet moves no bytes over a network for multisig. Each step of a
+spend is a **ceremony file** the wallet writes; members pass the files by
+any means: a shared folder, encrypted email, a messenger, a USB stick.
+A file is sealed under the group's key and signed by its sender, and
+shows only its size and that it is a Shekyl multisig file, so the
+channel needs no trust.
 
-1. Navigate to Multisig → Settings → Relay Configuration.
-2. Add relay URLs with their operator IDs.
-3. The UI warns if fewer than 3 distinct operators are configured.
+A spend is one session:
 
-All multisig messages are encrypted end-to-end. Relay operators see
-only encrypted blobs and cannot determine message types, roles, or
-transaction details.
+1. **Agree a time.** The signers who will take part are named in the
+   proposal, so agree who they are and when. A session lasts about three
+   hours (`PROOF_VALIDITY_HORIZON` blocks from the proposal's reference
+   block); after that no block can include the transaction and the
+   proposal must be made again.
+2. **Pass files.** The proposer sends the proposal; each signer imports
+   the files it receives, the wallet checks them, and it writes the next
+   file for the others. Import files in any order: the wallet tells you
+   which step each one is.
+3. **Bring the safe-held device out once.** A device kept offline comes
+   out for the session, takes part, and goes back. It does not need a
+   network connection or a correct clock; a device without a chain view
+   cannot tell whether the session has expired, and signing an expired
+   proposal produces a transaction no block will include, not a loss.
 
-### File Transport as Alternative
-
-For maximum security or air-gapped operation, use file-based transport
-(Multisig → File Transport tab):
-
-1. Export the signing request as a file.
-2. Transfer it via USB drive, encrypted email, or any secure channel.
-3. The recipient imports, signs, and exports the response.
-4. Collect M response files and assemble.
-
-File transport has equal status with relay transport. It is not an
-"advanced" option — it is the trust anchor for security-conscious
-treasuries.
+Filenames are random and say nothing about the file. The wallet shows
+each file's meaning after it opens it, and never writes that to disk.
 
 ---
 
@@ -435,7 +438,7 @@ treasuries.
 | **Coercion of one member** | M-1 others can refuse to sign |
 | **Single point of failure** | Key loss doesn't destroy all funds |
 | **Insider threat (below threshold)** | <M colluding insiders can't spend |
-| **Relay censorship** | Multi-relay + file transport as fallback |
+| **A channel that drops or reads files** | Files are sealed and signed; pass them another way |
 
 ### What Multisig Does NOT Defend Against
 
@@ -444,7 +447,6 @@ treasuries.
 | **M keys compromised simultaneously** | By definition, M keys = full control |
 | **Social engineering of M signers** | Protocol can't prevent humans from being tricked |
 | **Protocol bugs** | Any software can have bugs; audit mitigates |
-| **All relays colluding** | Messages could be delayed (not stolen); file transport is the escape hatch |
 | **Quantum attack on ML-DSA-65** | V3.1 uses hybrid PQC; classical fallback exists |
 | **Physical coercion of M members** | Out of scope for cryptographic protocol |
 
@@ -611,23 +613,20 @@ Bitcoin multisig unusable for small amounts.
 
 ## 11. Message Types
 
-The protocol defines 11 message types (see `SHEKYL_MULTISIG_WIRE_FORMAT.md`
-for binary layouts):
+Each ceremony file carries one message (see `SHEKYL_MULTISIG_WIRE_FORMAT.md`
+for the layouts):
 
 | Type | ID | Description |
 |------|----|-------------|
-| SpendIntent | 0x01 | Transaction proposal |
-| ProverOutput | 0x02 | FCMP++ proof from assigned prover |
-| SignatureShare | 0x03 | Partial signature from a signer |
-| Veto | 0x04 | Abort request with reason |
-| ProverReceipt | 0x05 | Acknowledgment of prover assignment |
-| Heartbeat | 0x06 | Liveness and sync beacon |
-| CounterProof | 0x07 | Chain evidence for counter recovery |
-| GroupStateSummary | 0x08 | Group state synchronization |
-| InvariantViolation | 0x09 | Report of failed invariant check |
-| RotationIntent | 0x0A | Reserved for V4 |
-| EquivocationProof | 0x0B | Evidence of conflicting proofs |
+| SignatureShare | 0x03 | A FROST signature share |
+| InvariantViolation | 0x09 | Report of a failed invariant check |
+| EquivocationProof | 0x0B | Two conflicting messages from one member |
+| Proposal | 0x0C | The spend intent and the proposer's first round |
+| Commitment | 0x0D | A holder's first round |
+| SigningSet | 0x0E | The set the responder signs over |
+| ResponderShare | 0x0F | The responder's round |
+| FinalTx | 0x10 | The finished transaction |
+| HybridSig | 0x11 | Each signer's post-quantum signatures |
 
-All messages are wrapped in a `MultisigEnvelope` with AEAD encryption.
-The message type is encrypted inside the payload to prevent role-pattern
-leakage.
+The message type is inside the file's ciphertext, so nothing that
+carries a file sees which step it is.
