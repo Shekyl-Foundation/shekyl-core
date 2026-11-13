@@ -518,8 +518,13 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// §7.1): the socket's name is a hash, so the operator is told which
 /// network and instance it serves and where it is.
 fn owner_socket_line(network: &str, instance: &str, path: &std::path::Path) -> String {
+    let leg = if cfg!(windows) {
+        "owner's rendezvous"
+    } else {
+        "owner's socket"
+    };
     format!(
-        "owner's socket: network {network}, instance {instance}, at {}",
+        "{leg}: network {network}, instance {instance}, at {}",
         path.display()
     )
 }
