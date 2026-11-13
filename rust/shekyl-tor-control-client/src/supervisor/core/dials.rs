@@ -42,9 +42,8 @@ pub enum TorCensus {
     Held { seats: u32, since: u64 },
 }
 
-/// The fact a quiet line states. [`TorQuiet::Unanswered`]'s duration is how
-/// long that fact has stood. A longer span of the same fact is not said
-/// again.
+/// The fact a quiet line states. [`TorQuiet::Unanswered`]'s start is when
+/// that fact began. A longer span of the same fact is not said again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QuietFact {
     NoPeersKnown,
@@ -54,7 +53,7 @@ enum QuietFact {
 fn quiet_fact(line: TorQuiet) -> QuietFact {
     match line {
         TorQuiet::NoPeersKnown => QuietFact::NoPeersKnown,
-        TorQuiet::Unanswered(_) => QuietFact::Unanswered,
+        TorQuiet::Unanswered { .. } => QuietFact::Unanswered,
     }
 }
 
@@ -73,7 +72,7 @@ fn unanswered(
     let failed = tally
         .failed_attempt_began
         .is_some_and(|began| began >= from);
-    (span >= policy.quiet_after && failed).then_some(TorQuiet::Unanswered(span))
+    (span >= policy.quiet_after && failed).then_some(TorQuiet::Unanswered { since: from })
 }
 
 /// The dialer's tally of this node's Tor dials. The supervisor never sees
@@ -148,9 +147,10 @@ impl Dials {
     ///   is nothing to dial, so no failure is required.
     /// - [`TorCensus::Held`] stands as [`TorQuiet::Unanswered`] when a Tor
     ///   dial launched at or after `max(stretch start, run start)` has
-    ///   failed, and that span has reached `quiet_after`. The spoken
-    ///   duration is that span: time peers have been held without an
-    ///   answer, not time that passed while the census was empty.
+    ///   failed, and that span has reached `quiet_after`. The line carries
+    ///   the span's start: the spoken duration is time peers have been held
+    ///   without an answer, not time that passed while the census was
+    ///   empty, and it is taken when the status is asked.
     ///
     /// Returns `true` when the line's fact has just begun or has changed
     /// from the other fact. A longer duration of the same fact is the same

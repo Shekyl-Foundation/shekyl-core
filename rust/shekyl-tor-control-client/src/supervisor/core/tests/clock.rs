@@ -10,10 +10,11 @@
 //! Every wall time and `valid-after` here is a value the test passes, as
 //! the driver does; the core's own time is the test's, in nanoseconds.
 
-use super::super::super::posture::{render, Cause, Inbound, InboundCause};
+use super::super::super::posture::{Cause, Inbound, InboundCause};
 use super::super::{Action, Core, Input, RoundTally, Step};
 use super::probe::{arrival, count, probes, published, republishes, run_timed, secs, uploaded};
 use super::{managed, policy, replied};
+use super::{said, said_of};
 
 /// The consensus of 2026-11-01 00:00:00 UTC, the one Tor held through the
 /// clock VM run.
@@ -169,11 +170,11 @@ fn the_clock_is_named_while_running_and_clears() {
     assert_eq!(named.cause, Cause::None, "outbound is untouched");
     assert_eq!(named.own_tx, before.own_tx, "OwnTx is untouched");
     assert!(
-        render(&named).contains(
+        said_of(&named).contains(
             "This computer's clock is at least 1 d 0 h behind the Tor network's. Others may not be able to reach this node. Check this computer's date and time."
         ),
         "{}",
-        render(&named)
+        said_of(&named)
     );
     core.on(clock(VALID_AFTER, VALID_AFTER - DAY - 3_600), secs(6));
     assert_eq!(
@@ -184,8 +185,12 @@ fn the_clock_is_named_while_running_and_clears() {
     core.on(clock(VALID_AFTER, VALID_AFTER - 200), secs(7));
     let cleared = core.status();
     assert_eq!(cleared.clock_behind, None);
-    assert_eq!(cleared.inbound, Inbound::Publishing);
-    assert!(!render(&cleared).contains("clock"));
+    assert!(
+        matches!(cleared.inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        cleared.inbound
+    );
+    assert!(!said_of(&cleared).contains("clock"));
 }
 
 /// **Named while Bootstrapping too**; before Tor runs, the reading is
@@ -284,17 +289,21 @@ fn no_republish_under_a_majority_of_refusals() {
         }
     );
     assert!(
-        render(&status).contains(
+        said_of(&status).contains(
             "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
         ),
         "{}",
-        render(&status)
+        said_of(&status)
     );
     let served = serve(&mut core, secs(4 * 3_600), |_| None);
     assert_eq!(republishes(&served), 0, "no republish");
     assert_eq!(overdues(&served), 0, "the overdue rule stands down");
     let half = core.on(round_tally(8, 8, 16), secs(4 * 3_600 + 1));
-    assert_eq!(core.status().inbound, Inbound::Publishing);
+    assert!(
+        matches!(core.status().inbound, Inbound::Publishing { .. }),
+        "{:?}",
+        core.status().inbound
+    );
     assert_eq!(checks(&half), 1, "an accepted round's probe judges");
 }
 
@@ -405,7 +414,7 @@ fn the_clock_runs_sequence_gives_the_clock_line_and_no_republish() {
     assert_eq!(overdues(&after), 0, "the overdue rule stands down");
     // 06:16Z on the clock: 00:00Z the day before plus 6 h 16 min, so
     // 17 h 44 min behind.
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.contains("This computer's clock is at least 17 h 44 min behind the Tor network's."),
         "{text}"
@@ -462,7 +471,7 @@ fn a_new_tor_keeps_a_named_clock() {
             ..
         }
     ));
-    assert!(render(&core.status()).contains("This computer's clock is at least"));
+    assert!(said(&core).contains("This computer's clock is at least"));
 }
 
 /// **A clock jump asks no probe while the clock is named**: the run of

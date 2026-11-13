@@ -9,9 +9,10 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, Cause, ReportedSkew, Shown};
+use super::super::super::posture::{Cause, ReportedSkew, Shown};
 use super::super::{duration_ns, Action, Core, Input};
 use super::{managed, policy};
+use super::{said, said_of};
 use crate::control::RelayFingerprint;
 
 fn secs(seconds: u64) -> u64 {
@@ -58,7 +59,7 @@ fn three_lines_and_three_relays_name_the_clock_and_hold_it() {
     );
     assert_eq!(status.shown, Shown::Degraded);
     assert_eq!(status.respawn_count, 0, "the clock is never a respawn");
-    let text = render(&status);
+    let text = said_of(&status);
     assert!(text.contains("date or time looks wrong"), "{text}");
 }
 
@@ -85,7 +86,7 @@ fn one_relay_or_two_lines_leave_the_blocked_wording() {
     core.on(Input::ExternalBlocked, secs(3));
     let status = core.status();
     assert_eq!(status.cause, Cause::ExternalBlocked, "two lines");
-    assert!(render(&status).contains("Check this computer's date and time, then"));
+    assert!(said_of(&status).contains("Check this computer's date and time, then"));
 }
 
 /// The evidence must stand inside one window: lines from one stretch do not
@@ -159,7 +160,7 @@ fn an_unreachable_directory_leaves_the_verdict() {
     assert!(
         !step.actions.contains(&Action::Announce),
         "said: {}",
-        render(&core.status())
+        said(&core)
     );
     assert_eq!(core.status().cause, Cause::CertificatesOutOfDate);
 }
@@ -181,20 +182,20 @@ fn the_count_does_not_say_a_clock_the_check_named() {
         named.actions.contains(&Action::Announce),
         "the check names it"
     );
-    let mut said = Vec::new();
+    let mut heard = Vec::new();
     for i in 0..3 {
         let step = core.on(Input::CertificateOutOfDate, secs(2 + i));
         if step.actions.contains(&Action::Announce) {
-            said.push(render(&core.status()));
+            heard.push(said(&core));
         }
     }
     for n in 1..=3 {
         let step = closed_step(&mut core, n, secs(6));
         if step.actions.contains(&Action::Announce) {
-            said.push(render(&core.status()));
+            heard.push(said(&core));
         }
     }
-    assert!(said.is_empty(), "said again: {said:#?}");
+    assert!(heard.is_empty(), "said again: {heard:#?}");
     assert_eq!(
         core.status().cause,
         Cause::None,
