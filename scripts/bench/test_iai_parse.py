@@ -135,12 +135,13 @@ class ParseTests(unittest.TestCase):
         ])
 
     def test_the_capture_registers_its_rows_with_the_parse(self) -> None:
-        """The capture passes every `BENCHES` row to the parse: a row it
+        """The capture passes every row it selected to the parse: a row it
         did not pass could go missing unseen."""
         script = (pathlib.Path(__file__).resolve().parent
                   / "capture_rust_baseline.sh").read_text()
-        self.assertIn('BENCH_ROWS="$(printf \'%s\\n\' "${BENCHES[@]}")"',
+        self.assertIn('PARSE_ROWS="$(printf \'%s\\n\' "${SELECTED[@]}")"',
                       script)
+        self.assertIn('os.environ["PARSE_ROWS"]', script)
         self.assertIn("iai_parse.parse(iai_text, rows)", script)
 
 
