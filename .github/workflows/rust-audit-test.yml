@@ -447,6 +447,9 @@ jobs:
         # hashing actor's contract (the cap, the queue, the lending types,
         # and why it has no end for `Node::ended`).
         #
+        # `shekyl-tor-status` joined when it landed: its docs state the wire
+        # contract every client of the Tor status reads.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -458,7 +461,7 @@ jobs:
           -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
           -p shekyl-hasher
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
-          -p shekyl-onion-key -p shekyl-heap-secret
+          -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

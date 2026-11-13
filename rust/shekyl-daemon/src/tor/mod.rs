@@ -44,15 +44,15 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
-    clock_evidence_of, directory_content_input_of, held_at_start_sentence, input_of,
-    install_sentence, render, Action, Cause, Connectors, Core, DialTally, Input, ManagedRunning,
-    NetworkView, OriginVerdict as FoldedOrigin, Policy, Sessions, Space, Status, Step,
-    TorCensus as QuietCensus, TorSetting,
+    clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
+    Core, DialTally, Input, ManagedRunning, NetworkView, OriginVerdict as FoldedOrigin, Policy,
+    Sessions, Space, Status, Step, TorCensus as QuietCensus, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
     IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
 };
+use shekyl_tor_status::{held_at_start_sentence, install_sentence, render};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -217,14 +217,33 @@ fn classify_pin(error: &TorBinaryError) -> PinClass {
     }
 }
 
-/// The warning text for a pin error. `error`'s display is the detail: a
-/// `NotFound` lists `searched`, and the posture cause does not carry those
-/// paths.
-fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
+/// A pin error in words: the class's install sentence, then the error,
+/// whose display is the detail. A refusal names the file and the reason; a
+/// `NotFound` lists `searched`. The status carries neither (Rick,
+/// 2026-11-12: the file stays in the daemon's log, IG-F26).
+fn pin_refusal_line(error: &TorBinaryError) -> String {
     let class = classify_pin(error);
-    let sentence = install_sentence(&class.cause).expect("a pin class is an install cause");
+    let sentence = wire_cause(&class.cause)
+        .as_ref()
+        .and_then(install_sentence)
+        .expect("a pin class is an install cause");
+    format!("managed Tor: {sentence} ({error})")
+}
+
+/// The warning text for a pin error at a start or a check, with what the
+/// node will do.
+fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
     let consequence = held_at_start_sentence(clearnet_on);
-    format!("warning: managed Tor: {sentence} ({error}) {consequence}")
+    format!("warning: {} {consequence}", pin_refusal_line(error))
+}
+
+/// A running re-check's refusal, logged in full (Rick, 2026-11-12). The
+/// first pin's refusal is the start's announcement ([`pin_warning`]), so it
+/// is not said again here; every re-check after it is.
+fn say_pin_refusal(first: bool, error: &TorBinaryError) {
+    if !first {
+        tracing::warn!(target: "global", "{}", pin_refusal_line(error));
+    }
 }
 
 /// Start the supervisor on its inbox when Tor is managed. Any other
@@ -467,6 +486,7 @@ impl Drive {
             control: None,
             kept: None,
             pinned: None,
+            pin_checked: false,
             incarnation: None,
             generation: 0,
             held: None,
@@ -527,6 +547,9 @@ struct Drive {
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
+    /// A pin has run. The first is the start's; a refusal after it is a
+    /// running re-check's, and is logged in full.
+    pin_checked: bool,
     incarnation: Option<u64>,
     /// The incarnation a death or a bootstrap transition must name to be
     /// folded. It moves at each spawn and each reap, so the stop's own
@@ -677,9 +700,8 @@ impl Drive {
         }
         match action {
             Action::Announce => {
-                let status = self.core.status();
-                let text = render(&status);
-                if status.health {
+                let text = self.said();
+                if self.core.status().health {
                     tracing::info!(target: "global", "{text}");
                 } else {
                     tracing::warn!(target: "global", "{text}");
@@ -689,7 +711,7 @@ impl Drive {
             // The progress line is news. The core only asks for it when no
             // cause is set, so this arm does not re-read the posture.
             Action::SayProgress => {
-                let text = render(&self.core.status());
+                let text = self.said();
                 tracing::info!(target: "global", "{text}");
                 Vec::new()
             }
@@ -903,13 +925,18 @@ impl Drive {
             #[cfg(all(test, unix))]
             PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
-        match verified {
+        let input = match verified {
             Ok(binary) => {
                 self.pinned = Some(binary);
                 Input::PinAccepted
             }
-            Err(error) => classify_pin(&error).input,
-        }
+            Err(error) => {
+                say_pin_refusal(!self.pin_checked, &error);
+                classify_pin(&error).input
+            }
+        };
+        self.pin_checked = true;
+        input
     }
 
     fn watch_state(&self) -> Option<Input> {
@@ -956,6 +983,14 @@ impl Drive {
             BootstrapState::Failed => Input::ControlEnded,
             BootstrapState::Connecting { progress } => Input::BootstrapNoted { progress },
         }
+    }
+
+    /// The status in words, as every client says it: the supervisor's
+    /// snapshot through the one renderer. The daemon's own log names its
+    /// data directory.
+    fn said(&self) -> String {
+        let data_dir = self.data_dir.display().to_string();
+        render(&self.core.view(self.now()), Some(&data_dir))
     }
 
     fn now(&self) -> u64 {
@@ -1032,7 +1067,6 @@ fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
     let needed = space_needed(data_dir, fresh);
     match shekyl_node::free_bytes(data_dir) {
         Ok(available) if available < needed => Some(Input::DirectoryUnusable {
-            path: data_dir.to_path_buf(),
             space: Some(Space { available, needed }),
         }),
         Ok(_) => None,
@@ -1070,6 +1104,8 @@ fn consensus_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_tor_status::TorCause;
+
     /// A bootstrap sample does not ask Tor about its network. A Running
     /// sample does (§4.2): "no circuit" during bootstrap is not a statement.
     #[test]
@@ -1237,7 +1273,7 @@ mod tests {
         assert_eq!(class.input, Input::BundleMissing);
         assert_eq!(class.cause, Cause::BundleMissing);
         let line = pin_warning_line(&missing, false);
-        let sentence = install_sentence(&Cause::BundleMissing).expect("an install cause");
+        let sentence = install_sentence(&TorCause::Missing).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains(searched.to_str().unwrap()));
         assert!(line.contains(&held_at_start_sentence(false)));
@@ -1250,7 +1286,7 @@ mod tests {
         assert_eq!(class.input, Input::Unavailable);
         assert_eq!(class.cause, Cause::Unavailable);
         let line = pin_warning_line(&unavailable, true);
-        let sentence = install_sentence(&Cause::Unavailable).expect("an install cause");
+        let sentence = install_sentence(&TorCause::Unavailable).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("no bundle for this target"));
         assert!(line.contains(&held_at_start_sentence(true)));
@@ -1259,12 +1295,31 @@ mod tests {
         let class = classify_pin(&refused);
         assert_eq!(class.input, Input::PinRefused);
         assert_eq!(class.cause, Cause::PinRefused);
+        assert_eq!(wire_cause(&class.cause), Some(TorCause::InstallDefect));
         let line = pin_warning_line(&refused, false);
-        let sentence = install_sentence(&Cause::PinRefused).expect("an install cause");
+        let sentence = install_sentence(&TorCause::InstallDefect).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("was not started"));
         assert!(line.contains("/srv/tor-dir"));
         assert!(line.contains(&held_at_start_sentence(false)));
+    }
+
+    /// **A running re-check's refusal names the file and the reason** (Rick,
+    /// 2026-11-12): the status carries no path, so the log does. The first
+    /// pin's refusal is the start's announcement and is not said twice.
+    /// Fails if the re-check's error is thrown away, or the first is said
+    /// again.
+    #[test]
+    fn a_re_checks_refusal_names_the_file_and_the_reason() {
+        let refused = TorBinaryError::NotExecutable(PathBuf::from("/srv/tor/tor"));
+        let first = logged(|| say_pin_refusal(true, &refused));
+        assert!(first.is_empty(), "{first}");
+        let again = logged(|| say_pin_refusal(false, &refused));
+        assert_eq!(again.lines().count(), 1, "{again}");
+        assert!(again.contains("WARN"), "{again}");
+        assert!(again.contains("/srv/tor/tor"), "{again}");
+        assert!(again.contains("not executable"), "{again}");
+        assert!(again.contains("failed its check"), "{again}");
     }
 
     /// What `f` writes to the log, one line per event, without times.

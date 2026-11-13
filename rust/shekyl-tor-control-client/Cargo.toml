@@ -26,6 +26,9 @@ publish = false
 unpinned-tor-for-tests = []
 
 [dependencies]
+# The status's wire shape and its one renderer: the supervisor's snapshot
+# is in that shape, and its words are that crate's (TOR_STATUS_CRATE.md).
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # The process clock. The handshake read, the readiness wait, and `awake`
 # end on it, so a machine's sleep is not time Tor was given. The supervisor
 # core's tests use the same crate's hand clock.

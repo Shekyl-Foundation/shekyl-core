@@ -220,7 +220,7 @@ impl Core {
             self.inbound_unreachable(now, InboundCause::UploadsRefused);
         } else {
             self.inbound = if self.onion_published_here() {
-                Inbound::Publishing
+                Inbound::Publishing { since: now }
             } else {
                 Inbound::NotOffered
             };
@@ -300,7 +300,7 @@ impl Core {
 
     /// A round that was not refused clears refused uploads. The facet is
     /// unknown again until its probe judges it.
-    pub(super) fn uploads_accepted(&mut self) {
+    pub(super) fn uploads_accepted(&mut self, now: u64) {
         if !std::mem::take(&mut self.uploads_refused) {
             return;
         }
@@ -311,7 +311,7 @@ impl Core {
                 ..
             }
         ) {
-            self.inbound = Inbound::Publishing;
+            self.inbound = Inbound::Publishing { since: now };
         }
     }
 

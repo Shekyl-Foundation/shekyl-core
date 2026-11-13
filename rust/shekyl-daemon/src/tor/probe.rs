@@ -204,7 +204,7 @@ fn link_inbound(inbound: Inbound) -> shekyl_p2p::InboundFacet {
     use shekyl_p2p::{InboundCause as LinkCause, InboundFacet};
     match inbound {
         Inbound::NotOffered => InboundFacet::NotOffered,
-        Inbound::Publishing => InboundFacet::Publishing,
+        Inbound::Publishing { .. } => InboundFacet::Publishing,
         Inbound::Reachable { evidence_at } => InboundFacet::Reachable {
             evidence_at: Tick::new(evidence_at),
         },
