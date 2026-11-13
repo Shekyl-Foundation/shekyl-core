@@ -83,6 +83,8 @@ pub enum Code {
     BanFileLine,
     /// A runtime set names a row that is not marked runtime.
     RuntimeStartupOnly,
+    /// The service run mode is not available on this platform yet.
+    ServicePlatform,
     /// The service run mode was asked for outside the service manager.
     ServiceNoManager,
     /// The service run mode's machine-wide root is missing, mis-owned, or
@@ -140,6 +142,7 @@ impl Code {
             Self::BanFileUnreadable => "config.ban-file.unreadable",
             Self::BanFileLine => "config.ban-file.line",
             Self::RuntimeStartupOnly => "config.runtime.startup-only",
+            Self::ServicePlatform => "config.service.platform",
             Self::ServiceNoManager => "config.service.no-manager",
             Self::ServiceRoot => "config.service.root",
             Self::SocketDirNone => "config.socket-dir.none",
@@ -370,6 +373,10 @@ impl Diagnostic {
             Code::RuntimeStartupOnly => format!(
                 "`{opt}` can only be set at startup; change it in the configuration file and restart"
             ),
+            Code::ServicePlatform => format!(
+                "`{opt}` is not available on this platform yet: {}",
+                p("reason")
+            ),
             Code::ServiceNoManager => format!(
                 "`{opt}` is for the Windows service manager; install the service and start it with the service manager"
             ),
@@ -497,6 +504,7 @@ mod tests {
             Code::BanFileUnreadable,
             Code::BanFileLine,
             Code::RuntimeStartupOnly,
+            Code::ServicePlatform,
             Code::ServiceNoManager,
             Code::ServiceRoot,
             Code::SocketDirNone,

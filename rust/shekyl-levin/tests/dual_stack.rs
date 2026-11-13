@@ -51,6 +51,8 @@ struct Daemon {
 /// directory: a harness names one per daemon (`RPC_CHANNEL.md` §7.1).
 fn private_socket_dir(data_dir: &std::path::Path) -> PathBuf {
     let dir = data_dir.join("socket");
+    // Only the Unix arm below sets a mode.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {

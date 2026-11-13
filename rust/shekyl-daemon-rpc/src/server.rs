@@ -565,7 +565,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{first_error_stops_the_rest, gate, serve_bound, Listener};
+    use super::{first_error_stops_the_rest, serve_bound, Listener};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -646,6 +646,7 @@ mod lifecycle_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_owners_socket_is_served_at_its_authority_through_the_one_tracker() {
+        use super::gate;
         use crate::authority::Authority;
         use std::os::unix::fs::PermissionsExt;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

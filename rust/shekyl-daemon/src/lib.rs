@@ -62,7 +62,7 @@ pub(crate) fn test_session_dir(home: &std::path::Path) -> Option<std::path::Path
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        let dir = home.join("session");
+        let dir = home.join("s");
         if !dir.is_dir() {
             std::fs::DirBuilder::new()
                 .mode(0o700)
