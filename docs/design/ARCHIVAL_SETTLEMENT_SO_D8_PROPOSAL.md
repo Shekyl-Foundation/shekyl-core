@@ -43,10 +43,10 @@ here**. A hiding commitment that weakens the binding is refused; the
 privacy gain does not enter the arithmetic.
 
 > **Line-number era.** `blockchain.cpp:NNNN` citations in this document are
-> pinned at `dev@37accf6f` (the brief's read); `dev` has since shed ~195 lines
-> above the serve-credit arm, so today's numbers are lower. Identifiers
-> (`h_close`, `challenge_seal_on_chain`, `ctx.settlement_epoch`,
-> `shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`)) are stable; re-pin at Slice C.
+> pinned at `dev@37accf6f` (the brief's read), as are the identifiers
+> beside them (`h_close`, `challenge_seal_on_chain`, `ctx.settlement_epoch`,
+> `shekyl_archival_verify_serve_credit_vin`). The C++ chain and the
+> serve-credit arm are deleted; the specification states what replaced them.
 
 > **F5 (§1.5) → `PL-D1`, CLOSED by `PL-D3` — PR #745
 > (`feat/pl-d3-pedersen-leaf-commitment`), ratified by Rick 2026-09-14.** The
@@ -1657,10 +1657,9 @@ not wait on them; building does.
 2. **The R-B record layout, written once** (`SCV-3`): kept and pruned
    fields, including where `SF-D8`'s carried `nonce`, `anchor_height` and
    32-byte delivery digest ride.  This is the response-format round's reopen (§2.1 item 1), with its
-   rule-42 version bump. It includes **the anchor window's operand**: the
-   landed `PassAnchorWindow::shape_for_predecessor` keys it on the
-   *including* block's predecessor; whether R-B keeps that or moves it to
-   the issuing block `h` is unwritten.
+   rule-42 version bump. It includes **the anchor window's operand**:
+   there is none. Admission checks only `anchor_height < h` (`SCS-P7`,
+   `SCS-P32`, CEN-J36).
 3. **The height that replaces "the fire height"** (`SCV-12`). §8's
    enumeration row asks `holds_shard_of` "at the fire height" and deletes
    the function that computes one. The answer must read strictly above a

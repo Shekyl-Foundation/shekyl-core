@@ -5,20 +5,22 @@
 
 //! The section half of the bundle rule: form, the window, then the budget.
 //!
-//! [`check_section`] and [`check_section_until_switch`] are the only
+//! [`check_section`] and [`check_section_stateless`] are the only
 //! admission results. [`fill_section`] is the template's selection, and
 //! the references it returns are a section [`check_section`] admits. The
 //! charge arithmetic is [`SectionCharge`]; a cap compared there is not a
 //! section result. The per-bundle verifier asks the same window through
 //! [`inside_window`].
 //!
-//! Staged with the parent module: nothing on the connect path calls this.
-//! The disposition is the parent module's.
+//! [`check_section`] is live on the connect path (through
+//! `rules::bundle_admission`) and [`check_section_stateless`] at arrival
+//! (`bind_body`). [`fill_section`] is the block template's selection. The
+//! disposition is the parent module's.
 
 use core::fmt;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, section_d_max, ArchivalParams, BundleRef, BundleWireError,
+    section_budget, section_d_max, section_root, ArchivalParams, BundleRef, BundleWireError,
     DrawableEpoch, SectionBudget, SettlementEpochBlocks, SettlementSchedule, TooManyReferences,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch};
@@ -301,7 +303,7 @@ pub fn check_section<V: BundleView>(
 /// # Errors
 ///
 /// [`SectionRefused`], naming the first form or window check that failed.
-pub fn check_section_until_switch(
+pub fn check_section_stateless(
     refs: &[BundleRef],
     header_root: &[u8; 32],
     h_incl: BlockHeight,
@@ -336,13 +338,11 @@ pub fn check_section_until_switch(
 /// larger `D`.
 ///
 /// The result is a section [`check_section`] admits at `h_incl` under the
-/// root [`bundle_root`] computes over it.
+/// root [`section_root`] computes over it.
 ///
-/// **STAGED** (`SO-D12` 4b prep, `ARCHIVAL_SETTLEMENT_WRITER.md` §16.3
-/// item 4): the block template (`shekyl-chain-ingest`'s `template.rs`)
-/// calls it at the switch, over the bundle queue's references and the
-/// store's bundle view of the template's snapshot. Nothing calls it before
-/// then.
+/// The block template (`shekyl-chain-ingest`'s `template.rs`) calls it
+/// over the bundle queue's references and the store's bundle view of the
+/// template's snapshot (`SO-D12` 4b, C4).
 ///
 /// # Errors
 ///
@@ -395,9 +395,9 @@ fn section_shape(
             position: offender + 1,
         });
     }
-    // The one refusal `bundle_root` has, mapped by name: a section the
+    // The one refusal `section_root` has, mapped by name: a section the
     // root cannot count is a verdict here, never a panic.
-    let root = bundle_root(refs)
+    let root = section_root(refs)
         .map_err(|TooManyReferences { found }| SectionRefused::TooManyReferences { found })?;
     if root != *header_root {
         return Err(SectionRefused::Root);

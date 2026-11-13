@@ -38,7 +38,7 @@
 use core::num::NonZeroU128;
 
 use shekyl_chain_rules::{CappedEpoch, GenesisPin, RuleSchedule, RuleSet, Trust};
-use shekyl_network::{Lever, Network, Permit};
+use shekyl_network::{Lever, Network};
 use shekyl_types::BlockHeight;
 
 /// A lever pulled for a network whose row does not permit it.
@@ -151,13 +151,6 @@ impl ChainRules {
     #[must_use]
     pub const fn schedule(&self) -> CappedEpoch {
         self.schedule
-    }
-
-    /// The network's permission for `lever`, for a callee that holds no
-    /// network (the store's replay writes).
-    #[must_use]
-    pub const fn permit(&self, lever: Lever) -> Option<Permit> {
-        self.network.permit(lever)
     }
 
     /// The rule set in force at `height`: the network's issued set, under
@@ -278,19 +271,13 @@ mod tests {
     }
 
     #[test]
-    fn only_a_harness_unpins_and_only_regtest_permits_the_replay_writes() {
+    fn unpinning_moves_the_trust_and_not_the_rules() {
         let rules = ChainRules::new(Network::Regtest, None, PRODUCTION).expect("regtest");
         assert_eq!(rules.unpinned().trust(), Trust::UNPINNED);
         assert_eq!(
             rules.unpinned().in_force(BlockHeight::ZERO),
             rules.in_force(BlockHeight::ZERO)
         );
-        for net in Network::ALL {
-            let rules = ChainRules::new(net, None, PRODUCTION).expect("no lever");
-            for lever in [Lever::InjectServeCredit, Lever::IssueDraws] {
-                assert_eq!(rules.permit(lever).is_some(), net == Network::Regtest);
-            }
-        }
     }
 
     #[test]

@@ -191,7 +191,7 @@ fn section_13_words_answer_a_regtest_daemon() {
 
     let headers = crate::console::execute(&client, &View::BlockHeaderList { from: 1, to: 3 })
         .expect("block header list");
-    let header_count = headers.matches("height:").count();
+    let header_count = headers.matches("block number:").count();
     assert_eq!(header_count, 3, "three headers:\n{headers}");
     let rewards: Vec<shekyl_units::AtomicUnits> = headers
         .lines()
@@ -349,7 +349,7 @@ fn section_13_words_answer_a_regtest_daemon() {
         crate::commands::mine::cmd_mine_start(Some(&client), Some(1)).expect("mine start");
     assert_eq!(started["started"], true, "{started}");
     let mining = crate::commands::mine::cmd_mine_status(Some(&client)).expect("mine status");
-    assert_eq!(mining["active"], true, "{mining}");
+    assert!(mining.active, "{mining:?}");
     crate::commands::mine::cmd_mine_stop(Some(&client)).expect("mine stop");
 
     let marks = daemon.marks();
@@ -476,6 +476,10 @@ impl Regtest {
                 .expect("utf8 config"),
             "--log-file",
             data_dir.join("shekyld.log").to_str().expect("utf8 log"),
+            // The owner's socket in the private configuration directory:
+            // a harness names it (`RPC_CHANNEL.md` §7.1).
+            "--rpc-socket-dir",
+            config_dir.to_str().expect("utf8 config"),
             "--log-level",
             "info",
             "--mine-address",

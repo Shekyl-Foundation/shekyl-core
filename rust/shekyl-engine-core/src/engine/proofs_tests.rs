@@ -322,8 +322,8 @@ mod check_workflows {
             "version_major": 1, "version_minor": 1, "time": 0, "nonce": 0,
             "orphan": false, "depth": 0, "difficulty": "0x1",
             "difficulty_cumulative": "0x1", "reward": "0", "weight": 0,
-            "weight_longterm": null, "tx_count": 0, "pow": null, "coinbase": zero,
-            "curve_root": zero, "attestation_root": zero,
+            "weight_longterm": null, "tx_count": 0, "coinbase": zero,
+            "curve_root": zero, "section_root": zero,
         })
     }
 
@@ -350,9 +350,14 @@ mod check_workflows {
                                 serde_json::to_value(wire::tx::TxEntry {
                                     id: HashHex::from_hex(h).expect("txid is 32 bytes of hex"),
                                     body: Bytes(hex::decode(body_hex).expect("fixture hex")),
-                                    prunable_hash: HashHex::ZERO,
-                                    pqc_auth_hash: Nullable(None),
-                                    archival_size: Size(0),
+                                    // The proofs read asks with `prune`.
+                                    prunable_hash: shekyl_rpc_types::kinds::Asked::Present(
+                                        HashHex::ZERO,
+                                    ),
+                                    pqc_auth_hash: shekyl_rpc_types::kinds::Asked::Present(
+                                        Nullable(None),
+                                    ),
+                                    archival_size: shekyl_rpc_types::kinds::Asked::Present(Size(0)),
                                     pooled,
                                     mined_height: (!pooled)
                                         .then_some(Height(TX_BLOCK_HEIGHT))

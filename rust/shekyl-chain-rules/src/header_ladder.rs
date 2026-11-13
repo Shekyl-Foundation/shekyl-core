@@ -20,8 +20,9 @@
 //! `anchor` only.
 //!
 //! `validate` inserts its chain-state rules between the segments: B5 after
-//! the parent link, B4 after the clock (the proof, CEN-D1, is `form`'s),
-//! G1 after the coinbase. Those three are `BlockRule`s; a header segment
+//! the parent link, the bundle section (CEN-J29 through J37) after the
+//! clock (the proof, CEN-D1, is `form`'s), G1 after the coinbase. B5 and
+//! G1 are `BlockRule`s and the section is `admit`; a header segment
 //! cannot name one — [`run_header`](crate::rules::run_header) takes a
 //! [`HeaderRule`](crate::rules::HeaderRule).
 //!
@@ -180,7 +181,7 @@ pub(crate) fn coinbase_height<'id, H: HeaderView<'id>>(
 
 /// The alt tier's header predicates, in census order: the three segments
 /// with nothing between them. `validate` calls the segments itself so it
-/// can run B5, B4 and G1 at the C++ insertion points.
+/// can run B5, the bundle section and G1 between them.
 pub(crate) fn judge_header_ladder<'id, H: HeaderView<'id>>(
     cx: &BlockContext<'_>,
     view: &H,

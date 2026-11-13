@@ -49,6 +49,8 @@ use shekyl_rpc_types::method::{Grant, GrantSet, Preset};
 use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::info_facts::{InfoFacts, PeerFacts, PoolScope, PoolState};
 use crate::methods::{RpcFault, StoreFault};
+use crate::tor_facts::TorRead;
+use shekyl_tor_status::TorStatus;
 
 /// What a caller is shown: which parts its grants select, and whether it is
 /// the host's administrator.
@@ -153,6 +155,7 @@ pub fn daemon_status(
     chain_facts: &dyn ChainFacts,
     disclosure: Disclosure,
     rpc_connections: u64,
+    tor: TorRead,
 ) -> Result<DaemonStatus, RpcFault> {
     let chain = facts.chain()?;
     let halt = chain_facts.chain_tip()?.halt;
@@ -234,6 +237,44 @@ pub fn daemon_status(
         RpcFault::Store(fault)
     })?;
     let on = disclosure.status();
+    let on_chain = disclosure.shows(Grant::Chain);
+    // The Tor status is read only for a caller shown Status (RK-D24); one
+    // read for a caller who is not, or none for one who is, is the handler
+    // and the disclosure disagreeing.
+    let tor_status = match (on, tor.status) {
+        (true, Some(status)) => Some(status),
+        (false, None) => None,
+        (shown_status, read) => {
+            tracing::error!(
+                shown_status,
+                read = read.is_some(),
+                "daemon_status refused: the Tor read and the caller's Status disclosure disagree"
+            );
+            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+        }
+    };
+    let (posture, origination, sync_connector, tor_quiet, managed) = match tor_status {
+        Some(TorStatus {
+            posture,
+            origination,
+            sync_connector,
+            tor_quiet,
+            tor,
+        }) => (
+            Withheld::Shown(posture),
+            Withheld::Shown(origination),
+            Withheld::Shown(sync_connector),
+            Withheld::Shown(shekyl_rpc_types::Nullable(tor_quiet)),
+            Withheld::Shown(shekyl_rpc_types::Nullable(tor)),
+        ),
+        None => (
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+            Withheld::Withheld,
+        ),
+    };
     let status_count = |pick: fn(crate::info_facts::SessionCounts) -> u64| {
         shekyl_rpc_types::Nullable::from(sessions.map(|s| Count(pick(s))))
     };
@@ -258,22 +299,26 @@ pub fn daemon_status(
         peered: sessions
             .map(crate::info_facts::SessionCounts::has_peers)
             .into(),
+        hiding: tor.hiding,
         writer: crate::reads::writer_of(halt),
         protocol_version: Integer(chain.protocol_version),
-        difficulty: HexU128(chain.difficulty),
-        difficulty_cumulative: HexU128(chain.cumulative_difficulty),
-        block_spacing: Duration(chain.difficulty_target),
+        difficulty: shown(on_chain, HexU128(chain.difficulty)),
+        difficulty_cumulative: shown(on_chain, HexU128(chain.cumulative_difficulty)),
+        block_spacing: shown(on_chain, Duration(chain.difficulty_target)),
         // Coinbases excluded: one per block.
-        tx_count: Count(chain.total_transactions.wrapping_sub(count)),
-        block_weight_max: Size(chain.block_weight_limit),
-        block_weight_median: Size(chain.block_weight_median),
-        time_adjusted: Time(chain.adjusted_time),
-        emission: AtomicUnitsString::from(tip.coins_generated),
-        emission_multiplier: Micro(tip.release_multiplier),
-        burn: Micro(burn),
-        burn_total: AtomicUnitsString::from(tip.total_burned),
-        stake_share: Micro(tip.staker_emission_share),
-        txpool_count: txpool_count.into(),
+        tx_count: shown(
+            on_chain,
+            Count(chain.total_transactions.wrapping_sub(count)),
+        ),
+        block_weight_max: shown(on_chain, Size(chain.block_weight_limit)),
+        block_weight_median: shown(on_chain, Size(chain.block_weight_median)),
+        time_adjusted: shown(on_chain, Time(chain.adjusted_time)),
+        emission: shown(on_chain, AtomicUnitsString::from(tip.coins_generated)),
+        emission_multiplier: shown(on_chain, Micro(tip.release_multiplier)),
+        burn: shown(on_chain, Micro(burn)),
+        burn_total: shown(on_chain, AtomicUnitsString::from(tip.total_burned)),
+        stake_share: shown(on_chain, Micro(tip.staker_emission_share)),
+        txpool_count: shown(disclosure.shows(Grant::Pool), txpool_count.into()),
         grant: disclosure.grants().iter().map(GrantName::from).collect(),
         started: shown(on, Time(status.as_ref().map_or(0, |(s, _)| s.start_time))),
         disk_free: shown(on, Size(status.as_ref().map_or(0, |(s, _)| s.free_space))),
@@ -294,6 +339,11 @@ pub fn daemon_status(
         ),
         rpc_connections: shown(on, Count(rpc_connections)),
         txpool_retired: shown(on, txpool_retired),
+        posture,
+        origination,
+        sync_connector,
+        tor_quiet,
+        tor: managed,
         connector,
         txpool_private_count,
     })

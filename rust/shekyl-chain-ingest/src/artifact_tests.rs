@@ -313,7 +313,8 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     ));
     // Reader: a row the snapshot refuses — a second row of a singleton
     // family — is the snapshot's fault, carried.
-    let mut two_watermarks = good[..snapshot_at + 1 + 8 + 9 * 8].to_vec();
+    // Every family's empty count but the last, the watermark's.
+    let mut two_watermarks = good[..snapshot_at + 1 + 8 + EMPTY_BODY_LEN - 8].to_vec();
     two_watermarks.extend_from_slice(&2u64.to_le_bytes());
     for epoch in [1u64, 2] {
         two_watermarks.extend_from_slice(&8u32.to_le_bytes());
@@ -391,16 +392,15 @@ mod fetch {
 
     use shekyl_rpc_client::{wire, Rpc, RpcError, RpcMethod};
     use shekyl_rpc_types::hash::HashHex;
-    use shekyl_rpc_types::kinds::{Bytes, Integer, Size};
-    use shekyl_rpc_types::nullable::Nullable;
+    use shekyl_rpc_types::kinds::{Asked as Selected, Bytes, Integer};
     use shekyl_rpc_types::wire::block::BlockTx;
     use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived};
-    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
+    use shekyl_types::{BlockHeight, TxHash};
 
     use super::three_blocks;
     use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
     use crate::fetch::{fetch_corpus, FetchFault};
-    use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
+    use crate::source::Source;
     use shekyl_network::Network;
 
     /// One recorded request: the method and the heights asked.
@@ -468,8 +468,8 @@ mod fetch {
             "height": height.to_raw(), "hash": zero, "parent": zero, "version_major": 1,
             "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
             "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
-            "weight": 0, "weight_longterm": 0, "tx_count": 0, "pow": null,
-            "coinbase": zero, "curve_root": zero, "attestation_root": zero,
+            "weight": 0, "weight_longterm": 0, "tx_count": 0,
+            "coinbase": zero, "curve_root": zero, "section_root": zero,
         })
     }
 
@@ -479,9 +479,10 @@ mod fetch {
             OrArchived::Item(BlockTx {
                 id: HashHex::ZERO,
                 body: Bytes(body.clone()),
-                prunable_hash: HashHex::ZERO,
-                pqc_auth_hash: Nullable(None),
-                archival_size: Size(0),
+                // The full form, asked without `prune`: `{id, body}`.
+                prunable_hash: Selected::Unasked,
+                pqc_auth_hash: Selected::Unasked,
+                archival_size: Selected::Unasked,
             })
         })
     }
@@ -503,6 +504,8 @@ mod fetch {
                         "body": Bytes(block.clone()),
                         "tx": txs.iter().map(&mut slot).collect::<Vec<_>>(),
                         "output_index": 0,
+                        "section": [],
+                        "section_body": [],
                     })
                 })
                 .collect(),
@@ -523,7 +526,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &[], &mut w)
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &mut w)
             .await
             .expect("fetched");
         assert_eq!(written, 3);
@@ -563,9 +566,9 @@ mod fetch {
                 OrArchived::Item(BlockTx {
                     id: HashHex::ZERO,
                     body: Bytes(body.clone()),
-                    prunable_hash: HashHex::ZERO,
-                    pqc_auth_hash: Nullable(None),
-                    archival_size: Size(0),
+                    prunable_hash: Selected::Unasked,
+                    pqc_auth_hash: Selected::Unasked,
+                    archival_size: Selected::Unasked,
                 })
             }
         })]);
@@ -575,7 +578,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("archived");
         match err {
@@ -608,7 +611,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("pruned");
         match err {
@@ -635,7 +638,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("refused");
         assert!(
@@ -658,7 +661,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("missing");
         assert!(
@@ -673,7 +676,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("short");
         assert!(
@@ -696,86 +699,10 @@ mod fetch {
         )
         .expect("header");
         assert!(matches!(
-            fetch_corpus(&rpc, 0..1, batch(1), &[], &mut w)
+            fetch_corpus(&rpc, 0..1, batch(1), &mut w)
                 .await
                 .expect_err("transport"),
             FetchFault::Rpc(RpcError::ConnectionError(_))
         ));
-    }
-
-    fn receipt(at: u64, tag: u8) -> Injection {
-        Injection {
-            at: BlockHeight::from_raw(at),
-            credit: ServeCredit {
-                persona: PCanonicalId::from_bytes([tag; 32]),
-                shard: ShardId::from_raw(u64::from(tag) + 100),
-                epoch: SettlementEpoch::from_raw(u64::from(tag)),
-            },
-        }
-    }
-
-    /// The injector's receipts are placed right after the block at their
-    /// height — across a batch boundary, two at one height in the order
-    /// given — and the corpus reads the `Inject` back where the daemon
-    /// wrote it. A receipt the range does not reach is refused before the
-    /// first request.
-    #[tokio::test]
-    async fn injections_land_beside_their_block_and_a_stray_one_is_refused_first() {
-        let blocks = three_blocks();
-        let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            Network::Regtest,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        // Out of height order on purpose: placement is by `at`, not by
-        // position in the flag list.
-        let receipts = [receipt(2, 0x22), receipt(1, 0x11), receipt(2, 0x33)];
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &receipts, &mut w)
-            .await
-            .expect("fetched");
-        assert_eq!(written, 3, "blocks, not records");
-        let bytes = w.finish().expect("count").into_inner();
-        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-        assert_eq!(r.declared(), 6);
-        let mut shape = Vec::new();
-        while let Some(Sequenced { event, .. }) = r.next().expect("record") {
-            shape.push(match event {
-                IngestEvent::Extend(_) => None,
-                IngestEvent::Inject(credit) => Some(credit),
-                other => panic!("{other:?}"),
-            });
-        }
-        assert_eq!(
-            shape,
-            vec![
-                None,
-                None,
-                Some(receipts[1].credit),
-                None,
-                Some(receipts[0].credit),
-                Some(receipts[2].credit),
-            ]
-        );
-
-        let rpc = Scripted::new(&[reply(&blocks)]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            Network::Regtest,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[receipt(3, 0x44)], &mut w)
-            .await
-            .expect_err("stray");
-        assert!(
-            matches!(err, FetchFault::InjectionOutOfRange { injection } if injection == receipt(3, 0x44)),
-            "{err}"
-        );
-        assert!(
-            rpc.asked.lock().expect("lock").is_empty(),
-            "refused before any block was requested"
-        );
     }
 }

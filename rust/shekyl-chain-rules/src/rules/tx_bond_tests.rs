@@ -3,29 +3,22 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Fixtures for the bond-state rows: CEN-J4/J5/J6 on a serve-credit vin
-//! and CEN-J13/J14/J15/J16/J18 on a bond post (below) — the arms a view
-//! with **no bonds** can witness. `MockChain` holds no records by policy
-//! (`harness.rs`, `archival_reads!(empty, r_market from …)`; DRS-E4 §5.2,
-//! *No `Mock*` archival state*), which is exactly J4's negative: a credit
-//! for a persona with no record. The one planted archival read is J15's
-//! market price, for the reason `MockChain::with_r_market` gives. J5 and
-//! J6 need a record to read a join epoch and an interval log from, so
-//! their negatives are the ingest driver's — a real chain that posted the
-//! bond, through `connect` (`archival_slash_tests.rs`, the J5 and J6
-//! pins) — never a record constructed here. The three rows' vacuity on
-//! every other class is also this file's.
+//! Fixtures for the bond-post rows, CEN-J13/J14/J15/J16/J18 — the arms a
+//! view with **no bonds** can witness. `MockChain` holds no records by
+//! policy (`harness.rs`, `archival_reads!(empty, r_market from …)`; DRS-E4
+//! §5.2, *No `Mock*` archival state*). The one planted archival read is
+//! J15's market price, for the reason `MockChain::with_r_market` gives.
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{
-    anchored_on, candidate_on, coinbase, join_market, listed, persona, point, serve_credit_only,
-    signed_as, spendable_chain, BOND_FLOOR,
+    anchored_on, candidate_on, coinbase, join_market, listed, persona, point, signed_as,
+    spendable_chain, BOND_FLOOR,
 };
 use crate::harness::{assert_refused, defined, formed_on, judge_on, judged, MockChain, MockView};
 use crate::rule_set::RuleSet;
-use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
+use crate::rules::tx_bond::judge_bond_post;
 use crate::rules::TxContext;
 use crate::trust::Trust;
 use crate::validate::{tx_against, validate};
@@ -36,8 +29,6 @@ use shekyl_types::{SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPost, Holdings};
 use shekyl_wire::{BondPostKind, Ct, Input, Transaction};
 
-const P: [u8; 32] = [0x5e; 32];
-const ROWS: [CenRow; 3] = [CenRow::J4, CenRow::J5, CenRow::J6];
 const POST_ROWS: [CenRow; 5] = [
     CenRow::J13,
     CenRow::J14,
@@ -45,113 +36,6 @@ const POST_ROWS: [CenRow; 5] = [
     CenRow::J16,
     CenRow::J18,
 ];
-
-/// CEN-J4 at the pool's slot: a credit for a persona the view has no
-/// record for is refused on J4 at its **vin**, through `tx_against` — the
-/// pool's call. Until E6 slice 8 row 3 this body passed every rule and met
-/// the fold's L7 at connect (row 2's measurement); the refusal is now the
-/// rule's, and the fold's arm is the backstop beneath it.
-#[test]
-fn j4_refuses_a_credit_for_a_persona_with_no_record_at_the_pool_slot() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        assert_refused(
-            judged(tx_against(
-                &serve_credit_only(P),
-                TxSlot::Lone,
-                &view,
-                &RuleSet::GENESIS,
-                &shekyl_network::HARNESS_NETWORK_ID,
-                None,
-                FormAttempt::FIRST,
-            )),
-            CenRow::J4,
-            Locus::Input {
-                slot: TxSlot::Lone,
-                input: 0,
-            },
-        );
-    });
-}
-
-/// The same body listed first in a block is refused by `validate` on J4 at
-/// `Listed(0)`'s vin — one function, two sites — and **before** the
-/// archival fold runs (L7 would refuse it there; the row that names the
-/// reason is J4's, and the census pin in `scenario_archival_tests.rs`
-/// moved from L7 to J4 with this rule).
-#[test]
-fn j4_refuses_the_same_credit_listed_before_the_fold_reaches_it() {
-    let chain = spendable_chain();
-    chain.with_view(|view| {
-        let formed = formed_on(
-            &chain,
-            candidate_on(&chain, vec![anchored_on(&chain, serve_credit_only(P))]),
-        );
-        assert_refused(
-            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
-            CenRow::J4,
-            Locus::Input {
-                slot: TxSlot::Listed(0),
-                input: 0,
-            },
-        );
-    });
-}
-
-/// A multi-vin credit is refused at the vin that fails, in vin order: two
-/// credits for two personas with no record name vin 0, not the body.
-#[test]
-fn j4_names_the_first_failing_vin() {
-    let chain = spendable_chain();
-    let mut two = serve_credit_only(P);
-    two.prefix
-        .inputs
-        .push(serve_credit_only([0x5f; 32]).prefix.inputs[0].clone());
-    chain.with_view(|view| {
-        let mut coverage = RuleCoverage::EMPTY;
-        let cx = TxContext::derive(&two, TxSlot::Lone, &mut coverage)
-            .expect("two serve-credit vins classify as serve-credit-only");
-        assert_refused(
-            judge_serve_credit_bond(&cx, &view, &mut coverage)
-                .unwrap_or_else(|never| match never {}),
-            CenRow::J4,
-            Locus::Input {
-                slot: TxSlot::Lone,
-                input: 0,
-            },
-        );
-        for row in ROWS {
-            assert!(
-                !coverage.contains(row),
-                "{row}: a refusal records nothing — the rows are recorded after the loop"
-            );
-        }
-    });
-}
-
-/// On every class that is not a serve credit the three rows are recorded
-/// **vacuous, not absent** (slice 5 Q2): a spend and a coinbase have no
-/// credit vin, and the sequence reads nothing.
-#[test]
-fn j4_j5_j6_are_vacuous_off_the_serve_credit_class() {
-    let chain = MockChain::default();
-    chain.with_view(|view| {
-        for (name, tx, slot) in [
-            ("spend", listed(point(9)), TxSlot::Lone),
-            ("coinbase", coinbase(0), TxSlot::Miner),
-        ] {
-            let mut coverage = RuleCoverage::EMPTY;
-            let cx = TxContext::derive(&tx, slot, &mut coverage)
-                .unwrap_or_else(|refused| panic!("{name} classifies: {refused}"));
-            judge_serve_credit_bond(&cx, &view, &mut coverage)
-                .unwrap_or_else(|never| match never {})
-                .unwrap_or_else(|refused| panic!("{name}: nothing to judge, but {refused}"));
-            for row in ROWS {
-                assert!(coverage.contains(row), "{name}: {row} recorded vacuous");
-            }
-        }
-    });
-}
 
 // ---- CEN-J13, J14, J16, J18: the bond post against its record ----------
 // ---- (slice 8 rows 4 and 5) ---------------------------------------------
@@ -165,7 +49,7 @@ fn j4_j5_j6_are_vacuous_off_the_serve_credit_class() {
 // settlement, J18's open interval and holdings, J13's Reinstate arm (J18
 // runs first and refuses the missing record) — is the ingest driver's,
 // over a chain that posted the bond (`archival_slash_tests.rs`,
-// `scenario_archival_tests.rs`), by the same policy as J5 and J6.
+// `scenario_archival_tests.rs`).
 
 const BOND_KI: [u8; 32] = point(11);
 const WHO: [u8; 32] = [0x6a; 32];
@@ -852,7 +736,6 @@ fn the_post_rows_are_vacuous_off_the_bond_post_class() {
     chain.with_view(|view| {
         for (name, tx, slot) in [
             ("spend", listed(point(9)), TxSlot::Lone),
-            ("serve credit", serve_credit_only(P), TxSlot::Lone),
             ("coinbase", coinbase(0), TxSlot::Miner),
         ] {
             let mut coverage = RuleCoverage::EMPTY;

@@ -857,7 +857,7 @@ pub(crate) fn judge_reference<'id, N, V: ChainView<'id>>(
             coverage.insert(J21::ROW);
             context_after_claim(cx, view, BOND_POST_REFERENCE, verified, attempt, coverage)
         }
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => {
+        TxClass::Coinbase => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }

@@ -64,7 +64,7 @@ fn run_child_if_requested() {
     let listen = format!("127.0.0.1:{port}");
     let data_dir = dir.join("data");
     let log_file = dir.join("shekyld.log");
-    let args: Vec<std::ffi::OsString> = [
+    let mut args: Vec<std::ffi::OsString> = [
         "shekyld",
         "--network",
         "regtest",
@@ -82,11 +82,27 @@ fn run_child_if_requested() {
     .iter()
     .map(std::ffi::OsString::from)
     .collect();
+    // A harness names a private directory for the owner's socket, so this
+    // daemon never meets another test's at the default rendezvous
+    // (`RPC_CHANNEL.md` §7.1).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let socket_dir = dir.join("s");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&socket_dir)
+            .expect("a socket directory");
+        args.push("--rpc-socket-dir".into());
+        args.push(socket_dir.into_os_string());
+    }
     let status = shekyl_daemon::run::main(
         &args,
         &Platform {
             home: Some(dir),
             program_data: None,
+            session_dir: None,
+            service_rendezvous: None,
         },
     );
     std::process::exit(status);

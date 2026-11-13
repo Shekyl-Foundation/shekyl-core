@@ -287,13 +287,13 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
-# `TestKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
+# `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
 # production graph.
 shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
-# SH-2's proving test (`serving::round_trip_tests`): the persona's resident
-# pass key behind a real `PServeEndpoint`, fetched by the daemon's real
-# `PFetchClient`, and the countersignature verified against the persona's
-# **bond identity**. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
+# SH-2's proving test (`serving::receipt_round_trip_tests`): the persona's
+# resident receipt key behind a real `PServeEndpoint`, fetched by the
+# daemon's real `PFetchClient`, and the receipt verified against the
+# persona's receipt key. The SOCKS shim is `shekyl-p-loopback`. Dev-only:
 # `SF-D4` forbids the client on a wallet production graph, and
 # `check_p_fetch_dep_cut.py` does not follow this edge.
 shekyl-p-loopback = { path = "../shekyl-p-loopback" }
@@ -315,12 +315,6 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # compiled only under `cfg(test)`). Production takes the keypair from the
 # persona bundle and does not name this crate.
 shekyl-onion-key = { path = "../shekyl-onion-key" }
-# DRS-E4 commit 7: the chain-vector capture (`regtest_e2e.rs`) writes the
-# regtest injector's receipt as the corpus's `Injection` — one type for the
-# `--inject` flag it passes `shekyl-chain-replay fetch`, the manifest row
-# it writes, and the replay's report — so the height cannot be spelled
-# differently at any of them. No default features: the type lives in the
-# unconditional `source` module; the pipeline and CLI are not compiled.
 # `harness` (E6 slice 8 row 7, Q3's pin): the scenario driver's
 # emission-claim assembly, so `stake_engine_tests::emission_claim_assembly`
 # can hold it and this crate's handler to identical bytes for one shape. A

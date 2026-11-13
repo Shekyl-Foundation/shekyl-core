@@ -31,7 +31,34 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// are unchanged (RK-D25, RW-Q6). A 3.x reader of any 4.0 reply refuses it
 /// after the version read reports the daemon newer. The method table and
 /// its schema are `wire::TABLE` and `docs/generated/rpc_wire_schema.tsv`.
-pub const CORE_RPC_VERSION_MINOR: u32 = 0;
+///
+/// 4.1: `daemon_status` follows `RPC_CHANNEL.md` §6.1 (Rick, 2026-11-12).
+/// Its base fields are `health`'s, liveness only; the chain's facts are a
+/// part shown to `chain`, and `txpool_count` a part shown to `pool`. A
+/// caller without the grant finds the part absent, never zero (RK-D23).
+/// And a reply field a request switch selects is present exactly when the
+/// request turned the switch on (RW-Q4 as amended): `pow` selects a
+/// header's proof-of-work hash, never `null`; `prune` selects a
+/// transaction's skeleton entry, the pruned body with the txid's operands,
+/// where without it the entry is `{id, body}` (IG-Q55, IG-Q56).
+///
+/// 4.2: `daemon_status` carries the Tor status (`INPUT_GRAMMAR.md` §23 as
+/// Part G and Rick's rulings of 2026-11-12 amend it). `hiding` joins the
+/// base fields; `posture`, `origination`, `sync_connector`, `tor_quiet` and
+/// `tor` are a part shown to `status`, in `shekyl-tor-status`'s types. Every
+/// closed set there decodes a keyword this build does not know, and the
+/// send flow reads such a value as not address-hiding.
+///
+/// 4.3: the 4b switch (`SO-D12`; `INPUT_GRAMMAR.md` IG-Q102). A block
+/// header's `attestation_root` is `section_root`, the root of the block's
+/// bundle section; `block_show` and `block_list` carry each block's
+/// `section` (its bundle references) and the `section_body` list this node
+/// holds for it; an `archival_claim_show` bond loses `complete_tree` (a
+/// complete tree is never in an epoch's market, so it was always `false`),
+/// and `served_epoch` names the last pass only inside the release
+/// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
+/// version read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 3;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -45,15 +72,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 0)` is `(4 << 16) | 0` = 262144. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 3)` is `(4 << 16) | 3` = 262147. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_144);
-        assert_eq!(CORE_RPC_VERSION, 4 << 16, "minor 0 packs to nothing");
+        assert_eq!(CORE_RPC_VERSION, 262_147);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 3);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 0);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.0");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 3);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.3");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

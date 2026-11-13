@@ -19,6 +19,7 @@ description = "Chain sync's runtime half: the sync owner task on the session lay
 publish-for-test = []
 
 [dependencies]
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }

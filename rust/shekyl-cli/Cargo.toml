@@ -11,6 +11,9 @@ name = "shekyl-cli"
 path = "src/main.rs"
 
 [dependencies]
+# The Tor status's one renderer (`TOR_STATUS_CRATE.md`): `status` says what
+# the daemon's log says. serde only.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-types = { path = "../shekyl-types" }
 # The daemon's `get_info` reply is one type, defined once (RK-D1); the CLI

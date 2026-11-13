@@ -52,7 +52,6 @@ fn regtest_expectation() -> super::DaemonExpectation {
 }
 
 use serde_json::json;
-use shekyl_chain_ingest::source::Injection;
 use shekyl_rpc_client::{wire, Rpc};
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_rpc_types::hash::HashHex;
@@ -690,6 +689,9 @@ impl RegtestDaemon {
         } = spec;
         install_wallet_tracing();
 
+        // A released binary named here (the mixed-version test's alpha.11)
+        // predates `rpc-socket-dir`, and refuses a row it does not know.
+        let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
         let p2p_ports: Vec<u16> = match &peering {
@@ -775,6 +777,16 @@ impl RegtestDaemon {
             "--log-level",
             "info",
         ]);
+        // The owner's socket goes in the same private directory: this
+        // account's, mode 0700, one per spawn. A harness names it, so a test
+        // daemon never meets another's at the default rendezvous and needs no
+        // session directory (`RPC_CHANNEL.md` §7.1, IG-Q104).
+        if !released {
+            cmd.args([
+                "--rpc-socket-dir",
+                config_dir.to_str().expect("utf8 config path"),
+            ]);
+        }
         let mine_address = mine_address.unwrap_or_else(|| default_mine_address(network));
         cmd.args(["--mine-address", &mine_address]);
         match peering {
@@ -1026,6 +1038,8 @@ impl RegtestDaemon {
             .0;
         status
             .txpool_count
+            .shown()
+            .expect("the harness is the host, and is told the pool part")
             .0
             .expect("the harness's pool is live")
             .0
@@ -1037,7 +1051,18 @@ impl RegtestDaemon {
     /// `daemon_status` reports them.
     pub(super) async fn weight_limit(&self) -> (u64, u64) {
         let status = self.status().await;
-        (status.block_weight_median.0, status.block_weight_max.0)
+        (
+            status
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            status
+                .block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+        )
     }
 
     /// The block at `height`, whole.
@@ -1102,7 +1127,12 @@ impl RegtestDaemon {
     /// The emission e2e samples it once, at epoch close, and pins it to 0
     /// (A6 pool-half disposition).
     pub(super) async fn total_burned(&self) -> shekyl_units::AtomicUnits {
-        self.status().await.burn_total.to_atomic_units()
+        self.status()
+            .await
+            .burn_total
+            .shown()
+            .expect("the chain part is shown")
+            .to_atomic_units()
     }
 
     /// The ephemeral RPC port the daemon bound. Observability harnesses open
@@ -2073,7 +2103,6 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         &format!("spend-1in-{outputs}out"),
         "e2e_fcmp_spend_accepted_by_daemon",
         Some(accepted),
-        &[],
     )
     .await;
 }
@@ -2504,7 +2533,6 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         "spend-depth3",
         "e2e_fcmp_spend_over_depth3_tree",
         Some(accepted),
-        &[],
     )
     .await;
 }
@@ -2647,7 +2675,7 @@ async fn overfill_pool(
 /// at its fee/penalty equilibrium just past `M`, so a block at the bound
 /// exists only as a Rust-built one. The Rust template is built against the
 /// C++'s own state — its template's header (parent, curve-tree root,
-/// attestation root, versions, timestamp), `block_template`'s median and
+/// section root, versions, timestamp), `block_template`'s median and
 /// accumulator, the pool's bodies, the F20 volume window from the headers
 /// — so the only thing that differs between the two blocks submitted is
 /// one listed hash, and the only rule that can tell them apart is F14.
@@ -2691,7 +2719,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
     use shekyl_economics::params::TX_VOLUME_WINDOW;
     use shekyl_economics::{ClosedShardCount, EconomicParams, EmissionError, TxVolume};
-    use shekyl_types::{AttestationRoot, BlockCount, BlockHeight, Timestamp};
+    use shekyl_types::{BlockCount, BlockHeight, SectionRoot, Timestamp};
     use shekyl_wire::{Block, Transaction};
     use zeroize::Zeroizing;
 
@@ -2707,7 +2735,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
 
     // --- the daemon's state for the next block, read rather than assumed ---
     // The daemon's own template supplies the header a block at this height
-    // must carry: parent, curve-tree root (B5), attestation root, the
+    // must carry: parent, curve-tree root (B5), section root, the
     // version pair, and a timestamp past the MTP (C2).
     let job = daemon
         .rpc
@@ -2804,9 +2832,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             height: BlockHeight::from_raw(height),
             previous: cxx_block.header.previous,
             curve_tree_root: cxx_block.header.curve_tree_root,
-            attestation_root: AttestationRoot::from_bytes(
-                *cxx_block.header.attestation_root.as_bytes(),
-            ),
+            section_root: SectionRoot::from_bytes(*cxx_block.header.section_root.as_bytes()),
             major_version: cxx_block.header.major_version,
             // The C++'s template timestamp is already `max(now, MTP + 1)`;
             // claiming it with no median reproduces it exactly.
@@ -2934,7 +2960,6 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         "limit-full",
         "e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx",
         None,
-        &[],
     )
     .await;
 }
@@ -3052,7 +3077,6 @@ async fn e2e_cxx_template_fills_to_its_median() {
         "median-full",
         "e2e_cxx_template_fills_to_its_median",
         None,
-        &[],
     )
     .await;
 }
@@ -3696,7 +3720,7 @@ struct ConfirmedBondFixture {
     /// How many pre-post funding records the discovery scan found.
     pre_post_discovered: usize,
     /// Tip height when the confirmation scan sealed — the geography anchor
-    /// for the emission e2e's epoch-close/inject/claim layout.
+    /// for the emission e2e's epoch-close/claim layout.
     confirmed_tip_height: u64,
 }
 
@@ -4236,14 +4260,14 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
         "bond-post",
         "e2e_staker_bond_post_accepted_and_applied",
         None,
-        &[],
     )
     .await;
 }
 
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the
-/// full staker reward loop over real RPC — serve credit injected under the
-/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, the epoch closed by mining, the
+/// full staker reward loop over real RPC — serve credit earned by the
+/// persona's admitted draws (SO-D12), the epoch closed by mining under the
+/// settlement-epoch lever, the
 /// claim built by the production CB-3 path ([`Engine::submit_emission_claim`]
 /// — no parallel builder), accepted by the daemon's PR-4b emission battery
 /// (`DAEMON_SUBMIT_VERDICT.md` §8.7.2 E-rows), and **applied**: the
@@ -4261,18 +4285,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// (the pass of epoch `w` is the last block of `w + 1`) — is the walk's
 /// datum: the onset stagger (`good_through`: a bond is a market member
 /// from `join_epoch + 1`, never in its join epoch) makes **`J + 1` the
-/// first claimable epoch**. The serve credit is injected for `J + 1`,
+/// first claimable epoch**. The persona earns serve credit in `J + 1`,
 /// `J + 1` is mined closed, and the claim targets it. `J` closes
 /// zero-work along the way — the no-staker epoch whose budget is never
 /// minted (claims are wallet-timed mints; an unclaimable epoch's accrual
 /// simply never enters supply) — and the claim builder must EXCLUDE it
 /// and every epoch before it (`claimed_epochs == [J + 1]`), which is the
 /// no-staker leg's e2e observable. The epoch is `SEB = 128` so that the
-/// inject and the claim fit between the join and `J + 1`'s close
-/// wherever in `J` the join lands (the inject follows the confirmation
-/// by some twenty blocks, and the claim needs `REF_ANCHOR_AGE` of room
-/// before the close). The pinned ordering
-/// `inject < referenceBlock < epoch_close < claim ≤ tip` follows from
+/// credit and the claim fit between the join and `J + 1`'s close wherever
+/// in `J` the join lands (the claim needs `REF_ANCHOR_AGE` of room before
+/// the close). The pinned ordering
+/// `referenceBlock < epoch_close < claim ≤ tip` follows from
 /// claiming within `REF_ANCHOR_AGE` blocks of the close (the close-detect
 /// loop mines in 3-block steps so the overshoot stays inside that
 /// window). Blocks between the close and the claim carry no `J + 2`
@@ -4299,7 +4322,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK: serve credit's production path goes live at SO-D12 4b (Rick, 2026-10-29: no inject lever); green on the flip through the daemon-closed shard, the market-bond join and the join-epoch read"]
+#[ignore = "DECIDED_DARK: serve credit comes only from admitted bundles (SO-D12 4b); the leg that serves the persona's shard over Tor for the mining daemon's producer is the switch's live-Tor emission walk; green on the flip through the daemon-closed shard, the market-bond join and the join-epoch read"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::emission_source::fetch_emission_claim_source;
     use super::stake_engine::PSlot;
@@ -4307,9 +4330,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     const SLOT: u32 = 0;
     /// Settlement-epoch size under the lever. The join epoch is no longer
     /// pinned (module docs: it is read back from the record), so the
-    /// epoch only has to hold the inject and the claim after a join that
-    /// may land anywhere in it: the inject follows the confirmation by
-    /// about twenty blocks and the claim needs `REF_ANCHOR_AGE` before
+    /// epoch only has to hold the credit and the claim after a join that
+    /// may land anywhere in it: the claim needs `REF_ANCHOR_AGE` before
     /// the next close, so 128 leaves room to spare, and the shard's
     /// pricing pass and `J + 1`'s close are each a few hundred empty
     /// blocks rather than a thousand.
@@ -4800,8 +4822,8 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 ///   read's positive balance.
 ///
 /// **The cooldown predicates are vacuous on this walk, by design.** The
-/// persona never serves (serve credit exists only via the explicit
-/// `inject_serve_credit` lever, which this walk never calls), so
+/// persona never serves (serve credit comes only from admitted draws, and
+/// this walk files no bundle), so
 /// `release_cooldown_elapsed(None, _)` and `slashes_settled_through(_, None)`
 /// are both `true`. A *served* persona's exit waits on the slash
 /// watermark, which advances one settlement epoch
@@ -5649,24 +5671,6 @@ fn a_version_line_names_its_last_nine_hex_digits() {
 /// `spend_txid` is recorded when the generator knows it; the archival
 /// shapes are located by their vin class at load, so it is `None` there.
 ///
-/// `injections` is **every row in the daemon's state that no block
-/// produced** — a regtest injector's direct LMDB write, made under the
-/// blockchain lock outside any block's write batch — as the injector's
-/// receipts. Empty for a chain whose state is wholly block-derived, and
-/// the manifest says so positively rather than by omission, because the
-/// corpus travels and the inference is drawn where the data is: a
-/// block-driven replay cannot reach such a row, so an archival digest over
-/// the chain diverges *by construction*, at exactly the height a writer
-/// bug would produce one (`DRS_E4_ARCHIVAL_WRITER.md` ARW-1). The receipts
-/// go two places from one value: `shekyl-chain-replay fetch --inject`
-/// writes each as an `IngestEvent::Inject` record beside the block at its
-/// height, so the replay reaches the daemon's archival state (DRS-E4 §3.8
-/// item 3); and the manifest's `out_of_band_writes` rows carry the same
-/// spelling, so the replay test can hold the corpus's `Inject` records to
-/// the manifest in both directions. A generator that injects and does not
-/// pass the receipt here has mislabelled its corpus — and the archival
-/// oracle will say so at the tip.
-///
 /// **Why the manifest stamps `genesis_hash` and `built_at_dev_sha`.** These
 /// blobs are consensus-pinned test data: valid against one genesis and one
 /// rule set, and a change of TXE-Q6′'s class (a grammar closure, a constant
@@ -5684,7 +5688,6 @@ async fn maybe_capture_chain_vector(
     shape: &str,
     generator: &str,
     spend_txid: Option<TxHash>,
-    injections: &[Injection],
 ) {
     if std::env::var_os("SHEKYL_CAPTURE_CHAIN_VECTORS").is_none() {
         return;
@@ -5726,9 +5729,6 @@ async fn maybe_capture_chain_vector(
         .arg(count.to_string())
         .arg("--out")
         .arg(&corpus);
-    for injection in injections {
-        fetch.arg("--inject").arg(injection.to_string());
-    }
     let fetch = shekyl_tor_control_client::spawn_lock::output(&mut fetch)
         .expect("spawn shekyl-chain-replay fetch");
     assert!(
@@ -5824,11 +5824,10 @@ async fn maybe_capture_chain_vector(
     );
     std::fs::remove_file(&baseline_store).expect("remove the baseline store");
 
-    // Format 4 (DRS-E4 commit 7): `out_of_band_writes` rows are structured
-    // — the kind and the injector's receipt in the corpus's one spelling —
-    // where format 3 carried prose.
+    // Format 5: every row of the captured state is block-produced, so the
+    // manifest carries no out-of-band rows.
     let manifest = json!({
-        "format_version": 4,
+        "format_version": 5,
         "tx_count": tx_count,
         "genesis_hash": genesis_hash,
         "built_at_dev_sha": built_at_dev_sha,
@@ -5856,18 +5855,6 @@ async fn maybe_capture_chain_vector(
         "tip_height": tip,
         "block_count": count,
         "spend_txid": spend_txid.map(|h| h.to_string()),
-        // Rows no block produced (see the doc comment). Empty is the
-        // positive claim "wholly block-derived"; absent would be silence.
-        // Each row is the receipt the fetch was given, in the same
-        // spelling, so the corpus and the manifest cannot name different
-        // heights for one injection.
-        "out_of_band_writes": injections
-            .iter()
-            .map(|injection| json!({
-                "kind": "archival_serve_credit",
-                "receipt": injection,
-            }))
-            .collect::<Vec<_>>(),
         // What `replay --chain regtest --fixed-difficulty n` must be given:
         // the value this harness spawned the daemon with, recorded rather
         // than remembered.
@@ -6134,7 +6121,7 @@ async fn tx_show_and_chain_spent_answer_through_shekyl_cli() {
 
     let out = daemon.console(&format!("tx show {txid}"));
     assert!(
-        out.contains("Found in blockchain at height 0"),
+        out.contains("Found in blockchain at block 0"),
         "tx show must locate the genesis coinbase; got:\n{out}"
     );
 

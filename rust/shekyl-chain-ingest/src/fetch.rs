@@ -21,33 +21,29 @@
 //!
 //! Generic over `Rpc` so the loop is tested against a scripted transport;
 //! the binary supplies `shekyl_rpc_transport::HttpRpc`.
-//!
-//! **Injections** (DRS-E4 §3.8 item 3). A regtest daemon's state can carry
-//! one row no block produced — a serve credit the injector wrote at the
-//! tip of the moment — and `block_list` cannot see it. The
-//! caller hands the fetch the injector's receipts ([`Injection`]: the
-//! credit and the height it was attributed to), and the fetch writes each
-//! `Inject` record right after the block at its height, so the corpus
-//! carries the event at its capture position. A receipt whose height the
-//! fetch does not reach is refused before any block is requested
-//! ([`FetchFault::InjectionOutOfRange`]): a receipt silently dropped would
-//! be a corpus mislabelled as wholly block-derived.
 
 use std::io::{Seek, Write};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 
 use shekyl_rpc_client::{wire, Rpc, RpcError};
-use shekyl_rpc_types::kinds::Height;
+use shekyl_rpc_types::kinds::{Bytes, Height};
 use shekyl_rpc_types::wire::shared::{ArchivedState, OrArchived, Slot, SlotState};
 use shekyl_types::{BlockHeight, TxHash};
 
 use crate::corpus::{CorpusFault, CorpusWriter};
-use crate::source::Injection;
 
 /// Why the corpus could not be fetched.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchFault {
+    /// A block's bundle section names a body the daemon no longer holds:
+    /// it was released past the undo retention, and a corpus without it
+    /// cannot be replayed.
+    #[error("the bundle body of a reference at height {height} is not held")]
+    BundleBodyNotHeld {
+        /// The block's height.
+        height: BlockHeight,
+    },
     /// The transport failed.
     #[error("rpc: {0}")]
     Rpc(#[from] RpcError),
@@ -84,41 +80,24 @@ pub enum FetchFault {
     /// verification).
     #[error(transparent)]
     Corpus(#[from] CorpusFault),
-    /// An injection receipt names a height the fetch does not reach, so
-    /// its record could never be placed beside its block.
-    #[error("injection {injection} is attributed to a height outside the fetched range")]
-    InjectionOutOfRange {
-        /// The receipt.
-        injection: Injection,
-    },
 }
 
 /// Fetch `heights` in batches of `batch` and write them through `writer`,
-/// which must be positioned at `heights.start`, placing each of
-/// `injections` right after the block at its height (module docs; any
-/// order, any count — several at one height land in the order given).
-/// Returns the **block** records written. A batch is non-zero by type: a
+/// which must be positioned at `heights.start`. Returns the block records
+/// written. A batch is non-zero by type: a
 /// batch of zero heights would fetch nothing forever, and the caller's
 /// flag refuses it before a file is created.
 ///
 /// # Errors
 ///
-/// Any [`FetchFault`]; [`FetchFault::InjectionOutOfRange`] before any
-/// block is requested. Otherwise the writer is left at the height that
-/// failed, so a caller can report exactly how far the corpus reached.
+/// Any [`FetchFault`]. The writer is left at the height that failed, so
+/// a caller can report exactly how far the corpus reached.
 pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
     rpc: &R,
     heights: Range<u64>,
     batch: NonZeroUsize,
-    injections: &[Injection],
     writer: &mut CorpusWriter<W>,
 ) -> Result<u64, FetchFault> {
-    if let Some(stray) = injections
-        .iter()
-        .find(|i| !heights.contains(&i.at.to_raw()))
-    {
-        return Err(FetchFault::InjectionOutOfRange { injection: *stray });
-    }
     let mut written = 0u64;
     let mut first = heights.start;
     while first < heights.end {
@@ -158,13 +137,54 @@ pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
                     }
                 }
             }
-            writer.append(&block.body.0, &txs)?;
+            // The section's bodies in section order, each the one its
+            // reference names. A body the daemon no longer holds cannot be
+            // replayed, so the capture stops there (`corpus.rs`, version 4).
+            let references: Vec<Vec<u8>> = block.section.into_iter().map(Bytes::into_vec).collect();
+            let carried: Vec<Vec<u8>> = block
+                .section_body
+                .into_iter()
+                .map(Bytes::into_vec)
+                .collect();
+            let bodies = section_bodies(at, &references, &carried)?;
+            writer.append_carrying(&block.body.0, &txs, &references, &bodies)?;
             written += 1;
-            for injection in injections.iter().filter(|i| i.at == at) {
-                writer.inject(at, injection.credit)?;
-            }
         }
         first = end;
     }
     Ok(written)
+}
+
+/// The body of each of `references`, in section order, from `carried`,
+/// matched by length and hash (§7.5). Each carried body is hashed once
+/// ([`shekyl_archival_retention::CarriedBodies`]).
+///
+/// # Errors
+///
+/// [`FetchFault::BundleBodyNotHeld`] when a reference's body is not among
+/// them: the daemon has released it, and a corpus without it cannot be
+/// replayed.
+fn section_bodies(
+    height: BlockHeight,
+    references: &[Vec<u8>],
+    carried: &[Vec<u8>],
+) -> Result<Vec<Vec<u8>>, FetchFault> {
+    let by_hash =
+        shekyl_archival_retention::CarriedBodies::index(carried.iter().map(Vec::as_slice));
+    let mut bodies = Vec::with_capacity(references.len());
+    for bytes in references {
+        let found = shekyl_archival_retention::BundleRef::decode(bytes)
+            .ok()
+            .and_then(|reference| {
+                by_hash
+                    .named_by(&reference)
+                    .filter(|named| reference.accept_body(named).is_ok())
+                    .map(<[u8]>::to_vec)
+            });
+        match found {
+            Some(body) => bodies.push(body),
+            None => return Err(FetchFault::BundleBodyNotHeld { height }),
+        }
+    }
+    Ok(bodies)
 }

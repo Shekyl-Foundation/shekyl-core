@@ -340,8 +340,8 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 HashHex::from_bytes(block.header.curve_tree_root.to_bytes())
             );
             assert_eq!(
-                header.attestation_root,
-                HashHex::from_bytes(block.header.attestation_root.to_bytes())
+                header.section_root,
+                HashHex::from_bytes(block.header.section_root.to_bytes())
             );
             assert_eq!(
                 header.difficulty.0,
@@ -356,7 +356,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
                 m.height.to_raw()
             );
             assert_eq!(
-                header.pow.0,
+                header.pow.present(),
                 Some(HashHex::from_bytes(keccak_pow(&block.pow_blob(), &m.seed))),
                 "the recorded PoW is this block's own hash under its seed"
             );
@@ -369,7 +369,11 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
             sum += m.target.difficulty().to_raw();
             let header = at_height(m.height, false).expect("in range");
             assert_eq!(header.difficulty_cumulative.0, sum);
-            assert_eq!(header.pow.0, None, "not requested, not filled");
+            assert_eq!(
+                header.pow,
+                shekyl_rpc_types::kinds::Asked::Unasked,
+                "not requested, not in the reply"
+            );
         }
 
         // By hash and at the tip, the same header.
@@ -483,7 +487,7 @@ async fn a_scenario_chains_headers_and_blocks_are_the_mined_blocks() {
         // The recorded hash is a store read.
         let paid =
             block_header_show(&facts, &select(Selector::Tip, true)).expect("the recorded hash");
-        assert!(paid.pow.0.is_some());
+        assert!(paid.pow.present().is_some());
         drop(facts);
         drop(store);
     })
@@ -536,30 +540,54 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let info = daemon_status(&facts, &facts, Disclosure::FULL, 0)
-            .unwrap_or_else(|_| panic!("daemon_status"));
+        let info = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::FULL,
+            0,
+            tor_read(Disclosure::FULL),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
         assert_eq!(info.height.0, last.height.to_raw(), "the tip's height");
         assert_eq!(info.hash, hex(last.hash));
         assert!(info.synchronized);
         assert!(!info.degraded);
         assert_eq!(
-            info.tx_count.0, listed,
+            info.tx_count.shown().expect("the chain part is shown").0,
+            listed,
             "every listed body, coinbases excluded"
         );
         assert_eq!(
-            info.emission.to_atomic_units(),
+            info.emission
+                .shown()
+                .expect("the chain part is shown")
+                .to_atomic_units(),
             last.emission.coins_generated,
             "the accumulator through the tip"
         );
         // The scenario's fixed difficulty is the next block's too.
-        assert_eq!(info.difficulty.0, 1);
         assert_eq!(
-            info.block_weight_max.0,
-            2 * info.block_weight_median.0,
+            info.difficulty.shown().expect("the chain part is shown").0,
+            1
+        );
+        assert_eq!(
+            info.block_weight_max
+                .shown()
+                .expect("the chain part is shown")
+                .0,
+            2 * info
+                .block_weight_median
+                .shown()
+                .expect("the chain part is shown")
+                .0,
             "the limit is twice the effective median (CEN-G6b)"
         );
         assert_eq!(
-            info.txpool_count.0.map(|count| count.0),
+            info.txpool_count
+                .shown()
+                .expect("the pool part is shown")
+                .0
+                .map(|count| count.0),
             Some(3),
             "the pool's broadcast count is the node's"
         );
@@ -568,8 +596,14 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
             Some(0),
             "a full disclosure shows Status"
         );
-        let restricted = daemon_status(&facts, &facts, Disclosure::VIEW, 0)
-            .unwrap_or_else(|_| panic!("daemon_status"));
+        let restricted = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::VIEW,
+            0,
+            tor_read(Disclosure::VIEW),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
         assert!(restricted.alt_count.is_withheld(), "Status is withheld");
         assert!(restricted.connector.is_withheld(), "Peers is withheld");
         drop(facts);
@@ -622,7 +656,7 @@ async fn an_alt_block_by_hash_is_described_by_its_own_row() {
         );
         assert_eq!(alt_header.difficulty.0, alt.target.difficulty().to_raw());
         assert_eq!(
-            alt_header.pow.0,
+            alt_header.pow.present(),
             Some(HashHex::from_bytes(keccak_pow(
                 &alt.template.block.pow_blob(),
                 &alt.seed
@@ -918,4 +952,24 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
          {coinbase_figure_wraps}"
     );
     assert!(differences.is_empty(), "{} differences", differences.len());
+}
+
+/// What the daemon's Tor supervisor answers `disclosure`, which a store
+/// test does not run: a Tor-off node's `hiding`, and its status only for a
+/// caller shown Status, as the handler asks it.
+fn tor_read(disclosure: Disclosure) -> shekyl_daemon_rpc::tor_facts::TorRead {
+    use shekyl_tor_status::{Clearnet, Origination, Posture, TorSetting, TorStatus};
+    shekyl_daemon_rpc::tor_facts::TorRead {
+        hiding: false,
+        status: disclosure.status().then(|| TorStatus {
+            posture: Posture {
+                tor: TorSetting::Off,
+                clearnet: Clearnet::On,
+            },
+            origination: Origination::ClearnetOnly,
+            sync_connector: vec![],
+            tor_quiet: None,
+            tor: None,
+        }),
+    }
 }

@@ -815,7 +815,7 @@ split the signature's cost into its own cell):
 | Function | Cells | What is inside the count |
 | --- | --- | --- |
 | `crypto_bench_serve_response` | one leaf, an eighth of a segment, a full segment | One whole response to `GET /shard/{id}`: parse, anchor gate, open, the key's pre-flight, the head, every chunk read and folded into the delivery digest, the call for the countersignature (answered by a pinned envelope — see *Fixture shape*), the bytes written |
-| `crypto_bench_serve_sign` | one pinned transcript | The countersignature alone: the seeded persona key's hybrid sign (Ed25519 + ML-DSA-65) over a fixed transcript, so the cost of signing is gated on a rejection-sampling trajectory nothing on the wire can move |
+| `crypto_bench_serve_sign` | one pinned transcript | The receipt alone: the seeded receipt key's hybrid sign (Ed25519 + FN-DSA-1024, from the SO-D12 4b switch's C7; Ed25519 + ML-DSA-65 before it) over a fixed transcript, with FN-DSA's signing stream seeded, so the cost of signing is gated on a trajectory nothing on the wire can move |
 | `crypto_bench_serve_prehead` | one leaf, a full segment | The same request up to the 200 head being ready to write. No body byte is read |
 | `crypto_bench_serve_read_and_fold` | all three | Open the shard, then read it at the serve loop's chunk size and fold each chunk into the delivery digest |
 | `crypto_bench_serve_digest_alone` | all three | `pass_delivery_digest` in one call over the same body bytes |
@@ -901,7 +901,10 @@ byte is `0x0a`, which keeps the 113-byte transcript on that round count.
 until that constant and the tail are chosen again. The one-time drop in the serve
 cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
 leaving them, absorbed by the rolling baseline on the next `dev`
-rotation.
+rotation. At the SO-D12 4b switch's C7 the bench key became a receipt
+key (Ed25519 + FN-DSA-1024, FN-DSA's signing stream seeded), the serve's
+only scheme from then on: `crypto_bench_serve_sign` moves with the
+scheme, and the serve cells' envelope is 1,356 bytes where it was 3,385.
 
 **Measurement boundary.** Building the shard and the key, and a
 self-witness serve (asserting a `200` closed by a signature, so the gate
@@ -1457,3 +1460,24 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   for the block-template row: the 28 2-in/2-out spends one block admits.
   No existing fixture moved. Sections previously numbered §§17–19 (Known
   gaps, Cross-references, Change log) renumbered to §§18–20.
+- 2026-11-13 SO-D12 4b (the switch, regenesis): the block-path fixtures
+  of §§14–15 are mined again. The switch moves the replay corpus to
+  format 4 and the block to a bundle section committed by the header's
+  `section_root`, with no coinbase attestation, so the corpora D1 wrote
+  no longer read (`every_block_path_fixture_replays` refused every
+  one). The shapes, sizes and history rule are unchanged. Function
+  names, classes and schema version (`shekyl_rust_v0`) unchanged; the
+  counts §§14–15 record stay the 2026-11-12 capture's. The per-PR
+  capture on the new fixtures (#1327 at `d55c49327`, against the
+  rolling baseline at `ddba96485`), in instructions: `form` 1,827,705,951 /
+  4,934,858,936 / 2,187,558,889 / 1,849,492,351 for `spend_1in_2out`
+  / `spend_8in_2out` / `spend_1in_16out` / `bond_post` (each within
+  0.11 %); `connect` 24,326,535 / 43,587,835 / 34,489,119 / 30,249,301
+  and `pop` 28,491,573 / 76,344,773 / 35,702,337 / 31,776,977 (each
+  within 0.9 %); the block read 146,461 (−0.73 %). The two range reads
+  run over the re-mined history and move past the ±5 % warning, inside
+  the fail band: the header run 478,081 → 450,907 (−5.68 %) and the
+  leaf run 21,399 → 20,312 (−5.08 %). The capture compares the switch's
+  code on the new history with `dev`'s on the old, so it does not say
+  which of the two moved the reads. One-time, absorbed by the rolling
+  baseline on the next `dev` rotation.

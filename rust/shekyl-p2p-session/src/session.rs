@@ -613,6 +613,15 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             (Command::ResponseBodies, Shape::Notification) => {
                 self.to_sync(session, SyncInbound::ResponseBodies(payload), permit);
             }
+            (Command::NewBundle, Shape::Notification) => {
+                self.to_sync(session, SyncInbound::NewBundle(payload), permit);
+            }
+            (Command::RequestBundleBodies, Shape::Notification) => {
+                self.to_sync(session, SyncInbound::RequestBundleBodies(payload), permit);
+            }
+            (Command::ResponseBundleBodies, Shape::Notification) => {
+                self.to_sync(session, SyncInbound::ResponseBundleBodies(payload), permit);
+            }
             (
                 Command::NewTransactions
                 | Command::GetTxpoolComplement
@@ -621,7 +630,10 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                 | Command::RequestHeaders
                 | Command::ResponseHeaders
                 | Command::RequestBodies
-                | Command::ResponseBodies,
+                | Command::ResponseBodies
+                | Command::NewBundle
+                | Command::RequestBundleBodies
+                | Command::ResponseBundleBodies,
                 Shape::Request | Shape::Response,
             ) => {
                 tracing::debug!(id = ?self.id, ?command, "a notification command framed as an invoke; refused");

@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! [`StoreBundleView`]: [`BundleView`] over a chain view and the count
-//! phase's [`DrawableMemo`] (`SO-D12` increment 4a).
+//! [`StoreBundleView`]: [`BundleView`] over a chain view and the connect's
+//! [`DrawableMemo`] (`SO-D12` increment 4a).
 //!
 //! `D` is rules-side state. The store does not compute it, so the view is
-//! the batch plus the memo, not the batch alone. A memo miss is SI-35: the
-//! count phase of this block has already filed every epoch a section inside
+//! the batch plus the memo, not the batch alone. A memo miss is SI-35:
+//! admission's filing step has already filed every epoch a section inside
 //! the response window can name, and this path does not rebuild.
 //!
 //! Issued draws are read once per epoch and kept as [`IssuedVisibility`]:
@@ -22,13 +22,14 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use shekyl_chain_rules::{
-    AtHeight, BlockDrawsFloor, BundleView, ChainView, DrawableEpoch, DrawableMemo, EpochFloor,
-    HeaderRecord, HeaderView, SettlementSchedule, Settling,
+    support_step, AtHeight, BlockDrawsFloor, BundleView, ChainView, DrawableEpoch, DrawableMemo,
+    EpochFloor, HeaderRecord, HeaderView, SettlementSchedule, Settling, SupportStepFault,
+    WindowClosed,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawCommitment, IndexedDraw, SupportSeats, COUNTED_DRAWS,
+    BlockDraws, DrawCommitment, IndexedDraw, SupportCarryAfter, SupportRow, COUNTED_DRAWS,
 };
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::error::{StoreError, StoreInvariant};
 use super::view::BatchView;
@@ -64,12 +65,12 @@ pub trait BundleRows {
         floor: EpochFloor<Settling>,
     ) -> Result<Vec<IndexedDraw>, StoreError>;
 
-    /// [`ChainView::support_block_seats`], under this view's arming.
-    fn support_seats_row(
+    /// [`ChainView::support_row`], under this view's arming.
+    fn support_row_at(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError>;
+    ) -> Result<Option<SupportRow>, StoreError>;
 
     /// [`HeaderView::header_at`], under this view's arming.
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError>;
@@ -103,12 +104,12 @@ impl<'id> BundleRows for BatchView<'_, 'id> {
         ChainView::issued_draws(self, epoch, floor)
     }
 
-    fn support_seats_row(
+    fn support_row_at(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        ChainView::support_block_seats(self, height, floor)
+    ) -> Result<Option<SupportRow>, StoreError> {
+        ChainView::support_row(self, height, floor)
     }
 
     fn header_row(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreError> {
@@ -214,7 +215,7 @@ impl<'a> OpenedEpochs<'a> {
     }
 }
 
-/// The admission view: one chain view and the memo the count phase filled.
+/// The admission view: one chain view and the memo admission's filing step filled.
 ///
 /// `V` is a [`BatchView`] when a connect journals what this view admits,
 /// and a snapshot when a read must not commit. The journal names the
@@ -260,6 +261,83 @@ impl<'a, V: BundleRows> StoreBundleView<'a, V> {
     fn draws_row(&self, h: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
         self.view.block_draws_row(h, floor)
+    }
+
+    /// The support row the transition writes at `h`, recomputed from what
+    /// the store holds (SI-43): one step of the carry ([`support_step`])
+    /// from the carry the row at `h − 1` left (empty when `h` opens its
+    /// epoch, `SO-D12r`) and the row and `revealed` of the block whose
+    /// window closes at `h`, when that block is in the epoch. These are the
+    /// facts the connect at `h` read, and none of them moves after it: the
+    /// earlier rows are written once, and the closing block's window closed
+    /// at `h`. Both rows are above the draw rows' floor in force at
+    /// `h_incl`, because `h` is inside `h_incl`'s window and the floor never
+    /// passes the open of the epoch before `h_incl`'s.
+    ///
+    /// An earlier row that is absent is SI-7 on the cell: every connected
+    /// height writes one (SI-40). A carry before `h` past `c` is SI-43 at
+    /// `h − 1`, whose row no transition writes.
+    fn one_step(
+        &self,
+        drawable: &DrawableEpoch,
+        h: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<SupportRow, StoreError> {
+        let absent = |key: &'static str| {
+            self.view.arm_row(StoreInvariant::CellCorrupt {
+                key,
+                fault: super::error::CellFault::Absent,
+            })
+        };
+        let open = BlockHeight::from_raw(
+            self.schedule
+                .open_height(self.schedule.epoch_at(h).to_raw()),
+        );
+        let before = if h == open {
+            SupportCarryAfter::EMPTY
+        } else {
+            self.view
+                .support_row_at(h - BlockCount::ONE, floor)?
+                .ok_or_else(|| absent("archival_support_block"))?
+                .carry_after
+        };
+        let closing = self
+            .schedule
+            .challenge_response_blocks()
+            .and_then(|window| {
+                h.checked_sub_count(BlockCount::from_raw(window.get().saturating_add(1)))
+            })
+            .filter(|at| *at >= open);
+        let closed = match closing {
+            None => None,
+            Some(at) => {
+                let row = self
+                    .view
+                    .support_row_at(at, floor)?
+                    .ok_or_else(|| absent("archival_support_block"))?;
+                let filed = self
+                    .view
+                    .block_draws_row(at, floor)?
+                    .ok_or_else(|| absent("archival_block_draws"))?
+                    .revealed;
+                Some((row.seats, filed))
+            }
+        };
+        let closed = closed.as_ref().map(|(seats, filed)| WindowClosed {
+            seats,
+            filed: *filed,
+        });
+        support_step(drawable, h, self.schedule, &before, closed).map_err(|why| match why {
+            SupportStepFault::PastCap { persona, .. } => {
+                self.view.arm_row(StoreInvariant::SupportRowNotOneStep {
+                    height: h - BlockCount::ONE,
+                    persona,
+                })
+            }
+            SupportStepFault::Corrupt(corrupt) => {
+                self.view.arm_row(super::write::invariant_of(corrupt))
+            }
+        })
     }
 
     /// Read `epoch`'s issued-draw index into [`IssuedVisibility`], once.
@@ -384,49 +462,46 @@ impl<V: BundleRows> BundleView for StoreBundleView<'_, V> {
 
     fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, StoreError> {
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
-        Ok(self
-            .view
-            .support_seats_row(h, floor)?
-            .map(|seats| u32::try_from(seats.len()).expect("a block seats fewer than 2^32 trees")))
+        Ok(self.view.support_row_at(h, floor)?.map(|row| {
+            u32::try_from(row.seats.len()).expect("a block seats fewer than 2^32 trees")
+        }))
     }
 
     fn support_roster(
         &self,
         h: BlockHeight,
     ) -> Result<Option<Vec<shekyl_chain_rules::SupportSeat>>, StoreError> {
-        // `h`'s seat row, as written when `h` connected, with each seat's
-        // key from `h`'s epoch snapshot (`SO-D12` S1). A missing row is the
-        // hole, never an empty roster. The snapshot's miss is SI-35, as for
-        // `D`: admission never rebuilds.
+        // `h`'s support row, as written when `h` connected, with each
+        // seat's key from `h`'s epoch snapshot (`SO-D12` S1). A missing row
+        // is the hole, never an empty roster. The snapshot's miss is SI-35,
+        // as for `D`: admission never rebuilds.
         let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
-        let Some(seats) = self.view.support_seats_row(h, floor)? else {
+        let Some(row) = self.view.support_row_at(h, floor)? else {
             return Ok(None);
         };
         let epoch = self.schedule.epoch_at(h);
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
-        // SI-43: the row equals the schedule over the snapshot. A member the
-        // schedule does not seat, a stranger, and a scheduled member the row
-        // drops are one disagreement. The carry is staged and is not
-        // consulted: the transition writes `scheduled_seats`, and when the
-        // carry joins, the seats it writes are what this comparison takes.
-        // The comparison stays equality.
-        let scheduled = shekyl_chain_rules::scheduled_seats(drawable, h, self.schedule)
-            .map_err(|corrupt| self.view.arm_row(super::write::invariant_of(corrupt)))?;
-        if let Some(persona) = seats.first_one_sided(&scheduled) {
+        // SI-43: the row is one step of the carry from the row before it.
+        let stepped = self.one_step(drawable, h, floor)?;
+        if let Some(persona) = row
+            .seats
+            .first_one_sided(&stepped.seats)
+            .or_else(|| first_carry_difference(&row.carry_after, &stepped.carry_after))
+        {
             return Err(self
                 .view
-                .arm_row(StoreInvariant::SupportSeatsNotScheduled { height: h, persona }));
+                .arm_row(StoreInvariant::SupportRowNotOneStep { height: h, persona }));
         }
-        // Equality holds, so every seat is a member: `scheduled_seats` emits
-        // only members of this snapshot. No roster means no seats.
+        // The row is the step, so every seat is a member: `support_step`
+        // seats only members of this snapshot. No roster means no seats.
         let members = drawable.support_roster();
-        let mut roster = Vec::with_capacity(scheduled.len());
-        for persona in scheduled.as_slice() {
+        let mut roster = Vec::with_capacity(row.seats.len());
+        for persona in row.seats.as_slice() {
             let receipt_key = members
                 .and_then(|members| members.key(persona))
-                .expect("scheduled_seats emits only members of this snapshot")
+                .expect("support_step seats only members of this snapshot")
                 .clone();
             roster.push(shekyl_chain_rules::SupportSeat {
                 persona: *persona,
@@ -467,4 +542,31 @@ fn singular_draw_commitment(block: &shekyl_wire::Block) -> Option<DrawCommitment
         }
     }
     found
+}
+
+/// The first persona, in persona order, whose carried count differs
+/// between `held` and `stepped`: on one side only, or owed a different
+/// count. [`None`] when the carries are equal.
+fn first_carry_difference(
+    held: &SupportCarryAfter,
+    stepped: &SupportCarryAfter,
+) -> Option<PCanonicalId> {
+    let mut here = held.as_slice().iter();
+    let mut there = stepped.as_slice().iter();
+    let mut left = here.next();
+    let mut right = there.next();
+    loop {
+        match (left, right) {
+            (None, None) => return None,
+            (Some((only, _)), None) | (None, Some((only, _))) => return Some(*only),
+            (Some((a, x)), Some((b, y))) => match a.cmp(b) {
+                core::cmp::Ordering::Equal if x == y => {
+                    left = here.next();
+                    right = there.next();
+                }
+                core::cmp::Ordering::Equal | core::cmp::Ordering::Less => return Some(*a),
+                core::cmp::Ordering::Greater => return Some(*b),
+            },
+        }
+    }
 }

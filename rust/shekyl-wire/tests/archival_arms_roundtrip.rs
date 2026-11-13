@@ -9,14 +9,11 @@
 //! impl is incomplete; notably it omits `bond_spend_pk`), so the design docs +
 //! Rust impl are authority and the test is a synthetic round-trip
 //! (`read(write(x)) == x`). Layouts transcribed from
-//! `shekyl-archival-retention::{wire,bond_wire}` + GENESIS_TX_WIRE_FORMAT.md
+//! `shekyl-archival-retention::bond_wire` + GENESIS_TX_WIRE_FORMAT.md
 //! §9.10/§9.11, with `bond_spend_pk` added per §9.11.
 
 use shekyl_types::PCanonicalId;
-use shekyl_wire::transaction::{
-    ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES, BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN,
-    TAG_INPUT_SERVE_CREDIT,
-};
+use shekyl_wire::transaction::{BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN};
 use shekyl_wire::{BondPost, BondPostKind, Holdings, Input};
 
 fn round_trip(input: &Input) -> Input {
@@ -26,63 +23,6 @@ fn round_trip(input: &Input) -> Input {
     let parsed = Input::read(&mut cursor).expect("read input arm");
     assert!(cursor.is_empty(), "input arm left trailing bytes");
     parsed
-}
-
-/// A well-shaped opaque kept-half blob: the retention codec's encoding is
-/// `tag ‖ p_id(32) ‖ shard ‖ epoch ‖ ed25519(64)`; this crate only checks
-/// the tag and the ceiling, so any bytes of that shape exercise the arm.
-fn kept_blob() -> Vec<u8> {
-    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
-    b.extend_from_slice(&[0x11; 32]);
-    b.extend_from_slice(&[7, 42]);
-    b.extend_from_slice(&[0x66; 64]);
-    b
-}
-
-#[test]
-fn serve_credit_round_trips() {
-    // The KEPT half, as the opaque blob the vin carries (RF-D1). The
-    // interior is `shekyl-archival-retention::wire`'s; this
-    // arm mirrors the emission arm: tag + length + bytes.
-    let input = Input::ServeCredit {
-        canonical_bytes: kept_blob(),
-    };
-    assert_eq!(round_trip(&input), input);
-}
-
-#[test]
-fn serve_credit_blob_must_lead_with_its_tag() {
-    let mut bytes = kept_blob();
-    bytes[0] = 0x03;
-    let input = Input::ServeCredit {
-        canonical_bytes: bytes,
-    };
-    let mut out = Vec::new();
-    input
-        .write(&mut out)
-        .expect("write encodes without validating");
-    let err = Input::read(&mut &out[..]).expect_err("wrong leading tag must reject at read");
-    assert!(
-        err.to_string().contains("wire tag"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn serve_credit_blob_is_bounded() {
-    let mut bytes = kept_blob();
-    bytes.resize(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES + 1, 0);
-    let input = Input::ServeCredit {
-        canonical_bytes: bytes,
-    };
-    let mut out = Vec::new();
-    input
-        .write(&mut out)
-        .expect("write encodes without validating");
-    assert!(
-        Input::read(&mut &out[..]).is_err(),
-        "over-ceiling blob must reject at read"
-    );
 }
 
 #[test]
@@ -197,10 +137,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
-use shekyl_wire::transaction::{
-    is_join_market_post_kind, RetiredKeylessJoinMarket, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
-    TAG_INPUT_BOND_POST,
-};
+use shekyl_wire::transaction::{is_join_market_post_kind, TAG_INPUT_BOND_POST};
 
 const IDENTITY: u8 = 0xAB;
 const SPEND: u8 = 0xCD;
@@ -227,7 +164,7 @@ fn leb128(mut v: u64, out: &mut Vec<u8>) {
 /// The whole vin by hand: tag, identity key, hint, kind byte, the coupled
 /// fields, holdings, the three amounts. `receipt_len` is the length the
 /// receipt key's prefix declares and the number of bytes that follow it;
-/// `None` writes no receipt key at all (the retired keyless layout).
+/// `None` writes no receipt key at all.
 fn join_market_bytes(kind: u8, receipt_len: Option<usize>) -> Vec<u8> {
     let mut b = vec![TAG_INPUT_BOND_POST];
     leb128(PQC_HYBRID_SINGLE_KEY_LEN as u64, &mut b);
@@ -307,8 +244,8 @@ fn the_receipt_key_length_is_its_twin_s() {
 }
 
 /// The JoinMarket's byte is 5 in both crates and it is the only JoinMarket
-/// byte. The bytes three rulings refused — 0 (the keyless JoinMarket), 3
-/// (`HoldingsUpdate`) and 4 (`EndpointUpdate`) — are neither it nor a
+/// byte. The bytes two rulings refused — 3 (`HoldingsUpdate`) and 4
+/// (`EndpointUpdate`) — and the unassigned 0 are neither it nor a
 /// JoinMarket, and the retention table refuses each.
 ///
 /// Why the byte has two definitions, tied here at run time rather than by
@@ -322,7 +259,6 @@ fn the_receipt_key_length_is_its_twin_s() {
 #[test]
 fn the_join_market_byte_is_five_and_the_refused_bytes_stay_refused() {
     assert_eq!(BOND_POST_KIND_JOINMARKET, 5);
-    assert_eq!(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET, 0);
     assert_eq!(RetentionKind::JoinMarket as u8, BOND_POST_KIND_JOINMARKET);
     for kind in 0..=u8::MAX {
         assert_eq!(is_join_market_post_kind(kind), kind == 5, "kind {kind}");
@@ -373,29 +309,26 @@ fn a_join_market_round_trips_and_both_representations_agree() {
     assert_eq!(decoded.endpoint(), Some(&ENDPOINT));
 }
 
-/// `post_kind` 0, the keyless JoinMarket, is refused at parse by both
-/// decoders — the exact bytes the retired form had (its coupled fields with
-/// no receipt key), and the JoinMarket's own bytes with the kind byte set
-/// back to 0. Neither surfaces as `Other(0)`.
+/// `post_kind` 0 is an unknown kind (C7, 2026-11-11: the keyless
+/// JoinMarket is deleted). The wire reads it as `Other(0)`, so a JoinMarket's
+/// coupled fields after it are read as the holdings and refused there; the
+/// retention decoder, which the consensus validator reads a bond post
+/// through, refuses the kind itself, as it refuses every unknown kind. A
+/// JoinMarket (kind 5) with no receipt key where one belongs does not parse
+/// either: the endpoint's first bytes are not the key's length prefix.
 #[test]
-fn the_retired_keyless_join_market_is_refused_at_parse() {
+fn post_kind_zero_is_an_unknown_kind() {
     for bytes in [
         join_market_bytes(0, None),
         join_market_bytes(0, Some(RECEIPT_SIGN_PK_LEN)),
     ] {
-        let err = Input::read(&mut &bytes[..]).expect_err("the wire refuses post_kind 0");
-        assert!(
-            err.get_ref()
-                .is_some_and(RetiredKeylessJoinMarket::downcast_is),
-            "{err}"
-        );
+        let err = Input::read(&mut &bytes[..]).expect_err("the coupled fields are no holdings");
+        assert!(err.to_string().contains("holdings kind"), "{err}");
         assert!(matches!(
             ArchivalBondPostVin::read(&mut &bytes[..]),
             Err(BondWireError::InvalidPostKind(0))
         ));
     }
-    // And a JoinMarket (kind 5) with no receipt key where one belongs does
-    // not parse: the endpoint's first bytes are not the key's length prefix.
     let keyless_under_5 = join_market_bytes(5, None);
     assert!(Input::read(&mut &keyless_under_5[..]).is_err());
     assert!(ArchivalBondPostVin::read(&mut &keyless_under_5[..]).is_err());
@@ -422,12 +355,11 @@ fn a_receipt_key_of_the_wrong_length_is_refused_at_read_by_both_decoders() {
     }
 }
 
-/// `Other` carrying the JoinMarket's tag, or the retired keyless one, is a
-/// misconstruction: `write` would emit a blob with no keys and no endpoint
-/// that `read` does not read back as the value written. Refused at the
-/// writer, with the same words for both.
+/// `Other` carrying the JoinMarket's tag is a misconstruction: `write` would
+/// emit a blob with no keys and no endpoint that `read` does not read back
+/// as the value written. Refused at the writer.
 #[test]
-fn bond_post_other_must_not_use_a_join_market_tag_live_or_retired() {
+fn bond_post_other_must_not_use_the_join_market_tag() {
     let other = |tag| {
         Input::BondPost(Box::new(BondPost {
             hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
@@ -445,14 +377,10 @@ fn bond_post_other_must_not_use_a_join_market_tag_live_or_retired() {
             .expect_err("Other must not use a JoinMarket tag")
             .to_string()
     };
-    assert_eq!(
-        refusal(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET),
-        refusal(BOND_POST_KIND_JOINMARKET)
-    );
     assert!(refusal(BOND_POST_KIND_JOINMARKET).contains("JoinMarket"));
-    // The refused bytes 3 and 4 were never JoinMarket tags: `Other` carries
-    // them on this envelope, and the retention decoder refuses them.
-    for tag in [3u8, 4] {
+    // 0, 3 and 4 are not JoinMarket tags: `Other` carries them on this
+    // envelope, and the retention decoder refuses them.
+    for tag in [0u8, 3, 4] {
         assert_eq!(round_trip(&other(tag)), other(tag));
     }
 }

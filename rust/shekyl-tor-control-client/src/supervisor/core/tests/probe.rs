@@ -499,7 +499,7 @@ fn a_respawn_resets_inbound_and_a_stale_arrival_is_ignored() {
     // The respawn reaches Running again; the onion is republished.
     let due = core.deadline().expect("the pin check");
     core.on_deadline(due);
-    core.on(Input::PinAccepted, due);
+    core.on(Input::accepted(), due);
     core.on(Input::Spawned, due);
     // The launch, then the subscription; its `Replied` sends the first
     // sample, answered here.

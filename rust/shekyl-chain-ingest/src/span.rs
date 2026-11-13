@@ -15,13 +15,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use kameo::error::SendError;
+use shekyl_archival_retention::BundleBody;
 use shekyl_chain_rules::{
     form, form_judged, Candidate, CenRow, Fault, FormAttempt, FormClaims, HeaderJudged, HeaderView,
     InvalidBlock, StatelessPass, StructurallyValid, Substrate, Tip,
 };
-use shekyl_chain_store::store::{AltCannot, SnapshotView, StoreCannot, StoreError};
+use shekyl_chain_store::store::{AltCannot, ChainStore, SnapshotView, StoreCannot, StoreError};
 use shekyl_hash_budget::{Class, Permit};
 use shekyl_mempool::{stateless, Admission, Duplicate, Pool, PoolFault};
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
@@ -44,8 +46,10 @@ struct Parsed {
     bodies: Vec<Transaction>,
     /// How this arrival is formed. A judged proof is not hashed here.
     proof: Proof,
-    /// The witness carried beside the block.
-    witness: Option<shekyl_types::archival::AttestationWitness>,
+    /// The bundle references carried beside the block.
+    references: Option<BundleReferences>,
+    /// The bundle bodies carried beside the block, unverified.
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl Parsed {
@@ -98,7 +102,8 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         block,
         bodies,
         proof,
-        witness,
+        references,
+        bundle_bodies,
     } = accepted;
     let refused = |rule| InvalidBlock::new(rule, shekyl_chain_rules::Locus::Block);
     let Ok(block) = Block::from_bytes(&block) else {
@@ -111,14 +116,11 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         };
         parsed.push(tx);
     }
-    // A witness that is not one is CEN-B4's: the block cannot carry it.
-    let witness = if witness.is_empty() {
-        None
-    } else {
-        match shekyl_types::archival::AttestationWitness::new(witness) {
-            Ok(witness) => Some(witness),
-            Err(_) => return Err((slot, tag, refused(shekyl_chain_rules::CenRow::B4))),
-        }
+    // References that are not a section — an empty one, or more than a
+    // section holds — are CEN-J29's: no root counts them. What each
+    // reference says is the validator's to open.
+    let Ok(references) = BundleReferences::from_sidecar(references) else {
+        return Err((slot, tag, refused(shekyl_chain_rules::CenRow::J29)));
     };
     Ok(Parsed {
         slot,
@@ -126,15 +128,32 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
         block,
         bodies: parsed,
         proof,
-        witness,
+        references,
+        bundle_bodies,
     })
+}
+
+/// Why an arrival did not assemble into a candidate.
+enum Assembly {
+    /// Listed transactions neither carried nor shown by the pool, by index.
+    MissingTxs(Vec<usize>),
+    /// A carried bundle body hashes to its reference and does not parse:
+    /// the block committed to it, so the block is refused (CEN-J32).
+    Refused(InvalidBlock),
+    /// The body store could not be read.
+    Store(StoreError),
 }
 
 /// The candidate for `parsed`: its listed bodies in listed order, then any
 /// carried body the list does not name. A listed body the arrival did not
 /// carry is resolved from the bodies `pool` shows, and only those: a stem
-/// transaction the pool holds counts as missing.
-fn assemble(parsed: &Parsed, pool: Option<&Pool>) -> Result<Candidate, Vec<usize>> {
+/// transaction the pool holds counts as missing. The bundle bodies are
+/// [`bundle_bodies`]'.
+fn assemble(
+    parsed: &Parsed,
+    pool: Option<&Pool>,
+    store: &ChainStore,
+) -> Result<Candidate, Assembly> {
     let mut carried: Vec<Option<&Transaction>> = parsed.bodies.iter().map(Some).collect();
     let mut listed = Vec::with_capacity(parsed.block.transaction_hashes.len());
     let mut missing = Vec::new();
@@ -149,11 +168,74 @@ fn assemble(parsed: &Parsed, pool: Option<&Pool>) -> Result<Candidate, Vec<usize
         }
     }
     if !missing.is_empty() {
-        return Err(missing);
+        return Err(Assembly::MissingTxs(missing));
     }
     listed.extend(carried.into_iter().flatten().cloned());
+    let bodies = bundle_bodies(parsed.references.as_ref(), &parsed.bundle_bodies, store)?;
     Ok(Candidate::new(parsed.block.clone(), listed)
-        .with_attestation_witness(parsed.witness.clone()))
+        .with_bundle_references(parsed.references.clone())
+        .with_bundle_bodies(bodies))
+}
+
+/// The body of each of `section`'s references, in section order:
+/// one the arrival carried, accepted on hash equality (§7.5) by the
+/// validator's [`shekyl_chain_rules::open_body`], or else the one the body
+/// store holds under the reference's prunable hash. Each carried body is
+/// hashed once and found by its hash
+/// ([`shekyl_chain_rules::CarriedBodies`]), not tried against every
+/// reference.
+///
+/// A reference with neither stops the list there. The candidate then lacks
+/// that body, which `validate` faults as `Stale::BundleBody`, never a
+/// verdict: the sync owner asks 2016 for a body this node does not hold
+/// before it offers the block, so a gap here is a driver defect. A
+/// reference that does not parse stops the list too; `validate` refuses it
+/// (CEN-J29) before it reads a body.
+fn bundle_bodies(
+    section: Option<&BundleReferences>,
+    carried: &[Vec<u8>],
+    store: &ChainStore,
+) -> Result<Vec<BundleBody>, Assembly> {
+    let Some(section) = section else {
+        return Ok(Vec::new());
+    };
+    let by_hash = shekyl_chain_rules::CarriedBodies::index(carried.iter().map(Vec::as_slice));
+    let mut snapshot = None;
+    let mut bodies = Vec::with_capacity(section.as_slice().len());
+    for (position, bytes) in section.as_slice().iter().enumerate() {
+        let Ok(reference) = shekyl_chain_rules::open_reference(position, bytes) else {
+            return Ok(bodies);
+        };
+        let mut found = None;
+        if let Some(named) = by_hash.named_by(&reference) {
+            match shekyl_chain_rules::open_body::<core::convert::Infallible>(&reference, named) {
+                Ok(body) => found = Some(body),
+                Err(shekyl_chain_rules::BundleRefused::Invalid(invalid)) => {
+                    return Err(Assembly::Refused(InvalidBlock::new(
+                        invalid.row(),
+                        shekyl_chain_rules::Locus::Bundle { position },
+                    )));
+                }
+                // The index matched the hash, so the validator's hash
+                // check holds; no other refusal is open to it here.
+                Err(_) => {}
+            }
+        }
+        if found.is_none() {
+            if snapshot.is_none() {
+                snapshot = Some(store.begin_read().map_err(Assembly::Store)?);
+            }
+            let snap = snapshot.as_ref().expect("opened above");
+            found = snap
+                .bundle_body(reference.prunable_hash())
+                .map_err(Assembly::Store)?;
+        }
+        match found {
+            Some(body) => bodies.push(body),
+            None => return Ok(bodies),
+        }
+    }
+    Ok(bodies)
 }
 
 /// Work one accepted span.
@@ -188,13 +270,18 @@ where
         if shared.stopping() {
             return;
         }
-        let candidate = match assemble(&front, shared.shown_pool().as_deref()) {
+        let candidate = match assemble(&front, shared.shown_pool().as_deref(), &shared.store) {
             Ok(candidate) => candidate,
-            Err(indices) => {
+            Err(Assembly::MissingTxs(indices)) => {
                 let hash = front.hash();
                 front.slot.send(Reply::MissingBodies { hash, indices });
                 continue;
             }
+            Err(Assembly::Refused(refused)) => {
+                front.slot.send(Reply::Refused(refused));
+                continue;
+            }
+            Err(Assembly::Store(e)) => return shared.fail(e.into()),
         };
         let placed = match crate::router::place(&shared.store, &front.block) {
             Ok(placed) => placed,
@@ -216,7 +303,9 @@ where
                     if next.block.header.previous != run[run.len() - 1].0.hash() {
                         break;
                     }
-                    let Ok(next_candidate) = assemble(next, shared.shown_pool().as_deref()) else {
+                    let Ok(next_candidate) =
+                        assemble(next, shared.shown_pool().as_deref(), &shared.store)
+                    else {
                         break;
                     };
                     let next = queue.pop_front().expect("peeked");
@@ -1397,5 +1486,101 @@ mod tests {
                 floor: BlockHeight::from_raw(4),
             })
         );
+    }
+
+    /// Assembly finds each reference's body (the switch's C3): one the
+    /// arrival carried, by hash; else the one the body store holds; and a
+    /// carried body that hashes to its reference and does not parse is the
+    /// block's own defect, refused at that reference (CEN-J32). A reference
+    /// with neither stops the list for `validate` to fault.
+    ///
+    /// Red edits: drop the store lookup — the queued body is not found;
+    /// map a malformed carried body to "not this reference's" — no
+    /// refusal.
+    #[test]
+    fn bundle_bodies_come_carried_or_from_the_store_and_a_malformed_one_is_refused() {
+        use shekyl_archival_retention::{bundle_prunable_hash, BundleKept, BundleRef, PassBitmap};
+        use shekyl_chain_rules::harness::bundle::BundleWorld;
+        use shekyl_chain_rules::RuleSet;
+
+        let rules = RuleSet::GENESIS;
+        let carried_world = BundleWorld::with(
+            shekyl_types::BlockHeight::from_raw(5),
+            BundleWorld::SEED,
+            0,
+            &rules,
+        );
+        let (carried_ref, carried_body) = carried_world.bundle(&[]);
+        let stored_world = BundleWorld::with(
+            shekyl_types::BlockHeight::from_raw(6),
+            BundleWorld::SEED,
+            0,
+            &rules,
+        );
+        let (stored_ref, stored_body) = stored_world.bundle(&[]);
+        let absent_world = BundleWorld::with(
+            shekyl_types::BlockHeight::from_raw(7),
+            BundleWorld::SEED,
+            0,
+            &rules,
+        );
+        let (absent_ref, _) = absent_world.bundle(&[]);
+
+        let path = crate::test_support::tmp("span-bundle-bodies");
+        let store = crate::test_support::open_store(&path);
+        let queued: Result<(), StoreError> = store.write(|batch| {
+            batch.queue_bundle(
+                &stored_ref,
+                &stored_body,
+                shekyl_types::BlockHeight::from_raw(6),
+                shekyl_types::BlockHash::from_bytes([0x11; 32]),
+                64,
+            )
+        });
+        queued.expect("the store holds the second body");
+
+        let section = |refs: &[&BundleRef]| {
+            BundleReferences::new(refs.iter().map(|r| r.encode()).collect()).expect("a section")
+        };
+        let both = section(&[&carried_ref, &stored_ref]);
+        let found = bundle_bodies(Some(&both), &[carried_body.as_bytes().to_vec()], &store)
+            .ok()
+            .expect("both bodies resolve");
+        assert_eq!(found, vec![carried_body.clone(), stored_body.clone()]);
+
+        let gap = section(&[&carried_ref, &absent_ref, &stored_ref]);
+        let found = bundle_bodies(Some(&gap), &[carried_body.as_bytes().to_vec()], &store)
+            .ok()
+            .expect("the list stops at the gap");
+        assert_eq!(
+            found,
+            vec![carried_body],
+            "a body nobody holds stops the list"
+        );
+
+        let garbage = vec![0xEE; 64];
+        let none = PassBitmap::new(0, &[]).expect("an empty bitmap");
+        let malformed_ref = BundleRef::new(
+            BundleKept {
+                h: shekyl_types::BlockHeight::from_raw(8),
+                seed: [0x5E; 32],
+                passes: none.clone(),
+                support: none,
+            },
+            bundle_prunable_hash(&garbage),
+        );
+        let malformed = section(&[&malformed_ref]);
+        match bundle_bodies(Some(&malformed), &[garbage], &store) {
+            Err(Assembly::Refused(refused)) => {
+                assert_eq!(refused.rule, shekyl_chain_rules::CenRow::J32);
+                assert_eq!(
+                    refused.locus,
+                    shekyl_chain_rules::Locus::Bundle { position: 0 }
+                );
+            }
+            Ok(_) => panic!("a malformed committed body was accepted"),
+            Err(_) => panic!("a malformed committed body was not refused"),
+        }
+        drop(store);
     }
 }

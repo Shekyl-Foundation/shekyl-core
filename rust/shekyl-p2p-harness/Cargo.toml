@@ -62,6 +62,12 @@ shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
 # The miner's keys for a node that posts templates (CS-5 §3).
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+# The bundle relay test: a witness key, its bundle, and a template's
+# economic operands.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-economics = { path = "../shekyl-economics" }
+zeroize = { workspace = true }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 

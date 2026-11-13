@@ -3,24 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! SF-D8 pass-countersignature transcript and admission window.
+//! SF-D8 pass transcript, its anchor depth and lag, and the receipt verify.
 //!
 //! Design: [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
-//! `SF-D8`. Record codec and [`verify_pass_countersignature`](crate::verify_pass_countersignature)
-//! live in [`crate::attestation_wire`].
+//! `SF-D8`. A persona's receipt key signs the [`PassTranscript`] under the
+//! receipt domain, and [`verify_receipt_transcript`] is the one check of it.
 //!
 //! Inland clocks are ordinal [`BlockHeight`]; depths and lags are
 //! [`BlockCount`]. The 73-byte header still carries `anchor_height` as
 //! eight LE bytes (C1); [`PassRequestHeader::from_bytes`] /
 //! [`pass_request_header_bytes`] are the punch.
-//!
-//! ```compile_fail
-//! // HEIGHT_SEMANTICS.md C9: predecessor is ordinal, depth is a span.
-//! use shekyl_archival_retention::pass_anchor::{
-//!     PassAnchorWindow, PASS_ANCHOR_DEPTH_BLOCKS,
-//! };
-//! let _ = PassAnchorWindow::shape_for_predecessor(PASS_ANCHOR_DEPTH_BLOCKS);
-//! ```
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: decoded header height is ordinal, not a count.
@@ -36,13 +28,18 @@
 
 use core::num::NonZeroU64;
 
-use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
 
-use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
+};
+use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
+
+use crate::bond_floor::{ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
 
 /// Requester-random nonce `P` signs over (`SF-D5`: exactly 32 bytes).
 pub const PASS_NONCE_LEN: usize = 32;
@@ -105,22 +102,11 @@ pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize =
 /// (C4); the inland constant is the span.
 pub const PASS_ANCHOR_DEPTH_BLOCKS: BlockCount = BlockCount::from_raw(ARCHIVAL_REORG_DEPTH_BLOCKS);
 
-/// Window lag `L` (PROVISIONAL 4). Same `L` on P's pre-sign gate (`RF-R1`).
+/// Anchor lag `L` (PROVISIONAL 4): the half-width of P's pre-sign gate
+/// (`RF-R1`), and the margin `W₂ + L ≤` depth keeps between an honest
+/// read's anchor and the block it answers for.
 pub const PASS_ANCHOR_LAG_BLOCKS: BlockCount =
-    BlockCount::from_raw(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS);
-
-/// Lowest predecessor with a window: genesis plus depth plus lag.
-/// A predecessor below this has no admissible anchor. The sum is
-/// checked, so an overflowing pair fails to compile.
-pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: BlockHeight = {
-    match BlockHeight::ZERO.checked_add(PASS_ANCHOR_DEPTH_BLOCKS) {
-        Some(after_depth) => match after_depth.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
-            Some(floor) => floor,
-            None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
-        },
-        None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
-    }
-};
+    BlockCount::from_raw(ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS);
 
 /// Whether an honest read under `schedule` is anchored below the block it
 /// answers for: `W₂ + L ≤` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
@@ -182,94 +168,6 @@ pub const fn response_window_outrunning_anchor(
     }
 }
 
-/// Heights (and hashes) in one window: `L + 1`.
-pub const PASS_ANCHOR_WINDOW_LEN: usize = {
-    assert!(PASS_ANCHOR_LAG_BLOCKS.to_raw() <= u32::MAX as u64);
-    #[allow(clippy::cast_possible_truncation)]
-    let lag = PASS_ANCHOR_LAG_BLOCKS.to_raw() as usize;
-    lag + 1
-};
-
-/// Window construction failed: genesis boundary, or the caller's table is the
-/// wrong length.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PassAnchorWindowError {
-    #[error(
-        "no pass anchor window below predecessor height {PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT} \
-         (got {predecessor_height})"
-    )]
-    BelowThreshold { predecessor_height: BlockHeight },
-    #[error("pass anchor hash table has {got} entries, expected {expected}")]
-    WrongLength { expected: usize, got: usize },
-}
-
-/// Connecting-chain hashes for `[h − depth − L, h − depth]`, `hashes[i]` at
-/// `first + i`. Length is [`PASS_ANCHOR_WINDOW_LEN`] in the type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PassAnchorWindow {
-    first: BlockHeight,
-    hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN],
-}
-
-impl PassAnchorWindow {
-    /// `(first_height, len)` the caller must fill, or `None` below
-    /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`].
-    #[must_use]
-    pub fn shape_for_predecessor(predecessor_height: BlockHeight) -> Option<(BlockHeight, usize)> {
-        if predecessor_height < PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT {
-            return None;
-        }
-        // The floor is genesis + depth + lag, so both spans fit. A floor
-        // that does not match these subtractions panics here.
-        let last = predecessor_height - PASS_ANCHOR_DEPTH_BLOCKS;
-        let first = last - PASS_ANCHOR_LAG_BLOCKS;
-        Some((first, PASS_ANCHOR_WINDOW_LEN))
-    }
-
-    /// Build from the caller's table for `predecessor_height`. The slice must
-    /// be exactly [`PASS_ANCHOR_WINDOW_LEN`] hashes, ascending from `first`.
-    pub fn from_table(
-        predecessor_height: BlockHeight,
-        hashes: &[[u8; PASS_ANCHOR_HASH_LEN]],
-    ) -> Result<Self, PassAnchorWindowError> {
-        let Some((first, _)) = Self::shape_for_predecessor(predecessor_height) else {
-            return Err(PassAnchorWindowError::BelowThreshold { predecessor_height });
-        };
-        let hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN] = hashes
-            .try_into()
-            .map_err(|_| PassAnchorWindowError::WrongLength {
-                expected: PASS_ANCHOR_WINDOW_LEN,
-                got: hashes.len(),
-            })?;
-        Ok(Self { first, hashes })
-    }
-
-    #[must_use]
-    pub const fn first(&self) -> BlockHeight {
-        self.first
-    }
-
-    /// Inclusive end of the window (`first + L`).
-    ///
-    /// Panics if the sum overflows. [`Self::from_table`] cannot build
-    /// such a window: `first` was produced by subtracting `L`.
-    #[must_use]
-    pub const fn last(&self) -> BlockHeight {
-        match self.first.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
-            Some(last) => last,
-            None => panic!("pass anchor window end overflowed BlockHeight"),
-        }
-    }
-
-    /// Connecting-chain hash at `anchor_height`, or `None` outside the window.
-    #[must_use]
-    pub fn hash_at(&self, anchor_height: BlockHeight) -> Option<&[u8; PASS_ANCHOR_HASH_LEN]> {
-        let offset = anchor_height.checked_sub(self.first)?;
-        let i = usize::try_from(offset.to_raw()).ok()?;
-        self.hashes.get(i)
-    }
-}
-
 /// Decoded header: `stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
 #[must_use]
 pub fn pass_request_header_bytes(
@@ -299,7 +197,7 @@ pub struct PassRequestHeader {
     stream: PassStream,
     nonce: [u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
-    anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+    anchor_hash: BlockHash,
 }
 
 impl PassRequestHeader {
@@ -310,7 +208,7 @@ impl PassRequestHeader {
         stream: PassStream,
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
-        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+        anchor_hash: BlockHash,
     ) -> Self {
         Self {
             stream,
@@ -343,7 +241,7 @@ impl PassRequestHeader {
             stream,
             nonce,
             anchor_height: BlockHeight::from_raw(u64::from_le_bytes(height_le)),
-            anchor_hash,
+            anchor_hash: BlockHash::from_bytes(anchor_hash),
         })
     }
 
@@ -361,7 +259,7 @@ impl PassRequestHeader {
 
     /// The requester's block hash at [`Self::anchor_height`].
     #[must_use]
-    pub const fn anchor_hash(&self) -> &[u8; PASS_ANCHOR_HASH_LEN] {
+    pub const fn anchor_hash(&self) -> &BlockHash {
         &self.anchor_hash
     }
 
@@ -372,25 +270,79 @@ impl PassRequestHeader {
             self.stream,
             &self.nonce,
             self.anchor_height,
-            &self.anchor_hash,
+            self.anchor_hash.as_bytes(),
         )
     }
 
     /// The SF-D8 transcript for this header, `shard_id`, and the digest of
     /// the bytes delivered under this header's nonce.
     #[must_use]
-    pub fn transcript(
+    pub const fn transcript(
         &self,
         shard_id: u64,
-        delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
-    ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(
-            self.stream,
-            &self.nonce,
-            self.anchor_height,
-            &self.anchor_hash,
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> PassTranscript {
+        PassTranscript {
+            header: *self,
             shard_id,
             delivery_digest,
+        }
+    }
+}
+
+/// What `P` signs, typed: the request header (whose anchor is a
+/// [`BlockHash`]), the shard the route named, and the digest of the bytes
+/// delivered. Every function that applies the receipt domain to a pass
+/// takes this, never the bytes, so the anchor reaches the domain as a block
+/// hash. [`Self::message`] is the 113-byte layout the signature covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassTranscript {
+    header: PassRequestHeader,
+    shard_id: u64,
+    delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+}
+
+impl PassTranscript {
+    /// The transcript of `header`, `shard_id` and `delivery_digest`; the
+    /// same as [`PassRequestHeader::transcript`].
+    #[must_use]
+    pub const fn new(
+        header: PassRequestHeader,
+        shard_id: u64,
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> Self {
+        header.transcript(shard_id, delivery_digest)
+    }
+
+    /// The request header.
+    #[must_use]
+    pub const fn header(&self) -> &PassRequestHeader {
+        &self.header
+    }
+
+    /// The shard the route named.
+    #[must_use]
+    pub const fn shard_id(&self) -> u64 {
+        self.shard_id
+    }
+
+    /// The digest of the bytes delivered under the header's nonce.
+    #[must_use]
+    pub const fn delivery_digest(&self) -> &[u8; PASS_DELIVERY_DIGEST_LEN] {
+        &self.delivery_digest
+    }
+
+    /// The 113-byte message a signature covers
+    /// ([`pass_countersignature_message`]).
+    #[must_use]
+    pub fn message(&self) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        pass_countersignature_message(
+            self.header.stream,
+            &self.header.nonce,
+            self.header.anchor_height,
+            self.header.anchor_hash.as_bytes(),
+            self.shard_id,
+            &self.delivery_digest,
         )
     }
 }
@@ -468,22 +420,10 @@ impl PassDeliveryHasher {
 
 /// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]` ‖
 /// [`pass_delivery_digest`]. Plain concatenation of fixed-width fields.
-///
-/// One transcript, two signing domains, by key:
-///
-/// - the identity key (hybrid scheme 1) signs it under
-///   [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION)
-///   — the live pass countersignature, verified by
-///   [`verify_pass_transcript`](crate::verify_pass_transcript) on the fetch
-///   client and by `verify_pass_countersignature` at attestation admission;
-/// - the receipt key (hybrid scheme 3) signs it under
-///   [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
-///   — the serve-credit receipt, verified by
-///   [`verify_receipt_transcript`](crate::verify_receipt_transcript) in the
-///   bundle verifier's step 8 and on the fetch client's scheme-3 target;
-///   both staged (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6, `FN_DSA_HYBRID.md` §9).
-///
-/// A signature under one domain is not a signature under the other.
+/// The persona's receipt key signs it under
+/// [`SCHEME_DOMAIN_RECEIPT`], and [`verify_receipt_transcript`] checks it
+/// on the fetch client and in the bundle verifier's step 8
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6, `FN_DSA_HYBRID.md` §9).
 #[must_use]
 pub fn pass_countersignature_message(
     stream: PassStream,
@@ -506,31 +446,56 @@ pub fn pass_countersignature_message(
     out
 }
 
+/// A receipt that does not verify over its transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("receipt does not verify over the pass transcript")]
+pub struct ReceiptRefused;
+
+/// Verify a **receipt** over the pass transcript: the 113-byte transcript,
+/// signed by the persona's receipt key (Ed25519 + FN-DSA-1024, hybrid
+/// scheme 3) under [`SCHEME_DOMAIN_RECEIPT`] (`ARCHIVAL_SERVE_CREDIT_SPEC.md`
+/// §6; `FN_DSA_HYBRID.md` §9).
+///
+/// It has two callers: the fetch client's target (`shekyl-p-fetch`,
+/// `target.rs`), which every drawn holder's target is, and the bundle
+/// verifier's step 8 (`shekyl-chain-rules`, `archival::bundle::verify_bundle`),
+/// which admission runs. Neither builds the message or names the domain
+/// itself, so the receipt a persona signs at serve time and the receipt
+/// admission verifies cannot drift.
+///
+/// The transcript's delivery digest is the caller's, recomputed from the
+/// body it received ([`pass_delivery_digest`]), so a signature over other
+/// bytes fails here.
+///
+/// # Errors
+///
+/// [`ReceiptRefused`] if the signature does not verify under
+/// `receipt_pubkey`, the receipt domain and this transcript.
+pub fn verify_receipt_transcript(
+    receipt_pubkey: &FnDsaHybridPublicKey,
+    transcript: &PassTranscript,
+    signature: &FnDsaHybridSignature,
+) -> Result<(), ReceiptRefused> {
+    HybridEd25519FnDsa
+        .verify(
+            receipt_pubkey,
+            SCHEME_DOMAIN_RECEIPT,
+            &transcript.message(),
+            signature,
+        )
+        .map_err(|_| ReceiptRefused)
+}
+
+#[cfg(test)]
+#[path = "receipt_transcript_tests.rs"]
+mod receipt_transcript_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const H: u64 = 5000;
-
     const fn bh(n: u64) -> BlockHeight {
         BlockHeight::from_raw(n)
-    }
-
-    fn chain_hash(height: u64) -> [u8; 32] {
-        let mut h = [0u8; 32];
-        h[..8].copy_from_slice(&height.to_le_bytes());
-        h[8] = 0xC4;
-        h
-    }
-
-    fn window_at(predecessor_height: u64) -> PassAnchorWindow {
-        let (first, len) =
-            PassAnchorWindow::shape_for_predecessor(bh(predecessor_height)).expect("window");
-        let hashes: Vec<_> = (0..len as u64)
-            .map(|i| chain_hash(first.to_raw() + i))
-            .collect();
-        PassAnchorWindow::from_table(bh(predecessor_height), &hashes)
-            .expect("table sized to the window")
     }
 
     #[test]
@@ -539,7 +504,7 @@ mod tests {
             PassStream::Economy,
             [0x11; 32],
             bh(0x0102_0304_0506_0708),
-            [0x22; 32],
+            shekyl_types::BlockHash::from_bytes([0x22; 32]),
         );
         let bytes = h.to_bytes();
         assert_eq!(PassRequestHeader::from_bytes(&bytes), Some(h));
@@ -554,7 +519,7 @@ mod tests {
         bad[0] = 2;
         assert!(PassRequestHeader::from_bytes(&bad).is_none());
         assert_eq!(
-            h.transcript(9, &[0x33; 32]),
+            h.transcript(9, [0x33; 32]).message(),
             pass_countersignature_message(
                 PassStream::Economy,
                 &[0x11; 32],
@@ -738,51 +703,10 @@ mod tests {
     }
 
     #[test]
-    fn anchor_window_heights_are_depth_and_lag_below_the_predecessor() {
+    fn anchor_depth_and_lag_are_the_generated_constants() {
         assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, BlockCount::from_raw(720));
         assert_eq!(PASS_ANCHOR_LAG_BLOCKS, BlockCount::from_raw(4));
-        assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, bh(724));
-        assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
-
-        let (first, len) = PassAnchorWindow::shape_for_predecessor(bh(H)).unwrap();
-        assert_eq!((first, len), (bh(H - 724), 5));
-        let w = window_at(H);
-        assert_eq!((w.first(), w.last()), (bh(H - 724), bh(H - 720)));
-        assert_eq!(w.hash_at(bh(H - 724)), Some(&chain_hash(H - 724)));
-        assert_eq!(w.hash_at(bh(H - 720)), Some(&chain_hash(H - 720)));
-        assert_eq!(w.hash_at(bh(H - 725)), None);
-        assert_eq!(w.hash_at(bh(H - 719)), None);
-
-        assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(723)), None);
-        let (first, _) = PassAnchorWindow::shape_for_predecessor(bh(724)).unwrap();
-        assert_eq!(first, bh(0));
-        assert_eq!(PassAnchorWindow::shape_for_predecessor(bh(0)), None);
     }
-
-    #[test]
-    fn anchor_window_table_must_match_the_window_exactly() {
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(723), &[[0u8; 32]; 5]).unwrap_err(),
-            PassAnchorWindowError::BelowThreshold {
-                predecessor_height: bh(723)
-            }
-        );
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(H), &[[0u8; 32]; 4]).unwrap_err(),
-            PassAnchorWindowError::WrongLength {
-                expected: 5,
-                got: 4
-            }
-        );
-        assert_eq!(
-            PassAnchorWindow::from_table(bh(H), &[[0u8; 32]; 6]).unwrap_err(),
-            PassAnchorWindowError::WrongLength {
-                expected: 5,
-                got: 6
-            }
-        );
-    }
-
     /// The window a refusal names is the window that outran the anchor,
     /// and nothing else: `None` where the relation holds, including the
     /// epoch too short to have a window, and `Some(W₂)` — the schedule's

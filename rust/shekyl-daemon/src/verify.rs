@@ -15,7 +15,9 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
-use shekyl_daemon_config::{account, announce, marker, resolve, Lock, TABLE};
+use shekyl_daemon_config::{
+    account, announce, marker, owner_socket, resolve, Lock, Platform, TABLE,
+};
 use shekyl_options::{Code, Diagnostic, Source, Value};
 
 use crate::levers;
@@ -26,6 +28,9 @@ use crate::run::tell;
 pub(crate) struct Walked {
     pub(crate) network_id: [u8; 16],
     pub(crate) warnings: Vec<String>,
+    /// Where the owner's socket goes, checked; `None` for a service
+    /// (`RPC_CHANNEL.md` §7.1, IG-Q105).
+    pub(crate) owner_socket: Option<shekyl_daemon_config::OwnerSocketPlan>,
 }
 
 /// The walk (IG-Q59), in a start's order, stopping at the first refusal
@@ -39,18 +44,35 @@ pub(crate) struct Walked {
 /// file; the owner values the table accepted, judged and not latched; a
 /// `mine-threads` count above the host's parallelism, refused here so the
 /// start-time miner never asks for it (Rick, 2026-11-02); and the managed
-/// Tor's pin, read and not started. Nothing is created, opened for
-/// writing, locked or latched, so the check can run while a daemon is up
-/// and leaves the machine as it found it.
+/// Tor's pin, read and not started; and where the owner's socket goes,
+/// its directory asserted and nothing bound (`RPC_CHANNEL.md` §7.1).
+/// Nothing is created, opened for writing, locked or latched, so the check
+/// can run while a daemon is up and leaves the machine as it found it.
 pub(crate) fn walk(
     config: &DaemonConfig,
     resolved: &resolve::Resolved,
+    platform: &Platform,
 ) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
+    // First: a service's rendezvous directory is the account's mark that
+    // it is the machine's service, and a non-service account that gives
+    // `service` is refused for that, not for a data directory it could
+    // not open (`RPC_CHANNEL.md` §7.1).
+    owner_socket::service_rendezvous(config, platform).map_err(one)?;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;
     log_location_creatable(&config.logging.file).map_err(one)?;
+    let owner_socket = owner_socket::plan(
+        config,
+        platform,
+        &network_id,
+        resolved
+            .source("rpc-socket-dir")
+            .cloned()
+            .unwrap_or(Source::Cli),
+    )
+    .map_err(one)?;
     let dev = &config.dev;
     if let Err(refusal) =
         levers::check_seed_epoch(dev.pow_seed_epoch_blocks, dev.pow_seed_epoch_lag)
@@ -83,6 +105,7 @@ pub(crate) fn walk(
     Ok(Walked {
         network_id,
         warnings,
+        owner_socket,
     })
 }
 
@@ -189,10 +212,14 @@ mod tests {
         shekyl_daemon_config::Network::Regtest.network_id()
     }
 
+    /// A logged-in account: its home, and a private session directory
+    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
             program_data: None,
+            session_dir: crate::test_session_dir(home),
+            service_rendezvous: None,
         }
     }
 
@@ -285,7 +312,7 @@ mod tests {
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let loaded = load(cli, &platform(d.path())).unwrap();
-        let ds = walk(&loaded.config, &loaded.resolved)
+        let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
             .err()
             .expect("a seed-epoch length of 3 is refused");
         assert_eq!(ds.len(), 1);
@@ -323,7 +350,7 @@ mod tests {
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let loaded = load(cli, &platform(d.path())).unwrap();
-        let walked = walk(&loaded.config, &loaded.resolved).unwrap();
+        let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
         assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
         let warning = &walked.warnings[0];
@@ -390,7 +417,7 @@ mod tests {
             let a = args(&full);
             let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
             let loaded = load(cli, &platform(d.path())).unwrap();
-            let walked = walk(&loaded.config, &loaded.resolved).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
             let (_, err) = accepted_lines(
                 &loaded.resolved,
                 loaded.file_read.as_deref(),
@@ -443,5 +470,47 @@ mod tests {
         // Open, but the miner is not asked to start.
         let idle = notice_lines(&["--tor", "off", "--mine-address", &address]);
         assert!(idle.is_empty(), "{idle:?}");
+    }
+
+    /// A start that gives `service` from an account that is not the
+    /// service's is refused before it touches anything, with this machine's
+    /// own rendezvous directory (`/run/shekyl` on Linux). An ordinary account
+    /// is refused because the directory is not its own; a root runner, as CI
+    /// is, because a service never runs as root. Either way the refusal is
+    /// the rendezvous directory's (Rick, 2026-11-12). Red edit: drop the
+    /// walk's rendezvous check and the refusal is the data directory's, or
+    /// none.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_service_account_giving_service_is_refused_on_this_machine() {
+        use std::os::unix::fs::MetadataExt;
+        let platform = shekyl_process::platform::current();
+        let dir = platform
+            .service_rendezvous
+            .clone()
+            .expect("this platform names a service rendezvous directory");
+        let d = tempfile::tempdir().unwrap();
+        // This account: the owner of a directory it just made.
+        let me = std::fs::metadata(d.path()).unwrap().uid();
+        if me != 0 {
+            if let Ok(meta) = std::fs::metadata(&dir) {
+                assert_ne!(
+                    meta.uid(),
+                    me,
+                    "{} is this account's: this host runs its service as the test account",
+                    dir.display()
+                );
+            }
+        }
+        let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
+        a.push(OsString::from("--service"));
+        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+        let loaded = load(cli, &platform).unwrap();
+        let ds = walk(&loaded.config, &loaded.resolved, &platform)
+            .err()
+            .expect("the service start is refused");
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
+        assert!(!d.path().join("data").exists(), "nothing was created");
     }
 }

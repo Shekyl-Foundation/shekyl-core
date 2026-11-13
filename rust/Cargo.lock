@@ -3862,6 +3862,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-thread-ledger",
  "shekyl-thread-priority",
+ "shekyl-tor-status",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -3911,6 +3912,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
@@ -3930,6 +3932,7 @@ name = "shekyl-chain-sync"
 version = "3.1.0"
 dependencies = [
  "proptest",
+ "shekyl-archival-retention",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-difficulty",
@@ -3944,6 +3947,7 @@ dependencies = [
 name = "shekyl-chain-sync-runtime"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-retention",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
@@ -4012,6 +4016,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-shard-visual",
  "shekyl-tor-control-client",
+ "shekyl-tor-status",
  "shekyl-types",
  "shekyl-units",
  "shekyl-version",
@@ -4203,6 +4208,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
+ "shekyl-rpc-channel",
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
@@ -4243,13 +4249,17 @@ dependencies = [
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
+ "shekyl-rpc-channel",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
+ "shekyl-tor-status",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-win-sec",
  "shekyl-wire",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower",
@@ -4592,6 +4602,18 @@ name = "shekyl-hash-budget"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-hasher"
+version = "3.1.0"
+dependencies = [
+ "proptest",
+ "shekyl-hash-budget",
+ "shekyl-pow-randomx",
+ "shekyl-thread-ledger",
+ "tokio",
+ "trybuild",
+]
+
+[[package]]
 name = "shekyl-heap-secret"
 version = "3.1.0"
 dependencies = [
@@ -4731,6 +4753,7 @@ dependencies = [
  "shekyl-runtime",
  "shekyl-store-codec",
  "shekyl-timing-engine",
+ "shekyl-tor-status",
  "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-units",
@@ -4850,8 +4873,6 @@ dependencies = [
 name = "shekyl-p-serve"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
- "fips204",
  "gungraun",
  "rand 0.8.6",
  "shekyl-archival-retention",
@@ -4920,6 +4941,7 @@ name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-bundle-producer",
  "shekyl-capped-stream",
@@ -4929,8 +4951,10 @@ dependencies = [
  "shekyl-chain-sync",
  "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
+ "shekyl-crypto-pq",
  "shekyl-difficulty",
  "shekyl-draw-rng",
+ "shekyl-economics",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",
  "shekyl-levin",
@@ -4949,6 +4973,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -5206,6 +5231,7 @@ dependencies = [
  "shekyl-address",
  "shekyl-network",
  "shekyl-rpc-grants",
+ "shekyl-tor-status",
  "shekyl-units",
  "shekyl-wire",
 ]
@@ -5631,6 +5657,7 @@ dependencies = [
 name = "shekyl-win-sec"
 version = "3.1.0"
 dependencies = [
+ "tempfile",
  "tokio",
  "windows-sys 0.61.2",
 ]

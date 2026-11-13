@@ -22,9 +22,15 @@ use shekyl_levin::{
     COMMAND_HANDSHAKE,
 };
 
+#[path = "../support/owner_socket_dir.rs"]
+mod owner_socket_dir;
+
 pub struct Daemon {
     pub child: Child,
     pub data_dir: PathBuf,
+    /// The owner's socket directory. Not under [`Self::data_dir`]: that
+    /// path is too long for `sun_path` on macOS.
+    socket_dir: PathBuf,
     pub p2p_port: u16,
     pub rpc_port: u16,
 }
@@ -55,6 +61,8 @@ impl Daemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
+        // A short private directory, not under `data_dir` (`sun_path`).
+        let socket_dir = owner_socket_dir::owner_socket_dir(p2p_port);
         // Regtest has no seeds and the test names no peer, so every connection
         // counted here is INBOUND and ours; the outbound degree is a protocol
         // constant (`out-peers` is a rejected row). Regtest's default is the
@@ -77,6 +85,8 @@ impl Daemon {
             &data_dir.join("shekyld.log").display().to_string(),
             "--log-level",
             log_level,
+            "--rpc-socket-dir",
+            socket_dir.to_str().expect("utf8 socket dir"),
         ];
         let mut command = match descriptor_limit {
             None => {
@@ -106,6 +116,7 @@ impl Daemon {
         let mut d = Self {
             child,
             data_dir,
+            socket_dir,
             p2p_port,
             rpc_port,
         };
@@ -148,6 +159,7 @@ impl Drop for Daemon {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
+        drop(std::fs::remove_dir_all(&self.socket_dir));
     }
 }
 

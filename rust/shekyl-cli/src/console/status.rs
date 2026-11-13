@@ -8,8 +8,10 @@
 use super::info::{chain_count, fetch_status, network_label};
 use crate::daemon::{DaemonClient, DaemonError};
 use shekyl_rpc_client::wire;
-use shekyl_rpc_types::kinds::NoParams;
-use shekyl_rpc_types::wire::node::MineSpeed;
+use shekyl_rpc_types::kinds::{NoParams, Text};
+use shekyl_rpc_types::wire::daemon::{DaemonStatus, GrantName};
+use shekyl_rpc_types::wire::node::{MineSpeed, OptionRow, OptionShow};
+use shekyl_tor_status::{names_data_dir, render};
 
 /// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
 const PREFIX_FROM_HASHES: u128 = 1_000;
@@ -178,16 +180,22 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
         }
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
-    // Network hash rate as difficulty per target second. `checked_div` for
-    // the same reason as everywhere else in this file: `T` is genesis-frozen
-    // and generated; a zero would be a build defect, not a daemon value.
-    let net_hash = info
-        .difficulty
-        .get()
-        .checked_div(u128::from(target))
-        .map_or_else(|| "unknown".to_owned(), mining_speed);
+    // Network hash rate as difficulty per target second, from the chain's
+    // part; a daemon that does not show it is "not disclosed", never a
+    // zero. `checked_div` for the same reason as everywhere else in this
+    // file: `T` is genesis-frozen and generated; a zero would be a build
+    // defect, not a daemon value.
+    let net_hash = info.difficulty.shown().map_or_else(
+        || "not disclosed".to_owned(),
+        |difficulty| {
+            difficulty
+                .get()
+                .checked_div(u128::from(target))
+                .map_or_else(|| "unknown".to_owned(), mining_speed)
+        },
+    );
     let mut line = format!(
-        "Height: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
+        "Block count: {}/{net_height} ({:.1}%) on {network}, {mining_text}, net hash {net_hash}, \
          {connections}",
         height,
         sync_percentage(height, net_height),
@@ -204,5 +212,51 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
             uptime % 60
         ));
     }
+    // The Tor status, in the one renderer's words; a caller not shown
+    // Status is told nothing of it, as of the counts above.
+    if let Some(tor) = tor_sentence(daemon, &info)? {
+        line.push('\n');
+        line.push_str(&tor);
+    }
     Ok(line)
+}
+
+/// The Tor status as `shekyl-tor-status` renders it, or `None` for a
+/// caller not shown Status. The data directory is named only for a
+/// connection that holds `config` (IG-Q97), and only when the sentence
+/// speaks of it, so an ordinary status costs no second call.
+fn tor_sentence(daemon: &DaemonClient, info: &DaemonStatus) -> Result<Option<String>, String> {
+    let Some(tor) = info.tor_status() else {
+        return Ok(None);
+    };
+    let data_dir = if names_data_dir(&tor) && info.grant.contains(&GrantName::Config) {
+        data_dir(daemon)?
+    } else {
+        None
+    };
+    Ok(Some(render(&tor, data_dir.as_deref())))
+}
+
+/// The daemon's `data-dir`, with its control characters taken out: it is a
+/// string the daemon supplies, and this prints it to a terminal (Rick,
+/// 2026-11-12). `None` when the daemon shows no value for it.
+fn data_dir(daemon: &DaemonClient) -> Result<Option<String>, String> {
+    let rows = super::call::<wire::OptionShow>(
+        daemon,
+        &OptionShow {
+            name: Some(vec![Text("data-dir".to_owned())]),
+        },
+    )?;
+    Ok(rows.into_iter().find_map(|row| match row {
+        OptionRow::Value(value) if value.name.0 == "data-dir" => {
+            value.value.0.map(|path| printable(&path.0))
+        }
+        _ => None,
+    }))
+}
+
+/// `text` with every control character removed, so a daemon-supplied
+/// string cannot move the cursor, clear the screen or forge a line.
+pub(super) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
 }

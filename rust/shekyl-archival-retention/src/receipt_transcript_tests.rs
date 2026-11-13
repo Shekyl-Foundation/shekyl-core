@@ -4,15 +4,12 @@
 // BSD-3-Clause
 
 //! [`verify_receipt_transcript`]: the scheme-3 check over the pass
-//! transcript, and its separation from the identity key's check.
+//! transcript.
 
 use super::*;
-use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_RECEIPT,
-    SCHEME_DOMAIN_WITNESS_BUNDLE,
+    HybridEd25519MlDsa, HybridSignature, SCHEME_DOMAIN_WITNESS_BUNDLE,
 };
-use shekyl_types::BlockHeight;
 
 const NONCE: [u8; PASS_NONCE_LEN] = [0x11; PASS_NONCE_LEN];
 const ANCHOR: BlockHeight = BlockHeight::from_raw(1_000);
@@ -44,15 +41,19 @@ fn receipt_keypair(
 fn verify(
     public: &FnDsaHybridPublicKey,
     signature: &FnDsaHybridSignature,
-) -> Result<(), PassCountersignatureError> {
+) -> Result<(), ReceiptRefused> {
     verify_receipt_transcript(
         public,
-        crate::pass_anchor::PassStream::Economy,
-        &NONCE,
-        ANCHOR,
-        &ANCHOR_HASH,
-        SHARD,
-        &DIGEST,
+        &crate::pass_anchor::PassTranscript::new(
+            crate::pass_anchor::PassRequestHeader::from_parts(
+                crate::pass_anchor::PassStream::Economy,
+                NONCE,
+                ANCHOR,
+                shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
+            ),
+            SHARD,
+            DIGEST,
+        ),
         signature,
     )
 }
@@ -65,19 +66,23 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
         .expect("sign");
     verify(&public, &signature).expect("verifies");
 
-    let refused = Err(PassCountersignatureError::InvalidSignature);
+    let refused = Err(ReceiptRefused);
     // Another key.
     assert_eq!(verify(&receipt_keypair(9).0, &signature), refused);
     // Each transcript field, moved by one.
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &[0x12; PASS_NONCE_LEN],
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    [0x12; PASS_NONCE_LEN],
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -85,12 +90,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            BlockHeight::from_raw(1_001),
-            &ANCHOR_HASH,
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    BlockHeight::from_raw(1_001),
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -98,12 +107,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &[0x23; PASS_ANCHOR_HASH_LEN],
-            SHARD,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes([0x23; PASS_ANCHOR_HASH_LEN])
+                ),
+                SHARD,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -111,12 +124,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD + 1,
-            &DIGEST,
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD + 1,
+                DIGEST
+            ),
             &signature
         ),
         refused
@@ -124,12 +141,16 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
     assert_eq!(
         verify_receipt_transcript(
             &public,
-            crate::pass_anchor::PassStream::Economy,
-            &NONCE,
-            ANCHOR,
-            &ANCHOR_HASH,
-            SHARD,
-            &[0x5b; PASS_DELIVERY_DIGEST_LEN],
+            &crate::pass_anchor::PassTranscript::new(
+                crate::pass_anchor::PassRequestHeader::from_parts(
+                    crate::pass_anchor::PassStream::Economy,
+                    NONCE,
+                    ANCHOR,
+                    shekyl_types::BlockHash::from_bytes(ANCHOR_HASH)
+                ),
+                SHARD,
+                [0x5b; PASS_DELIVERY_DIGEST_LEN]
+            ),
             &signature
         ),
         refused
@@ -137,47 +158,28 @@ fn a_receipt_over_the_transcript_verifies_and_binds_every_field() {
 }
 
 /// The domain is the receipt's. The same key over the same transcript under
-/// the identity key's domain, or under the other scheme-3 surface's, is not
-/// a receipt.
+/// the other scheme-3 domain is not a receipt.
 #[test]
 fn a_signature_under_another_domain_is_not_a_receipt() {
     let (public, secret) = receipt_keypair(7);
-    for domain in [SCHEME_DOMAIN_ATTESTATION, SCHEME_DOMAIN_WITNESS_BUNDLE] {
-        let signature = HybridEd25519FnDsa
-            .sign(&secret, domain, &transcript())
-            .expect("sign");
-        assert_eq!(
-            verify(&public, &signature),
-            Err(PassCountersignatureError::InvalidSignature)
-        );
-    }
+    let signature = HybridEd25519FnDsa
+        .sign(&secret, SCHEME_DOMAIN_WITNESS_BUNDLE, &transcript())
+        .expect("sign");
+    assert_eq!(verify(&public, &signature), Err(ReceiptRefused));
 }
 
-/// The two checks do not accept each other's objects. The types refuse it
-/// first — an identity signature is not a `FnDsaHybridSignature` — so what
-/// is held here is the bytes: an identity signature's canonical encoding
-/// does not parse as a receipt, and a receipt's does not parse as an
-/// identity signature.
+/// An identity-key signature is not a receipt, even under the receipt
+/// domain. The types refuse it first (it is not a `FnDsaHybridSignature`),
+/// so what is held here is the bytes: its canonical encoding does not parse
+/// as a receipt, and a receipt's does not parse as an identity signature.
 #[test]
 fn an_identity_signature_is_not_a_receipt_and_a_receipt_is_not_one() {
-    let (identity_public, identity_secret) = HybridEd25519MlDsa
+    let (_, identity_secret) = HybridEd25519MlDsa
         .generate_ephemeral_keypair_for_tests()
         .expect("keygen");
     let identity = HybridEd25519MlDsa
-        .sign(&identity_secret, SCHEME_DOMAIN_ATTESTATION, &transcript())
+        .sign(&identity_secret, SCHEME_DOMAIN_RECEIPT, &transcript())
         .expect("sign");
-    verify_pass_transcript(
-        &identity_public,
-        crate::pass_anchor::PassStream::Economy,
-        &NONCE,
-        ANCHOR,
-        &ANCHOR_HASH,
-        SHARD,
-        &DIGEST,
-        &identity,
-    )
-    .expect("control: the identity check accepts its own");
-
     let (_, receipt_secret) = receipt_keypair(7);
     let receipt = HybridEd25519FnDsa
         .sign(&receipt_secret, SCHEME_DOMAIN_RECEIPT, &transcript())

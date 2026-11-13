@@ -42,7 +42,7 @@
 //! - [`bundle_commitment`] — what the witness signs.
 //! - [`bundle_prunable_hash`] — what a reference carries of the prunable
 //!   part, and the key a body is fetched and accepted by.
-//! - [`bundle_root`] — what the block header commits to.
+//! - [`section_root`] — what the block header commits to.
 //!
 //! All three are consensus: every node must compute the same bytes.
 //!
@@ -59,6 +59,8 @@
 //! A bundle is public from the moment it is filed: the seed it carries is
 //! the reveal. The seed and the witness key *before* the reveal are the
 //! challenger's, held in its ring, and never pass through these types.
+
+use std::collections::BTreeMap;
 
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::archival::SettlementEpochBlocks;
@@ -80,8 +82,8 @@ pub const BUNDLE_COMMITMENT: IdDomain<2, W64> =
 /// cSHAKE256 customization for [`bundle_prunable_hash`].
 pub const BUNDLE_PRUNABLE_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-prunable-v1";
 
-/// cSHAKE256 customization for [`bundle_root`].
-pub const BUNDLE_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
+/// cSHAKE256 customization for [`section_root`].
+pub const SECTION_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
 
 /// The draw seed's length.
 pub const BUNDLE_SEED_LEN: usize = 32;
@@ -532,6 +534,56 @@ impl BundleRef {
             u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
         BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
+
+    /// The body this reference names, from bytes a peer sent for it
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): accepted only at exactly
+    /// [`Self::body_len`] bytes and only on hash equality.
+    ///
+    /// The length is checked before anything is hashed, so a body the
+    /// reference's bitmaps do not fix costs a comparison and no hash. A
+    /// body that passes both is not yet a valid bundle: the witness and
+    /// receipt checks are admission's (§9.1).
+    ///
+    /// # Errors
+    ///
+    /// [`BodyRefused::Length`] for any length but [`Self::body_len`];
+    /// [`BodyRefused::Hash`] when the bytes do not hash to the reference's
+    /// prunable hash.
+    pub fn accept_body(&self, bytes: &[u8]) -> Result<BundleBody, BodyRefused> {
+        let expected = self.body_len();
+        if u64::try_from(bytes.len()).ok() != Some(expected) {
+            return Err(BodyRefused::Length {
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if bundle_prunable_hash(bytes) != self.prunable_hash {
+            return Err(BodyRefused::Hash);
+        }
+        // The exact length is the witness and a whole number of records,
+        // so this decode cannot refuse; its error is mapped, not unwrapped.
+        BundleBody::decode(bytes).map_err(|_| BodyRefused::Length {
+            expected,
+            found: bytes.len(),
+        })
+    }
+}
+
+/// Bytes refused as the body a reference names (§7.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BodyRefused {
+    /// The reference's bitmaps fix the body's length, and these bytes are
+    /// another length.
+    #[error("the reference names a {expected}-byte body, not {found} bytes")]
+    Length {
+        /// [`BundleRef::body_len`].
+        expected: u64,
+        /// The bytes offered.
+        found: usize,
+    },
+    /// The bytes do not hash to the reference's prunable hash.
+    #[error("the body does not hash to the reference's prunable hash")]
+    Hash,
 }
 
 /// One pass record. It names nothing: its draw is the position of its bit,
@@ -788,6 +840,45 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
     cshake256_32(BUNDLE_PRUNABLE_CUSTOMIZATION, prunable)
 }
 
+/// Bundle bodies a block carried or a peer sent, each hashed once by
+/// [`bundle_prunable_hash`], so that each of a section's references finds
+/// its body by a lookup (§7.5).
+///
+/// Trying every carried body against every reference hashes each body
+/// once per reference: `n` references and `n` bodies cost `n²` hashes of
+/// bytes a peer chose. Indexed, each body costs one hash and each
+/// reference one lookup. A body carried twice is indexed once.
+///
+/// A lookup matches on the hash alone. Whether the bytes are the
+/// reference's body is still [`BundleRef::accept_body`]'s to say (its
+/// length), and whether they parse is the validator's.
+#[derive(Clone, Debug, Default)]
+pub struct CarriedBodies<'a> {
+    by_hash: BTreeMap<[u8; 32], &'a [u8]>,
+}
+
+impl<'a> CarriedBodies<'a> {
+    /// Hash each of `carried` once and index it by its prunable hash.
+    #[must_use]
+    pub fn index<I>(carried: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let mut by_hash = BTreeMap::new();
+        for bytes in carried {
+            by_hash.entry(bundle_prunable_hash(bytes)).or_insert(bytes);
+        }
+        Self { by_hash }
+    }
+
+    /// The carried bytes whose prunable hash is the one `reference`
+    /// states, if any were carried.
+    #[must_use]
+    pub fn named_by(&self, reference: &BundleRef) -> Option<&'a [u8]> {
+        self.by_hash.get(reference.prunable_hash()).copied()
+    }
+}
+
 /// The header root over a block's bundle references, in the order given
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3, §9.1).
 ///
@@ -814,14 +905,24 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 /// root's preimage counts them in four bytes, so such a section has no
 /// root. A consensus caller refuses the section for it; nothing here
 /// panics.
-pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
+pub fn section_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
     let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
     input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
         reference.encode_into(&mut input);
     }
-    Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
+    Ok(cshake256_32(SECTION_ROOT_CUSTOMIZATION, &input))
+}
+
+/// The root of a section with no references: what the header commits to
+/// on a block that admits no bundle, genesis included (§7.3, `SCS-P34`).
+#[must_use]
+pub fn empty_section_root() -> [u8; 32] {
+    match section_root(&[]) {
+        Ok(root) => root,
+        Err(_) => unreachable!("an empty section's count fits"),
+    }
 }
 
 /// A section holds more references than the root's `n_le[4]` can count.
@@ -840,9 +941,9 @@ pub struct TooManyReferences {
 /// `n` as the root's preimage carries it: the section's reference count in
 /// 32 bits, checked, never truncated.
 ///
-/// Crate-private. [`bundle_root`] is the caller. The bound is tested on
+/// Crate-private. [`section_root`] is the caller. The bound is tested on
 /// this function because a section of 2³² references is not something a
-/// test allocates. The verifier maps [`bundle_root`]'s error and does not
+/// test allocates. The verifier maps [`section_root`]'s error and does not
 /// call this.
 ///
 /// # Errors

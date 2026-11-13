@@ -51,7 +51,6 @@ pipeline = [
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
     "dep:shekyl-block-template",
-    "dep:shekyl-archival-retention",
     "dep:shekyl-chain-sync",
     "dep:rand",
     "dep:zeroize",
@@ -72,7 +71,6 @@ replay-cli = [
     "fetch",
     "dep:clap",
     "dep:shekyl-rpc-transport",
-    "dep:shekyl-archival-retention",
 ]
 # harness: the driver's emission-claim assembly (`emission_assembly.rs`,
 # E6 slice 8 row 7) for the one test outside this crate that needs it —
@@ -85,7 +83,6 @@ replay-cli = [
 # enabler that turns on this crate's harness alone must still compile.
 harness = [
     "shekyl-chain-rules/harness",
-    "dep:shekyl-archival-retention",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
     "dep:shekyl-curve-generators",
@@ -144,6 +141,10 @@ required-features = ["replay-cli"]
 # form (stateless) / validate (view-bound), Substrate, Candidate, the
 # verdict and fault types. The validator, never re-derived here.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The bundle's bytes: the corpus holds each body to its reference (§7.5)
+# in every build, and the pipeline builds and roots the template's
+# section. The validator already depends on it.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # The production PoW verifier: PreparedCache / compute_hash / CacheStore.
 # Verification is this crate everywhere, forever (§1.3); the JIT is never
 # consulted here.
@@ -224,11 +225,8 @@ tempfile = { workspace = true, optional = true }
 
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
-# pipeline also takes `shekyl-archival-retention`: the empty attestation
-# root and the bundle's bytes.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
-shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
 
 # harness: what `emission_assembly.rs` signs and encodes with — the same
 # crates the [dev-dependencies] below name unconditionally for the rest of
@@ -240,6 +238,9 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The Tor status a store test hands `daemon_status`, as the daemon's
+# supervisor would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
 # The instruction-count harness of `benches/block_path_iai.rs`, at the
 # version every other gated bench uses.
 gungraun = "0.19"
@@ -290,12 +291,6 @@ shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# The archival body fixtures (`test_support::{serve_credit_body,
-# emission_claim_body}`, slice 7 commit 7): the kept-half and emission-vin
-# codecs, so the mutation family's duplicates carry keys the validator's
-# parse (`ArchivalKey::of`) reads. Unconditional here; the [dependencies]
-# edge above stays optional for the replay CLI alone.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 # The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
 # `TemplateContext` takes (rule 35).

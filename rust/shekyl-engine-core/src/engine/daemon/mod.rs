@@ -56,6 +56,8 @@
 /// [`SyncedChainFacts`]: synced_chain_facts::SyncedChainFacts
 pub(crate) mod synced_chain_facts;
 
+pub mod methods;
+
 use std::future::Future;
 
 use serde_json::{json, Value};

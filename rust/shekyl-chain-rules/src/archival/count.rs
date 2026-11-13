@@ -21,7 +21,7 @@
 //! the writer halts, and the block is not refused.
 
 use shekyl_archival_retention::{draw_count, draw_horizon, DrawableEpoch};
-use shekyl_types::archival::{BlockDraws, SupportSeats, COUNTED_DRAWS};
+use shekyl_types::archival::{BlockDraws, SupportCarryAfter, SupportRow, COUNTED_DRAWS};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -33,7 +33,7 @@ use crate::view::{AtHeight, ChainView};
 
 use super::drawable;
 use super::memo::DrawableMemo;
-use super::support_seats::scheduled_seats;
+use super::{support_step, SupportStepFault, WindowClosed};
 
 /// CEN-L17: the count. One row per connected height, derived here and
 /// written by the store. A windowless schedule records a zero row; every
@@ -95,7 +95,7 @@ impl super::Transition {
         opened: Option<&DrawableEpoch>,
         count_memo: &mut CountMemo<'_>,
         coverage: &mut RuleCoverage,
-    ) -> Result<(BlockDraws, SupportSeats), ViewRead<V::Fault>> {
+    ) -> Result<(BlockDraws, SupportRow), ViewRead<V::Fault>> {
         let connecting = self.connecting;
         let schedule = self.schedule;
         let epoch = self.epoch;
@@ -109,7 +109,7 @@ impl super::Transition {
         // that empty row is written too (SI-40).
         let Some(window) = schedule.challenge_response_blocks() else {
             coverage.insert(L17::ROW);
-            return Ok((BlockDraws::ZERO, SupportSeats::EMPTY));
+            return Ok((BlockDraws::ZERO, SupportRow::EMPTY));
         };
 
         let open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
@@ -118,18 +118,57 @@ impl super::Transition {
         // `|D|` and the block's support seats read one snapshot: the epoch's
         // members are filed with `D` (`SO-D12` S1).
         //
-        // Only scheduled seats: a seat carried from an unfiled block joins
-        // the transition with admission at the switch. Before it nothing is
-        // admitted on chain, so every scheduled seat would read as unfiled
-        // and every tree would be carried onto nearly every block (G3).
-        let (set_size, seats) = self.resolve(view, at_open, opened, count_memo, |drawable| {
+        // The row is one step of the carry (`support_step`, the switch's
+        // C5): a seat whose block's bundle was not admitted by its window's
+        // close is owed, and re-seated at a later block of the same epoch.
+        // The carry before this block is the one the row at `h − 1` left;
+        // at an open it is empty, because no carry crosses an epoch
+        // (`SO-D12r`).
+        let before = if at_open {
+            SupportCarryAfter::EMPTY
+        } else {
+            let prior = connecting
+                .checked_sub_count(BlockCount::ONE)
+                .expect("height 0 opens its epoch");
+            view.support_row(prior, floor)
+                .map_err(ViewRead::View)?
+                .ok_or_else(|| fault(connecting, DrawCountFault::MissingSeats { at: prior }))?
+                .carry_after
+        };
+        // The block whose window closes here, `h − W₂ − 1`: its seats, and
+        // whether its bundle was admitted by the close. Read only when it
+        // is in this epoch; one in the epoch before belongs to that
+        // epoch's carry, where it lapsed.
+        let closed = match connecting
+            .checked_sub_count(BlockCount::from_raw(window.get().saturating_add(1)))
+            .filter(|at| *at >= open)
+        {
+            None => None,
+            Some(at) => {
+                let row = view
+                    .support_row(at, floor)
+                    .map_err(ViewRead::View)?
+                    .ok_or_else(|| fault(connecting, DrawCountFault::MissingSeats { at }))?;
+                let filed = require_row(view, at, floor, connecting)?.revealed;
+                Some((row.seats, filed))
+            }
+        };
+        let (set_size, stepped) = self.resolve(view, at_open, opened, count_memo, |drawable| {
+            let closed = closed.as_ref().map(|(seats, filed)| WindowClosed {
+                seats,
+                filed: *filed,
+            });
             (
                 drawable.len(),
-                scheduled_seats(drawable, connecting, schedule),
+                support_step(drawable, connecting, schedule, &before, closed),
             )
         })?;
-        let seats = seats.map_err(ViewRead::Corrupt)?;
-        self.file_prior_epoch(view, count_memo)?;
+        let support_row = stepped.map_err(|why| match why {
+            SupportStepFault::PastCap { count, .. } => {
+                fault(connecting, DrawCountFault::SupportCountPastCap { count })
+            }
+            SupportStepFault::Corrupt(corrupt) => ViewRead::Corrupt(corrupt),
+        })?;
         let (visible, carry_in) = if at_open {
             // The block before a later open wrote a row. Its numbers belong
             // to the epoch that closed; this epoch counts `D` afresh. The
@@ -178,7 +217,7 @@ impl super::Transition {
             window.get(),
             shekyl_archival_retention::archival_params(),
         );
-        let Some((count, carry)) = draw_count(
+        let Some((count, draw_carry)) = draw_count(
             set_size,
             unsettled,
             horizon,
@@ -193,11 +232,11 @@ impl super::Transition {
         Ok((
             BlockDraws {
                 count,
-                carry,
+                carry: draw_carry,
                 shortfall: visible,
                 ..BlockDraws::ZERO
             },
-            seats,
+            support_row,
         ))
     }
 
@@ -238,39 +277,6 @@ impl super::Transition {
         };
         memo.evict(connecting, schedule);
         self.remember_epoch(view, epoch, memo, read)
-    }
-
-    /// File the previous epoch's set when this block's window reaches it.
-    ///
-    /// `W₂ < SEB`, so the window names at most the epoch being counted and
-    /// the one before it, and only while `connecting` is still within `W₂`
-    /// of the open. A warm memo already holds that set. A cold one does
-    /// not: the count rebuilds only its own epoch, and admission would
-    /// then fault the miss it was promised would not happen.
-    fn file_prior_epoch<'id, V: ChainView<'id>>(
-        &self,
-        view: &V,
-        count_memo: &mut CountMemo<'_>,
-    ) -> Result<(), ViewRead<V::Fault>> {
-        let Some(memo) = count_memo.memo.as_mut() else {
-            return Ok(());
-        };
-        let Some(window) = self.schedule.challenge_response_blocks() else {
-            return Ok(());
-        };
-        let raw = self.epoch.to_raw();
-        if raw == 0 {
-            return Ok(());
-        }
-        let open = BlockHeight::from_raw(self.schedule.open_height(raw));
-        let reaches = match self.connecting.checked_sub(open) {
-            Some(span) => span.to_raw() < window.get(),
-            None => false,
-        };
-        if !reaches {
-            return Ok(());
-        }
-        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo, |_| ())
     }
 
     /// The hash of the block that opened `epoch`. Above the tip the epoch
@@ -494,11 +500,15 @@ mod tests {
                 open_hash: BlockHash::NULL,
                 memo: None,
             };
-            let (row, seats) = transition
+            let (row, support) = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
                 .expect("a windowless count does not read the chain");
             assert_eq!(row, BlockDraws::ZERO);
-            assert!(seats.is_empty(), "a windowless schedule seats nobody");
+            assert_eq!(
+                support,
+                SupportRow::EMPTY,
+                "a windowless schedule seats nobody and carries nothing"
+            );
             assert!(coverage.contains(CenRow::L17));
         });
     }

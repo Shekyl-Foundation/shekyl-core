@@ -19,10 +19,10 @@
 //! Genesis (h0) is deterministic and equals regtest's genesis in the network
 //! table (enforced below); h1/h2 are mined regtest blocks.
 //!
-//! Empty-set invariant: every captured height (no pass records yet) must carry
-//! `empty_attestation_root()` — live-derived from `shekyl-archival-retention`, not
-//! a hand-copied pin — so C++ `empty_attestation_root()` / constructor default and
-//! Rust agree without a third hex constant.
+//! Empty-section invariant: every captured height admits no bundle, so it must
+//! carry `empty_section_root()` — live-derived from `shekyl-archival-retention`,
+//! not a hand-copied pin — so the daemon that mined it and this crate agree
+//! without a third hex constant.
 //!
 //! Mining address note: `capture_coinbase.py` mines to a freshly derived
 //! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
@@ -34,8 +34,8 @@
 //! the file. Note h0 **is** regtest's genesis, so a regtest genesis re-pin
 //! requires re-capturing this corpus.
 
-use shekyl_archival_retention::empty_attestation_root;
-use shekyl_types::AttestationRoot;
+use shekyl_archival_retention::empty_section_root;
+use shekyl_types::SectionRoot;
 use shekyl_wire::Block;
 
 /// Regtest's genesis block id, from the network table (`shekyl-network`,
@@ -66,7 +66,7 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         (2, include_bytes!("vectors/regtest_coinbase_h2.block")),
     ];
 
-    let empty_root = empty_attestation_root();
+    let empty_root = empty_section_root();
 
     for (height, blob) in corpus {
         let want = &expected[height.to_string()];
@@ -89,13 +89,13 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
             block_hash,
             "height {height}: block hash (keccak256 of V(len)·preimage) must match the daemon"
         );
-        // Every height in this corpus has no pass records, so the header must
-        // commit the empty-set root — not null_hash. Ties C++ constructor default /
-        // create_block_template to Rust empty_attestation_root() without a hex pin.
+        // Every height in this corpus admits no bundle, so the header must
+        // commit the empty section's root — not null_hash. Ties the daemon's
+        // template to empty_section_root() without a hex pin.
         assert_eq!(
-            block.header.attestation_root,
-            AttestationRoot::from_bytes(empty_root),
-            "height {height}: attestation_root must be empty_attestation_root(), not null_hash"
+            block.header.section_root,
+            SectionRoot::from_bytes(empty_root),
+            "height {height}: section_root must be empty_section_root(), not null_hash"
         );
         if height == 0 {
             // Cross-anchor: daemon-captured h0 must equal regtest's genesis

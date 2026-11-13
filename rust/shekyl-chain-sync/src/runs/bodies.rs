@@ -98,13 +98,17 @@ where
             };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
-            self.held.insert(BoundArrival {
-                tag,
-                session,
-                header: judged,
-                body: offered,
-                solicited: true,
-            });
+            self.hold_or_await(
+                BoundArrival {
+                    tag,
+                    session,
+                    header: judged,
+                    body: offered,
+                    solicited: true,
+                },
+                now,
+                out,
+            );
         }
         self.flush_offers(out);
     }
@@ -141,7 +145,10 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
-            let reserved = self.body_accounted(hash);
+            // A waiting block's body is here and its bundle bodies are
+            // asked for. Asked for again, the same body would come back
+            // without them on every plan while the wait lasts.
+            let reserved = self.body_accounted(hash) || self.awaiting.contains_key(&hash);
             if !reserved {
                 hashes.push(hash);
             }
@@ -275,6 +282,10 @@ where
     }
 
     /// Held, in flight, offered, or already accepted by the entry.
+    ///
+    /// A block waiting for its bundle bodies is not counted: a copy that
+    /// carries them, announced by another session, completes it at once
+    /// (`runs::awaiting`). Only the span planner leaves it out as well.
     pub(in crate::runs) fn body_accounted(&self, hash: BlockHash) -> bool {
         self.accepted.contains(&hash)
             || self.span_has(hash)

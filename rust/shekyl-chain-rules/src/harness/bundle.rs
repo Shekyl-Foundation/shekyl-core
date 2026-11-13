@@ -41,9 +41,9 @@ use core::convert::Infallible;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    assemble_bundle, challenge_nonce, draw_commit, pass_countersignature_message, select_draw,
-    sign_bundle_commitment, BundleBody, BundleKept, BundleRecord, BundleRef, DrawableEpoch,
-    DrawablePair, PassBitmap, BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
+    assemble_bundle, challenge_nonce, draw_commit, select_draw, sign_bundle_commitment, BundleBody,
+    BundleKept, BundleRecord, BundleRef, DrawableEpoch, DrawablePair, PassBitmap,
+    BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa,
@@ -285,16 +285,16 @@ pub fn signed_record(
     attempt: u8,
 ) -> BundleRecord {
     let delivery_digest = [0xDD; 32];
-    let transcript = pass_countersignature_message(
-        stream,
-        nonce,
-        anchor.height,
-        anchor.hash.as_bytes(),
-        shard_id,
-        &delivery_digest,
-    );
+    let transcript: shekyl_archival_retention::PassTranscript =
+        shekyl_archival_retention::PassRequestHeader::from_parts(
+            stream,
+            *nonce,
+            anchor.height,
+            anchor.hash,
+        )
+        .transcript(shard_id, delivery_digest);
     let receipt: [u8; BUNDLE_SIGNATURE_LEN] = HybridEd25519FnDsa
-        .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript)
+        .sign(secret_key, SCHEME_DOMAIN_RECEIPT, &transcript.message())
         .expect("fixture receipt signing")
         .to_canonical_bytes()
         .try_into()

@@ -8,8 +8,8 @@ REVERSED 2026-09-23 as `TXE-Q6′`** (§6): the coinbase `0x02` nonce is kept as
 a **fixed 8-byte field inside a closed coinbase grammar** — census `CEN-I20`,
 wire spec §9.6b — and genesis was regenerated to carry it as eight zero
 bytes. This file stays in `design/` as the owner of §9's two equivalence
-tables and of the grammar ruling until the `0x0B` producer amends the
-grammar; the census row and the wire spec are the contract of record.
+tables and of the grammar ruling; the census row and the wire spec are
+the contract of record.
 Round 0 executed 2026-09-22 at `7b9be6cd1`; Round 1 RULED 2026-09-22
 (maintainer, PR #826): TXE-Q1 delete `construct_tx*` on the per-test
 equivalence condition (§9.1 — the premise corrected there); Q2/Q3/Q4

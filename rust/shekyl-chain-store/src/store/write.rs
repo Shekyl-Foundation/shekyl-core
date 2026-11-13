@@ -82,13 +82,14 @@ use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
 use shekyl_chain_rules::{
-    Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant, SettlementCheck,
+    BundleUnanswered, Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant,
+    SettlementCheck,
 };
 use shekyl_units::AtomicUnits;
 
 use super::error::{
-    CellFault, DigestFault, DrawRowFault, DrawableFault, EngineError, FrozenFault, SettlementFault,
-    StoreCannot, StoreError, StoreInvariant,
+    CellFault, DigestFault, DrawRowFault, DrawableFault, EngineError, SettlementFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
@@ -175,7 +176,6 @@ pub struct WriteBatch<'store, 'id> {
 /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
 /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
 /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
-/// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
 /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
 /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
 /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
@@ -352,19 +352,6 @@ pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
                 },
             }),
         },
-        // CEN-B4 read a bond record whose hybrid key is not the
-        // canonical grammar. The record is bytes; the key type lives
-        // above `shekyl-types`, so the cell can hold a key admission
-        // would not have written. That is SI-7 on `archival_bond`, the
-        // same cell as a fold invariant, and a different reason: the
-        // key does not decode.
-        Corrupt::BondHybridKeyMalformed { persona: _ } => StoreInvariant::CellCorrupt {
-            key: "archival_bond",
-            fault: CellFault::Undecodable(CodecError::Invalid {
-                codec: "bond_record",
-                reason: "the hybrid public key is not canonical",
-            }),
-        },
         // The open epoch's accruing budget plus this block's inflow does
         // not fit (CEN-L8's overflow clause). The validator computes the
         // post-image (`ARW-Q1`), so the SI-8 fold on
@@ -419,12 +406,29 @@ pub fn invariant_of(corrupt: Corrupt) -> StoreInvariant {
             height,
             observed: DrawRowFault::Count(why),
         },
-        // A claim's re-gather found `Σwork(E)` and no frozen
-        // complete-tree set: the slash pass's write set is not whole
-        // (SI-31). The block is not invalid; this node cannot judge it.
-        Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
-            epoch,
-            observed: FrozenFault::Absent,
+        // Admitting a block's section, the bundle view did not answer for
+        // a block it holds (`SO-D12` 4b, C3). Each reason is the row the
+        // store's own bundle view arms when it finds the same hole: the
+        // memo miss (SI-35), the commitment (SI-38), an index past `D`
+        // (SI-37); a missing draw row or block hash below the tip is the
+        // dense-range hole, SI-7 on its cell.
+        Corrupt::BundleUnanswered { including, why } => match why {
+            BundleUnanswered::DrawableEpoch { epoch } => StoreInvariant::DrawableMemoMiss { epoch },
+            BundleUnanswered::DrawCommitment { height } => {
+                StoreInvariant::DrawCommitmentUnreadable { height }
+            }
+            BundleUnanswered::Draw { draw } => StoreInvariant::DrawableIndexPastSet {
+                height: including,
+                index: u64::from(draw),
+            },
+            BundleUnanswered::DrawCount { .. } => StoreInvariant::CellCorrupt {
+                key: "archival_block_draws",
+                fault: CellFault::Absent,
+            },
+            BundleUnanswered::BlockHash { .. } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Absent,
+            },
         },
     }
 }

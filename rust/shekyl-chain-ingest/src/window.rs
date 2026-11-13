@@ -18,7 +18,8 @@ use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, Substrate, Vi
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_hash_budget::Class;
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHeight, TxHash, UnixSeconds, MAX_ATTESTATION_WITNESS_BYTES};
+use shekyl_types::archival::MAX_SECTION_REFERENCES;
+use shekyl_types::{BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use super::{
@@ -178,18 +179,17 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
         | Corrupt::HoleBelowTip { at, .. }
         | Corrupt::RelayFloorUnpriceable { at, .. } => *at,
         Corrupt::DrawCount { height, .. } => *height,
+        Corrupt::BundleUnanswered { including, .. } => *including,
         Corrupt::CumulativeDifficultyOverflow
         | Corrupt::BurnExceedsEmission { .. }
         | Corrupt::LeafNotConstructible { .. }
         | Corrupt::TreeUnservable { .. }
         | Corrupt::BondRecordInvariant { .. }
-        | Corrupt::BondHybridKeyMalformed { .. }
         | Corrupt::AccrualOverflow { .. }
         | Corrupt::SettlementIntegrity { .. }
-        // An epoch's drawable set or its frozen complete-tree set, like
-        // settlement: the fault names the epoch, not a block.
-        | Corrupt::DrawableEpoch { .. }
-        | Corrupt::CompleteTreesAbsent { .. } => BlockHeight::ZERO,
+        // An epoch's drawable set, like settlement: the fault names the
+        // epoch, not a block.
+        | Corrupt::DrawableEpoch { .. } => BlockHeight::ZERO,
     }
 }
 
@@ -473,7 +473,8 @@ impl Reservation {
                 block: staged.block,
                 bodies: staged.bodies,
                 proof: staged.proof,
-                witness: staged.witness,
+                references: staged.references,
+                bundle_bodies: staged.bundle_bodies,
             });
         }
         // A service that has ended drops the span here, and each slot
@@ -521,7 +522,8 @@ impl Door {
         };
         let oversize = lengths.iter().any(|arrival| {
             !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX))
-                || arrival.witness_len > MAX_ATTESTATION_WITNESS_BYTES
+                || arrival.reference_count > MAX_SECTION_REFERENCES
+                || arrival.bundle_body_count > MAX_SECTION_REFERENCES
         });
         if oversize {
             return Err(Refusal::Oversize);

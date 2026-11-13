@@ -23,8 +23,8 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    at, body, candidate, connect_chain, connect_chain_anchored, credited, height_maturing, judge,
-    prefix_to, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, connect_chain_anchored, height_maturing, judge, prefix_to, spend,
+    spendable_prefix, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{tmp, TestErr, EPOCH};
@@ -339,23 +339,18 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Every spend carries per-input auths (the wire reads `nvin` of them),
-    // so a spend is 4-part — here the join-market post, a real spend that
-    // opens the record the 3-part body needs; the 3-part non-coinbase
-    // transaction is the serve-credit-only shape, whose `pqc_auths` are
-    // empty by rule (CEN-H20) — its countersignature is over the pass
-    // record (CEN-J10) — and which connects only behind its join (CEN-L7 /
-    // CEN-J4), one block above it.
-    let (four_part, three_part) = credited(9);
-    assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // The first spend block lists the 4-part join; the block above it the
-    // 3-part credit: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one
-    // per block through the join's), then four_part, then the credit
-    // block's coinbase, then three_part. The expectation is read off the
-    // join **as connected**: a join is a spend the chain builds at its
-    // height, and the third component is over its auths.
+    // so a spend is 4-part — here the join-market post, a real spend. Every
+    // non-coinbase transaction is a spend, so the 3-part transactions are
+    // the coinbases: `Ct::Null` carries no `pqc_auths`.
+    // The first spend block lists the 4-part join; the block above it lists
+    // nothing: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block
+    // through the join's), then the join, then the next block's coinbase.
+    // The expectation is read off the join **as connected**: a join is a
+    // spend the chain builds at its height, and the third component is
+    // over its auths.
     let (_, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(vec![vec![four_part], vec![body(three_part)]]),
+        &spendable_prefix(vec![vec![Listed::Join { slot: 9 }], vec![]]),
     );
     let expected = connected
         .get(at(BlockHeight::from_raw(FIRST_SPEND_HEIGHT)))
@@ -365,7 +360,6 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         .pqc_auth_hash
         .expect("a pqc_auth per input makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
-    let three_part_id = four_part_id + 2;
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(TXS_PQC_AUTH_HASH).expect("sealed");
     assert_eq!(table.len().expect("len"), 1, "one 4-part txid, one row");
@@ -380,8 +374,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     for (tx_id, why) in [
         (0, "genesis coinbase"),
         (FIRST_SPEND_HEIGHT, "the join block's coinbase"),
-        (four_part_id + 1, "the credit block's coinbase"),
-        (three_part_id, "3-part serve credit"),
+        (four_part_id + 1, "the next block's coinbase"),
     ] {
         assert!(
             table.get(tx_id).expect("g").is_none(),
@@ -391,7 +384,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     drop(table);
     drop(snap);
 
-    // The row is journaled: popping the credit's block and then the join's
+    // The row is journaled: popping the next block and then the join's
     // removes it with the join's block.
     for _ in 0..2 {
         let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
@@ -416,8 +409,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
     let alt_bodies = schema::ordinal_of("alt_block_bodies").expect("catalogued");
     let release_journal = schema::ordinal_of("archival_release_journal").expect("catalogued");
-    let complete = schema::ordinal_of("archival_complete_trees").expect("catalogued");
-    let support_unissued = schema::ordinal_of("archival_support_unissued").expect("catalogued");
     let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
     let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
     let support_settlement = schema::ordinal_of("archival_support_settlement").expect("catalogued");
@@ -432,8 +423,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // (`SHT-Q2`) was appended after it, `SO-D10`'s two index tables after
     // that, `SO-D12`'s two draw-state tables after those, then the switch
     // PR's recorded proof-of-work, DRS-E5 PR-b's alternative bodies,
-    // `SO-D12`'s Release journal, `SO-D12h`'s frozen complete trees, the
-    // support stream's four tables, and `SO-D12` increment 4c's bundle
+    // `SO-D12`'s Release journal, the support stream's three tables, and `SO-D12` increment 4c's bundle
     // queue and body store last, so they hold the final slots in that
     // order.
     assert_eq!(ordinal.index() + 1, archival_len.index());
@@ -444,9 +434,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     assert_eq!(drawable_digest.index() + 1, block_pow.index());
     assert_eq!(block_pow.index() + 1, alt_bodies.index());
     assert_eq!(alt_bodies.index() + 1, release_journal.index());
-    assert_eq!(release_journal.index() + 1, complete.index());
-    assert_eq!(complete.index() + 1, support_unissued.index());
-    assert_eq!(support_unissued.index() + 1, support_block.index());
+    assert_eq!(release_journal.index() + 1, support_block.index());
     assert_eq!(support_block.index() + 1, support_issued.index());
     assert_eq!(support_issued.index() + 1, support_settlement.index());
     assert_eq!(support_settlement.index() + 1, bundle_queue.index());
@@ -456,14 +444,15 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         catalogue_len,
         "archival_bundle_body is the final catalogue slot"
     );
-    // 31 tables the LMDB store also held (`rule_set_in_force` under its
-    // old name, `hf_versions`) plus the nineteen Rust-only tables named
-    // below.
+    // 30 tables the LMDB store also held (`rule_set_in_force` under its
+    // old name, `hf_versions`; `archival_serve_credit` left with the
+    // carrier class, the switch's C7) plus the seventeen Rust-only tables
+    // named below.
     // The pool file holds `txpool_meta` / `txpool_blob`
     // (`schema::MIRRORED_ELSEWHERE`), `alt_blocks` holds the alternative
-    // block's attestation witness (`schema::FOLDED_INTO`), and the tables
+    // block's bundle references (`schema::FOLDED_INTO`), and the tables
     // `schema::NOT_PORTED` names are not here.
-    assert_eq!(catalogue_len, 50);
+    assert_eq!(catalogue_len, 47);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -480,8 +469,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "block_pow",
             "alt_block_bodies",
             "archival_release_journal",
-            "archival_complete_trees",
-            "archival_support_unissued",
             "archival_support_block",
             "archival_support_issued",
             "archival_support_settlement",

@@ -21,6 +21,10 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [dev-dependencies]
+# The awaiting tests build a block's bundle section and its root
+# (`runs/awaiting_tests.rs`); the production crate opens references
+# through `shekyl-chain-rules` and names no retention type.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 proptest = "1"
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }

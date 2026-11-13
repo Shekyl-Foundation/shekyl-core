@@ -58,7 +58,6 @@ use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
 use shekyl_chain_ingest::rebaseline::write_trace_file;
 use shekyl_chain_ingest::schedule::ChainRules;
-use shekyl_chain_ingest::source::Injection;
 use shekyl_chain_ingest::substrate::ProductionSubstrate;
 use shekyl_chain_ingest::trace::Trace;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
@@ -111,13 +110,6 @@ enum Command {
         /// Where to write the corpus.
         #[arg(long)]
         out: PathBuf,
-        /// A regtest injector's receipt, `<persona-hex>:<shard>:<epoch>@<height>`:
-        /// the serve credit it wrote and the tip it was attributed to. The
-        /// corpus carries an `Inject` record right after that block (DRS-E4
-        /// §3.8 item 3). Repeatable; `--chain regtest` only, refused by the
-        /// corpus writer elsewhere.
-        #[arg(long = "inject")]
-        injections: Vec<Injection>,
     },
     /// Replay a corpus against a store and hold it to the baseline trace.
     Replay {
@@ -231,8 +223,7 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             to,
             batch,
             out,
-            injections,
-        } => fetch(daemon, chain, from..to, batch, &injections, &out).await,
+        } => fetch(daemon, chain, from..to, batch, &out).await,
         Command::Replay { flags, trace } => replay(flags, trace).await,
         Command::Baseline {
             flags,
@@ -441,7 +432,6 @@ async fn fetch(
     chain: Network,
     heights: std::ops::Range<u64>,
     batch: NonZeroUsize,
-    injections: &[Injection],
     out: &std::path::Path,
 ) -> Result<(), Failure> {
     let rpc = HttpRpc::new(daemon).await?;
@@ -450,13 +440,9 @@ async fn fetch(
         chain,
         BlockHeight::from_raw(heights.start),
     )?;
-    let written = fetch_corpus(&rpc, heights, batch, injections, &mut writer).await?;
+    let written = fetch_corpus(&rpc, heights, batch, &mut writer).await?;
     writer.finish()?;
-    eprintln!(
-        "fetched {written} block(s) and {} injection(s) into {}",
-        injections.len(),
-        out.display()
-    );
+    eprintln!("fetched {written} block(s) into {}", out.display());
     Ok(())
 }
 
@@ -596,49 +582,6 @@ mod tests {
             ])
             .is_err(),
             "the flag spells the daemon's word, not the tag's"
-        );
-    }
-
-    /// `--inject` is repeatable, parsed by `Injection`'s one spelling, and
-    /// a flag that does not spell every field is refused at parse — the
-    /// fetch never sees a height it would have to default.
-    #[test]
-    fn inject_repeats_and_is_parsed_by_the_one_spelling() {
-        let hex = "ab".repeat(32);
-        let base = [
-            "fetch", "--daemon", "d", "--chain", "regtest", "--to", "9", "--out", "o",
-        ];
-        let cli = parse(
-            &[
-                &base[..],
-                &[
-                    "--inject",
-                    &format!("{hex}:3:2@5"),
-                    "--inject",
-                    &format!("{hex}:3:2@7"),
-                ],
-            ]
-            .concat(),
-        )
-        .expect("parses");
-        let Command::Fetch { injections, .. } = cli.command else {
-            panic!("fetch");
-        };
-        assert_eq!(injections.len(), 2);
-        assert_eq!(injections[0].at, BlockHeight::from_raw(5));
-        assert_eq!(injections[1].at, BlockHeight::from_raw(7));
-        assert_eq!(injections[0].credit, injections[1].credit);
-        assert_eq!(injections[0].to_string(), format!("{hex}:3:2@5"));
-        assert!(
-            parse(&[&base[..], &["--inject", &format!("{hex}:3:2")]].concat()).is_err(),
-            "no height, no injection"
-        );
-        let Command::Fetch { injections, .. } = parse(&base).expect("parses").command else {
-            panic!("fetch");
-        };
-        assert!(
-            injections.is_empty(),
-            "the flag is optional, never defaulted"
         );
     }
 

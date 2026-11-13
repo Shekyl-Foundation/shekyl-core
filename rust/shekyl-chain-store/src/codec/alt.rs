@@ -6,11 +6,12 @@
 //! The alternative-chain store's record (DRS-E1 S-ALT, `DRS_E1_SALT.md`
 //! §3.4): `alt_blocks[hash] → Coded<AltBlock>`.
 //!
-//! The C++ `alt_block_data_t` (`blockchain_db.h:206`) is five `u64` words
-//! followed by the block blob in one LMDB value, with the reorg-survival
-//! attestation witness in a **second** table keyed by the same hash
-//! (`archival_alt_attestation_witness`, `ARCHIVAL_CREDIT_WIRE.md` §3 CW-2).
-//! This record re-specifies that along its seams rather than porting it:
+//! The C++ `alt_block_data_t` (`blockchain_db.h:206`) was five `u64` words
+//! followed by the block blob in one LMDB value, with the block's sidecar in
+//! a **second** table keyed by the same hash. This record re-specifies that
+//! along its seams rather than porting it, and the alt block's bundle
+//! references are a field of it (the family `archival_alt_section_references`,
+//! folded into `alt_blocks`):
 //!
 //! - `cumulative_difficulty` is **one** `u128`, the encoding the chain
 //!   codec already uses for `block_info` (`chain.rs`), not the two `u64`
@@ -21,9 +22,12 @@
 //!   weight: the cheap tier measures one, and zero is a codec refusal
 //!   ([`AltBlockError::ZeroWeight`]), not an absence. This layout stores
 //!   the eight bytes with no presence byte;
-//! - the block and the witness are **fields**, so an alt record without
-//!   its block, or a witness outliving its block, is not a value
-//!   (`SAL-Q2`; CW-2's lifetime clause made structural, SAL-6);
+//! - the block and its bundle references are **fields**, so an alt
+//!   record without its block, or references outliving their block, is
+//!   not a value (`SAL-Q2`; CW-2's lifetime clause made structural,
+//!   SAL-6). The references are the section the header's root commits
+//!   (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5); an alternative block's bodies
+//!   are fetched before the switch closes (E5 §2.3, B10);
 //! - there is **no supply word** (CEN-K8, `DRS_E5_POOL_ALT_PRUNE.md`
 //!   §2.1). The C++ carried `already_generated_coins` per alt block as a
 //!   coinbase-paid approximation nothing consensus-bearing read; the Rust
@@ -41,26 +45,26 @@
 //!
 //! [`AltBlock::admitted`] is the constructor: it takes the cheap tier's
 //! verdict, [`AltValid`], and nothing else (DRS-E5 a4, `AltValid → AL1`).
-//! The verdict carries the block, its witness, and the three facts the tier
+//! The verdict carries the block, its references, and the three facts the tier
 //! derived over the stitched chain — the height, the cumulative difficulty,
 //! the measured weight — so there is no call site at which a fact is typed
 //! by hand, and no row the store holds that no tier admitted. The
 //! constructor is infallible: the block is a parsed [`Block`] already, the
-//! witness is a typed [`AttestationWitness`](shekyl_types::archival::AttestationWitness)
-//! (non-empty, within the bound the codec checks), and a measured weight is
-//! never zero (a block weighs at least its coinbase's bytes).
+//! references are a typed [`BundleReferences`] (non-empty, within the
+//! bound the codec checks), and a measured weight is never zero (a block
+//! weighs at least its coinbase's bytes).
 //!
 //! [`AltBlock::checked`] builds a *value* from bare facts and bytes,
 //! refusing what the codec would refuse: block bytes that are not a block
-//! ([`BlockBody::parse`] — the `blocks` table's own rule), a witness that
-//! is present and empty or over its bound
-//! ([`AttestationWitnessBytes::well_formed`] — the height-keyed twin's own
-//! rule; "empty stores no row" is `None`), and a weight of zero. The
-//! codec's own tests, the schema snapshot and the store's planted-row
-//! fixtures build rows this way; AL1 does not take one — the write
-//! boundary is the verdict's type, not this constructor's visibility.
-//! [`Canonical::decode`] refuses the same three, so a row that decodes is
-//! a row `checked` would have built (SI-14's shape).
+//! ([`BlockBody::parse`] — the `blocks` table's own rule) and a weight of
+//! zero; its references are already a [`BundleReferences`] ("no
+//! references" is `None`). The codec's own tests, the schema snapshot and
+//! the store's planted-row fixtures build rows this way; AL1 does not take
+//! one — the write boundary is the verdict's type, not this constructor's
+//! visibility. [`Canonical::decode`] refuses the same two and stored
+//! references that are not a section
+//! ([`BundleReferences::decode`], the height-keyed twin's own rule), so a
+//! row that decodes is a row `checked` would have built (SI-14's shape).
 //!
 //! The weight is mandatory in this layout. [`AltBlock::admitted`] always
 //! measured one, and no other writer produced an absence, so a presence
@@ -91,11 +95,11 @@
 
 use shekyl_chain_rules::AltValid;
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_store_codec::{BlobKind, Canonical, CodecError};
+use shekyl_store_codec::{Canonical, CodecError};
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHeight, BlockWeight};
 use shekyl_wire::{Block, Transaction};
 
-use super::archival::AttestationWitnessBytes;
 use super::chain::{BlockBody, RecordedPow};
 use shekyl_store_codec::reader::{put_bytes, put_count, Reader};
 
@@ -104,9 +108,6 @@ use shekyl_store_codec::reader::{put_bytes, put_count, Reader};
 pub enum AltBlockError {
     /// The block bytes do not parse as a block. An alt block is a block.
     BlockMalformed,
-    /// A witness was given and is not a well-formed witness — empty, or over
-    /// its bound. Absence is `None`, never an empty `Some`.
-    WitnessMalformed,
     /// A weight of zero was given. A block weighs at least its coinbase;
     /// zero is not a weight this record stores.
     ZeroWeight,
@@ -116,9 +117,6 @@ impl core::fmt::Display for AltBlockError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::BlockMalformed => "alt block bytes do not parse as a block",
-            Self::WitnessMalformed => {
-                "attestation witness is present and empty or over its bound; absence is None"
-            }
             Self::ZeroWeight => "a block weight of zero is refused",
         })
     }
@@ -126,8 +124,8 @@ impl core::fmt::Display for AltBlockError {
 
 impl core::error::Error for AltBlockError {}
 
-/// One alternative-chain block: its bookkeeping, its bytes, and the
-/// attestation witness it carries across a reorg.
+/// One alternative-chain block: its bookkeeping, its bytes, and the bundle
+/// references beside it.
 ///
 /// Built from the cheap tier's verdict through [`AltBlock::admitted`]
 /// (inside the crate, from bare facts through [`AltBlock::checked`]); read
@@ -144,7 +142,7 @@ pub struct AltBlock {
     /// Parsed once, at construction or decode. The wire form is
     /// [`Block::serialize`] of this value.
     block: Block,
-    attestation_witness: Option<Vec<u8>>,
+    bundle_references: Option<BundleReferences>,
 }
 
 /// The bookkeeping half of an [`AltBlock`] — what the C++ `alt_block_data_t`
@@ -164,13 +162,13 @@ pub struct AltBlockFacts {
 }
 
 impl AltBlock {
-    /// Presence byte for an absent witness.
+    /// Presence byte for no references.
     const ABSENT: u8 = 0;
-    /// Presence byte for a present witness.
+    /// Presence byte for a section of references.
     const PRESENT: u8 = 1;
 
     /// **AL1's input.** The row for a block the cheap tier admitted: the
-    /// block and witness the verdict carries, under the height, cumulative
+    /// block and references the verdict carries, under the height, cumulative
     /// difficulty and weight it derived over the stitched chain
     /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1). Infallible — module docs, *The row
     /// is built from the verdict*. `V` is the view the tier judged over;
@@ -196,9 +194,7 @@ impl AltBlock {
                 cumulative_difficulty,
                 pow,
                 block: candidate.block,
-                attestation_witness: candidate
-                    .attestation_witness
-                    .map(|witness| witness.as_bytes().to_vec()),
+                bundle_references: candidate.bundle_references,
             },
             AltBodies(candidate.transactions),
         )
@@ -212,29 +208,23 @@ impl AltBlock {
     /// # Errors
     ///
     /// [`AltBlockError::BlockMalformed`] if `block` does not parse;
-    /// [`AltBlockError::WitnessMalformed`] if `attestation_witness` is
-    /// `Some` and not a well-formed witness; [`AltBlockError::ZeroWeight`]
-    /// if `facts.block_weight` is zero.
+    /// [`AltBlockError::ZeroWeight`] if `facts.block_weight` is zero.
     pub fn checked(
         facts: AltBlockFacts,
         block: &[u8],
-        attestation_witness: Option<Vec<u8>>,
+        bundle_references: Option<BundleReferences>,
     ) -> Result<Self, AltBlockError> {
         if facts.block_weight.to_raw() == 0 {
             return Err(AltBlockError::ZeroWeight);
         }
         let block = BlockBody::parse(block).map_err(|_| AltBlockError::BlockMalformed)?;
-        if let Some(witness) = attestation_witness.as_deref() {
-            AttestationWitnessBytes::well_formed(witness)
-                .map_err(|_| AltBlockError::WitnessMalformed)?;
-        }
         Ok(Self {
             height: facts.height,
             block_weight: facts.block_weight,
             cumulative_difficulty: facts.cumulative_difficulty,
             pow: facts.pow,
             block,
-            attestation_witness,
+            bundle_references,
         })
     }
 
@@ -280,10 +270,10 @@ impl AltBlock {
         &self.block
     }
 
-    /// The reorg-survival attestation witness, if the block carries one.
+    /// The bundle references beside the block, if it carries any.
     #[must_use]
-    pub fn attestation_witness(&self) -> Option<&[u8]> {
-        self.attestation_witness.as_deref()
+    pub const fn bundle_references(&self) -> Option<&BundleReferences> {
+        self.bundle_references.as_ref()
     }
 }
 
@@ -297,11 +287,11 @@ impl Canonical for AltBlock {
         out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
         self.pow.encode_into(out);
         put_bytes(out, &self.block.serialize());
-        match &self.attestation_witness {
+        match &self.bundle_references {
             None => out.push(Self::ABSENT),
-            Some(w) => {
+            Some(references) => {
                 out.push(Self::PRESENT);
-                put_bytes(out, w);
+                put_bytes(out, &references.encode());
             }
         }
     }
@@ -317,33 +307,29 @@ impl Canonical for AltBlock {
             r.array::<16>("buffer ends inside the cumulative difficulty")?,
         ));
         let pow = RecordedPow::decode(&r.array::<64>("buffer ends inside the recorded PoW")?)?;
-        // Copied out so the witness can be read before the parse. The
+        // Copied out so the references can be read before the parse. The
         // `Block` is what is kept.
         let block_bytes = r.bytes()?.to_vec();
-        let attestation_witness = match r.u8()? {
+        let bundle_references = match r.u8()? {
             Self::ABSENT => None,
-            Self::PRESENT => Some(r.bytes()?.to_vec()),
-            _ => return Err(r.invalid("attestation_witness presence byte is not 0 or 1")),
+            Self::PRESENT => Some(
+                BundleReferences::decode(r.bytes()?)
+                    .map_err(|_| r.invalid("stored bundle references are not a section"))?,
+            ),
+            _ => return Err(r.invalid("bundle_references presence byte is not 0 or 1")),
         };
         if !r.is_empty() {
             return Err(r.invalid("trailing bytes after the alt block record"));
         }
         let block = BlockBody::parse(&block_bytes)
             .map_err(|_| r.invalid("alt block bytes do not parse as a block"))?;
-        if let Some(witness) = attestation_witness.as_deref() {
-            AttestationWitnessBytes::well_formed(witness).map_err(|_| {
-                r.invalid(
-                    "attestation witness is empty or over its bound; absence is a missing option",
-                )
-            })?;
-        }
         Ok(Self {
             height,
             block_weight,
             cumulative_difficulty,
             pow,
             block,
-            attestation_witness,
+            bundle_references,
         })
     }
 }
@@ -449,7 +435,7 @@ impl Canonical for AltBodies {
 /// this snapshot's own literals and nothing else's.
 #[cfg(test)]
 pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
-    use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot};
+    use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot};
     use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
     // The snapshot's own bytes. `UNLOCK_OFFSET` happens to equal the genesis
     // unlock window and `KEY` / `MASK` the harness's `G` / `2·G` at the pin;
@@ -474,7 +460,7 @@ pub(crate) fn test_block_bytes(height: u64) -> Vec<u8> {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::EMPTY,
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {

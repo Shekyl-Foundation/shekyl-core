@@ -348,7 +348,7 @@ count_pattern() {
 # Bundle verifier, the hashes (2026-10-12): 70 -> 73. Three production sites
 # in rust/shekyl-archival-retention/src/bundle.rs -- `bundle_commitment`
 # (shekyl/archival-serve-credit-bundle-v1), `bundle_prunable_hash`
-# (shekyl/archival-bundle-prunable-v1) and `bundle_root`
+# (shekyl/archival-bundle-prunable-v1) and `section_root`
 # (shekyl/archival-bundle-root-v1). Their vectors were computed outside the
 # tree and are pinned as hex, so the tests add no site.
 # SCS-P39 (2026-10-12): 73 -> 74. One inline #[cfg(test)] site in
@@ -447,7 +447,15 @@ count_pattern() {
 # rust/shekyl-genesis-tool/src/txkey.rs called cshake256_32 under
 # shekyl/genesis-txkey-v2 over the name string and the recipients; it frames
 # the recipients under shekyl/genesis-txkey-v3 and the network's name_id.
-MECH1_EXPECTED=76
+# The attestation record (SO-D12 4b C7): 76 -> 75. `attestation_root` in
+# rust/shekyl-archival-retention/src/attestation_wire.rs called cshake256_32
+# under shekyl/archival-attestation-root-v1; it goes with the attestation
+# record surface, which no block carries since the switch's C3.
+# The serve-credit input (SO-D12 4b C7): 75 -> 72. challenge.rs's leaf
+# index and fire height (shekyl/archival-serve-challenge-leaf-v2, -fire-v1)
+# and wire.rs's response preimage (shekyl/archival-serve-credit-response-v1)
+# go with the input they served.
+MECH1_EXPECTED=72
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

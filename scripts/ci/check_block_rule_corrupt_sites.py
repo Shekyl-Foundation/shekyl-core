@@ -95,18 +95,20 @@ DEFAULT_SRC = REPO / "rust" / "shekyl-chain-rules" / "src"
 # when a rule is added here: that every site *propagates* that read's
 # `Corrupt`, and none consumes one.
 CORRUPT_CAPABLE: dict[str, str] = {
-    # `rules/attestation.rs`: `anchor_window` lifts a hole in the predecessor's
-    # anchor window (through `recorded`) to `Corrupt::HoleBelowTip`;
-    # `committed_hybrid_key` lifts a stored bond key the grammar rejects to
-    # `Corrupt::BondHybridKeyMalformed`.
-    "B4": "anchor_window through recorded; committed_hybrid_key",
+    # Empty: no block rule reads a view in a way that can halt the writer.
+    # CEN-B4's record arm was the last (`SO-D12` 4b, C1), and B4 left at C3.
+    # A rule that gains a `Corrupt` path is added here, with the read its
+    # halt comes from.
 }
 
 # Fewer rule impls than this, summed over every derived form, and the walk did
-# not find the crate (15 at DRS-E5 a2: 11 `BlockRule`, 4 `HeaderRule`). A
-# whole form going unread drops the count by at least four; this floor sees
-# that, and the self-assertion above sees it by signature first.
-MIN_BLOCK_RULES = 14
+# not find the crate (12 at the switch's C7: 8 `BlockRule`, 4 `HeaderRule`;
+# CEN-B4 left as a rule type at C3 and CEN-G7 at C7, and their successors
+# J29–J37 run through `rules::bundle_admission::admit`, which is not a
+# `BlockRule`). A whole form going unread drops the count by at least four;
+# this floor sees that, and the self-assertion above sees it by signature
+# first.
+MIN_BLOCK_RULES = 12
 
 # The lifting function every parent-side read goes through (`rules/mod.rs`);
 # its absence from the set means the signature walk is not reading signatures.
@@ -572,7 +574,7 @@ impl BurnOperands {
 """
 _ANCHOR = """
 pub(crate) fn anchor_window<'id, V: ChainView<'id>>(view: &V, c: BlockHeight)
-    -> Result<Option<PassAnchorWindow>, ViewRead<V::Fault>> { todo!() }
+    -> Result<Option<BlockHash>, ViewRead<V::Fault>> { todo!() }
 """
 _CONVERTER = """
 fn parent_read<VF>(fault: Fault<VF>) -> ViewRead<VF> { ViewRead::View(fault) }
@@ -613,18 +615,24 @@ def _synthetic(*, b4_body: str = _B4, extra: dict[str, str] | None = None, n_pla
     return files
 
 
+# The synthetic tree models one Corrupt-capable rule, B4 lifting through
+# `anchor_window`, so the consistent and stale cases have an entry to judge
+# against. The production list is `CORRUPT_CAPABLE`, which may be empty.
+_SELFTEST_CAPABLE: dict[str, str] = {"B4": "anchor_window through recorded"}
+
+
 class _Probe:
     def __init__(self) -> None:
         self.refusals = 0
 
     def clean(self, name: str, files: dict[str, str]) -> None:
-        errs = judge(analyze(files))
+        errs = judge(analyze(files), _SELFTEST_CAPABLE)
         if errs:
             raise SystemExit(f"selftest {name}: expected clean, got:\n  " + "\n  ".join(errs))
 
     def red(self, name: str, files: dict[str, str], needle: str, *, subject: bool = False) -> None:
         try:
-            errs = judge(analyze(files))
+            errs = judge(analyze(files), _SELFTEST_CAPABLE)
         except Refused as e:
             if not subject:
                 raise SystemExit(f"selftest {name}: expected a finding, got a subject refusal: {e}")
@@ -691,7 +699,7 @@ def selftest() -> None:
     p.red("B4 impl gone", no_b4, "has no rule impl: stale")
     p.red("no impls", {"rules/mod.rs": _TRAITS + _BLANKET + _MOD}, "no rule impl found", subject=True)
     p.red("too few impls", _synthetic(n_plain=2, n_header=0), "block rules found", subject=True)
-    p.red("too few impls across forms", _synthetic(n_plain=6, n_header=6), "block rules found",
+    p.red("too few impls across forms", _synthetic(n_plain=4, n_header=6), "block rules found",
           subject=True)
     p.red("no lifters", _synthetic(mod="pub fn x() -> u8 { 0 }", err="V::Fault", anchor="",
                                    b4_body=_PLAIN, traits="", blanket="", n_header=0),

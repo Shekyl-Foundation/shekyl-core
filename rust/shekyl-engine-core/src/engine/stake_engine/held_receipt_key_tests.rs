@@ -16,23 +16,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
-use shekyl_p_host::PassKey;
 
 use super::{HeldPersona, HeldReceiptKey, PSlot, StakeEngineError};
 use crate::engine::stake_engine::handle::StakeEngineHandle;
 use crate::engine::stake_engine::persona::SignReceiptTranscript;
 use crate::engine::stake_engine::receipt_test_fixtures::{
-    bundle_with_a_corrupted_receipt_key, is_built, message, receipt_pk, sign, slot, OTHER_SLOT,
+    bundle_with_a_corrupted_receipt_key, is_built, receipt_pk, sign, slot, transcript, OTHER_SLOT,
     SLOT,
 };
-use crate::engine::stake_engine::serving::pass_key::ResidentPassKey;
 use crate::engine::stake_engine::serving::receipt_key::ResidentReceiptKey;
 use crate::engine::stake_engine::test_fixtures::{derive_bundle, ephemeral_body_store, spawn_over};
 
 /// Starting the actor decodes no receipt key, however many personas it
-/// holds: the staged capability costs the live path nothing. The first
-/// receipt asked of a persona decodes that persona's key and no other,
-/// and the identity key signing does not decode one at all.
+/// holds. The first receipt asked of a persona decodes that persona's key
+/// and no other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn starting_the_actor_decodes_no_receipt_key() {
     const THIRD_SLOT: u32 = 5;
@@ -42,15 +39,7 @@ async fn starting_the_actor_decodes_no_receipt_key() {
     }
     assert_eq!(is_built(&stake, SLOT + 1_000).await, None, "unheld");
 
-    // The live signer runs and the slot stays empty.
-    let identity_key = ResidentPassKey::new(&stake, slot(SLOT));
-    tokio::task::spawn_blocking(move || identity_key.sign_pass(&message()))
-        .await
-        .expect("blocking task")
-        .expect("identity key signs");
-    assert_eq!(is_built(&stake, SLOT).await, Some(false));
-
-    sign(ResidentReceiptKey::new(&stake, slot(SLOT)), message())
+    sign(ResidentReceiptKey::new(&stake, slot(SLOT)), transcript())
         .await
         .expect("signs");
     assert_eq!(is_built(&stake, SLOT).await, Some(true));
@@ -68,9 +57,13 @@ fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
         "nothing at hold"
     );
 
-    let first = persona.sign_receipt_transcript(&message()).expect("signs");
+    let first = persona
+        .sign_receipt_transcript(&transcript())
+        .expect("signs");
     let built = persona.receipt_key().built().expect("the first built it");
-    let second = persona.sign_receipt_transcript(&message()).expect("signs");
+    let second = persona
+        .sign_receipt_transcript(&transcript())
+        .expect("signs");
     assert_eq!(
         persona.receipt_key().built(),
         Some(built),
@@ -80,7 +73,12 @@ fn the_first_receipt_builds_the_key_and_the_second_reuses_it() {
     let public = receipt_pk(SLOT);
     for signature in [&first, &second] {
         HybridEd25519FnDsa
-            .verify(&public, SCHEME_DOMAIN_RECEIPT, &message(), signature)
+            .verify(
+                &public,
+                SCHEME_DOMAIN_RECEIPT,
+                &transcript().message(),
+                signature,
+            )
             .expect("verifies");
     }
     assert_ne!(first, second, "each receipt draws a fresh seed");
@@ -95,7 +93,7 @@ fn a_corrupted_receipt_key_refuses_at_the_first_signature() {
     assert!(matches!(persona.receipt_key(), HeldReceiptKey::NotBuilt));
     for _ in 0..3 {
         assert!(matches!(
-            persona.sign_receipt_transcript(&message()),
+            persona.sign_receipt_transcript(&transcript()),
             Err(StakeEngineError::ReceiptKeyUndecodable)
         ));
         assert!(matches!(persona.receipt_key(), HeldReceiptKey::Undecodable));
@@ -122,7 +120,7 @@ fn an_undecodable_key_is_not_decoded_again() {
         true,
     ));
     persona
-        .sign_receipt_transcript(&message())
+        .sign_receipt_transcript(&transcript())
         .expect_err("the first request, on this thread, attempts the decode");
 
     let persona = std::thread::Builder::new()
@@ -130,7 +128,7 @@ fn an_undecodable_key_is_not_decoded_again() {
         .spawn(move || {
             for _ in 0..2 {
                 assert!(matches!(
-                    persona.sign_receipt_transcript(&message()),
+                    persona.sign_receipt_transcript(&transcript()),
                     Err(StakeEngineError::ReceiptKeyUndecodable)
                 ));
             }
@@ -149,18 +147,18 @@ fn an_undecodable_key_is_one_personas_state() {
     let mut broken = HeldPersona::hold(bundle_with_a_corrupted_receipt_key(SLOT), true);
     let mut sound = HeldPersona::hold(derive_bundle(OTHER_SLOT), false);
     broken
-        .sign_receipt_transcript(&message())
+        .sign_receipt_transcript(&transcript())
         .expect_err("does not decode");
     assert!(matches!(broken.receipt_key(), HeldReceiptKey::Undecodable));
     assert!(matches!(sound.receipt_key(), HeldReceiptKey::NotBuilt));
 
-    let signature = sound.sign_receipt_transcript(&message()).expect("signs");
+    let signature = sound.sign_receipt_transcript(&transcript()).expect("signs");
     assert!(matches!(sound.receipt_key(), HeldReceiptKey::Built(_)));
     HybridEd25519FnDsa
         .verify(
             &receipt_pk(OTHER_SLOT),
             SCHEME_DOMAIN_RECEIPT,
-            &message(),
+            &transcript().message(),
             &signature,
         )
         .expect("verifies");
@@ -267,12 +265,17 @@ fn the_first_receipt_pays_the_decode_and_later_ones_do_not() {
                 .actor
                 .ask(SignReceiptTranscript {
                     p_slot: slot(SLOT),
-                    message: message(),
+                    transcript: transcript(),
                 })
                 .await
                 .expect("signs");
             HybridEd25519FnDsa
-                .verify(&public, SCHEME_DOMAIN_RECEIPT, &message(), &signature)
+                .verify(
+                    &public,
+                    SCHEME_DOMAIN_RECEIPT,
+                    &transcript().message(),
+                    &signature,
+                )
                 .expect("verifies");
         }
         assert_eq!(is_built(&stake, SLOT).await, Some(true));
@@ -281,16 +284,21 @@ fn the_first_receipt_pays_the_decode_and_later_ones_do_not() {
     // Boxed so the persona is handed to the small thread as a pointer.
     let mut persona = Box::new(HeldPersona::hold(derive_bundle(SLOT), true));
     persona
-        .sign_receipt_transcript(&message())
+        .sign_receipt_transcript(&transcript())
         .expect("the first receipt, on this thread, builds the key");
     let later = std::thread::Builder::new()
         .stack_size(LATER_STACK)
-        .spawn(move || persona.sign_receipt_transcript(&message()))
+        .spawn(move || persona.sign_receipt_transcript(&transcript()))
         .expect("spawn")
         .join()
         .expect("a later receipt ran, and the persona dropped, within the stack")
         .expect("signs");
     HybridEd25519FnDsa
-        .verify(&receipt_pk(SLOT), SCHEME_DOMAIN_RECEIPT, &message(), &later)
+        .verify(
+            &receipt_pk(SLOT),
+            SCHEME_DOMAIN_RECEIPT,
+            &transcript().message(),
+            &later,
+        )
         .expect("verifies");
 }

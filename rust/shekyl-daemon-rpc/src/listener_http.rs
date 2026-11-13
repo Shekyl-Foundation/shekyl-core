@@ -44,11 +44,16 @@ pub(crate) const WRITE_STALL: Duration = Duration::from_secs(4);
 /// Serve `app` on `listener` until `signal` completes. Every connection
 /// reads headers within [`HEADER_READ`] and is closed after that long
 /// with nothing to read, which is the plaintext idle.
-pub(crate) async fn serve_plaintext(
-    mut listener: LimitedListener,
+pub(crate) async fn serve_plaintext<L>(
+    mut listener: LimitedListener<L>,
     make_service: Router,
     signal: impl std::future::Future<Output = ()> + Send + 'static,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    L: crate::conn_limit::AdmitAs,
+    L::Addr: std::fmt::Debug,
+    L::Io: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (signal_tx, signal_rx) = watch::channel(());
     tokio::spawn(async move {
         signal.await;
@@ -73,12 +78,14 @@ pub(crate) async fn serve_plaintext(
     Ok(())
 }
 
-fn handle_connection(
+fn handle_connection<S>(
     make_service: Router,
     signal_tx: &watch::Sender<()>,
     close_rx: &watch::Receiver<()>,
-    io: StallWrite<crate::conn_limit::CountedStream>,
-) {
+    io: StallWrite<crate::conn_limit::CountedStream<S>>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let io = TokioIo::new(io);
     // `Router<()>` serves `http::Request<Incoming>` directly: its body
     // bound accepts hyper's incoming body.

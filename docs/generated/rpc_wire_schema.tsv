@@ -33,10 +33,10 @@ block_header_show	field	block header	reward	chain	amount
 block_header_show	field	block header	weight	chain	size
 block_header_show	field	block header	weight_longterm	chain	size or null
 block_header_show	field	block header	tx_count	chain	count
-block_header_show	field	block header	pow	chain	hash or null
+block_header_show	field	block header	pow	chain	hash, when asked by pow
 block_header_show	field	block header	coinbase	chain	hash
 block_header_show	field	block header	curve_root	chain	hash
-block_header_show	field	block header	attestation_root	chain	hash
+block_header_show	field	block header	section_root	chain	hash
 block_header_list	method		block_header_list	chain	list of object (block header), or state missing|archived or null
 block_header_list	parameter	block header	pow	chain	switch, optional
 block_header_list	parameter	block	from	chain	height
@@ -57,10 +57,10 @@ block_header_list	field	block header	reward	chain	amount
 block_header_list	field	block header	weight	chain	size
 block_header_list	field	block header	weight_longterm	chain	size or null
 block_header_list	field	block header	tx_count	chain	count
-block_header_list	field	block header	pow	chain	hash or null
+block_header_list	field	block header	pow	chain	hash, when asked by pow
 block_header_list	field	block header	coinbase	chain	hash
 block_header_list	field	block header	curve_root	chain	hash
-block_header_list	field	block header	attestation_root	chain	hash
+block_header_list	field	block header	section_root	chain	hash
 block_header_list	field	tx	id	chain	hash
 block_header_list	field	tx	shard	chain	integer
 block_show	method		block_show	chain	object (block)
@@ -85,20 +85,22 @@ block_show	field	block header	reward	chain	amount
 block_show	field	block header	weight	chain	size
 block_show	field	block header	weight_longterm	chain	size or null
 block_show	field	block header	tx_count	chain	count
-block_show	field	block header	pow	chain	hash or null
+block_show	field	block header	pow	chain	hash, when asked by pow
 block_show	field	block header	coinbase	chain	hash
 block_show	field	block header	curve_root	chain	hash
-block_show	field	block header	attestation_root	chain	hash
+block_show	field	block header	section_root	chain	hash
 block_show	field	block	body	chain	bytes
 block_show	field	block	tx	chain	list of object (tx), or state archived
 block_show	field	tx	id	chain	hash
 block_show	field	tx	body	chain	bytes
-block_show	field	tx	prunable_hash	chain	hash
-block_show	field	tx	pqc_auth_hash	chain	hash or null
-block_show	field	tx	archival_size	chain	size
+block_show	field	tx	prunable_hash	chain	hash, when asked by prune
+block_show	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+block_show	field	tx	archival_size	chain	size, when asked by prune
 block_show	field	tx	id	chain	hash
 block_show	field	tx	shard	chain	integer
 block_show	field	block	output_index	chain	integer
+block_show	field	block	section	chain	list of bytes
+block_show	field	block	section_body	chain	list of bytes
 block_list	method		block_list	chain	list of object (block), or state missing|archived or null
 block_list	parameter	block	height	chain	list of height
 block_list	parameter	tx	prune	chain	switch, optional
@@ -118,20 +120,22 @@ block_list	field	block header	reward	chain	amount
 block_list	field	block header	weight	chain	size
 block_list	field	block header	weight_longterm	chain	size or null
 block_list	field	block header	tx_count	chain	count
-block_list	field	block header	pow	chain	hash or null
+block_list	field	block header	pow	chain	hash, when asked by pow
 block_list	field	block header	coinbase	chain	hash
 block_list	field	block header	curve_root	chain	hash
-block_list	field	block header	attestation_root	chain	hash
+block_list	field	block header	section_root	chain	hash
 block_list	field	block	body	chain	bytes
 block_list	field	block	tx	chain	list of object (tx), or state archived
 block_list	field	tx	id	chain	hash
 block_list	field	tx	body	chain	bytes
-block_list	field	tx	prunable_hash	chain	hash
-block_list	field	tx	pqc_auth_hash	chain	hash or null
-block_list	field	tx	archival_size	chain	size
+block_list	field	tx	prunable_hash	chain	hash, when asked by prune
+block_list	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+block_list	field	tx	archival_size	chain	size, when asked by prune
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 block_list	field	block	output_index	chain	integer
+block_list	field	block	section	chain	list of bytes
+block_list	field	block	section_body	chain	list of bytes
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 tx_show	method		tx_show	chain	object (tx), or state archived
@@ -139,9 +143,9 @@ tx_show	parameter	tx	id	chain	hash
 tx_show	parameter	tx	prune	chain	switch, optional
 tx_show	field	tx	id	chain	hash
 tx_show	field	tx	body	chain	bytes
-tx_show	field	tx	prunable_hash	chain	hash
-tx_show	field	tx	pqc_auth_hash	chain	hash or null
-tx_show	field	tx	archival_size	chain	size
+tx_show	field	tx	prunable_hash	chain	hash, when asked by prune
+tx_show	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+tx_show	field	tx	archival_size	chain	size, when asked by prune
 tx_show	field	tx	pooled	chain	switch
 tx_show	field	tx	mined_height	chain	height or null
 tx_show	field	tx	confirmations	chain	count or null
@@ -155,9 +159,9 @@ tx_list	parameter	tx	id	chain	list of hash
 tx_list	parameter	tx	prune	chain	switch, optional
 tx_list	field	tx	id	chain	hash
 tx_list	field	tx	body	chain	bytes
-tx_list	field	tx	prunable_hash	chain	hash
-tx_list	field	tx	pqc_auth_hash	chain	hash or null
-tx_list	field	tx	archival_size	chain	size
+tx_list	field	tx	prunable_hash	chain	hash, when asked by prune
+tx_list	field	tx	pqc_auth_hash	chain	hash or null, when asked by prune
+tx_list	field	tx	archival_size	chain	size, when asked by prune
 tx_list	field	tx	pooled	chain	switch
 tx_list	field	tx	mined_height	chain	height or null
 tx_list	field	tx	confirmations	chain	count or null
@@ -210,7 +214,6 @@ archival_claim_show	field	epoch	work	chain	milli
 archival_claim_show	field	epoch	budget	chain	amount or null
 archival_claim_show	field	epoch	bond	chain	list of object (bond)
 archival_claim_show	field	bond	joined_epoch	chain	integer
-archival_claim_show	field	bond	complete_tree	chain	switch
 archival_claim_show	field	bond	failure	chain	list of object (bond failure)
 archival_claim_show	field	bond failure	from	chain	integer
 archival_claim_show	field	bond failure	to	chain	integer
@@ -256,24 +259,25 @@ daemon_status	field	daemon	syncing	health	switch
 daemon_status	field	daemon	offline	health	switch
 daemon_status	field	daemon	degraded	health	switch
 daemon_status	field	daemon	peered	health	switch or null
+daemon_status	field	daemon	hiding	health	switch
 daemon_status	field	daemon	writer	health	state live|halted
 daemon_status	field	chain writer	height	health	height
 daemon_status	field	chain writer	invariant	health	integer
 daemon_status	field	daemon	protocol_version	health	integer
-daemon_status	field	daemon	difficulty	health	hex128
-daemon_status	field	daemon	difficulty_cumulative	health	hex128
-daemon_status	field	daemon	block_spacing	health	duration
-daemon_status	field	daemon	tx_count	health	count
-daemon_status	field	daemon	block_weight_max	health	size
-daemon_status	field	daemon	block_weight_median	health	size
-daemon_status	field	daemon	time_adjusted	health	time
-daemon_status	field	daemon	emission	health	amount
-daemon_status	field	daemon	emission_multiplier	health	micro
-daemon_status	field	daemon	burn	health	micro
-daemon_status	field	daemon	burn_total	health	amount
-daemon_status	field	daemon	stake_share	health	micro
-daemon_status	field	daemon	txpool_count	health	count or null
 daemon_status	field	daemon	grant	health	list of one-of health|status|chain|pool|peers|submit|mining-work|mining-control|bans|node|config|enrol
+daemon_status	field	daemon	difficulty	chain	hex128
+daemon_status	field	daemon	difficulty_cumulative	chain	hex128
+daemon_status	field	daemon	block_spacing	chain	duration
+daemon_status	field	daemon	tx_count	chain	count
+daemon_status	field	daemon	block_weight_max	chain	size
+daemon_status	field	daemon	block_weight_median	chain	size
+daemon_status	field	daemon	time_adjusted	chain	time
+daemon_status	field	daemon	emission	chain	amount
+daemon_status	field	daemon	emission_multiplier	chain	micro
+daemon_status	field	daemon	burn	chain	micro
+daemon_status	field	daemon	burn_total	chain	amount
+daemon_status	field	daemon	stake_share	chain	micro
+daemon_status	field	daemon	txpool_count	pool	count or null
 daemon_status	field	daemon	started	status	time
 daemon_status	field	daemon	disk_free	status	size
 daemon_status	field	daemon	data_size	status	size
@@ -283,6 +287,33 @@ daemon_status	field	daemon	peer_inbound_count	status	count or null
 daemon_status	field	daemon	alt_count	status	count
 daemon_status	field	daemon	rpc_connections	status	count
 daemon_status	field	daemon	txpool_retired	status	switch
+daemon_status	field	daemon	posture	status	object (posture)
+daemon_status	field	posture	tor	status	one-of managed|operator|off
+daemon_status	field	posture	clearnet	status	one-of on|off
+daemon_status	field	daemon	origination	status	one-of address-hiding|connecting|rebuilding|clearnet-only|offline
+daemon_status	field	daemon	sync_connector	status	list of one-of clearnet|tor
+daemon_status	field	daemon	tor_quiet	status	state empty|failing or null
+daemon_status	field	tor quiet	age	status	duration
+daemon_status	field	daemon	tor	status	object (tor) or null
+daemon_status	field	tor	state	status	one-of restarting|waiting|bootstrapping|usable|impaired
+daemon_status	field	tor	cause	status	state outbound-blocked|directory-unreachable|clock-skew|descriptor-limit|exited|unanswered|launch-failed|install-defect|missing|unavailable|unusable|onion-refused|stranded or null
+daemon_status	field	disk	free	status	size
+daemon_status	field	disk	needed	status	size
+daemon_status	field	tor	age	status	duration
+daemon_status	field	tor	respawn_count	status	count
+daemon_status	field	tor	progress	status	integer or null
+daemon_status	field	tor	flagged	status	switch
+daemon_status	field	tor	fix	status	list of one-of restore-managed|operator|clearnet-on|clearnet-only
+daemon_status	field	tor	onion	status	object (tor onion) or null
+daemon_status	field	tor onion	state	status	one-of publishing|reachable|unreachable
+daemon_status	field	tor onion	age	status	duration
+daemon_status	field	tor onion	cause	status	state probe-missed|uploads-refused|descriptor-missing|clock-behind or null
+daemon_status	field	tor	bootstrap	status	object (tor bootstrap) or null
+daemon_status	field	tor bootstrap	pace	status	one-of advancing|slow|stalled|held
+daemon_status	field	tor bootstrap	unchanged	status	duration
+daemon_status	field	tor bootstrap	download	status	size or null
+daemon_status	field	tor bootstrap	window	status	duration
+daemon_status	field	tor	carriage	status	one-of carries|open-only|gone
 daemon_status	field	daemon	connector	peers	map clearnet|tor to object (connector)
 daemon_status	field	clearnet	inbound_count	peers	count
 daemon_status	field	clearnet	outbound_count	peers	count

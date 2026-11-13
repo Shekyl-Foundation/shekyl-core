@@ -17,7 +17,7 @@ use core::future::Future;
 use shekyl_rpc_types::wire::shared::{Archived, ArchivedState};
 
 use shekyl_types::{
-    ArchivalLength, AttestationRoot, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, TxHash,
+    ArchivalLength, BlockHash, CurveTreeRoot, PqcAuthHash, PrunableHash, SectionRoot, TxHash,
 };
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::{MAX_TX_SIZE, UNLOCK_TIME_BLOCK_SENTINEL};
@@ -136,14 +136,16 @@ fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) ->
         "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
         "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
         "weight": 0, "weight_longterm": null, "tx_count": 0,
-        "pow": null, "coinbase": "00".repeat(32), "curve_root": "00".repeat(32),
-        "attestation_root": "00".repeat(32),
+        "coinbase": "00".repeat(32), "curve_root": "00".repeat(32),
+        "section_root": "00".repeat(32),
     });
     serde_json::json!({
         "header": header,
         "body": Bytes(block.serialize()),
         "tx": tx,
         "output_index": output_index,
+        "section": [],
+        "section_body": [],
     })
 }
 
@@ -190,9 +192,7 @@ fn coinbase_block(number: u64) -> Block {
             previous: BlockHash::NULL,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
@@ -443,7 +443,6 @@ fn full_spend_tx() -> Transaction {
     }];
     *prunable = Some(Prunable {
         // Spend fixture: no pass records (RF-D1).
-        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0; 32],
             a1: [0; 32],
@@ -463,15 +462,37 @@ fn full_spend_tx() -> Transaction {
 
 /// A served transaction built from the wire type rather than a JSON
 /// literal, so the double cannot describe a shape the daemon does not
-/// produce (RK-D1). Null operands: the fixtures' bodies carry none.
+/// produce (RK-D1). The fetch asks with `prune`, so the operands are
+/// present; null operands: the fixtures' bodies carry none.
 fn block_tx(tx_hash: TxHash, body: Vec<u8>) -> BlockTx {
     BlockTx {
         id: HashHex::from_bytes(tx_hash.to_bytes()),
         body: Bytes(body),
-        prunable_hash: HashHex::from_bytes([0u8; 32]),
-        pqc_auth_hash: Nullable(None),
-        archival_size: Size(0),
+        prunable_hash: Asked::Present(HashHex::from_bytes([0u8; 32])),
+        pqc_auth_hash: Asked::Present(Nullable(None)),
+        archival_size: Asked::Present(Size(0)),
     }
+}
+
+/// **A pruned reply without the txid's operands is refused** (RW-Q4,
+/// IG-Q55). Every fetch asks with `prune`, so the operands are selected;
+/// a daemon that leaves them out answered a request this client did not
+/// send, and the binding never defaults them. Red edit: default the
+/// operands in `Served::of`.
+#[test]
+fn a_pruned_reply_without_its_operands_is_refused() {
+    let tx = pruned_spend_tx(0);
+    let real_id = pruned_id(&tx);
+    let mut entry = block_tx(real_id, tx.serialize());
+    entry.prunable_hash = Asked::Unasked;
+    entry.pqc_auth_hash = Asked::Unasked;
+    entry.archival_size = Asked::Unasked;
+    let err = bind_block_txs(&[real_id], &slots(vec![entry]))
+        .expect_err("operands left out answer no prune request");
+    assert!(
+        format!("{err}").contains("without the txid's operands"),
+        "the refusal names the missing operands: {err}"
+    );
 }
 
 /// **A canonical transaction under a borrowed label is refused.**
@@ -507,7 +528,7 @@ fn a_forged_prunable_digest_does_not_rescue_a_body() {
     let tx = pruned_spend_tx(0);
     let real_id = pruned_id(&tx);
     let mut entry = block_tx(real_id, tx.serialize());
-    entry.prunable_hash = HashHex::from_bytes([0x77; 32]); // not the fixtures' zero
+    entry.prunable_hash = Asked::Present(HashHex::from_bytes([0x77; 32])); // not the fixtures' zero
 
     let err = bind_block_txs(&[real_id], &slots(vec![entry]))
         .expect_err("a different digest yields a different identity");
@@ -526,7 +547,7 @@ fn a_forged_archival_length_does_not_rescue_a_body() {
     let tx = pruned_spend_tx(0);
     let real_id = pruned_id(&tx);
     let mut entry = block_tx(real_id, tx.serialize());
-    entry.archival_size = Size(1); // not the fixtures' zero
+    entry.archival_size = Asked::Present(Size(1)); // not the fixtures' zero
 
     let err = bind_block_txs(&[real_id], &slots(vec![entry]))
         .expect_err("a different length yields a different identity");
@@ -624,12 +645,14 @@ fn a_whole_body_is_refused() {
     let full = full_spend_tx();
     let (skeleton, id) = served_skeleton(&full);
     let mut entry = block_tx(id, full.serialize());
-    entry.prunable_hash = HashHex::from_bytes(skeleton.prunable_hash.to_bytes());
-    entry.pqc_auth_hash = skeleton
-        .pqc_auth_hash
-        .map(|hash| HashHex::from_bytes(hash.to_bytes()))
-        .into();
-    entry.archival_size = Size(skeleton.archival_len.to_raw());
+    entry.prunable_hash = Asked::Present(HashHex::from_bytes(skeleton.prunable_hash.to_bytes()));
+    entry.pqc_auth_hash = Asked::Present(
+        skeleton
+            .pqc_auth_hash
+            .map(|hash| HashHex::from_bytes(hash.to_bytes()))
+            .into(),
+    );
+    entry.archival_size = Asked::Present(Size(skeleton.archival_len.to_raw()));
     let err = bind_block_txs(&[id], &slots(vec![entry]))
         .expect_err("a whole body answers no prune request");
     assert!(

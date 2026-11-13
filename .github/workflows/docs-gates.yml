@@ -425,6 +425,15 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_compare.py
 
+      - name: Run benchmark capture parse tests
+        # `scripts/bench/iai_parse.py` reads gungraun's stdout for the
+        # capture, and refuses a registered row it cannot read instead of
+        # dropping it: a header with no run id, a section with no entry, a
+        # row with no section. Here for the comparator's reason: this job
+        # has no `paths:` filter.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_iai_parse.py
+
       - name: Run RT-P5 class derivation tests
         # `scripts/bench/rt_p5_classes.py` derives the RPC channel's record
         # size classes from RT-P5's trace, by the rule registered in

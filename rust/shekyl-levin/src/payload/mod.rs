@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! Levin command schemas (LV-2b: 1001 / 1002 and notifies 2002–2004 /
-//! 2006–2010, plus the chain-sync commands 2011–2014, which are not
-//! admitted at ingress).
+//! 2006–2010, the chain-sync commands 2011–2014, and the bundle
+//! transport 2015–2017).
 //!
 //! Encode/decode sit on `shekyl-portable-storage`. Cryptonote blobs stay
 //! opaque `Vec<u8>` (`shekyl-wire` owns those). RPC maps stay out.
@@ -14,6 +14,7 @@ use shekyl_portable_storage::{load_from_binary, store_to_binary, Limits, Section
 
 mod address;
 mod block;
+mod bundles;
 mod commands;
 mod error;
 mod get;
@@ -22,7 +23,12 @@ mod sync;
 mod types;
 
 pub use address::{NetworkAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
-pub use block::{BlockCompleteEntry, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES};
+pub use block::{BlockCompleteEntry, TxBlobEntry, MAX_BUNDLE_REFERENCES};
+pub use bundles::{
+    HeldBundleBody, NewBundle, RequestBundleBodies, ResponseBundleBodies, CAP_NEW_BUNDLE,
+    CAP_REQUEST_BUNDLE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, MAX_BUNDLE_BODY_REQUEST_COUNT,
+    NOTIFY_NEW_BUNDLE, NOTIFY_REQUEST_BUNDLE_BODIES, NOTIFY_RESPONSE_BUNDLE_BODIES,
+};
 pub use commands::{
     HandshakeRequest, HandshakeResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC,

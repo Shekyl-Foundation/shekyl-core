@@ -12,8 +12,8 @@
 
 use shekyl_network::{Lever, Staging};
 use shekyl_options::{
-    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, PeerRule, Row, Surface, Table,
-    Visibility,
+    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, NameRule, PeerRule, Row,
+    Surface, Table, Visibility,
 };
 
 /// The five log levels, as `log-level` and `log-category` spell them.
@@ -50,6 +50,16 @@ const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
 const GLOBAL: Kind = Kind::Endpoint(EndpointRule::GlobalUnicast);
 const PEER: Kind = Kind::PeerEndpoint(PeerRule::Any);
+/// The instance-name rule is the channel crate's, where the name is hashed
+/// into the rendezvous (`RPC_CHANNEL.md` §7.1, IG-Q103).
+const INSTANCE: Kind = Kind::Name(NameRule {
+    describe: "an instance name",
+    check: |name| {
+        shekyl_rpc_channel::InstanceName::parse(name)
+            .map(drop)
+            .map_err(shekyl_rpc_channel::InstanceNameError::rule)
+    },
+});
 const ORIGIN: Kind = Kind::Origin;
 const RATE: Kind = Kind::Quantity {
     dimension: Dimension::Rate,
@@ -157,11 +167,13 @@ const ROWS: &[Row] = &[
         surface: Surface::Cli,
         runtime: false,
         grant: Grant::Config,
-        visibility: Visibility::Reserved {
-            reason: "the Windows service run mode (RPC_CHANNEL.md RT-16), accepted once RT-W14 builds the service-manager dispatcher",
-        },
-        help: "",
+        // IG-Q105: one row on every platform. On Windows the switch also
+        // answers the service manager, and that dispatcher is RT-W14's, so
+        // a Windows start refuses it until then (`sections::build`).
+        visibility: Visibility::Public,
+        help: "Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14).",
     },
+    public("instance", INSTANCE, Default::Unset, Surface::Both, "This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir."),
     public("config-file", Kind::Path, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused."),
     public("data-dir", Kind::Path, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
     public("log-file", Kind::Path, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
@@ -268,6 +280,7 @@ const ROWS: &[Row] = &[
         },
         help: "",
     },
+    public("rpc-socket-dir", Kind::Path, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
     public("rpc-admin-listen", Kind::List(&LOOPBACK), Default::Derived("127.0.0.1 and the network's rpc port"), Surface::Both, "The plaintext full-access listeners, loopback only; `none` is no admin listener."),
     public("rpc-view-listen", Kind::List(&LOOPBACK), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only."),
     public("rpc-cors-origin", Kind::List(&ORIGIN), Default::Value("none"), Surface::Both, "Web origins allowed to call the RPC; `none` denies all. `*` is refused."),
@@ -408,13 +421,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 52 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 49);
+        assert_eq!(live, 52);
         let levers = TABLE
             .rows
             .iter()
@@ -516,7 +529,6 @@ mod tests {
         }
         let configurable = Lever::ALL
             .into_iter()
-            .filter(|l| !matches!(l, Lever::InjectServeCredit | Lever::IssueDraws))
             .map(DevGate::Lever)
             .chain(Staging::ALL.into_iter().map(DevGate::Staging));
         for gate in configurable {

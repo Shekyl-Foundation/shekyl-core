@@ -512,7 +512,7 @@ pub(crate) mod tests {
     use crate::sync_facts::{BodySpanFacts, RequestTiming, SyncSessionFacts, SyncViewFacts};
     use shekyl_rpc_types::wire::p2p::{SyncMode, SyncState};
     use shekyl_types::{
-        AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+        BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, SectionRoot, TxHash,
     };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -643,6 +643,8 @@ pub(crate) mod tests {
                         TxHash::from_bytes(tagged_bytes(61)),
                         TxHash::from_bytes(tagged_bytes(67)),
                     ],
+                    bundle_references: Vec::new(),
+                    bundle_bodies: Vec::new(),
                 }),
                 chain_height,
             })
@@ -769,7 +771,7 @@ pub(crate) mod tests {
             prev_hash: tagged_hash(3),
             miner_tx_hash: TxHash::from_bytes(tagged_bytes(31)),
             curve_tree_root: CurveTreeRoot::from_bytes(tagged_bytes(41)),
-            attestation_root: AttestationRoot::from_bytes(tagged_bytes(53)),
+            section_root: SectionRoot::from_bytes(tagged_bytes(53)),
             pow_hash: None,
             height: BlockHeight::from_raw(1_234_567),
             depth: BlockCount::from_raw(42),

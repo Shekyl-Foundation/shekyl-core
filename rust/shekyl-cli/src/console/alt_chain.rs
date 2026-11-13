@@ -41,7 +41,7 @@ pub(super) fn alt_chain_info(daemon: &DaemonClient) -> Result<String, String> {
     let mut out = vec![format!("{} alternate chains found:", shown.len())];
     for chain in shown {
         out.push(format!(
-            "{} blocks long, from height {} ({} deep), diff {}: {}",
+            "{} blocks long, from block {} ({} deep), diff {}: {}",
             length_of(chain),
             start_of(chain),
             depth_of(chain),

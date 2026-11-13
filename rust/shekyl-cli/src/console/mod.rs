@@ -27,7 +27,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-pub(crate) use tests::{daemon_status_reply, route_server_recording};
+pub(crate) use tests::{daemon_status_reply, route_server_recording, status_withheld};
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
@@ -69,7 +69,7 @@ fn human_readable_timestamp(ts: u64) -> String {
 /// Built as lines and joined: writing to a `String` cannot fail, so
 /// `write!` here would only produce `Result`s to discard.
 fn render_block_header(h: &BlockHeader) -> String {
-    let pow_hash = h.pow.0.map_or_else(String::new, |p| p.to_string());
+    let pow_hash = h.pow.present().map_or_else(String::new, |p| p.to_string());
     let time = h.time.0;
     [
         format!("timestamp: {time} ({})", human_readable_timestamp(time)),
@@ -77,7 +77,7 @@ fn render_block_header(h: &BlockHeader) -> String {
         format!("nonce: {}", h.nonce.0),
         // The C++ streamed a bool, which prints as 0/1.
         format!("is orphan: {}", u8::from(h.orphan)),
-        format!("height: {}", h.height.0),
+        format!("block number: {}", h.height.0),
         format!("depth: {}", h.depth.0),
         format!("hash: {}", h.hash),
         format!("difficulty: {}", h.difficulty.get()),
@@ -225,7 +225,7 @@ pub(crate) fn transaction(daemon: &DaemonClient, hash: &str) -> Result<TxAnswer,
     match (tx.pooled, tx.mined_height.0, tx.mined_time.0) {
         (true, _, _) => out.push("Found in pool".to_owned()),
         (false, Some(height), Some(time)) => {
-            out.push(format!("Found in blockchain at height {}", height.0));
+            out.push(format!("Found in blockchain at block {}", height.0));
             out.push(format!(
                 "Block timestamp: {} ({})",
                 time.0,
@@ -721,8 +721,9 @@ fn print_net_stats(src: &DaemonClient, now: u64) -> Result<String, String> {
     ))
 }
 
-/// `sync status`: chain sync's view. Heights are block counts, as this
-/// word has always printed them: the wire's tips plus one.
+/// `sync status`: chain sync's view. The numbers are block counts, the
+/// wire's tips plus one, and are labelled as counts (`HEIGHT_SEMANTICS.md`
+/// §1).
 #[deny(clippy::arithmetic_side_effects)]
 fn sync_info(src: &DaemonClient) -> Result<String, String> {
     let Some(reply) = p2p_call::<wire::SyncStatus>(src, &NoParams)? else {
@@ -739,7 +740,7 @@ fn sync_info(src: &DaemonClient) -> Result<String, String> {
     )]
     let progress = (height as f64 / target as f64) * 100.0;
     let mut out = vec![format!(
-        "Height: {height}, target: {target} ({}%), {}{}",
+        "Block count: {height}, target: {target} ({}%), {}{}",
         trimmed(progress, 4),
         sync_state_word(reply.state),
         if reply.stalled {

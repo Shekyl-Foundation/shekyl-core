@@ -8,11 +8,7 @@
 # Regenerate the current hit set with `--print-records` to see what remains.
 
 rust/shekyl-archival-retention/src/admission.rs	1	parent_height: u64,
-rust/shekyl-archival-retention/src/attestation_wire_tests.rs	1	fn chain_hash(height: u64) -> [u8; 32] {
-rust/shekyl-archival-retention/src/attestation_wire_tests.rs	1	fn window_at(predecessor_height: u64) -> PassAnchorWindow {
 rust/shekyl-archival-retention/src/bond_duration.rs	1	pub fn from_add(add_settlement_epoch: u64, freeze_height: u64) -> Self {
-rust/shekyl-archival-retention/src/challenge.rs	1	pub fn challenge_seal_height(h_open: u64) -> u64 {
-rust/shekyl-archival-retention/src/challenge.rs	1	pub fn challenge_seal_on_chain(h_open: u64, chain_height: u64) -> bool {
 rust/shekyl-archival-retention/src/consensus_state.rs	3	close_block_height: u64,
 rust/shekyl-archival-retention/src/consensus_state.rs	1	pub close_block_height: u64,
 rust/shekyl-archival-retention/src/consensus_state.rs	1	pub fn epoch_close_due_at_height(block_height: u64) -> Option<u64> {
@@ -31,18 +27,10 @@ rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs	1	pub 
 rust/shekyl-archival-retention/src/consensus_state/settlement_schedule.rs	1	pub const fn slash_deadline_height(self, epoch: u64) -> u64 {
 rust/shekyl-archival-retention/src/emission_verify.rs	1	current_block_height: u64,
 rust/shekyl-archival-retention/src/emission_verify.rs	1	pub current_block_height: u64,
-rust/shekyl-archival-retention/src/pass_anchor.rs	1	fn chain_hash(height: u64) -> [u8; 32] {
-rust/shekyl-archival-retention/src/pass_anchor.rs	1	fn window_at(predecessor_height: u64) -> PassAnchorWindow {
 rust/shekyl-archival-retention/src/shard_coverage.rs	1	fn row(shard_id: u64, bonded_count: u64, freeze_height: u64) -> ShardCoverageIn {
 rust/shekyl-archival-retention/src/shard_coverage.rs	2	pub freeze_height: u64,
 rust/shekyl-archival-retention/src/shard_coverage.rs	1	tip_height: u64,
-rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	fn coinbase_gindex(blocks: &[Block], target_height: u64) -> u64 {
-rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
-rust/shekyl-archival-retention/tests/assembled_path_crosscheck.rs	1	height: u64,
-rust/shekyl-archival-retention/tests/attestation_wire_kat.rs	1	fn pinned_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
-rust/shekyl-archival-retention/tests/attestation_wire_kat.rs	1	fn pinned_window(predecessor_height: u64) -> PassAnchorWindow {
 rust/shekyl-archival-retention/tests/emission_verify_kat.rs	1	height: u64,
-rust/shekyl-archival-retention/tests/gate2_serve_credit_kat.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/corpus.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/corpus_tests.rs	1	fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
 rust/shekyl-chain-ingest/src/fetch.rs	1	heights: Range<u64>,
@@ -52,7 +40,6 @@ rust/shekyl-chain-ingest/src/pipeline_tests.rs	1	height: u64,
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn over(self, tree: &GrownTree, height: u64) -> Facts {
 rust/shekyl-chain-ingest/src/test_support.rs	1	fn synthetic_economics(height: u64) -> TraceEconomics {
 rust/shekyl-chain-ingest/src/test_support.rs	4	height: u64,
-rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn at(height: u64) -> usize {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn coinbase(height: u64) -> Transaction {
 rust/shekyl-chain-ingest/src/test_support.rs	1	pub fn key_image(family: Family, height: u64) -> [u8; 32] {
@@ -68,7 +55,7 @@ rust/shekyl-chain-store/src/codec/alt.rs	1	pub(crate) fn test_block_bytes(height
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn hash_at(store: &ChainStore, height: u64) -> Option<BlockHash> {
 rust/shekyl-chain-store/src/store/alt_tests.rs	1	fn tip_height(store: &ChainStore) -> Option<u64> {
 rust/shekyl-chain-store/src/store/amendments_tests.rs	1	fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
-rust/shekyl-chain-store/src/store/archival_write.rs	4	height: u64,
+rust/shekyl-chain-store/src/store/archival_write.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/chain_reads.rs	1	pub(super) fn class_of(tip: Option<&(u64, BlockInfo)>, height: u64) -> HeightClass<'_> {
 rust/shekyl-chain-store/src/store/connect.rs	1	height: u64,
@@ -92,7 +79,6 @@ rust/shekyl-chain-store/src/store/prune.rs	1	fn from_block(txn: &'t T, height: u
 rust/shekyl-chain-store/src/store/prune.rs	1	fn retire_undo_rows(&self, height: u64) -> Result<BlockHeight, StoreError> {
 rust/shekyl-chain-store/src/store/prune.rs	4	height: u64,
 rust/shekyl-chain-store/src/store/prune_tests.rs	1	fn close_height(&self, k: u64) -> Option<u64> {
-rust/shekyl-chain-store/src/store/prune_tests.rs	1	fn key_of(salt: u64, height: u64, index: usize) -> u64 {
 rust/shekyl-chain-store/src/store/prune_tests.rs	3	height: u64,
 rust/shekyl-chain-store/src/store/read.rs	1	height: u64,
 rust/shekyl-chain-store/src/store/read_tests.rs	1	let heights: Vec<u64> = rows.map(|r| r.expect("row").0.to_raw()).collect();

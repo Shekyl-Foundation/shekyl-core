@@ -209,7 +209,8 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
                     origin: Origin::Local,
                     block,
                     bodies,
-                    attestation_witness: Vec::new(),
+                    bundle_references: Vec::new(),
+                    bundle_bodies: Vec::new(),
                 })
                 .expect("room")
                 .reply()
@@ -554,26 +555,22 @@ async fn the_q1_reads_answer_from_the_store_and_the_pool() {
                 panic!("under prune the one listed body is a skeleton");
             };
             let parts = spend.txid_parts();
+            // Under `prune` the operands are selected, so present.
+            let prunable_hash = slot.prunable_hash.present().expect("asked with prune");
+            let pqc_auth_hash = slot.pqc_auth_hash.present().expect("asked with prune");
+            let archival_size = slot.archival_size.present().expect("asked with prune");
+            assert_eq!(prunable_hash.to_bytes(), parts.prunable_hash.to_bytes());
             assert_eq!(
-                slot.prunable_hash.to_bytes(),
-                parts.prunable_hash.to_bytes()
-            );
-            assert_eq!(
-                slot.pqc_auth_hash
-                    .0
-                    .map(shekyl_rpc_client::HashHex::to_bytes),
+                pqc_auth_hash.0.map(shekyl_rpc_client::HashHex::to_bytes),
                 parts.pqc_auth_hash.map(shekyl_types::PqcAuthHash::to_bytes)
             );
             let skeleton = shekyl_wire::SkeletonTx {
                 unprunable: slot.body.0.clone(),
-                prunable_hash: shekyl_types::PrunableHash::from_bytes(
-                    slot.prunable_hash.to_bytes(),
-                ),
-                pqc_auth_hash: slot
-                    .pqc_auth_hash
+                prunable_hash: shekyl_types::PrunableHash::from_bytes(prunable_hash.to_bytes()),
+                pqc_auth_hash: pqc_auth_hash
                     .0
                     .map(|h| shekyl_types::PqcAuthHash::from_bytes(h.to_bytes())),
-                archival_len: shekyl_types::ArchivalLength::from_raw(slot.archival_size.0),
+                archival_len: shekyl_types::ArchivalLength::from_raw(archival_size.0),
             };
             assert_eq!(
                 skeleton.txid().expect("the skeleton binds"),

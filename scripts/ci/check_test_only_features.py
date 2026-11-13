@@ -237,12 +237,12 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     (
         "shekyl-p-host",
         "test-signer",
-    ): "arms shekyl-p-serve's ephemeral TestKeySigner as a PassKey, so a host "
+    ): "arms shekyl-p-serve's ephemeral TestReceiptKeySigner as a PassKey, so a host "
     "under test can be bound with a key whose public half the test holds "
     "(and, since SH-2, exposes RefusingKey — the always-refusing PassKey the "
     "serving-task lifecycle tests bind in place of the persona's resident "
     "key). Enabled from shekyl-engine-core's [dev-dependencies] edge only; "
-    "the production PassKey is the stake actor's ResidentPassKey, and "
+    "the production PassKey is the stake actor's ResidentReceiptKey, and "
     "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
     "every production graph",
     (
@@ -479,9 +479,13 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         "The shekyl-verify-cost dev edge (2026-11-09, BA-T1) is the pool-admission drift "
         "gate calling sign_pqc_auth_for_output_with_ml_dsa_seed, the wallet signer's "
         "assembly with a seeded ML-DSA nonce — the same shape as shekyl-tx-builder's "
-        "transfer_e2e_iai.",
+        "transfer_e2e_iai. The shekyl-chain-store dev edge (2026-11-11, SO-D12 #1327) "
+        "is the shard-fill capture writer's regeneration guard, "
+        "test_support::regen_decision_or_refuse — the guard every pinned vector's "
+        "rewrite goes through, as in shekyl-archival-retention's gate-4 KAT.",
         frozenset({
             ("test-utils", "shekyl-archival-retention", "dev"),
+            ("test-utils", "shekyl-chain-store", "dev"),
             ("test-utils", "shekyl-p-fetch", "dev"),
             ("test-utils", "shekyl-p-serve", "normal"),
             ("test-utils", "shekyl-tx-builder", "dev"),

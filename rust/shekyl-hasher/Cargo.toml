@@ -1,0 +1,35 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-hasher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The one owner of every RandomX cache in the daemon (docs/design/RANDOMX_CACHE_ACTOR.md): three places, jobs before warm residency, and residency computed from the seeds the node needs"
+publish = false
+
+# Its own crate, above the verifier and the budget (RANDOMX_CACHE_ACTOR.md
+# §5.3, HA-R6): `shekyl-pow-randomx` is held to isolation invariants a
+# scheduler has no business under, and the budget is a counter that knows
+# nothing of caches.
+[dependencies]
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+# The published residency (`Hasher::resident`): a watch, which the follower
+# reads from the runtime and a test reads from a thread.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+proptest = "1"
+# The lending types' compile_fail controls (tests/trybuild.rs), with stderr
+# snapshots: a `compile_fail` doctest cannot say why it failed.
+trybuild = "1"
+
+[lints]
+workspace = true
