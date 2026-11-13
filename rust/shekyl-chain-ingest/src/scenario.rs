@@ -936,6 +936,17 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
 #[path = "scenario_pool.rs"]
 mod pool;
 
+/// The chain that carries a network's identity: regtest's table genesis as
+/// block 0, its miner and its id (`CHAIN_FORGE.md` §6, `CF-1a`).
+#[path = "scenario_genesis.rs"]
+mod genesis;
+
 #[cfg(test)]
 #[path = "scenario_tests.rs"]
 mod scenario_tests;
+
+/// The identity test's four locks on a chain carrying regtest's identity
+/// (`CHAIN_FORGE.md` §6).
+#[cfg(test)]
+#[path = "scenario_identity_tests.rs"]
+mod scenario_identity_tests;

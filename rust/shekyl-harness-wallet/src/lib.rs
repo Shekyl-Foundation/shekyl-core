@@ -46,6 +46,13 @@
 //! every other place builds. The fixture derivation is not a wallet's: a
 //! wallet derives through `shekyl_crypto_pq::account` (`NETWORK_IDENTITY.md`
 //! NI-R7), and nothing here may stand in for it.
+//!
+//! A chain that carries a network's identity pays a wallet of that network
+//! instead ([`MinerWallet::from_account`], [`MinerWallet::harness_regtest`]):
+//! the keys come out of `account_from_seed` under the network's name, as
+//! a wallet restored from the same seed on that network derives them, and
+//! this crate only copies them (`CHAIN_FORGE.md` §6, `CF-1a`). The fixture
+//! derivation stays the miner of the chains that mine their own genesis.
 
 #![forbid(unsafe_code)]
 
@@ -58,7 +65,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
-use shekyl_crypto_pq::account::ml_kem_keypair_from_d_z;
+use shekyl_crypto_pq::account::{account_from_seed, ml_kem_keypair_from_d_z, Network, SEED_BYTES};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::kem::HybridKemSecretKey;
 use zeroize::Zeroizing;
@@ -210,6 +217,46 @@ impl MinerWallet {
         &HARNESS
     }
 
+    /// The wallet `seed` derives on `network`, through the wallet's own
+    /// derivation (`account_from_seed`, NI-R7): the account's spend pair,
+    /// its view scalar as the X25519 decapsulation secret (the scanner's,
+    /// as [`Owner::persona`] reads a persona's), and its ML-KEM-768 pair.
+    /// The same wallet a user restoring `seed` on `network` holds, so a
+    /// chain paying it is spendable by the production wallet stack.
+    ///
+    /// # Panics
+    ///
+    /// If the account derivation fails, which it does only for a view
+    /// scalar on a low-order point: negligible, and a broken primitive
+    /// rather than a seed to handle.
+    #[must_use]
+    pub fn from_account(seed: &[u8; SEED_BYTES], network: Network) -> Self {
+        let (_master, keys) =
+            account_from_seed(seed, network).expect("the account derivation is total");
+        Self {
+            spend_secret: Zeroizing::new(*keys.spend_sk.as_canonical_bytes()),
+            kem_secret: HybridKemSecretKey {
+                x25519: *keys.view_sk.as_canonical_bytes(),
+                ml_kem: keys.ml_kem_dk.as_canonical_bytes().to_vec(),
+            },
+            recipient: Recipient {
+                spend_public: *keys.spend_pk.as_canonical_bytes(),
+                x25519_pk: keys.x25519_pk,
+                ml_kem_ek: keys.ml_kem_ek.to_vec(),
+            },
+        }
+    }
+
+    /// The miner of a chain that carries regtest's identity —
+    /// [`from_account`](Self::from_account) over [`HARNESS_SEED`] on
+    /// [`Network::Regtest`], derived once per process (`CHAIN_FORGE.md` §6).
+    #[must_use]
+    pub fn harness_regtest() -> &'static MinerWallet {
+        static REGTEST: LazyLock<MinerWallet> =
+            LazyLock::new(|| MinerWallet::from_account(&HARNESS_SEED, Network::Regtest));
+        &REGTEST
+    }
+
     /// The public half, as a payer addresses it.
     #[must_use]
     pub fn recipient(&self) -> &Recipient {
@@ -258,5 +305,33 @@ mod tests {
     fn two_seeds_are_two_wallets() {
         let other = MinerWallet::from_seed(&[0x11; 32]);
         assert_ne!(MinerWallet::harness().recipient(), other.recipient());
+    }
+
+    /// The regtest miner is the account the wallet derives from the seed
+    /// on regtest, key for key, and no other network's.
+    #[test]
+    fn the_regtest_miner_is_the_seeds_regtest_account() {
+        let (_master, account) =
+            account_from_seed(&HARNESS_SEED, Network::Regtest).expect("derives");
+        let miner = MinerWallet::harness_regtest();
+        assert_eq!(
+            miner.recipient().spend_public,
+            *account.spend_pk.as_canonical_bytes()
+        );
+        assert_eq!(miner.recipient().x25519_pk, account.x25519_pk);
+        assert_eq!(miner.recipient().ml_kem_ek, account.ml_kem_ek.to_vec());
+        assert_eq!(miner.spend_secret(), account.spend_sk.as_canonical_bytes());
+        assert_eq!(
+            &miner.kem_secret().x25519,
+            account.view_sk.as_canonical_bytes()
+        );
+        for other in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+            assert_ne!(
+                MinerWallet::from_account(&HARNESS_SEED, other).recipient(),
+                miner.recipient(),
+                "{other}"
+            );
+        }
+        assert_ne!(MinerWallet::harness().recipient(), miner.recipient());
     }
 }

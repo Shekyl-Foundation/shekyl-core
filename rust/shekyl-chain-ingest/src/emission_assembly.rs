@@ -57,6 +57,7 @@ use shekyl_crypto_pq::signature::{
     sign_emission_claim, HybridEd25519MlDsa, SignatureScheme as _, SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_network::NetworkId;
 use shekyl_tx_builder::{
     open_spend, prove_backing_membership, sign_transaction_with_terms,
     tx_prefix_hash_from_parts_with_extra, tx_signable_for, AuthSlots, InputTerm, OutputInfo,
@@ -78,6 +79,21 @@ pub struct ClaimTerms {
     pub settlement_epochs: Vec<u64>,
     pub work_claim: Vec<WorkEpochClaim>,
     pub reward_amount_plain: Vec<u64>,
+}
+
+/// Where a claim lists: the id of the chain's network and the reference
+/// its proofs anchor at. Every network-bound message the claim carries —
+/// the transaction's `tx_signable`, the vin's auth digests, the fee
+/// spends' proofs and slots — is framed with `network`: the harness id on
+/// a chain that mines its own genesis, the table network's on one that
+/// carries its identity (`CHAIN_FORGE.md` §6). A spender hands both out
+/// with every sourced output (`Sourced::network`, `Sourced::tree`).
+#[derive(Clone, Copy)]
+pub struct ClaimAnchor<'a> {
+    /// The chain's network id.
+    pub network: &'a NetworkId,
+    /// The reference the backing and the fee spends are proved at.
+    pub tree: &'a TreeContext,
 }
 
 /// The assembled claim: the wire bytes, and the facts a caller verifies
@@ -121,7 +137,8 @@ pub struct AssembledClaim {
 /// membership-only proof over it; 12–13 the vin and its dual auth;
 /// 14 the full prefix hash; 15 the fee-side proving with the reward as the
 /// input-side cleartext term; 16–17 the PQC auth slots, fee keys then the
-/// identity key; 19 the production encoder.
+/// identity key; 19 the production encoder. `anchor` says which chain
+/// the claim lists on and where its proofs anchor ([`ClaimAnchor`]).
 pub fn assemble_emission_claim(
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
@@ -129,16 +146,17 @@ pub fn assemble_emission_claim(
     backing: SpendInput,
     terms: ClaimTerms,
     fee: u64,
-    tree: &TreeContext,
+    anchor: ClaimAnchor<'_>,
 ) -> AssembledClaim {
     assemble(
+        anchor.network,
         keys,
         tx_key_secret,
         fee_inputs,
         backing,
         terms,
         fee,
-        tree,
+        anchor.tree,
         FeeProof::AsProved,
     )
 }
@@ -158,16 +176,17 @@ pub fn assemble_emission_claim_breaking_fee_proof(
     backing: SpendInput,
     terms: ClaimTerms,
     fee: u64,
-    tree: &TreeContext,
+    anchor: ClaimAnchor<'_>,
 ) -> AssembledClaim {
     assemble(
+        anchor.network,
         keys,
         tx_key_secret,
         fee_inputs,
         backing,
         terms,
         fee,
-        tree,
+        anchor.tree,
         FeeProof::FlippedBeforeSigning,
     )
 }
@@ -183,6 +202,7 @@ enum FeeProof {
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn assemble(
+    network: &NetworkId,
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
     fee_inputs: Vec<SpendInput>,
@@ -303,7 +323,7 @@ fn assemble(
     // The transaction's one network-bound message (the signing envelope
     // §2.2), over that prefix and the base the outputs commit.
     let tx_signable = tx_signable_for(
-        &shekyl_network::HARNESS_NETWORK_ID,
+        network,
         signable,
         AtomicUnits::from_raw(fee),
         &tree.reference_block,
@@ -344,11 +364,7 @@ fn assemble(
         auth_claim: vec![0u8; SINGLE_SIG_CANONICAL_LEN],
     };
     let auth_msgs = vin
-        .auth_msgs(
-            &shekyl_network::HARNESS_NETWORK_ID,
-            &reward_commits,
-            &tx_signable,
-        )
+        .auth_msgs(network, &reward_commits, &tx_signable)
         .expect("the auth binding messages derive");
     let auth_b =
         sign_emission_backing_for_output(&backing_combined, backing_index, &auth_msgs.backing)
@@ -371,7 +387,7 @@ fn assemble(
     // Step 15: the fee-side proving, the mint as the input-side cleartext
     // term — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H` (CEN-H22).
     let mut signed = sign_transaction_with_terms(
-        &shekyl_network::HARNESS_NETWORK_ID,
+        network,
         // J22's prefix: the signer frames the tx_signable the backing proof
         // and the auths were made over.
         signable,
@@ -410,7 +426,7 @@ fn assemble(
                 extra: vec![hybrid_pk_bytes],
             },
         },
-        &shekyl_network::HARNESS_NETWORK_ID,
+        network,
     )
     .expect("the fee side opens");
     drop(spend_inputs);

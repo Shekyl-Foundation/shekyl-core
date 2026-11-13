@@ -247,6 +247,11 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # a crate and not this crate's module.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+# The genesis block assembly the node connects (`genesis_block`): a scenario
+# chain that carries a network's identity connects that network's table
+# genesis as block 0, assembled the node's way (`scenario_genesis.rs`,
+# CHAIN_FORGE.md §6). Dev edge only: the driver is test-only.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 # Two subjects over the scenario chain: CEN-M9's witness (the submit
 # engine, with the production verifier, over
 # `shekyl_daemon_rpc::RustPoolShim` — the prepared reversion judged end to

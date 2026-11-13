@@ -82,7 +82,7 @@ use crate::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::chain_drive::{catch_up, spender_owning_before, Driven};
 use crate::emission_assembly::{
-    assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
+    assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimAnchor, ClaimTerms,
 };
 use crate::frozen_membership::{drive_frozen_membership, price_frozen_claim};
 use crate::scenario::{FreeHash, Scenario};
@@ -313,7 +313,10 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         backing.input,
         terms.clone(),
         FEE,
-        &backing.tree,
+        ClaimAnchor {
+            network: &backing.network,
+            tree: &backing.tree,
+        },
     );
     assert_eq!(claim.persona, persona.id());
     let claim_tx =
@@ -485,7 +488,10 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         twin_backing.input,
         terms.clone(),
         FEE,
-        &twin_backing.tree,
+        ClaimAnchor {
+            network: &twin_backing.network,
+            tree: &twin_backing.tree,
+        },
     );
     let twin_tx = Transaction::from_bytes(&twin.bytes).expect("the twin's bytes parse");
     refused_at(
@@ -515,7 +521,10 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
             backing.input,
             terms,
             FEE,
-            &backing.tree,
+            ClaimAnchor {
+                network: &backing.network,
+                tree: &backing.tree,
+            },
         );
         Transaction::from_bytes(&broken.bytes).expect("the broken claim's bytes parse")
     };

@@ -63,10 +63,22 @@ pub struct Persona {
 }
 
 impl Persona {
-    /// Derive the persona at `p_slot` from the harness's master seed.
+    /// Derive the persona at `p_slot` from the harness's master seed, under
+    /// mainnet's name: the personas of the chains that mine their own
+    /// genesis, whose fixtures pin these ids. A chain that carries a
+    /// network's identity derives its personas under that network's name
+    /// ([`Self::on`]).
     #[must_use]
     pub fn at(p_slot: u32) -> Self {
-        let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, p_slot)
+        Self::on(Network::Mainnet, p_slot)
+    }
+
+    /// Derive the persona at `p_slot` from the harness's master seed under
+    /// `network`'s name, as a wallet of that network derives it (`NI-R10`;
+    /// `CHAIN_FORGE.md` §6).
+    #[must_use]
+    pub fn on(network: Network, p_slot: u32) -> Self {
+        let keys = derive_archival_p_keys(&MASTER, network, p_slot)
             .expect("the harness's seed derives a persona");
         Self { keys }
     }

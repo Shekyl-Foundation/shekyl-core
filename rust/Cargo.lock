@@ -3845,6 +3845,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-engine-core",
  "shekyl-fcmp",
+ "shekyl-genesis-tool",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",

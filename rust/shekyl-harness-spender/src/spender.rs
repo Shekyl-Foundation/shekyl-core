@@ -44,6 +44,9 @@ pub struct Sourced {
     pub key_image: shekyl_types::KeyImage,
     /// The reference the path was assembled against.
     pub tree: TreeContext,
+    /// The id of the network whose chain the path is through: what a spend
+    /// of this output signs and proves under (the signing envelope §2.2).
+    pub network: shekyl_network::NetworkId,
 }
 
 /// A watched output found in a pushed block: the transaction that listed
@@ -92,18 +95,28 @@ pub struct Spender {
     watched: BTreeSet<[u8; 32]>,
     /// Watched outputs a pushed block has listed, by output key.
     located: BTreeMap<[u8; 32], Located>,
+    /// The id of the network the chain is: every spend this spender builds
+    /// signs and proves under it (`NETWORK_IDENTITY.md` NI-Q4).
+    network: shekyl_network::NetworkId,
 }
 
 impl Spender {
-    /// The network id every spend this spender builds signs under: the
-    /// harness id, because the chains it spends from mine their own genesis
-    /// and are validated under `Trust::UNPINNED` (`NETWORK_IDENTITY.md`
-    /// NI-Q4).
-    pub const NETWORK_ID: shekyl_network::NetworkId = shekyl_network::HARNESS_NETWORK_ID;
-
-    /// The tree after every block of `mined`, in order, from genesis.
+    /// The tree after every block of `mined`, in order, from genesis, for a
+    /// chain that mines its own genesis: its spends sign under the harness
+    /// id, the id `Trust::UNPINNED` validates them under
+    /// (`NETWORK_IDENTITY.md` NI-Q4).
     #[must_use]
     pub fn over<B: MinedBlock>(mined: &[B]) -> Self {
+        Self::on(shekyl_network::HARNESS_NETWORK_ID, mined)
+    }
+
+    /// The tree after every block of `mined`, in order, from genesis, for a
+    /// chain that carries `network`'s identity — its block 0 that network's
+    /// table genesis, `network` the id derived from it (`NI-R10`): its
+    /// spends sign and prove under `network`, so a validator of any other
+    /// network refuses them (`CHAIN_FORGE.md` §6, lock 3).
+    #[must_use]
+    pub fn on<B: MinedBlock>(network: shekyl_network::NetworkId, mined: &[B]) -> Self {
         let mut spender = Self {
             client: CurveTreeClient::new(),
             hashes: Vec::new(),
@@ -112,6 +125,7 @@ impl Spender {
             next: 0,
             watched: BTreeSet::new(),
             located: BTreeMap::new(),
+            network,
         };
         for block in mined {
             spender.push(block);
@@ -491,6 +505,7 @@ impl Spender {
                 tree_root: path.tree.tree_root,
                 tree_depth: path.tree.tree_depth,
             },
+            network: self.network,
         }
     }
 
@@ -684,6 +699,12 @@ impl Spender {
                     && s.tree.tree_depth == tree.tree_depth),
             "every input's path is assembled against the one reference"
         );
+        // One chain, one network: the spend signs and proves under it.
+        let network = sourced[0].network;
+        assert!(
+            sourced.iter().all(|s| s.network == network),
+            "every input is sourced from the one chain"
+        );
         // The name moves after the path was assembled against the real
         // reference, before signing (`Twist::reference`).
         if let Some(reference) = twist.reference {
@@ -807,7 +828,7 @@ impl Spender {
         )
         .expect("the prefix hashes");
         let mut signed = sign_transaction_with_terms(
-            &Self::NETWORK_ID,
+            &network,
             tx_prefix_hash,
             &spend_inputs,
             &output_infos,
@@ -864,7 +885,7 @@ impl Spender {
                     extra: bond.map(|b| vec![b.slot_pk.clone()]).unwrap_or_default(),
                 },
             },
-            &Self::NETWORK_ID,
+            &network,
         )
         .expect("the spend opens");
 
