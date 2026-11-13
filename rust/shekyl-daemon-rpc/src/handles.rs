@@ -398,9 +398,6 @@ pub struct Handles {
     pub p2p: P2pHandle,
     /// The shard view: the node's view desk, or its Tor-off refusal.
     pub shard_view: crate::shard_view::ShardViewHandle,
-    /// The Tor supervisor's two asks (`daemon_status`'s `hiding` and Tor
-    /// status). The daemon supplies it; the node does not hold one.
-    pub tor: crate::tor_facts::TorHandle,
 }
 
 impl Default for Handles {
@@ -422,7 +419,6 @@ impl Handles {
             stop: Arc::new(StopAbsent),
             p2p: Arc::new(P2pAbsent),
             shard_view: Arc::new(crate::shard_view::ShardViewAbsent),
-            tor: Arc::new(crate::tor_facts::TorAbsent),
         }
     }
 }

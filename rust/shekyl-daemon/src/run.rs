@@ -322,7 +322,8 @@ fn supervise(
     let rpc = match shekyl_daemon_rpc::run::start(
         &config.rpc,
         options,
-        node.handles(tor_inbox.asks()),
+        node.handles(),
+        tor_inbox.asks(),
         config.dev.rpc,
         owner.map(|socket| (socket, gone)),
     ) {

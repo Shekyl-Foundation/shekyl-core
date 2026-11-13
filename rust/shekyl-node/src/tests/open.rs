@@ -15,38 +15,20 @@ fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
-    let identity = node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .chain
-        .identity()
-        .expect("identity");
+    let identity = node.handles().chain.identity().expect("identity");
     assert_eq!(identity.genesis_hash, want);
     let at = node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
+        .handles()
         .chain
         .block_hash_at(BlockHeight::ZERO)
         .expect("height 0");
     assert_eq!(at.hash, Some(want));
     assert!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .door
-            .room()
-            .expect("door")
-            > 0,
+        node.handles().door.room().expect("door") > 0,
         "a live door is not the absent handle"
     );
-    assert!(!node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .mining
-        .running()
-        .expect("mining"));
-    assert_eq!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .pool
-            .broadcast_count()
-            .expect("pool"),
-        0
-    );
+    assert!(!node.handles().mining.running().expect("mining"));
+    assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
     node.stop();
 }
 /// `Node::stop` waits, so it refuses to run inside a tokio runtime
@@ -140,9 +122,7 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(tip.hash, want);
     assert_eq!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .chain
-            .identity(),
+        node.handles().chain.identity(),
         Err(FactsFault::NotReady),
         "the handle does not answer after the store closes"
     );
@@ -203,11 +183,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
         "a pow permit was still free"
     );
     let hashing = {
-        let chain = Arc::clone(
-            &node
-                .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-                .chain,
-        );
+        let chain = Arc::clone(&node.handles().chain);
         let admitted = match ChainReadFacts::admit_pow(&*chain, PowSeed::Given(BlockHash::NULL)) {
             Ok(PowAdmission::Admitted(admitted)) => admitted,
             other => panic!("the null seed is held at open: {other:?}"),
@@ -228,11 +204,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     }
     let (done, arrived) = mpsc::channel();
     let reading = {
-        let chain = Arc::clone(
-            &node
-                .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-                .chain,
-        );
+        let chain = Arc::clone(&node.handles().chain);
         std::thread::spawn(move || {
             let _read = ChainFacts::chain_tip(&*chain).is_ok();
             let _sent = done.send(()).is_ok();
@@ -262,12 +234,7 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
         dir.path(),
         Arc::new(move || flag.store(true, Ordering::SeqCst)),
     );
-    shekyl_daemon_rpc::node_methods::daemon_stop(
-        &*node
-            .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .stop,
-    )
-    .expect("asks");
+    shekyl_daemon_rpc::node_methods::daemon_stop(&*node.handles().stop).expect("asks");
     assert!(asked.load(Ordering::SeqCst), "the handler asked the latch");
     assert_eq!(
         Handles::absent().stop.request_stop(),
@@ -324,7 +291,7 @@ fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() 
     put_chain_version(&chain, SCHEMA_VERSION.get() - 1);
     let node = open().expect("an older layout is replaced");
     assert_eq!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
+        node.handles()
             .chain
             .block_hash_at(BlockHeight::ZERO)
             .expect("height 0")
@@ -403,13 +370,7 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
     let pool = dir.path().join("pool.db");
     put_pool_version(&pool, POOL_SCHEMA_VERSION.get() + 1);
     let node = open_at(dir.path(), Arc::new(|| {}));
-    assert_eq!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .pool
-            .broadcast_count()
-            .expect("pool"),
-        0
-    );
+    assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
     node.stop();
     let garbage = b"not a pool file";
     std::fs::write(&pool, garbage).expect("overwrite");

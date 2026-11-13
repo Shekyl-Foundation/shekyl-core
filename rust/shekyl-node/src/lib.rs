@@ -541,9 +541,6 @@ impl Node {
                 started_at,
             )),
             shard_view: producer::shard_view(scheduler.as_ref()),
-            // The node holds no Tor supervisor; [`Node::handles`] takes the
-            // daemon's, so this one is never handed out.
-            tor: Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent),
         };
         let slots = Arc::new(Slots {
             facts: facts_slot,
@@ -572,15 +569,10 @@ impl Node {
         Ok(node)
     }
 
-    /// The handles the RPC server carries, with `tor`, the daemon's Tor
-    /// supervisor's asks: the node does not hold the supervisor, so the
-    /// caller names it.
+    /// The handles the RPC server carries.
     #[must_use]
-    pub fn handles(&self, tor: shekyl_daemon_rpc::tor_facts::TorHandle) -> Handles {
-        Handles {
-            tor,
-            ..self.handles.clone()
-        }
+    pub fn handles(&self) -> Handles {
+        self.handles.clone()
     }
 
     /// The socket table: the one admission every connector goes through.

@@ -13,7 +13,8 @@
 //! a spawned task. Every route reads the node through the
 //! [`Handles`] the composition root supplies; the p2p facts among them
 //! are the node's over `shekyl-p2p`'s board
-//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1).
+//! (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1). The Tor supervisor is not among
+//! them: [`start`] takes its asks beside the handles.
 //!
 //! [`Running::stop`] stops the server: no new connections, the in-flight
 //! handlers drained, the runtime released. It blocks until the drain
@@ -33,6 +34,7 @@ use crate::conn_limit::ConnLimits;
 use crate::handles::Handles;
 use crate::options::OptionsHandle;
 use crate::server::{serve_listeners, ServerConfig};
+use crate::tor_facts::TorHandle;
 
 /// Structural floor, the same pair the transport runtime is built with.
 /// Tokio's unset worker count and its 512 blocking cap are the defaults
@@ -66,7 +68,8 @@ struct Owner {
 pub type OnRendezvousGone = Arc<dyn Fn() + Send + Sync>;
 
 /// Binds every listener synchronously, then serves them on the node's
-/// handles. `armed` is the node's `dev-rpc` switch (`RPC_CHANNEL.md` §6.1).
+/// handles. `tor` is the daemon's Tor supervisor, as `daemon_status` asks
+/// it. `armed` is the node's `dev-rpc` switch (`RPC_CHANNEL.md` §6.1).
 /// `owner` is the owner's socket, already dialled and bound at start
 /// ([`crate::owner::OwnerSocket::bind`]), with what to do if it goes.
 ///
@@ -79,6 +82,7 @@ pub fn start(
     section: &Rpc,
     options: OptionsHandle,
     handles: Handles,
+    tor: TorHandle,
     armed: bool,
     owner: Option<(crate::owner::OwnerSocket, OnRendezvousGone)>,
 ) -> Result<Running, String> {
@@ -106,6 +110,7 @@ pub fn start(
         conn_limits,
         options,
         handles,
+        tor,
         armed,
         ..Default::default()
     };

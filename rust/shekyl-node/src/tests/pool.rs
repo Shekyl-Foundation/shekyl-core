@@ -54,7 +54,7 @@ fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         pool.refuse_next_commit();
         txid
     };
-    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
+    let handles = node.handles();
     let flushed = a_runtime().block_on(txpool_flush(
         &*handles.pool,
         &FlushIds {
@@ -173,7 +173,7 @@ fn a_reoffer_enters_the_stem_entry_a_submission_takes() {
             public: false,
         },
     );
-    let handles = node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent));
+    let handles = node.handles();
     let id = HashHex::from_bytes(held.to_bytes());
     let public = |handles: &shekyl_daemon_rpc::handles::Handles| {
         txpool_list(&*handles.pool, PoolScope::Broadcast)

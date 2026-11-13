@@ -64,6 +64,10 @@ pub struct AppState {
     /// The node's handles (N1): every route reads through them, the p2p
     /// facts included.
     pub handles: Handles,
+    /// The daemon's Tor supervisor, as `daemon_status` asks it. Not a node
+    /// handle: the node does not run the supervisor. [`TorAbsent`](crate::tor_facts::TorAbsent)
+    /// when none was composed.
+    pub tor: crate::tor_facts::TorHandle,
     /// One hash budget for every bounded caller (§6.3).
     pub hash_budget: Arc<HashBudget>,
     /// Bounded `chain_coinbase_sum` reads, one at a time. Cold reads wait
@@ -81,6 +85,8 @@ pub struct ServerConfig {
     pub options: Arc<dyn OptionsFacts>,
     /// The node's handles. The default is absent: every call is not ready.
     pub handles: Handles,
+    /// The daemon's Tor supervisor. The default answers not ready.
+    pub tor: crate::tor_facts::TorHandle,
     /// The node's armed-lever switch (`dev-rpc`, `RPC_CHANNEL.md` §6.1): the
     /// admin listener serves the armed test levers only while it is on.
     pub armed: bool,
@@ -94,6 +100,7 @@ impl Default for ServerConfig {
             conn_limits: ConnLimits::default(),
             options: Arc::new(OptionsAbsent),
             handles: Handles::absent(),
+            tor: Arc::new(crate::tor_facts::TorAbsent),
             armed: false,
         }
     }
@@ -218,6 +225,7 @@ pub async fn serve_listeners(
             shard_view: Arc::clone(&config.handles.shard_view),
             options: config.options.clone(),
             handles: config.handles.clone(),
+            tor: Arc::clone(&config.tor),
             hash_budget: Arc::clone(&hash_budget),
             coinbase_reads: Arc::clone(&coinbase_reads),
         });

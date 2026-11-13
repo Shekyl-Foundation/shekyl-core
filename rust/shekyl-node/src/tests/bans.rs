@@ -16,27 +16,13 @@ fn a_finite_ban_on_an_offline_node_ends_when_its_time_is_up() {
     let node = open_at(dir.path(), Arc::new(|| {}));
     let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50));
     let target = shekyl_daemon_rpc::handles::BanTargetFacts::Host(host);
-    assert!(node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .bans
-        .ban(target, Some(1))
-        .expect("ban"));
+    assert!(node.handles().bans.ban(target, Some(1)).expect("ban"));
     assert!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .bans
-            .remaining(host)
-            .expect("read")
-            .is_some(),
+        node.handles().bans.remaining(host).expect("read").is_some(),
         "the ban is in force"
     );
     let give_up = std::time::Instant::now() + Duration::from_secs(10);
-    while node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .bans
-        .remaining(host)
-        .expect("read")
-        .is_some()
-    {
+    while node.handles().bans.remaining(host).expect("read").is_some() {
         assert!(
             std::time::Instant::now() < give_up,
             "the ban stayed in force past its second"
@@ -55,11 +41,7 @@ fn a_ban_through_the_node_is_on_the_node_socket_table() {
     let node = open_at(dir.path(), Arc::new(|| {}));
     let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
     let target = shekyl_daemon_rpc::handles::BanTargetFacts::Host(host);
-    assert!(node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .bans
-        .ban(target, None)
-        .expect("ban"));
+    assert!(node.handles().bans.ban(target, None).expect("ban"));
     assert!(
         node.sockets().is_banned(host),
         "the admission table holds the node's ban"
@@ -69,10 +51,7 @@ fn a_ban_through_the_node_is_on_the_node_socket_table() {
         "the network's ban verbs read the node's table"
     );
     assert_eq!(
-        node.handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-            .bans
-            .remaining(host)
-            .expect("banned"),
+        node.handles().bans.remaining(host).expect("banned"),
         Some(shekyl_daemon_rpc::handles::BanLeftFacts::Permanent)
     );
     node.stop();
@@ -89,9 +68,7 @@ fn add_list_show_and_remove_round_trip_over_the_nodes_table() {
     use shekyl_rpc_types::wire::node::{BanAdd, BanHost};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
-    let bans = node
-        .handles(std::sync::Arc::new(shekyl_daemon_rpc::tor_facts::TorAbsent))
-        .bans;
+    let bans = node.handles().bans;
     let add = |host: &str, seconds: Option<u64>| BanAdd {
         host: Text(host.to_owned()),
         duration: seconds.map(Duration),

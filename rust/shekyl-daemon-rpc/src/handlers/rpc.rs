@@ -367,7 +367,7 @@ async fn dispatch(
             let rpc_connections = state.conn_tracker.active_total();
             // The supervisor's asks, off the chain worker: `hiding` for
             // every caller, the status only for one shown Status (RK-D24).
-            let tor = crate::tor_facts::read(state.handles.tor.as_ref(), disclosure.status())
+            let tor = crate::tor_facts::read(state.tor.as_ref(), disclosure.status())
                 .await
                 .map_err(RpcFault::Facts)?;
             framed(
