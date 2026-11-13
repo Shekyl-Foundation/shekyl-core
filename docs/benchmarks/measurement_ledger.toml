@@ -164,6 +164,7 @@ stale_through = [
   { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): RerandomizedOutput::for_pseudo_out holds r_c = a − z. prove_with_rng and SalSigningParams::propose both call it, then the same with_commitment_blind the call sites called before. Same scalar subtraction, same rerandomization. Not re-measured; the rows stay stale." },
   { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. No hash, derivation or verify function changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "edfcd5795f", note = "Multisig R-11 (edfcd5795f): in this path set, frost_sal.rs's group-shape check refuses m below MIN_MULTISIG_THRESHOLD (2) where it refused m = 0, and its tests build 2-of-2 groups for 1-of-1. Multisig feature only; one comparison at key load, not on any path the capture times. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
@@ -1073,6 +1074,7 @@ stale_through = [
   { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): in this path set, prove_with_rng calls RerandomizedOutput::for_pseudo_out, which subtracts the commitment mask from the pseudo-out blind and calls with_commitment_blind. The subtraction moved into that constructor; the prover does the same work. frost_sal.rs's proposer calls it too, behind the multisig feature. Not re-measured; the rows stay stale." },
   { through = "aebf8e3bdf", note = "Multisig slice 3 PR-B, R-13 (aebf8e3bdf): in this path set, shekyl-curve-tree reference.rs's proof_submittable and proof_expired add one block to the tip age before comparing it with the window, and a test sweeps them against CEN-I11. One addition in two predicates no spend path calls; tree build, path assembly and the prover do the same work. Not re-measured; the rows stay stale." },
+  { through = "edfcd5795f", note = "Multisig R-11 (edfcd5795f): in this path set, frost_sal.rs's group-shape check refuses m below MIN_MULTISIG_THRESHOLD (2) where it refused m = 0, and its tests build 2-of-2 groups for 1-of-1. Multisig feature only; tree build, path assembly and the single-signer prover do the same work. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]
