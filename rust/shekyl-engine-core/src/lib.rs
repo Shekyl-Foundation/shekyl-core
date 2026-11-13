@@ -34,7 +34,7 @@ pub use engine::{
     SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
     StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SuppressedClass,
     TracingDiagnosticSink, TxDestination, TxError, TxHash, TxRecipient, TxRecipientSummary,
-    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can
