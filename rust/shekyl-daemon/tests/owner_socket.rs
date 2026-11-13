@@ -50,7 +50,7 @@ fn run_child_if_requested() {
     let dir = PathBuf::from(dir);
     let data_dir = dir.join(data);
     let log_file = data_dir.join("shekyld.log");
-    let socket_dir = dir.join("socket");
+    let socket_dir = dir.join("s");
     let args: Vec<std::ffi::OsString> = [
         "shekyld",
         "--network",
@@ -90,12 +90,13 @@ struct Node {
 }
 
 /// A working directory with its private socket directory, as a harness
-/// makes it.
+/// makes it. Named `s`: under macOS's per-user temporary directory a
+/// longer name leaves the socket's path over the 104-byte limit.
 fn workdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a directory");
     std::fs::DirBuilder::new()
         .mode(0o700)
-        .create(dir.path().join("socket"))
+        .create(dir.path().join("s"))
         .expect("the socket directory");
     dir
 }
@@ -150,7 +151,7 @@ impl Node {
     }
 
     fn socket(&self) -> Option<PathBuf> {
-        std::fs::read_dir(self.dir.join("socket"))
+        std::fs::read_dir(self.dir.join("s"))
             .ok()?
             .filter_map(Result::ok)
             .map(|entry| entry.path())

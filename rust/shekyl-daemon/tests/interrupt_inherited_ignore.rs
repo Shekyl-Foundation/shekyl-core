@@ -88,7 +88,7 @@ fn run_child_if_requested() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        let socket_dir = dir.join("socket");
+        let socket_dir = dir.join("s");
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&socket_dir)

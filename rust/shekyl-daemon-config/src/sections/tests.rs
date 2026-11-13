@@ -816,5 +816,8 @@ fn a_windows_start_refuses_service_until_rt_w14() {
         &["--service", "--data-dir", &abs("/srv/chain")],
         &format!("log-file = '{}'\n", abs("/var/log/s.log")),
     ));
-    assert!(d.contains(&(Code::NameReserved, "service".into())), "{d:?}");
+    assert!(
+        d.contains(&(Code::ServicePlatform, "service".into())),
+        "{d:?}"
+    );
 }

@@ -434,16 +434,16 @@ pub fn build(
 
 /// `service` on Windows: the switch also answers the service manager, and
 /// that dispatcher is RT-W14's (IG-Q105), so until it is built a Windows
-/// start refuses the switch as the reserved row did.
+/// start refuses the switch, naming RT-W14.
 fn windows_service_not_yet(resolved: &Resolved) -> Diagnostic {
     Diagnostic::new(
-        Code::NameReserved,
+        Code::ServicePlatform,
         resolved.source("service").cloned().unwrap_or(Source::Cli),
     )
     .option("service")
     .param(
         "reason",
-        "the Windows service run mode (RPC_CHANNEL.md RT-16), accepted once RT-W14 builds the service-manager dispatcher",
+        "on Windows the service run mode answers the service manager (RPC_CHANNEL.md RT-16), and RT-W14 builds that dispatcher",
     )
 }
 
