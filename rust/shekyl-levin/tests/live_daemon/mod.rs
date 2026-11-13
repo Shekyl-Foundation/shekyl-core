@@ -59,6 +59,8 @@ impl Daemon {
         // names one per daemon (`RPC_CHANNEL.md` §7.1).
         let socket_dir = data_dir.join("socket");
         {
+            // Only the Unix arm below sets a mode.
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
