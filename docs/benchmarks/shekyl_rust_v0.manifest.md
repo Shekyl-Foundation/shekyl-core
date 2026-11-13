@@ -1364,5 +1364,15 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   no longer read (`every_block_path_fixture_replays` refused every
   one). The shapes, sizes and history rule are unchanged. Function
   names, classes and schema version (`shekyl_rust_v0`) unchanged; the
-  counts §§14–15 record stay the 2026-11-12 capture's, and this
-  change's counts follow.
+  counts §§14–15 record stay the 2026-11-12 capture's. The per-PR
+  capture on the new fixtures (#1327 at `d55c49327`, against the
+  rolling baseline at `ddba96485`): `form` 1,827,705,951 /
+  4,934,858,936 / 2,187,558,889 / 1,849,492,351 for `spend_1in_2out`
+  / `spend_8in_2out` / `spend_1in_16out` / `bond_post` (each within
+  0.11 %); `connect` 24,326,535 / 43,587,835 / 34,489,119 / 30,249,301
+  and `pop` 28,491,573 / 76,344,773 / 35,702,337 / 31,776,977 (each
+  within 0.9 %); the block read 146,461 (−0.73 %). The two range reads
+  run over the re-mined history and move past the ±5 % warning, inside
+  the fail band: the header run 478,081 → 450,907 (−5.68 %) and the
+  leaf run 21,399 → 20,312 (−5.08 %). One-time, absorbed by the rolling
+  baseline on the next `dev` rotation.
