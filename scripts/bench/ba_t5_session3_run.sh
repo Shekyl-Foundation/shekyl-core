@@ -167,9 +167,13 @@ sync_height() { grep -oE 'Synced [0-9]+/[0-9]+' "$WORK/syncdata/stdout.log" 2>/d
 
 sync_start() {  # a fresh data directory, then the daemon, then wait until it is syncing
   rm -rf "$WORK/syncdata"; mkdir -p "$WORK/syncdata"
+  # A private directory for the owner's socket: the bench runs beside the
+  # host's own daemon, as the bench's account (RPC_CHANNEL.md §7.1).
+  mkdir -m 0700 "$WORK/syncdata/sock"
   # No inbound (`clearnet-listen none`), one closed peer, Tor off: the
   # grammar's spellings (INPUT_GRAMMAR.md §5).
   local cmd=("$SHEKYLD" --network testnet --data-dir "$WORK/syncdata"
+    --rpc-socket-dir "$WORK/syncdata/sock"
     --clearnet-listen none --tor off
     --rpc-admin-listen "127.0.0.1:$SYNC_RPC" --rpc-view-listen "127.0.0.1:$SYNC_RPC_R"
     --p2p-closed-peer "$PEER" --dev-clearnet-encrypt

@@ -30,4 +30,12 @@ pub struct Platform {
     pub home: Option<PathBuf>,
     /// `%ProgramData%` on Windows; `None` elsewhere.
     pub program_data: Option<PathBuf>,
+    /// The account's per-user session directory, from the platform's own
+    /// interface and never the environment (IG-Q14): `/run/user/<uid>` on
+    /// Linux when the session or linger keeps it, and
+    /// `confstr(_CS_DARWIN_USER_TEMP_DIR)` on macOS. `None` where there is
+    /// none: under `sudo -u`, cron, most containers, a service account,
+    /// FreeBSD, and Windows, whose owner leg is a pipe
+    /// (`RPC_CHANNEL.md` §7.1).
+    pub session_dir: Option<PathBuf>,
 }

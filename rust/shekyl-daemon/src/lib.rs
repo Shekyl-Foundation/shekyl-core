@@ -46,3 +46,34 @@ pub fn main(args: &[std::ffi::OsString]) -> i32 {
     shekyl_process::panic_hook::install();
     run::main(args, &shekyl_process::platform::current())
 }
+
+/// A private session directory under `home` for a test's owner's socket:
+/// mode 0700, as the account's real one is (`RPC_CHANNEL.md` §7.1). `None`
+/// on Windows, whose owner leg is a pipe.
+#[cfg(test)]
+#[cfg_attr(
+    unix,
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "None on Windows, whose owner leg is a pipe"
+    )
+)]
+pub(crate) fn test_session_dir(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = home.join("session");
+        if !dir.is_dir() {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&dir)
+                .expect("a session directory");
+        }
+        Some(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = home;
+        None
+    }
+}

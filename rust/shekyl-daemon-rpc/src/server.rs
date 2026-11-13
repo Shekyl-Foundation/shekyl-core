@@ -197,11 +197,15 @@ where
 /// verification cap ("one cap per daemon, not per listener"), re-made here
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
+///
+/// `owner` is the owner's socket (`RPC_CHANNEL.md` RT-15, §7.1), served at
+/// the owner's authority ([`Authority::owner`]) through the same tracker.
 pub async fn serve_listeners(
     config: ServerConfig,
     submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
+    owner: Option<crate::owner::OwnerListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn_tracker = ConnTracker::new(config.conn_limits);
@@ -252,6 +256,7 @@ pub async fn serve_listeners(
         );
     }
 
+    let owner = owner.map(|listener| (router_at(Authority::owner(config.armed)), listener));
     serve_bound(
         vec![
             (
@@ -261,6 +266,7 @@ pub async fn serve_listeners(
             ),
             (Listener::View, router_at(Authority::VIEW_LISTENER), view),
         ],
+        owner,
         conn_tracker,
         shutdown,
     )
@@ -298,11 +304,30 @@ impl Listener {
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
     sets: Vec<(Listener, Router, Vec<BoundListener>)>,
+    owner: Option<(Router, crate::owner::OwnerListener)>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
+    // Either signal is a stop, and either outcome of each is too (the value
+    // turned true, or its sender is gone). `wait_for` is level-triggered: a
+    // send that happened before this future was first polled is still
+    // observed.
+    let stop_on = |mut stop: watch::Receiver<bool>, mut fail: watch::Receiver<bool>| async move {
+        tokio::select! {
+            _signal = stop.wait_for(|&stop| stop) => {}
+            _signal = fail.wait_for(|&fail| fail) => {}
+        }
+    };
+    if let Some((app, listener)) = owner {
+        let listener = crate::owner::serve_ready(listener)?;
+        serves.spawn(crate::listener_http::serve_plaintext(
+            LimitedListener::new(listener, conn_tracker.clone()),
+            app,
+            stop_on(shutdown.clone(), fail_rx.clone()),
+        ));
+    }
     for (role, app, bound) in sets.into_iter().flat_map(|(role, app, listeners)| {
         listeners
             .into_iter()
@@ -322,21 +347,10 @@ pub(crate) async fn serve_bound(
         // Every accepted connection is admitted through (and accounted in)
         // the one shared tracker.
         let listener = LimitedListener::new(listener, conn_tracker.clone());
-        let mut stop = shutdown.clone();
-        let mut fail = fail_rx.clone();
         serves.spawn(crate::listener_http::serve_plaintext(
             listener,
             app,
-            async move {
-                // Either signal is a stop, and either outcome of each is
-                // too (the value turned true, or its sender is gone).
-                // `wait_for` is level-triggered: a send that happened
-                // before this future was first polled is still observed.
-                tokio::select! {
-                    _signal = stop.wait_for(|&stop| stop) => {}
-                    _signal = fail.wait_for(|&fail| fail) => {}
-                }
-            },
+            stop_on(shutdown.clone(), fail_rx.clone()),
         ));
     }
     first_error_stops_the_rest(&mut serves, &fail_tx).await
@@ -551,7 +565,7 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::{first_error_stops_the_rest, serve_bound, Listener};
+    use super::{first_error_stops_the_rest, gate, serve_bound, Listener};
     use crate::bind::bind_listener;
     use crate::conn_limit::{ConnLimits, ConnTracker};
     use std::time::Duration;
@@ -610,12 +624,73 @@ mod lifecycle_tests {
                 (Listener::Admin, admin, vec![admin_listener]),
                 (Listener::View, router(), vec![view_listener]),
             ],
+            None,
             ConnTracker::new(ConnLimits::default()),
             rx,
         ));
         assert_eq!(status_of(admin_addr, "/admin_only").await, 200);
         assert_eq!(status_of(view_addr, "/admin_only").await, 404);
         assert_eq!(status_of(view_addr, "/").await, 200);
+        tx.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("stops")
+            .expect("joins")
+            .expect("a clean stop is Ok");
+    }
+
+    /// The owner's socket is served beside the TCP listeners, at the
+    /// authority it is given, through the one connection tracker, and stops
+    /// on the same signal. Red edit: drop the owner arm in `serve_bound` and
+    /// the dial finds nothing listening.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_owners_socket_is_served_at_its_authority_through_the_one_tracker() {
+        use crate::authority::Authority;
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("owner.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        // The handler reports the authority the gate stamped.
+        let owner_app = gate(
+            axum::Router::new().route(
+                "/",
+                axum::routing::get(
+                    |axum::Extension(a): axum::Extension<Authority>| async move {
+                        format!("host={} armed={}", a.host(), a.armed_switch())
+                    },
+                ),
+            ),
+            Authority::owner(true),
+        );
+        let tracker = ConnTracker::new(ConnLimits::default());
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let serving = tokio::spawn(serve_bound(
+            vec![(Listener::Admin, router(), two_loopback_listeners().await)],
+            Some((owner_app, listener)),
+            tracker.clone(),
+            rx,
+        ));
+        let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut reply = vec![0u8; 512];
+        let n = stream.read(&mut reply).await.unwrap();
+        let reply = String::from_utf8_lossy(&reply[..n]).into_owned();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.ends_with("host=true armed=true"), "{reply}");
+        assert_eq!(
+            tracker.active_total(),
+            1,
+            "the owner's connection is counted"
+        );
+        drop(stream);
         tx.send_replace(true);
         tokio::time::timeout(Duration::from_secs(5), serving)
             .await
@@ -643,6 +718,7 @@ mod lifecycle_tests {
             Duration::from_secs(5),
             serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ),
@@ -691,6 +767,7 @@ mod lifecycle_tests {
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ));

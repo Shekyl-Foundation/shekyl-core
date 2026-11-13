@@ -123,6 +123,10 @@ rand_chacha = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
+# The owner's socket tests bind in a private directory of their own, and
+# build the plan the walk hands the RPC, whose instance is the channel's.
+tempfile = "3"
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 # `start_paused` for the plaintext header-bound and write-stall tests.
 # Production tokio stays `full` without `test-util`.
 tokio = { version = "1", features = ["full", "test-util"] }

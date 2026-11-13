@@ -83,13 +83,25 @@ pub enum Code {
     BanFileLine,
     /// A runtime set names a row that is not marked runtime.
     RuntimeStartupOnly,
-    /// The service run mode is not available on this platform.
-    ServicePlatform,
     /// The service run mode was asked for outside the service manager.
     ServiceNoManager,
     /// The service run mode's machine-wide root is missing, mis-owned, or
     /// writable outside its permitted principals.
     ServiceRoot,
+    /// A run-as-me daemon has no per-user session directory and was named
+    /// no socket directory (`RPC_CHANNEL.md` §7.1).
+    SocketDirNone,
+    /// The owner's socket directory is not the daemon user's alone, not a
+    /// local directory, or cannot hold a socket.
+    SocketDirUnusable,
+    /// The owner's socket path is longer than the platform's socket limit.
+    SocketPathLong,
+    /// Another daemon of this user, network and instance answers at the
+    /// owner's socket.
+    SocketRunning,
+    /// Something that is not this user's daemon holds the owner's socket
+    /// path.
+    SocketImpostor,
 }
 
 impl Code {
@@ -128,9 +140,13 @@ impl Code {
             Self::BanFileUnreadable => "config.ban-file.unreadable",
             Self::BanFileLine => "config.ban-file.line",
             Self::RuntimeStartupOnly => "config.runtime.startup-only",
-            Self::ServicePlatform => "config.service.platform",
             Self::ServiceNoManager => "config.service.no-manager",
             Self::ServiceRoot => "config.service.root",
+            Self::SocketDirNone => "config.socket-dir.none",
+            Self::SocketDirUnusable => "config.socket-dir.unusable",
+            Self::SocketPathLong => "config.socket-dir.path-long",
+            Self::SocketRunning => "config.socket.running",
+            Self::SocketImpostor => "config.socket.impostor",
         }
     }
 }
@@ -354,14 +370,37 @@ impl Diagnostic {
             Code::RuntimeStartupOnly => format!(
                 "`{opt}` can only be set at startup; change it in the configuration file and restart"
             ),
-            Code::ServicePlatform => format!(
-                "`{opt}` exists only on Windows; on this platform the service manager runs the daemon in the foreground"
-            ),
             Code::ServiceNoManager => format!(
                 "`{opt}` is for the Windows service manager; install the service and start it with the service manager"
             ),
             Code::ServiceRoot => format!(
                 "the service root {} cannot be used: {}; the installer creates it with the right owner and access",
+                p("path"),
+                p("found")
+            ),
+            Code::SocketDirNone => format!(
+                "this account has no session directory ({}) to hold the owner's socket, so a daemon run as this user cannot start here; run it unattended with `--service`, keep this user's session past logout with `loginctl enable-linger`, or name a directory you own with `--rpc-socket-dir`",
+                p("looked")
+            ),
+            Code::SocketDirUnusable => format!(
+                "the owner's socket directory {} cannot be used: {}; it must be a local directory owned by this account with mode 0700",
+                p("path"),
+                p("found")
+            ),
+            Code::SocketPathLong => format!(
+                "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
+                p("path"),
+                p("length"),
+                p("limit")
+            ),
+            Code::SocketRunning => format!(
+                "a daemon for network {}, instance {}, is already running as this user at {}; stop it first, or start this one as a named `--instance` with its own `--data-dir`",
+                p("network"),
+                p("instance"),
+                p("path")
+            ),
+            Code::SocketImpostor => format!(
+                "the owner's socket path {} is held by something that is not this account's daemon ({}); remove it once you know what put it there",
                 p("path"),
                 p("found")
             ),
@@ -458,9 +497,13 @@ mod tests {
             Code::BanFileUnreadable,
             Code::BanFileLine,
             Code::RuntimeStartupOnly,
-            Code::ServicePlatform,
             Code::ServiceNoManager,
             Code::ServiceRoot,
+            Code::SocketDirNone,
+            Code::SocketDirUnusable,
+            Code::SocketPathLong,
+            Code::SocketRunning,
+            Code::SocketImpostor,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for code in all {

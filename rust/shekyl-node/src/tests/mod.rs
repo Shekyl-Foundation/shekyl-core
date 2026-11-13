@@ -254,6 +254,7 @@ fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -
         &Platform {
             home: Some(dir.to_path_buf()),
             program_data: None,
+            session_dir: None,
         },
     )
     .expect("config")

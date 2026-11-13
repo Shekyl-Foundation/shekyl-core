@@ -47,6 +47,20 @@ struct Daemon {
     rpc_port: u16,
 }
 
+/// A private directory for the owner's socket, mode 0700, under the data
+/// directory: a harness names one per daemon (`RPC_CHANNEL.md` §7.1).
+fn private_socket_dir(data_dir: &std::path::Path) -> PathBuf {
+    let dir = data_dir.join("socket");
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).expect("create the socket directory");
+    dir
+}
+
 impl Daemon {
     fn start() -> Self {
         let bin = match std::env::var_os("SHEKYLD_BIN") {
@@ -62,6 +76,7 @@ impl Daemon {
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
+        let socket_dir = private_socket_dir(&data_dir);
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
@@ -81,6 +96,8 @@ impl Daemon {
                 &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
                 "warn",
+                "--rpc-socket-dir",
+                socket_dir.to_str().expect("utf8 socket dir"),
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))

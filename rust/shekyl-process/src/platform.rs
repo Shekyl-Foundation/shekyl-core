@@ -82,6 +82,62 @@ pub fn program_data() -> Option<PathBuf> {
     }
 }
 
+/// The account's per-user session directory, from the platform's own
+/// interface, never `XDG_RUNTIME_DIR` (IG-Q14): `/run/user/<euid>` on Linux
+/// when it is a directory (the session, or linger, keeps it), and
+/// `confstr(_CS_DARWIN_USER_TEMP_DIR)` on macOS. `None` elsewhere and when
+/// absent. What is found is only a candidate: the owner's socket asserts
+/// its owner and mode before binding (`RPC_CHANNEL.md` §7.1).
+#[must_use]
+pub fn session_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: no preconditions; returns the effective user id.
+        let uid = unsafe { libc::geteuid() };
+        let dir = PathBuf::from(format!("/run/user/{uid}"));
+        std::fs::symlink_metadata(&dir)
+            .is_ok_and(|meta| meta.is_dir())
+            .then_some(dir)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        darwin_user_temp_dir()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the per-user, per-boot temporary
+/// directory macOS keeps for the account, with no environment read.
+#[cfg(target_os = "macos")]
+fn darwin_user_temp_dir() -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut buffer = vec![0u8; 1024];
+    // SAFETY: `buffer` is a live allocation of the length passed; `confstr`
+    // writes at most that many bytes, NUL included, and returns the length
+    // it needs.
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast::<libc::c_char>(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return None;
+    }
+    // `needed` counts the terminating NUL.
+    buffer.truncate(needed - 1);
+    let dir = PathBuf::from(OsStr::from_bytes(&buffer));
+    // The interface's spelling ends in a separator; the directory is the
+    // same without it.
+    Some(dir.components().collect())
+}
+
 /// This account's and this machine's roots, as the daemon's configuration
 /// takes them: the one constructor the daemon's start, the snapshot export
 /// and the utilities' default data directory share.
@@ -90,6 +146,7 @@ pub fn current() -> shekyl_daemon_config::Platform {
     shekyl_daemon_config::Platform {
         home: account_home(),
         program_data: program_data(),
+        session_dir: session_dir(),
     }
 }
 
@@ -99,6 +156,25 @@ mod tests {
 
     /// The passwd home is absolute and exists for the account the tests
     /// run under; it is read without consulting `HOME`.
+    /// On Linux the session directory is `/run/user/<euid>`, or none; it is
+    /// never what `XDG_RUNTIME_DIR` says. The test sets that variable to a
+    /// directory that exists and is not the session directory.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_session_directory_is_the_uids_and_not_the_environments() {
+        let elsewhere = tempfile::tempdir().expect("a directory");
+        // SAFETY: test-only; no other thread in this test binary reads the
+        // environment while this test runs (the crate's tests read none).
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", elsewhere.path()) };
+        // SAFETY: no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let expected = PathBuf::from(format!("/run/user/{uid}"));
+        match session_dir() {
+            Some(found) => assert_eq!(found, expected),
+            None => assert!(!expected.is_dir(), "{} exists", expected.display()),
+        }
+    }
+
     #[test]
     fn the_passwd_home_is_an_absolute_existing_directory() {
         let home = account_home().expect("the test account has a passwd entry");

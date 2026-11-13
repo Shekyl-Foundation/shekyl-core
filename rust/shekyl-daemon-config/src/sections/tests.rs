@@ -41,6 +41,7 @@ fn platform() -> Platform {
     Platform {
         home: Some(PathBuf::from(abs("/srv/op"))),
         program_data: None,
+        session_dir: None,
     }
 }
 
@@ -738,4 +739,82 @@ fn a_crlf_file_builds_what_its_lf_twin_builds() {
         "{:?}",
         refused[0].source
     );
+}
+
+/// A named instance is a second node and keeps its own state, so it names
+/// its own data directory (`RPC_CHANNEL.md` §7.1). Red edit: drop the
+/// `given("data-dir")` check and the first assertion fails.
+#[test]
+fn a_named_instance_needs_its_own_data_directory() {
+    assert_eq!(
+        codes(build_from(&["--instance", "bench"], "")),
+        vec![(Code::ValueRequires, "instance".into())]
+    );
+    let c = build_from(
+        &["--instance", "bench", "--data-dir", &abs("/srv/bench")],
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        c.rpc.instance,
+        shekyl_rpc_channel::Instance::Named(
+            shekyl_rpc_channel::InstanceName::parse("bench").unwrap()
+        )
+    );
+    assert_eq!(
+        build_from(&[], "").unwrap().rpc.instance,
+        shekyl_rpc_channel::Instance::Default
+    );
+}
+
+/// The instance name's rule is the channel crate's, and `default` names
+/// the default instance (`RPC_CHANNEL.md` §7.1).
+#[test]
+fn an_instance_name_outside_the_rule_is_refused_at_parse() {
+    for bad in ["default", "Bench", "-bench", "a_b", "seventeen-chars-x"] {
+        let refused =
+            build_from(&["--instance", bad, "--data-dir", &abs("/srv/bench")], "").expect_err(bad);
+        assert_eq!(refused.len(), 1, "{bad}");
+        assert_eq!(refused[0].code, Code::ValueRange, "{bad}");
+        assert_eq!(refused[0].option.as_deref(), Some("instance"), "{bad}");
+    }
+}
+
+/// A service serves no owner socket, so a socket directory with `service`
+/// is refused rather than ignored (IG-Q105). Red edit: drop the conflict and
+/// the service start builds.
+#[cfg(not(windows))]
+#[test]
+fn a_service_is_given_no_socket_directory() {
+    let paths = [
+        "--data-dir",
+        "/var/lib/shekyl",
+        "--log-file",
+        "/var/log/shekyl/shekyld.log",
+    ];
+    let mut with_dir = vec!["--service", "--rpc-socket-dir", "/run/shekyl"];
+    with_dir.extend(paths);
+    assert_eq!(
+        codes(build_from(&with_dir, "")),
+        vec![(Code::ValueConflict, "rpc-socket-dir".into())]
+    );
+    let mut service = vec!["--service"];
+    service.extend(paths);
+    let c = build_from(&service, "").unwrap();
+    assert_eq!(c.run_mode, RunMode::Service);
+    assert_eq!(c.rpc.socket_dir, None);
+    let c = build_from(&["--rpc-socket-dir", "/run/shekyl"], "").unwrap();
+    assert_eq!(c.rpc.socket_dir, Some(PathBuf::from("/run/shekyl")));
+}
+
+/// On Windows `service` also answers the service manager, whose dispatcher
+/// is RT-W14's, so the switch is refused there as the reserved row was.
+#[cfg(windows)]
+#[test]
+fn a_windows_start_refuses_service_until_rt_w14() {
+    let d = codes(build_from(
+        &["--service", "--data-dir", &abs("/srv/chain")],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
+    ));
+    assert!(d.contains(&(Code::NameReserved, "service".into())), "{d:?}");
 }

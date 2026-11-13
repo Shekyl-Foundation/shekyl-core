@@ -140,6 +140,22 @@ fn instance_names_follow_the_rule() {
     assert!(InstanceName::parse(&"a".repeat(INSTANCE_NAME_MAX)).is_ok());
 }
 
+/// The refusal's words carry the rule's numbers: the length limit and the
+/// reserved label, so a change to either changes what an operator reads.
+#[test]
+fn the_refusal_states_the_rule_it_enforces() {
+    let length = InstanceNameError::TooLong.rule();
+    assert!(
+        length.contains(&format!("1 to {INSTANCE_NAME_MAX} ")),
+        "{length}"
+    );
+    let reserved = InstanceNameError::Reserved.rule();
+    assert!(
+        reserved.contains(&format!("`{DEFAULT_INSTANCE_LABEL}`")),
+        "{reserved}"
+    );
+}
+
 /// The default instance and a named one never share a rendezvous, and
 /// neither does one name on two networks.
 #[test]
