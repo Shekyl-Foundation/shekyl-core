@@ -57,6 +57,8 @@ pub async fn dispatch(
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
         "abandon_tx" => send::abandon_tx(tenants, params).await,
+        "tx_alarm" => send::tx_alarm(tenants, params).await,
+        "tx_resend" => send::tx_resend(tenants, params).await,
         "set_tx_note" => notes::set_tx_note(tenants, params).await,
         "get_tx_note" => notes::get_tx_note(tenants, params).await,
         // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no

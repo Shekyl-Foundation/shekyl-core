@@ -32,7 +32,7 @@ pub use engine::{
     RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
     RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
     SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
-    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SuppressedClass,
+    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
     TracingDiagnosticSink, TxDestination, TxError, TxHash, TxRecipient, TxRecipientSummary,
     TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
 };

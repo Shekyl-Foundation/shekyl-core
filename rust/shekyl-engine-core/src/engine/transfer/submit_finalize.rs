@@ -63,21 +63,18 @@ where
         id: ReservationId,
         tx_hash: TxHash,
     ) -> TxHash {
-        // §5.3 decision 2: retain the network-exposed bytes for the
-        // watchdog's rung-1 resubmit-same-bytes probe before the in-flight
-        // record (their only holder) is dropped. Ephemeral — a restart
-        // drops the map and the probe rung degrades to the operator alarm.
+        // The network-exposed bytes the watchdog's rung-1 probe re-offers
+        // were saved on the journal row at dispatch (A19), so dropping the
+        // in-flight entry loses nothing.
         //
         // WI-RPC-3 retention: nothing to write here — the record was
-        // persisted at dispatch (pin 1, dispatch form), keyed by the
+        // saved at dispatch (pin 1, dispatch form), keyed by the
         // canonical txid of the bytes; dropping the entry wipes the
         // runtime copy of the secret. (A daemon returning a hash that
         // differs from the canonical txid would leave the record
         // pending under the canonical key — safe direction, the proof
         // stays servable for the tx actually broadcast.)
-        if let Some(flight) = state.in_flight.remove(&id) {
-            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
-        }
+        state.in_flight.remove(&id);
         release_output_locks_for(state, id);
         // F28/F37: a definite accept ends any consecutive-rejection streak
         // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
@@ -145,17 +142,15 @@ where
         tx_hash: TxHash,
         height: u64,
     ) -> TxHash {
-        // §5.3 decision 2: retain the network-exposed bytes for the
-        // watchdog probe (see the accept path). The AlreadyInChain arm
-        // holds too, so a fruitless-re-scan escalation can fall through to
-        // the F31 resubmit-as-status-query with the original bytes.
+        // The AlreadyInChain arm holds too, so a fruitless-re-scan
+        // escalation can fall through to the F31 resubmit-as-status-query
+        // with the original bytes — saved on the journal row at dispatch
+        // (A19), so dropping the in-flight entry loses nothing.
         //
         // WI-RPC-3 retention: as on the accept path, the record was
-        // persisted at dispatch — an AlreadyInChain verdict changes the
+        // saved at dispatch — an AlreadyInChain verdict changes the
         // lock baseline, not the retention record.
-        if let Some(flight) = state.in_flight.remove(&id) {
-            state.held_bytes.insert(tx_hash, flight.entry.tx_bytes);
-        }
+        state.in_flight.remove(&id);
         release_output_locks_for(state, id);
         // F28/F37: a definite identity-bearing verdict ends any
         // consecutive-rejection streak, same as a fresh accept.

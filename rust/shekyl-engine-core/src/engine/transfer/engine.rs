@@ -21,6 +21,7 @@ use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
     PendingTxDiagnostic,
 };
+use super::super::dispatch_durability::{commit_dispatch, LedgerCommit};
 use super::super::error::{
     OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
 };
@@ -184,6 +185,17 @@ where
     pub(crate) submit_daemon_outcome: Mutex<Option<Result<SubmitSuccess, SubmitterError>>>,
 }
 
+/// What a dispatch records, gathered under the state lock at the flip and
+/// written under the ledger guard by `commit_dispatch` (A19).
+struct DispatchFacts {
+    txid: TxHash,
+    fee: u64,
+    tx_bytes: Vec<u8>,
+    selected: Vec<OutputId>,
+    retained: shekyl_engine_state::TxSecretKey,
+    recipients: Vec<shekyl_engine_state::SendRecipient>,
+}
+
 pub(super) struct BuiltPendingMeta {
     pub(super) fee: AtomicUnits,
     pub(super) selected: SelectedOutputs,
@@ -326,31 +338,55 @@ where
         )
     }
 
-    /// Look up the retained network-exposed bytes for `tx_hash` (§5.3
-    /// decision 2), cloned for the watchdog's resubmit-same-bytes probe.
-    /// `None` means the bytes are gone — a restart crossed the await, or
-    /// the tx already left the held projection and was pruned — and the
-    /// probe rung degrades to the operator alarm.
+    /// The saved network-exposed bytes of the held send `tx_hash`, cloned
+    /// for the watchdog's resubmit-same-bytes probe. They live on the
+    /// send's journal row, saved at dispatch (A19), so they survive a
+    /// restart; `None` only for a row that holds none
+    /// ([`SendRecord::tx_bytes`](shekyl_engine_state::SendRecord::tx_bytes)).
     pub(crate) fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>> {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .get(tx_hash)
-            .cloned()
+        self.ledger.with_wallet_ledger(|wallet| {
+            wallet
+                .send_journal
+                .tx_bytes(&tx_hash.to_bytes())
+                .map(<[u8]>::to_vec)
+        })
     }
 
-    /// Prune retained probe bytes down to the live held-projection set
-    /// `live` (decision 2: "prune when the hash leaves the held
-    /// projection"). The driver calls this after projecting
-    /// `held_submits` so confirmed / released txs do not retain their
-    /// bytes indefinitely.
-    pub(crate) fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
+    /// Drop the saved bytes of every send that can no longer need them
+    /// ([`SendJournalBlock::prune_settled_tx_bytes`](shekyl_engine_state::SendJournalBlock::prune_settled_tx_bytes)):
+    /// by row state, with confirmations kept until they are deeper than the
+    /// wallet's reorg margin. Re-derivable housekeeping: it rides the next
+    /// save.
+    pub(crate) fn prune_settled_send_bytes(&self) {
+        let margin = shekyl_engine_state::WalletSafetyConstants::DEFAULTS
+            .max_reorg_depth
+            .to_raw();
+        self.ledger.with_wallet_ledger_mut(|wallet| {
+            let synced = wallet.ledger.height();
+            wallet.send_journal.prune_settled_tx_bytes(synced, margin);
+        });
+    }
+
+    /// Whether `tx_hash` was dispatched (or resent by the user) in this
+    /// session. A held send outside this set was dispatched before a
+    /// restart: the watchdog does not resend it on its own (§5.3).
+    pub(crate) fn dispatched_this_session(&self, tx_hash: &TxHash) -> bool {
         self.state
             .lock()
             .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .retain(|tx_hash, _| live.contains(tx_hash));
+            .dispatched_this_session
+            .contains(tx_hash)
+    }
+
+    /// Record the user's decision to resend the held send `tx_hash`: from
+    /// here this session owns it, and the watchdog's automatic rung 1
+    /// applies to it again.
+    pub(crate) fn adopt_into_session(&self, tx_hash: TxHash) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .dispatched_this_session
+            .insert(tx_hash);
     }
 
     pub(super) fn build_select_sync(
@@ -1348,10 +1384,11 @@ where
         }))
     }
 
-    pub(super) async fn submit_async(
+    pub(super) async fn submit_async<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
+        commit: &C,
     ) -> Result<SubmitOutcome, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
@@ -1414,8 +1451,8 @@ where
             }
         }
 
-        // --- broadcast gate (sync): content_gen consent + atomic flip, then send ---
-        let tx_bytes = {
+        // --- broadcast gate (sync): content_gen consent + atomic flip ---
+        let dispatch = {
             let mut state = self
                 .state
                 .lock()
@@ -1455,74 +1492,35 @@ where
             }
 
             // Consent satisfied. Move the entry out of `consumer_held` and flip it
-            // to `in_flight` atomically under the lock, then send lock-free —
-            // "committed as of" the flip (F-H). The lock is held continuously
-            // since the peek above (no await), so the entry is still present.
+            // to `in_flight` atomically under the lock (F-H): from here a
+            // concurrent submit is `SubmitAlreadyPending` and a discard is
+            // refused, so the save below can run without the state lock.
             // `in_flight` preserves the *whole* entry (re-anchor substrate
-            // included) so a §2.5 retryable rejection can restore it to
-            // `consumer_held` losslessly; one `tx_bytes` clone moves on to the
-            // send.
+            // included) so a failed save or a §2.5 retryable rejection can
+            // restore it to `consumer_held` losslessly.
             let held = state
                 .consumer_held
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
-            let tx_bytes = held.tx_bytes.clone();
-
-            // WI-RPC-3 retention (OUTBOUND PREREQUISITE pin 1, dispatch
-            // form): persist the per-tx secret BEFORE the bytes can
-            // leave for the daemon. The accept verdict is an
-            // *observation* about network exposure, not its start — a
-            // crash or dropped connection between this send and the
-            // verdict leaves a tx the network may still mine, and a
-            // secret that lived only in the runtime `in_flight` map
-            // died with the process, permanently disabling the OUTBOUND
-            // proof for a payment that settles normally. Definite
-            // refusals (terminal / retryable — provably unrelayed under
-            // single-egress, §2.5) retire the record in their
-            // finalizers, so a never-accepted build still leaves no
-            // residue; accept / already-in-chain / ambiguous / crash
-            // keep it.
-            //
-            // Second copy, accounted: from here the persisted record is
-            // the durable holder; the runtime copy stays on the entry
-            // only so a §2.5 retryable restoration can re-dispatch, and
-            // is wiped when the entry drops (`TxSecretKey` is
-            // zeroize-on-drop).
-            let dispatch_txid = canonical_tx_id(&held.tx_bytes);
-            // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
-            // read from the wire bytes — the same cleartext value the
-            // chain sees — never an estimator output. Wallet-built bytes
-            // are canonical wire by construction (the `canonical_tx_id`
-            // contract).
-            let realized_fee = wire_fee(&held.tx_bytes);
             let selected: Vec<OutputId> = state
                 .output_locks
                 .iter()
                 .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
                 .collect();
-            let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                *held.tx_key_secret.as_bytes(),
-            ));
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
-                // PR-SJ-1: the journal row is born in the same guard as
-                // the retention record — dispatch facts persist
-                // atomically, before the bytes can reach the daemon
-                // (pin-1 dispatch form). C2: the journal owns these
-                // facts; the F14 field is the derived cache.
-                let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
-                    .iter()
-                    .map(|&idx| {
-                        let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
-                            panic!("dispatch: output_locks references missing transfer index {idx}")
-                        });
-                        shekyl_engine_state::SendInputRef {
-                            gindex: td.global_output_index.to_raw(),
-                            amount: td.amount().to_raw(),
-                        }
-                    })
-                    .collect();
-                let recipients = held
+            let dispatch = DispatchFacts {
+                txid: canonical_tx_id(&held.tx_bytes),
+                // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
+                // read from the wire bytes — the same cleartext value the
+                // chain sees — never an estimator output. Wallet-built bytes
+                // are canonical wire by construction (the `canonical_tx_id`
+                // contract).
+                fee: wire_fee(&held.tx_bytes),
+                tx_bytes: held.tx_bytes.clone(),
+                selected,
+                retained: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
+                    *held.tx_key_secret.as_bytes(),
+                )),
+                recipients: held
                     .request
                     .recipients
                     .iter()
@@ -1531,23 +1529,108 @@ where
                         amount: r.amount_atomic_units.to_raw(),
                         rid: r.rid,
                     })
-                    .collect();
-                wallet.record_dispatched_send(
-                    dispatch_txid.to_bytes(),
-                    realized_fee,
-                    recipients,
-                    inputs,
-                );
-            });
-
-            let submitted_at = Instant::now();
+                    .collect(),
+            };
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
                     entry: held,
-                    submitted_at,
+                    submitted_at: Instant::now(),
                 },
             );
+            dispatch
+        };
+
+        // --- save before send (A19; WI-RPC-3 pin 1, dispatch form) ---
+        //
+        // The accept verdict is an *observation* about network exposure,
+        // not its start: a crash, a kill or a dropped connection between
+        // the send and the verdict leaves a tx the network may still mine.
+        // So the journal row (with the signed bytes), the retained per-tx
+        // secret (the OUTBOUND proof) and the input set the F14 lock holds
+        // are written and the whole ledger saved, under one write guard,
+        // before the bytes can leave; only that save mints the
+        // `DurableTxBytes` the submitter requires. Definite refusals
+        // (terminal / retryable — provably unrelayed under single-egress,
+        // §2.5) retire the record in their finalizers, so a never-accepted
+        // build still leaves no secret residue.
+        //
+        // Second copy of the secret, accounted: from here the saved record
+        // is the durable holder; the runtime copy stays on the in-flight
+        // entry only so a §2.5 retryable restoration can re-dispatch, and
+        // is wiped when the entry drops (`TxSecretKey` is zeroize-on-drop).
+        let DispatchFacts {
+            txid: dispatch_txid,
+            fee: realized_fee,
+            tx_bytes,
+            selected,
+            retained,
+            recipients,
+        } = dispatch;
+        let durable = self.ledger.with_wallet_ledger_mut(|wallet| {
+            commit_dispatch(
+                wallet,
+                commit,
+                dispatch_txid.to_bytes(),
+                tx_bytes.clone(),
+                |wallet| {
+                    wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
+                    // PR-SJ-1: the journal row is born in the same guard as
+                    // the retention record. C2: the journal owns these
+                    // facts; the F14 lock set is derived from them.
+                    let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
+                        .iter()
+                        .map(|&idx| {
+                            let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
+                                panic!(
+                                    "dispatch: output_locks references missing transfer index {idx}"
+                                )
+                            });
+                            shekyl_engine_state::SendInputRef {
+                                gindex: td.global_output_index.to_raw(),
+                                amount: td.amount().to_raw(),
+                            }
+                        })
+                        .collect();
+                    wallet.record_dispatched_send(
+                        dispatch_txid.to_bytes(),
+                        realized_fee,
+                        recipients,
+                        inputs,
+                        tx_bytes,
+                    );
+                },
+            )
+        });
+
+        let durable = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            let durable = match durable {
+                Ok(durable) => durable,
+                Err(source) => {
+                    // Nothing left the wallet and the record is undone: the
+                    // reservation goes back to `consumer_held` with its output
+                    // locks, exactly as before the flip.
+                    if let Some(flight) = state.in_flight.remove(&id) {
+                        state.consumer_held.insert(id, flight.entry);
+                    }
+                    emit_pending_tx_diagnostic(
+                        self.sink.as_ref(),
+                        PendingTxDiagnostic::SubmitNotSaved { reservation_id: id },
+                    );
+                    return Err(SubmitError::DispatchNotSaved {
+                        reservation_id: id,
+                        source,
+                    });
+                }
+            };
+            // Dispatched in this session: the watchdog may resend these bytes
+            // on its own (rung 1). A held send outside this set was dispatched
+            // before a restart, and resending it is the user's decision (§5.3).
+            state.dispatched_this_session.insert(dispatch_txid);
 
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
@@ -1555,21 +1638,21 @@ where
             );
 
             if let Some(outcome) = self.take_queued_submit_outcome() {
-                // Test-injected daemon reply: same finalization as the
-                // production dispatch below, through the same two methods,
-                // so the injected path cannot certify a projection the real
-                // one does not perform.
+                // Test-injected daemon reply: same save, same finalization as
+                // the production dispatch below, through the same methods, so
+                // the injected path cannot certify a projection the real one
+                // does not perform. The durable bytes are dropped unsent.
+                drop(durable);
                 return match outcome {
                     Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
                     Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
                 };
             }
-
-            tx_bytes
+            durable
         };
 
         let submitter = Arc::clone(&self.submitter);
-        let success = match submitter.submit(tx_bytes).await {
+        let success = match submitter.submit(durable).await {
             Ok(success) => success,
             Err(submit_err) => {
                 let mut state = self
@@ -1710,7 +1793,8 @@ where
             in_flight: HashMap::new(),
             next_id: 0,
             loop_breaker: SubmitLoopBreaker::default(),
-            held_bytes: HashMap::new(),
+            dispatched_this_session: HashSet::new(),
+            raised_alarms: HashMap::new(),
             rescan_queue: Vec::new(),
         });
         Self {

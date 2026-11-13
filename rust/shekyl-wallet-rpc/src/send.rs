@@ -21,7 +21,7 @@ use shekyl_units::AtomicUnitsString;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_hex32, parse_required_object, parse_rid};
-use crate::project::{pending_tx_result, submit_pending_tx_result};
+use crate::project::{pending_tx_result, submit_pending_tx_result, tx_alarm_view};
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{AbandonTxResult, DiscardPendingTxResult, TransferState};
 
@@ -67,6 +67,12 @@ struct DiscardPendingTxParams {
 #[derive(Debug, Deserialize)]
 struct AbandonTxParams {
     tx_hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TxResendParams {
+    id: String,
 }
 
 pub(crate) async fn build_pending_tx(
@@ -190,6 +196,47 @@ pub(crate) async fn abandon_tx(
     };
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize abandon_tx: {e}")))
+}
+
+/// `tx_alarm` (A19): the held sends that need the user's decision —
+/// every held send sent before this session, and every one the watchdog
+/// has alarmed on in it. Derived from the saved journal each time; the
+/// reply is the list itself (Part C: a `list`-shaped read).
+pub(crate) async fn tx_alarm(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    crate::params::require_empty_object(params, "tx_alarm")?;
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+    let sends: Vec<_> = engine.held_sends().iter().map(tx_alarm_view).collect();
+    serde_json::to_value(sends)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize tx_alarm: {e}")))
+}
+
+/// `tx_resend` (A19): resend a held send's saved bytes, by the user's
+/// decision, and answer the daemon's verdict exactly as
+/// `submit_pending_tx` does — the same result, and the same `-29106` /
+/// `-29107` refusals. From here the session owns the send.
+pub(crate) async fn tx_resend(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: TxResendParams = parse_required_object(params, "tx_resend")?;
+    let txid = parse_hex32(&p.id).ok_or_else(|| {
+        WalletRpcError::InvalidParams(
+            shekyl_wallet_contract::canonical_hex::invalid_hex32_message("id"),
+        )
+    })?;
+    let shared = require_open_engine(tenants).await?;
+    let engine = shared.read().await;
+    let outcome = engine.resend_held_send(TxHash::from_bytes(txid)).await?;
+    let result = submit_pending_tx_result(&shekyl_engine_core::SubmitReceipt {
+        outcome,
+        verdict_saved: true,
+    });
+    serde_json::to_value(result)
+        .map_err(|e| WalletRpcError::InternalError(format!("serialize tx_resend: {e}")))
 }
 
 fn parse_fee_priority(p: FeePriorityParams) -> Result<FeePriority, WalletRpcError> {

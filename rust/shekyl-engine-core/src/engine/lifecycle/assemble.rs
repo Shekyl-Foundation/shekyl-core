@@ -46,6 +46,23 @@ impl Engine<SoloSigner> {
     ) -> Result<Self, OpenError> {
         let state_wrap_key = crate::engine::sealing_keys::state_wrap_key_from_wallet_file(&file);
 
+        // A19: a send whose verdict never arrived — the process ended
+        // between its dispatch save and the verdict — may already be on the
+        // network. Lock its inputs as an accept would have (§2.6 fund
+        // safety; the §7.1 same-key-image self-link), so it is held: the
+        // watchdog sees it, and since this session did not dispatch it,
+        // resending is the user's decision. Nothing is in flight before the
+        // engine exists, so no row this stamps belongs to this session.
+        // In-memory; re-derived at every open until a save writes it.
+        let unverdicted = ledger.send_journal.lock_unverdicted_dispatches();
+        if unverdicted > 0 {
+            tracing::warn!(
+                unverdicted,
+                "open: sends whose daemon verdict never arrived are held; resending them is \
+                 the user's decision (held sends)"
+            );
+        }
+
         // SP-R0 open-time staking reconciliation (arms #2 retired GC, #3
         // phantom GC, #4 SA-5 monotone raise) — before the persona derive.
         // The raise's interesting slots sit *outside* the bonded hint (a

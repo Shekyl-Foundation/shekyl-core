@@ -5,10 +5,11 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::engine::{HeldSend, WatchdogAlarmReason};
 use shekyl_engine_core::BalanceView;
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
-use shekyl_engine_core::SubmitOutcome;
+use shekyl_engine_core::{SubmitOutcome, SubmitReceipt};
 use shekyl_engine_state::{
     DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
 };
@@ -19,7 +20,7 @@ use crate::error::WalletRpcError;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
     RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
-    TransferDirection, TransferState, TransferView,
+    TransferDirection, TransferState, TransferView, TxAlarmCause, TxAlarmView,
 };
 
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
@@ -290,24 +291,53 @@ pub fn rescan_result(summary: &RefreshSummary, synced_height: i64) -> RescanBloc
 /// field exists only on `SubmitPendingTxResult` (structurally — no
 /// refresh-populated view shares it), so a client cannot mistake it
 /// for a refresh-observed confirmation.
-pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResult {
+///
+/// `verdict_saved` is the receipt's (A19): `false` when the send stands
+/// but saving what its verdict changed failed.
+pub fn submit_pending_tx_result(receipt: &SubmitReceipt) -> SubmitPendingTxResult {
+    let outcome = &receipt.outcome;
     let tx_hash = outcome.hash().to_string();
+    let verdict_saved = receipt.verdict_saved;
     match outcome {
         SubmitOutcome::Accepted { .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::Accepted,
             confirmed_height: None,
         },
         SubmitOutcome::AlreadyInPool { .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::AlreadyInPool,
             confirmed_height: None,
         },
         SubmitOutcome::AlreadyInChain { height, .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::AlreadyInChain,
             confirmed_height: Some(i64::try_from(*height).unwrap_or(i64::MAX)),
         },
+    }
+}
+
+/// Project one held send to `tx_alarm`'s element. The one mapping from the
+/// engine's alarm reasons to the contract's keywords; exhaustive, so a new
+/// reason cannot reach the wire unnamed.
+pub fn tx_alarm_view(send: &HeldSend) -> TxAlarmView {
+    let alarm = match send.alarm {
+        WatchdogAlarmReason::DispatchedBeforeThisSession => TxAlarmCause::EarlierSession,
+        WatchdogAlarmReason::HeldOverdue => TxAlarmCause::Overdue,
+        WatchdogAlarmReason::OriginUntracked => TxAlarmCause::Untracked,
+        WatchdogAlarmReason::PublishedUnmined => TxAlarmCause::PublishedPastLookback,
+        WatchdogAlarmReason::DaemonPeerless => TxAlarmCause::Peerless,
+        WatchdogAlarmReason::DaemonOffline => TxAlarmCause::Offline,
+        WatchdogAlarmReason::ReferenceStaleNeedsRebuild => TxAlarmCause::ReferenceStale,
+        WatchdogAlarmReason::HeldBytesMissing => TxAlarmCause::BytesMissing,
+    };
+    TxAlarmView {
+        id: send.tx_hash.to_string(),
+        alarm,
+        sent_height: i64::try_from(send.sent_height.to_raw()).unwrap_or(i64::MAX),
     }
 }
 

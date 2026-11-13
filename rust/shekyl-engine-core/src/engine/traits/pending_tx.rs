@@ -101,6 +101,7 @@
 use std::future::Future;
 
 use crate::engine::diagnostics::DiscardReason;
+use crate::engine::dispatch_durability::LedgerCommit;
 use crate::engine::error::{PendingTxError, SendError, SubmitError};
 use crate::engine::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
 
@@ -277,10 +278,17 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// with its claimed height. All three share the §2.5 lock disposition
     /// — the verdict informs the consumer, it never changes what the
     /// engine does with the reservation or the F14 lock.
-    fn submit(
+    ///
+    /// `commit` is the durable-save capability the engine lends for this
+    /// one call (A19): the dispatch record is saved through it before the
+    /// bytes can leave ([`commit_dispatch`](crate::engine::dispatch_durability::commit_dispatch)),
+    /// and a failed save returns [`SubmitError::DispatchNotSaved`] with
+    /// nothing sent.
+    fn submit<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
+        commit: &C,
     ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send;
 
     /// Discard the named reservation with an explicit reason.

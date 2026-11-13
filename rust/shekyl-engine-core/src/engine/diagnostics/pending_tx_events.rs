@@ -220,10 +220,13 @@ pub enum DiscardReason {
 /// enum, no `String` payload (PR 4 §5.4.7 R6 memory-amplifier closure
 /// carries to the watchdog stream verbatim).
 ///
-/// The kernel's reasons come first. The last two are driver-level
-/// conditions the kernel cannot represent. The `#[non_exhaustive]`
-/// discipline lets a later executor add its own alarm reasons.
-#[non_exhaustive]
+/// The kernel's reasons come first. The last three are driver-level
+/// conditions the kernel cannot represent.
+///
+/// Exhaustive on purpose: since A19 each reason reaches the user through
+/// the wallet contract (`tx_alarm`), and a reason the contract had to fold
+/// into a catch-all would tell the user nothing. A new reason is a new
+/// contract keyword in the same change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WatchdogAlarmReason {
     /// The daemon still holds the transaction past its own publication
@@ -251,12 +254,22 @@ pub enum WatchdogAlarmReason {
     DaemonOffline,
 
     /// The kernel called for the rung-1 resubmit-same-bytes probe, but
-    /// the retained bytes are gone — a wallet restart crossed the await
-    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 decision 2, ephemeral held-bytes
-    /// store). The probe rung degrades to the operator-alarm rung,
-    /// preserving §2.6's "every exit is verdict, confirmation, or
-    /// operator alarm."
-    ProbeBytesUnavailable,
+    /// the send was dispatched before this session: a restart crossed the
+    /// await. Its bytes are saved, but resending them — perhaps to a
+    /// different daemon than the one they went to — is the user's
+    /// decision, not the watchdog's (A19; the held-bytes reversion
+    /// clause's auto-versus-confirm axis stays closed). The probe rung
+    /// becomes the operator-alarm rung, preserving §2.6's "every exit is
+    /// verdict, confirmation, or operator alarm"; the user resends
+    /// (`resend_held_send`) or abandons (`abandon_tx`).
+    DispatchedBeforeThisSession,
+
+    /// The kernel called for the probe, but the held send's journal row
+    /// holds no bytes to re-offer: a `PresumedDead` row the user then
+    /// abandoned, or a confirmation pruned past the reorg margin that a
+    /// deeper reorg undid. Nothing can be resent; the user abandons the
+    /// send or waits for refresh to settle it.
+    HeldBytesMissing,
 
     /// The probe was rejected with a **retryable** cause
     /// ([`RetryableRejectCause`]: stale root / reference too recent /
@@ -321,7 +334,8 @@ pub enum WatchdogProbeOutcome {
 /// | `BuildAttempted` | C5 `LocalPendingTx::build` entry, after request validation. |
 /// | `BuildSucceeded` | C5 `LocalPendingTx::build` exit, after `Reservation` + `output_locks` inserted (P7-atomic). |
 /// | `BuildFailed` | C5 `LocalPendingTx::build` error paths; mapped from [`SendError`](crate::engine::error::SendError) via [`BuildErrorKind`]. |
-/// | `SubmitAttempted` | C5 `LocalPendingTx::submit` entry, after F2 ownership-boundary dispatch. |
+/// | `SubmitAttempted` | C5 `LocalPendingTx::submit`, once the dispatch record is saved and before the bytes leave. |
+/// | `SubmitNotSaved` | `LocalPendingTx::submit`, when the dispatch save failed and nothing was sent (A19). |
 /// | `SubmitSucceeded` | C5 `LocalPendingTx::submit` happy-path exit; paired with daemon-`Accepted` outcome. |
 /// | `SubmitPendingResolution` | C5 `LocalPendingTx::submit` ambiguous-daemon-outcome exit; reservation stays in `in_flight` per F2 ownership-boundary. |
 /// | `SubmitSnapshotInvalidated` | C5 `LocalPendingTx::submit` lazy-R5 staleness-check exit before daemon dispatch. |
@@ -394,6 +408,13 @@ pub enum PendingTxDiagnostic {
     /// entry after F2 ownership-boundary dispatch.
     SubmitAttempted {
         /// The reservation the consumer asked to submit.
+        reservation_id: ReservationId,
+    },
+
+    /// A19: the dispatch record could not be saved, so the submit sent
+    /// nothing; the reservation is back in `consumer_held`.
+    SubmitNotSaved {
+        /// The reservation whose submit was refused.
         reservation_id: ReservationId,
     },
 

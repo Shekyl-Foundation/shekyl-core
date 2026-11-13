@@ -13,6 +13,7 @@ use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
 use super::bond_assembly::PBoundBytes;
+use super::dispatch_durability::DurableTxBytes;
 use super::error::{AmbiguousErrorKind, CenRowName, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
 use super::posture::BroadcastPosture;
@@ -282,10 +283,14 @@ fn submitter_error_from_cause(cause: &Rejection) -> SubmitterError {
 }
 
 /// Broadcast signed transaction bytes to the network.
+///
+/// Takes [`DurableTxBytes`], not raw bytes: a caller can only hand over
+/// bytes whose record is already durably on disk
+/// ([`dispatch_durability`](super::dispatch_durability), A19).
 pub(crate) trait TransactionSubmitter: Send + Sync + 'static {
     fn submit(
         &self,
-        tx_bytes: Vec<u8>,
+        tx: DurableTxBytes,
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, SubmitterError>> + Send;
 }
 
@@ -304,7 +309,8 @@ impl<D> TransactionSubmitter for DaemonTransactionSubmitter<D>
 where
     D: DaemonEngine,
 {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
         // carry the same hash this computes locally. Computed only in debug builds so
         // release does no extra parse. Graceful on a malformed blob (the daemon path
@@ -398,7 +404,8 @@ impl PTransactionSubmitter {
 }
 
 impl TransactionSubmitter for PTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
         // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
@@ -594,7 +601,9 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
                 });
             }
         }
-        Ok(self.submit(bound.into_bytes()).await?)
+        // Every `PBoundBytes` reaching here was sealed in its pending store
+        // before the dispatch call (`dispatch_durability` module docs).
+        Ok(self.submit(DurableTxBytes::from_sealed(bound)).await?)
     }
 }
 
@@ -604,10 +613,10 @@ impl<D: DaemonEngine> TransactionSubmitter for BroadcastSubmitter<D> {
     /// (the shared verdict mapping, the watchdog probe rung); the `P`-bound
     /// path goes through [`Self::submit_bound`], and the P-2 store-wrapped
     /// pin keeps retries on that façade.
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
         match self {
-            Self::Local(submitter) => submitter.submit(tx_bytes).await,
-            Self::PerP(submitter) => submitter.submit(tx_bytes).await,
+            Self::Local(submitter) => submitter.submit(tx).await,
+            Self::PerP(submitter) => submitter.submit(tx).await,
         }
     }
 }

@@ -605,11 +605,16 @@ pub enum SubmitVerdictView {
     AlreadyInChain,
 }
 
-/// `submit_pending_tx` result.
+/// `submit_pending_tx` result, and `tx_resend`'s.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubmitPendingTxResult {
     /// Transaction hash (lowercase hex).
     pub tx_hash: String,
+    /// `false` when the bytes left and the verdict stands, but saving what
+    /// the verdict changed failed (A19). The send is not undone; the
+    /// next successful save writes it, and until then a restart lists the
+    /// send under `tx_alarm`. The cause is in the wallet's log.
+    pub verdict_saved: bool,
     /// Success verdict.
     pub verdict: SubmitVerdictView,
     /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
@@ -619,6 +624,43 @@ pub struct SubmitPendingTxResult {
     /// view shares it, structurally.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_height: Option<i64>,
+}
+
+/// Why a held send needs the user's decision (`tx_alarm`; A19,
+/// `DAEMON_SUBMIT_VERDICT.md` §5.3 rung 2). Keywords per IG-Q86.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TxAlarmCause {
+    /// Sent before this session (a restart crossed the verdict).
+    /// Resending — perhaps to a different daemon — is the user's
+    /// decision, never the wallet's own.
+    EarlierSession,
+    /// The daemon holds the transaction past its own publication budget.
+    Overdue,
+    /// Pool-resident, and the daemon has no record of publishing it.
+    Untracked,
+    /// Published, and not mined within the fee ladder's lookback.
+    PublishedPastLookback,
+    /// The daemon has no peers: it cannot relay.
+    Peerless,
+    /// The daemon was started offline: it relays nothing.
+    Offline,
+    /// The daemon refused the bytes for a stale reference: they cannot be
+    /// offered again as they are. Rebuilding is the user's decision.
+    ReferenceStale,
+    /// The send's record holds no bytes to resend.
+    BytesMissing,
+}
+
+/// One held send that needs the user's decision (`tx_alarm`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TxAlarmView {
+    /// The send's transaction id (lowercase hex).
+    pub id: String,
+    /// Why it needs a decision.
+    pub alarm: TxAlarmCause,
+    /// The wallet's synced height when the send left.
+    pub sent_height: i64,
 }
 
 /// `discard_pending_tx` result (empty object).

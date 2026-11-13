@@ -245,6 +245,22 @@ pub enum SubmitError {
         reservation_id: ReservationId,
     },
 
+    /// A19: the dispatch record (journal row with the signed bytes, the
+    /// retained tx secret, the inputs the F14 lock holds) could not be
+    /// saved, so **nothing was sent**. The record was undone under the
+    /// same guard as the failed save and the reservation is back in
+    /// `consumer_held` with its output locks; the consumer may retry the
+    /// submit once the cause (a full disk, an unwritable wallet
+    /// directory) is fixed, or discard.
+    #[error("send not saved, so not sent (reservation {reservation_id:?} kept): {source}")]
+    DispatchNotSaved {
+        /// The reservation, kept for a retry.
+        reservation_id: ReservationId,
+        /// Why the save failed.
+        #[source]
+        source: super::PersistenceError,
+    },
+
     /// P2: rid was found in `in_flight` at submit entry — a second
     /// `submit` is being attempted while the first is still
     /// daemon-pending.

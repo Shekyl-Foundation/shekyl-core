@@ -5,7 +5,7 @@
 
 //! Transfer / pending-tx state types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -325,21 +325,23 @@ pub(crate) struct PendingTxState {
     pub next_id: u64,
     /// F28/F37 rebuild-loop circuit breaker. See [`SubmitLoopBreaker`].
     pub loop_breaker: SubmitLoopBreaker,
-    /// In-memory serialized bytes of network-exposed txs, keyed by
-    /// canonical txid, retained for the §5.3 watchdog's rung-1
-    /// resubmit-same-bytes probe (`DAEMON_SUBMIT_VERDICT.md` §5.3
-    /// decision 2). Populated at finalize-accept / finalize-already-in-
-    /// chain from the in-flight entry about to be dropped; pruned by the
-    /// driver when the txid leaves the held projection.
+    /// Canonical txids this session dispatched, or adopted by the user's
+    /// resend of a held send (A19, `DAEMON_SUBMIT_VERDICT.md` §5.3). The
+    /// watchdog's rung-1 resubmit-same-bytes probe is automatic only for
+    /// these. A held send outside the set was dispatched before a restart
+    /// — perhaps to a different daemon — so resending it is a human
+    /// decision: the probe rung becomes the operator alarm
+    /// ([`WatchdogAlarmReason::DispatchedBeforeThisSession`](crate::engine::diagnostics::WatchdogAlarmReason::DispatchedBeforeThisSession)).
     ///
-    /// **Ephemeral by design (decision 2).** Not persisted: a wallet
-    /// restart drops these, degrading the probe rung to the operator-
-    /// alarm rung — still satisfying §2.6's "every exit is verdict,
-    /// confirmation, or operator alarm." Persistence's only real product
-    /// would be a silent cross-restart re-broadcast of a signed key-image
-    /// spend, which the ephemeral design correctly converts into a human
-    /// decision.
-    pub held_bytes: HashMap<TxHash, Vec<u8>>,
+    /// Session-scoped by design, so never persisted: every open starts
+    /// empty and the alarm is re-derived from the saved journal rows.
+    pub dispatched_this_session: HashSet<TxHash>,
+    /// The operator alarm raised for each held send this session, by the
+    /// watchdog's alarm rung (the edge-trigger latch: one alarm per held
+    /// send until it leaves the held projection or the user resends it).
+    /// Read by [`Engine::held_sends`](crate::engine::Engine::held_sends)
+    /// beside the alarm derived from the saved journal; never persisted.
+    pub raised_alarms: HashMap<TxHash, crate::engine::diagnostics::WatchdogAlarmReason>,
     /// F40 targeted re-scan requests awaiting the driver's next tick.
     /// `finalize_submit_already_in_chain` pushes here (alongside the
     /// observability diagnostic) whenever the daemon claims a confirming
