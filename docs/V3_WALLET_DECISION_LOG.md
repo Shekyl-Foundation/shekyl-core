@@ -6936,3 +6936,180 @@ built once and checked in at `rust/shekyl-harness-spender/vectors/shard-fill.bin
 **Why.** Rule 50: a test's bytes are ones every landed rule verifies.
 Proving them in every run costs minutes; verifying the captured chain
 costs seconds.
+
+---
+
+## 2026-11-12 — Canonical test chains: as many as testing needs, forged byte for byte, regtest only
+
+**Decision** (Rick, the chain forge lane brief; `CHAIN_FORGE.md` §1,
+`CF-R1`…`CF-R5`). Every lane tests against real chains that one tool
+forges, instead of each test building its own history or replaying a chain
+captured from a live daemon.
+
+- **As many chains as the testing needs require, no fewer** (`CF-R1`).
+  Needs that do not fit one chain are not forced into it. The starting
+  set is Chain L (the lifecycle, on a levered schedule), Chain P (the
+  production schedule under load) and a short LWMA chain; the event
+  catalogue decides whether more are needed.
+- **Byte-for-byte deterministic regeneration** (`CF-R2`). A chain is a
+  KAT: at the same commit it regenerates exactly, and at a new commit the
+  first block that differs names the consensus change.
+- **Commit the chains if possible** (`CF-R3`); a release asset pinned by
+  SHA-256 when a chain is too large. Chain P is.
+- **Order** (`CF-R4`): the forge and Chain L first; Chain P second, with
+  the daemon budget lane.
+- **One lane** owns the forge and the chains (`CF-R5`); each consuming
+  lane migrates its own tests.
+
+The brief also sets three security constraints. Deterministic randomness
+exists only behind test-only features the test-only feature gate polices,
+and the production prover and signers keep OS randomness with no injectable
+RNG in their public API. Every forged chain carries regtest's network
+identity and cannot validate under testnet or mainnet rules, and a test
+asserts it. A store snapshot is built only by a fully verifying replay of
+the committed corpus.
+
+**Why.**
+- *Every test rebuilt its own history.* No committed chain crossed a
+  settlement epoch, so 13 nightly tests and 2 nightly-slow daemon walks
+  each filled a shard with real proofs, and whole families (serve credits,
+  settlement, slashes, reorgs) had no realistic witness at all.
+- *Capturing from a live daemon does not keep up.* The five committed
+  chains were re-captured three times in three days (2026-11-03…05), each
+  time with a daemon built at the head. A forged chain regenerates from
+  the commit alone.
+
+**Not part of the ruling.** The lane's Round 0 (`CHAIN_FORGE.md`) proposes
+the chain set from its catalogue (L, a bundle-producer chain B, P and an
+LWMA chain W, with L's own split undecided) and puts four questions to
+Rick (§13, `CF-Q1`…`CF-Q4`): whether Chain L's bytes are committed or
+pinned as an asset, given that chain bytes do not compress or delta;
+reading two corpus layouts during migration; the forge's runnable as an
+example target rather than a binary; and where the no-injectable-RNG line
+is held. Rick ruled all four the same day (the next entry).
+
+---
+
+## 2026-11-12 — Chain forge Round 0 rulings: storage and hosting, layouts, the RNG line, the split of CF-1
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R6`…`CF-R11`).
+
+- **Storage** (`CF-R6`). Chain bytes up to 5 MB are committed. Above that,
+  the manifest, the block-hash list and the trace are committed, and the
+  bytes are a release asset pinned by SHA-256. The asset is a cache:
+  deterministic regeneration at the pinned commit is the source of truth.
+  The five old corpora move to this scheme when they are next regenerated.
+- **Hosting** (`CF-R11`). Chains above 5 MB are OCI artifacts on GHCR
+  (`ghcr.io/shekyl-foundation/test-chains/<chain>`, one per chain
+  version, public), pushed and pulled with `oras`, in a package linked to
+  a new repository, `shekyl-test-chains`, that holds the forge plans,
+  manifests, hash lists and release notes. Layers carry their own media
+  types under the artifact type `application/vnd.shekyl.test-chain`.
+  shekyl-core pins each chain by digest, never by tag, in a committed pin
+  file with every layer's SHA-256 and size; the fetch script pulls by
+  digest and refuses any layer that disagrees; `oras` is installed from a
+  pinned, checksum-verified release. Only a protected workflow in
+  `shekyl-test-chains`, approved by Rick, publishes, so a pin change is
+  always a reviewed core PR. The artifacts are a cache: a deleted package
+  is rebuilt from the pinned commit, never lost, and a nightly pull of
+  every pinned digest reports a missing one through `dev-red`.
+- **Corpus layouts** (`CF-R7`). The reader takes both the old and the new
+  layout until the last old corpus is gone, then the old reader is
+  deleted. No live-daemon re-capture.
+- **The forge's runnable** (`CF-R8`) is a cargo example, and CI builds the
+  examples.
+- **The RNG line** (`CF-R9`) sits at Shekyl's signing and proving entry
+  points. `prove_with_rng` becomes crate-private behind a test-only
+  `seeded-rng` feature that `shekyl-verify-cost` enables, and a gate
+  refuses seedable-RNG construction (`from_seed`, `seed_from_u64` and the
+  like) in production code outside test-only features.
+- **CF-1 splits in three** (`CF-R10`): `CF-1a` chain identity (regtest's
+  genesis, network id and name), `CF-1b` the RNG line (with the
+  forwarded-feature gate fix and `shekyl-crypto-pq` under the gate through
+  F-7), `CF-1c` the forge skeleton and the determinism check in CI.
+  Chain B is accepted, conditional on `CF-1c`: anything the bundle
+  producer depends on besides chain state is either by design, and B's
+  regeneration check then compares state digests, or a defect filed with
+  SO-D12.
+
+**Why.** The chains do not compress and git cannot delta one regeneration
+against the last, so committing a 20 MB chain costs its full size in
+history at every regeneration, and the five small corpora had already
+left 96 MB that way. Determinism makes the bytes reproducible from the
+commit, so a pinned asset loses nothing the tree needs. A cargo example
+keeps every edge into the test-only driver and seeds a dev edge, which
+the test-only feature gate already enforces. Splitting CF-1 keeps each
+change reviewable on one validation surface.
+
+## 2026-11-12 — Chain forge Round 0: the seedable-RNG gate's site list, the home of each chain file, the hosting repository
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R12`…`CF-R14`).
+
+- **The seedable-RNG gate lists sites, not groups** (`CF-R12`). Each
+  allowed site is listed by path and function, with its group and one
+  line on where its seed comes from; naming a group allows nothing on its
+  own. The allowed seed sources, and only these: G0, a seed drawn from
+  `OsRng` on the spot (listed anyway, so the gate never has to guess);
+  G1, the output of a key-derivation function over a secret key or seed;
+  G2, verifier batch weights from a domain-separated transcript, weights
+  only, never a value that is published or signed; G3, multisig values
+  every participant must derive identically, from a transcript that
+  already binds every participant's commitments. Always refused: a
+  constant seed, a seed the caller chooses, or a seed built from public
+  data alone, at any signing or proving nonce; a fixed seed is available
+  only through the test-only `seeded-rng` feature. No grandfathering: at
+  `CF-1b` every current hit is listed with its justification or changed,
+  a later site needs a reviewed change to the list, and a file move drops
+  a listing on purpose.
+- **The SAL multisig is allowed under G3.** α, β, δ, μ, r_z, r_p and
+  r_r_p cover parameters that are not secret within the signing group,
+  the upstream FCMP++ SAL design; only `y` is the threshold secret, and
+  its nonce comes from FROST's hedged preprocess step. Two conditions, in
+  `CF-1b`: a test that fails if the `y` nonce ever comes from the
+  `deterministic_nonces` stream, and a confirmation in code, with its line
+  recorded, that the transcript binds every preprocess commitment before
+  `rng_seed` is called.
+- **Which repository holds what** (`CF-R13`, rules `CF-Q5`). shekyl-core
+  keeps each chain's plan and `blocks.txt`. `shekyl-test-chains` keeps
+  the published manifests and release notes. The chain, its trace and its
+  manifest go to GHCR as layers pinned by digest; the digest in
+  shekyl-core is the source of truth, and a mismatch fails.
+- **The `shekyl-test-chains` setup is accepted** (`CF-R14`). Making the
+  package public cannot be undone, so it waits until `CF-4`, after the
+  first artifact has been reviewed, and only on Rick's explicit approval.
+  Rick checks the organization's public-package setting by hand before
+  `CF-4`.
+
+**Why.** A group named in the gate would allow every future site that
+claims it; a site list makes each one a reviewed decision with its seed
+source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
+keeps regeneration at one commit and puts the first differing block in a
+consensus PR's own diff.
+
+## 2026-11-13 — Chain forge: the harness identity ends in CF-5, and the harness seed is public and regtest-only
+
+**Decision** (Rick, on `CF-1a`; `CHAIN_FORGE.md` §1, `CF-R15`).
+
+- `CF-1a` adds a regtest mode alongside the existing harness id; the
+  design's regtest-identity section governs. Two identities side by side
+  are fine for now.
+- The old harness id is marked test-only and due for deletion in `CF-5`,
+  and listed as a follow-up, so a later revival fails review instead of
+  passing quietly. Where the test-only feature gate can check it, it does.
+- Lock 4 (the wire) may be cited rather than tested only if the citation
+  names, by path and function, an existing test of the network's
+  transport prefix; with none, `CF-1a` writes one with the positive-control
+  pattern of locks 1–3.
+- The harness seed is public and regtest-only: the regtest miner's
+  coinbases can be spent by anyone who restores it, which is intended.
+  Its addresses are refused on mainnet and testnet because their prefixes
+  do not match, and a test holds that refusal.
+- The emission claim's network id and proof reference travel as one
+  argument (`ClaimAnchor`): grouping them fixes the design, where an
+  `#[allow]` would have hidden the lint.
+
+**Why.** An identity kept for convenience is the one that quietly comes
+back; a dated deletion with a gate behind it does not. A public seed is
+safe only while what it can spend is worthless, which regtest's prefixes
+make true and a test keeps true.
+

@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The harness network id outlives the chains that need it unless `CF-5` deletes it.** `HARNESS_NETWORK_ID`, the all-zero id that chains which mine their own genesis sign under (`Trust::UNPINNED`), stays beside regtest's identity from `CF-1a` on. It is test-only: `CF-1b` puts it behind a `TEST_ONLY` `harness` feature on `shekyl-network` that the test-only feature gate holds, and `CF-5` deletes it, with `Trust::UNPINNED`, `GenesisPin::NONE` and `Persona::at`'s mainnet derivation, once every chain judged under `Trust::UNPINNED` is held to a genesis (`CHAIN_FORGE.md` §12.2). Falsify by: a build of the workspace at `CF-5`'s merge in which the name does not resolve.
+  - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R15`, `CF-5`)
+  - Target: pre-genesis
 - **The block path's gated benches have no multisig shape: nothing builds a scheme-2 spend a validator admits.** `DAEMON_REDB_STORE.md` §1.3a.7's shape 3 is the multisig container at its maximum signers, the heaviest post-quantum signature kind. `shekyl-harness-spender` signs single-signer inputs only, so `shekyl-chain-ingest`'s block-path fixtures (`bench_fixture_tests.rs`) cannot list one. Named blocker: a builder of a scheme-2 spend (the multisig completion's spend path). When it exists, the shape is one `Shape` entry and two regenerated fixtures.
   - Owner: the daemon benchmarks — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-T2)
   - Target: pre-genesis (trigger: a scheme-2 spend builder lands)
