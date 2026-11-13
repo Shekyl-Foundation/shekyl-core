@@ -96,8 +96,7 @@ fn facts_with_pool_spends(
         Arc::new(move |h| RULES.in_force(h)),
         Arc::new(node),
         identity(),
-        Arc::new(CacheStore::new()),
-        shekyl_hash_budget::Budget::of_host(),
+        crate::test_support::unranked_hasher(),
     )
 }
 
@@ -188,7 +187,6 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
         RULES,
         Arc::new(crate::service::service_tests::Gated::new()),
         crate::service::ServiceConfig::default(),
-        shekyl_hash_budget::Budget::of_host(),
         Follow {
             job: None,
             pool: None,
@@ -227,8 +225,7 @@ async fn a_spend_connected_between_the_reads_is_spent_in_the_chain() {
         Arc::new(move |h| RULES.in_force(h)),
         Arc::new(node),
         identity(),
-        Arc::new(CacheStore::new()),
-        shekyl_hash_budget::Budget::of_host(),
+        crate::test_support::unranked_hasher(),
     );
     let spent = tokio::task::spawn_blocking(move || {
         shekyl_daemon_rpc::read_facts::ChainReadFacts::key_images_spent(
@@ -423,8 +420,7 @@ async fn tx_list_answers_the_chain_the_pool_and_a_miss() {
                 Arc::new(move |h| RULES.in_force(h)),
                 Arc::new(node),
                 identity(),
-                Arc::new(CacheStore::new()),
-                shekyl_hash_budget::Budget::of_host(),
+                crate::test_support::unranked_hasher(),
             );
             let reply = shekyl_daemon_rpc::reads::tx_list(
                 &facts,

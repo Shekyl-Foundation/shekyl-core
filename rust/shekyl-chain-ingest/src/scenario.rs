@@ -183,11 +183,6 @@ impl<P: Pow> Scenario<P> {
         }
     }
 
-    /// The proof-of-work boundary this driver forms through.
-    pub const fn pow(&self) -> &Clocked<P> {
-        &self.substrate
-    }
-
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
         Self::open_under_with(name, pow, RULES, |path| open_store(path))
@@ -472,21 +467,22 @@ impl<P: Pow> Scenario<P> {
             Ok(references) => references,
             Err(never) => match never {},
         };
-        let formed = self.job(seed, |job| {
-            form(
-            candidate,
-            &FormClaims {
-                rule_set: &rule_set,
-                seed,
-                target,
-                references: &references,
-                network: self.rules.trust().network_id(),
-            },
-            job,
-            FormAttempt::FIRST,
-        )
-        })
-        .expect("the driver's substrate does not fault");
+        let formed = self
+            .job(seed, |job| {
+                form(
+                    candidate,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault");
         let formed = formed.map_err(StepOutcome::Refused)?;
         Ok((
             height,
@@ -603,22 +599,23 @@ impl<P: Pow> Scenario<P> {
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
-        let formed = self.job(mined.seed, |job| {
-            form(
-            mined.candidate(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(mined.height),
-                seed: mined.seed,
-                target: mined.target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            job,
-            FormAttempt::FIRST,
-        )
-        })
-        .expect("the driver's substrate does not fault")
-        .expect("a block another driver connected forms");
+        let formed = self
+            .job(mined.seed, |job| {
+                form(
+                    mined.candidate(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(mined.height),
+                        seed: mined.seed,
+                        target: mined.target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .expect("a block another driver connected forms");
         self.connector
             .ask(OfferAlt(formed))
             .await
@@ -646,22 +643,23 @@ impl<P: Pow> Scenario<P> {
             .template(facts, now, listed)
             .map_err(StepOutcome::Template)?;
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
-        let formed = self.job(seed, |job| {
-            form(
-            candidate.clone(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(height),
-                seed,
-                target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            job,
-            FormAttempt::FIRST,
-        )
-        })
-        .expect("the driver's substrate does not fault")
-        .map_err(StepOutcome::Refused)?;
+        let formed = self
+            .job(seed, |job| {
+                form(
+                    candidate.clone(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(height),
+                        seed,
+                        target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .map_err(StepOutcome::Refused)?;
         self.targets
             .extend(height, &template.block, target)
             .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
@@ -678,22 +676,23 @@ impl<P: Pow> Scenario<P> {
     /// again here under empty reference claims, then [`OfferAlt`].
     #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
-        let formed = self.job(block.seed, |job| {
-            form(
-            block.candidate.clone(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(block.height),
-                seed: block.seed,
-                target: block.target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            job,
-            FormAttempt::FIRST,
-        )
-        })
-        .expect("the driver's substrate does not fault")
-        .expect("a block assembled under empty claims forms");
+        let formed = self
+            .job(block.seed, |job| {
+                form(
+                    block.candidate.clone(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(block.height),
+                        seed: block.seed,
+                        target: block.target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .expect("a block assembled under empty claims forms");
         self.connector
             .ask(OfferAlt(formed))
             .await

@@ -36,7 +36,6 @@ use shekyl_daemon_rpc::reads::{
     fee,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, StoreFacts, SyncFacts};
-use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::kinds::Height;
 use shekyl_rpc_types::wire::block::{
     BlockSelect, BlockShowSelect, HeaderRange, HeaderRangeSelect, HeaderSelect,
@@ -173,40 +172,24 @@ fn identity() -> NodeIdentity {
     }
 }
 
-/// The store-backed facts over the store at `path`, under `rules`.
+/// The store-backed facts over the store at `path`, under `rules`. `pow`
+/// asks a hasher nothing ranks, so it is declined.
 pub(crate) fn facts_over(
     store: Arc<ChainStore>,
     path: impl AsRef<Path>,
     rules: ChainRules,
 ) -> StoreFacts {
     let path: &Path = path.as_ref();
-    facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
+    facts_with_hasher(store, path, rules, crate::test_support::unranked_hasher())
 }
 
-/// [`facts_over`], hashing `pow` under the caches `caches` holds —
-/// the store a test's production substrate derived into, or an empty one.
-pub(crate) fn facts_with_caches(
+/// [`facts_over`], with `pow` asking `hasher` for its warm loan: the hasher
+/// a test's production boundary forms under.
+pub(crate) fn facts_with_hasher(
     store: Arc<ChainStore>,
     path: &Path,
     rules: ChainRules,
-    caches: Arc<CacheStore>,
-) -> StoreFacts {
-    facts_with_budget(
-        store,
-        path,
-        rules,
-        caches,
-        shekyl_hash_budget::Budget::of_host(),
-    )
-}
-
-/// [`facts_with_caches`], hashing `pow` under permits from `budget`.
-pub(crate) fn facts_with_budget(
-    store: Arc<ChainStore>,
-    path: &Path,
-    rules: ChainRules,
-    caches: Arc<CacheStore>,
-    budget: shekyl_hash_budget::Budget,
+    hasher: shekyl_hasher::Hasher,
 ) -> StoreFacts {
     StoreFacts::new(
         store,
@@ -214,8 +197,7 @@ pub(crate) fn facts_with_budget(
         Arc::new(move |h| rules.in_force(h)),
         Arc::new(TestNode::synced()),
         identity(),
-        caches,
-        budget,
+        hasher,
     )
 }
 

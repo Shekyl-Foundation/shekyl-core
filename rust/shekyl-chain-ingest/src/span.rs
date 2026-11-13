@@ -960,7 +960,10 @@ fn refuse(arrival: Parsed, refused: InvalidBlock) -> Next {
 /// [`form_plan`]: one cache per run of blocks under the same seed, and
 /// none for a run whose hashes are all on record. `None` when the service
 /// stopped or failed.
-async fn carry_out<P: Pow>(shared: &Arc<Shared<P>>, plan: crate::connector::SwitchPlan) -> Option<Reply> {
+async fn carry_out<P: Pow>(
+    shared: &Arc<Shared<P>>,
+    plan: crate::connector::SwitchPlan,
+) -> Option<Reply> {
     let formed = form_switch(shared, &plan).await;
     let switched = match formed {
         Ok(formed) => shared

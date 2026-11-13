@@ -12,7 +12,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use shekyl_chain_rules::Substrate;
 use shekyl_hasher::{Class, Ranked, Resident};
 use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{BlockHash, PowHash, Timestamp};
@@ -156,10 +155,7 @@ fn a_stop_grants_no_job_and_is_not_a_fault() {
     let own = own_hasher();
     let stopped = AtomicBool::new(true);
     let a = seed(0x41);
-    assert!(own
-        .pow
-        .run(Class::Chain, a, &stopped, |_| ())
-        .is_none());
+    assert!(own.pow.run(Class::Chain, a, &stopped, |_| ()).is_none());
     assert!(own.pow.lend(Class::Chain, a, &stopped, |_| ()).is_none());
     assert!(ProductionPow::stopped(&SubstrateFault::Stopped));
     assert!(!ProductionPow::stopped(&SubstrateFault::ClockBeforeEpoch));
@@ -174,7 +170,10 @@ fn the_clock_is_now_in_unix_seconds() {
     assert!(now.to_raw() > 1_780_000_000, "{now:?}");
     assert!(now.to_raw() < 4_000_000_000, "{now:?}");
     let in_job = own.pow.unlent(|job| job.local_clock()).expect("clock");
-    assert!(in_job.to_raw() >= now.to_raw(), "a job reads the same clock");
+    assert!(
+        in_job.to_raw() >= now.to_raw(),
+        "a job reads the same clock"
+    );
 }
 
 /// The caller's defect §1.3 names: a job asked for on one seed while the
@@ -278,7 +277,11 @@ async fn a_form_on_a_job_for_another_seed_ends_the_service_and_refuses_nothing()
         .reply()
         .await
         .reply;
-    assert_eq!(reply, Reply::Stopped, "no verdict: the arrival is not refused");
+    assert_eq!(
+        reply,
+        Reply::Stopped,
+        "no verdict: the arrival is not refused"
+    );
     let mut ended = service.ended();
     let end = ended
         .wait_for(Option::is_some)
@@ -286,7 +289,10 @@ async fn a_form_on_a_job_for_another_seed_ends_the_service_and_refuses_nothing()
         .expect("the service publishes its end")
         .clone()
         .expect("checked");
-    let fault = service.stop().await.expect_err("the service ended on a fault");
+    let fault = service
+        .stop()
+        .await
+        .expect_err("the service ended on a fault");
     assert!(
         matches!(
             fault,
@@ -297,9 +303,15 @@ async fn a_form_on_a_job_for_another_seed_ends_the_service_and_refuses_nothing()
         ),
         "{fault:?}"
     );
-    assert!(end.to_string().contains("a job hashes under its own seed only"), "{end}");
+    assert!(
+        end.to_string().contains("SeedNotLent"),
+        "the exit line names the fault: {end}"
+    );
     let snap = store.begin_read().expect("read");
-    assert!(snap.tip().expect("tip").recorded.is_none(), "nothing stored");
+    assert!(
+        snap.tip().expect("tip").recorded.is_none(),
+        "nothing stored"
+    );
     assert_eq!(snap.alt_block_count().expect("alts"), 0, "and no alt row");
     drop(snap);
     y.close().await;

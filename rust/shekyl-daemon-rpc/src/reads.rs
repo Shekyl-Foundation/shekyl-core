@@ -32,9 +32,7 @@ use crate::methods::{
     bound_exceeded, codes, RpcFault, RESTRICTED_BLOCK_COUNT, RESTRICTED_BLOCK_HEADER_RANGE,
     RESTRICTED_SPENT_KEY_IMAGES_COUNT, RESTRICTED_TRANSACTIONS_COUNT,
 };
-use crate::read_facts::{
-    ChainReadFacts, CoinbaseRange, PowAnswer, PowDecline, PowSeed, SpentAt,
-};
+use crate::read_facts::{ChainReadFacts, CoinbaseRange, PowAnswer, PowDecline, PowSeed, SpentAt};
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
 
 fn hash(bytes: [u8; 32]) -> HashHex {

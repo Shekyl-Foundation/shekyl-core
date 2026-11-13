@@ -196,7 +196,10 @@ pub(crate) fn gather(
 ///
 /// `None` when nothing was gathered: a store with no block.
 #[must_use]
-pub(crate) fn ranked_seeds(gathered: Option<&Gathered>, frontier: Option<Frontier>) -> Option<Ranked> {
+pub(crate) fn ranked_seeds(
+    gathered: Option<&Gathered>,
+    frontier: Option<Frontier>,
+) -> Option<Ranked> {
     let gathered = gathered?;
     let window = gathered.window;
     let mut heaviest: Option<(BlockHash, CumulativeDifficulty, Class)> = None;
@@ -433,17 +436,22 @@ mod tests {
     /// row).
     #[test]
     fn the_ranked_list_is_the_window_then_the_most_work_chain_outside_it() {
-        type Row = (
-            &'static str,
-            Gathered,
-            Option<Frontier>,
-            Option<Ranked>,
-        );
+        type Row = (&'static str, Gathered, Option<Frontier>, Option<Ranked>);
         let fork = Class::Unsolicited;
         let ahead = Class::HeaderPow;
         let rows: Vec<Row> = vec![
-            ("a one-seed window", gathered(false, &[]), None, list(None, None)),
-            ("a two-seed window", gathered(true, &[]), None, list(Some(2), None)),
+            (
+                "a one-seed window",
+                gathered(false, &[]),
+                None,
+                list(None, None),
+            ),
+            (
+                "a two-seed window",
+                gathered(true, &[]),
+                None,
+                list(Some(2), None),
+            ),
             (
                 "a held fork past its seed point",
                 gathered(false, &[(7, 10)]),

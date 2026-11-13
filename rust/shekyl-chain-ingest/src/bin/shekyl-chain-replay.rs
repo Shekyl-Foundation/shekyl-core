@@ -58,14 +58,14 @@ use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
 use shekyl_chain_ingest::rebaseline::write_trace_file;
 use shekyl_chain_ingest::schedule::ChainRules;
-use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_ingest::trace::Trace;
+use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
-use shekyl_network::Network;
 use shekyl_hash_budget::Budget;
 use shekyl_hasher::Hasher;
+use shekyl_network::Network;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_types::{BlockCount, BlockHeight};
 

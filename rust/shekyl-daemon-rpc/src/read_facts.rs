@@ -18,8 +18,6 @@
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
 
-use std::sync::Arc;
-
 use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
 use shekyl_types::archival::HoldingsKind;

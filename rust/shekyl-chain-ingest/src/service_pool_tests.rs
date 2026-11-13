@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_chain_rules::AdmissionPolicy;
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
-use shekyl_hash_budget::Budget;
 use shekyl_mempool::{Admission, Pool};
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;

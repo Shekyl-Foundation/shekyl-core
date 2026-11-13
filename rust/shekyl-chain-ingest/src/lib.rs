@@ -293,13 +293,13 @@ pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
 #[cfg(feature = "pipeline")]
+pub use pow::ProductionPow;
+#[cfg(feature = "pipeline")]
 pub use schedule::{ChainRules, LeverRefused};
 #[cfg(feature = "pipeline")]
 pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-#[cfg(feature = "pipeline")]
-pub use pow::ProductionPow;
 pub use substrate::SubstrateFault;
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

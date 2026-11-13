@@ -29,7 +29,6 @@ use shekyl_daemon_rpc::reads::{
     shard_coverage,
 };
 use shekyl_harness_spender::Spender;
-use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_rpc_types::errors::ErrorClass;
 use shekyl_rpc_types::kinds::{Bytes, Height};
 use shekyl_rpc_types::wire::archival::PersonaQuery;
@@ -41,12 +40,8 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
 
 use crate::connector::Offered;
-use crate::metrics::Metrics;
-use crate::rpc_store_facts_tests::{
-    facts_over, facts_with_budget, facts_with_caches, hex, KeccakPow,
-};
+use crate::rpc_store_facts_tests::{facts_over, facts_with_hasher, hex, KeccakPow};
 use crate::scenario::{Mined, Scenario, RULES};
-use crate::substrate::ProductionSubstrate;
 use crate::test_support::{h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT};
 
 fn hash_budget() -> shekyl_daemon_rpc::hash_budget::HashBudget {
@@ -564,26 +559,26 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
 /// supply accumulator `daemon_status` reports. The C++'s emission figure —
 /// each coinbase less the block's fees — is printed beside it: on the
 /// spending block it is not what was minted.
-/// `pow` hashes under a permit from the daemon's one hasher budget,
-/// in its own class (PR2-Q3): while the one permit is held, it waits, and
-/// it hashes once the permit is free.
+/// `pow` hashes under a permit from the node's one hasher, in its own
+/// class (PR2-Q3): while the one permit is held, it waits in that class
+/// inside its warm loan, and it hashes once the permit is free.
+///
+/// Red edit: in `StoreReadFacts::pow`, ask the loan in `Class::Chain`: the
+/// wait is never counted in `CalcPow`.
 #[tokio::test]
 async fn pow_waits_for_a_hasher_permit_in_its_class() {
     use shekyl_hash_budget::{Budget, Class};
-    let caches = Arc::new(CacheStore::new());
-    let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
-    let mut s = Scenario::open_with("rpc-reads-calc-pow-permit", substrate);
+    let budget = Budget::new(std::num::NonZeroUsize::MIN);
+    let own = crate::test_support::own_hasher_on(budget.clone());
+    let mut s = Scenario::open_with("rpc-reads-calc-pow-permit", own.pow.clone());
     let mined = s.mine(2).await;
+    // The node's ranker lists the tip's seed and the hasher builds it:
+    // `pow` hashes only on a warm loan.
+    s.rank();
+    wait_warm(&own, &mined[1].seed);
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
-        let budget = Budget::new(std::num::NonZeroUsize::MIN);
-        let facts = facts_with_budget(
-            Arc::clone(&store),
-            path,
-            RULES,
-            Arc::clone(&caches),
-            budget.clone(),
-        );
+        let facts = facts_with_hasher(Arc::clone(&store), path, RULES, own.hasher.clone());
         let request = PowInput {
             height: Height(mined[1].height.to_raw()),
             hashing: Bytes(mined[1].template.block.pow_blob()),
@@ -607,6 +602,19 @@ async fn pow_waits_for_a_hasher_permit_in_its_class() {
     })
     .await;
     s.close().await;
+}
+
+/// Wait until `seed`'s cache is built on `own`'s hasher.
+fn wait_warm(own: &crate::test_support::OwnHasher, seed: &BlockHash) {
+    use crate::pow::Pow;
+    let started = std::time::Instant::now();
+    while !own.pow.warm(seed) {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "the ranked seed {seed:?} was never built"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 #[tokio::test]
@@ -716,24 +724,25 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     s.close().await;
 }
 
-/// `pow` is RandomX over the bytes as given, under a cache the
-/// daemon's cache store already holds. The store here is the one the
-/// connector's production substrate derived into while the chain was mined:
-/// where it still holds the seed a height names, the answer is the PoW the
-/// node recorded when it judged the block, and where it no longer does
-/// (genesis's, replaced by the next seed) the request is refused. A held seed the
-/// caller names is answered the same way. A seed height above the tip, a
+/// `pow` is RandomX over the bytes as given, on a warm loan from the node's
+/// hasher. The hasher here is the one the chain was mined under, ranked
+/// from the store as the node ranks: where the list names the seed a
+/// height names, the answer is the PoW the node recorded when it judged
+/// the block, and where it does not (genesis's null seed, which nothing
+/// ranks) the request is refused. A warm seed the caller names is answered
+/// the same way. A seed height above the tip, a
 /// blob that is not hex or is longer than a hashing blob, and a seed that is not
 /// 32 bytes are refused with the C++ codes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn pow_hashes_under_the_caches_the_validator_holds() {
-    let caches = Arc::new(CacheStore::new());
-    let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
-    let mut s = Scenario::open_with("rpc-reads-calc-pow", substrate);
+async fn pow_hashes_under_the_warm_caches_the_validator_formed_under() {
+    let own = crate::test_support::own_hasher();
+    let mut s = Scenario::open_with("rpc-reads-calc-pow", own.pow.clone());
     let mined = s.mine(3).await;
+    s.rank();
+    wait_warm(&own, &mined[2].seed);
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
-        let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
+        let facts = facts_with_hasher(Arc::clone(&store), path, RULES, own.hasher.clone());
         let ask = |height: BlockHeight, blob: &[u8], seed: Option<BlockHash>| {
             outcome(pow(
                 &facts,
@@ -746,15 +755,17 @@ async fn pow_hashes_under_the_caches_the_validator_holds() {
                 &hash_budget(),
             ))
         };
-        // The driver pins each connecting seed before the hash. Genesis
-        // pins the null seed; the next block pins genesis's hash and
-        // demotes the null seed to the transient slot. Two seeds, two
-        // slots, both held. `pow` answers under either.
+        // Genesis was hashed under the null seed, by its own job, and
+        // nothing ranks that seed: its cache was freed, and `pow` builds
+        // none. Blocks 1 and 2 hash under block 0's id, which the list
+        // names.
         assert_eq!(mined[0].seed, BlockHash::NULL);
-        for m in &mined {
-            let held = caches
-                .lookup(&Seedhash::from_bytes(*m.seed.as_bytes()))
-                .expect("the validator holds the seed it proved this block under");
+        assert_eq!(
+            ask(mined[0].height, &mined[0].template.block.pow_blob(), None),
+            not_warm(BlockHash::NULL),
+            "the null seed is not warm once genesis has connected"
+        );
+        for m in &mined[1..] {
             let blob = m.template.block.pow_blob();
             let recorded = block_header_show(
                 &facts,
@@ -770,27 +781,21 @@ async fn pow_hashes_under_the_caches_the_validator_holds() {
             .expect("asked with pow");
             assert_eq!(
                 ask(m.height, &blob, None),
-                Ok(hex::encode(compute_hash(&held, &blob))),
-                "RandomX under the held seed at {}",
-                m.height.to_raw()
-            );
-            assert_eq!(
-                ask(m.height, &blob, None),
                 Ok(hex::encode(recorded.to_bytes())),
                 "the PoW the node recorded at {}",
                 m.height.to_raw()
             );
         }
-        // A held seed the caller names: block 1's, under block 2's bytes.
+        // A warm seed the caller names: block 1's, under block 2's bytes.
+        // The same bytes under the seed the height names give the same
+        // hash, since both name block 0's id.
         let blob = mined[2].template.block.pow_blob();
         let named = mined[1].seed;
-        let held = caches
-            .lookup(&Seedhash::from_bytes(*named.as_bytes()))
-            .expect("held");
         assert_eq!(
             ask(BlockHeight::ZERO, &blob, Some(named)),
-            Ok(hex::encode(compute_hash(&held, &blob)))
+            ask(mined[2].height, &blob, None),
         );
+        assert!(ask(BlockHeight::ZERO, &blob, Some(named)).is_ok());
         // One shared bucket. The first bounded hash spends the one hash
         // the bucket holds. The second is empty and spends nothing. The
         // host hashes from an empty bucket.
@@ -855,31 +860,35 @@ fn outcome(
     }
 }
 
-/// The refusal for a seed the cache store does not hold, given or named by
-/// a height.
-fn not_held(seed: BlockHash) -> Result<String, (String, String)> {
+/// The refusal for a seed whose cache is not warm, given or named by a
+/// height.
+fn not_warm(seed: BlockHash) -> Result<String, (String, String)> {
     Err((
         "pow.seed".to_owned(),
         format!(
-            "seed {} is not held: pow hashes under held seeds only",
+            "seed {} is not warm: pow hashes under warm seeds only",
             hex::encode(seed.to_bytes())
         ),
     ))
 }
 
-/// `pow` never derives a cache (ruled 2026-10-17). Over a chain whose
-/// facts hold an empty cache store, a seed the caller names and the seed a
-/// height names are each refused, naming the seed, and afterwards the store
-/// still holds neither: a derivation publishes the cache it made, so a seed
-/// still absent is one never derived.
+/// `pow` never builds a cache (ruled 2026-10-17; `RANDOMX_CACHE_ACTOR.md`
+/// §8). Over a hasher whose list names neither, a seed the caller names
+/// and the seed a height names are each declined, naming the seed. The
+/// hasher has built nothing afterwards, and a bounded caller's one hash is
+/// still unspent: the payment is made inside the loan, which was never
+/// granted.
+///
+/// Red edit: in `StoreReadFacts::pow`, call `Hasher::lend` instead of
+/// `lend_warm`: the hasher builds a cache for the caller's seed.
 #[tokio::test]
-async fn pow_never_derives_a_cache() {
+async fn pow_on_a_seed_that_is_not_warm_is_declined_builds_nothing_and_spends_nothing() {
     let mut s = Scenario::open_with("rpc-reads-calc-pow-held", KeccakPow);
     let mined = s.mine(3).await;
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
-        let caches = Arc::new(CacheStore::new());
-        let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
+        let own = crate::test_support::own_hasher();
+        let facts = facts_with_hasher(Arc::clone(&store), path, RULES, own.hasher.clone());
         let blob = mined[2].template.block.pow_blob();
         let fresh = BlockHash::from_bytes([7; 32]);
         let not_held_request = PowInput {
@@ -889,14 +898,14 @@ async fn pow_never_derives_a_cache() {
         };
         assert_eq!(
             outcome(pow(&facts, &not_held_request, false, &hash_budget())),
-            not_held(fresh)
+            not_warm(fresh)
         );
         // An empty bucket and a seed that will not hash is the parameter
         // refusal, not the empty bucket. The spend sits after admission.
         let empty = shekyl_daemon_rpc::hash_budget::HashBudget::empty(std::time::Instant::now());
         assert_eq!(
             outcome(pow(&facts, &not_held_request, true, &empty)),
-            not_held(fresh)
+            not_warm(fresh)
         );
         let named_by_height = mined[2].seed;
         assert_eq!(
@@ -910,16 +919,27 @@ async fn pow_never_derives_a_cache() {
                 false,
                 &hash_budget(),
             )),
-            not_held(named_by_height)
+            not_warm(named_by_height)
         );
-        for seed in [fresh, named_by_height] {
-            assert!(
-                caches
-                    .lookup(&Seedhash::from_bytes(*seed.as_bytes()))
-                    .is_none(),
-                "pow derived no cache for {seed:?}"
-            );
-        }
+        // A bounded caller's bucket holds one hash. The declined request
+        // leaves it there: the next spend succeeds.
+        let one_hash = hash_budget();
+        assert_eq!(
+            outcome(pow(&facts, &not_held_request, true, &one_hash)),
+            not_warm(fresh)
+        );
+        assert!(
+            one_hash.spend(std::time::Instant::now()).is_ok(),
+            "the declined request spent no RPC hash"
+        );
+        let resident = own.hasher.resident();
+        let resident = resident.borrow();
+        assert_eq!(
+            (resident.builds, resident.caches.len()),
+            (0, 0),
+            "pow built no cache: {resident:?}"
+        );
+        drop(resident);
         drop(facts);
         drop(store);
     })
@@ -958,7 +978,7 @@ fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
             false,
             &hash_budget(),
         )),
-        not_held(seed)
+        not_warm(seed)
     );
     drop(facts);
     drop(store);

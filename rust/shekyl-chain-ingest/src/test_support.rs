@@ -765,8 +765,6 @@ pub struct OwnHasher {
     pub pow: crate::pow::ProductionPow,
     /// The hasher, for its `resident()` watch.
     pub hasher: shekyl_hasher::Hasher,
-    /// The sink the boundary records into.
-    pub metrics: std::sync::Arc<crate::metrics::Metrics>,
     _owner: shekyl_hasher::Owner,
 }
 
@@ -782,9 +780,17 @@ pub fn own_hasher_on(budget: shekyl_hash_budget::Budget) -> OwnHasher {
     let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
     let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
     OwnHasher {
-        pow: crate::pow::ProductionPow::new(hasher.clone(), std::sync::Arc::clone(&metrics)),
+        pow: crate::pow::ProductionPow::new(hasher.clone(), metrics),
         hasher,
-        metrics,
         _owner: owner,
     }
+}
+
+/// A running hasher nothing ranks, shared by the process's tests: every
+/// warm loan on it is declined, as on a node whose list names no such
+/// seed. For a test whose subject builds no cache.
+#[cfg(feature = "pipeline")]
+pub fn unranked_hasher() -> shekyl_hasher::Hasher {
+    static IDLE: std::sync::OnceLock<OwnHasher> = std::sync::OnceLock::new();
+    IDLE.get_or_init(own_hasher).hasher.clone()
 }

@@ -174,13 +174,6 @@ impl<P: Pow> Pow for Clocked<P> {
     }
 }
 
-impl<P> Clocked<P> {
-    /// The boundary this clock is over.
-    pub const fn inner(&self) -> &P {
-        &self.pow
-    }
-}
-
 /// The harness longhash as a substrate: every target satisfied, no cache.
 pub struct FreeHash;
 

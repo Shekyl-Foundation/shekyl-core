@@ -480,7 +480,11 @@ mod tests {
         m.leased(Duration::from_millis(1));
         let leased = m.snapshot(Derives::default());
         assert_eq!(
-            (leased.leases, leased.lease_wait_ns_total, leased.lease_wait_ns_mean),
+            (
+                leased.leases,
+                leased.lease_wait_ns_total,
+                leased.lease_wait_ns_mean
+            ),
             (1, 1_000_000, Some(1_000_000))
         );
         assert_eq!((s.blocks_formed, s.form_ns_mean), (1, Some(1_000)));

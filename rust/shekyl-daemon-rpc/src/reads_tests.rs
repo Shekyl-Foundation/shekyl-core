@@ -11,11 +11,11 @@ use crate::chain_facts::decode_target_count;
 use crate::core::ArchivalGood;
 use crate::methods::tests::{facts, patterned_hash, tagged_bytes, tagged_hash, FakeFacts};
 use crate::read_facts::{
-    AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx,
-    ShardCoverage, TransactionsAt,
+    AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx, ShardCoverage,
+    TransactionsAt,
 };
 use serde_json::json;
-use shekyl_types::{CurveTreeRoot, PowHash, ShardId};
+use shekyl_types::{CurveTreeRoot, ShardId};
 use shekyl_wire::Transaction;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;

@@ -19,8 +19,8 @@ use shekyl_harness_spender::Spender;
 use shekyl_types::BlockHeight;
 
 use crate::connector::{Offered, Switched};
-use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::pow::Pow;
+use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::test_support::{own_hasher, Family, FIRST_SPEND_HEIGHT};
 
 /// The cap in force at genesis.

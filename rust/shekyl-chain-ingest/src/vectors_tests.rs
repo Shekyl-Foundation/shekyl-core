@@ -57,7 +57,6 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{GenesisPin, InvalidBlock};
 use shekyl_types::BlockHeight;
 
-use crate::metrics::Metrics;
 use crate::pipeline::RunReport;
 use crate::pow::Pow;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};

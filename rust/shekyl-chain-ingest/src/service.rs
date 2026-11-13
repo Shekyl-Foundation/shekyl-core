@@ -60,11 +60,11 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
+use crate::cache_window::Frontier;
 use crate::connector::{
     BundleOffered, Connector, ConnectorArgs, FiledBundle, OfferBundle, OfferFault,
     PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
 };
-use crate::cache_window::Frontier;
 use crate::follower::JobSeat;
 use crate::pow::Pow;
 use crate::schedule::ChainRules;
@@ -407,16 +407,6 @@ enum Proof {
     Judged(Box<shekyl_chain_rules::HeaderJudged>),
 }
 
-impl Proof {
-    /// The class a hash waits in. A judged arrival does not hash.
-    const fn hash_class(&self) -> Option<Class> {
-        match self {
-            Self::Hash { class } => Some(*class),
-            Self::Judged(_) => None,
-        }
-    }
-}
-
 /// The hasher class an arrival's `form` waits in: a block this node asked
 /// for or made is the chain's; an announcement is unsolicited.
 const fn class_of(origin: Origin) -> Class {
@@ -653,8 +643,7 @@ pub(crate) struct Shared<P: Pow> {
     pub(crate) between_locks: Mutex<Option<Arc<crate::template::HeldBetweenLocks>>>,
 }
 
-impl<P: Pow> Shared<P>
-{
+impl<P: Pow> Shared<P> {
     pub(crate) fn stopping(&self) -> bool {
         self.stop_flag.load(Ordering::Acquire)
     }
@@ -1240,13 +1229,11 @@ pub struct PoolWiring {
 
 /// Pops blocks for `dev_chain_pop` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
 /// apart from the service ([`Service::rewinder`]).
-pub struct Rewinder<P: Pow>
-{
+pub struct Rewinder<P: Pow> {
     shared: Arc<Shared<P>>,
 }
 
-impl<P: Pow> Clone for Rewinder<P>
-{
+impl<P: Pow> Clone for Rewinder<P> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
@@ -1329,8 +1316,7 @@ impl PoolHealth {
 }
 
 /// The running service (module docs).
-pub struct Service<P: Pow>
-{
+pub struct Service<P: Pow> {
     door: Door,
     shared: Arc<Shared<P>>,
     task: tokio::task::JoinHandle<()>,

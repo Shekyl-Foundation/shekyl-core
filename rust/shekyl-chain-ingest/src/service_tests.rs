@@ -26,9 +26,9 @@ use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
 use super::{Arrival, ArrivalTag, Origin, Refusal, Reply, Service, ServiceConfig, SessionId};
 use crate::connector::Rewind;
+use crate::pow::{LendJob, Pow, RunJob};
 use crate::scenario::{Mined, Scenario, CLOCK_START, RULES};
 use crate::test_support::{open_store, tmp, TestPath};
-use crate::pow::{LendJob, Pow, RunJob};
 use shekyl_hash_budget::Budget;
 use shekyl_hasher::{Class, Ranked, Resident};
 
@@ -626,10 +626,7 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
     assert!(service.shared.ranked_now().await, "the service is running");
     assert_eq!(
         gate.ranked(),
-        Some(
-            Ranked::new(as_seed(epoch_seed), Some(as_seed(genesis)), None)
-                .expect("two seeds")
-        ),
+        Some(Ranked::new(as_seed(epoch_seed), Some(as_seed(genesis)), None).expect("two seeds")),
         "the list's first seed is the new epoch's, block 2048's, and the window still names \
          the epoch before it"
     );
@@ -811,11 +808,7 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         // Three seats: one stays reserved, so a sync caller sees two.
         room: NonZeroUsize::new(3).expect("three"),
     };
-    let service = service(
-        "service-room",
-        Arc::clone(&gate),
-        config,
-    );
+    let service = service("service-room", Arc::clone(&gate), config);
     let door = service.door();
     assert_eq!(door.room(), 2);
     let span: Vec<_> = blocks[..3]
@@ -1420,7 +1413,11 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
         "{reply:?}"
     );
     assert_eq!(substrate.hashes(), hashes, "no hash for the door's answer");
-    assert_eq!(substrate.jobs().len(), jobs, "no job asked for it, so no cache built");
+    assert_eq!(
+        substrate.jobs().len(),
+        jobs,
+        "no job asked for it, so no cache built"
+    );
     assert_eq!(
         homes(&service, fork[0].hash),
         (false, false),
