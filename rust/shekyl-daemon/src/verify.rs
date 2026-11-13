@@ -54,6 +54,11 @@ pub(crate) fn walk(
     platform: &Platform,
 ) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
+    // First: a service's rendezvous directory is the account's mark that
+    // it is the machine's service, and a non-service account that gives
+    // `service` is refused for that, not for a data directory it could
+    // not open (`RPC_CHANNEL.md` §7.1).
+    owner_socket::service_rendezvous(config, platform).map_err(one)?;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;
@@ -214,6 +219,7 @@ mod tests {
             home: Some(home.to_path_buf()),
             program_data: None,
             session_dir: crate::test_session_dir(home),
+            service_rendezvous: None,
         }
     }
 
@@ -464,5 +470,43 @@ mod tests {
         // Open, but the miner is not asked to start.
         let idle = notice_lines(&["--tor", "off", "--mine-address", &address]);
         assert!(idle.is_empty(), "{idle:?}");
+    }
+
+    /// A non-service account that gives `service` is refused before the
+    /// start touches anything, with this machine's own rendezvous directory
+    /// (`/run/shekyl` on Linux), which is not this account's (Rick,
+    /// 2026-11-12). Red edit: drop the walk's rendezvous check and the
+    /// refusal is the data directory's, or none.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_service_account_giving_service_is_refused_on_this_machine() {
+        use std::os::unix::fs::MetadataExt;
+        let platform = shekyl_process::platform::current();
+        let dir = platform
+            .service_rendezvous
+            .clone()
+            .expect("this platform names a service rendezvous directory");
+        let d = tempfile::tempdir().unwrap();
+        // This account: the owner of a directory it just made.
+        let me = std::fs::metadata(d.path()).unwrap().uid();
+        assert_ne!(me, 0, "run the tests as an ordinary account");
+        if let Ok(meta) = std::fs::metadata(&dir) {
+            assert_ne!(
+                meta.uid(),
+                me,
+                "{} is this account's: this host runs its service as the test account",
+                dir.display()
+            );
+        }
+        let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
+        a.push(OsString::from("--service"));
+        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+        let loaded = load(cli, &platform).unwrap();
+        let ds = walk(&loaded.config, &loaded.resolved, &platform)
+            .err()
+            .expect("the service start is refused");
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
+        assert!(!d.path().join("data").exists(), "nothing was created");
     }
 }

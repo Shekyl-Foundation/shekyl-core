@@ -297,6 +297,14 @@ impl AdmitAs for tokio::net::UnixListener {
     }
 }
 
+#[cfg(windows)]
+impl AdmitAs for crate::owner::OwnerListener {
+    /// The owner's caller is on this computer.
+    fn admit_as((): &()) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    }
+}
+
 impl<L> Listener for LimitedListener<L>
 where
     L: AdmitAs,

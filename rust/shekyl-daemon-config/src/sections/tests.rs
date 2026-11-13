@@ -42,6 +42,7 @@ fn platform() -> Platform {
         home: Some(PathBuf::from(abs("/srv/op"))),
         program_data: None,
         session_dir: None,
+        service_rendezvous: None,
     }
 }
 

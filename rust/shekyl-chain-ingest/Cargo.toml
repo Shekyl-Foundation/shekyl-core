@@ -58,6 +58,14 @@ pipeline = [
     "dep:shekyl-bundle-producer",
 ]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
+# bench-internals: the synchronous block-path driver the instruction-count
+# benches run (`bench_support.rs`, `benches/block_path_iai.rs`). The driver
+# also needs `harness`, for the unpinned regtest rules a fixture chain is
+# mined under (`ChainRules::harness_regtest`). This feature does not enable
+# it: `harness` is TEST_ONLY and no feature of this crate may turn it on
+# (check_test_only_features.py). The bench target requires both, and the
+# capture script names both on its command line.
+bench-internals = ["pipeline", "dep:tempfile"]
 replay-cli = [
     "pipeline",
     "fetch",
@@ -83,6 +91,22 @@ harness = [
     "dep:curve25519-dalek",
     "dep:zeroize",
 ]
+
+# The block path's instruction counts (BENCHMARK_ALIGNMENT.md BA-T2,
+# BA-T41): form, connect with its commit, pop and three store reads, over
+# committed blocks of four transactions. The per-PR capture.
+[[bench]]
+name = "block_path_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# The same three block rows over blocks at the weight limit: twenty
+# minutes of callgrind a row, so the nightly capture's (nightly.yml,
+# bench-full) and not a pull request's.
+[[bench]]
+name = "block_path_full_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
 
 [[bin]]
 name = "shekyl-chain-replay"
@@ -168,6 +192,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 shekyl-bundle-producer = { path = "../shekyl-bundle-producer", optional = true }
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
 
+# bench-internals: the bench store's own directory (`bench_support.rs`).
+tempfile = { workspace = true, optional = true }
+
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
 # pipeline also takes `shekyl-archival-retention`: the empty attestation
@@ -189,6 +216,9 @@ zeroize = { workspace = true, optional = true }
 # The Tor status a store test hands `daemon_status`, as the daemon's
 # supervisor would answer it.
 shekyl-tor-status = { path = "../shekyl-tor-status" }
+# The instruction-count harness of `benches/block_path_iai.rs`, at the
+# version every other gated bench uses.
+gungraun = "0.19"
 # Each test store's own directory (`test_support::tmp`), which takes the
 # store's sidecar files with it when the test ends.
 tempfile = { workspace = true }

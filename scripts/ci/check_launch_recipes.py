@@ -20,8 +20,10 @@ Three checks over an enumerated set of files:
    (`echo "key = …"` lines) is a row the file accepts, and the generator's
    default roots are the fleet units' `StateDirectory` and `LogsDirectory`.
 4. A unit has no session directory, so its daemon either runs as the
-   machine's service instance (`--service`) and names no socket directory,
-   or names `--rpc-socket-dir /run/<RuntimeDirectory>` with
+   machine's service instance (`--service`), names no socket directory and
+   has the service's rendezvous directory, `/run/shekyl`
+   (`RuntimeDirectory=shekyl`, `RuntimeDirectoryMode=0755`), or names
+   `--rpc-socket-dir /run/<RuntimeDirectory>` with
    `RuntimeDirectoryMode=0700` (RPC_CHANNEL.md §7.1; INPUT_GRAMMAR.md
    IG-Q104, IG-Q105). Neither is a daemon that refuses to start.
 
@@ -120,6 +122,8 @@ def check_unit(rel: str, text: str, live: dict[str, str]) -> list[str]:
     if "service" in flags:
         if "rpc-socket-dir" in values:
             errors.append(f"{rel}: ExecStart names --service and --rpc-socket-dir; a service is given no socket directory")
+        if runtime != "shekyl" or fields.get("RuntimeDirectoryMode") != "0755":
+            errors.append(f"{rel}: a --service unit needs the service's rendezvous directory: RuntimeDirectory=shekyl with RuntimeDirectoryMode=0755")
     elif "rpc-socket-dir" not in values:
         errors.append(f"{rel}: ExecStart names neither --service nor --rpc-socket-dir; a unit has no session directory, so the daemon would refuse to start")
     elif not runtime:
@@ -202,7 +206,7 @@ def selftest() -> int:
     )
     unit_ok = (
         "[Service]\nExecStart=/usr/local/bin/shekyld --service --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log\n"
-        "StateDirectory=shekyl\nLogsDirectory=shekyl\n"
+        "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl\nLogsDirectory=shekyl\n"
     )
     fleet_ok = (
         "[Service]\nExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/f/node-%i.toml --rpc-socket-dir /run/f/%i\n"
@@ -222,6 +226,7 @@ def selftest() -> int:
         ("a command-line row written into a file is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"network = '), ["`network = …`, a command-line-only row"]),
         ("a generator root off the fleet unit is named", unit_ok, fleet_ok, gen_ok.replace("/var/lib/f", "/var/lib/g"), ["DATA_ROOT defaults to /var/lib/g"]),
         ("a unit with neither service nor a socket directory is named", unit_ok.replace("--service ", ""), fleet_ok, gen_ok, ["names neither --service nor --rpc-socket-dir"]),
+        ("a service unit without the rendezvous directory is named", unit_ok.replace("RuntimeDirectoryMode=0755", "RuntimeDirectoryMode=0700"), fleet_ok, gen_ok, ["needs the service's rendezvous directory"]),
         ("a service given a socket directory is named", unit_ok.replace("--service ", "--service --rpc-socket-dir /run/shekyl "), fleet_ok, gen_ok, ["a service is given no socket directory"]),
         ("a socket directory off RuntimeDirectory is named", unit_ok, fleet_ok.replace("--rpc-socket-dir /run/f/%i", "--rpc-socket-dir /run/g/%i"), gen_ok, ["is not /run/f/%i (RuntimeDirectory)"]),
         ("a socket directory not 0700 is named", unit_ok, fleet_ok.replace("RuntimeDirectoryMode=0700", "RuntimeDirectoryMode=0755"), gen_ok, ["is not RuntimeDirectoryMode=0700"]),
