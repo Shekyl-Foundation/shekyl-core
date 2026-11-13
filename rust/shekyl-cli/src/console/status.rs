@@ -11,7 +11,7 @@ use shekyl_rpc_client::wire;
 use shekyl_rpc_types::kinds::{NoParams, Text};
 use shekyl_rpc_types::wire::daemon::{DaemonStatus, GrantName};
 use shekyl_rpc_types::wire::node::{MineSpeed, OptionRow, OptionShow};
-use shekyl_tor_status::{render, TorCause};
+use shekyl_tor_status::{names_data_dir, render};
 
 /// Where [`mining_speed`] leaves raw hashes and starts a metric prefix.
 const PREFIX_FROM_HASHES: u128 = 1_000;
@@ -229,12 +229,7 @@ fn tor_sentence(daemon: &DaemonClient, info: &DaemonStatus) -> Result<Option<Str
     let Some(tor) = info.tor_status() else {
         return Ok(None);
     };
-    let speaks_of_the_directory = tor
-        .tor
-        .as_ref()
-        .and_then(|managed| managed.cause.as_ref())
-        .is_some_and(|cause| matches!(cause, TorCause::Unusable(_)));
-    let data_dir = if speaks_of_the_directory && info.grant.contains(&GrantName::Config) {
+    let data_dir = if names_data_dir(&tor) && info.grant.contains(&GrantName::Config) {
         data_dir(daemon)?
     } else {
         None

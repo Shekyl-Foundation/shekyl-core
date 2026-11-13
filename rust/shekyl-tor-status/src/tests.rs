@@ -566,4 +566,6 @@ fn the_data_directory_is_named_only_when_given() {
         unnamed.contains("Tor's data directory has 1.0 MB free"),
         "{unnamed}"
     );
+    assert!(names_data_dir(&status));
+    assert!(!names_data_dir(&managed()));
 }
