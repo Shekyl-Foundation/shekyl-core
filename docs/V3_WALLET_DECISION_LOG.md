@@ -6876,3 +6876,51 @@ Testnet's and stagenet's genesis wallets are generated fresh, not
 re-derived from the 2026-11-03 custody seeds: one of those seeds was
 printed into a working session transcript while this change was prepared,
 so that set is retired.
+
+---
+
+## 2026-11-12 — Canonical test chains: as many as testing needs, forged byte for byte, regtest only
+
+**Decision** (Rick, the chain forge lane brief; `CHAIN_FORGE.md` §1,
+`CF-R1`…`CF-R5`). Every lane tests against real chains that one tool
+forges, instead of each test building its own history or replaying a chain
+captured from a live daemon.
+
+- **As many chains as the testing needs require, no fewer** (`CF-R1`).
+  Needs that do not fit one chain are not forced into it. Round 0 found
+  four: L (the lifecycle, on the settled archival schedule), B (the bundle
+  producer's own epoch), P (the production schedule under the design load)
+  and W (live LWMA difficulty).
+- **Byte-for-byte deterministic regeneration** (`CF-R2`). A chain is a
+  KAT: at the same commit it regenerates exactly, and at a new commit the
+  first block that differs names the consensus change.
+- **Commit the chains if possible** (`CF-R3`); a release asset pinned by
+  SHA-256 when a chain is too large. Chain P is.
+- **Order** (`CF-R4`): the forge and Chain L first; Chain P second, with
+  the daemon budget lane.
+- **One lane** owns the forge and the chains (`CF-R5`); each consuming
+  lane migrates its own tests.
+
+The brief also sets three security constraints. Deterministic randomness
+exists only behind test-only features the test-only feature gate polices,
+and the production prover and signers keep OS randomness with no injectable
+RNG in their public API. Every forged chain carries regtest's network
+identity and cannot validate under testnet or mainnet rules, and a test
+asserts it. A store snapshot is built only by a fully verifying replay of
+the committed corpus.
+
+**Why.**
+- *Every test rebuilt its own history.* No committed chain crossed a
+  settlement epoch, so 13 nightly tests and 2 nightly-slow daemon walks
+  each filled a shard with real proofs, and whole families (serve credits,
+  settlement, slashes, reorgs) had no realistic witness at all.
+- *Capturing from a live daemon does not keep up.* The five committed
+  chains were re-captured three times in three days (2026-11-03…05), each
+  time with a daemon built at the head. A forged chain regenerates from
+  the commit alone.
+
+**Open with Rick at the ruling** (`CHAIN_FORGE.md` §13): whether Chain L's
+bytes are committed or pinned as an asset, given that chain bytes do not
+compress or delta (`CF-Q1`); reading two corpus layouts during migration
+(`CF-Q2`); the forge's runnable as an example target rather than a binary
+(`CF-Q3`); and where the no-injectable-RNG line is held (`CF-Q4`).
