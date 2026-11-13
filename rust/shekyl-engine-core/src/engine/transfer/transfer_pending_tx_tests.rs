@@ -3863,3 +3863,132 @@ async fn daemon_dedupes_identical_tx_bytes() {
         "reservation consumed after first submit: {err:?}"
     );
 }
+
+/// A submitter that never answers: the bytes are in hand and the process
+/// dies before any verdict. The test seam for A19's crash window between
+/// the dispatch save and the send — the one window a real process cannot
+/// be stopped in reliably, since the daemon round-trip it would have to
+/// interrupt takes microseconds on loopback.
+struct NeverAnswers;
+
+impl TransactionSubmitter for NeverAnswers {
+    async fn submit(&self, _tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        std::future::pending().await
+    }
+}
+
+/// A commit seam that keeps what the save would write — the ledger's
+/// postcard bytes, which `save_state` seals into the wallet file — so a
+/// test can reopen from exactly that state.
+#[derive(Default)]
+struct CapturingCommit {
+    saved: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+impl crate::engine::dispatch_durability::LedgerCommit for CapturingCommit {
+    fn commit(
+        &self,
+        ledger: &shekyl_engine_state::WalletLedger,
+    ) -> Result<(), crate::engine::error::PersistenceError> {
+        let bytes = ledger.to_postcard_bytes().expect("the ledger serializes");
+        *self.saved.lock().expect("capture lock") = Some(bytes);
+        Ok(())
+    }
+}
+
+/// A19, the crash between the dispatch save and the send. The submitter
+/// never answers and the submit is dropped (the process died with the
+/// bytes in hand); the wallet reopens from what the dispatch save wrote.
+/// The record is there with its signed bytes and its secret, open locks its
+/// inputs, and on the production host the send is held, has bytes to
+/// resend, and is not this session's — the three facts that make the
+/// watchdog alarm `DispatchedBeforeThisSession` instead of resending
+/// (`submit_lifecycle_tests` pins that reaction).
+#[tokio::test]
+async fn a_crash_between_the_dispatch_save_and_the_send_reopens_held() {
+    use crate::engine::submit_lifecycle::WatchdogHost;
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = LocalPendingTx::new(
+        Arc::new(LocalSigner::new(test_signer_handle())),
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        Arc::new(NeverAnswers),
+        Arc::clone(&ledger),
+        Some(tree),
+        Arc::new(TracingDiagnosticSink),
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+
+    let commit = CapturingCommit::default();
+    let submit = pending.submit(built.id, built.content_gen, &commit);
+    let outcome = tokio::time::timeout(std::time::Duration::from_millis(500), submit).await;
+    assert!(outcome.is_err(), "the submitter never answers");
+    drop(pending);
+
+    let saved = commit
+        .saved
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("the dispatch was saved before the bytes were handed over");
+    let mut reopened =
+        shekyl_engine_state::WalletLedger::from_postcard_bytes(&saved).expect("the save decodes");
+
+    let (txid, row) = reopened
+        .send_journal
+        .rows
+        .iter()
+        .next()
+        .map(|(k, v)| (*k, v.clone()))
+        .expect("the send's record was saved");
+    assert_eq!(
+        canonical_tx_id(row.tx_bytes.as_deref().expect("with its bytes")).to_bytes(),
+        txid,
+        "the saved bytes are the send's own"
+    );
+    assert_eq!(row.lock_baseline, None, "no verdict was recorded");
+    assert!(
+        reopened.tx_meta.tx_keys.contains_key(&txid),
+        "the tx secret was saved with the record"
+    );
+
+    // Open: the send whose verdict never arrived is locked and held.
+    assert_eq!(reopened.send_journal.lock_unverdicted_dispatches(), 1);
+    let locks = reopened.send_journal.spend_locks();
+    for input in &row.inputs {
+        assert!(
+            locks.contains(shekyl_types::GlobalOutputIndex::from_raw(input.gindex)),
+            "input {} is locked after the reopen",
+            input.gindex
+        );
+    }
+
+    let host = test_pending_tx(Arc::new(LocalLedger::new(
+        reopened,
+        shekyl_engine_state::LedgerIndexes::empty(),
+    )));
+    let tx_hash = shekyl_types::TxHash::from_bytes(txid);
+    assert!(
+        WatchdogHost::held_submits(&host)
+            .iter()
+            .any(|held| held.tx_hash == tx_hash),
+        "the send is held"
+    );
+    assert_eq!(
+        WatchdogHost::held_bytes_for(&host, &tx_hash).as_deref(),
+        row.tx_bytes.as_deref(),
+        "its bytes are there to resend"
+    );
+    assert!(
+        !WatchdogHost::dispatched_this_session(&host, &tx_hash),
+        "and it is not this session's, so resending is the user's decision"
+    );
+}

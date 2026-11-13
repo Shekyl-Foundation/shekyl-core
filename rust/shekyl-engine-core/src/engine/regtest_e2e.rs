@@ -6210,6 +6210,9 @@ mod peer;
 #[path = "regtest_e2e_rt_p5.rs"]
 mod rt_p5;
 
+#[path = "regtest_e2e_send_durable.rs"]
+mod send_durable;
+
 #[path = "regtest_e2e_shard.rs"]
 mod shard;
 
