@@ -242,16 +242,6 @@ impl std::fmt::Debug for ScannedOutput {
     }
 }
 
-/// Construct a two-component output with deterministic KEM from `tx_key_secret`.
-///
-/// `spend_key` is interpreted as a **compressed Edwards point** (opaque B),
-/// not a scalar. This preserves the V4 FROST SAL migration path where B
-/// may be a multisig aggregate key unknown to any single party as a scalar.
-///
-/// KEM encapsulation is deterministic: `tx_key_secret` + recipient public keys
-/// + `output_index` uniquely determine the X25519 ephemeral key and ML-KEM
-///   ciphertext. The sender can re-derive `combined_ss` at proof time from
-///   `tx_key_secret` (stored in `m_tx_keys`) + public data.
 /// Mint a transaction key: the secret `r`, as a canonical scalar's
 /// bytes, and its public point `R = r·G`.
 ///
@@ -272,6 +262,16 @@ pub fn generate_tx_key() -> (Zeroizing<[u8; 32]>, EdwardsPoint) {
     (secret, public)
 }
 
+/// Construct a two-component output with deterministic KEM from `tx_key_secret`.
+///
+/// `spend_key` is interpreted as a **compressed Edwards point** (opaque B),
+/// not a scalar. This preserves the V4 FROST SAL migration path where B
+/// may be a multisig aggregate key unknown to any single party as a scalar.
+///
+/// KEM encapsulation is deterministic: `tx_key_secret` + recipient public keys
+/// + `output_index` uniquely determine the X25519 ephemeral key and ML-KEM
+///   ciphertext. The sender can re-derive `combined_ss` at proof time from
+///   `tx_key_secret` (stored in `m_tx_keys`) + public data.
 pub fn construct_output(
     tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],

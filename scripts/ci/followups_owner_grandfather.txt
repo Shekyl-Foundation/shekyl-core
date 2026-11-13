@@ -69,7 +69,6 @@ Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1 disposition, 20
 Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral, 2026-06-12).
 Refresh-over-spend reorg: optimistic-spend `spent_height` invariant + orphaned-spend un-mark (Track-2-surfaced + FIXED 2026-06-27).
 `AlreadyInChain` submit verdict: distinct lock-lifecycle disposition — DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim implementation landed #252; F40 conformance LANDED 2026-07-05 (#254); targeted re-scan executor + F40-R2 breaker LANDED 2026-07-05 (`feat/submit-lifecycle-driver`) — RESOLVED.
-Watchdog probe bytes: ephemeral in-memory held-bytes store — reversion clause (rule 21), two independent axes, only one reopens.
 Submit-error reservation-id placeholder: split submitter error from orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED 2026-07-04 (2c pre-wiring).
 F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four implementation obligations open, and a hard ordering constraint.
 CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity [`docs/completed/CT2_ROUND1_CLOSEOUT.md`](./completed/CT2_ROUND1_CLOSEOUT.md)
