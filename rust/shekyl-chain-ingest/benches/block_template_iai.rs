@@ -43,7 +43,7 @@ use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_block_template::{build, EmissionOperands, MinerKeys, Template, TemplateContext};
 use shekyl_chain_ingest::bench_support::{blocks_of, RULES};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
-use shekyl_economics::{ClosedShardCount, EconomicParams, TxVolume, FULL_REWARD_ZONE};
+use shekyl_economics::{economic_params, ClosedShardCount, EconomicParams, TxVolume};
 use shekyl_types::{BlockHeight, Timestamp};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::block::Block;
@@ -62,7 +62,7 @@ struct Operands {
     height: BlockHeight,
     subject: Block,
     listed: Vec<Transaction>,
-    params: EconomicParams,
+    params: &'static EconomicParams,
     miner: MinerKeys,
 }
 
@@ -82,11 +82,11 @@ impl Operands {
             emission: EmissionOperands {
                 already_generated_coins: AtomicUnits::ZERO,
                 total_burned: AtomicUnits::ZERO,
-                median_weight: FULL_REWARD_ZONE,
+                median_weight: self.params.full_reward_zone,
                 tx_volume: TxVolume::ZERO,
                 closed_shards: ClosedShardCount::ZERO,
             },
-            params: &self.params,
+            params: self.params,
             miner: &self.miner,
             tx_key_secret: Zeroizing::new([0x77; 32]),
             extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
@@ -113,7 +113,7 @@ fn operands(corpus: &[u8]) -> Operands {
         height,
         subject: subject.block,
         listed: subject.transactions,
-        params: EconomicParams::default(),
+        params: economic_params(),
         miner: MinerKeys {
             spend_public: EdwardsPoint::mul_base(&Scalar::from_bytes_mod_order([0x4d; 32]))
                 .compress()
