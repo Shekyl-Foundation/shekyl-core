@@ -191,12 +191,12 @@ impl WatchdogHost for StubHost {
     }
 
     fn latch_alarm(&self, tx_hash: TxHash, reason: WatchdogAlarmReason) -> bool {
-        let mut s = self.state.lock().unwrap();
-        if s.alarms.contains_key(&tx_hash) {
-            false
-        } else {
-            s.alarms.insert(tx_hash, reason);
-            true
+        match self.state.lock().unwrap().alarms.entry(tx_hash) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(reason);
+                true
+            }
         }
     }
 

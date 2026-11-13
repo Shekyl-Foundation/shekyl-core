@@ -88,11 +88,11 @@ fn large_ledger() -> WalletLedger {
         BlockHash::from_bytes([0xAA; 32]),
     );
     let reorg = ReorgBlocks {
-        blocks: (190..=200)
+        blocks: (190u8..=200)
             .map(|h| {
                 (
-                    BlockHeight::from_raw(h),
-                    BlockHash::from_bytes([h as u8; 32]),
+                    BlockHeight::from_raw(u64::from(h)),
+                    BlockHash::from_bytes([h; 32]),
                 )
             })
             .collect(),
@@ -153,7 +153,7 @@ fn save_state_on_a_large_wallet() {
     let mut times: Vec<Duration> = Vec::with_capacity(SAVES);
     for _ in 0..SAVES {
         let started = Instant::now();
-        file.save_state(&key, &ledger).expect("save");
+        file.save_state(key, &ledger).expect("save");
         times.push(started.elapsed());
     }
     times.sort();

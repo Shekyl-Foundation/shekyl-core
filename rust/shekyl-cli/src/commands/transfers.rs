@@ -429,7 +429,7 @@ pub fn cmd_abandon(rpc: &RpcSession, txid: &str) -> CommandResult {
 /// bug hunt §A19, sends 7–9).
 fn report_refusal(rpc: &RpcSession, context: &str, e: &RpcError) -> crate::outcome::CommandFailed {
     let mut reported = rpc.report(context, e);
-    if let Some(why) = reported.data.as_ref().and_then(|data| refusal_words(data)) {
+    if let Some(why) = reported.data.as_ref().and_then(refusal_words) {
         reported.message = format!("{context}: {why}");
     }
     reported

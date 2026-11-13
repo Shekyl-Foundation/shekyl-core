@@ -120,8 +120,9 @@ impl WalletServer {
 
     /// One JSON-RPC call over a fresh connection.
     fn call(&self, method: &str, params: Value) -> Result<Value, RpcRefusal> {
-        let body =
-            json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+        let mut request = json!({"jsonrpc": "2.0", "id": 1, "method": method});
+        request["params"] = params;
+        let body = request.to_string();
         let transport = |e: std::io::Error| RpcRefusal {
             code: 0,
             message: format!("transport: {e}"),
@@ -197,8 +198,11 @@ impl WalletServer {
 impl Drop for WalletServer {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            // A process that already exited refuses the kill; either way the
+            // wait reaps it, and a test that is ending has nothing to do with
+            // the outcome.
+            drop(child.kill());
+            drop(child.wait());
         }
     }
 }

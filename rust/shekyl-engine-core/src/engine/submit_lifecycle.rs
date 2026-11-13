@@ -479,7 +479,7 @@ impl SubmitLifecycleDriver {
         match escape_ladder_step(&held, synced, health, self.config) {
             WatchdogStep::Wait(_) => {}
             WatchdogStep::OperatorAlarm(reason) => {
-                self.raise_alarm(host, held.tx_hash, project_alarm(reason));
+                raise_alarm(host, held.tx_hash, project_alarm(reason));
             }
             WatchdogStep::ProbeResubmitSameBytes => {
                 self.probe(host, daemon, commit, held, synced, health).await;
@@ -503,7 +503,7 @@ impl SubmitLifecycleDriver {
             // Dispatched before a restart: re-offering the bytes — perhaps
             // to a different daemon than the one they went to — is the
             // user's decision (A19). The probe rung becomes the alarm rung.
-            self.raise_alarm(
+            raise_alarm(
                 host,
                 held.tx_hash,
                 WatchdogAlarmReason::DispatchedBeforeThisSession,
@@ -511,7 +511,7 @@ impl SubmitLifecycleDriver {
             return;
         }
         let Some(bytes) = host.held_bytes_for(&held.tx_hash) else {
-            self.raise_alarm(host, held.tx_hash, WatchdogAlarmReason::HeldBytesMissing);
+            raise_alarm(host, held.tx_hash, WatchdogAlarmReason::HeldBytesMissing);
             return;
         };
 
@@ -537,7 +537,7 @@ impl SubmitLifecycleDriver {
 
         match verdict {
             ProbeVerdict::ReferenceStale => {
-                self.raise_alarm(
+                raise_alarm(
                     host,
                     held.tx_hash,
                     WatchdogAlarmReason::ReferenceStaleNeedsRebuild,
@@ -577,25 +577,21 @@ impl SubmitLifecycleDriver {
                 if let WatchdogStep::OperatorAlarm(reason) =
                     escape_ladder_step(&next, probe_height, health, self.config)
                 {
-                    self.raise_alarm(host, tx_hash, project_alarm(reason));
+                    raise_alarm(host, tx_hash, project_alarm(reason));
                 }
             }
         }
     }
+}
 
-    /// Emit a watchdog alarm for `tx_hash`, edge-triggered: the first
-    /// alarm for a held tx fires; subsequent ticks suppress re-emission
-    /// (alarm-fatigue bound, §5.3). The latch clears when the tx leaves
-    /// the held projection ([`reconcile_overlays`](Self::reconcile_overlays)).
-    fn raise_alarm(
-        &mut self,
-        host: &dyn WatchdogHost,
-        tx_hash: TxHash,
-        reason: WatchdogAlarmReason,
-    ) {
-        if host.latch_alarm(tx_hash, reason) {
-            host.emit(PendingTxDiagnostic::WatchdogAlarm { tx_hash, reason });
-        }
+/// Emit a watchdog alarm for `tx_hash`, edge-triggered on the host's latch:
+/// the first alarm for a held tx fires; subsequent ticks suppress
+/// re-emission (alarm-fatigue bound, §5.3). The latch clears when the tx
+/// leaves the held projection
+/// ([`SubmitLifecycleDriver::reconcile_overlays`]) or the user resends it.
+fn raise_alarm(host: &dyn WatchdogHost, tx_hash: TxHash, reason: WatchdogAlarmReason) {
+    if host.latch_alarm(tx_hash, reason) {
+        host.emit(PendingTxDiagnostic::WatchdogAlarm { tx_hash, reason });
     }
 }
 
