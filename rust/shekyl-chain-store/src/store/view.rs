@@ -93,8 +93,7 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow, SupportSeats,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, SettlementRow, SupportRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -210,7 +209,23 @@ impl<'id> HeaderView<'id> for BatchView<'_, 'id> {
     }
 }
 
-impl<'id> ChainView<'id> for BatchView<'_, 'id> {
+impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
+    /// The store's bundle view over this view and the memo the connect
+    /// loop filed (`super::bundle_view`). A memo miss is SI-35.
+    type Bundles<'m>
+        = super::bundle_view::StoreBundleView<'m, BatchView<'a, 'id>>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m shekyl_chain_rules::DrawableMemo,
+        h_incl: BlockHeight,
+        schedule: shekyl_chain_rules::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        super::bundle_view::StoreBundleView::new(self, memo, h_incl, schedule)
+    }
+
     /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read
     /// from the table SI-1 guards. The body is [`chain_reads::has_key_image`],
     /// shared with the read snapshot (S-OUT-KI K1); a membership read has no
@@ -386,27 +401,6 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             .map_err(|f| self.arm(f))
     }
 
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, StoreError> {
-        archival_reads::last_served_epoch(self.batch.txn(), persona, shard).map_err(|f| self.arm(f))
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, StoreError> {
-        archival_reads::served_shards(self.batch.txn(), persona).map_err(|f| self.arm(f))
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, StoreError> {
-        archival_reads::pass_count(self.batch.txn(), persona, shard, epoch).map_err(|f| self.arm(f))
-    }
-
     fn r_market(
         &self,
         shard: ShardId,
@@ -520,13 +514,12 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
     }
 
-    fn support_block_seats(
+    fn support_row(
         &self,
         height: BlockHeight,
         floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, StoreError> {
-        archival_reads::support_block_seats(self.batch.txn(), height, floor)
-            .map_err(|f| self.arm(f))
+    ) -> Result<Option<SupportRow>, StoreError> {
+        archival_reads::support_row(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(
@@ -535,14 +528,6 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
-    }
-
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, StoreError> {
-        archival_reads::complete_trees(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     fn release_journal_after(

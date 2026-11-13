@@ -209,8 +209,8 @@ async fn a_liar_holds_the_opening_until_the_header_deadline_and_no_longer() {
 async fn during_the_opening_a_local_block_connects_and_is_not_relayed() {
     logs();
     let (corpus, steps) = spend();
-    let Some((Step::Block { block, bodies }, before)) = steps.split_last() else {
-        panic!("the corpus ends in a block");
+    let Some((Step { block, bodies }, before)) = steps.split_last() else {
+        panic!("the corpus is not empty");
     };
     let keys = {
         let wallet = shekyl_harness_wallet::MinerWallet::from_seed(&[0x6a; 32]);

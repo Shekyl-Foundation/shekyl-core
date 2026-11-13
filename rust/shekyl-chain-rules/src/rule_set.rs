@@ -574,16 +574,20 @@ impl RuleSet {
     /// construction ([`RowStatus::ByConstruction`] — CEN-F2, F8, F19),
     /// which no per-block coverage could contain; and rows a Rust crate
     /// below the validator holds ([`RowStatus::HeldByStore`] — CEN-K1a, K2,
-    /// K3, K8; A1 and A4 by the ingest router). So
+    /// K3, K8; A1 and A4 by the ingest router); and rows retired by ruling
+    /// ([`RowStatus::Retired`] — `SO-D12g`), which nothing runs. So
     /// `Coverage::is_complete_for` measures
-    /// `enforced − at-open − by-construction − held-by-store` — the
+    /// `enforced − at-open − by-construction − held-by-store − retired` — the
     /// census denominator itself never moves for any of them (the gate
     /// prints the subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
         self.enforced.iter().copied().filter(|row| {
             !matches!(
                 row.status(),
-                RowStatus::EnforcedAt | RowStatus::ByConstruction | RowStatus::HeldByStore
+                RowStatus::EnforcedAt
+                    | RowStatus::ByConstruction
+                    | RowStatus::HeldByStore
+                    | RowStatus::Retired
             )
         })
     }
@@ -650,7 +654,7 @@ impl fmt::Debug for RuleSet {
             .field(
                 "enforced",
                 &format_args!(
-                    "{} of {} rows (per-block; held, at-open, by-construction and store-held rows excluded)",
+                    "{} of {} rows (per-block; held, at-open, by-construction, store-held and retired rows excluded)",
                     self.enforced().count(),
                     CenRow::ALL.len()
                 ),

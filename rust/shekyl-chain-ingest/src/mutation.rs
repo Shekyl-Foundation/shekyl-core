@@ -50,23 +50,21 @@
 //! exists. The block at `u64::MAX` is yielded; the event after it is
 //! [`MutationFault::HeightExhausted`]. A fault is not retryable
 //! ([`MutationFault::Stopped`]). The wrapper never reorders, renumbers or
-//! adds events, and it is **Extend-only**: a `Rewind` or an `Inject` from
-//! the inner source is a wrapper fault — a mutation on a fork is the
-//! reorg × mutation cross §3.10 names as out of scope, and a mutation over
-//! an out-of-band write has no family (no captured chain carries an
-//! `Inject`).
+//! adds events, and it is **Extend-only**: a `Rewind` from the inner source
+//! is a wrapper fault — a mutation on a fork is the reorg × mutation cross
+//! §3.10 names as out of scope.
 
 use core::fmt;
 
 use shekyl_chain_rules::{ArchivalKey, Candidate, CenRow};
 use shekyl_difficulty::{check_hash, is_timestamp_below_ftl, Difficulty, FTL_SECONDS};
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp,
 };
 use shekyl_wire::transaction::MAX_FCMP_INPUTS;
 use shekyl_wire::{Ct, Input, Transaction};
 
-use crate::source::{IngestEvent, Sequenced, ServeCredit, Source};
+use crate::source::{IngestEvent, Sequenced, Source};
 
 /// One second past the future-time limit CEN-C1 accepts (`clock + FTL`).
 const PAST_FTL: u64 = FTL_SECONDS + 1;
@@ -93,12 +91,12 @@ const ORPHAN_PARENT: [u8; 32] = [0x77; 32];
 const UNHELD_ROOT_FILL: u8 = 0x5a;
 pub(crate) const UNHELD_ROOT: [u8; 32] = [UNHELD_ROOT_FILL; 32];
 
-/// An `attestation_root` no attestation set recomputes to when nothing is
-/// supplied — [`Mutation::WrongAttestationRoot`]'s. A block carrying no
-/// witness and no `0x0B` field commits the empty set, whose root is a
-/// hash (`empty_attestation_root`); a constant fill is not it, and
-/// `mutation_tests` pins the inequality.
-pub(crate) const UNHELD_ATTESTATION_ROOT: [u8; 32] = [0x5b; 32];
+/// A `section_root` no section recomputes to when the block admits no
+/// bundle — [`Mutation::WrongSectionRoot`]'s. A block that admits none
+/// commits the empty section, whose root is a hash (`empty_section_root`);
+/// a constant fill is not it, and `mutation_source_tests` pins the
+/// inequality.
+pub(crate) const UNHELD_SECTION_ROOT: [u8; 32] = [0x5b; 32];
 
 /// A `referenceBlock` no chain holds — [`Mutation::UnknownReference`]'s.
 /// Its own value, like [`ORPHAN_PARENT`]: this module is production code
@@ -165,13 +163,11 @@ pub enum Mutation {
     Orphan,
     /// `curve_tree_root` replaced by a root the tree never had.
     WrongRoot,
-    /// `attestation_root` replaced, nothing else: no witness, no `0x0B`
-    /// field, so the set is empty and the mined root is not the empty
-    /// set's. CEN-B4's empty-witness arm — CEN-A3's falsifier — at the
-    /// block (`CHAIN_RULES_SLICE_8.md` §5 row 10). The record arm has no
-    /// mutation: CEN-I20's coinbase grammar admits no `0x0B` field, so no
-    /// driven block carries a record to corrupt (slice 8's finding).
-    WrongAttestationRoot,
+    /// `section_root` replaced, nothing else: no references, so the
+    /// section is empty and the mined root is not the empty
+    /// section's: CEN-J29's root check over the empty section — CEN-A3's
+    /// falsifier — at the block.
+    WrongSectionRoot,
     /// `timestamp` = `clock + FTL + 1`: one second past the future-time
     /// limit the substrate's clock allows. Closes §5's FTL row.
     /// [`Unmutable`] at genesis and when that instant does not fit.
@@ -239,11 +235,6 @@ pub enum Mutation {
     /// The candidate's own first body listed a second time. CEN-G1's
     /// intra-block arm, at the second slot — before L1 can see the double.
     DoubledListing,
-    /// A second serve-credit body carrying a `(P, shard, E)` the block
-    /// already carries: the first serve-credit body cloned with its
-    /// `unlock_time` moved (a different transaction, the same key).
-    /// CEN-G7, at the second vin.
-    DuplicateServeCredit,
     /// A second bond post for a `P` the block already posts for, the same
     /// way. CEN-G10, at the second vin.
     ///
@@ -321,11 +312,11 @@ pub enum ExpectedPlace {
 
 impl Mutation {
     /// Every mutation, in the table's order (§3.10).
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 20] = [
         Self::HeaderVersion,
         Self::Orphan,
         Self::WrongRoot,
-        Self::WrongAttestationRoot,
+        Self::WrongSectionRoot,
         Self::FutureTimestamp,
         Self::StaleTimestamp,
         Self::PowUnderWrongSeed,
@@ -335,7 +326,6 @@ impl Mutation {
         Self::SubstitutedBody,
         Self::RelistedTransaction,
         Self::DoubledListing,
-        Self::DuplicateServeCredit,
         Self::DuplicateBondPost,
         Self::OverweightBlock,
         Self::DoubleSpend,
@@ -353,14 +343,13 @@ impl Mutation {
             Self::HeaderVersion => CenRow::B1,
             Self::Orphan => CenRow::A2,
             Self::WrongRoot => CenRow::B5,
-            Self::WrongAttestationRoot => CenRow::B4,
+            Self::WrongSectionRoot => CenRow::J29,
             Self::FutureTimestamp => CenRow::C1,
             Self::StaleTimestamp => CenRow::C2,
             Self::PowUnderWrongSeed => CenRow::D1,
             Self::WrongReward => CenRow::F18,
             Self::ReorderedBodies | Self::MissingBody | Self::SubstitutedBody => CenRow::G2,
             Self::RelistedTransaction | Self::DoubledListing => CenRow::G1,
-            Self::DuplicateServeCredit => CenRow::G7,
             Self::DuplicateBondPost => CenRow::G10,
             Self::OverweightBlock => CenRow::F14,
             Self::DoubleSpend => CenRow::I7,
@@ -381,7 +370,7 @@ impl Mutation {
             Self::HeaderVersion
             | Self::Orphan
             | Self::WrongRoot
-            | Self::WrongAttestationRoot
+            | Self::WrongSectionRoot
             | Self::FutureTimestamp
             | Self::StaleTimestamp
             // F14's evidence is the block's summed weight (slice 7 Q8).
@@ -391,7 +380,6 @@ impl Mutation {
             // The three archival passes name the second occurrence's vin.
             Self::DoubleSpend
             | Self::ForgedSignature
-            | Self::DuplicateServeCredit
             | Self::DuplicateBondPost => ExpectedPlace::Input,
             // I10/I11 name the transaction; so does CEN-G2's index arm (slice
             // 7 Q8: the first mismatching index — `Listed(0)` for both G2
@@ -451,9 +439,8 @@ impl Mutation {
             Self::WrongRoot => {
                 candidate.block.header.curve_tree_root = CurveTreeRoot::from_bytes(UNHELD_ROOT);
             }
-            Self::WrongAttestationRoot => {
-                candidate.block.header.attestation_root =
-                    AttestationRoot::from_bytes(UNHELD_ATTESTATION_ROOT);
+            Self::WrongSectionRoot => {
+                candidate.block.header.section_root = SectionRoot::from_bytes(UNHELD_SECTION_ROOT);
             }
             Self::FutureTimestamp => {
                 self.refuse_genesis(at)?;
@@ -532,29 +519,8 @@ impl Mutation {
                 candidate.transactions.push(first);
                 relist(&mut candidate);
             }
-            Self::DuplicateServeCredit => {
-                // A serve-credit body carries no `pqc_auths` (CEN-H20), so
-                // its twin is the same body with its `unlock_time` moved: a
-                // different transaction, the same `(P, shard, E)`.
-                let mut twin = candidate
-                    .transactions
-                    .iter()
-                    .find(|tx| {
-                        tx.prefix
-                            .inputs
-                            .iter()
-                            .any(|input| ArchivalKind::ServeCredit.carried_by(input))
-                    })
-                    .cloned()
-                    .ok_or(Unmutable::NoArchivalBodyToDuplicate {
-                        kind: ArchivalKind::ServeCredit,
-                    })?;
-                move_unlock_time(&mut twin)?;
-                candidate.transactions.push(twin);
-                relist(&mut candidate);
-            }
             Self::DuplicateBondPost => {
-                Self::list_supplied_twin(&mut candidate, env, ArchivalKind::BondPost)?;
+                Self::list_supplied_twin(&mut candidate, env)?;
             }
             Self::OverweightBlock => {
                 let supply = env.overweight.as_ref().ok_or(Unmutable::NoBodySupply)?;
@@ -679,30 +645,15 @@ impl Mutation {
     }
 }
 
-/// Which archival body a `Duplicate*` mutation clones.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArchivalKind {
-    /// A parseable serve-credit vin (`ArchivalServeCreditResponse`).
-    ServeCredit,
-    /// A bond post.
-    BondPost,
+/// Whether `input` is a parseable bond post — the rule's own parse
+/// (`ArchivalKey::of`), so the family and the validator agree on what has a
+/// key.
+fn carries_a_bond_post(input: &Input) -> bool {
+    matches!(ArchivalKey::of(input), Some(ArchivalKey::BondPost { .. }))
 }
 
-impl ArchivalKind {
-    /// Whether `input` carries a key this kind duplicates — the rule's own
-    /// parse (`ArchivalKey::of`), so the family and the validator agree on
-    /// what has a key; an unparseable vin is another row's and has none.
-    fn carried_by(self, input: &Input) -> bool {
-        matches!(
-            (self, ArchivalKey::of(input)),
-            (Self::ServeCredit, Some(ArchivalKey::ServeCredit { .. }))
-                | (Self::BondPost, Some(ArchivalKey::BondPost { .. }))
-        )
-    }
-}
-
-/// Whether two archival keys collide under their rule: one `(P, shard, E)`
-/// (G7), one `P` (G10). G9's shared-`(P, E)` rule has no mutation here
+/// Whether two archival keys collide under their rule: one `P` (G10).
+/// G9's shared-`(P, E)` rule has no mutation here
 /// (`DuplicateBondPost` docs), so a claim key collides only with itself.
 fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
     match (a, b) {
@@ -713,24 +664,23 @@ fn collides(a: &ArchivalKey, b: &ArchivalKey) -> bool {
 
 impl Mutation {
     /// List a body from the environment's twins that collides, under
-    /// `kind`'s rule, with a key the candidate already carries. A bond-post
+    /// G10's rule, with a bond post the candidate already carries. A bond-post
     /// body is signed over its content (its `pqc_auths` slot, CEN-I18), so
     /// a second valid body with the same key cannot be made from the first
     /// — the caller supplies one it built with the keys.
     fn list_supplied_twin(
         candidate: &mut Candidate,
         env: &Environment<'_>,
-        kind: ArchivalKind,
     ) -> Result<(), Unmutable> {
         let keys: Vec<ArchivalKey> = candidate
             .transactions
             .iter()
             .flat_map(|tx| tx.prefix.inputs.iter())
-            .filter(|input| kind.carried_by(input))
+            .filter(|input| carries_a_bond_post(input))
             .filter_map(ArchivalKey::of)
             .collect();
         if keys.is_empty() {
-            return Err(Unmutable::NoArchivalBodyToDuplicate { kind });
+            return Err(Unmutable::NoBondPostToDuplicate);
         }
         let listed: Vec<_> = candidate.block.transaction_hashes.clone();
         let twin = env
@@ -746,7 +696,7 @@ impl Mutation {
                         .any(|theirs| keys.iter().any(|ours| collides(ours, &theirs)))
             })
             .cloned()
-            .ok_or(Unmutable::NoTwinSupplied { kind })?;
+            .ok_or(Unmutable::NoTwinSupplied)?;
         candidate.transactions.push(twin);
         relist(candidate);
         Ok(())
@@ -820,8 +770,8 @@ pub struct Environment<'a> {
     /// Twins for [`Mutation::DuplicateBondPost`]: bodies valid at the
     /// mutated height whose archival key collides with one the block
     /// already carries. A bond-post body is signed over its content, so
-    /// the family cannot forge a second from the first; a serve-credit body
-    /// carries no signature slot and needs none. Empty for a corpus chain.
+    /// the family cannot forge a second from the first. Empty for a corpus
+    /// chain.
     pub twins: &'a [Transaction],
     /// Wallet-made bodies for the three spend mutations whose in-place
     /// edit became CEN-I18's on 2026-10-16 (the signature sequence runs in
@@ -944,19 +894,16 @@ pub enum Unmutable {
         listed: usize,
     },
     /// A body whose `unlock_time` is `u64::MAX`; moving it by one does not
-    /// fit (`SubstitutedBody`, the `Duplicate*` twins).
+    /// fit (`SubstitutedBody`).
     #[error("the body's unlock_time is u64::MAX; nothing to move it to")]
     UnlockTimeSaturated,
     /// [`Mutation::RelistedTransaction`] with no block below listing a body.
     #[error("no block below this height listed a transaction; nothing to re-list")]
     NothingListedBefore,
-    /// A `Duplicate*` mutation on a block carrying no parseable body of its
-    /// kind.
-    #[error("the candidate carries no parseable {kind:?} body to duplicate")]
-    NoArchivalBodyToDuplicate {
-        /// The kind sought.
-        kind: ArchivalKind,
-    },
+    /// [`Mutation::DuplicateBondPost`] on a block carrying no parseable bond
+    /// post.
+    #[error("the candidate carries no parseable bond post to duplicate")]
+    NoBondPostToDuplicate,
     /// [`Mutation::OverweightBlock`] without an [`Environment::overweight`].
     #[error("OverweightBlock needs the environment's body supply and bound")]
     NoBodySupply,
@@ -974,13 +921,10 @@ pub enum Unmutable {
     /// other than the one the mutation names.
     #[error("the supplied body does not name the reference the mutation names")]
     ReferenceNotAsNamed,
-    /// A `Duplicate*` mutation whose twin must be supplied
-    /// ([`Environment::twins`]) found none colliding with the block's keys.
-    #[error("no supplied twin collides with the block's {kind:?} key")]
-    NoTwinSupplied {
-        /// The kind sought.
-        kind: ArchivalKind,
-    },
+    /// [`Mutation::DuplicateBondPost`], whose twin must be supplied
+    /// ([`Environment::twins`]), found none colliding with the block's posts.
+    #[error("no supplied twin collides with the block's bond post")]
+    NoTwinSupplied,
     /// The supply ran out before the block passed the bound.
     #[error("the body supply ran out at {reached} bytes, under the bound {bound}")]
     BodySupplyExhausted {
@@ -1101,8 +1045,7 @@ impl<'a, S: Source> Mutated<'a, S> {
     }
 
     /// `u64::MAX` was yielded. Another event is [`MutationFault::HeightExhausted`],
-    /// except a `Rewind` or an `Inject`, which are still the Extend-only
-    /// faults.
+    /// except a `Rewind`, which is still the Extend-only fault.
     fn pull_past_end(&mut self) -> Result<Option<Sequenced<IngestEvent>>, MutationFault<S::Fault>> {
         match self.inner.next() {
             Err(fault) => self.fail(MutationFault::Inner(fault)),
@@ -1111,10 +1054,6 @@ impl<'a, S: Source> Mutated<'a, S> {
                 event: IngestEvent::Rewind { to },
                 ..
             })) => self.fail(MutationFault::Rewind { to }),
-            Ok(Some(Sequenced {
-                event: IngestEvent::Inject(credit),
-                ..
-            })) => self.fail(MutationFault::Inject(credit)),
             Ok(Some(_)) => self.fail(MutationFault::HeightExhausted {
                 after: BlockHeight::from_raw(u64::MAX),
             }),
@@ -1134,9 +1073,6 @@ pub enum MutationFault<F> {
         /// The rewind's target.
         to: BlockHeight,
     },
-    /// The inner source emitted an `Inject`; the family is Extend-only.
-    #[error("the inner source emitted an out-of-band serve credit for {persona} (shard {shard}, epoch {epoch}); the mutation family is Extend-only", persona = .0.persona, shard = .0.shard, epoch = .0.epoch)]
-    Inject(ServeCredit),
     /// The candidate at `at` could not carry the mutation.
     #[error("{mutation} at height {at}: {cause}")]
     Unmutable {
@@ -1192,7 +1128,6 @@ impl<S: Source> Source for Mutated<'_, S> {
         let candidate = match event {
             IngestEvent::Extend(candidate) => candidate,
             IngestEvent::Rewind { to } => return self.fail(MutationFault::Rewind { to }),
-            IngestEvent::Inject(credit) => return self.fail(MutationFault::Inject(credit)),
         };
         let produced = if height == self.at {
             match self

@@ -64,6 +64,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bond;
+pub mod captured;
 pub mod persona;
 mod spender;
 

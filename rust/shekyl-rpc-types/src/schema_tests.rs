@@ -282,7 +282,7 @@ fn a_selected_field_inside_a_union_is_still_required() {
         "depth": 0, "hash": "22".repeat(32), "difficulty": "0x1",
         "difficulty_cumulative": "0xa", "reward": "1000", "weight": 400,
         "weight_longterm": 400, "tx_count": 0, "coinbase": "33".repeat(32),
-        "curve_root": "44".repeat(32), "attestation_root": "55".repeat(32),
+        "curve_root": "44".repeat(32), "section_root": "55".repeat(32),
     });
     let slot = Slot::<BlockHeader>::shape();
     let missing = conforms_presence(&header, &slot, &["pow"]).expect_err("pow was asked");

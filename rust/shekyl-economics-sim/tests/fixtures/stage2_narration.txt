@@ -500,29 +500,12 @@ at the CAPPED-honest end (prem>1, ROI several x higher); its undodgeable-cap fix
 prices concentration in bonded capital THERE. So the pair: fee-floor for the
 fee-flow regime, D3 for the capped one.
 
-A5 — W10 proxy free-rider margin (§12.2/§11.1): GATE2-conformant cheap opening
-(128-B leaf + shallow ~6784-B segment co-path; fetch-on-demand IS service, NOT
-durability). margin/epoch = proxy(re-fetch + L14 slash exposure) − honest storage.
-PASS iff margin > 0. L14 rides the CORRECTED m-of-n slash (m=11/n=13: a single
-missed re-fetch is ABSORBED — deterrent is WEAKER than single-strike).
-honest storage/epoch = $0.00468 (hold 12.3 GB @ 1e-11 $/B/yr).
-fetch $/GB             refetch/epoch     margin@q=0  q* bond-only   q* +reward
-0.01                        0.000834      -0.003842         0.271        0.103
-0.10                        0.008336       0.003660         0.000        0.000
-  -> W10 gate: FAILS at the current grace window (margin@q=0 < 0 — re-fetch is ~KB
-vs 12.3 GB held, so honest holding is the DEARER strategy: the proxy free-rides).
-'q*' = the per-epoch re-fetch-FAILURE rate the gate-4 grace window must force for
-the m-of-n slash exposure to flip the margin positive — i.e. how tight grace must
-get. A large post-D2 reward lowers q* (bigger forfeit deters more) — the one way
-D2 helps here — but the current hours-long grace gives q≈0, so it does not bind.
-§11.1 disposition (NOT a D2 redesign): tighten gate-4 grace to force q ≥ q*, OR
-accelerate the PoRep reopen (q→1: re-fetch cannot substitute for sealed possession
-— the whole-shard/actual-possession test, a NAMED non-genesis path).
-
-TJ deliverable 2 — A5 re-measured at the test=job payload (SHARD_BYTES = 3.00e6 B
-per challenge vs the retained ~6784-B opening artifact above). The slash machinery
-is payload-independent; the payload moves ONLY the bandwidth leg.
-S (SS 5.1 marginal threshold, one epoch of holding) = $0.00468.
+A5 — W10 proxy free-rider margin (SS 12.2/SS 11.1) at the test=job payload (TJ R1:
+a challenge moves the whole shard, SHARD_BYTES = 3.00e6 B). margin/epoch =
+proxy(re-fetch + L14 slash exposure) - honest storage; L14 rides the m-of-n slash
+(m=11/n=13: a single missed re-fetch is absorbed). The slash machinery is
+payload-independent; the payload moves only the bandwidth leg.
+S (SS 5.1 marginal threshold, one epoch of holding 12.3 GB) = $0.00468.
 fetch $/GB             refetch/epoch     margin@q=0  q* bond-only   q* +reward
 0.01                        0.368640       0.363964         0.000        0.000
 0.10                        3.686400       3.681724         0.000        0.000
@@ -537,11 +520,8 @@ q            T_risk bond-only     T_risk +reward
 0.100                0.000000           0.002898
 0.278                0.004978         109.908269
   -> q_risk* (T_risk alone covers S; storage cheap-side worst case): bond-only 0.2762,
-+reward 0.1046. Residual vs the A5 band at 0.01 $/GB (0.103-0.271), ATTRIBUTED (F-2): the
-A5 crossover solves T_risk(q) = S - T_bw(opening) and its band ends were quoted at
-specific fetch prices; q_risk* solves T_risk(q) = S exactly. The slash model is
-payload-independent -- inputs aside -- and the zero-payload crossover EQUALS
-q_risk* identically (welded by test).
++reward 0.1046. The slash model is payload-independent: the zero-payload crossover
+EQUALS q_risk* identically (welded by test).
   -> WITHIN-CLASS restatement (F-1 -- one actor, one infrastructure class; the
 cross-class 79-788x pairs the cheapest storage against the dearest bandwidth):
 cloud-class: S = $0.1122/epoch (@2.4e-10 $/B/yr) vs T = $0.369-$3.686
@@ -551,6 +531,11 @@ consumer/flat-rate: S = $0.0047/epoch, T_marginal ~= 0 -> INVERTED; T_risk
 decides (q_risk* above). Headline, honestly: bandwidth closes it decisively
 for a metered-egress fetcher, marginally for a cheap-transit cloud actor,
 and not at all for a flat-rate one.
+-> A5 of record (TJ SS 5.3, SS 5.4): at metered bandwidth, whole-shard reads put
+the proxy above storage at q = 0. At zero byte price (free ingress, flat-rate
+residential) the bandwidth leg vanishes and the deterrent rests on T_risk: the
+deadline must force a re-fetch failure rate of q_risk* = 0.10 (+reward) for the
+slash exposure to cover storage.
 
 TJ-4/TJ-7 — the two inequalities the (m,n) re-pin needs (m=11/n=13).
 BOND_FLOOR = 0.750 SKL per shard. Deterministic no-slash fraction 0.2308

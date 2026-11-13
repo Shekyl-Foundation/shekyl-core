@@ -283,7 +283,6 @@ fn console_spend() -> shekyl_wire::Transaction {
                 hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
             }],
             prunable: Some(Prunable {
-                serve_credit_pruned: vec![],
                 bulletproofs: vec![BpPlus {
                     a: [0; 32],
                     a1: [0; 32],
@@ -640,7 +639,7 @@ fn the_block_header_renders_line_for_line() {
         "difficulty": "0x1", "difficulty_cumulative": "0x1",
         "reward": "100000000000000", "weight": 6263, "weight_longterm": 176_470,
         "tx_count": 0, "coinbase": "09".repeat(32),
-        "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
+        "curve_root": "00".repeat(32), "section_root": "00".repeat(32),
     }))
     .expect("a header decodes");
     let seven = "07".repeat(32);
@@ -680,11 +679,13 @@ fn block_show_asks_for_the_block_with_its_pow() {
             "difficulty": "0x1", "difficulty_cumulative": "0x1",
             "reward": "0", "weight": 1, "weight_longterm": 1,
             "tx_count": 0, "pow": "08".repeat(32), "coinbase": "09".repeat(32),
-            "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
+            "curve_root": "00".repeat(32), "section_root": "00".repeat(32),
         },
         "body": "",
         "tx": [],
         "output_index": 0,
+        "section": [],
+        "section_body": [],
     });
     let (addr, log) = route_server_recording(vec![(rpc::<wire::BlockShow>(), rpc_result(block))]);
     let out = run(&["block", "show", "5"], Some(&addr)).expect("renders");
@@ -1024,7 +1025,7 @@ fn header_at(height: u64) -> serde_json::Value {
         "difficulty": "0x3e8", "difficulty_cumulative": "0x3e8",
         "reward": "600000000000", "weight": 100, "weight_longterm": 100,
         "tx_count": 1, "coinbase": "00".repeat(32),
-        "curve_root": "00".repeat(32), "attestation_root": "00".repeat(32),
+        "curve_root": "00".repeat(32), "section_root": "00".repeat(32),
     })
 }
 

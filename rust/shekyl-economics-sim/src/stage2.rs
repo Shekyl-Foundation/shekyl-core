@@ -2023,14 +2023,9 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // conservative deterrent); TJ-4/TJ-7 take MEDIAN + MAX (larger flow is
     // alarm-raising for the attacker).
     let rewards = shard_reward_operands(&folded, params);
-    // The absorption DP prices the stream forgone FROM the slash epoch, so it
-    // takes the per-epoch rate rather than a horizon lump.
-    crate::proxy::a5_proxy_report(
-        out,
-        rewards.max_per_epoch_skl,
-        SKL_FIAT_PRICE_BAND[1],
-        params,
-    )?;
+    // A5, at the test≡job payload. The absorption DP prices the stream
+    // forgone FROM the slash epoch, so it takes the per-epoch rate rather
+    // than a horizon lump.
     crate::proxy::tj_shard_payload_report(
         out,
         rewards.max_per_epoch_skl,

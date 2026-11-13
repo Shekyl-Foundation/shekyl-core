@@ -41,7 +41,7 @@ use shekyl_chain_rules::{
     form, seed_height, validate, AtHeight, Candidate, ChainValid, Fault, FormAttempt, FormClaims,
     HeaderView, RuleSet, Substrate, Trust,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockHeader};
 
 use super::connect_fixtures::{batch_root_going_into, priced};
@@ -158,14 +158,9 @@ fn candidate(height: u64, previous: BlockHash, root: CurveTreeRoot) -> Candidate
             previous,
             nonce: 7,
             curve_tree_root: root,
-            // The committed empty set (CEN-B4 recomputes it; a coinbase-only
-            // block carries no pass records). *Records-was:* `[0x33; 32]`
-            // from before B4 landed (2026-10-06, slice 8 row 10) — B4 then
-            // refused the bench's block 0, and no lane ran the bench to say
-            // so until `nightly.yml`'s `store-ignored` job did (PR #1003).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            // The empty section's root: a block with no references commits
+            // it, and CEN-J29 compares it.
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: fixture::coinbase(height),
         transaction_hashes: Vec::new(),

@@ -116,6 +116,12 @@ pub enum SyncInbound {
     RequestBodies(Vec<u8>),
     /// 2014.
     ResponseBodies(Vec<u8>),
+    /// 2015.
+    NewBundle(Vec<u8>),
+    /// 2016.
+    RequestBundleBodies(Vec<u8>),
+    /// 2017.
+    ResponseBundleBodies(Vec<u8>),
 }
 
 impl SyncInbound {
@@ -129,6 +135,9 @@ impl SyncInbound {
             Self::ResponseHeaders(_) => Command::ResponseHeaders,
             Self::RequestBodies(_) => Command::RequestBodies,
             Self::ResponseBodies(_) => Command::ResponseBodies,
+            Self::NewBundle(_) => Command::NewBundle,
+            Self::RequestBundleBodies(_) => Command::RequestBundleBodies,
+            Self::ResponseBundleBodies(_) => Command::ResponseBundleBodies,
         }
     }
 
@@ -141,7 +150,10 @@ impl SyncInbound {
             | Self::RequestHeaders(p)
             | Self::ResponseHeaders(p)
             | Self::RequestBodies(p)
-            | Self::ResponseBodies(p) => p,
+            | Self::ResponseBodies(p)
+            | Self::NewBundle(p)
+            | Self::RequestBundleBodies(p)
+            | Self::ResponseBundleBodies(p) => p,
         }
     }
 }
@@ -155,7 +167,7 @@ pub trait SyncOwner: Send + Sync {
     /// claims queue no faster than the owner takes them.
     fn claim(&self, session: &Established, sync: CoreSyncData, carrier: ClaimCarrier, taken: Taken);
 
-    /// One of the owner's six commands arrived.
+    /// One of the owner's nine commands arrived.
     fn message(&self, session: &Established, message: SyncInbound, taken: Taken);
 
     /// A session completed its handshake.

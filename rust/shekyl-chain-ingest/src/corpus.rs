@@ -28,12 +28,16 @@
 //! ```text
 //! header  = MAGIC(8) ‖ version u32 ‖ net u8 ‖ first_height u64 ‖ count u64
 //! extend  = 0x01 ‖ height u64 ‖ block_len u32 ‖ block ‖ tx_count u32 ‖ (tx_len u32 ‖ tx)*
+//!           ‖ ref_count u32 ‖ (ref_len u32 ‖ ref)* ‖ (body_len u32 ‖ body)^ref_count
 //! rewind  = 0x02 ‖ to u64
-//! inject  = 0x03 ‖ at u64 ‖ persona[32] ‖ shard u64 ‖ epoch u64
 //! ```
 //!
-//! `count` counts records of every kind — a `rewind` or an `inject`
-//! occupies no height, so it is a record count, not a height span — and is
+//! Tag `0x03` was version 3's out-of-band serve-credit `inject`. Version 4
+//! carries no out-of-band write, and the reader refuses `0x03` as it
+//! refuses any other unknown tag.
+//!
+//! `count` counts records of every kind — a `rewind` occupies no height,
+//! so it is a record count, not a height span — and is
 //! written at [`CorpusWriter::finish`]; a file whose header count disagrees
 //! with its records, or that ends inside one, was not finished and is
 //! refused.
@@ -49,25 +53,14 @@
 //! tip ([`CorpusFault::RewindOnEmpty`]). Version 1 had no record tag and
 //! no rewind; the tag byte is the version-2 change.
 //!
-//! # Inject — the one out-of-band write (DRS-E4 §3.8 item 3)
+//! # A block's bundle section (version 4, the switch's C4)
 //!
-//! `inject { at, persona, shard, epoch }` is [`IngestEvent::Inject`] as a
-//! record: a serve-credit pass bit the regtest injector wrote **beside**
-//! the chain — no block carries it, so no `extend` can — at its capture
-//! position, so a replay reaches the archival state the daemon held. `at`
-//! is the height the injector attributed the bit to (its receipt), and the
-//! record sits right after the `extend` at that height: writer and reader
-//! both require `at` to be the tip at the record's position
-//! ([`CorpusFault::InjectNotAtTip`]), so a record filed at the wrong
-//! position is refused rather than replayed to a different height than the
-//! daemon wrote. Before any block there is no tip
-//! ([`CorpusFault::InjectOnEmpty`]). The reader emits the event without
-//! the height: the pipeline applies it at the committed tip, which is that
-//! height by this law. Only where a network's row permits the write, at
-//! every layer that can say so (`NETWORK_IDENTITY.md` NI-R6): the writer
-//! and reader refuse the record under any other network's tag
-//! ([`CorpusFault::InjectNotPermitted`]), and the store refuses the write
-//! without the row's permit. The record is the version-3 change.
+//! An `extend` carries the block's bundle references, as the block's
+//! header root commits them, and each one's body, in section order: a
+//! replay judges the section, and `validate` faults a block whose body it
+//! does not have. A block that admits no bundle has `ref_count` 0. Writer
+//! and reader both hold each body to its reference (length and hash,
+//! §7.5) before the record is kept.
 //!
 //! # Verified, not declared (RD-F15)
 //!
@@ -90,40 +83,41 @@
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 
 use shekyl_chain_rules::Candidate;
-use shekyl_network::{Lever, Network};
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, TxHash};
+use shekyl_network::Network;
+use shekyl_types::{BlockCount, BlockHeight, TxHash};
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::MAX_TX_SIZE;
 use shekyl_wire::{Block, Transaction};
 
-use crate::source::{IngestEvent, SequenceNo, Sequenced, ServeCredit, Source};
+use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 
 /// The artifact's magic: eight bytes no other Shekyl artifact starts with.
 pub const CORPUS_MAGIC: [u8; 8] = *b"SHKCORPS";
 
 /// The layout version this module writes and the only one it reads.
 /// A layout change bumps it; the reader refuses every other value.
-pub const CORPUS_FORMAT_VERSION: u32 = 3;
+pub const CORPUS_FORMAT_VERSION: u32 = 4;
 
 /// Record tags (module docs).
 mod tag {
     pub const EXTEND: u8 = 0x01;
     pub const REWIND: u8 = 0x02;
-    pub const INJECT: u8 = 0x03;
 }
 
 /// A `rewind` record: tag ‖ `to` u64.
 const REWIND_RECORD_LEN: usize = 1 + core::mem::size_of::<u64>();
-
-/// An `inject` record: tag ‖ `at` u64 ‖ persona[32] ‖ shard u64 ‖ epoch u64.
-const INJECT_RECORD_LEN: usize =
-    1 + core::mem::size_of::<u64>() + 32 + 2 * core::mem::size_of::<u64>();
 
 /// Why a corpus could not be written or read.
 #[derive(Debug)]
 pub enum CorpusFault {
     /// The bytes do not start with [`CORPUS_MAGIC`].
     BadMagic,
+    /// A block's bundle section is not one: its references do not form a
+    /// section, or a body is missing or is not its reference's.
+    BadSection {
+        /// The block's height.
+        height: BlockHeight,
+    },
     /// The header names a layout this module does not read.
     UnsupportedVersion {
         /// What the header said.
@@ -188,24 +182,8 @@ pub enum CorpusFault {
         /// The parser's error.
         cause: io::Error,
     },
-    /// A record tag none of `extend`, `rewind`, `inject`.
+    /// A record tag neither `extend` nor `rewind`.
     UnknownTag(u8),
-    /// An `inject` whose `at` is not the tip at its position: the record
-    /// was filed somewhere other than where the injector wrote the bit.
-    InjectNotAtTip {
-        /// The height the record claims the bit was attributed to.
-        at: BlockHeight,
-        /// Where the tip is at the record's position.
-        tip: BlockHeight,
-    },
-    /// An `inject` before any block: there is no tip to attribute it to.
-    InjectOnEmpty,
-    /// An `inject` in a corpus whose network's row does not permit the
-    /// write (NI-R6).
-    InjectNotPermitted {
-        /// The corpus's network.
-        net: Network,
-    },
     /// A `rewind` to the tip or above it: nothing to pop.
     RewindNotBackward {
         /// Where the rewind wanted the tip.
@@ -238,6 +216,11 @@ pub enum CorpusFault {
 impl core::fmt::Display for CorpusFault {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::BadSection { height } => write!(
+                f,
+                "the bundle section at height {} is not one: its references or a body do not hold",
+                height.to_raw()
+            ),
             Self::BadMagic => f.write_str("not a Shekyl corpus (bad magic)"),
             Self::UnsupportedVersion { found } => write!(
                 f,
@@ -289,15 +272,6 @@ impl core::fmt::Display for CorpusFault {
                 "rewind to {to} is below the corpus's first height {first_height}"
             ),
             Self::RewindOnEmpty => write!(f, "rewind before any block"),
-            Self::InjectNotAtTip { at, tip } => write!(
-                f,
-                "inject attributed to {at} is filed where the tip is {tip}"
-            ),
-            Self::InjectOnEmpty => write!(f, "inject before any block"),
-            Self::InjectNotPermitted { net } => write!(
-                f,
-                "inject in a {net} corpus; {net}'s row does not permit the serve-credit write"
-            ),
             Self::CountMismatch { declared, present } => write!(
                 f,
                 "header declares {declared} records, {present} present; the corpus was not finished"
@@ -367,6 +341,8 @@ fn verified_candidate(
     height: BlockHeight,
     block_blob: &[u8],
     tx_blobs: &[Vec<u8>],
+    references: &[Vec<u8>],
+    bodies: &[Vec<u8>],
 ) -> Result<Candidate, CorpusFault> {
     let block = parse_block(height, block_blob)?;
     let listed = block.transaction_hashes.len();
@@ -381,7 +357,38 @@ fn verified_candidate(
     for (index, (blob, want)) in tx_blobs.iter().zip(&block.transaction_hashes).enumerate() {
         transactions.push(verified_tx(height, index, *want, blob)?);
     }
-    Ok(Candidate::new(block, transactions))
+    let (section, bundle_bodies) = verified_section(height, references, bodies)?;
+    Ok(Candidate::new(block, transactions)
+        .with_bundle_references(section)
+        .with_bundle_bodies(bundle_bodies))
+}
+
+/// A block's bundle section as a record holds it: references that form a
+/// section, and in the same order the body each names, held to it by
+/// length and hash (§7.5).
+fn verified_section(
+    height: BlockHeight,
+    references: &[Vec<u8>],
+    bodies: &[Vec<u8>],
+) -> Result<
+    (
+        Option<shekyl_types::archival::BundleReferences>,
+        Vec<shekyl_archival_retention::BundleBody>,
+    ),
+    CorpusFault,
+> {
+    let bad = || CorpusFault::BadSection { height };
+    let section = shekyl_types::archival::BundleReferences::from_sidecar(references.to_vec())
+        .map_err(|_| bad())?;
+    if bodies.len() != references.len() {
+        return Err(bad());
+    }
+    let mut out = Vec::with_capacity(bodies.len());
+    for (bytes, body) in references.iter().zip(bodies) {
+        let reference = shekyl_archival_retention::BundleRef::decode(bytes).map_err(|_| bad())?;
+        out.push(reference.accept_body(body).map_err(|_| bad())?);
+    }
+    Ok((section, out))
 }
 
 /// The next height a contiguous corpus records, or `None` past `u64::MAX`.
@@ -403,7 +410,6 @@ const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 /// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
-    net: Network,
     first: BlockHeight,
     /// The height the next `append` records; `None` once `u64::MAX` has
     /// been written.
@@ -431,37 +437,10 @@ impl<W: Write + Seek> CorpusWriter<W> {
         out.write_all(&0u64.to_le_bytes())?;
         Ok(Self {
             out,
-            net,
             first: first_height,
             next: Some(first_height),
             count: 0,
         })
-    }
-
-    /// Append `inject { at, persona, shard, epoch }`: the reader will emit
-    /// [`IngestEvent::Inject`] at this position (module docs). `at` is the
-    /// height the injector's receipt attributed the bit to; it must be the
-    /// tip here, so the record cannot be filed away from the block it
-    /// belongs beside.
-    ///
-    /// # Errors
-    ///
-    /// [`CorpusFault::InjectNotPermitted`], [`CorpusFault::InjectOnEmpty`],
-    /// [`CorpusFault::InjectNotAtTip`]; I/O.
-    pub fn inject(&mut self, at: BlockHeight, credit: ServeCredit) -> Result<(), CorpusFault> {
-        check_inject(self.net, self.first, self.next, at)?;
-        let mut record = Vec::with_capacity(INJECT_RECORD_LEN);
-        record.push(tag::INJECT);
-        record.extend_from_slice(&at.to_raw().to_le_bytes());
-        record.extend_from_slice(credit.persona.as_bytes());
-        record.extend_from_slice(&credit.shard.to_raw().to_le_bytes());
-        record.extend_from_slice(&credit.epoch.to_raw().to_le_bytes());
-        self.out.write_all(&record)?;
-        self.count = self
-            .count
-            .checked_add(1)
-            .expect("corpus record count exhausted");
-        Ok(())
     }
 
     /// Append `rewind { to }`: the reader will emit [`IngestEvent::Rewind`]
@@ -496,14 +475,30 @@ impl<W: Write + Seek> CorpusWriter<W> {
     /// [`CorpusFault::Malformed`] for the record; [`CorpusFault::Oversized`]
     /// if a blob exceeds the wire cap; I/O.
     pub fn append(&mut self, block_blob: &[u8], tx_blobs: &[Vec<u8>]) -> Result<(), CorpusFault> {
+        self.append_carrying(block_blob, tx_blobs, &[], &[])
+    }
+
+    /// [`Self::append`] for a block carrying a bundle section: its
+    /// references and, in the same order, each one's body (module docs).
+    ///
+    /// # Errors
+    ///
+    /// [`Self::append`]'s, and [`CorpusFault::BadSection`].
+    pub fn append_carrying(
+        &mut self,
+        block_blob: &[u8],
+        tx_blobs: &[Vec<u8>],
+        references: &[Vec<u8>],
+        bodies: &[Vec<u8>],
+    ) -> Result<(), CorpusFault> {
         let height = self.next.ok_or(CorpusFault::HeightExhausted {
             after: BlockHeight::from_raw(u64::MAX),
         })?;
-        verified_candidate(height, block_blob, tx_blobs)?;
+        verified_candidate(height, block_blob, tx_blobs, references, bodies)?;
         // One buffer, one write: a verify failure writes nothing, and an
         // I/O error cannot leave a torn prefix the next append would
         // continue after.
-        let record = encode_record(height, block_blob, tx_blobs)?;
+        let record = encode_record(height, block_blob, tx_blobs, references, bodies)?;
         self.out.write_all(&record)?;
         self.next = successor(height);
         self.count = self
@@ -554,33 +549,13 @@ fn check_rewind(
     Ok(())
 }
 
-/// The inject law shared by writer and reader: the corpus is a regtest
-/// chain's, there is a tip, and `at` is that tip (`next − 1`).
-fn check_inject(
-    net: Network,
-    first: BlockHeight,
-    next: Option<BlockHeight>,
-    at: BlockHeight,
-) -> Result<(), CorpusFault> {
-    if !net.permits(Lever::InjectServeCredit) {
-        return Err(CorpusFault::InjectNotPermitted { net });
-    }
-    let tip = match next {
-        Some(n) if n == first => return Err(CorpusFault::InjectOnEmpty),
-        Some(n) => BlockHeight::from_raw(n.to_raw() - 1),
-        None => BlockHeight::from_raw(u64::MAX),
-    };
-    if at != tip {
-        return Err(CorpusFault::InjectNotAtTip { at, tip });
-    }
-    Ok(())
-}
-
 /// One `extend` as the on-disk layout: `0x01 ‖ height ‖ block_len ‖ block ‖ tx_count ‖ (tx_len ‖ tx)*`.
 fn encode_record(
     height: BlockHeight,
     block_blob: &[u8],
     tx_blobs: &[Vec<u8>],
+    references: &[Vec<u8>],
+    bodies: &[Vec<u8>],
 ) -> Result<Vec<u8>, CorpusFault> {
     let mut buf = vec![tag::EXTEND];
     write_len(
@@ -600,8 +575,27 @@ fn encode_record(
         write_len_only(&mut buf, "transaction", blob.len(), MAX_TX_SIZE)?;
         buf.write_all(blob)?;
     }
+    // `verified_section` held the counts equal and under the section bound.
+    let ref_count = u32::try_from(references.len()).map_err(|_| CorpusFault::Oversized {
+        what: "bundle reference count",
+        len: references.len() as u64,
+    })?;
+    buf.write_all(&ref_count.to_le_bytes())?;
+    for blob in references {
+        write_len_only(&mut buf, "bundle reference", blob.len(), MAX_SECTION_BLOB)?;
+        buf.write_all(blob)?;
+    }
+    for blob in bodies {
+        write_len_only(&mut buf, "bundle body", blob.len(), MAX_SECTION_BLOB)?;
+        buf.write_all(blob)?;
+    }
     Ok(buf)
 }
+
+/// The largest bundle reference or body a record holds. A body is the
+/// witness and one record per set bit, under the packet bound a 2017 is
+/// read at; a reference is far smaller.
+const MAX_SECTION_BLOB: usize = 100_000_000;
 
 /// `height u64 ‖ len u32` for a block record.
 fn write_len<W: Write>(
@@ -749,23 +743,6 @@ impl<R: BufRead> CorpusReader<R> {
                     .expect("corpus record count exhausted");
                 return Ok(Some(IngestEvent::Rewind { to }));
             }
-            tag::INJECT => {
-                let at = BlockHeight::from_raw(read_u64(&mut self.input)?);
-                let mut persona = [0u8; 32];
-                self.input.read_exact(&mut persona)?;
-                let shard = ShardId::from_raw(read_u64(&mut self.input)?);
-                let epoch = SettlementEpoch::from_raw(read_u64(&mut self.input)?);
-                check_inject(self.net, self.first, self.next, at)?;
-                self.read = self
-                    .read
-                    .checked_add(1)
-                    .expect("corpus record count exhausted");
-                return Ok(Some(IngestEvent::Inject(ServeCredit {
-                    persona: PCanonicalId::from_bytes(persona),
-                    shard,
-                    epoch,
-                })));
-            }
             other => return Err(CorpusFault::UnknownTag(other)),
         }
         let height = BlockHeight::from_raw(read_u64(&mut self.input)?);
@@ -798,16 +775,34 @@ impl<R: BufRead> CorpusReader<R> {
             let blob = read_blob(&mut self.input, "transaction", MAX_TX_SIZE)?;
             transactions.push(verified_tx(height, index, *want, &blob)?);
         }
+        let ref_count = read_u32(&mut self.input)? as usize;
+        if ref_count > shekyl_types::archival::MAX_SECTION_REFERENCES {
+            return Err(CorpusFault::BadSection { height });
+        }
+        let mut references = Vec::with_capacity(ref_count);
+        for _ in 0..ref_count {
+            references.push(read_blob(
+                &mut self.input,
+                "bundle reference",
+                MAX_SECTION_BLOB,
+            )?);
+        }
+        let mut bodies = Vec::with_capacity(ref_count);
+        for _ in 0..ref_count {
+            bodies.push(read_blob(&mut self.input, "bundle body", MAX_SECTION_BLOB)?);
+        }
+        let (section, bundle_bodies) = verified_section(height, &references, &bodies)?;
         self.next = successor(height);
         // Bounded by `declared`, which `open` proved fits the height space.
         self.read = self
             .read
             .checked_add(1)
             .expect("corpus record count exhausted");
-        Ok(Some(IngestEvent::Extend(Box::new(Candidate::new(
-            block,
-            transactions,
-        )))))
+        Ok(Some(IngestEvent::Extend(Box::new(
+            Candidate::new(block, transactions)
+                .with_bundle_references(section)
+                .with_bundle_bodies(bundle_bodies),
+        ))))
     }
 }
 

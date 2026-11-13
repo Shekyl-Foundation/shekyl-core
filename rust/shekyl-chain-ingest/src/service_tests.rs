@@ -206,7 +206,8 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -1002,7 +1003,8 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         },
         block: vec![0xA5; len],
         bodies: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -2147,6 +2149,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         crate::follower::KeptPosting {
             job,
             bodies: blocks[2].template.transactions.clone(),
+            section: None,
         },
     );
     let (sender, inbox) = shekyl_miner::found_blocks();
@@ -2205,7 +2208,7 @@ fn current_thread_runtime() -> tokio::runtime::Runtime {
 }
 
 fn coinbase_block() -> shekyl_wire::Block {
-    use shekyl_types::{AttestationRoot, CurveTreeRoot};
+    use shekyl_types::{CurveTreeRoot, SectionRoot};
     use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
     use shekyl_wire::{Block, BlockHeader, Transaction};
     Block {
@@ -2216,7 +2219,7 @@ fn coinbase_block() -> shekyl_wire::Block {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 1,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
@@ -2442,22 +2445,24 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
-    // The door bounds the block and its bodies; the witness is a sidecar
-    // with its own cap, and the caller's measure is the door's own.
+    // The door bounds the block and its bodies; the references are a
+    // sidecar with their own cap, a count, and the caller's measure is the
+    // door's own.
     let measured = bound.bytes();
-    let with_witness = super::BoundArrival {
-        attestation_witness: vec![0; 64],
+    let with_references = super::BoundArrival {
+        bundle_references: vec![vec![0; 80]; 3],
         ..bound.clone()
     };
-    assert_eq!(with_witness.bytes(), measured);
+    assert_eq!(with_references.bytes(), measured);
     assert_eq!(
         measured,
         bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
     );
     let over = super::BoundArrival {
-        attestation_witness: vec![0; shekyl_types::MAX_ATTESTATION_WITNESS_BYTES + 1],
+        bundle_references: vec![vec![0; 80]; shekyl_types::archival::MAX_SECTION_REFERENCES + 1],
         ..bound.clone()
     };
     assert_eq!(over.bytes(), measured);
@@ -2523,7 +2528,8 @@ async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let room = door.room();
     assert!(

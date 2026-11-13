@@ -23,9 +23,9 @@ shekyl-wire = { path = "../shekyl-wire" }
 # Round-trip property tests (rule 50): builder → chunked reader → same
 # message, over arbitrary payloads, commands, and chunk boundaries.
 proptest = "1"
-# Test-only: `tests/notify_kats.rs` asserts the hand-copied
-# `ATTESTATION_WITNESS_MAX_BYTES` twin equals the retention crate's authority.
-# Not a production dependency (see `payload/block.rs`).
+# Test-only: the section bound (`MAX_BUNDLE_REFERENCES`, the body-request
+# cap) is pinned against the W₂ band's top, the retention crate's constant.
+# Not a production dependency: a framing crate does not take that stack.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # The regtest handshake advertises the id derived from fakechain's genesis

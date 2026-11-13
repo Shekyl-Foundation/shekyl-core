@@ -318,7 +318,6 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
                 tree_depth: u64::from(tree_depth.max(2)) - 1,
                 fcmp_proof: adm.proof.clone(),
                 pseudo_outs: adm.pseudo_outs.clone(),
-                serve_credit_pruned: Vec::new(),
             }),
         },
     };

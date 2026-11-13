@@ -347,6 +347,7 @@ fn class_of_pool_spend(own: bool, public: bool) -> KeyImageConflict {
 /// ([`release_last_served`]).
 fn release_facts(
     view: &SnapshotView<'_>,
+    rule_set: &RuleSet,
     persona: &PCanonicalId,
     auth_pubkey: &[u8],
     bond_debit: u64,
@@ -380,7 +381,7 @@ fn release_facts(
     let per_shard_last_served = if skip_scan {
         Vec::new()
     } else {
-        release_last_served(view, persona, &record).map_err(fault)?
+        release_last_served(view, rule_set, persona, &record).map_err(fault)?
     };
     let record = ReleaseRecordFacts::new(
         total,
@@ -487,7 +488,6 @@ fn emission_facts(
                         .into_iter()
                         .map(|bond| EmissionCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals,
                         })
                         .collect();
@@ -606,6 +606,7 @@ fn gather(
             facts.bond_record_bonded_total = record.as_ref().map(|r| r.bonded_total.to_raw());
             facts.release = Some(release_facts(
                 &view,
+                rule_set,
                 p_canonical_id,
                 auth_pubkey,
                 bond_debit,

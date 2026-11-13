@@ -36,7 +36,7 @@ block_header_show	field	block header	tx_count	chain	count
 block_header_show	field	block header	pow	chain	hash, when asked by pow
 block_header_show	field	block header	coinbase	chain	hash
 block_header_show	field	block header	curve_root	chain	hash
-block_header_show	field	block header	attestation_root	chain	hash
+block_header_show	field	block header	section_root	chain	hash
 block_header_list	method		block_header_list	chain	list of object (block header), or state missing|archived or null
 block_header_list	parameter	block header	pow	chain	switch, optional
 block_header_list	parameter	block	from	chain	height
@@ -60,7 +60,7 @@ block_header_list	field	block header	tx_count	chain	count
 block_header_list	field	block header	pow	chain	hash, when asked by pow
 block_header_list	field	block header	coinbase	chain	hash
 block_header_list	field	block header	curve_root	chain	hash
-block_header_list	field	block header	attestation_root	chain	hash
+block_header_list	field	block header	section_root	chain	hash
 block_header_list	field	tx	id	chain	hash
 block_header_list	field	tx	shard	chain	integer
 block_show	method		block_show	chain	object (block)
@@ -88,7 +88,7 @@ block_show	field	block header	tx_count	chain	count
 block_show	field	block header	pow	chain	hash, when asked by pow
 block_show	field	block header	coinbase	chain	hash
 block_show	field	block header	curve_root	chain	hash
-block_show	field	block header	attestation_root	chain	hash
+block_show	field	block header	section_root	chain	hash
 block_show	field	block	body	chain	bytes
 block_show	field	block	tx	chain	list of object (tx), or state archived
 block_show	field	tx	id	chain	hash
@@ -99,6 +99,8 @@ block_show	field	tx	archival_size	chain	size, when asked by prune
 block_show	field	tx	id	chain	hash
 block_show	field	tx	shard	chain	integer
 block_show	field	block	output_index	chain	integer
+block_show	field	block	section	chain	list of bytes
+block_show	field	block	section_body	chain	list of bytes
 block_list	method		block_list	chain	list of object (block), or state missing|archived or null
 block_list	parameter	block	height	chain	list of height
 block_list	parameter	tx	prune	chain	switch, optional
@@ -121,7 +123,7 @@ block_list	field	block header	tx_count	chain	count
 block_list	field	block header	pow	chain	hash, when asked by pow
 block_list	field	block header	coinbase	chain	hash
 block_list	field	block header	curve_root	chain	hash
-block_list	field	block header	attestation_root	chain	hash
+block_list	field	block header	section_root	chain	hash
 block_list	field	block	body	chain	bytes
 block_list	field	block	tx	chain	list of object (tx), or state archived
 block_list	field	tx	id	chain	hash
@@ -132,6 +134,8 @@ block_list	field	tx	archival_size	chain	size, when asked by prune
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 block_list	field	block	output_index	chain	integer
+block_list	field	block	section	chain	list of bytes
+block_list	field	block	section_body	chain	list of bytes
 block_list	field	tx	id	chain	hash
 block_list	field	tx	shard	chain	integer
 tx_show	method		tx_show	chain	object (tx), or state archived
@@ -210,7 +214,6 @@ archival_claim_show	field	epoch	work	chain	milli
 archival_claim_show	field	epoch	budget	chain	amount or null
 archival_claim_show	field	epoch	bond	chain	list of object (bond)
 archival_claim_show	field	bond	joined_epoch	chain	integer
-archival_claim_show	field	bond	complete_tree	chain	switch
 archival_claim_show	field	bond	failure	chain	list of object (bond failure)
 archival_claim_show	field	bond failure	from	chain	integer
 archival_claim_show	field	bond failure	to	chain	integer

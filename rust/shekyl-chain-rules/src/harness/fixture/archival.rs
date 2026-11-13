@@ -35,11 +35,9 @@ use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{
-    BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Prunable, Transaction, TxPrefix,
-};
+use shekyl_wire::{BondPost, BondPostKind, Holdings, Input, Transaction};
 
-use super::{balanced_bond_post, FIXTURE_OUTPUT_INDEX, UNRECORDED_REFERENCE};
+use super::{balanced_bond_post, FIXTURE_OUTPUT_INDEX};
 
 /// A fixture **persona**: the keys the archival bodies for one `tag` are
 /// built with, and the id they are recorded under. The identity key and
@@ -252,29 +250,13 @@ pub fn emission_vin_for(p_pubkey: Vec<u8>, epochs: &[u64]) -> Input {
 /// complete-tree floor, one bond (`bond_floor_of(CompleteTree, _)`).
 pub const BOND_FLOOR: u64 = shekyl_archival_retention::archival_params().bond_floor_atomic;
 
-/// A parseable **serve-credit vin** — the kept half of the response
-/// (`RF-D1`) crediting the persona tagged `p` for `shard` in
-/// `settlement_epoch`, its countersignature filler (CEN-J10 reads that;
-/// nothing here does).
-pub fn serve_credit_vin(p: [u8; 32], shard: u64, settlement_epoch: u64) -> Input {
-    let kept = shekyl_archival_retention::ArchivalServeCreditResponse {
-        p_canonical_id: *persona(p).id.as_bytes(),
-        shard_id: shard,
-        settlement_epoch,
-        ed25519_countersignature: [0x5c; 64],
-    };
-    Input::ServeCredit {
-        canonical_bytes: kept.serialize().expect("a kept half serializes"),
-    }
-}
-
 /// A **JoinMarket bond post** for the persona tagged `p` (CEN-H21's shape
 /// on [`balanced_bond_post`]): a complete-tree holding bonded at
 /// [`BOND_FLOOR`], funded by the spend of `key_image`. The one archival
 /// body that connects on a chain with **no archival state** — it creates
 /// the persona's record, under `persona(p).id` — so it is what precedes a
-/// serve credit or a claim for `p` in a block (CEN-L7 refuses either for a
-/// persona without a record). The post carries the persona's identity key
+/// claim for `p` in a block (CEN-L7 refuses one for a persona without a
+/// record). The post carries the persona's identity key
 /// and its recompute (J11) and commits the persona's bond-spend key and its
 /// receipt key, a real one (J28); the
 /// slot that signs it is the identity key's (J13's credit arm).
@@ -296,65 +278,4 @@ pub fn join_market(key_image: [u8; 32], p: [u8; 32]) -> Transaction {
             bond_debit: 0,
         },
     )
-}
-
-/// The pruned half of one pass record in the serve-credit fixtures: a
-/// non-empty opaque blob inside the wire's length bound. CEN-H20 counts the
-/// records and the wire bounds their length; what one holds is CEN-J10's,
-/// and no fixture claims to satisfy it.
-pub const PRUNED_PASS_RECORD: [u8; 8] = [0xA5; 8];
-
-/// A **serve-credit-only** transaction (CEN-H20's shape: serve-credit
-/// inputs and nothing else, no outputs, zero fee, no spend material, and the
-/// `RF-D1` prunable region holding one pruned pass record per serve-credit
-/// vin — [`PRUNED_PASS_RECORD`], a marker no verifier reads)
-/// crediting the persona tagged `p` for shard 0 in settlement epoch 1 — the first
-/// epoch a persona who joined in epoch 0 may serve (CEN-J5: `E ≥ join +
-/// 1`, and every fixture join is in epoch 0, the open epoch on any chain
-/// shorter than one). Which epoch the listing chain is *in* is CEN-J7's
-/// question (E6 slice C), not this body's. The one
-/// legal non-coinbase shape with **no key image** — what a test needs
-/// when it must list the same body twice (SI-3) without tripping the
-/// spent-key-image set. It is judged against `p`'s record **on the view**
-/// (CEN-J4; L7 at the fold and SI-15 at the store are the belts beneath),
-/// which a [`join_market`] for `p` writes only once its own block has
-/// connected — so over a chain holding no record (every `MockChain`) this
-/// body is for `tx_form`, not for `validate` ([`TxShape::valid_at`]); its
-/// `validate` witness is a driven chain that posted the join a block
-/// earlier.
-pub fn serve_credit_only(p: [u8; 32]) -> Transaction {
-    serve_credit_only_with(serve_credit_vin(p, 0, 1))
-}
-
-/// [`serve_credit_only`]'s shape around a serve-credit vin a caller built —
-/// for a persona that is not a fixture one (the harness spender's, keyed
-/// from a seed, whose `serve_credit_vin` names its own id), or for a
-/// shard and epoch other than the fixture's. The body is the one above:
-/// H20's, with one `RF-D1` pruned record for the one vin.
-pub fn serve_credit_only_with(vin: Input) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![vin],
-            outputs: Vec::new(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 0,
-            reference_block: UNRECORDED_REFERENCE,
-            base: CtBase {
-                enc_amounts: Vec::new(),
-                enc_labels: Vec::new(),
-                commitments: Vec::new(),
-            },
-            pqc_auths: Vec::new(),
-            prunable: Some(Prunable {
-                bulletproofs: Vec::new(),
-                tree_depth: 0,
-                fcmp_proof: Vec::new(),
-                pseudo_outs: Vec::new(),
-                serve_credit_pruned: vec![PRUNED_PASS_RECORD.to_vec()],
-            }),
-        },
-    }
 }

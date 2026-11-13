@@ -3,12 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A relayed tip as a compact announcement (2008).
+//! A relayed tip as a compact announcement (2008), and the fan-out that
+//! relays it and a bundle (2015, [`crate::bundles`]).
 //!
-//! The block and its attestation witness, and no transactions. The owner
+//! The block and its bundle references, and no transactions. The owner
 //! sends that announcement to every established session but the supplier,
 //! and to every established session when no session supplied it. The model
-//! has already decided that the block is relayed.
+//! has already decided that the block is relayed. A bundle goes by the same
+//! fan-out once the queue has admitted it.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -35,8 +37,8 @@ pub(crate) fn announcement(
     let AtHeight::Recorded(body) = snap.block(height)? else {
         return Ok(None);
     };
-    let attestation_witness = match snap.attestation_witness_at(height)? {
-        AtHeight::Recorded(Some(witness)) => witness,
+    let bundle_references = match snap.bundle_references_at(height)? {
+        AtHeight::Recorded(Some(references)) => references.into_inner(),
         _ => Vec::new(),
     };
     let current_blockchain_height = snap
@@ -49,7 +51,7 @@ pub(crate) fn announcement(
             block: body.block.serialize(),
             block_weight: OMITTED_BLOCK_WEIGHT,
             txs: Vec::new(),
-            attestation_witness,
+            bundle_references,
         },
         current_blockchain_height,
     }))

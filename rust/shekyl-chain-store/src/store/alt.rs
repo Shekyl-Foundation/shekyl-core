@@ -164,7 +164,7 @@ impl WriteBatch<'_, '_> {
     /// for `ChainValid`. The tier and the write stay two operations: the
     /// token is minted on a snapshot, and the snapshot stays live through
     /// the write (a later switch judges, then pops, then inserts). The row
-    /// is [`AltBlock::admitted`] of the verdict — the block, its witness,
+    /// is [`AltBlock::admitted`] of the verdict — the block, its references,
     /// and the height, cumulative difficulty and weight the tier derived —
     /// and its listed bodies go to `alt_block_bodies` under the same key.
     /// The key is the verdict's hash (CEN-B6 over the block it stores), so
@@ -218,8 +218,8 @@ impl WriteBatch<'_, '_> {
             .arm(StoreInvariant::DemotedBlockRefused { height })
     }
 
-    /// **AL2.** Remove the alt block under `id`. Its witness leaves with it —
-    /// the witness is a field of the row (CW-2, structural).
+    /// **AL2.** Remove the alt block under `id`. Its references leave with
+    /// it — they are a field of the row (CW-2, structural).
     ///
     /// # Errors
     ///
@@ -239,18 +239,37 @@ impl WriteBatch<'_, '_> {
     /// it; whether it did. The connect's half of "a block id has one home"
     /// (module docs): the block it records leaves the alt table in the same
     /// write. Its children stay: their parent is now a main-chain block.
+    ///
+    /// The bundle bodies the row's section named lose this holder; each goes
+    /// unless another holds it (`bundle_holders.rs`, SI-41). When the block
+    /// is being connected, its own section row already holds them.
     pub(super) fn take_alt_block(&self, id: &BlockHash) -> Result<bool, StoreError> {
         let mut table = self.alt_table()?;
         let removed = table.remove(key(id)).map_err(EngineError::Storage)?;
-        let held = removed.is_some();
-        drop(removed);
+        let row = removed.map(|row| row.value().decode());
         drop(table);
-        if held {
-            self.alt_bodies_table()?
-                .remove(key(id))
-                .map_err(EngineError::Storage)?;
-        }
-        Ok(held)
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        self.alt_bodies_table()?
+            .remove(key(id))
+            .map_err(EngineError::Storage)?;
+        // A row that does not decode named nothing this store can read; the
+        // reconcile at open drops what it held.
+        let released: Vec<_> = row
+            .ok()
+            .and_then(|block| block.bundle_references().cloned())
+            .map(|section| {
+                section
+                    .as_slice()
+                    .iter()
+                    .filter_map(|bytes| shekyl_archival_retention::BundleRef::decode(bytes).ok())
+                    .map(|reference| (reference.h(), *reference.prunable_hash()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.drop_unheld(&released)?;
+        Ok(true)
     }
 
     /// **The death rule** (module docs): remove every alt block at or below

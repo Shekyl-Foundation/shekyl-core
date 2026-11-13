@@ -26,7 +26,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS};
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::transaction::Input;
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
@@ -535,11 +535,12 @@ fn body_of(candidate: &Candidate) -> BlockBody {
     BlockBody {
         block,
         txs,
-        attestation_witness: candidate
-            .attestation_witness
+        bundle_references: candidate
+            .bundle_references
             .as_ref()
-            .map(|w| w.as_bytes().to_vec())
+            .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -667,18 +668,18 @@ fn bind_body_agrees_with_validate() {
                         );
                         reordered = true;
                     }
-                    let mut bad_witness = intact;
-                    bad_witness.attestation_witness = vec![0xff];
-                    let mut with_witness = candidate.clone();
-                    with_witness.attestation_witness =
-                        Some(AttestationWitness::new(vec![0xff]).expect("within the cap"));
+                    let mut bad_references = intact;
+                    bad_references.bundle_references = vec![vec![0xff; 80]];
+                    let mut with_references = candidate.clone();
+                    with_references.bundle_references =
+                        Some(BundleReferences::new(vec![vec![0xff; 80]]).expect("a section"));
                     assert_eq!(
-                        bind_body(&header, &bad_witness).map_err(|e| e.rule),
-                        Err(CenRow::B4)
+                        bind_body(&header, &bad_references).map_err(|e| e.rule),
+                        Err(CenRow::J29)
                     );
                     assert_eq!(
                         validate_said(
-                            with_witness,
+                            with_references,
                             &view,
                             &rule_set,
                             &trust,
@@ -686,7 +687,7 @@ fn bind_body_agrees_with_validate() {
                             seed,
                             target,
                         ),
-                        Said::Refused(CenRow::B4)
+                        Said::Refused(CenRow::J29)
                     );
                     witnessed = true;
 

@@ -13,7 +13,7 @@ use crate::coverage::RuleCoverage;
 use crate::harness::assert_refused;
 use crate::harness::fixture::{
     balanced_emission, coinbase, emission_vin, join_market, listed, mask_committing, multiple_of_g,
-    point, serve_credit_only, G, TWO_G,
+    point, G, TWO_G,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{TxContext, H17, H7};
@@ -100,8 +100,7 @@ fn h7_a_non_point_output_key_is_refused_everywhere() {
 
 /// A key image that is not a point, the identity, and a small-order point
 /// are each refused on H11 (at both sites for the first); a table point
-/// passes; archival vins carry no image and a serve credit records the row
-/// vacuously satisfied.
+/// passes.
 #[test]
 fn h11_a_non_point_identity_or_torsion_key_image_is_refused() {
     let with_image = |image: [u8; 32]| {
@@ -126,13 +125,6 @@ fn h11_a_non_point_identity_or_torsion_key_image_is_refused() {
     assert!(tx_form(&listed(KI), TxSlot::Lone, &RuleSet::GENESIS)
         .expect("a table point is a valid image")
         .contains(CenRow::H11));
-    assert!(tx_form(
-        &serve_credit_only([0x77; 32]),
-        TxSlot::Lone,
-        &RuleSet::GENESIS
-    )
-    .expect("no image to hold")
-    .contains(CenRow::H11));
 }
 
 // ---- CEN-H17 ------------------------------------------------------------
@@ -177,8 +169,7 @@ fn h17_trivial_or_invalid_or_miscounted_masks_are_refused() {
 
 /// A spend whose pseudo-out does not equal its mask plus the fee is refused
 /// on H18: a non-zero fee against an otherwise balanced pair, and a
-/// pseudo-out of `G` against a mask of `2·G`. The archival shapes record
-/// H18 vacuous.
+/// pseudo-out of `G` against a mask of `2·G`.
 #[test]
 fn h18_an_unbalanced_spend_is_refused() {
     let mut fee = listed(KI);
@@ -195,13 +186,6 @@ fn h18_an_unbalanced_spend_is_refused() {
         p.pseudo_outs = vec![G];
     }
     refused_lone(&short, CenRow::H18);
-    assert!(tx_form(
-        &serve_credit_only([0x77; 32]),
-        TxSlot::Lone,
-        &RuleSet::GENESIS
-    )
-    .expect("a serve credit")
-    .contains(CenRow::H18));
 }
 
 /// The balance is over the **amounts**, not only the blindings. Every other

@@ -9,8 +9,7 @@
 //! [`the_corpus_carries_exactly_these_archival_inputs`] reads every archival
 //! input off the captured chains and holds them to a table written from the
 //! first run: height, slot, kind, and the facts the 4.J rows judge (the hint
-//! recomputes; the post's money terms; a credit's shard and epoch; a claim's
-//! epochs).
+//! recomputes; the post's money terms; a claim's epochs).
 //! The positive witnesses are a list: a rule that refuses one of these blocks
 //! has refused a named input. The four chains with no archival input are the
 //! empty list, so a capture that grows one fails the table.
@@ -48,20 +47,6 @@ enum Archival {
         credit: u64,
         debit: u64,
     },
-    /// A serve-credit **vin** (none in the corpus today).
-    CreditVin {
-        height: BlockHeight,
-        slot: usize,
-        shard: u64,
-        epoch: u64,
-    },
-    /// An `Inject` record: a credit no block produced, attributed to the
-    /// tip it was written at. Not a vin: J4–J6 never see it.
-    Injected {
-        at_tip: BlockHeight,
-        shard: u64,
-        epoch: u64,
-    },
     /// An emission vin: the claimant and the epochs claimed (J19's parse).
     Claim {
         height: BlockHeight,
@@ -78,7 +63,6 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
     let mut reader =
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus");
     let mut height = reader.first_height();
-    let mut tip: Option<BlockHeight> = None;
     let mut found = Vec::new();
     while let Some(event) = reader.next().expect("corpus reads") {
         match event.event {
@@ -111,25 +95,6 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
                                     },
                                 ));
                             }
-                            Input::ServeCredit { .. } => {
-                                let Some(ArchivalKey::ServeCredit { p, shard, epoch }) =
-                                    ArchivalKey::of(input)
-                                else {
-                                    panic!(
-                                        "{}: an unparseable serve credit at {height}",
-                                        dir.display()
-                                    );
-                                };
-                                found.push((
-                                    PCanonicalId::from_bytes(p),
-                                    Archival::CreditVin {
-                                        height,
-                                        slot,
-                                        shard,
-                                        epoch,
-                                    },
-                                ));
-                            }
                             Input::ArchivalRewardEmission { .. } => {
                                 let Some(ArchivalKey::Claims { p, epochs }) =
                                     ArchivalKey::of(input)
@@ -152,21 +117,11 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
                         }
                     }
                 }
-                tip = Some(height);
                 height = height.saturating_add(BlockCount::ONE);
             }
             IngestEvent::Rewind { to } => {
-                tip = Some(to);
                 height = to.saturating_add(BlockCount::ONE);
             }
-            IngestEvent::Inject(credit) => found.push((
-                credit.persona,
-                Archival::Injected {
-                    at_tip: tip.expect("the corpus law refuses an inject before any block"),
-                    shard: credit.shard.to_raw(),
-                    epoch: credit.epoch.to_raw(),
-                },
-            )),
         }
     }
     found
@@ -186,8 +141,8 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
 ///   distinguish a per-shard floor from a flat one; the driver's two-shard
 ///   join and its one-floor negative (`scenario_archival_tests`) are the
 ///   witnesses that do.
-/// - **No serve-credit vin, no credit, no claim, and no Release or
-///   Reinstate** anywhere in the corpus: J4–J6, J13, J18–J20 have no
+/// - **No claim, and no Release or Reinstate** anywhere in the corpus:
+///   J13, J18–J20 have no
 ///   corpus-positive witness, which is why (b)–(d) build theirs on the
 ///   driver. No captured chain crosses a settlement epoch; `emission-claim`
 ///   returns with SO-D12 4b's evidence run (`docs/FOLLOWUPS.md`).

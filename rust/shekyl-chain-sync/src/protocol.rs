@@ -99,8 +99,35 @@ pub enum Event<K> {
     Announce {
         /// The session.
         session: K,
-        /// The block, its transactions, and its attestation witness.
+        /// The block, its transactions, and its bundle references.
         body: BlockBody,
+    },
+    /// A session's 2017: its answer to a 2016 the owner sent it for a block
+    /// awaiting bundle bodies ([`Command::RequestBundleBodies`]). Each body
+    /// is already held to the reference it answers (length and hash, §7.5).
+    /// Empty when the session answered with nothing.
+    BundleBodies {
+        /// The session that answered.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies, encoded.
+        bodies: Vec<Vec<u8>>,
+    },
+    /// What this node's body store held of a
+    /// [`Command::RequestBundleBodies`], read when the owner took it. Not
+    /// the session's answer: that is [`Event::BundleBodies`], and follows
+    /// only when `asked`.
+    HeldBundleBodies {
+        /// The session the command named.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies the store held, encoded. May be empty.
+        bodies: Vec<Vec<u8>>,
+        /// Whether the rest went to `session` as a 2016. `false` when the
+        /// store held every body, or the session was gone.
+        asked: bool,
     },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
@@ -261,6 +288,18 @@ pub enum Command<K> {
         /// established session.
         from: Option<K>,
     },
+    /// A block's section names bundle bodies this node was not sent (2016).
+    /// The owner answers what its body store holds
+    /// ([`Event::HeldBundleBodies`]) and asks `session` for the rest, whose
+    /// answer is [`Event::BundleBodies`].
+    RequestBundleBodies {
+        /// The session that sent the block.
+        session: K,
+        /// The block awaiting the bodies.
+        block: BlockHash,
+        /// The references whose bodies were not sent, undecoded.
+        references: Vec<Vec<u8>>,
+    },
     /// An announce is missing transactions.
     RequestMissingTxs {
         /// The session.
@@ -363,8 +402,12 @@ pub struct OfferedBody {
     pub block: Vec<u8>,
     /// Listed transactions, whole encodings, in the block's order.
     pub txs: Vec<Vec<u8>>,
-    /// The witness beside the block. Empty when the set is empty.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references beside the block, undecoded. Empty when the
+    /// block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles the sender carried, unverified and in no
+    /// set order. Assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl OfferedBody {
@@ -381,7 +424,8 @@ impl OfferedBody {
         Some(Self {
             block: body.block.clone(),
             txs,
-            attestation_witness: body.attestation_witness.clone(),
+            bundle_references: body.bundle_references.clone(),
+            bundle_bodies: body.bundle_bodies.clone(),
         })
     }
 }
@@ -509,4 +553,8 @@ pub enum CloseCause {
     BlockRefused(InvalidBlock),
     /// The body is larger than any valid block.
     Oversize,
+    /// The session announced a block and answered the 2016 for its bundle
+    /// bodies with nothing. A relayer serves the bodies of the blocks it
+    /// relays (`SCS-P27`), so the session is withholding them.
+    BundleBodiesWithheld,
 }

@@ -181,8 +181,8 @@ async fn a_block_this_node_mined_is_relayed_to_every_session() {
     let (corpus, steps) = spend();
     let held = source("mined-relay-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let Some((Step::Block { block, bodies }, before)) = steps.split_last() else {
-        panic!("the corpus ends in a block");
+    let Some((Step { block, bodies }, before)) = steps.split_last() else {
+        panic!("the corpus is not empty");
     };
     let mut node = Node::start(
         "mined-relay",

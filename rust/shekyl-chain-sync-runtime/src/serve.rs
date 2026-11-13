@@ -16,7 +16,7 @@
 //! difficulty.
 //!
 //! A body request names hashes. Each one on the main chain is answered with
-//! its block, its listed transactions and its attestation witness, and
+//! its block, its listed transactions and its bundle references, and
 //! [`BodyPlanner`] decides what is sent, deferred and missed; a body the
 //! budget defers is never read. A transaction whose archival good this
 //! node holds is served [`TxBody::Full`]; one whose good the retention
@@ -26,7 +26,7 @@
 //!
 //! A request for an announced block's missing transactions (2009, CS-5 §6)
 //! names the block and indices into its transaction list. It is answered
-//! with one 2008 carrying the block, its witness and those transactions
+//! with one 2008 carrying the block, its references and those transactions
 //! whole. The peer's own faults close its session, each with its cause
 //! ([`MissingTxsRefused`]). A block this node holds only as an alternative
 //! left the main chain after it was announced; that is not the peer's
@@ -39,6 +39,7 @@ use shekyl_levin::{
     RequestCompactMissingTx, RequestHeaders, ResponseBodies, ResponseHeaders, TxBlobEntry,
     HASH_SIZE, HEADERS_RESPONSE_BYTES,
 };
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, TxHash};
 use shekyl_wire::{BlockBody, TxBody};
 
@@ -196,10 +197,23 @@ fn body_of(snap: &ReadSnapshot<'_>, hash: BlockHash) -> Result<Option<BlockBody>
         };
         txs.push(tx);
     }
+    // The bodies of its section this store holds, passed over where it
+    // holds none: a recent block's are here, an older block's may not be,
+    // and the asker fetches what is missing by 2016 or does without (§8).
+    let section = section_at(snap, height)?;
+    let bundle_bodies = snap
+        .held_section_bodies(section.as_ref())?
+        .iter()
+        .map(|body| body.as_bytes().to_vec())
+        .collect();
+    let bundle_references = section
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default();
     Ok(Some(BlockBody {
         block: body.block.serialize(),
         txs,
-        attestation_witness: witness_at(snap, height)?,
+        bundle_references,
+        bundle_bodies,
     }))
 }
 
@@ -222,13 +236,23 @@ fn tx_body(snap: &ReadSnapshot<'_>, txid: &TxHash) -> Result<Option<TxBody>, Sto
     })
 }
 
-/// The attestation witness of the main-chain block at `height`; empty when
-/// it has none.
-fn witness_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<Vec<u8>, StoreError> {
-    Ok(match snap.attestation_witness_at(height)? {
-        AtHeight::Recorded(Some(witness)) => witness,
-        AtHeight::Recorded(None) | AtHeight::AboveTip => Vec::new(),
+/// The bundle section of the main-chain block at `height`, if it has one.
+fn section_at(
+    snap: &ReadSnapshot<'_>,
+    height: BlockHeight,
+) -> Result<Option<BundleReferences>, StoreError> {
+    Ok(match snap.bundle_references_at(height)? {
+        AtHeight::Recorded(section) => section,
+        AtHeight::AboveTip => None,
     })
+}
+
+/// The bundle references of the main-chain block at `height`; empty when
+/// it has none.
+fn references_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<Vec<Vec<u8>>, StoreError> {
+    Ok(section_at(snap, height)?
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default())
 }
 
 /// Why a request for an announced block's missing transactions closes its
@@ -260,7 +284,7 @@ pub enum MissingTxsRefused {
 /// What a request for an announced block's missing transactions gets.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MissingTxsServed {
-    /// The block, its witness and the transactions asked for, in the
+    /// The block, its references and the transactions asked for, in the
     /// order asked, as one 2008.
     Answer(NewCompactBlock),
     /// The block is held only as an alternative: it left the main chain
@@ -335,7 +359,7 @@ pub fn serve_missing_txs(
             block: body.block.serialize(),
             block_weight: 0,
             txs,
-            attestation_witness: witness_at(&snap, height)?,
+            bundle_references: references_at(&snap, height)?,
         },
         current_blockchain_height: request.current_blockchain_height,
     }))

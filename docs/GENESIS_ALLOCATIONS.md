@@ -62,7 +62,7 @@ Genesis identity:
 
 ```text
 tx hash        027cd4eab42c68d4906a5106d6015de2c5b7e9c7fd9b1bbad6ab311ee3e5d7ab
-block id       cdd7233fc45420c24b5e4eeae8636bb5a8c52b4e0d7efd92ed397e3cc89e2a55
+block id       f91dd5408ce12f0032ec3d48b367d8bf40f8c3498f3ea199153532d41c254279
 ```
 
 ### stagenet
@@ -81,7 +81,7 @@ Genesis identity:
 
 ```text
 tx hash        3396d303a926c50e8dc745915d91597ecdb7c20aebd8245cf2e8c1ad57b5688d
-block id       d986a79ea2320037878ff1b862af04a0827148b54e9f7f10283ca1bc038b87d2
+block id       73bc5f22c340c37ff589f4f08ecd00113c55553f1c8ce539ce0abe3335c5833f
 ```
 
 ### testnet
@@ -100,7 +100,7 @@ Genesis identity:
 
 ```text
 tx hash        a4ce0b6b0a434e77a5b31f58d2cc6516b5e224335bc397b371b3fa6715e82344
-block id       bb826da27e019532f22c199d366812e39c2e33de1b5bbae3f6352bccf4caaa7b
+block id       b76542286f60b2a21be1672c5494f66b8a80e5f89bea66e5a26aab977989ef39
 ```
 
 ### regtest
@@ -124,7 +124,7 @@ Genesis identity:
 
 ```text
 tx hash        3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e
-block id       a55e00d6677d3ad7f07e76e2255102ea761623bac23cc94d4185a0667b8a3825
+block id       7662cdc11aa4e5df3da1231532d2b027714dc14e4f16a6d785be76f1bce4f2a3
 ```
 
 Addresses are truncated above for readability only — the full strings are

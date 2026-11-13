@@ -410,7 +410,7 @@ fn header_facts(
         prev_hash: block.header.previous,
         miner_tx_hash: block.miner_transaction.hash(),
         curve_tree_root: block.header.curve_tree_root,
-        attestation_root: block.header.attestation_root,
+        section_root: block.header.section_root,
         pow_hash: place.pow_hash,
         height: place.height,
         depth: place.depth,
@@ -553,14 +553,42 @@ impl ChainFacts for StoreFacts {
     fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
         let snap = self.snapshot()?;
         let (tip, _) = tip_of(&snap)?;
-        let block = header_for(&snap, tip, at, fill_pow_hash)?.map(|(header, block)| {
-            let tx_hashes: Vec<TxHash> = block.transaction_hashes.clone();
-            BlockFacts {
-                header,
-                blob: block.serialize(),
-                json: None,
-                tx_hashes,
+        let Some((header, block)) = header_for(&snap, tip, at, fill_pow_hash)? else {
+            return Ok(BlockAt {
+                block: None,
+                chain_height: count_at(tip),
+            });
+        };
+        // The block's own section: an alt block carries it in its record;
+        // a main-chain block's is the row at its height.
+        let references = if header.orphan_status {
+            snap.alt_block(&header.hash)
+                .map_err(store_fault)?
+                .and_then(|alt| alt.bundle_references().cloned())
+        } else {
+            match snap
+                .bundle_references_at(header.height)
+                .map_err(store_fault)?
+            {
+                AtHeight::Recorded(section) => section,
+                AtHeight::AboveTip => return Err(FactsFault::Inconsistent),
             }
+        };
+        let bundle_bodies = snap
+            .held_section_bodies(references.as_ref())
+            .map_err(store_fault)?
+            .iter()
+            .map(|body| body.as_bytes().to_vec())
+            .collect();
+        let block = Some(BlockFacts {
+            tx_hashes: block.transaction_hashes.clone(),
+            blob: block.serialize(),
+            json: None,
+            header,
+            bundle_references: references
+                .map(shekyl_types::archival::BundleReferences::into_inner)
+                .unwrap_or_default(),
+            bundle_bodies,
         });
         Ok(BlockAt {
             block,

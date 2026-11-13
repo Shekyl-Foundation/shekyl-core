@@ -100,6 +100,7 @@ mod archival_fold;
 mod archival_reads;
 mod archival_write;
 mod at_index;
+mod bundle_holders;
 mod bundle_queue;
 mod bundle_view;
 mod chain_reads;
@@ -130,16 +131,14 @@ mod write;
 pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
 pub use archival_fold::BlockArchivalFold;
-pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use bundle_queue::{QueueEntry, QueueReconciled};
 pub use bundle_view::{BundleRows, StoreBundleView};
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, BodyHolderFault, CellFault, DigestFault, DrawRowFault, DrawableFault,
-    EdgeFault, EngineError, ErrorClass, FrozenFault, HeldRegion, LeafCountFault, LeafDensity,
-    PoolCannot, QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
-    UndoFault,
+    EdgeFault, EngineError, ErrorClass, HeldRegion, LeafCountFault, LeafDensity, PoolCannot,
+    QueueCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -735,6 +734,10 @@ mod edge_tests;
 #[path = "prune_tests.rs"]
 mod prune_tests;
 
+#[cfg(test)]
+#[path = "shard_fill.rs"]
+mod shard_fill;
+
 /// Where the proofs are verified: `form`, never `validate` (2026-10-16).
 #[cfg(test)]
 #[path = "verify_site_tests.rs"]
@@ -762,7 +765,7 @@ mod curve_read_tests;
 mod archival_read_tests;
 
 /// DRS-E4 commit 5: the archival writer's rows, read back against the
-/// verdict; the injector door; ARW-9; CEN-L7 over a persisted record.
+/// verdict; ARW-9; CEN-L7 over a persisted record.
 #[cfg(test)]
 #[path = "archival_write_tests.rs"]
 mod archival_write_tests;

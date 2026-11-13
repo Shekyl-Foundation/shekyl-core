@@ -40,7 +40,7 @@ pub enum Inbound {
         /// is read once the owner has taken the claim.
         taken: Taken,
     },
-    /// One of the owner's six commands, still encoded under its arm.
+    /// One of the owner's nine commands, still encoded under its arm.
     Message {
         /// The session.
         session: Established,

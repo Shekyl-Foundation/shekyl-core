@@ -323,7 +323,7 @@ mod check_workflows {
             "orphan": false, "depth": 0, "difficulty": "0x1",
             "difficulty_cumulative": "0x1", "reward": "0", "weight": 0,
             "weight_longterm": null, "tx_count": 0, "coinbase": zero,
-            "curve_root": zero, "attestation_root": zero,
+            "curve_root": zero, "section_root": zero,
         })
     }
 

@@ -6,10 +6,9 @@
 //! The archival writer (`archival_write.rs`, DRS-E4 commit 5): what one
 //! block's [`ArchivalDelta`] leaves in the store, read back through the
 //! production snapshot API and compared with the **verdict** that produced
-//! it — never with a figure the test planted. The join and its credit
-//! (phase 2), the accrual (9a), the epoch close (9c) on a short levered epoch
-//! schedule, the attestation witness (5), the regtest injector door
-//! (`ChainStore::regtest_inject_serve_credit`), ARW-9's skip-and-widen
+//! it — never with a figure the test planted. The join (phase 2), the
+//! accrual (9a), the epoch close (9c) on a short levered epoch
+//! schedule, the attestation witness (5), ARW-9's skip-and-widen
 //! under a stubbed family, and CEN-L7's `NotSettled` arm over a
 //! **persisted** record — the arm the rules crate cannot reach on its own,
 //! because its driver has no record that outlives a block.
@@ -38,23 +37,21 @@ use shekyl_chain_rules::{
     FormClaims, HeaderView, Locus, RecordWriteKind, ReferenceClaims, RuleSet, Trust, TxSlot,
     Verdict,
 };
-use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::archival::BundleReferences;
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch};
 use shekyl_wire::Input;
 
 use shekyl_harness_spender::Persona;
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, expected_seed,
-    expected_target, priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
+    anchor, batch_root_going_into, candidate_over, connect_chain, expected_seed, expected_target,
+    priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{inject_permit, issue_permit, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::view::BatchView;
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{SettlementEpochBlocks, SigmaWorkMilli};
-use crate::ids::ServeCreditKey;
-use crate::schema::ARCHIVAL_SERVE_CREDIT;
 use shekyl_chain_rules::EpochFloor;
 
 /// The slot of the persona every join here opens a record for
@@ -71,10 +68,6 @@ fn epoch(n: u64) -> SettlementEpoch {
     SettlementEpoch::from_raw(n)
 }
 
-fn shard(n: u64) -> ShardId {
-    ShardId::from_raw(n)
-}
-
 /// A `(SEB, cap)` pair at compile time; a bad one is a compile error
 /// (`prune_tests.rs`'s shape).
 const fn pair(seb: u64, cap: u64) -> CappedEpoch {
@@ -89,27 +82,17 @@ const fn pair(seb: u64, cap: u64) -> CappedEpoch {
 
 /// A settlement epoch just long enough to hold the first admissible spend
 /// height, so a chain a few blocks past it closes an epoch with a record
-/// and a credit in it: the join sits at [`FIRST_SPEND_HEIGHT`], in epoch
-/// 0 — the premise the harness credit is built on ([`credited`] credits
-/// epoch 1, "a fixture join is in epoch 0") — and
-/// [`CLOSING_HEIGHT`] closes epoch 1, the first the persona may be
-/// credited for (CEN-J5). Before the spend height was derived from
-/// coinbase maturity it sat at 5 and this epoch was sixteen blocks.
+/// in it: the join sits at [`FIRST_SPEND_HEIGHT`], in epoch 0, and
+/// [`CLOSING_HEIGHT`] closes epoch 1, the first the persona could serve.
 const SHORT_SEB: u64 = FIRST_SPEND_HEIGHT + 14;
 /// The epoch the join is listed in: epoch 0, by the epoch's length.
 const JOIN_EPOCH: u64 = FIRST_SPEND_HEIGHT / SHORT_SEB;
-const _: () = assert!(
-    JOIN_EPOCH == 0,
-    "the harness credit is for a join in epoch 0"
-);
-/// The first epoch the persona may serve: not the join's own (CEN-J5).
+const _: () = assert!(JOIN_EPOCH == 0, "the join is in epoch 0");
+/// The first epoch the persona could serve: not the join's own.
 const CREDIT_EPOCH: u64 = JOIN_EPOCH + 1;
-/// The credit is listed in its epoch's third block — inside the epoch and
-/// past its seal block (what CEN-J7 will require; E6 slice C).
-const CREDIT_HEIGHT: u64 = CREDIT_EPOCH * SHORT_SEB + 2;
-/// The credited epoch's last block, the one that closes it.
+/// The closed epoch's last block, the one that closes it.
 const CLOSING_HEIGHT: u64 = (CREDIT_EPOCH + 1) * SHORT_SEB - 1;
-const _: () = assert!(FIRST_SPEND_HEIGHT < CREDIT_HEIGHT && CREDIT_HEIGHT < CLOSING_HEIGHT);
+const _: () = assert!(FIRST_SPEND_HEIGHT < CLOSING_HEIGHT);
 const SHORT_RETENTION: u64 = 8;
 const SHORT: RuleSet = RuleSet::GENESIS.with_levers(None, pair(SHORT_SEB, 4));
 
@@ -199,17 +182,13 @@ fn pop(store: &ChainStore) {
 
 // ------------------------------------------------------- phase 2 and 9a
 
-/// A JoinMarket and, one block above it, the credit on its record land as
-/// the rows the two deltas name — the record the join's delta inserted,
-/// the credit's pass bit, each block's open-epoch accrual post-image — and
-/// the pops lift them in order: the credit's pop the pass bit and the
-/// accrual back to the join block's, the join's pop the record and the
-/// accrual back to the pre-image the blocks before had written. The credit
-/// is for epoch 1 (CEN-J5: the join's epoch plus one); the pass bit is
-/// read under that key.
+/// A JoinMarket lands as the row its delta names — the record the join's
+/// delta inserted — beside the block's open-epoch accrual post-image, and
+/// the pop lifts both: the record and the accrual back to the pre-image the
+/// blocks before had written.
 #[test]
-fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
-    let path = tmp("aw-join-credit");
+fn a_join_lands_as_its_deltas_record_and_a_pop_lifts_it() {
+    let path = tmp("aw-join");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut grown = Grown::new();
     for _ in 0..FIRST_SPEND_HEIGHT {
@@ -223,14 +202,17 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         .expect("read");
     assert!(before.is_some(), "the coinbase-only blocks accrued");
 
-    let (join, credit) = credited(P_SLOT);
-    let joined = connect_one(&store, &mut grown, &[join], RuleSet::GENESIS);
+    let joined = connect_one(
+        &store,
+        &mut grown,
+        &[Listed::Join { slot: P_SLOT }],
+        RuleSet::GENESIS,
+    );
     let [write] = joined.records() else {
         panic!("one record write: {:?}", joined.records());
     };
     assert_eq!(write.kind(), RecordWriteKind::Insert);
     assert_eq!(*write.persona(), p);
-    assert!(joined.serve_credits().is_empty());
     assert!(
         joined.close().is_none(),
         "epoch 0 is open under the production SEB"
@@ -238,18 +220,6 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
     assert_ne!(
         Some(joined.accrual().total),
         before,
-        "this block's inflow moved the accrual"
-    );
-
-    let credited_delta = connect_one(&store, &mut grown, &[body(credit)], RuleSet::GENESIS);
-    assert!(
-        credited_delta.records().is_empty(),
-        "a credit writes no record"
-    );
-    assert_eq!(credited_delta.serve_credits().len(), 1);
-    assert_ne!(
-        credited_delta.accrual().total,
-        joined.accrual().total,
         "this block's inflow moved the accrual"
     );
 
@@ -262,21 +232,6 @@ fn a_join_and_its_credit_land_as_the_deltas_rows_and_a_pop_lifts_them() {
         snap.bond_records().expect("read"),
         vec![(p, write.record().clone())]
     );
-    assert!(snap.pass_count(&p, shard(0), epoch(1)).expect("read").any());
-    assert_eq!(
-        snap.budget_accruing(epoch(0)).expect("read"),
-        Some(credited_delta.accrual().total)
-    );
-    drop(snap);
-
-    pop(&store);
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.bond_record(&p).expect("read"),
-        Some(write.record().clone()),
-        "the credit's pop leaves the join's record"
-    );
-    assert!(!snap.pass_count(&p, shard(0), epoch(1)).expect("read").any());
     assert_eq!(
         snap.budget_accruing(epoch(0)).expect("read"),
         Some(joined.accrual().total)
@@ -314,23 +269,13 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
         connect_empty(&store, &mut grown, SHORT);
     }
     let p = persona(P_SLOT);
-    let (join, credit) = credited(P_SLOT);
-    connect_one(&store, &mut grown, &[join], SHORT);
-    for _ in (FIRST_SPEND_HEIGHT + 1)..CREDIT_HEIGHT {
-        connect_empty(&store, &mut grown, SHORT);
-    }
-    assert_eq!(
-        grown.height().to_raw(),
-        CREDIT_HEIGHT,
-        "the next block is {CREDIT_HEIGHT}, the credit's"
-    );
-    connect_one(&store, &mut grown, &[body(credit)], SHORT);
+    connect_one(&store, &mut grown, &[Listed::Join { slot: P_SLOT }], SHORT);
     let mut accrued_before_close = None;
-    for _ in (CREDIT_HEIGHT + 1)..CLOSING_HEIGHT {
+    for _ in (FIRST_SPEND_HEIGHT + 1)..CLOSING_HEIGHT {
         accrued_before_close = Some(connect_empty(&store, &mut grown, SHORT).accrual().total);
     }
     let accrued_before_close =
-        accrued_before_close.expect("the blocks between the credit and the close connected");
+        accrued_before_close.expect("the blocks between the join and the close connected");
     assert_eq!(
         grown.height().to_raw(),
         CLOSING_HEIGHT,
@@ -416,10 +361,10 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
     assert_eq!(again, closing, "the same block, the same verdict");
     between(&store);
 
-    // One epoch on, the pass of `CREDIT_EPOCH` gathers it. The persona's
-    // serve credit is a pass row, not a Served settlement row — no draw
-    // was issued — so it is credited nothing (`SO-D11a`), and the epoch's
-    // Σwork is a written zero a claim can cite.
+    // One epoch on, the pass of `CREDIT_EPOCH` gathers it. No draw was
+    // issued, so the persona has no Served settlement row and is credited
+    // nothing (`SO-D11a`), and the epoch's Σwork is a written zero a claim
+    // can cite.
     let mut last = None;
     for _ in 0..SHORT_SEB {
         last = Some(connect_empty(&store, &mut grown, SHORT));
@@ -458,19 +403,15 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
 
 // -------------------------------------------------------------- phase 5
 
-/// The attestation witness row has one persisted form per block (DRS-E4
-/// §3.2 phase 5): the empty set is `None` on the candidate and **no row**
-/// — `Recorded(None)` at the height, `AboveTip` once the block is popped
-/// — and the only other spelling of the empty set, an eight-byte zero
-/// count on the sidecar, is refused at CEN-B4 (`Locus::Block`) before the
-/// writer is handed anything, so no node records a present-but-empty row
-/// for a block its peers record none for. A present row needs a genuine
-/// non-empty witness, which no block can carry until CEN-I20's coinbase
-/// grammar admits the `0x0B` field (`CHAIN_RULES_SLICE_8.md` §5.1, row 10
-/// finding); the write itself is the FFI's and the rules crate's to
-/// witness until then.
+/// The bundle-references row has one persisted form per block: no
+/// references is `None` on the candidate and **no row** — `Recorded(None)`
+/// at the height, `AboveTip` once the block is popped. A section whose
+/// reference does not parse is refused at CEN-J29, at that reference,
+/// before the writer is handed anything. A present row — a block that
+/// admitted a bundle — is written and popped in
+/// `admission_chain_tests::a_verified_bundle_is_what_the_store_writes_and_pop_restores`.
 #[test]
-fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
+fn no_references_is_no_row_and_a_malformed_section_is_refused() {
     let path = tmp("aw-witness");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut grown = Grown::new();
@@ -480,31 +421,34 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     let snap = store.begin_read().expect("read");
     for h in 0..2 {
         assert_eq!(
-            snap.attestation_witness_at(BlockHeight::from_raw(h))
+            snap.bundle_references_at(BlockHeight::from_raw(h))
                 .expect("read"),
             AtHeight::Recorded(None)
         );
     }
     drop(snap);
 
-    // The zero-count sidecar on the block that would connect at height 2.
-    let zero_count = AttestationWitness::new(0u64.to_le_bytes().to_vec())
-        .expect("eight bytes: non-empty, under the cap");
+    // A section on the block that would connect at height 2.
+    let section = BundleReferences::new(vec![vec![0xAB; 80]]).expect("a section");
     let height = grown.height().to_raw();
     let previous = grown.tip();
     let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let root = batch_root_going_into(&view, height)?;
         let cand = candidate_over(root, height, previous, Vec::new())
-            .with_attestation_witness(Some(zero_count));
+            .with_bundle_references(Some(section));
         Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
     });
-    assert_refused(out.expect("judging only reads"), CenRow::B4, Locus::Block);
+    assert_refused(
+        out.expect("judging only reads"),
+        CenRow::J29,
+        Locus::Bundle { position: 0 },
+    );
 
     pop(&store);
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.attestation_witness_at(BlockHeight::from_raw(1))
+        snap.bundle_references_at(BlockHeight::from_raw(1))
             .expect("read"),
         AtHeight::AboveTip
     );
@@ -512,155 +456,18 @@ fn the_empty_attestation_set_is_no_row_and_a_zero_count_sidecar_is_refused() {
     drop(store);
 }
 
-// ------------------------------------------------------- the injector
-
-/// The regtest door: refused under any trust that carries an anchor
-/// (Fakechain is the one posture no release vouches for), refused on an
-/// empty chain, refused for a persona with no record (a bit for a
-/// stranger would be SI-15 at the next read), and otherwise a pass bit at
-/// the tip's height that the journal never saw — a pop below it leaves the
-/// bit, as the C++'s does.
-#[test]
-fn the_injector_opens_only_unanchored_and_writes_an_unjournaled_bit_at_the_tip() {
-    let path = tmp("aw-inject");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(P_SLOT);
-
-    let empty = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(empty, StoreError::Cannot(StoreCannot::ChainEmpty)),
-        "{empty:?}"
-    );
-
-    let mut grown = Grown::new();
-    for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    }
-    let stranger = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            stranger,
-            StoreError::Cannot(StoreCannot::InjectionForUnbondedPersona { persona }) if persona == p
-        ),
-        "{stranger:?}"
-    );
-    connect_one(
-        &store,
-        &mut grown,
-        &[Listed::Join { slot: P_SLOT }],
-        RuleSet::GENESIS,
-    );
-    let tip = BlockHeight::from_raw(FIRST_SPEND_HEIGHT);
-
-    // A permit for another lever opens no door: the write runs on its own.
-    let off = store
-        .regtest_inject_serve_credit(issue_permit(), p, shard(3), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            off,
-            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
-                given: shekyl_network::Lever::IssueDraws,
-                wanted: shekyl_network::Lever::InjectServeCredit,
-            })
-        ),
-        "{off:?}"
-    );
-    assert!(
-        !store
-            .begin_read()
-            .expect("read")
-            .pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .any(),
-        "a refused injection writes nothing"
-    );
-
-    let at = store
-        .regtest_inject_serve_credit(inject_permit(), p, shard(3), epoch(0))
-        .expect("Fakechain, a tip recorded, a record held");
-    assert_eq!(at, tip, "attributed to the tip");
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .to_raw(),
-        1
-    );
-    assert!(!snap.pass_count(&p, shard(3), epoch(1)).expect("read").any());
-    drop(snap);
-
-    // Not journaled: a block above the bit, popped, leaves it.
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    pop(&store);
-    let snap = store.begin_read().expect("read");
-    assert_eq!(
-        snap.tip().expect("read").recorded.map(|t| t.height),
-        Some(tip)
-    );
-    assert_eq!(
-        snap.pass_count(&p, shard(3), epoch(0))
-            .expect("read")
-            .to_raw(),
-        1,
-        "the injected bit survives the pop below it"
-    );
-    drop(snap);
-    drop(store);
-}
-
-/// The door writes one family and does not skip: a session stubbing
-/// `ServeCredit` is refused at the table, not silently widened.
-#[test]
-fn the_injector_is_refused_when_serve_credits_are_stubbed() {
-    let path = tmp("aw-inject-stubbed");
-    let policy = ApplyPolicy::stubbed(&[ArchivalFamily::ServeCredit]).expect("non-empty");
-    let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
-    let mut grown = Grown::new();
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    let err = store
-        .regtest_inject_serve_credit(inject_permit(), persona(0x1f), shard(0), epoch(0))
-        .unwrap_err();
-    assert!(
-        matches!(
-            err,
-            StoreError::Cannot(StoreCannot::FamilyStubbed(ArchivalFamily::ServeCredit))
-        ),
-        "{err:?}"
-    );
-    drop(store);
-}
-
 // ------------------------------------------------------------- ARW-9
 
 /// Skip-and-widen: a session stubbing `Bond` connects the join without
 /// writing its record, and the file's provenance names the family — the
-/// block is accepted, and the file is no longer parity evidence. The
-/// credit behind that join, in the next block, is **refused at CEN-J4**
-/// (E6 slice 8 row 3): the validator reads the record off the tables, not
-/// the session's policy, and this session wrote none. So a `Bond`-stubbed
-/// session cannot connect a serve credit at all, which is the honest
-/// consequence — the stub is a measurement lever, and a credit it let
-/// through would be SI-15 (`ServeCreditWithoutBond`) at the next read.
-///
-/// *Records-was:* until row 3 this test listed the credit in the **same
-/// block** as the join and witnessed its row written behind a record the
-/// session did not hold, with SI-15 at the read; the fold's in-block
-/// sequencing admitted the pair. The rule refuted that arrangement
-/// (`connect_fixtures::credited`); SI-15's read witness is
-/// `archival_read_tests`' own.
+/// block is accepted, and the file is no longer parity evidence.
 #[test]
 fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     let path = tmp("aw-arw9");
     let policy = ApplyPolicy::stubbed(&[ArchivalFamily::Bond]).expect("non-empty");
     let store = ChainStore::with_apply_policy(&path, policy, EPOCH).expect("create");
     let p = persona(P_SLOT);
-    let (join, credit) = credited(P_SLOT);
-    let listing = spendable_prefix(vec![vec![join]]);
+    let listing = spendable_prefix(vec![vec![Listed::Join { slot: P_SLOT }]]);
     let grown = connect_chain(&store, &listing);
     assert_eq!(grown.height().to_raw(), FIRST_SPEND_HEIGHT + 1);
 
@@ -675,35 +482,6 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     assert!(provenance.stubbed().contains(ArchivalFamily::Bond));
     assert!(!provenance.is_parity_evidence());
 
-    // The credit, one block above the join it names: J4 reads the table
-    // the policy skipped.
-    let height = FIRST_SPEND_HEIGHT + 1;
-    let credit = anchor(&grown.hashes, BlockHeight::from_raw(height), credit);
-    let previous = grown.tip();
-    let out: Result<Verdict<()>, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let root = batch_root_going_into(&view, height)?;
-        let cand = candidate_over(root, height, previous, vec![credit]);
-        Ok(verdict_under(&view, cand, &RuleSet::GENESIS)?)
-    });
-    assert_refused(
-        out.expect("judging only reads"),
-        CenRow::J4,
-        Locus::Input {
-            slot: TxSlot::Listed(0),
-            input: 0,
-        },
-    );
-    let snap = store.begin_read().expect("read");
-    assert!(
-        snap.open_table(ARCHIVAL_SERVE_CREDIT)
-            .expect("table")
-            .get(ServeCreditKey::new(p, shard(0), epoch(1), BlockHeight::from_raw(height)).key())
-            .expect("get")
-            .is_none(),
-        "nothing reached the writer"
-    );
-    drop(snap);
     drop(store);
 }
 
@@ -805,117 +583,6 @@ fn a_claim_with_a_filler_fee_proof_is_refused_at_j26_before_the_persisted_record
         },
     );
     drop(store);
-}
-
-/// The draw-issue door (`SO-D10f`) beside the credit injector: Fakechain
-/// only, bonded personas only, a draw issued once, and the digest the
-/// caller folded stored as given. Not journaled, like the credit.
-#[test]
-fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_once() {
-    let path = tmp("aw-issue-draws");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let p = persona(P_SLOT);
-    let draw = |j: u32, passed: bool| IndexedDraw {
-        persona: p,
-        shard: shard(3),
-        issuing_height: BlockHeight::from_raw(FIRST_SPEND_HEIGHT),
-        draw: j,
-        state: IssuedDraw {
-            revealed_at: BlockHeight::from_raw(FIRST_SPEND_HEIGHT + 1),
-            passed,
-        },
-    };
-    let digest = IssuedDigest::from_bytes([0x5a; 32]);
-
-    let mut grown = Grown::new();
-    for _ in 0..FIRST_SPEND_HEIGHT {
-        connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    }
-    let stranger = store
-        .regtest_issue_draws(issue_permit(), epoch(0), &[draw(0, false)], digest)
-        .unwrap_err();
-    assert!(
-        matches!(
-            stranger,
-            StoreError::Cannot(StoreCannot::InjectionForUnbondedPersona { persona }) if persona == p
-        ),
-        "{stranger:?}"
-    );
-    connect_one(
-        &store,
-        &mut grown,
-        &[Listed::Join { slot: P_SLOT }],
-        RuleSet::GENESIS,
-    );
-    let off = store
-        .regtest_issue_draws(inject_permit(), epoch(0), &[draw(0, false)], digest)
-        .unwrap_err();
-    assert!(
-        matches!(
-            off,
-            StoreError::Cannot(StoreCannot::PermitForAnotherLever {
-                given: shekyl_network::Lever::InjectServeCredit,
-                wanted: shekyl_network::Lever::IssueDraws,
-            })
-        ),
-        "{off:?}"
-    );
-    let read = |e: u64| {
-        let snap = store.begin_read().expect("read");
-        (
-            snap.issued_draws(epoch(e), EpochFloor::NONE).expect("read"),
-            snap.issued_digest(epoch(e), EpochFloor::NONE)
-                .expect("read"),
-        )
-    };
-    assert_eq!(
-        read(0),
-        (vec![], IssuedDigest::ZERO),
-        "a refused issue writes nothing"
-    );
-
-    store
-        .regtest_issue_draws(
-            issue_permit(),
-            epoch(0),
-            &[draw(1, true), draw(0, false)],
-            digest,
-        )
-        .expect("Fakechain, a record held, draws not yet issued");
-    assert_eq!(
-        read(0),
-        (vec![draw(0, false), draw(1, true)], digest),
-        "both draws in index order, the digest as given"
-    );
-    assert_eq!(
-        read(1),
-        (vec![], IssuedDigest::ZERO),
-        "another epoch is untouched"
-    );
-
-    // A draw the index holds is not issued again, and the refused batch
-    // writes nothing: not the fresh draw listed before it, not the digest.
-    let again = store
-        .regtest_issue_draws(
-            issue_permit(),
-            epoch(0),
-            &[draw(2, false), draw(1, false)],
-            IssuedDigest::ZERO,
-        )
-        .unwrap_err();
-    assert!(
-        matches!(
-            again,
-            StoreError::Cannot(StoreCannot::DrawAlreadyIssued { persona }) if persona == p
-        ),
-        "{again:?}"
-    );
-    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
-
-    // Not journaled: a block above the draws, popped, leaves them.
-    connect_empty(&store, &mut grown, RuleSet::GENESIS);
-    pop(&store);
-    assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
 }
 
 #[path = "block_draws_write_tests.rs"]
