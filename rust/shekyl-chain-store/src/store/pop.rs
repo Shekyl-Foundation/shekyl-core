@@ -142,6 +142,14 @@ impl WriteBatch<'_, '_> {
         // impossible inside one transaction, and named rather than assumed.
         match self.replay_undo(tip)? {
             Replayed::Entries(reversed) => {
+                // §7.5: an entry leaves when its block is popped. Upkeep
+                // used to keep an entry at or above the tip until the
+                // window closed, so a rewind of blocks that each admitted
+                // the previous block's bundle held one entry per popped
+                // height and could pass the queue's `W₂` bound. The entry
+                // goes before the section returns: a returned bundle names
+                // an `h` the pop left on the chain.
+                self.unqueue_bundle(BlockHeight::from_raw(tip))?;
                 if !returned.is_empty() {
                     let (parent_height, parent_hash) = self.parent_of(tip)?;
                     self.return_section(&returned, parent_height, parent_hash)?;

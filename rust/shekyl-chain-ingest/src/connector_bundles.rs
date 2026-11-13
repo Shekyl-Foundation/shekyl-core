@@ -36,8 +36,9 @@
 //!   snapshot. An entry whose window closed leaves. An entry whose
 //!   admitting tip is no longer on the chain is judged again: kept by
 //!   rewriting that tip ([`WriteBatch::retip_bundle`]), or removed if
-//!   refused. An entry above the tip waits. A queue that does not change
-//!   is not written.
+//!   refused. An entry whose block is not on the chain leaves: `pop`
+//!   removes it, and a queue that still holds one is the same departure
+//!   (§7.5). A queue that does not change is not written.
 //! - **Reconcile**, at start: the store drops a body no entry names and an
 //!   entry whose body is gone (SI-41), and this actor logs what went.
 //!
@@ -309,6 +310,11 @@ impl Connector {
                 Departed::WindowClosed => tracing::info!(
                     h = departure.h.to_raw(),
                     "bundle queue: the window for height {} closed",
+                    departure.h.to_raw()
+                ),
+                Departed::IssuingBlockPopped => tracing::info!(
+                    h = departure.h.to_raw(),
+                    "bundle queue: the entry for height {} left because its block was popped",
                     departure.h.to_raw()
                 ),
                 Departed::Refused(why) => tracing::info!(
@@ -627,6 +633,8 @@ struct Departure {
 
 enum Departed {
     WindowClosed,
+    /// The issuing block is not on the chain (§7.5).
+    IssuingBlockPopped,
     Refused(String),
 }
 
@@ -689,8 +697,14 @@ fn classify(
     for entry in entries {
         let h = entry.h;
         if h >= h_incl {
-            // Popped and not reconnected: the window cannot have closed,
-            // and there is nothing to judge until the block is back.
+            // The issuing block is not on the chain. §7.5: the entry
+            // leaves when `h` is popped. `pop` removes it in the same
+            // write; one still queued is the same departure, not a wait
+            // for the block to return.
+            plan.departures.push(Departure {
+                h,
+                why: Departed::IssuingBlockPopped,
+            });
             continue;
         }
         if h_incl > h.saturating_add(window) {

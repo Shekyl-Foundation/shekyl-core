@@ -214,8 +214,9 @@ async fn an_entry_leaves_when_its_window_closes() {
 
 /// After a reorg pops the tip an entry was admitted against, the queue
 /// judges it again by the same rule and keeps it, at the new tip. A pop of
-/// the bundle's own block refuses it, and it leaves. Red edit: skip the
-/// re-judge — the entry keeps its old tip.
+/// the bundle's own block removes the entry (§7.5). Red edits: skip the
+/// re-judge — the entry keeps its old tip; skip `unqueue_bundle` in `pop`
+/// — the entry is still queued after its block is gone.
 #[tokio::test]
 async fn a_reorg_judges_an_entry_again() {
     let witness = Witness::new(0x34);
@@ -232,17 +233,15 @@ async fn a_reorg_judges_an_entry_again() {
     assert_eq!(entries.len(), 1, "judged again and kept");
     assert_eq!(entries[0].queued.tip_height, to);
 
-    // Pop the bundle's block and connect another at its height: the
-    // commitment there is not the bundle's, and the rule refuses it.
+    // Pop the bundle's own block. The entry leaves with it (§7.5),
+    // rather than waiting above the tip for a later block to refuse it.
     scenario
         .rewind_to(BlockHeight::from_raw(ours.height.to_raw() - 1))
         .await
         .expect("the rewind lands");
-    assert_eq!(queued(&scenario).len(), 1, "above the tip it waits");
-    scenario.mine(2).await;
     assert!(
         queued(&scenario).is_empty(),
-        "another block at h refuses it"
+        "an entry leaves when its block is popped"
     );
     scenario.close().await;
 }

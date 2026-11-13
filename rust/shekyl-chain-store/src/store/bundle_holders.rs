@@ -35,9 +35,11 @@
 //!   entry the block did not admit — another valid bundle for the same
 //!   `h` — leaves too, and its body goes unless something else holds it.
 //! - **pop** of that block: each bundle returns to the queue, against the
-//!   tip the pop leaves ([`WriteBatch::return_section`]). It was admitted
-//!   against that chain, so it is not judged again here; the queue's
-//!   upkeep re-judges an entry whose tip leaves the chain.
+//!   tip the pop leaves ([`WriteBatch::return_section`]), and the queue
+//!   entry for the popped block itself leaves (§7.5: an entry leaves when
+//!   `h` is popped). A returned bundle was admitted against that chain, so
+//!   it is not judged again here; the queue's upkeep re-judges an entry
+//!   whose tip leaves the chain.
 //! - **the horizon**: at each connect, the block that has just passed the
 //!   undo retention gives up its bodies ([`WriteBatch::sweep_section`]).
 //!   A pop can no longer reach it.

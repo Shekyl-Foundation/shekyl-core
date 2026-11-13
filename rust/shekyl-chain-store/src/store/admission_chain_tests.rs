@@ -814,6 +814,51 @@ fn body_stored(chain: &SlashedChain, hash: &[u8; 32]) -> bool {
         .is_some()
 }
 
+/// Popping the block a queued bundle is for removes that entry (§7.5).
+/// The including block's pop returns the bundle; the issuing block's pop
+/// does not keep it. A rewind that returned every predecessor's bundle
+/// would otherwise hold one entry per popped height and pass the queue's
+/// `W₂` bound. Red edit: skip `unqueue_bundle` in `pop` — the entry for
+/// the popped block is still queued, and its body is still stored.
+#[test]
+fn popping_the_issuing_block_removes_its_queued_bundle() {
+    let mut prepared = prepare("pop-issuing");
+    let (reference, body) = produce(&prepared);
+    let hash = *reference.prunable_hash();
+    let h = drawing_height();
+    let including = prepared.chain.grown.height();
+    let tip_hash = prepared.chain.grown.tip();
+    let tip_height = including - BlockCount::ONE;
+    assert_eq!(tip_height, h, "the bundle is for the tip");
+    let queued: Result<(), TestErr> = prepared.chain.store.write(|batch| {
+        batch.queue_bundle(&reference, &body, tip_height, tip_hash, 64)?;
+        Ok(())
+    });
+    queued.expect("the bundle queues");
+    connect_carrying(&mut prepared.chain, &reference, &body);
+    assert!(queued_hs(&prepared.chain).is_empty());
+
+    pop_one(&mut prepared.chain);
+    assert_eq!(
+        queued_hs(&prepared.chain),
+        vec![(h, tip_height)],
+        "the including block's pop returns the bundle"
+    );
+    assert!(body_stored(&prepared.chain, &hash));
+
+    pop_one(&mut prepared.chain);
+    assert!(
+        !queued_hs(&prepared.chain)
+            .iter()
+            .any(|(queued_h, _)| *queued_h == h),
+        "the issuing block's pop removes its entry"
+    );
+    assert!(
+        !body_stored(&prepared.chain, &hash),
+        "nothing holds the body once its block is gone"
+    );
+}
+
 /// SI-41's holders across a bundle's life (`bundle_holders.rs`). Queued,
 /// the queue holds the body. Admitted, the block holds it and the entry
 /// leaves. Popped, the bundle is back in the queue against the tip the pop
