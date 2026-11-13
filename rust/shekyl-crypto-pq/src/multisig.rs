@@ -153,8 +153,9 @@ pub fn multisig_key_hash(
 
 /// The bytes an output's leaf commits to: `0x02 ‖ n ‖ m ‖ h_1 ‖ … ‖ h_n`.
 ///
-/// Fields are private and every constructor checks `1 ≤ m ≤ n ≤ MAX` and
-/// `n` hashes, so a committed form that does not parse does not exist.
+/// Fields are private and every constructor checks
+/// [`MIN_MULTISIG_THRESHOLD`] `≤ m ≤ n ≤ MAX` and `n` hashes, so a
+/// committed form that does not parse does not exist.
 /// The hashes are the decrypted `0x0D` plaintext until a spend publishes
 /// them, so the form and every serialization of it wipe on drop.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -185,8 +186,9 @@ impl MultisigCommittedForm {
     ///
     /// # Errors
     ///
-    /// [`PqcVerifyError::ParameterBounds`] unless `1 ≤ m ≤ n ≤ MAX`, where
-    /// `n` is `key_hashes.len()`.
+    /// [`PqcVerifyError::ParameterBounds`] unless
+    /// [`MIN_MULTISIG_THRESHOLD`] `≤ m ≤ n ≤ MAX`, where `n` is
+    /// `key_hashes.len()`.
     pub fn new(
         m_required: u8,
         key_hashes: Vec<[u8; MULTISIG_KEY_HASH_LEN]>,

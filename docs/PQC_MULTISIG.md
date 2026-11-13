@@ -350,8 +350,8 @@ MultisigAddressPayload {
     group_version:       u8   (= 0x01)
     spend_auth_version:  u8   (= 0x02, Option E′)
     network_byte:        u8
-    n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS = 5)
-    m_required:          u8   (1..=n_total)
+    n_total:             u8   (2..=MAX_MULTISIG_PARTICIPANTS = 5)
+    m_required:          u8   (2..=n_total)
 
     b_group:             [u8; 32]   // B = b·G. Every member holds b.
     y_group:             [u8; 32]   // Y = y·T. y is FROST-shared, M-of-N.
