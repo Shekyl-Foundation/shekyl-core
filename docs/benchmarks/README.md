@@ -60,6 +60,25 @@ gungraun `client_requests`) and `gungraun-runner` on `PATH`
 ./scripts/bench/capture_rust_baseline.sh
 ```
 
+Two variables choose what it captures. `BENCH_SET` is `pr` (the default:
+the rows a pull request and the push to `dev` run) or `nightly` (the rows
+too long for a pull request, which `nightly.yml`'s `bench-full` job
+captures and compares with the night before). `BENCH_ROWS` is `all` (the
+default) or the rows to run, space-separated, each
+`<crate>::<gungraun-target>`:
+
+```bash
+BENCH_ROWS="shekyl-engine-state::balance_iai" ./scripts/bench/capture_rust_baseline.sh
+```
+
+A pull request's capture is scoped this way. Every row has a
+`[[gated_row]]` in `measurement_ledger.toml` with a path set, the code
+whose change can move its counts; `scripts/ci/change_scope.py` names the
+rows the pull request's change can reach (`bench_rows`), and the capture
+runs those. The envelope records what was captured (`captured_rows`), and
+`compare.py` reads a baseline row outside it as out of scope, not deleted.
+The push to `dev` captures every row.
+
 This script:
 
 1. Wipes `rust/target/criterion` so the envelope reflects this run

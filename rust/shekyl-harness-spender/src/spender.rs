@@ -24,13 +24,13 @@ use shekyl_tx_builder::{
     open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
     InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
 };
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::tx_extra::{
     admitted_leaf_blob, parse, pqc_kem_per_output, pqc_leaf_entries_per_output, serialize,
     TxExtraField,
 };
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::bond::PostedBond;
 use crate::{MinedBlock, MinerWallet, Owner, Recipient};
@@ -292,6 +292,7 @@ impl Spender {
             fee,
             None,
             wallet.recipient(),
+            2,
             Twist {
                 break_range_proof: true,
                 ..Twist::default()
@@ -322,6 +323,7 @@ impl Spender {
             fee,
             None,
             wallet.recipient(),
+            2,
             Twist {
                 reference: Some(reference),
                 ..Twist::default()
@@ -351,6 +353,7 @@ impl Spender {
             fee,
             bond,
             wallet.recipient(),
+            2,
             Twist {
                 break_membership_proof: true,
                 ..Twist::default()
@@ -530,7 +533,15 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(sourced, connecting, fee, bond, recipient, Twist::default())
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            bond,
+            recipient,
+            2,
+            Twist::default(),
+        )
     }
 
     /// A spend of watched outputs ([`Self::own`], sourced by
@@ -547,7 +558,112 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         assert!(!sourced.is_empty(), "a spend has an input");
-        Self::spend_sourced(sourced, connecting, fee, None, recipient, Twist::default())
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            None,
+            recipient,
+            2,
+            Twist::default(),
+        )
+    }
+
+    /// A spend of several blocks' coinbases in **one** transaction, listed
+    /// in the block connecting at `connecting`, paying `fee` and the rest
+    /// back to the miner in two outputs — the multi-input shape, up to the
+    /// prover's `shekyl_fcmp::MAX_INPUTS` (CEN-I4's cap). Each input
+    /// carries its own `pqc_auths` slot, so the body's archival length
+    /// grows by a hybrid key and signature per input; this is how a
+    /// fixture chain reaches an archival length with bytes every landed
+    /// rule verifies, rather than by padding a region none does.
+    ///
+    /// Yields the body and the coinbase heights **in the body's input
+    /// order** — the inputs are sorted by key image (CEN-I5), not listed
+    /// as asked — so a caller pairing each input's key image with the
+    /// coinbase it spends reads the pairing here rather than deriving it.
+    #[must_use]
+    pub fn spend_coinbases(
+        &self,
+        wallet: &MinerWallet,
+        heights: &[BlockHeight],
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> (Transaction, Vec<BlockHeight>) {
+        assert!(!heights.is_empty(), "a spend has an input");
+        let pairs: Vec<(BlockHeight, Sourced)> = heights
+            .iter()
+            .map(|&height| (height, self.source_coinbase(wallet, height, connecting)))
+            .collect();
+        // `spend_sourced` is the one CEN-I5 sort. Heights come back from the
+        // encoded body's key images, so a sort here would have to stay
+        // identical to that one or the pairing would describe a different order.
+        let height_of: BTreeMap<KeyImage, BlockHeight> = pairs
+            .iter()
+            .map(|(height, source)| (source.key_image, *height))
+            .collect();
+        assert_eq!(
+            height_of.len(),
+            pairs.len(),
+            "each spent coinbase has its own key image"
+        );
+        let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
+        let tx = Self::spend_sourced(
+            inputs,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            2,
+            Twist::default(),
+        );
+        let spent_heights: Vec<BlockHeight> = tx
+            .prefix
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::ToKey { key_image, .. } => Some(
+                    height_of
+                        .get(&KeyImage::from_bytes(*key_image))
+                        .copied()
+                        .expect("the body's key image is one of the spent coinbases"),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            spent_heights.len(),
+            height_of.len(),
+            "a coinbase spend lists only the spent coinbases"
+        );
+        (tx, spent_heights)
+    }
+
+    /// A spend of block `height`'s coinbase paying `outputs` outputs back
+    /// to the miner, up to the output cap (`shekyl_wire`'s `MAX_OUTPUTS`): the
+    /// shape with the most range proof, outputs and tree leaves a
+    /// transaction can carry. Every output but the last carries an equal
+    /// share of what the fee leaves, each with its own KEM ciphertext and
+    /// leaf entry, as the two-output builders' do.
+    #[must_use]
+    pub fn spend_coinbase_paying(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+        outputs: usize,
+    ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            outputs,
+            Twist::default(),
+        )
     }
 
     /// Block `height`'s coinbase sourced for the miner, for a spend
@@ -573,8 +689,13 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
+        outputs: usize,
         twist: Twist,
     ) -> Transaction {
+        assert!(
+            (2..=shekyl_wire::transaction::MAX_OUTPUTS).contains(&outputs),
+            "a spend pays two outputs at least and the output cap at most"
+        );
         // Inputs in strict-descending key-image order (CEN-I5), as the
         // engine's `sign_bridge` orders them before signing; the prefix
         // hash, the signer's inputs and the pseudo-outs all follow it.
@@ -601,7 +722,7 @@ impl Spender {
             .try_fold(0u64, u64::checked_add)
             .expect("the inputs' amounts sum");
 
-        // Two outputs to the recipient, each with its own KEM and leaf.
+        // `outputs` outputs to the recipient, each with its own KEM and leaf.
         // The balance the signer proves: `Σ amount + debit = outputs + fee +
         // credit` (`shekyl_ct_balance::verify_ct_balance`, CEN-H21's
         // equation), so what the outputs carry is what is left after the
@@ -617,8 +738,19 @@ impl Spender {
             .and_then(|funds| funds.checked_sub(fee))
             .and_then(|funds| funds.checked_sub(credit))
             .expect("the coinbase funds the fee and the bond credit");
-        let payment_amount = spendable / 2;
-        let change_amount = spendable - payment_amount;
+        // Every output but the last carries an equal share and the last
+        // the rest: at two outputs, a payment of half and the change.
+        let count = u64::try_from(outputs).expect("under the output cap");
+        let share = spendable / count;
+        let amounts: Vec<u64> = (0..count)
+            .map(|index| {
+                if index + 1 == count {
+                    spendable - share * (count - 1)
+                } else {
+                    share
+                }
+            })
+            .collect();
         // The transaction key is a seed (`derive_kem_seed` hashes it), so
         // any 32 bytes serve; what matters is that two spends are never
         // built from one. Keyed on the connecting height alone, two spends
@@ -645,11 +777,14 @@ impl Spender {
             )
             .expect("construct output")
         };
-        let payment = pay(payment_amount, 0);
-        let change = pay(change_amount, 1);
+        let paid: Vec<OutputData> = amounts
+            .iter()
+            .zip(0u64..)
+            .map(|(amount, index)| pay(*amount, index))
+            .collect();
         let mut kem_blob = Vec::new();
         let mut leaf_blob = Vec::new();
-        for od in [&payment, &change] {
+        for od in &paid {
             kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
             kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
             leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
@@ -658,7 +793,7 @@ impl Spender {
             pqc_leaf_entries_per_output(&leaf_blob)
                 .expect("whole entries")
                 .len(),
-            2
+            outputs
         );
         let extra = serialize(&[
             TxExtraField::PqcKemCiphertext(kem_blob),
@@ -672,12 +807,14 @@ impl Spender {
             enc_amount: od.enc_amount_wire(),
             enc_label: od.enc_label_wire(),
         };
-        let outputs = [info(&payment, payment_amount), info(&change, change_amount)];
-        let output_keys = [payment.output_key, change.output_key];
-        let view_tags = [
-            Some(payment.view_tag_prefilter),
-            Some(change.view_tag_prefilter),
-        ];
+        let output_infos: Vec<OutputInfo> = paid
+            .iter()
+            .zip(&amounts)
+            .map(|(od, amount)| info(od, *amount))
+            .collect();
+        let output_keys: Vec<[u8; 32]> = paid.iter().map(|od| od.output_key).collect();
+        let view_tags: Vec<Option<u8>> =
+            paid.iter().map(|od| Some(od.view_tag_prefilter)).collect();
 
         // Sign, then encode through the production encoder and read back.
         let extra_inputs: Vec<shekyl_wire::Input> =
@@ -689,7 +826,7 @@ impl Spender {
             &key_image_bytes,
             &extra_inputs,
             &output_keys,
-            &[0, 0],
+            &vec![0; outputs],
             &view_tags,
             &extra,
         )
@@ -698,7 +835,7 @@ impl Spender {
             &Self::NETWORK_ID,
             tx_prefix_hash,
             &spend_inputs,
-            &outputs,
+            &output_infos,
             AtomicUnits::from_raw(fee),
             &extra_input_terms,
             &extra_output_terms,
@@ -742,9 +879,9 @@ impl Spender {
             SpendLayout {
                 key_images: key_image_bytes,
                 extra_inputs,
-                output_keys: output_keys.to_vec(),
                 output_amounts: vec![0; output_keys.len()],
-                view_tags: view_tags.to_vec(),
+                output_keys,
+                view_tags,
                 tx_extra: extra,
                 fee,
                 slots: AuthSlots {

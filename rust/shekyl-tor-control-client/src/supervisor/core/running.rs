@@ -32,7 +32,7 @@ impl Core {
         // same clock. The old Tor's refused rounds are not this one's.
         self.uploads_refused = false;
         if !self.clock_is_behind() && self.inbound != Inbound::NotOffered {
-            self.inbound = Inbound::Publishing;
+            self.inbound = Inbound::Publishing { since: now };
         }
         self.probe = Probe::Idle;
         self.probe_confirms = false;

@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The block path's gated benches have no multisig shape: nothing builds a scheme-2 spend a validator admits.** `DAEMON_REDB_STORE.md` §1.3a.7's shape 3 is the multisig container at its maximum signers, the heaviest post-quantum signature kind. `shekyl-harness-spender` signs single-signer inputs only, so `shekyl-chain-ingest`'s block-path fixtures (`bench_fixture_tests.rs`) cannot list one. Named blocker: a builder of a scheme-2 spend (the multisig completion's spend path). When it exists, the shape is one `Shape` entry and two regenerated fixtures.
+  - Owner: the daemon benchmarks — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (BA-T2)
+  - Target: pre-genesis (trigger: a scheme-2 spend builder lands)
 - **The clearnet reconnect throttle is registered and not built, and the evidence check's forced-rebuild bound waits on it.** After `N` completed handshakes from one host within `T`, refuse that host's new inbound handshakes for a cooldown; throttle only, keyed by prefix on IPv6. `N` and `T` are measured on the Rust transport. Until it exists a host's next session is free, so the past-cap evidence check, one per session, is bounded only by running serially (`RANDOMX_CACHE_ACTOR.md` §5.9). On the mainnet launch checklist (`RELEASE_CHECKLIST.md`). Falsify by: a host that completes `N + 1` handshakes inside `T` and is refused the last.
   - Owner: the transport layer — [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md) ("Clearnet reconnect throttle", D-S1)
   - Target: pre-genesis (trigger: before mainnet genesis)

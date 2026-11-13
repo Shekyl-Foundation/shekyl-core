@@ -501,7 +501,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented in §14 (Known gaps) because neither fully
+the split are documented in §17 (Known gaps) because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -531,7 +531,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§14 (Known gaps) below**. In the interim, a delta in this bench is
+**§17 (Known gaps) below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -998,7 +998,137 @@ gives the receipt key's share of a slot (`FN_DSA_HYBRID.md` `FND-12`).
 
 ---
 
-## 14. Known gaps
+## 14. `crypto_bench_block_form` — a block's stateless verification (`BA-T2`)
+
+**Crate.** `shekyl-chain-ingest`.
+**Binary.** `benches/block_path_iai.rs` (gungraun), built with
+`--features bench-internals,harness`. Count-only: `PB-D1`'s seconds are
+read at a release cut on the two devices, and `shekyl-verify-cost`'s
+`block_connect_verify` stays the wall-clock instrument a device runs.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** `shekyl_chain_rules::form` on one block: the header
+and coinbase rows, then for every listed transaction its form (`tx_form`),
+its signatures (CEN-I17, CEN-I18) and its membership proof (CEN-I15), then
+the block's range proofs folded into one batch (CEN-H19). It is the
+stateless stage every connected block pays, whether or not its
+transactions came through the pool, and the verifier's term of `PB-D1`
+(`DAEMON_REDB_STORE.md` §1.3a).
+
+| Cell | The block | Instructions (2026-11-12) |
+| --- | --- | --- |
+| `spend_1in_2out` | four 1-in/2-out spends, block weight 54,165 | 1,825,906,454 |
+| `spend_8in_2out` | four spends at the input cap (`MAX_FCMP_INPUTS`), block weight 236,501 | 4,934,399,305 |
+| `spend_1in_16out` | four spends at the output cap (`MAX_OUTPUTS`), block weight 139,725 | 2,188,084,731 |
+| `bond_post` | four coinbase spends each carrying a complete-tree join by its own persona, block weight 99,373 | 1,848,299,171 |
+
+The counts are a development workstation's, recorded to show the rows'
+scale. The gate compares a pull request with the baseline the runner
+captured, never with these.
+
+**The fixture.** `benches/fixtures/block_path_<shape>_unit.corpus`: a
+chain the scenario driver mined under regtest at fixed difficulty one,
+coinbase-only up to the first height at which the spent coinbases have
+matured, then the subject block. Every spend is the harness spender's,
+signed by the production signer and admitted by the validator when the
+fixture was written. `bench_support::BlockPath::replayed` connects the
+history into a fresh store in `setup`, outside the count, in one write;
+the subject's claims (the seed, the target, the reference claims) are
+read there too.
+
+**What it does not measure.** The block's proof-of-work: the fixture chain
+runs under the harness longhash, and one header's RandomX verification is
+§16. The view-bound stage, which is §15. A block at the weight limit:
+`benches/block_path_full_iai.rs` counts the same call on
+`block_path_<shape>_full.corpus` (45, 10, 17 and 24 transactions), and is the
+nightly capture's (`nightly.yml`, `bench-full`, compared with the night
+before by `bench-full-drift`), because forming the 45 spends of the smallest shape is
+17,141,243,472 instructions and about twenty minutes of callgrind a row.
+`form` judges each listed transaction on its own, so the four carry every
+term the 45 do; what the full block adds is the count.
+
+**Shapes not here.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An
+emission claim's own verification (its backing proof and its two
+signatures) is `validate`'s, not `form`'s, so its row needs a store
+holding a settled epoch: a chain through a closed shard and about three
+epochs. No fixture here carries one. That row is the chain forge's (its
+F4 pilot consumer, over the first-settled-epoch snapshot), as is any
+bench that needs a closed shard, a settled epoch, a claim, a slash or a
+discard. The
+multisig container needs a builder of a scheme-2 spend, which the harness
+does not have (`docs/FOLLOWUPS.md`).
+
+**Staleness.** `every_block_path_fixture_replays`
+(`src/bench_fixture_tests.rs`, default lane) replays each fixture and runs
+`form`, `connect` and `pop` on its subject, so a consensus change that
+refuses a fixture fails there by fixture name. The driver panics on a
+refusal, so a stale fixture fails the bench in setup and cannot count a
+refusal path. `regenerate_block_path_fixtures` rewrites them.
+
+## 15. `crypto_bench_block_connect`, `_pop`, `crypto_bench_store_read_*` — the store's share (`BA-T41`)
+
+**Crate, binary, class.** As §14.
+
+**What it measures.** On the blocks of §14:
+
+| Function | What is inside the count |
+| --- | --- |
+| `crypto_bench_block_connect` | `validate_with_memo` over the write batch's view (the view-bound rows: key images, references, the weight medians, the emission), `WriteBatch::connect`, and the commit at production durability: the connector's `Apply` for one block. The store's term, `PB-D1s` |
+| `crypto_bench_block_pop` | one pop of that block and its commit: the connector's rewind for one block |
+| `crypto_bench_store_read_block` | a read snapshot, and the tip block by height: the blob read, parsed, and hashed against its recorded identity |
+| `crypto_bench_store_read_header_range` | a read snapshot, and the 64 header records below the tip |
+| `crypto_bench_store_read_tree_leaves` | a read snapshot, and the first 8 curve-tree leaves |
+
+| Function | `spend_1in_2out` | `spend_8in_2out` | `spend_1in_16out` | `bond_post` |
+| --- | --- | --- | --- | --- |
+| `crypto_bench_block_connect` | 24,703,181 | 44,035,378 | 34,943,887 | 30,505,662 |
+| `crypto_bench_block_pop` | 28,679,225 | 76,536,312 | 35,947,387 | 31,979,949 |
+
+The three reads, on the output-cap fixture: the block 149,147, the header
+run 504,140, the leaf run 22,044. The block read is of the connected
+subject; the two range reads are over the fixture's history, so their
+setup does not form the subject.
+
+**Repeatability.** Captures of one build on one machine agreed to 0.002 %
+on the form rows and to within 1 % on the store rows (the block read:
+149,007, 148,838, 149,492, 149,147; the header run 499,796 and 504,140).
+The store rows are not bit-exact from run to run; the difference is well
+inside the class's ±5 % warning.
+
+**Cost of the capture.** Twelve functions of this binary (before the
+bond-post cells, which add three) took 31 minutes of callgrind on a
+16-core development workstation (2026-11-12), about two and a half
+minutes a function. Most of each is setup: the
+fixture's history, seventy to a hundred coinbase-only blocks, validated
+and connected under callgrind before the measured call. The history is
+connected in one write, since a commit per block was slower still.
+
+**What it does not measure.** The time a commit takes. An instruction
+count does not see the `fsync`, which is most of a commit's wall time on a
+real disk; `PB-D1s`' milliseconds are the release cut's. The reads are
+against a chain of about seventy blocks: they count the read's code, not
+a tree of production depth.
+
+## 16. `crypto_bench_randomx_verify_header` — one header's proof-of-work (`BA-T42`)
+
+**Crate.** `shekyl-pow-randomx`.
+**Binary.** `benches/verify_header_iai.rs` (gungraun). Count-only.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** `compute_hash` over a prepared cache on a 136-byte
+blob, the shortest proof-of-work preimage and a header's: scratchpad
+allocation and fill, the eight program chains in light mode, and the
+final hash. It is the call `ProductionSubstrate::longhash` makes for
+every block a node connects. 1,695,916,524 instructions (2026-11-12, a
+development workstation).
+
+**What it does not measure.** The cache's derivation, which is done in
+`setup`: a cache lasts an epoch of 2,048 blocks, and `benches/cache_derive.rs`
+is its instrument. The floor device's figure, which is `BA-T40`'s. The
+Rust-to-C ratio, which is `BA-T27`'s. The count is the x86 runner's, where
+the verifier uses the instruction set it finds.
+
+## 17. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -1083,7 +1213,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 15. Cross-references
+## 18. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -1114,13 +1244,13 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 16. Change log for this manifest
+## 19. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §14, Known gaps (§12 when this entry was written;
+  gaps documented in §17, Known gaps (§12 when this entry was written;
   renumbered since, as the entries below record) (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
@@ -1222,3 +1352,8 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   range proof 21,676,240. One-time gated rise, absorbed by the rolling
   baseline on the next `dev` rotation. Function name, class and schema
   version (`shekyl_rust_v0`) unchanged.
+- Brief D, PR D1 (2026-11-12): added §14 (`crypto_bench_block_form`,
+  `BA-T2`), §15 (the store's connect, pop and reads, `BA-T41`) and §16
+  (`crypto_bench_randomx_verify_header`, `BA-T42`), the first gated rows
+  on the daemon's block path. Sections previously numbered §§14–16 (Known
+  gaps, Cross-references, Change log) renumbered to §§17–19.

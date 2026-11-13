@@ -30,15 +30,24 @@
 # under heavy load (the two RandomX switch measurements dominate); the job
 # allows 240 minutes for a 4-vCPU runner.
 #
-# Rule 47, both ways: the set is exact. Every subject below must be in the
-# crate's `--list --ignored`, so a renamed, deleted or un-ignored member
-# fails here by name; and every ignored test in the listing must be below,
-# so a new `#[ignore]` stops the lane by name until it is added here (or
-# made a non-ignored test). Either refusal comes before anything runs.
+# Helpers, never run here: the block-path bench fixtures' writer
+# (`bench_fixture_tests::regenerate_block_path_fixtures`). It WRITES
+# committed files; a lane that rewrote a fixture and then replayed it
+# would pass every night (ignored_set_wire.sh gives the same reason).
+#
+# Rule 47, both ways: the set is exact. Every subject and helper below must
+# be in the crate's `--list --ignored`, so a renamed, deleted or un-ignored
+# member fails here by name; and every ignored test in the listing must be
+# below, so a new `#[ignore]` stops the lane by name until someone decides
+# here whether it is run or is a helper (or stops ignoring it). Either
+# refusal comes before anything runs. The subjects run by exact name, so a
+# helper cannot be reached by a filter, and the run must report as many
+# passes as subjects.
 # `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
 # Rust job uses it; the run below is the nightly lane.
-# Rule 46: the listing is captured once and judged; no verdict travels
-# through a pipe that can end early; the run's own exit is the verdict.
+# Rule 46: the listing is captured once and judged; the run's log is
+# written and its exit kept, then the log shown; no verdict travels
+# through a pipe.
 set -euo pipefail
 . "$(dirname "$0")/ignored_set_mode.sh"
 ignored_set_mode "$@"
@@ -73,11 +82,15 @@ subjects=(
   'vectors_tests::replays_every_captured_chain_under_the_production_substrate'
 )
 
+helpers=(
+  'bench_fixture_tests::regenerate_block_path_fixtures'
+)
+listed_here=("${subjects[@]}" "${helpers[@]}")
 list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-ingest --features pipeline --lib -- --list --ignored)
 listed=$(sed -n 's/: test$//p' <<< "$list")
 
 missing=0
-for subject in "${subjects[@]}"; do
+for subject in "${listed_here[@]}"; do
   if ! grep -qxF -- "$subject" <<< "$listed"; then
     echo "::error::${subject} is not in shekyl-chain-ingest's ignored set"
     missing=1
@@ -88,11 +101,11 @@ extra=0
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   known=0
-  for subject in "${subjects[@]}"; do
+  for subject in "${listed_here[@]}"; do
     if [ "$name" = "$subject" ]; then known=1; break; fi
   done
   if [ "$known" -eq 0 ]; then
-    echo "::error::${name} is an ignored test this lane does not list: add it to scripts/ci/ignored_set_chain_ingest.sh, or stop ignoring it"
+    echo "::error::${name} is an ignored test this lane does not list: decide in scripts/ci/ignored_set_chain_ingest.sh whether it is run or is a helper, or stop ignoring it"
     extra=1
   fi
 done <<< "$listed"
@@ -100,10 +113,22 @@ done <<< "$listed"
 if [ "$missing" -ne 0 ] || [ "$extra" -ne 0 ]; then
   exit 1
 fi
-echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s), exactly the listed set"
+echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s) run and ${#helpers[@]} helper(s) not, exactly the listed set"
 ignored_set_stop_after_judgement
 
 START=$(date +%s)
-cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- --ignored --nocapture
+status=0
+cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- \
+  --ignored --exact --nocapture "${subjects[@]}" > chain-ingest-ignored.log 2>&1 || status=$?
+cat chain-ingest-ignored.log
+if [ "$status" -ne 0 ]; then
+  echo "::error::chain-ingest-ignored: a listed test failed."
+  exit "$status"
+fi
+ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' chain-ingest-ignored.log | tail -1)
+if [ "$ran" != "${#subjects[@]}" ]; then
+  echo "::error::${ran:-0} of ${#subjects[@]} listed tests ran: a name above no longer matches a test exactly."
+  exit 1
+fi
 END=$(date +%s)
 echo "::notice::Chain-ingest ignored set completed on ${branch} in $((END - START))s (budget 240m)"
