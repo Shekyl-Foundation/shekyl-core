@@ -206,7 +206,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed; it starts on Rick's authorization (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
+- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed, and Rick authorized it on 2026-11-13 (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
   - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
   - Target: pre-genesis
 

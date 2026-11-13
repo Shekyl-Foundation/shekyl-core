@@ -57,7 +57,7 @@ lane=nightly
 budget='180m, the nightly job'
 if [ "${1:-}" = --narrations ]; then
   lane=narrations
-  budget='40m, the per-PR narrations job'
+  budget='30m, the per-PR narrations job'
   shift
 fi
 ignored_set_mode "$@"

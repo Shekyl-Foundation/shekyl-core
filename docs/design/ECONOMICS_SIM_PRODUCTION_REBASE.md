@@ -3310,9 +3310,15 @@ pass. At its merge (`4df90a482`) they fail, and at `dev` `5ea4bff87` they fail
 on the same lines: `stage2_narration.txt` first differs at line 19, the flat
 control at line 22, `esr10_narration_nightly.txt` at line 208. The fixtures
 regenerated at `5ea4bff87` pass at the merge, so nothing after #1323 moved
-the narrations. Within the merge, the sim reads #1323's change only through
-S: the constant in `config/consensus_constants.json`, its field in
-`shekyl-economics`' `params.rs` and the median clamp in `block_weight.rs`.
+the narrations. Every hunk of #1323's merge in a crate the sim builds is S
+or its record: the constant in `config/consensus_constants.json`,
+`shekyl-economics`' ratified constant and its test (`block_weight.rs`), doc
+comments in `params.rs` and `shekyl-chain-rules`' `rules/block_weight.rs`,
+the consensus digest re-pinned in `shekyl-rpc-types`' `build.rs`, and the
+digest line in the sim's `baseline.rs`. The pins attribute the three
+fixtures they read; the fourth, the full `--esr10` narration, has an
+on-demand pin (85 CPU-minutes) that was not run at the parent and moved
+only in the cells the other three locate.
 
 **The mechanism.** The effective median is the short-term median clamped
 between the long-term median and S times it (CEN-G6b). A burst raises the
@@ -3333,23 +3339,25 @@ burned, and fewer shards close.
   269.8 expired, 3.5 evicted, 109.1 refused (was 233.4, 0, 37.2). Year 20's
   mean ordinary fee 0.0317 → 0.0244 SKL. Folded to 60 years, `n` 15,629,783,769
   → 15,629,603,721 and the flat-25 ratio at year 20 5.26 → 4.89; the GF-7 band
-  row 25.91 / 10.49 / 5.26 → 24.07 / 9.74 / 4.89 (flat-25 at 0, 10, 25 %/yr) and
-  59.95 / 24.27 / 12.18 → 50.13 / 20.29 / 10.19 (the best candidate), R sustained
+  row 25.91 / 10.49 / 5.26 → 24.07 / 9.74 / 4.89 (flat-25 at opportunity-cost
+  rates of 2, 5 and 10 %) and 59.95 / 24.27 / 12.18 → 50.13 / 20.29 / 10.19 (the
+  best candidate), R sustained
   at 10 % 31.59 / 73.09 → 29.35 / 61.11. The stuffer's ROI (OQ-4) 3.0437 /
-  18.9056 → 2.3197 / 14.0896; the pool capture 143,753.0 → 100,505.9 SKL a
-  year, `fee×→1` 7.6 → 5.2, and the non-gating `ROI(resp)` 1.01 → 0.77.
+  18.9056 → 2.3197 / 14.0896; `Δpool` 143,753.0 → 100,505.9 SKL a year,
+  `fee×→1` 7.6 → 5.2, and the non-gating `ROI(resp)` 1.01 → 0.77.
 - **Boom-bust.** The surge year (year 15) carries 125.9 of 150 (was 138.2);
   it drops 24.1 a block (was 11.8): 20.7 expired, 0.8 evicted, 2.6 refused
   (was 11.1, 0.8, 0). At 60 years `n` 4,159,884 → 3,837,433, and two onset
-  cells move: best at 5 %/yr y30* → y32*, flat at 10 %/yr y26* → y28*; the
+  cells move: best at a 5 % opportunity cost y30* → y32*, flat at 10 % y26* →
+  y28*; the
   flat-25 ratio at year 20 4.31 → 4.55.
 - **Chain bootstrap.** Its year-20 jump carries 74.8 of 75 (was all 75), and
-  one onset cell moves, flat at 5 %/yr y33 → y34; `n` at 60 years 3,786,905 →
+  one onset cell moves, flat at a 5 % opportunity cost y33 → y34; `n` at 60 years 3,786,905 →
   3,785,690.
 - **High history, low activity.** `n` at 60 years 1,296,390 → 1,290,604, the
   flat-25 ratio at year 20 9.26 → 9.34, and its tail-floor and burn rows in
   the second decimal (flat + 15 % tail floor 13.27 → 13.33). The
-  stuffer's ROI (OQ-4) 1.1399 / 4.2941 → 0.8962 / 3.3596; the pool capture
+  stuffer's ROI (OQ-4) 1.1399 / 4.2941 → 0.8962 / 3.3596; `Δpool`
   250,016.1 → 194,791.5 SKL a year, `fee×→1` 1.1 → 0.9.
 - **Late-chain tail.** `n` 1,234,953 → 1,234,932 at its horizon; year-1
   expiry 0.7 → 0.8 a block.
@@ -3360,10 +3368,10 @@ burned, and fewer shards close.
   limit (was 2.0160); the reorg down-swing 0.0543 (was 0.0725); the flood's
   fees about 322,368 SKL an epoch (was 429,862). The verdict line moves from
   "see the slew reading below" to "no measurable adversarial slew": its
-  `< 1.0` point-an-epoch gate is the one ruled on 2026-10-24 (ruling 8), under
-  which this member was excluded from the band at S = 4. At S = 3 it passes.
-  Whether it re-enters the band is Rick's to rule; the slew scales with S,
-  and S is re-derived at BA-T10.
+  `< 1.0` point-an-epoch gate is the one ruled on 2026-10-24 (ruling 8),
+  under which this member was excluded from the band at S = 4. The exclusion
+  stands; at S = 3 the member measures 0.7558, under the gate. The slew
+  scales with S, and S is re-derived at BA-T10.
 
 **The flat control** (16 lines) moves in A6 alone in substance (the same
 ceiling, slew and reorg figures; the flood's fees 7,174 → 5,380 SKL an
@@ -3400,7 +3408,9 @@ decides it (`sim_narrations`) from the same dependency closure that
 scopes the per-PR tests, so a change to any crate the sim calls runs them,
 not only the four paths that moved this time; on #1323's diff it answers
 `run`. The job has its own runner beside the Rust job, so it adds runner
-time and no wall time. A smoke fold over the burst scenarios was the
+time and no wall time: on #1369 it ran 13.9 minutes (the release build 4.9,
+the pins 8.6), its timeout is 30, and the Rust job beside it runs about two
+hours. A smoke fold over the burst scenarios was the
 cheaper option; it was not built, because it would pin a second, smaller
 narration that the full ones already cover, and the pins fit beside the
 Rust job.
