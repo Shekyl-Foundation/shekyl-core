@@ -60,6 +60,9 @@ zeroize = { workspace = true }
 thiserror.workspace = true
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 rand = "0.8"
 # The seeded signers' own determinism tests (`seeded-rng`, on this dev edge only).
 shekyl-tx-builder = { path = ".", features = ["seeded-rng"] }

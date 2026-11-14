@@ -77,7 +77,7 @@ async fn a_join_is_written_and_the_blocks_after_it_read_the_record() {
         2,
     );
     mine_to(&mut scenario, &mut mined, connecting).await;
-    let mut spender = Spender::over(&mined);
+    let mut spender = Spender::on(scenario.network_id(), &mined);
 
     let compact = Persona::at(1);
     let whole = Persona::at(2);

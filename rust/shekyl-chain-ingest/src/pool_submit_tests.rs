@@ -109,7 +109,7 @@ async fn a_poisoned_pool_still_admits() {
 async fn the_engine_submits_through_the_rust_pool_and_its_door() {
     let (mut scenario, mined) = matured("pool-submit").await;
     let paid = paying_the_floor(&mut scenario, &mined, 0).await;
-    let cheap = shekyl_harness_spender::Spender::over(&mined).spend_coinbase(
+    let cheap = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(1),
         h(AT),
@@ -181,7 +181,7 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
         shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
         shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
     };
-    let twin = shekyl_harness_spender::Spender::over(&mined).spend_coinbase(
+    let twin = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT),
@@ -308,7 +308,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
 
     let (mut scenario, mined, shards, connecting, floor) =
         closed_shards_lane("pool-submit-join").await;
-    let spender = shekyl_harness_spender::Spender::over(&mined);
+    let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
     let (compact, whole) = (Persona::at(1), Persona::at(2));
     let posts = [
         (0, compact.join(shard_set(shards), ENDPOINT)),
@@ -383,7 +383,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
 
     let (mut scenario, mined, shards, connecting, floor) =
         closed_shards_lane("pool-template-g10").await;
-    let spender = shekyl_harness_spender::Spender::over(&mined);
+    let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
     let (compact, whole) = (Persona::at(1), Persona::at(2));
     let posts = [
         (0, compact.join(shard_set(shards), ENDPOINT)),
@@ -482,7 +482,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     let paid = paying_the_floor(&mut scenario, &mined, 0).await;
     let fresh = paying_the_floor(&mut scenario, &mined, 2).await;
     let (twin, cheap) = {
-        let spender = shekyl_harness_spender::Spender::over(&mined);
+        let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         let fee = match &paid.ct {
             shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
@@ -602,7 +602,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
         shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
         shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
     };
-    let peer = shekyl_harness_spender::Spender::over(&mined).spend_coinbase(
+    let peer = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(2),
         h(AT),

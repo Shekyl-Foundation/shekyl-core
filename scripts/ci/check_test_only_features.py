@@ -341,6 +341,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "(CHAIN_FORGE.md §5.3, seam T4). Forwards shekyl-tx-builder's and "
     "shekyl-crypto-pq's seeded-rng. The crate is test support reached through dev "
     "edges only; this row keeps the seeded surface there too",
+    (
+        "shekyl-network",
+        "harness",
+    ): "exposes HARNESS_NETWORK_ID, the id a harness chain that mines its own "
+    "genesis is judged under (Trust::UNPINNED): no network's row has it, and no "
+    "build that ships has the constant (CHAIN_FORGE.md CF-R15; deleted in CF-5). "
+    "Forwarded by shekyl-chain-rules' TEST_ONLY harness feature (CF-F5's rule "
+    "accepts the forward), and enabled from the dev edges of the crates whose "
+    "tests sign or judge under it",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).

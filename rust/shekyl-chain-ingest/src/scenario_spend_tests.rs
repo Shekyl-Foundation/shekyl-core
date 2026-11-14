@@ -77,7 +77,7 @@ async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Transaction, Tr
     let mut scenario = Scenario::open(name);
     let mined = scenario.mine(AT).await;
     let (a, b) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), Family::Main.fee()),
@@ -182,7 +182,7 @@ async fn seeded_spenders_build_byte_identical_spends_that_connect() {
 #[tokio::test]
 async fn l1_refuses_a_twin_spend_listed_behind_the_first() {
     let (mut scenario, mined, a, _b) = matured("spend-twin-l1").await;
-    let twin = Spender::over(&mined).spend_coinbase(
+    let twin = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT),
@@ -247,7 +247,7 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
     mined.push(two);
     let after = AT + 1;
     let (fresh, respend) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(2), h(after), Family::Main.fee()),
@@ -273,7 +273,7 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
 #[tokio::test]
 async fn h19_refuses_a_flipped_range_proof_and_the_unflipped_block_connects() {
     let (mut scenario, mined, a, b) = matured("spend-h19-flip").await;
-    let flipped = Spender::over(&mined).spend_coinbase_breaking_range_proof(
+    let flipped = Spender::on(scenario.network_id(), &mined).spend_coinbase_breaking_range_proof(
         scenario.wallet(),
         h(1),
         h(AT),
@@ -306,7 +306,7 @@ async fn h19_names_the_bad_proof_among_good_ones() {
     let mined = scenario.mine(AT + 1).await;
     let at = AT + 1;
     let listed = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         let fee = Family::Main.fee();
         vec![
@@ -354,7 +354,7 @@ async fn bodies_at_the_fills_bound_are_admitted() {
     // that connect are built at the later height, against that height's
     // reference.
     let mut mined = scenario.mine(FIRST_SPEND_HEIGHT).await;
-    let sample = Spender::over(&mined).spend_coinbase(
+    let sample = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(FIRST_SPEND_HEIGHT),
@@ -382,7 +382,7 @@ async fn bodies_at_the_fills_bound_are_admitted() {
         "the prefix reaches the spending height"
     );
 
-    let spender = Spender::over(&mined);
+    let spender = Spender::on(scenario.network_id(), &mined);
     let wallet = scenario.wallet();
     let fee = Family::Main.fee();
     let listed: Vec<Transaction> = std::thread::scope(|scope| {

@@ -46,7 +46,7 @@ async fn a_promotion_form_refusal_removes_the_alt_suffix_and_does_not_pop() {
     // Signed after the flip, so the refusal is the proof (CEN-I15) and not
     // the signature over it (CEN-I18). Empty claims skip the proof, which
     // is why the offer holds the block.
-    let spend = shekyl_harness_spender::Spender::over(&prefix)
+    let spend = shekyl_harness_spender::Spender::on(x.network_id(), &prefix)
         .spend_coinbase_posting_breaking_membership_proof(
             y.wallet(),
             BlockHeight::from_raw(0),
@@ -143,7 +143,7 @@ async fn a_switch_drops_the_losing_branch_from_the_target_ledger() {
     assert_eq!(won[1].height, BlockHeight::from_raw(AT + 1));
     let mut chain: Vec<Mined> = prefix;
     chain.extend(won.iter().cloned());
-    let spend = Spender::over(&chain).spend_coinbase(
+    let spend = Spender::on(x.network_id(), &chain).spend_coinbase(
         x.wallet(),
         BlockHeight::from_raw(0),
         connecting,

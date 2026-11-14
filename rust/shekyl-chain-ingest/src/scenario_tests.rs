@@ -238,7 +238,7 @@ async fn a_real_spend_against_the_grown_tree_is_admitted_and_the_two_trees_agree
     // at every height a header commits to — empty through the first drain,
     // then moving with it. (The client answers reference heights at or
     // below its tip, as a wallet asks them.)
-    let mut spender = Spender::over(&mined);
+    let mut spender = Spender::on(scenario.network_id(), &mined);
     for h in 0..connecting {
         let ours = scenario
             .root_at(BlockHeight::from_raw(h))

@@ -113,6 +113,7 @@ async fn a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on() {
         .expect("facts")
         .parent_coins_generated;
     let spender = spender_owning_before(
+        drive.scenario.network_id(),
         &drive.chain,
         facts.join_height,
         &[facts.backing_key, facts.fee_key],
@@ -330,7 +331,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
         2,
     );
     mine_to(&mut scenario, &mut mined, join_height).await;
-    let mut spender = Spender::over(&mined);
+    let mut spender = Spender::on(scenario.network_id(), &mined);
     let mut seen = mined.len();
 
     // The join rides coinbase 0, paying the persona the claims' backing and
@@ -495,7 +496,7 @@ async fn a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_
     let again_claim = claim(2, e_old, rebuilt, STRADDLE_AGAIN_TX_KEY);
     let mut owned = vec![backing_key];
     owned.extend(fee_keys);
-    let spender = spender_owning_before(&mined, join_height, &owned);
+    let spender = spender_owning_before(scenario.network_id(), &mined, join_height, &owned);
     let again = claim_of(&mut scenario, &spender, &mined, &again_claim).await;
     match scenario.mine_listing(vec![again]).await {
         Err(StepOutcome::Refused(refused)) => {

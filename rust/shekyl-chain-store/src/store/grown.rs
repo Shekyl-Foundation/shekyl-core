@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet};
+use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet, Trust};
 use shekyl_harness_spender::{
     complete_tree, first_spending_height, Linked, MinerWallet, Persona, PostedBond, Spender,
 };
@@ -205,7 +205,7 @@ impl Grown {
     pub(in super::super) fn new() -> Self {
         Self {
             hashes: Vec::new(),
-            spender: Spender::over::<Linked<'_>>(&[]),
+            spender: Spender::on::<Linked<'_>>(Trust::UNPINNED.network_id(), &[]),
             blocks: Vec::new(),
             spent: BTreeSet::new(),
             spent_at: Vec::new(),
@@ -544,7 +544,7 @@ impl Grown {
             .iter()
             .map(|(block, listed)| Linked::new(block, listed))
             .collect();
-        self.spender = Spender::over(&linked);
+        self.spender = Spender::on(Trust::UNPINNED.network_id(), &linked);
     }
 }
 

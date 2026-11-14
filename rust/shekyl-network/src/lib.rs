@@ -607,9 +607,10 @@ impl NameId {
 /// (`CHAIN_FORGE.md` `CF-R15`; `docs/FOLLOWUPS.md`). A chain that carries a
 /// network's identity signs under that network's id instead
 /// (`Network::network_id`); this one lasts only until every chain judged
-/// under `Trust::UNPINNED` is held to a genesis. `CF-1b` puts it behind a
-/// `TEST_ONLY` feature the test-only feature gate holds. A new reader is a
-/// review finding, not a convenience.
+/// under `Trust::UNPINNED` is held to a genesis. It is behind the TEST_ONLY
+/// `harness` feature, which the test-only feature gate keeps off every
+/// build that ships. A new reader is a review finding, not a convenience.
+#[cfg(any(test, feature = "harness"))]
 pub const HARNESS_NETWORK_ID: NetworkId = [0; 16];
 
 /// The id of the chain whose genesis block hash is `genesis_block_hash`:

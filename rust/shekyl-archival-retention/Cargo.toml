@@ -43,6 +43,9 @@ serde_json = { workspace = true }
 
 # CT-4 assembled-path KAT cross-check (gate-2 §10 step 1).
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # Self-dependency: integration tests / benches build the lib without cfg(test),
 # so the consensus-kat unlock must ride the dev graph explicitly.
 shekyl-archival-retention = { path = ".", features = ["consensus-kat"] }
