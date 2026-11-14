@@ -80,9 +80,11 @@ async fn a_sync_times_every_phase_of_each_block() {
     // node reads `Synced` from that commit's tip: the last answers reach
     // the owner just after the state does.
     let answered = node
-        .wait(LIMIT, |node| node.metrics.snapshot().entries >= fetched)
+        .wait(LIMIT, |node| {
+            node.chain.own.pow.artifact().entries >= fetched
+        })
         .await;
-    let profile = node.metrics.snapshot();
+    let profile = node.chain.own.pow.artifact();
     assert!(
         answered,
         "entry: {} answers for {fetched} offers",

@@ -95,6 +95,12 @@ full-dataset = ["randomx-v2-sys/full-dataset"]
 [dependencies]
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
 randomx-v2-sys = { path = "../randomx-v2-sys" }
+# The concurrent mode (T7, T8) hashes through the daemon's one owner of
+# caches, so its RSS ceiling is the production owner's
+# (RANDOMX_CACHE_ACTOR.md §8). The parity and corpus modes derive caches
+# directly: they compare the verifier with the C reference.
+shekyl-hasher = { path = "../shekyl-hasher" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 # `PowHash`: the type the verifier↔JIT parity verdict compares across
 # (DRS-E2 RD-Q12). Already in the graph through shekyl-pow-randomx; named
 # here because the comparison is this crate's.

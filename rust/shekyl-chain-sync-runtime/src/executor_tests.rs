@@ -302,6 +302,69 @@ async fn an_item_under_another_seed_is_not_judged() {
     assert_eq!(rig.builds(), 1, "and nothing was built for the other seed");
 }
 
+/// `RANDOMX_CACHE_ACTOR.md` §8, HA-F2: a fork whose headers were proven
+/// and whose bodies then arrive is built once. The executor's proofs and
+/// the ingest's forms are jobs on the same hasher, so the fork's seed has
+/// one cache: the proofs build it, the ranked list keeps it (it is the
+/// frontier's seed, then the held fork's), and the forms find it warm.
+/// Before the hasher the executor kept the cache for its proofs and the
+/// ingest prepared the same seed again.
+///
+/// The form here is what the ingest's span runs: one `run` job on the
+/// block's seed through the same boundary.
+///
+/// Red edit: give the executor a hasher of its own (`rig(..)` twice, one
+/// for the proofs and one for the form): two builds of the fork's seed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fork_proven_by_headers_then_formed_by_the_ingest_is_built_once() {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    let rig = rig(Budget::of_host());
+    let fork = seed(3);
+    // The list while the run proves: the window, and the fork's seed as
+    // the frontier's third.
+    rig.rank(&[1], Some(3));
+    let proven = prove(
+        Arc::clone(&rig.executor),
+        HashClass::HeaderPow,
+        fork,
+        vec![item(fork), item(fork)],
+    )
+    .await;
+    assert!(all_formed(&proven, 2), "{proven:?}");
+    rig.quiet_on(&[1, 3]);
+    let built = rig.builds();
+    assert_eq!(built, 2, "the window's seed and the fork's");
+    // The bodies arrive: the ingest forms each block as a `run` job on the
+    // fork's seed, hashing the header again.
+    let body = item(fork);
+    let formed = {
+        let pow = rig.pow.clone();
+        tokio::task::spawn_blocking(move || {
+            pow.run(Class::Unsolicited, fork, &RUNNING, |job| {
+                let blob = shekyl_wire::PowBlob::read(&body.pow).expect("a preimage");
+                shekyl_chain_rules::form_header(
+                    &blob,
+                    &body.rule_set,
+                    job,
+                    body.seed,
+                    body.target,
+                    body.attempt,
+                )
+            })
+        })
+        .await
+        .expect("joins")
+        .expect("granted")
+    };
+    assert!(matches!(formed, Ok(Ok(_))), "the block's header forms");
+    assert_eq!(
+        rig.builds(),
+        built,
+        "the bodies' forms found the fork's cache warm: one build for the fork's seed"
+    );
+    rig.quiet_on(&[1, 3]);
+}
+
 /// `RANDOMX_CACHE_ACTOR.md` §8, HA-R3: an evidence check while the third
 /// cache is warm. The window names two seeds and the third is warm, so
 /// all three places are in use. The check runs: the warm third is freed

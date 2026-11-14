@@ -13,8 +13,9 @@
 //! ## What this mode tests (per R1-D9 close + §6.3 T7/T8)
 //!
 //! - **T7 — Concurrent byte-equality.** 4 production + 1 reserve
-//!   workers, 256 hashes each, share a [`CacheStore`] of capacity 2
-//!   (per Phase 2F R3-D4). Each worker iterates the per-PR-size
+//!   workers, 256 hashes each, share one [`Hasher`], the daemon's one
+//!   owner of caches (`docs/design/RANDOMX_CACHE_ACTOR.md`): each hash
+//!   is a `lend` job on its seed. Each worker iterates the per-PR-size
 //!   random corpus cyclically (128 distinct pairs × 2 = 256
 //!   iterations per worker). Each worker's `(seedhash, data)`
 //!   sequence must produce byte-identical Rust hashes (cross-worker
@@ -23,9 +24,9 @@
 //! - **T8 — RSS bound.** During concurrent execution, resident-set
 //!   size measured via Linux `/proc/self/statm` field 2 (resident
 //!   pages × page size) must satisfy
-//!   `max(steady_state_samples) - baseline ≤ rss_ceiling_bytes(workers) × 1.10`
-//!   per the R1-D9 F4 Round-3 amendment (Arc reach-through
-//!   residency; see [`rss_ceiling_bytes`]). `steady_state_samples`
+//!   `max(steady_state_samples) - baseline ≤ rss_ceiling_bytes() × 1.10`:
+//!   the hasher's cap, less the one cache resident at the baseline
+//!   (see [`rss_ceiling_bytes`]). `steady_state_samples`
 //!   = samples taken at t > 5 s after worker spawn ("after worker
 //!   scheduling warms up").
 //!
@@ -50,9 +51,9 @@
 //! single-threaded C-side cache footprint), this module
 //! **pre-computes** the C-reference hash for every `(seedhash,
 //! data)` pair single-threadedly before the workers start. The
-//! workers then run only the Rust hot path (`CacheStore`-driven
-//! `compute_hash`) and assert their output against the pre-computed
-//! C hashes after join.
+//! workers then run only the Rust hot path (a hasher job per hash)
+//! and assert their output against the pre-computed C hashes after
+//! join.
 //!
 //! Pre-computation is **dropped** before the RSS baseline is taken:
 //! each per-seedhash [`COracleSession`] is constructed, all of that
@@ -63,18 +64,17 @@
 //! the Rust harness's steady state and prevents the C-side
 //! transient memory from masking a Rust-side leak.
 //!
-//! ## Pre-seeded canonical
+//! ## One ranked seed before the baseline
 //!
 //! Per R1-D9 F4 ("baseline taken at test entry after `PreparedCache`
-//! initialization but before worker spawn") the [`CacheStore`]'s
-//! canonical slot is pre-seeded with the first corpus seedhash's
-//! [`PreparedCache`]. The baseline RSS therefore captures the
-//! single-canonical state; the steady-state delta captures the
-//! transient-slot rotation + worker-thread overhead that the
-//! concurrent phase adds. This mirrors the daemon's chain-tip
-//! pre-seeded shape: at steady state the daemon holds one canonical
-//! cache (the chain-tip seedhash) and rotates the transient slot
-//! across alt-tip / probe seedhashes.
+//! initialization but before worker spawn") the hasher is handed a
+//! ranked list of one seed, the first corpus seedhash, and the run waits
+//! for that cache to be built. The baseline RSS therefore holds one
+//! cache, in the window's reserved place, as a daemon at its tip holds
+//! the chain's. The steady-state delta is what the concurrent phase
+//! adds: the other two places of the cap, which the workers' jobs on the
+//! other fifteen seeds share first in, first out, and the workers'
+//! scratchpads.
 //!
 //! ## Linux-only RSS sampling
 //!
@@ -101,7 +101,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use shekyl_pow_randomx::{compute_hash, CacheStore, PreparedCache, Seedhash};
+use shekyl_hash_budget::Budget;
+use shekyl_hasher::{Class, Hasher, Ranked, Residency, CAP};
+use shekyl_pow_randomx::Seedhash;
 
 use crate::c_oracle::{COracleError, COracleSession, RANDOMX_HASH_SIZE};
 use crate::corpus_random::{
@@ -118,8 +120,8 @@ use crate::corpus_random::{
 pub const DEFAULT_WORKER_COUNT: usize = 5;
 
 /// Per R1-D9 close: 256 hashes per worker × 5 workers = 1280
-/// total hashes. The product exercises [`CacheStore`]'s capacity-2
-/// invariant multiple times under contention.
+/// total hashes. The product exercises the hasher's cap many times
+/// under contention.
 pub const HASHES_PER_WORKER: usize = 256;
 
 /// Per-cache resident footprint used by the T8 ceiling derivation:
@@ -135,44 +137,30 @@ pub const CACHE_FOOTPRINT_BYTES: u64 = 256 * 1024 * 1024;
 /// R1-D9 F4 pin, rounded to 128 MiB.
 pub const RSS_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
 
-/// T8 RSS-delta ceiling per the R1-D9 F4 **Round-3 amendment**
-/// (2026-08, `docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`):
-/// `(workers + 1) × 256 MiB + 128 MiB`. Asserted as
+/// T8 RSS-delta ceiling: `(CAP − 1) × 256 MiB + 128 MiB`, which is
+/// 640 MiB at the hasher's cap of three. Asserted as
 /// `max(steady_state) - baseline ≤ ceiling × (numerator /
 /// denominator)`.
 ///
-/// # Derivation (Arc reach-through residency)
+/// # Derivation (the cap is the memory)
 ///
-/// The original F4 pin (640 MiB = 2 slot holdings + overhead)
-/// modeled only [`CacheStore`]'s capacity-2
-/// *slot* bound and omitted the store's own documented Arc
-/// reach-through: a cache displaced from the transient slot stays
-/// resident while any worker's `Arc<PreparedCache>` still
-/// references it. With free-running workers cycling a
-/// multi-seedhash corpus, scheduler drift legitimately keeps
-/// several displaced-generation caches live at once. The true
-/// per-run bound on delta-visible caches (canonical is pre-seeded
-/// before the baseline and thus excluded) is:
+/// The hasher has [`CAP`] places, and a place is counted from the moment
+/// a build is reserved until the freed cache's memory is returned: warm,
+/// lent, building and being dropped all hold their place
+/// (`RANDOMX_CACHE_ACTOR.md` §5.2). No worker holds a cache: a job
+/// borrows one for its closure and cannot keep it. So at most [`CAP`]
+/// caches exist at any instant, whatever the worker count.
 ///
-/// - `workers` — each worker holds at most one Arc at a time
-///   (`worker_loop` drops before the next lookup); a derivation
-///   leader's in-progress 256 MiB allocation occupies its hold
-///   slot in the count;
-/// - `+ 1` — the transient slot's occupant, which may be a cache
-///   no worker currently holds.
+/// One of them, the ranked seed's, is resident before the baseline and
+/// is therefore not in the delta. The delta-visible caches are at most
+/// `CAP − 1`, plus the working-set term.
 ///
-/// The gate's purpose (Phase 2F F2 backstop: catch an Arc
-/// retention leak past the `lookup_or_derive` hand-off) is
-/// preserved: a persistent per-rotation leak accretes ~256 MiB per
-/// corpus rotation (32 rotations per run, ~8 GiB if unchecked) and
-/// crosses the tolerance-inclusive bound within four leaked
-/// rotations, while the legitimate drift plateau — measured flat
-/// at ~1035 MiB delta across 30 consecutive daily crons on the
-/// committed runner class (2026-07-08 → 2026-08-08, both
-/// branches) — sits at ~62% of the 5-worker ceiling.
+/// The gate's purpose is unchanged: a cache kept past the cap. One
+/// cache more than the cap allows puts the delta at `CAP × 256 MiB`,
+/// which is past the tolerance-inclusive bound.
 #[must_use]
-pub fn rss_ceiling_bytes(workers: usize) -> u64 {
-    (workers as u64 + 1).saturating_mul(CACHE_FOOTPRINT_BYTES) + RSS_HEADROOM_BYTES
+pub fn rss_ceiling_bytes() -> u64 {
+    (CAP as u64 - 1).saturating_mul(CACHE_FOOTPRINT_BYTES) + RSS_HEADROOM_BYTES
 }
 
 /// Per R1-D9 F4: ±10% tolerance band numerator (1.10).
@@ -243,7 +231,7 @@ pub struct ConcurrentReport {
     /// only; `None` if either component is `None` or the
     /// subtraction would saturate to zero on a noisy runner).
     pub rss_delta_bytes: Option<u64>,
-    /// [`rss_ceiling_bytes`]`(workers)` for this run; reported for
+    /// [`rss_ceiling_bytes`] for this run; reported for
     /// `BENCH_RESULTS.md` traceability per R1-D9 F4 "max sample
     /// reported in `BENCH_RESULTS.md`".
     pub rss_ceiling_bytes: u64,
@@ -343,8 +331,7 @@ pub enum ConcurrentError {
     WallClockExceeded { elapsed_ms: u64, budget_ms: u64 },
     /// T8: `max(steady_state_samples) - baseline > ceiling × (11/10)`.
     /// Indicates a Rust-side memory regression (most likely an
-    /// `Arc<PreparedCache>` retention leak past the
-    /// `CacheStore::lookup_or_derive` hand-off boundary).
+    /// cache the hasher's cap does not count).
     RssBoundExceeded {
         /// RSS in bytes at test entry (after canonical pre-seed).
         baseline_bytes: u64,
@@ -352,7 +339,7 @@ pub enum ConcurrentError {
         max_steady_state_bytes: u64,
         /// `max_steady_state_bytes - baseline_bytes`.
         delta_bytes: u64,
-        /// [`rss_ceiling_bytes`]`(workers) ×
+        /// [`rss_ceiling_bytes`]` ×
         /// (RSS_TOLERANCE_NUMERATOR / RSS_TOLERANCE_DENOMINATOR)`.
         ceiling_with_tolerance_bytes: u64,
     },
@@ -449,16 +436,25 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
     //    the C-side allocator footprint bounded.
     let c_hashes = precompute_c_reference_hashes(&corpus)?;
 
-    // 3. Pre-seed CacheStore canonical with the first seedhash's
-    //    PreparedCache. Per R1-D9 F4 the baseline RSS is taken
-    //    "after PreparedCache initialization but before worker
-    //    spawn"; pre-seeding satisfies the post-init precondition
-    //    and matches the daemon's chain-tip canonical-loaded
-    //    steady state.
-    let cache_store = Arc::new(CacheStore::new());
+    // 3. Start the hasher over one permit per worker, rank the first
+    //    seedhash and wait for its cache. Per R1-D9 F4 the baseline
+    //    RSS is taken "after PreparedCache initialization but before
+    //    worker spawn"; one ranked, built seed is that state, and it
+    //    matches the daemon at its tip.
+    let permits = std::num::NonZeroUsize::new(workers).unwrap_or(std::num::NonZeroUsize::MIN);
+    let (hasher, owner) =
+        Hasher::start(Budget::new(permits)).expect("the hasher's builder thread starts");
     let first_seedhash = corpus[0].seedhash;
-    let first_prepared = Arc::new(PreparedCache::derive(first_seedhash));
-    cache_store.set_canonical(first_prepared);
+    hasher.rank(Ranked::new(first_seedhash, None, None).expect("one seed cannot repeat"));
+    let resident = hasher.resident();
+    while !resident
+        .borrow()
+        .caches
+        .iter()
+        .any(|(seed, state)| *seed == first_seedhash && *state == Residency::Warm)
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
 
     // 4. Take RSS baseline (Linux only).
     let baseline_rss = read_baseline_rss();
@@ -475,9 +471,9 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
         Vec::with_capacity(workers);
     for worker_idx in 0..workers {
         let corpus_c = Arc::clone(&corpus_shared);
-        let store_c = Arc::clone(&cache_store);
+        let hasher_c = hasher.clone();
         worker_handles.push(thread::spawn(move || {
-            worker_loop(worker_idx, &corpus_c, &store_c)
+            worker_loop(worker_idx, &corpus_c, &hasher_c)
         }));
     }
 
@@ -497,6 +493,10 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
             }
         }
     }
+    // Every job has ended: the stop waits on none, frees the caches and
+    // joins the builder.
+    drop(hasher);
+    owner.stop();
     stop_sampler.store(true, Ordering::Release);
     if let Some(h) = sampler_handle {
         // Drop the JoinHandle's Result explicitly; the sampler
@@ -562,12 +562,10 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
         }
     }
 
-    // 10. RSS-bound assertion (T8; Linux only). The ceiling is
-    //     worker-count-derived per the R1-D9 F4 Round-3 amendment
-    //     (each worker's Arc hold — or in-progress derivation —
-    //     contributes one 256 MiB cache to the worst-case
-    //     delta-visible residency).
-    let ceiling_bytes = rss_ceiling_bytes(workers);
+    // 10. RSS-bound assertion (T8; Linux only). The ceiling is the
+    //     hasher's cap less the cache resident at the baseline: no
+    //     worker holds a cache, so the worker count is not in it.
+    let ceiling_bytes = rss_ceiling_bytes();
     let (max_steady_state, rss_delta, rss_assertion_evaluated) =
         evaluate_rss(baseline_rss, &samples, ceiling_bytes)?;
 
@@ -585,36 +583,30 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
 }
 
 /// Worker thread body: iterate [`HASHES_PER_WORKER`] times,
-/// `corpus[i % corpus.len()]`-driven; look up the cache via
-/// [`CacheStore::lookup_or_derive`]; compute the hash; drop the
-/// `Arc<PreparedCache>` immediately (per Phase 2F §3.1 caller hand-
-/// off Arc-lifetime discipline). Returns the per-iteration Rust
-/// hash vector for the post-join cross-worker + rust-vs-C
-/// assertions.
-///
-/// The `Arc<Vec<…>>` / `Arc<CacheStore>` are taken by reference
-/// because the spawning closure owns the cloned `Arc` for the
-/// thread's lifetime; passing the `Arc` by value into `worker_loop`
-/// would move ownership across an additional function boundary
-/// with no benefit (the function does not re-clone the `Arc` to
-/// further consumers).
+/// `corpus[i % corpus.len()]`-driven; each hash is one `lend` job on
+/// the pair's seed, which borrows that seed's cache for the hash and
+/// takes one permit for it. The hasher builds the cache when it is not
+/// resident, inside its cap, and the worker never holds one. Returns
+/// the per-iteration Rust hash vector for the post-join cross-worker +
+/// rust-vs-C assertions.
 fn worker_loop(
     worker_idx: usize,
     corpus: &Arc<Vec<RandomCorpusPair>>,
-    cache_store: &Arc<CacheStore>,
+    hasher: &Hasher,
 ) -> Vec<[u8; RANDOMX_HASH_SIZE]> {
     let _ = worker_idx; // reserved for future per-worker diagnostics
+                        // The run has no stop: a job waits for its cache and its permit.
+    let never_stops = AtomicBool::new(false);
     let corpus_len = corpus.len();
     let mut out = Vec::with_capacity(HASHES_PER_WORKER);
     for i in 0..HASHES_PER_WORKER {
         let pair = &corpus[i % corpus_len];
-        let prepared = cache_store.lookup_or_derive(&pair.seedhash);
-        let hash = compute_hash(&prepared, &pair.data);
-        // Drop the Arc immediately per Phase 2F's caller hand-off
-        // discipline; long-lived holds extend cache memory residency
-        // past CacheStore's capacity-2 bound and break the RSS
-        // assertion.
-        drop(prepared);
+        let hash = hasher
+            .lend(Class::Chain, pair.seedhash, &never_stops, |loan| {
+                loan.hash(&pair.data)
+            })
+            .expect("the hasher runs until every worker has joined")
+            .expect("a job's loan is never cancelled, and the run has no stop");
         out.push(hash);
     }
     out
@@ -830,7 +822,7 @@ mod tests {
             baseline_bytes: 100_000_000,
             max_steady_state_bytes: 900_000_000,
             delta_bytes: 800_000_000,
-            ceiling_with_tolerance_bytes: rss_ceiling_bytes(DEFAULT_WORKER_COUNT) * 11 / 10,
+            ceiling_with_tolerance_bytes: rss_ceiling_bytes() * 11 / 10,
         };
         let s = format!("{e}");
         assert!(s.contains("RSS bound exceeded"), "got: {s}");
@@ -852,8 +844,9 @@ mod tests {
         assert_eq!(HASHES_PER_WORKER, 256);
         assert_eq!(CACHE_FOOTPRINT_BYTES, 256 * 1024 * 1024);
         assert_eq!(RSS_HEADROOM_BYTES, 128 * 1024 * 1024);
-        // (5 + 1) × 256 MiB + 128 MiB = 1664 MiB.
-        assert_eq!(rss_ceiling_bytes(DEFAULT_WORKER_COUNT), 1664 * 1024 * 1024);
+        // (3 − 1) × 256 MiB + 128 MiB = 640 MiB.
+        assert_eq!(CAP, 3);
+        assert_eq!(rss_ceiling_bytes(), 640 * 1024 * 1024);
         assert_eq!(RSS_TOLERANCE_NUMERATOR, 11);
         assert_eq!(RSS_TOLERANCE_DENOMINATOR, 10);
         assert_eq!(RSS_SAMPLE_INTERVAL, Duration::from_millis(100));
@@ -861,32 +854,27 @@ mod tests {
     }
 
     /// The ceiling-with-tolerance computation matches the
-    /// `1664 MiB × 1.10` literal value at the default worker count
-    /// (within integer rounding). Pins the arithmetic shape that
+    /// `640 MiB × 1.10` literal value (within integer rounding). Pins
+    /// the arithmetic shape that
     /// [`ConcurrentError::RssBoundExceeded`]'s
     /// `ceiling_with_tolerance_bytes` field carries.
     #[test]
-    fn ceiling_with_tolerance_matches_1664_mib_times_1_10() {
-        let cwt = rss_ceiling_bytes(DEFAULT_WORKER_COUNT).saturating_mul(RSS_TOLERANCE_NUMERATOR)
-            / RSS_TOLERANCE_DENOMINATOR;
-        // 1664 × 1024 × 1024 × 11 / 10 = 1_919_313_510 (integer div)
-        assert_eq!(cwt, 1_919_313_510);
-        // Rounded to MiB the tolerance-inclusive bound is 1830 MiB.
-        let cwt_mib = cwt / (1024 * 1024);
-        assert_eq!(cwt_mib, 1830);
+    fn ceiling_with_tolerance_matches_640_mib_times_1_10() {
+        let cwt =
+            rss_ceiling_bytes().saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
+        // 640 × 1024 × 1024 × 11 / 10 = 738_197_504.
+        assert_eq!(cwt, 738_197_504);
+        assert_eq!(cwt / (1024 * 1024), 704);
     }
 
-    /// The ceiling scales with the `--workers=<N>` override: each
-    /// additional worker adds one 256 MiB potential Arc hold to the
-    /// worst-case delta-visible residency.
+    /// The ceiling is the cap's, not the workers': `CAP − 1` caches
+    /// beside the one resident at the baseline, and the headroom.
     #[test]
-    fn ceiling_scales_with_worker_count() {
+    fn the_ceiling_is_the_caps_and_not_the_workers() {
         assert_eq!(
-            rss_ceiling_bytes(6) - rss_ceiling_bytes(5),
-            CACHE_FOOTPRINT_BYTES
+            rss_ceiling_bytes(),
+            (CAP as u64 - 1) * CACHE_FOOTPRINT_BYTES + RSS_HEADROOM_BYTES
         );
-        // Degenerate single-worker case: 2 × 256 MiB + 128 MiB.
-        assert_eq!(rss_ceiling_bytes(1), (2 * 256 + 128) * 1024 * 1024);
     }
 
     /// `max_steady_state_sample` filters samples by elapsed time
@@ -925,8 +913,7 @@ mod tests {
     fn evaluate_rss_no_baseline_skips() {
         let samples: Arc<Mutex<Vec<(Duration, u64)>>> = Arc::new(Mutex::new(Vec::new()));
         let (max, delta, evaluated) =
-            evaluate_rss(None, &samples, rss_ceiling_bytes(DEFAULT_WORKER_COUNT))
-                .expect("no error path");
+            evaluate_rss(None, &samples, rss_ceiling_bytes()).expect("no error path");
         assert_eq!(max, None);
         assert_eq!(delta, None);
         assert!(!evaluated);
@@ -945,12 +932,8 @@ mod tests {
             (Duration::from_secs(6), max_ss),
             (Duration::from_secs(7), max_ss - 1024 * 1024),
         ]));
-        let (max, delta, evaluated) = evaluate_rss(
-            Some(baseline),
-            &samples,
-            rss_ceiling_bytes(DEFAULT_WORKER_COUNT),
-        )
-        .expect("within-bound path");
+        let (max, delta, evaluated) =
+            evaluate_rss(Some(baseline), &samples, rss_ceiling_bytes()).expect("within-bound path");
         assert_eq!(max, Some(max_ss));
         assert_eq!(delta, Some(50 * 1024 * 1024));
         assert!(evaluated);
@@ -965,12 +948,8 @@ mod tests {
         // at the default worker count
         let max_ss = baseline + 2048 * 1024 * 1024;
         let samples = Arc::new(Mutex::new(vec![(Duration::from_secs(6), max_ss)]));
-        let err = evaluate_rss(
-            Some(baseline),
-            &samples,
-            rss_ceiling_bytes(DEFAULT_WORKER_COUNT),
-        )
-        .expect_err("over-ceiling path should surface error");
+        let err = evaluate_rss(Some(baseline), &samples, rss_ceiling_bytes())
+            .expect_err("over-ceiling path should surface error");
         match err {
             ConcurrentError::RssBoundExceeded {
                 baseline_bytes,
@@ -987,21 +966,18 @@ mod tests {
         }
     }
 
-    /// The legitimate drift plateau recorded on the committed
-    /// runner class (~1035 MiB delta, flat across the 2026-07-08 →
-    /// 2026-08-08 daily crons on both branches) passes the amended
-    /// ceiling with headroom, and a persistent Arc-retention leak
-    /// stacked on that plateau trips the tolerance-inclusive bound
-    /// within four leaked rotations (of the 32 per run). Pins the
-    /// amendment's leak-detection claim.
+    /// One cache more than the cap allows trips the
+    /// tolerance-inclusive bound: `CAP` caches in the delta, where the
+    /// cap leaves room for `CAP − 1` beside the baseline's. Pins the
+    /// gate's leak-detection claim.
     #[test]
-    fn amended_ceiling_admits_plateau_and_catches_leak() {
-        let cwt = rss_ceiling_bytes(DEFAULT_WORKER_COUNT).saturating_mul(RSS_TOLERANCE_NUMERATOR)
-            / RSS_TOLERANCE_DENOMINATOR;
-        let recorded_plateau_delta: u64 = 1_085_100_032; // 2026-08-09 cron
-        assert!(recorded_plateau_delta <= cwt);
-        let four_leaked_rotations = recorded_plateau_delta + 4 * CACHE_FOOTPRINT_BYTES;
-        assert!(four_leaked_rotations > cwt);
+    fn one_cache_past_the_cap_trips_the_bound() {
+        let cwt =
+            rss_ceiling_bytes().saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
+        let within_the_cap = (CAP as u64 - 1) * CACHE_FOOTPRINT_BYTES;
+        assert!(within_the_cap <= cwt);
+        let one_past = CAP as u64 * CACHE_FOOTPRINT_BYTES;
+        assert!(one_past > cwt);
     }
 
     /// On Linux, `/proc/self/statm` is readable and returns a

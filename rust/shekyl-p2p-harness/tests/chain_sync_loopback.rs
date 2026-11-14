@@ -17,14 +17,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_chain_ingest::ProductionSubstrate;
-use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
+use shekyl_chain_ingest::pow::Pow;
+use shekyl_chain_rules::{form_header, target_claim, FormAttempt};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
 use shekyl_levin::{Command, RequestBodies, ResponseBodies, ResponseHeaders};
 use shekyl_p2p_harness::sync::{
-    announcement, fork_headers, frame, request_headers, substrate, Bodies, HeaderChainPeer, Node,
+    announcement, fork_headers, frame, own_hasher, request_headers, Bodies, HeaderChainPeer, Node,
     ServingPeer, Silent, Step, SyncPeer,
 };
 use shekyl_p2p_session::harness::new_transactions;
@@ -346,27 +346,46 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let genesis = node.chain.block(0);
     let Step { block, .. } = &steps[1];
     let mut forged = Block::from_bytes(block).expect("a block");
-    let (prover, _) = substrate();
+    // The test's own hasher: it searches for a nonce that fails, apart
+    // from the node whose close is the subject.
+    let prover = own_hasher(2);
     let snap = node.chain.store.begin_read().expect("a read");
     let view = SnapshotView::new(&snap);
     let connecting = BlockHeight::from_raw(1);
     let rule_set = rules.in_force(connecting);
     let target = target_claim(&view, connecting, &rule_set).expect("a read");
     drop(snap);
-    prover.pin_seed(&genesis.hash());
-    let passes = |block: &Block, prover: &ProductionSubstrate| {
-        let pow = PowBlob::read(&block.pow_blob()).expect("a preimage");
-        matches!(
-            form_header(
-                &pow,
-                &rule_set,
-                prover,
-                genesis.hash(),
-                target,
-                FormAttempt::FIRST
-            ),
-            Ok(Ok(_))
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    // Ranked, so the search's hashes share one build.
+    prover.hasher.rank(
+        shekyl_hasher::Ranked::new(
+            shekyl_pow_randomx::Seedhash::from_bytes(*genesis.hash().as_bytes()),
+            None,
+            None,
         )
+        .expect("one seed"),
+    );
+    let passes = |block: &Block, prover: &shekyl_p2p_harness::sync::OwnHasher| {
+        let pow = PowBlob::read(&block.pow_blob()).expect("a preimage");
+        let formed = prover
+            .pow
+            .run(
+                shekyl_hasher::Class::HeaderPow,
+                genesis.hash(),
+                &RUNNING,
+                |job| {
+                    form_header(
+                        &pow,
+                        &rule_set,
+                        job,
+                        genesis.hash(),
+                        target,
+                        FormAttempt::FIRST,
+                    )
+                },
+            )
+            .expect("the test's hasher runs for the test's life");
+        matches!(formed, Ok(Ok(_)))
     };
     let failing = (0..64u32)
         .find(|nonce| {

@@ -12,8 +12,9 @@
 # that absence: a reintroduction is the failure. The production hash it
 # stands next to is the Rust one since the DRS-X flip deleted
 # `src/crypto/pow_randomx.cpp`: `shekyl_pow_randomx::compute_hash`, which
-# the ingest's substrate calls for every block it judges (rule 47: the
-# gate asserts its subject exists before it reports the seam absent).
+# the node's one hasher calls for every hash a job asks for
+# (`shekyl-hasher`, RANDOMX_CACHE_ACTOR.md; rule 47: the gate asserts its
+# subject exists before it reports the seam absent).
 
 set -euo pipefail
 
@@ -35,8 +36,8 @@ if ! rg -q 'pub fn compute_hash\(' rust/shekyl-pow-randomx/src/vm.rs; then
   exit 1
 fi
 
-if ! rg -q 'compute_hash' rust/shekyl-chain-ingest/src/substrate.rs; then
-  echo "FAIL: the ingest's substrate no longer calls compute_hash — the production dispatch moved; re-anchor this gate" >&2
+if ! rg -q 'compute_hash\(' rust/shekyl-hasher/src/lib.rs; then
+  echo "FAIL: the hasher no longer calls compute_hash — the production dispatch moved; re-anchor this gate" >&2
   exit 1
 fi
 

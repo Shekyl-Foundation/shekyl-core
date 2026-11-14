@@ -241,6 +241,13 @@ jobs:
             scripts/ci/check_ignore_reasons.sh
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          # RANDOMX_CACHE_ACTOR.md: one crate builds, holds and frees a
+          # RandomX cache, so the hasher's cap of three is the memory. The
+          # gate holds PreparedCache::derive and Arc<PreparedCache> to that
+          # crate, the verifier, the differential harness and the cost
+          # benches, and requires each allowed path to still use one.
+          run_one "One owner of every RandomX cache (HA-R1)" \
+            scripts/ci/check_randomx_cache_owner.sh
           # DX-Q3 Q4: the node's template draws its coinbase secret and its
           # draw commitment from the OS (the commitment through the witness
           # ring); the scenario's reproducible values stay in test code.

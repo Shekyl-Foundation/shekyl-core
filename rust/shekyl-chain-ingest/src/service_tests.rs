@@ -2907,8 +2907,6 @@ async fn a_span_has_one_form_waiting_for_its_job_at_a_time() {
     y.close().await;
 }
 
-// PRODUCTION-2124-PLACEHOLDER
-
 /// A service fault is said when it happens, and published. On the CS-5
 /// rehearsal of 2026-11-02 a commit met `ENOSPC`, the service stopped, and
 /// the one record printed 34 minutes later at SIGTERM while the RPC kept

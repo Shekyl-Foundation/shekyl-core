@@ -23,11 +23,10 @@ use std::sync::Arc;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalTag, Follow, Origin, Reply, Service, ServiceConfig,
 };
-use shekyl_chain_ingest::{ChainRules, CorpusReader, IngestEvent, ProductionSubstrate, Source};
+use shekyl_chain_ingest::{ChainRules, CorpusReader, IngestEvent, ProductionPow, Source};
 use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
-use shekyl_hash_budget::Budget;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
@@ -188,14 +187,114 @@ pub fn open_store(path: &Path, rules: ChainRules) -> ChainStore {
     ChainStore::with_horizons(path, ApplyPolicy::Full, horizons).expect("the store")
 }
 
+/// A hasher of a node's own, and the boundary over it.
+pub struct OwnHasher {
+    /// The boundary the service and the executor form and prove through.
+    pub pow: ProductionPow,
+    /// The hasher, for its `resident()` watch.
+    pub hasher: shekyl_hasher::Hasher,
+    /// The sink the boundary records into.
+    pub metrics: Arc<shekyl_chain_ingest::Metrics>,
+    _owner: shekyl_hasher::Owner,
+}
+
+/// Start a hasher over a budget of `permits`.
+///
+/// # Panics
+///
+/// `permits` is zero, or the builder thread does not start.
+#[must_use]
+pub fn own_hasher(permits: usize) -> OwnHasher {
+    let budget =
+        shekyl_hash_budget::Budget::new(NonZeroUsize::new(permits).expect("non-zero permits"));
+    let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
+    let metrics = Arc::new(shekyl_chain_ingest::Metrics::new());
+    OwnHasher {
+        pow: ProductionPow::new(hasher.clone(), Arc::clone(&metrics)),
+        hasher,
+        metrics,
+        _owner: owner,
+    }
+}
+
+/// The seeds a hasher's `resident` watch shows once it is quiet: every
+/// cache warm, and nothing changing for a third of a second.
+///
+/// # Panics
+///
+/// The hasher did not settle within two minutes.
+#[must_use]
+pub fn quiet_seeds(
+    resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
+) -> std::collections::BTreeSet<[u8; 32]> {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    let mut stable: Option<(shekyl_hasher::Resident, Instant)> = None;
+    loop {
+        let now = resident.borrow().clone();
+        let warm = now
+            .caches
+            .iter()
+            .all(|(_, state)| *state == shekyl_hasher::Residency::Warm);
+        match &stable {
+            Some((held, since)) if warm && *held == now => {
+                if since.elapsed() >= Duration::from_millis(300) {
+                    return now
+                        .caches
+                        .iter()
+                        .map(|(seed, _)| *seed.as_bytes())
+                        .collect();
+                }
+            }
+            _ => stable = warm.then(|| (now.clone(), Instant::now())),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "the hasher never went quiet: {now:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// HA-R5 on a node's production path: once the hasher behind `resident`
+/// is quiet it holds exactly the caches a fresh hasher fed `list` reaches.
+/// The fresh one is started here and derives each listed seed. Blocking.
+///
+/// # Panics
+///
+/// The two differ.
+pub fn assert_quiet_is_fresh(
+    resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
+    list: Option<shekyl_hasher::Ranked>,
+) {
+    let fresh = own_hasher(2);
+    if let Some(list) = list.clone() {
+        fresh.hasher.rank(list);
+    }
+    let expected = quiet_seeds(&fresh.hasher.resident());
+    let held = quiet_seeds(resident);
+    assert_eq!(
+        held, expected,
+        "a quiet hasher holds what a fresh one fed the same list holds (HA-R5); the list: {list:?}"
+    );
+}
+
 /// A real store with its ingest service running.
 pub struct Chain {
     /// The store.
     pub store: Arc<ChainStore>,
     /// The service that alone writes it.
-    pub service: Service<ProductionSubstrate>,
+    pub service: Service<ProductionPow>,
     /// The rules it connects under.
     pub rules: ChainRules,
+    /// This chain's own hasher, as each daemon has its own: its own cap
+    /// and its own ranked list. After the service, so the service's jobs
+    /// have ended before the hasher stops.
+    pub own: OwnHasher,
+    /// The header frontier a sync owner over this chain publishes, which
+    /// the service's ranker reads. `None` is published by a chain with no
+    /// owner.
+    pub frontier: tokio::sync::watch::Sender<Option<shekyl_chain_ingest::service::Frontier>>,
     next_tag: AtomicU64,
     /// The store's directory: a fresh one under the system temp directory,
     /// removed with the store and the files beside it when this drops,
@@ -206,13 +305,8 @@ pub struct Chain {
 impl Chain {
     /// An empty store and its service. Call from inside a runtime.
     #[must_use]
-    pub fn empty(
-        tag: &str,
-        rules: ChainRules,
-        substrate: Arc<ProductionSubstrate>,
-        budget: Budget,
-    ) -> Self {
-        Self::empty_following(tag, rules, substrate, budget, Follow::default())
+    pub fn empty(tag: &str, rules: ChainRules, own: OwnHasher) -> Self {
+        Self::empty_following(tag, rules, own, Follow::default())
     }
 
     /// An empty store and its service, with `follow` seated on the tip
@@ -221,29 +315,36 @@ impl Chain {
     pub fn empty_following(
         tag: &str,
         rules: ChainRules,
-        substrate: Arc<ProductionSubstrate>,
-        budget: Budget,
-        follow: Follow,
+        own: OwnHasher,
+        mut follow: Follow,
     ) -> Self {
         let dir = tempfile::Builder::new()
             .prefix(&format!("shekyl-cs3-{tag}-"))
             .tempdir()
             .expect("the store's directory");
         let store = Arc::new(open_store(&dir.path().join("chain.redb"), rules));
+        // The frontier channel exists before either service starts, as
+        // the daemon's node makes it.
+        let (frontier, listening) = tokio::sync::watch::channel(None);
+        follow.frontier = Some(listening);
+        // The boundary's sink, which the executor shares, as the daemon's
+        // node wires it: the per-block profile's phases in one place.
+        follow.metrics = Some(Arc::clone(&own.metrics));
         let service = Service::start(
             Arc::clone(&store),
             rules,
-            substrate,
+            Arc::new(own.pow.clone()),
             ServiceConfig {
                 room: NonZeroUsize::new(64).expect("non-zero"),
             },
-            budget,
             follow,
         );
         Self {
             store,
             service,
             rules,
+            own,
+            frontier,
             next_tag: AtomicU64::new(1),
             _dir: dir,
         }
@@ -313,11 +414,28 @@ impl Chain {
         let Self {
             store,
             service,
+            own,
+            frontier,
+            rules,
             _dir: dir,
             ..
         } = self;
+        // Whatever published the frontier has stopped: the service ranks
+        // without one. Then HA-R5 on this node's production path
+        // (`RANDOMX_CACHE_ACTOR.md` §8): once the hasher is quiet it holds
+        // what a fresh one fed the store's list holds.
+        drop(frontier);
+        let list = {
+            let snap = store.begin_read().expect("the store reads");
+            shekyl_chain_ingest::service::ranked_on(&snap, rules, None).expect("the store ranks")
+        };
+        let resident = own.hasher.resident();
+        tokio::task::spawn_blocking(move || assert_quiet_is_fresh(&resident, list))
+            .await
+            .expect("the quiet hasher holds what a fresh one holds (HA-R5)");
         let _stopped = service.stop().await;
         drop(store);
+        drop(own);
         dir.close().expect("remove the store's directory");
     }
 }

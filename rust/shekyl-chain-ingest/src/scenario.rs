@@ -176,11 +176,36 @@ impl<P: Pow> Scenario<P> {
             return;
         };
         let snap = store.begin_read().expect("the driver's store reads");
-        let gathered = crate::cache_window::gather(&snap, self.rules)
+        let list = crate::cache_window::ranked_on(&snap, self.rules, None)
             .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
-        if let Some(list) = crate::cache_window::ranked_seeds(gathered.as_ref(), None) {
+        if let Some(list) = list {
             self.substrate.rank(list);
         }
+        // Always, quiet or not: no more than the cap exist (HA-R5).
+        if let Some(resident) = self.substrate.resident() {
+            let resident = resident.borrow();
+            assert!(
+                resident.caches.len() <= shekyl_hasher::CAP,
+                "more caches than the cap: {resident:?}"
+            );
+        }
+    }
+
+    /// HA-R5 at the end of a run on a production pow: once the hasher is
+    /// quiet it holds what a fresh one fed the store's list holds. A free
+    /// longhash has no hasher, and this does nothing.
+    fn quiet_is_fresh(&self) {
+        let (Some(store), Some(resident)) = (&self.store, self.substrate.resident()) else {
+            return;
+        };
+        let snap = store.begin_read().expect("the driver's store reads");
+        let list = crate::cache_window::ranked_on(&snap, self.rules, None)
+            .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
+        drop(snap);
+        if let Some(list) = list.clone() {
+            self.substrate.rank(list);
+        }
+        crate::test_support::assert_quiet_is_fresh(&resident, list);
     }
 
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
@@ -521,6 +546,8 @@ impl<P: Pow> Scenario<P> {
             .extend(height, &template.block, target)
             .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
         self.targets.forget_below_window_of(height);
+        // The tip moved: rank, as the node's ranker does after the write.
+        self.rank();
         let (_, hash) = applied.connected[0];
         let judged_by = CenRow::ALL
             .iter()
@@ -616,10 +643,14 @@ impl<P: Pow> Scenario<P> {
             })
             .expect("the driver's substrate does not fault")
             .expect("a block another driver connected forms");
-        self.connector
+        let offered = self
+            .connector
             .ask(OfferAlt(formed))
             .await
-            .map_err(handler_error)
+            .map_err(handler_error);
+        // An alternative stored can change which fork is the third.
+        self.rank();
+        offered
     }
 
     /// Build the next block on `facts` without connecting it.
@@ -693,10 +724,14 @@ impl<P: Pow> Scenario<P> {
             })
             .expect("the driver's substrate does not fault")
             .expect("a block assembled under empty claims forms");
-        self.connector
+        let offered = self
+            .connector
             .ask(OfferAlt(formed))
             .await
-            .map_err(handler_error)
+            .map_err(handler_error);
+        // An alternative stored can change which fork is the third.
+        self.rank();
+        offered
     }
 
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
@@ -780,6 +815,7 @@ impl<P: Pow> Scenario<P> {
             })
             .await
             .map_err(handler_error)?;
+        self.rank();
         if let Switched::Done(_) = &switched {
             // The ledger still holds the losing branch above the fork. A
             // later claim reloads only the heights it lacks, so those
@@ -881,8 +917,11 @@ impl<P: Pow> Scenario<P> {
         self.start_connector();
     }
 
-    /// Stop the connector, release the store, remove the file.
+    /// Stop the connector, release the store, remove the file. On a
+    /// production pow, first hold the hasher to HA-R5 ([`Self::rank`]'s
+    /// cap check runs after every write; this is the quiet half).
     pub async fn close(mut self) {
+        self.quiet_is_fresh();
         self.stop_connector().await;
     }
 

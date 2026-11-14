@@ -33,12 +33,11 @@ use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{target_claim, FormAttempt};
 use shekyl_chain_store::store::SnapshotView;
-use shekyl_chain_sync::{CachePlan, HashClass, ProveItem, Proved, SyncState};
+use shekyl_chain_sync::{HashClass, ProveItem, Proved, SyncState};
 use shekyl_chain_sync_runtime::executor::{prove, Executor};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_hash_budget::Budget;
 use shekyl_levin::CoreSyncData;
-use shekyl_p2p_harness::sync::{substrate, Bodies, Chain, Corpus, Node, ServingPeer, Step};
+use shekyl_p2p_harness::sync::{own_hasher, Bodies, Chain, Corpus, Node, ServingPeer, Step};
 use shekyl_types::{BlockHash, BlockHeight};
 
 const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
@@ -86,19 +85,17 @@ fn peak_kib() -> Option<u64> {
 
 /// A store holding `corpus`, connected from its own node.
 async fn source(corpus: &Corpus, steps: &[Step]) -> Chain {
-    let (substrate, _) = substrate();
     let chain = Chain::empty(
         &format!("long-{}", corpus.shape),
         corpus.rules(),
-        Arc::new(substrate),
-        Budget::new(NonZeroUsize::new(4).expect("four")),
+        own_hasher(4),
     );
     chain.apply(steps).await;
     chain
 }
 
 /// Hash rate per slot: header proofs under a budget of one slot, then of
-/// every slot this host has, each after the branch cache is built.
+/// every slot this host has, each after the seed's cache is built.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hash_rate_per_slot() {
     let corpus = Corpus::open("spend-1in-2out");
@@ -128,10 +125,20 @@ async fn hash_rate_per_slot() {
     };
     let slots = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
     for permits in [NonZeroUsize::MIN, slots] {
-        let (prover, _) = substrate();
-        let executor = Arc::new(Executor::new(Budget::new(permits), prover));
+        let prover = own_hasher(permits.get());
+        let executor = Arc::new(Executor::new(prover.pow.clone()));
         let seed = BlockHash::from_bytes([u8::try_from(permits.get() % 251).unwrap_or(1); 32]);
-        let plan = CachePlan::Branch(seed);
+        // Ranked, so the cache stays warm between the jobs below: an
+        // unranked seed's cache is freed when its job ends.
+        prover.hasher.rank(
+            shekyl_hasher::Ranked::new(
+                shekyl_pow_randomx::Seedhash::from_bytes(*seed.as_bytes()),
+                None,
+                None,
+            )
+            .expect("one seed"),
+        );
+        let plan = seed;
         let job = |n: usize| -> Vec<ProveItem> {
             items
                 .iter()
@@ -141,8 +148,9 @@ async fn hash_rate_per_slot() {
                 .map(|item| ProveItem { seed, ..item })
                 .collect()
         };
-        // A job with no items still prepares the cache and hashes nothing,
-        // so this interval is the derivation. The one-proof warm-up is
+        // A job with no items still borrows the cache and hashes nothing,
+        // so this interval is the wait for the build the rank above began:
+        // the derivation. The one-proof warm-up is
         // outside it: folding that proof in overstates the derivation,
         // most on the floor device where one hash dominates the build.
         let started = Instant::now();
@@ -159,7 +167,7 @@ async fn hash_rate_per_slot() {
         let rate = f64::from(u32::try_from(n).expect("a count")) / hashing.as_secs_f64();
         eprintln!(
             "slots {permits}: {n} proofs in {hashing:?}: {rate:.2} proofs/s, {:.2} per slot \
-             (branch cache built in {derive:?})",
+             (cache built in {derive:?})",
             rate / f64::from(u32::try_from(permits.get()).expect("a count"))
         );
     }

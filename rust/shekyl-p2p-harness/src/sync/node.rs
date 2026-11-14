@@ -21,7 +21,6 @@
 //! that state is `Synced`.
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,13 +28,12 @@ use shekyl_block_template::MinerKeys;
 use shekyl_bundle_producer::WitnessRing;
 use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
 use shekyl_chain_ingest::service::Follow;
-use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
+use shekyl_chain_ingest::Metrics;
 use shekyl_chain_sync::SyncState;
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_chain_sync_runtime::owner::{self, OwnerParts, Running};
 use shekyl_chain_sync_runtime::port;
 use shekyl_draw_rng::RelayRng;
-use shekyl_hash_budget::Budget;
 use shekyl_levin::{GetTxpoolComplement, NewTransactions, PeerlistEntry};
 use shekyl_miner::{FoundBlocks, JobBoard};
 use shekyl_p2p_session::{
@@ -44,11 +42,10 @@ use shekyl_p2p_session::{
     SocketId, Taken,
 };
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_pow_randomx::CacheStore;
 use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass, Tick};
 use shekyl_transport_layer::{CloseKind, ConnectorId, DialEnd, Direction, Sockets};
 
-use super::chain::Chain;
+use super::chain::{own_hasher, Chain};
 use super::dial::{empty_claim, PeerDial, SyncPeer};
 
 /// The network every harness node and peer names in its handshake.
@@ -145,7 +142,7 @@ pub struct Node {
     pub clock: ManualClock,
     /// The published sync state: the handle a node's consumers read.
     pub state: tokio::sync::watch::Sender<SyncState>,
-    /// The substrate's measurements: one sink for ingest and the executor.
+    /// The boundary's measurements: one sink for ingest and the executor.
     pub metrics: Arc<Metrics>,
     /// The follower's job seat, on a node started to mine.
     pub miner: Option<MinerSeat>,
@@ -156,24 +153,6 @@ pub struct Node {
     /// layer holds the receiver.
     tip: tokio::sync::watch::Sender<CoreSyncData>,
     next_ip: u8,
-}
-
-/// One process-wide cache store: each prepared cache is 256 MiB, and every
-/// chain here shares the corpus's seed.
-#[must_use]
-pub fn caches() -> Arc<CacheStore> {
-    static CELL: std::sync::OnceLock<Arc<CacheStore>> = std::sync::OnceLock::new();
-    Arc::clone(CELL.get_or_init(|| Arc::new(CacheStore::new())))
-}
-
-/// A substrate over the shared caches with its own measurements.
-#[must_use]
-pub fn substrate() -> (ProductionSubstrate, Arc<Metrics>) {
-    let metrics = Arc::new(Metrics::new());
-    (
-        ProductionSubstrate::new(caches(), Arc::clone(&metrics)),
-        metrics,
-    )
 }
 
 impl Node {
@@ -236,11 +215,14 @@ impl Node {
         R: RelayRng + Send + 'static,
         S: RelayRng + Send + 'static,
     {
-        let (substrate, metrics) = substrate();
-        let budget = Budget::new(NonZeroUsize::new(permits).expect("non-zero"));
+        // A hasher of this node's own: its own cap and its own ranked
+        // list, as each daemon has.
+        let own = own_hasher(permits);
+        let metrics = Arc::clone(&own.metrics);
+        let sync_pow = own.pow.clone();
         // The published state, as the node's handle holds it.
         let state = tokio::sync::watch::Sender::new(SyncState::NoView);
-        let (mut follow, miner) = match keys {
+        let (follow, miner) = match keys {
             None => (Follow::default(), None),
             Some(keys) => {
                 let board = Arc::new(JobBoard::new());
@@ -271,23 +253,14 @@ impl Node {
                 )
             }
         };
-        // The substrate's sink, which the executor shares, as the daemon's
-        // node wires it: the per-block profile's phases in one place.
-        follow.metrics = Some(Arc::clone(&metrics));
-        let chain = Chain::empty_following(
-            tag,
-            rules,
-            Arc::new(substrate.clone()),
-            budget.clone(),
-            follow,
-        );
+        let chain = Chain::empty_following(tag, rules, own, follow);
         chain.apply(before).await;
 
         let clock = ManualClock::new(Tick::new(1));
         let engine = EngineService::start(clock.clone());
         let timing = engine.handle();
         let timer = timing.register(OwnerClass::Sync).expect("registered");
-        let executor = Arc::new(Executor::new(budget, substrate));
+        let executor = Arc::new(Executor::new(sync_pow));
         // No accept-rate gate: the harness admits at a fixed tick.
         let sockets = Sockets::with_clearnet_gate(None);
         let dial = Arc::new(PeerDial::new(
@@ -354,6 +327,9 @@ impl Node {
             pool_hashes: Arc::new(Vec::new),
             inbound,
             state: state.clone(),
+            // The owner publishes on the chain's own channel; the chain
+            // keeps the sender alive, so the owner holds a second one.
+            frontier: chain.frontier.clone(),
         };
         // The owner's log lines carry the node's tag.
         let span = tracing::info_span!("node", tag);
@@ -497,6 +473,15 @@ impl Node {
     pub async fn wait(&self, limit: Duration, mut done: impl FnMut(&Self) -> bool) -> bool {
         let started = Instant::now();
         while !done(self) {
+            // Always, quiet or not: no more caches than the cap (HA-R5).
+            {
+                let resident = self.chain.own.hasher.resident();
+                let resident = resident.borrow();
+                assert!(
+                    resident.caches.len() <= shekyl_hasher::CAP,
+                    "more caches than the cap: {resident:?}"
+                );
+            }
             if started.elapsed() > limit {
                 return false;
             }
@@ -578,10 +563,10 @@ impl Node {
             .expect("the inject returns")
     }
 
-    /// The RandomX hashes the node's substrate has run.
+    /// The RandomX hashes the node's boundary has run.
     #[must_use]
     pub fn hashes(&self) -> u64 {
-        self.metrics.snapshot().hashes
+        self.chain.own.pow.artifact().hashes
     }
 
     /// Stop the owner, the layer and the service, and remove the store.

@@ -119,7 +119,8 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # in every build, and the pipeline builds and roots the template's
 # section. The validator already depends on it.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
-# The production PoW verifier: PreparedCache / compute_hash / CacheStore.
+# The production PoW verifier's `Seedhash`, the name the hasher knows a
+# cache by. The cache itself is the hasher's: nothing here derives one.
 # Verification is this crate everywhere, forever (§1.3); the JIT is never
 # consulted here.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }

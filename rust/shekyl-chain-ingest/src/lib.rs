@@ -196,6 +196,8 @@ pub mod pow;
 #[cfg(feature = "pipeline")]
 pub mod rebaseline;
 /// Seats in the arrival window.
+#[cfg(all(test, feature = "pipeline"))]
+mod resident_tests;
 #[cfg(feature = "pipeline")]
 mod room;
 #[cfg(feature = "pipeline")]

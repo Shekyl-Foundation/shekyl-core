@@ -1626,6 +1626,20 @@ where
         }
     }
 
+    /// Wait until the ranker has sent a list computed after this call
+    /// ([`Shared::ranked_now`]): a test reads what the hasher holds for
+    /// the store as it is now. `false` when the service stopped first.
+    #[cfg(test)]
+    pub(crate) async fn ranked(&self) -> bool {
+        self.shared.ranked_now().await
+    }
+
+    /// The store this service writes, for a test's own snapshot.
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &Arc<ChainStore> {
+        self.shared.store()
+    }
+
     /// The door.
     #[must_use]
     pub fn door(&self) -> Door {
@@ -1670,7 +1684,7 @@ mod window;
 
 pub use window::Reservation;
 
-pub use crate::cache_window::Frontier;
+pub use crate::cache_window::{ranked_on, Frontier};
 pub(crate) use window::{divide_pool_faults, record_store_read, with_pool, PoolDivision};
 
 #[cfg(test)]
@@ -1684,3 +1698,7 @@ pub(crate) mod service_tests;
 #[cfg(test)]
 #[path = "service_pool_tests.rs"]
 mod service_pool_tests;
+
+#[cfg(test)]
+#[path = "service_seed_tests.rs"]
+mod service_seed_tests;

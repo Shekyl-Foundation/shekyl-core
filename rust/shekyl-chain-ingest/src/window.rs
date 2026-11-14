@@ -63,14 +63,14 @@ pub(super) async fn rank<P: Pow>(
         let asked = shared.rank_asked();
         let store = Arc::clone(&shared.store);
         let rules = shared.rules;
-        let gathered = tokio::task::spawn_blocking(move || {
+        let ranked = tokio::task::spawn_blocking(move || {
             let snap = store.begin_read().map_err(ViewRead::View)?;
-            cache_window::gather(&snap, rules)
+            cache_window::ranked_on(&snap, rules, ahead)
         })
         .await;
-        match gathered {
-            Ok(Ok(gathered)) => {
-                if let Some(list) = cache_window::ranked_seeds(gathered.as_ref(), ahead) {
+        match ranked {
+            Ok(Ok(list)) => {
+                if let Some(list) = list {
                     shared.pow().rank(list);
                 }
                 shared.rank_served(asked);

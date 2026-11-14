@@ -180,6 +180,22 @@ pub(crate) fn gather(
     Ok(Some(Gathered { window, forks }))
 }
 
+/// The ranked list for the store as `snap` holds it and chain sync's
+/// `frontier`: [`gather`], then [`ranked_seeds`]. What the service's ranker
+/// sends the hasher after each write, and what a test compares a quiet
+/// hasher against (HA-R5).
+///
+/// # Errors
+///
+/// As [`gather`].
+pub fn ranked_on(
+    snap: &ReadSnapshot<'_>,
+    rules: ChainRules,
+    frontier: Option<Frontier>,
+) -> Result<Option<Ranked>, ViewRead<StoreError>> {
+    Ok(ranked_seeds(gather(snap, rules)?.as_ref(), frontier))
+}
+
 /// The ranked list (`RANDOMX_CACHE_ACTOR.md` §5.1, HA-R4). Pure.
 ///
 /// 1. The window's canonical seed, then its other seed.

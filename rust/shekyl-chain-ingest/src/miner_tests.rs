@@ -607,6 +607,93 @@ fn a_form_takes_the_permit_the_miner_left_free() {
     miner.stop().join();
 }
 
+/// `RANDOMX_CACHE_ACTOR.md` §8: a mining job whose seed leaves the ranked
+/// list. The worker's warm loan is cancelled, the worker leaves the job
+/// (it stops hashing and holds no permit), and the seed's cache is gone at
+/// the next quiescence. A cancelled loan never holds off the node.
+///
+/// Red edit: in `shekyl-miner`'s worker, treat `Unhashed::Cancelled` as a
+/// reason to ask for the loan again on the same seed: the worker logs
+/// "not warm" in a loop; or in the hasher, do not cancel a warm lease
+/// whose seed left the list: the worker keeps hashing and the cache stays.
+#[test]
+fn a_mining_job_whose_seed_leaves_the_list_is_cancelled_and_its_cache_freed() {
+    use shekyl_hash_budget::{Budget, Class as BudgetClass};
+    let _lane = MINER_LANE.blocking_lock();
+    let mined_under = shekyl_types::BlockHash::from_bytes([0x6a; 32]);
+    let next_tip = shekyl_types::BlockHash::from_bytes([0x6b; 32]);
+    let template = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(async {
+            let mut s = Scenario::open_with("miner-cancel", crate::scenario::FreeHash);
+            let mined = s.mine(1).await;
+            s.close().await;
+            mined[0].template.block.clone()
+        });
+    let budget = Budget::new(NonZeroUsize::new(2).expect("the miner and one higher class"));
+    let own = own_hasher_on(budget.clone());
+    rank_alone(&own, &mined_under);
+    let board = Arc::new(JobBoard::new());
+    let (sink, _found) = found_blocks();
+    let miner = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::MIN,
+            bound: SearchBound::Unbounded,
+        },
+        Arc::clone(&board),
+        own.hasher.clone(),
+        sink,
+    )
+    .expect("the worker starts");
+    // A job no hash meets, so the worker searches until its loan ends.
+    board.publish(Job {
+        offsets: template
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
+        block: template,
+        height: shekyl_types::BlockHeight::from_raw(1),
+        seed: mined_under,
+        difficulty: Difficulty::new(u128::MAX).expect("a test difficulty is non-zero"),
+    });
+    let started = Instant::now();
+    while budget.held(BudgetClass::Miner) == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the miner never hashed"
+        );
+        std::thread::yield_now();
+    }
+    // The tip moves on: the list names another seed and not the job's.
+    rank_alone(&own, &next_tip);
+    let resident = own.hasher.resident();
+    let quiet = crate::test_support::quiet_seeds(&resident);
+    assert_eq!(
+        quiet,
+        std::iter::once(*next_tip.as_bytes()).collect(),
+        "the job's seed left the list and its cache is gone"
+    );
+    // The worker left the job: it holds no permit, and it stays that way.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        budget.held(BudgetClass::Miner),
+        0,
+        "a cancelled loan is not hashed under again"
+    );
+    assert_eq!(
+        own.hasher.resident().borrow().builds,
+        2,
+        "one build per ranked seed; the cancelled job built nothing"
+    );
+    miner.stop().join();
+}
+
 /// The loop's hash rate per worker, for the report: one worker, then every
 /// core, each searching a job no hash meets for a full window. Run in
 /// release — a debug build's rate says nothing about the daemon's:
