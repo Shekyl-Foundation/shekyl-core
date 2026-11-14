@@ -194,8 +194,8 @@ members = [
 
     # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
     # over `shekyl-daemon`'s sequence. It links no C++.
-    # One Rust dependency graph, so one tracing-core dispatcher; the staged
-    # binary's nm gate asserts it.
+    # One Rust dependency graph, so one tracing-core dispatcher: one cargo
+    # link resolves one `tracing-core` (`scripts/ci/check_binary_hardening.sh`).
     "shekyld",
     "shekyl-encoding",
     "shekyl-address",
@@ -702,16 +702,15 @@ tempfile = "3.27"
 # which do declare one unconditionally, key or store no table here).
 redb = "4.4.0"
 
-# `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
-# "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
-# the 2026-04-27 *Engine binary boundary* decision in
-# `docs/V3_WALLET_DECISION_LOG.md`). Verified at source via the
+# `kameo` actor framework — pinned per the 2026-04-27 *Engine binary
+# boundary* decision in
+# `docs/V3_WALLET_DECISION_LOG.md`. Verified at source via the
 # crates.io index 2026-05-29: 0.20.0 is the newest stable (released
 # 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
 # the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
 # this project's topology depends on. Crate MSRV 1.88.0 (below the
 # workspace floor). Pinned with an exact
-# patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
+# patch-level cap (`=0.20.0`): an actor
 # framework is a coordination-load-bearing dependency where a silent
 # minor bump could alter mailbox/supervision semantics under us.
 #
