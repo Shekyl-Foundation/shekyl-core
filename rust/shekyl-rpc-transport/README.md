@@ -1,6 +1,6 @@
 # Shekyl RPC transport
 
-Two things, because they must not disagree:
+Three things, because they must not disagree:
 
 1. **Client.** `shekyl-rpc-client`'s `Rpc` trait implemented over HTTP(S) — a
    small, pooled `hyper` client owned in `http_client` (re-absorbed from the
@@ -12,3 +12,12 @@ Two things, because they must not disagree:
    — wallet and daemon — so "wildcard" and "loopback" mean one thing,
    IPv4-mapped spellings included (`docs/design/RPC_TRANSPORT_POSTURE.md`
    RT-1, RT-2). The refusals themselves stay with each listener.
+3. **"This computer".** `local` (`LocalTarget`) dials a run-as-me daemon's
+   owner's leg, found by the daemon's own rendezvous naming
+   (`shekyl-rpc-channel`'s `rendezvous`): the socket on Unix, the pipe a
+   rendezvous record names on Windows, one connection per call. "Not
+   running" and a failed peer check are distinct failures (`LocalFault`);
+   the peer check's is a security failure and is never retried
+   (`docs/design/RPC_CHANNEL.md` RT-15, §7.1). The account's session
+   directory and the local legs' HTTP exchange are read here once, for the
+   daemon's start and every client.

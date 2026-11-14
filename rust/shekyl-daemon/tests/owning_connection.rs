@@ -155,11 +155,12 @@ fn parent(dir: &Path) -> ! {
     }
 }
 
-/// The sleeper role: outlive the parent, until the test releases it or a
-/// bound passes.
+/// The sleeper role: outlive the parent, until the test releases it, its
+/// directory goes, or a bound passes.
 fn sleeper(dir: &Path) -> ! {
     let deadline = Instant::now() + Duration::from_secs(300);
-    while Instant::now() < deadline && !dir.join("release").exists() {
+    // Released by the test, or by its directory's removal.
+    while Instant::now() < deadline && dir.exists() && !dir.join("release").exists() {
         std::thread::sleep(POLL);
     }
     std::process::exit(0)

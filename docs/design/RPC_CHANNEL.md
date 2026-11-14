@@ -248,6 +248,18 @@ and **fails the peer check** is a hard stop: reported as a security
 failure, never retried, never routed around (R0 RT-6: a fallback after a
 failed check is a downgrade oracle).
 
+**A wallet that starts its own daemon (GS-C3, ruled 2026-11-12).** The
+GUI's child holds an **owning connection** for its life
+([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q106): one end of a connected
+stream socket pair the GUI made and the daemon inherited
+(`owning-connection`). It carries the daemon's readiness (`shekyld-ready 1`,
+written once the owner's leg is bound, served and published) and its life
+(the GUI's close, or its death, stops the daemon cleanly), and nothing
+else. The GUI's calls go over the owner's leg, resolved as "this computer"
+through the rendezvous (`shekyl-rpc-transport`'s `local::LocalTarget`, which
+keeps this section's two failures apart). §7.1 is unchanged: the rendezvous
+watch stays, and either one stops the daemon.
+
 *Plaintext loopback TCP stays as an operator option, at view* (RT-O5,
 ruled 2026-10-08, kept for UX). **Off by default** (RT-O5′, ruled
 2026-10-08): a fresh install has no unauthenticated listener, and the
