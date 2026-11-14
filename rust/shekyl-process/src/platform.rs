@@ -177,7 +177,7 @@ pub fn service_parent() -> Option<PathBuf> {
 pub fn current() -> shekyl_daemon_config::Platform {
     shekyl_daemon_config::Platform {
         home: account_home(),
-        program_data: service_parent(),
+        service_parent: service_parent(),
         session_dir: session_dir(),
         service_rendezvous: service_rendezvous(),
     }

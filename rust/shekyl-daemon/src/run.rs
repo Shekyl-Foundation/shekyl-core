@@ -573,12 +573,9 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// on one and does not open the log beside the rolling writer. Standard
 /// error is prefixed `shekyld:`; the log line is the line alone. The
 /// closing [`shekyl_logging::flush`] delivers a line queued before it.
-/// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
-/// §7.1): the socket's name is a hash, so the operator is told which
-/// network and instance it serves and where it is.
-/// What a service says at start about its machine-wide rendezvous (§7.1;
-/// Rick, 2026-11-14): where it publishes the record when it listens on the
-/// channel, and that it publishes none when it does not.
+/// What a service says at start about its machine-wide rendezvous (§7.1):
+/// where it publishes the record when it listens on the channel, and that
+/// it publishes none when it does not.
 fn service_rendezvous_line(
     network: &str,
     instance: &str,
@@ -599,6 +596,9 @@ fn service_rendezvous_line(
     }
 }
 
+/// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
+/// §7.1): the socket's name is a hash, so the operator is told which
+/// network and instance it serves and where it is.
 fn owner_socket_line(network: &str, instance: &str, path: &std::path::Path) -> String {
     let leg = if cfg!(windows) {
         "owner's rendezvous"
@@ -644,7 +644,7 @@ mod tests {
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
-            program_data: None,
+            service_parent: None,
             session_dir: crate::test_session_dir(home),
             service_rendezvous: None,
         }

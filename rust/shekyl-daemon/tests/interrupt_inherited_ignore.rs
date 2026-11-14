@@ -100,7 +100,7 @@ fn run_child_if_requested() {
         &args,
         &Platform {
             home: Some(dir),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         },

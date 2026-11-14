@@ -32,7 +32,7 @@ pub struct Platform {
     /// under it (Rick, 2026-11-14): `%ProgramData%` on Windows, `/var/lib`
     /// on Linux, `/var/db` on FreeBSD and macOS. `None` where the platform
     /// names none. The daemon checks the data home and never creates it.
-    pub program_data: Option<PathBuf>,
+    pub service_parent: Option<PathBuf>,
     /// The account's per-user session directory, from the platform's own
     /// interface and never the environment (IG-Q14): `/run/user/<uid>` on
     /// Linux when the session or linger keeps it, and

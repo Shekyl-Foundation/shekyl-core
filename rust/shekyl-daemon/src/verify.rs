@@ -231,7 +231,7 @@ mod tests {
     fn platform(home: &Path) -> Platform {
         Platform {
             home: Some(home.to_path_buf()),
-            program_data: None,
+            service_parent: None,
             session_dir: crate::test_session_dir(home),
             service_rendezvous: None,
         }

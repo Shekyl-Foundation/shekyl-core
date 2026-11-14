@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source};
 
+#[cfg(unix)]
+use crate::directory::{require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE};
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
 
@@ -36,7 +38,7 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
             .map(|home| home.join(if cfg!(windows) { "Shekyl" } else { ".shekyl" }))
             .ok_or_else(|| Diagnostic::new(Code::PathNoHome, Source::Machine).option(option)),
         RunMode::Service => platform
-            .program_data
+            .service_parent
             .as_deref()
             .map(|parent| parent.join("shekyl"))
             .ok_or_else(|| {
@@ -96,8 +98,6 @@ fn check_service_data_home_as(
     explicit_data_dir: Option<&Path>,
     me: u32,
 ) -> Result<(), Diagnostic> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
     if mode != RunMode::Service {
         return Ok(());
     }
@@ -112,30 +112,17 @@ fn check_service_data_home_as(
             .param("path", shown.clone())
             .param("found", found)
     };
-    if me == 0 {
-        return Err(refuse("the daemon runs as root".to_owned()));
-    }
-    let meta = std::fs::symlink_metadata(&home).map_err(|e| {
-        refuse(match e.kind() {
-            std::io::ErrorKind::NotFound => format!("{shown} does not exist"),
-            _ => format!("{shown} cannot be read: {e}"),
-        })
-    })?;
-    if meta.file_type().is_symlink() {
-        return Err(refuse(format!("{shown} is a symbolic link")));
-    }
-    if !meta.is_dir() {
-        return Err(refuse(format!("{shown} is not a directory")));
-    }
-    if meta.uid() != me {
+    require_service_account(me).map_err(refuse)?;
+    let account =
+        DirectoryAccount::inspect(&home).map_err(|fault| refuse(fault.clause(Some(&shown))))?;
+    let account = account
+        .require_owner(me)
+        .map_err(|fault| refuse(fault.clause(Some(&shown))))?;
+    let mode = account.mode();
+    if mode != ACCOUNT_ONLY_MODE {
         return Err(refuse(format!(
-            "{shown} is owned by uid {}, not this account (uid {me})",
-            meta.uid()
+            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
         )));
-    }
-    let mode = meta.permissions().mode() & 0o7777;
-    if mode != 0o700 {
-        return Err(refuse(format!("{shown} has mode {mode:04o}, not 0700")));
     }
     Ok(())
 }
@@ -185,7 +172,7 @@ mod tests {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let parent = tempfile::tempdir().unwrap();
         let platform = Platform {
-            program_data: Some(parent.path().to_path_buf()),
+            service_parent: Some(parent.path().to_path_buf()),
             ..Platform::default()
         };
         let home = parent.path().join("shekyl");
@@ -231,7 +218,7 @@ mod tests {
     fn platform() -> Platform {
         Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
             session_dir: None,
             service_rendezvous: None,
         }
@@ -247,12 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn the_service_root_is_program_data_or_a_refusal() {
+    fn the_service_root_is_the_service_parent_or_a_refusal() {
         let d = root(&platform(), RunMode::Service, "log-file").unwrap_err();
         assert_eq!(d.code, Code::ServiceRoot);
         let p = Platform {
             home: None,
-            program_data: Some(PathBuf::from("C:/ProgramData")),
+            service_parent: Some(PathBuf::from("C:/ProgramData")),
             session_dir: None,
             service_rendezvous: None,
         };

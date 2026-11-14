@@ -24,6 +24,10 @@ use std::path::PathBuf;
 use shekyl_options::{Code, Diagnostic, Source};
 use shekyl_rpc_channel::{rendezvous_name, Instance};
 
+#[cfg(unix)]
+use crate::directory::{
+    require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE, GROUP_OR_OTHER_WRITE,
+};
 use crate::marker::NetworkId;
 use crate::platform::{Platform, RunMode};
 use crate::sections::DaemonConfig;
@@ -232,30 +236,14 @@ pub fn service_rendezvous(
 /// refusal names them; the error is the clause that failed, path included.
 #[cfg(unix)]
 fn check_service_dir(dir: &std::path::Path, me: u32) -> Result<(), String> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let shown = dir.display();
-    if me == 0 {
-        return Err("the daemon runs as root".to_owned());
-    }
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => format!("{shown} does not exist"),
-        _ => format!("{shown} cannot be read: {e}"),
-    })?;
-    if meta.file_type().is_symlink() {
-        return Err(format!("{shown} is a symbolic link"));
-    }
-    if !meta.is_dir() {
-        return Err(format!("{shown} is not a directory"));
-    }
-    if meta.uid() != me {
-        return Err(format!(
-            "{shown} is owned by uid {}, not this account (uid {me})",
-            meta.uid()
-        ));
-    }
-    let mode = meta.permissions().mode() & 0o7777;
-    if mode & 0o022 != 0 {
+    require_service_account(me)?;
+    let shown = dir.display().to_string();
+    let account = DirectoryAccount::inspect(dir).map_err(|fault| fault.clause(Some(&shown)))?;
+    let account = account
+        .require_owner(me)
+        .map_err(|fault| fault.clause(Some(&shown)))?;
+    let mode = account.mode();
+    if mode & GROUP_OR_OTHER_WRITE != 0 {
         return Err(format!(
             "{shown} is writable by its group or by others (mode {mode:04o})"
         ));
@@ -293,27 +281,15 @@ pub fn assert_dir(dir: &std::path::Path) -> Result<u32, String> {
 /// [`assert_dir`] for the account `me`.
 #[cfg(unix)]
 fn assert_dir_as(dir: &std::path::Path, me: u32) -> Result<u32, String> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => "it does not exist".to_owned(),
-        _ => format!("it cannot be read: {e}"),
-    })?;
-    if meta.file_type().is_symlink() {
-        return Err("it is a symbolic link; name the directory itself".to_owned());
-    }
-    if !meta.is_dir() {
-        return Err("it is not a directory".to_owned());
-    }
-    if meta.uid() != me {
+    let account = DirectoryAccount::inspect(dir).map_err(|fault| fault.clause(None))?;
+    let account = account
+        .require_owner(me)
+        .map_err(|fault| fault.clause(None))?;
+    let mode = account.mode();
+    if mode != ACCOUNT_ONLY_MODE {
         return Err(format!(
-            "it is owned by uid {}, not this account (uid {me})",
-            meta.uid()
+            "its mode is {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
         ));
-    }
-    let mode = meta.permissions().mode() & 0o7777;
-    if mode != 0o700 {
-        return Err(format!("its mode is {mode:04o}, not 0700"));
     }
     if !is_local(dir).map_err(|e| format!("its filesystem cannot be read: {e}"))? {
         return Err("it is on a network filesystem".to_owned());
@@ -382,7 +358,7 @@ mod tests {
     fn platform(session: Option<&Path>) -> Platform {
         Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
             session_dir: session.map(Path::to_path_buf),
             service_rendezvous: None,
         }

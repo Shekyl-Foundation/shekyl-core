@@ -40,7 +40,7 @@ fn home_root() -> PathBuf {
 fn platform() -> Platform {
     Platform {
         home: Some(PathBuf::from(abs("/srv/op"))),
-        program_data: None,
+        service_parent: None,
         session_dir: None,
         service_rendezvous: None,
     }

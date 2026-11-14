@@ -71,7 +71,7 @@ fn run_child_if_requested() {
         &args,
         &Platform {
             home: Some(dir.clone()),
-            program_data: Some(dir.clone()),
+            service_parent: Some(dir.clone()),
             session_dir: None,
             service_rendezvous: Some(dir.join("run")),
         },
