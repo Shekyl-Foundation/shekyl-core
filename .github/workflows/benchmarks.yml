@@ -28,11 +28,17 @@
 #                         `compare` run after seeding lands).
 #
 #   push → dev
-#     - update-baseline:  runs the same harness, writes the result to
-#                         `bench-baseline/baseline.json`, commits as
-#                         the CI bot. Creates the branch (orphan) if
-#                         it does not yet exist. Never merges into
-#                         `dev` or `main`.
+#     - update-baseline:  runs the pull-request set (every row of it,
+#                         not the nightly full-weight rows), writes
+#                         the result to `bench-baseline/baseline.json`,
+#                         commits as the CI bot. Creates the branch
+#                         (orphan) if it does not yet exist. Never
+#                         merges into `dev` or `main`. After the push,
+#                         compares that capture with the baseline it
+#                         replaced: a fail or a missing row is red, a
+#                         warn is not.
+#     - report-dev-red:   a failed or timed-out job of that push opens
+#                         the tracking issue.
 #
 # Implementation scope: **Rust + gungraun only** (Tier 1).
 # C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
@@ -82,14 +88,19 @@ on:
 
 # Top-level defaults: read-only. Per-job overrides upgrade to write
 # only where strictly necessary (PR comment; bench-baseline push).
-# Superseded-run cancellation (house pattern: build.yml).
+# Superseded-run cancellation for a pull request (house pattern: build.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
 # run behind the old one — with the shared runner pool, repeated pushes
 # queue out ALL runners (measured: ~80% of CI wait). `github.ref` is
 # unique per PR (refs/pull/N/merge), so only same-PR runs supersede.
+#
+# A push to dev is not cancelled. update-baseline publishes the baseline
+# and then raises the drift alarm. Cancelling between those two steps
+# leaves the baseline moved and the alarm unrun, and the next run
+# compares against the baseline that already absorbed the move.
 concurrency:
   group: benchmarks-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: "${{ github.ref != 'refs/heads/dev' }}"
 
 permissions:
   contents: read
@@ -103,7 +114,8 @@ jobs:
   # the path sets are the measurement ledger's). A wallet change runs the
   # wallet rows and not the block path's, whose setup is half an hour of
   # callgrind. The classifier fails closed: on any error it says `all`.
-  # The push to `dev` does not consult this job; it captures every row.
+  # The push to `dev` does not consult this job; it captures every row
+  # of the pull-request set. The full-weight rows are the nightly capture.
   scope:
     name: bench scope
     if: github.event_name == 'pull_request'
@@ -245,12 +257,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --heads origin bench-baseline >/dev/null 2>&1; then
+          # Exit 2 is the only "no such branch" (origin_branch.sh).
+          # A failed lookup must not post bootstrap-pending and pass.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh . bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
             git fetch origin bench-baseline:bench-baseline
             git show bench-baseline:baseline.json > /tmp/baseline.json
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${presence}" = "absent" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
           fi
 
       - name: bootstrap-pending comment (no baseline yet)
@@ -367,7 +389,10 @@ jobs:
 
   profile-on-fail:
     name: samply profile (fail only)
-    if: github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true'
+    # A missing bench has no binary to sample. fail_full_id is empty
+    # when the only gating failure is a deleted row; the compare log
+    # names that row.
+    if: github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true' && needs.compare.outputs.fail_full_id != ''
     needs: compare
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -492,6 +517,29 @@ jobs:
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
 
+      - name: keep the baseline this capture replaces
+        id: previous
+        run: |
+          set -euo pipefail
+          # Read before the push moves the branch. A failed lookup is
+          # not an absent branch: that would skip the alarm and let
+          # the push replace a baseline this run never read.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh . bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
+            git fetch origin bench-baseline
+            git show FETCH_HEAD:baseline.json > /tmp/previous-baseline.json
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "${presence}" = "absent" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
+          fi
+
       - name: push updated baseline to bench-baseline branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -529,13 +577,21 @@ jobs:
           git -C "$WORK" config user.email "ci-bot@shekyl.foundation"
           git -C "$WORK" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-          if git -C "$WORK" ls-remote --exit-code --heads origin bench-baseline >/dev/null 2>&1; then
+          # A failed lookup must not orphan-seed a second history.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh "$WORK" bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
             git -C "$WORK" fetch origin bench-baseline
             git -C "$WORK" checkout -b bench-baseline FETCH_HEAD
-          else
-            # Orphan seed.
+          elif [ "${presence}" = "absent" ]; then
             git -C "$WORK" checkout --orphan bench-baseline
             git -C "$WORK" rm -rf . >/dev/null 2>&1 || true
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
           fi
 
           cp /tmp/baseline-out/* "$WORK/"
@@ -548,3 +604,35 @@ jobs:
 
           git -C "$WORK" commit -m "bench-baseline: refresh from ${CAPTURE_SOURCE_SHA:0:12}"
           git -C "$WORK" push origin bench-baseline
+
+      - name: drift alarm
+        # This capture is the pull-request set, every row of it. The
+        # full-weight rows are nightly.yml bench-full-drift, which calls
+        # the same script on that set. compare.py: a fail or a missing
+        # row is red, and the log names it. A warn is not red. The
+        # baseline has already moved, so the next push is held to this
+        # capture and a warn does not accumulate into a later fail.
+        if: steps.previous.outputs.present == 'true'
+        run: |
+          ./scripts/bench/drift_report.sh "dev baseline" \
+            /tmp/previous-baseline.json docs/benchmarks/shekyl_rust_v0.json \
+            "the baseline this push replaced"
+
+  # A red push run on `dev` opens or threads a tracking issue
+  # (`report-dev-red.yml`). `needs` lists every other job in this file, so
+  # a red in any of them reports; scripts/ci/check_dev_red_reporter.py
+  # holds the list and this condition to the file. Only a push run on
+  # `dev` reports: a pull request's red is read on the pull request. A job
+  # past its `timeout-minutes` is cancelled, not failed, and `failure()`
+  # does not see it, so the condition reads each needed job's result: a
+  # failed or cancelled one reports, unless the whole run was cancelled
+  # (a newer merge superseded it), which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [scope, capture-pr, compare, profile-on-fail, update-baseline]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

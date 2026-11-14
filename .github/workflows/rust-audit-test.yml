@@ -75,6 +75,9 @@ jobs:
       rust_job: ${{ steps.scope.outputs.rust_job }}
       rust_tests: ${{ steps.scope.outputs.rust_tests }}
       rust_doc_pkgs: ${{ steps.scope.outputs.rust_doc_pkgs }}
+      # Whether the economics sim's narration pins run: the test scope
+      # reaches the sim, or the change is to the pins' own lane script.
+      sim_narrations: ${{ steps.scope.outputs.sim_narrations }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
     permissions:
       contents: read
@@ -105,7 +108,7 @@ jobs:
           # Fail closed: if the classifier does not run at all, every output
           # is written as its widest value, so no step below reads an empty one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
-            || printf '%s\n' docs_only=false rust_job=run rust_tests=all rust_doc_pkgs= >> "$GITHUB_OUTPUT"
+            || printf '%s\n' docs_only=false rust_job=run rust_tests=all rust_doc_pkgs= sim_narrations=run >> "$GITHUB_OUTPUT"
 
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
@@ -888,8 +891,35 @@ jobs:
   # does not see it, so the condition reads each needed job's result: a
   # failed or cancelled one reports, unless the whole run was cancelled
   # (a newer merge superseded it), which `!cancelled()` leaves out.
+  economics-sim-narrations:
+    name: 'Economics sim: narration pins'
+    needs: changes
+    # The sim's narration pins (`#[ignore]`d, release build): each folds the
+    # sim and compares its report with the committed fixture. A change to a
+    # value the sim reads anywhere upstream moves a narration without failing
+    # any test the Rust job runs: #1323 (the block-weight surge factor, 4 to
+    # 3) merged green and the nightly lane stayed red for three nights
+    # (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30). This job runs the pins on
+    # every change whose test scope reaches the sim, on its own runner beside
+    # the Rust job, so it adds runner time and no wall time. The nightly lane
+    # still runs them, with the tests too long for a pull request.
+    if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.sim_narrations == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # one run, 13.9 min (#1369: release build 4.9, pins 8.6); about twice it
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: install Rust
+        uses: ./.github/actions/install-rust
+      - name: the narration pins
+        # The pin list is scripts/ci/ignored_set_economics_sim.sh's, judged
+        # against the crate's ignored set before it runs.
+        run: bash scripts/ci/ignored_set_economics_sim.sh --narrations
+
   report-dev-red:
-    needs: [changes, rust-audit-and-test]
+    needs: [changes, rust-audit-and-test, economics-sim-narrations]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       actions: read

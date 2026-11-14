@@ -57,13 +57,17 @@ impl PendingSealStore for std::sync::Arc<MemStore> {
         Ok(self.block.lock().expect("mem store").clone())
     }
 
-    async fn save(&self, block: &PendingPostBlock) -> Result<(), Self::Error> {
+    async fn save(
+        &self,
+        block: &PendingPostBlock,
+    ) -> Result<shekyl_engine_file::Durability, Self::Error> {
         if self.fail_saves.load(Ordering::Relaxed) {
             return Err(InjectedSealFailure);
         }
         *self.saves.lock().expect("mem store") += 1;
         *self.block.lock().expect("mem store") = Some(block.clone());
-        Ok(())
+        // The memory store is the store. The assignment is the write.
+        Ok(shekyl_engine_file::Durability::Confirmed)
     }
 }
 
@@ -91,12 +95,12 @@ impl ScriptedBroadcast {
 impl BondBroadcast for std::sync::Arc<ScriptedBroadcast> {
     async fn submit_bound(
         &self,
-        bound: PBoundBytes,
+        handoff: crate::engine::transaction_submitter::BoundForSend,
     ) -> Result<SubmitSuccess, BroadcastSubmitError> {
         self.sent
             .lock()
             .expect("sent")
-            .push((*bound.persona(), bound.bytes().to_vec()));
+            .push((*handoff.persona(), handoff.bytes().to_vec()));
         self.script
             .lock()
             .expect("script")

@@ -75,6 +75,14 @@ dependency, not by topic:
 - `rust_doc_pkgs`: the `-p` arguments for the doctest run, the reverse
   closure of `rust_tests` cut to packages with a library target, since
   `cargo test --doc` refuses a package without one.
+- `sim_narrations`: `run` or `skip`, for the economics sim's narration pins
+  (`rust-audit-test.yml`'s economics-sim-narrations job). The pins are
+  `#[ignore]`d, so `rust_tests` reaching the sim does not run them. They run
+  when that scope is `all` or its reverse closure holds the sim, since a
+  value the sim reads anywhere upstream can move a narration (#1323 changed
+  `config/` and the surge factor's crates and merged green), and when a
+  changed file belongs to that job (the lane script and the helper it
+  sources).
 
 - `bench_rows`: `all`, `none`, or the benchmark rows a pull request's
   capture runs (`benchmarks.yml`), each `<crate>::<gungraun-target>`. A row
@@ -119,6 +127,9 @@ SELF = "scripts/ci/change_scope.py"
 JOB_OWNERS = "scripts/ci/job_owners.tsv"
 RUST_WORKFLOW = ".github/workflows/rust-audit-test.yml"
 RUST_JOB = "rust-audit-test:rust-audit-and-test"
+# The economics sim and the job that runs its narration pins.
+SIM = "shekyl-economics-sim"
+SIM_NARRATIONS_JOB = "rust-audit-test:economics-sim-narrations"
 WORKFLOW_DIR = ".github/workflows/"
 # The paths the ownership table claims. A workflow file owns its own jobs;
 # any other file under the workflows directory is a plain owned path.
@@ -341,13 +352,14 @@ def changed_files(base, head):
     return files
 
 
-def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all"):
+def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all", sim_narrations="run"):
     lines = [
         f"docs_only={'true' if docs_only else 'false'}",
         f"rust_job={rust_job}",
         f"rust_tests={rust_tests}",
         f"rust_doc_pkgs={rust_doc_pkgs}",
         f"bench_rows={bench_rows}",
+        f"sim_narrations={sim_narrations}",
     ]
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
@@ -666,6 +678,24 @@ def bench_rows(files, tests, workspace, rows):
     return " ".join(hit) if hit else "none"
 
 
+def sim_narrations_scope(files, tests, workspace, owners, workflows):
+    """(`run` or `skip`, reason) for the sim's narration pins, given the Rust
+    job's test scope `tests` over the changed `files`."""
+    if tests == "all":
+        return "run", "every crate's tests run"
+    if isinstance(tests, set):
+        if SIM in tests:
+            return "run", f"{SIM} changed"
+        reached = sorted(t for t in tests if SIM in workspace.rdeps({t}))
+        if reached:
+            return "run", f"{SIM} depends on {', '.join(reached)}"
+    for f in files:
+        jobs = workflow_owners(f, workflows) if is_workflow(f) and f in workflows else owners.get(f, set())
+        if SIM_NARRATIONS_JOB in jobs:
+            return "run", f"{f}: a file {SIM_NARRATIONS_JOB} runs"
+    return "skip", f"nothing {SIM} reads changed"
+
+
 def rust_tests_value(tests):
     return tests if isinstance(tests, str) else " ".join(sorted(tests))
 
@@ -790,6 +820,21 @@ RUST_SELFTEST = [
     ("scripts/armed_lever.py", "run", {"shekyl-cli"}),                     # outside scripts/ci: a regtest test runs it
 ]
 
+# The narration pins' scope: (changed files, expected sim_narrations).
+SIM_NARRATIONS_SELFTEST = [
+    # #1323's shape: the surge factor in config/, its crates, merged green
+    # while the narrations moved.
+    (["config/consensus_constants.json", "rust/shekyl-economics/src/params.rs",
+      "rust/shekyl-chain-rules/src/rules/block_weight.rs"], "run"),
+    (["rust/shekyl-economics/src/params.rs"], "run"),                       # a crate the sim calls
+    (["rust/shekyl-chain-rules/src/rules/block_weight.rs"], "run"),
+    (["rust/shekyl-economics-sim/tests/fixtures/stage2_narration.txt"], "run"),  # a pin's fixture
+    (["scripts/ci/ignored_set_economics_sim.sh"], "run"),                  # the pin list
+    (["scripts/ci/ignored_set_mode.sh"], "run"),                           # sourced by it
+    (["rust/shekyl-tor/src/lib.rs"], "skip"),                              # nothing the sim reads
+    (["scripts/ci/nextest_report.py"], "skip"),                            # the Rust job's, not the pins'
+    (["scripts/ci/check_doc_links.py"], "skip"),
+]
 # A workflow file or an owned path a crate's test reads: the readers, not
 # only the owners, decide (rule 47: the readers are asserted to exist).
 WORKFLOW_READERS = {
@@ -887,6 +932,16 @@ def rust_selftest(inputs, trees):
     if "-p shekyl-economics-sim" in doc_pkgs(workspace, {"shekyl-economics"}):
         print("WRONG: the sim has no library target and cannot take cargo test --doc")
         bad += 1
+    # The narration pins run where the sim can move.
+    for paths, want in SIM_NARRATIONS_SELFTEST:
+        _, tests, _ = rust_scope(paths, inputs, trees, workspace, owners, workflows)
+        got, why = sim_narrations_scope(paths, tests, workspace, owners, workflows)
+        ok = got == want
+        bad += not ok
+        print(f"[{'ok' if ok else 'WRONG'}] {' + '.join(paths)}: sim_narrations={got} — {why}")
+    if SIM not in workspace.dir_of:
+        print(f"WRONG: {SIM} is not a workspace member; the narration scope has no subject")
+        bad += 1
     # The ownership table against the tree.
     tracked = [t for t in git("ls-files", *OWNED_DIRS).splitlines() if not is_workflow(t)]
     missing = [t for t in tracked if t not in owners]
@@ -916,9 +971,10 @@ def rust_selftest(inputs, trees):
     if under:
         print(f"WRONG: {len(under)} path(s) are named by a job their row does not list: {under[:5]}")
         bad += 1
-    if RUST_JOB not in jobs:
-        print(f"WRONG: {RUST_JOB} is not a job the workflows define")
-        bad += 1
+    for job in (RUST_JOB, SIM_NARRATIONS_JOB):
+        if job not in jobs:
+            print(f"WRONG: {job} is not a job the workflows define")
+            bad += 1
     return bad + bench_selftest(inputs, trees, workspace, owners, workflows)
 
 
@@ -983,19 +1039,23 @@ def main():
             job, tests, more = "skip", "none", ["docs only: the Rust job is skipped"]
             docs = ""
             bench = "none"
+            narrations = "skip"
         else:
             workspace = Workspace.read()
+            owners = read_owners()
             workflows = sorted(w for w in git("ls-files", WORKFLOW_DIR).splitlines() if w.endswith((".yml", ".yaml")))
-            job, tests, more = rust_scope(files, inputs, trees, workspace, read_owners(), workflows)
+            job, tests, more = rust_scope(files, inputs, trees, workspace, owners, workflows)
             docs = doc_pkgs(workspace, tests)
             bench = bench_rows(files, tests, workspace, read_gated_rows())
+            narrations, why = sim_narrations_scope(files, tests, workspace, owners, workflows)
+            more = more + [f"sim narrations {narrations}: {why}"]
     except Exception as e:  # fail closed on anything
         print(f"scope: cannot decide ({e}); running everything (fail-closed)")
         emit(False)
         return 0
     for r in reasons + more:
         print(f"scope: {r}")
-    emit(docs_only, job, rust_tests_value(tests), docs, bench)
+    emit(docs_only, job, rust_tests_value(tests), docs, bench, narrations)
     return 0
 
 

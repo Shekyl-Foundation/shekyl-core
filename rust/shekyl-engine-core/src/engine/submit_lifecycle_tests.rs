@@ -21,6 +21,7 @@
 //! [`SubmitLifecycleDriver::tick`] over hermetic stubs.
 
 use super::*;
+use crate::engine::dispatch_durability::NoSaveCommit;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -66,6 +67,14 @@ struct HostState {
     rescan_queue: Vec<RescanRequest>,
     released: HashSet<TxHash>,
     events: Vec<PendingTxDiagnostic>,
+    /// Sends dispatched before this session (A19): the probe rung on
+    /// these is the operator alarm, never an automatic resend.
+    earlier: HashSet<TxHash>,
+    /// The host-side alarm latch.
+    alarms: HashMap<TxHash, WatchdogAlarmReason>,
+    /// Sends refresh has settled: their journal rows drop their bytes at
+    /// the next prune (the state-driven rule).
+    settled: HashSet<TxHash>,
 }
 
 struct StubHost {
@@ -115,7 +124,16 @@ impl StubHost {
     /// Model a refresh-observed confirmation: the F14 lock clears, so
     /// the tx leaves the held projection.
     fn confirm(&self, tx: &TxHash) {
-        self.state.lock().unwrap().held.retain(|h| &h.tx_hash != tx);
+        let mut s = self.state.lock().unwrap();
+        s.held.retain(|h| &h.tx_hash != tx);
+        s.settled.insert(*tx);
+    }
+
+    /// Mark `tx` as dispatched before this session (a restart crossed
+    /// its verdict).
+    fn dispatched_earlier(self, tx: TxHash) -> Self {
+        self.state.lock().unwrap().earlier.insert(tx);
+        self
     }
 
     fn events(&self) -> Vec<PendingTxDiagnostic> {
@@ -162,27 +180,79 @@ impl WatchdogHost for StubHost {
         self.state.lock().unwrap().held_bytes.get(tx_hash).cloned()
     }
 
-    fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
+    fn prune_settled_send_bytes(&self) {
+        let mut s = self.state.lock().unwrap();
+        let settled = s.settled.clone();
+        s.held_bytes.retain(|k, _| !settled.contains(k));
+    }
+
+    fn dispatched_this_session(&self, tx_hash: &TxHash) -> bool {
+        !self.state.lock().unwrap().earlier.contains(tx_hash)
+    }
+
+    fn latch_alarm(&self, tx_hash: TxHash, reason: WatchdogAlarmReason) -> bool {
+        match self.state.lock().unwrap().alarms.entry(tx_hash) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(reason);
+                true
+            }
+        }
+    }
+
+    fn release_alarms(&self, live: &HashSet<TxHash>) {
         self.state
             .lock()
             .unwrap()
-            .held_bytes
-            .retain(|k, _| live.contains(k));
+            .alarms
+            .retain(|tx, _| live.contains(tx));
+    }
+
+    fn clear_alarm(&self, tx_hash: &TxHash) {
+        self.state.lock().unwrap().alarms.remove(tx_hash);
+    }
+
+    fn held_send_facts(&self) -> Vec<HeldSendFact> {
+        let s = self.state.lock().unwrap();
+        s.held
+            .iter()
+            .map(|held| HeldSendFact {
+                tx_hash: held.tx_hash,
+                sent_height: BlockHeight::from_raw(held.baseline_height),
+                has_bytes: s.held_bytes.contains_key(&held.tx_hash),
+                dispatched_this_session: !s.earlier.contains(&held.tx_hash),
+                latched: s.alarms.get(&held.tx_hash).copied(),
+            })
+            .collect()
+    }
+
+    fn adopt_into_session(&self, tx_hash: TxHash) {
+        let mut s = self.state.lock().unwrap();
+        s.earlier.remove(&tx_hash);
+        s.alarms.remove(&tx_hash);
     }
 
     fn drain_rescan_queue(&self) -> Vec<RescanRequest> {
         std::mem::take(&mut self.state.lock().unwrap().rescan_queue)
     }
 
-    fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
+    fn release_awaiting_confirmation(
+        &self,
+        tx_hashes: &HashSet<TxHash>,
+        _commit: &dyn LedgerCommit,
+    ) -> ReleasePersistence {
         let mut s = self.state.lock().unwrap();
         let before = s.held.len();
         s.held.retain(|h| !tx_hashes.contains(&h.tx_hash));
-        let released = before - s.held.len();
+        let removed = before - s.held.len();
         for tx in tx_hashes {
             s.released.insert(*tx);
         }
-        released
+        if removed == 0 {
+            ReleasePersistence::Unchanged
+        } else {
+            ReleasePersistence::Confirmed
+        }
     }
 
     fn emit(&self, event: PendingTxDiagnostic) {
@@ -384,7 +454,7 @@ async fn probe_precedes_the_held_overdue_alarm() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(daemon.submit_calls(), 1, "the probe rung ran before alarm");
     let events = host.events();
@@ -420,8 +490,8 @@ async fn held_overdue_alarms_once_and_does_not_probe_again() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(
         daemon.submit_calls(),
@@ -435,91 +505,8 @@ async fn held_overdue_alarms_once_and_does_not_probe_again() {
     );
 }
 
-/// Presence branching — absent leg: the probe returns `Submitted`
-/// (the tx was evicted / never landed, the resubmit *is* the remedy)
-/// and records a fresh hold. No alarm. The next chain advance asks
-/// again, because a hold is a status read, and that answer does not
-/// alarm either.
-#[tokio::test]
-async fn absent_reoffer_is_held_and_asked_again() {
-    let tx = txid(1);
-    let host = StubHost::new(1_000)
-        .with_held(held(1, 1_000))
-        .with_bytes(tx, vec![0xAB; 8]);
-    let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::Submitted { hash: tx }));
-    daemon.push_submit(Ok(TxSubmitOutcome::AlreadyInPool {
-        hash: tx,
-        relay: Publication::Held,
-    }));
-    let mut d = driver();
-
-    d.tick(&host, &daemon).await;
-    assert_eq!(daemon.submit_calls(), 1);
-    assert!(
-        alarm_reasons(&host.events()).is_empty(),
-        "a re-offer is a remedy, not an alarm"
-    );
-
-    d.tick(&host, &daemon).await;
-    assert_eq!(
-        daemon.submit_calls(),
-        2,
-        "a fresh hold is asked again on the next chain advance"
-    );
-    assert!(alarm_reasons(&host.events()).is_empty());
-}
-
-/// §2.6 confirmed-absent release: a definite terminal verdict on the
-/// probe proves the bytes are in neither pool nor chain (single
-/// egress, §7.1), so the F14 locks are released — outputs selectable
-/// again — with **no** alarm and **no** rebuild.
-#[tokio::test]
-async fn terminal_probe_releases_confirmed_absent() {
-    let tx = txid(1);
-    let host = StubHost::new(1_000 + CEILING)
-        .with_held(held(1, 1_000))
-        .with_bytes(tx, vec![0xAB; 8]);
-    let daemon = StubDaemon::new();
-    daemon.push_submit(Ok(TxSubmitOutcome::Rejected {
-        cause: Rejection::DoubleSpendConflict,
-    }));
-    let mut d = driver();
-
-    d.tick(&host, &daemon).await;
-
-    assert!(host.released().contains(&tx), "locks released");
-    assert!(!host.is_held(&tx), "tx left the held projection");
-    assert!(
-        alarm_reasons(&host.events()).is_empty(),
-        "release is not an alarm"
-    );
-}
-
-/// Restart degradation (§5.3 decision 2): after a restart the
-/// ephemeral held-bytes are gone, so the rung-1 probe cannot run. The
-/// kernel still calls for it (past horizon), and the driver degrades
-/// the probe rung to the operator-alarm rung — the lock stays placed,
-/// nothing is released, and the daemon is never contacted for a
-/// submit.
-#[tokio::test]
-async fn missing_bytes_degrade_probe_to_alarm() {
-    let tx = txid(1);
-    // No `with_bytes` → held-bytes absent (restart crossed the await).
-    let host = StubHost::new(1_000 + CEILING).with_held(held(1, 1_000));
-    let daemon = StubDaemon::new();
-    let mut d = driver();
-
-    d.tick(&host, &daemon).await;
-
-    assert_eq!(daemon.submit_calls(), 0, "no bytes → no resubmit");
-    assert_eq!(
-        alarm_reasons(&host.events()),
-        vec![WatchdogAlarmReason::ProbeBytesUnavailable]
-    );
-    assert!(host.is_held(&tx), "the lock is retained");
-    assert!(host.released().is_empty());
-}
+#[path = "submit_lifecycle_session_tests.rs"]
+mod session_tests;
 
 /// A retryable probe rejection (stale reference) is a driver-level
 /// condition the kernel cannot represent: the bytes are neither
@@ -538,7 +525,7 @@ async fn retryable_rejection_alarms_needs_rebuild() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(
         alarm_reasons(&host.events()),
@@ -564,7 +551,7 @@ async fn peerless_daemon_alarms_without_probing() {
     });
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(
         daemon.submit_calls(),
@@ -597,7 +584,7 @@ async fn syncing_daemon_still_probes() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(
         daemon.submit_calls(),
@@ -622,34 +609,35 @@ async fn health_failure_makes_no_decision() {
     daemon.fail_health();
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
 
     assert_eq!(daemon.submit_calls(), 0);
     assert!(host.events().is_empty());
     assert!(host.is_held(&txid(1)));
 }
 
-/// Held-bytes pruning: retained probe bytes survive while the tx is
-/// held and are dropped once refresh confirms it (the tx leaves the
-/// projection). The prune tracks the live set, not the probe path.
+/// Saved-bytes pruning: the probe bytes survive while the tx is held and
+/// are dropped once refresh settles it. The driver asks the host to prune
+/// each tick; the host's rule reads the row's state (here: settled by
+/// `confirm`), never membership of the projection.
 #[tokio::test]
 async fn held_bytes_pruned_on_confirmation() {
     let tx = txid(1);
     // The status probe returns held, which does not alarm and does not
-    // release the bytes. Pruning follows the live set.
+    // release the bytes. Pruning follows the row's state.
     let host = StubHost::new(5_000)
         .with_held(held(1, 5_000))
         .with_bytes(tx, vec![0xAB; 8]);
     let daemon = StubDaemon::new();
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert!(host.has_bytes(&tx), "bytes retained while held");
 
     // Refresh confirms the tx: the F14 lock clears, the tx leaves the
     // projection, and the next tick prunes its bytes.
     host.confirm(&tx);
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert!(!host.has_bytes(&tx), "bytes pruned once the tx confirms");
     assert!(!host.is_held(&tx));
 }
@@ -675,7 +663,7 @@ async fn published_lookback_runs_from_the_first_observation() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 1);
     assert!(
         alarm_reasons(&host.events()).is_empty(),
@@ -687,12 +675,12 @@ async fn published_lookback_runs_from_the_first_observation() {
         hash: tx,
         relay: Publication::Public,
     }));
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 2);
     assert!(alarm_reasons(&host.events()).is_empty());
 
     host.set_synced(observed + lookback());
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(
         daemon.submit_calls(),
         2,
@@ -720,7 +708,7 @@ async fn published_unmined_waits_while_unsynced() {
         relay: Publication::Public,
     }));
     let mut d = driver();
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert!(alarm_reasons(&host.events()).is_empty());
 
     host.set_synced(observed + lookback());
@@ -729,7 +717,7 @@ async fn published_unmined_waits_while_unsynced() {
         height: 5_000,
         synchronized: false,
     });
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(
         daemon.submit_calls(),
         1,
@@ -742,7 +730,7 @@ async fn published_unmined_waits_while_unsynced() {
         height: 10_000,
         synchronized: true,
     });
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 1);
     assert_eq!(
         alarm_reasons(&host.events()),
@@ -765,11 +753,11 @@ async fn in_chain_waits_until_the_proof_life_ceiling() {
     }));
     let mut d = driver();
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 1);
     assert!(alarm_reasons(&host.events()).is_empty());
 
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(
         daemon.submit_calls(),
         1,
@@ -777,7 +765,7 @@ async fn in_chain_waits_until_the_proof_life_ceiling() {
     );
 
     host.set_synced(observed + CEILING - 1);
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 1);
 
     host.set_synced(observed + CEILING);
@@ -785,7 +773,7 @@ async fn in_chain_waits_until_the_proof_life_ceiling() {
         hash: tx,
         height: observed + CEILING,
     }));
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert_eq!(daemon.submit_calls(), 2, "the ceiling asks again");
     assert!(alarm_reasons(&host.events()).is_empty());
 }
@@ -818,7 +806,7 @@ async fn r2_breaker_trips_after_threshold_never_releases() {
 
     // Four ticks: fruitless at 1, 2, 3 (trip), 4 (latched, no re-emit).
     for _ in 0..4 {
-        d.tick(&host, &daemon).await;
+        d.tick(&host, &daemon, &NoSaveCommit).await;
     }
 
     assert_eq!(
@@ -858,7 +846,7 @@ async fn divergent_hash_never_counts_or_releases() {
     let mut d = driver();
 
     for _ in 0..5 {
-        d.tick(&host, &daemon).await;
+        d.tick(&host, &daemon, &NoSaveCommit).await;
     }
 
     assert!(
@@ -895,7 +883,7 @@ async fn above_synced_never_fruitless_until_scanned() {
     // claimed (6000) > synced (5000): the guard skips the count every
     // tick. Well past the threshold — no trip, because nothing counts.
     for _ in 0..5 {
-        d.tick(&host, &daemon).await;
+        d.tick(&host, &daemon, &NoSaveCommit).await;
     }
     assert!(
         breaker_trips(&host.events()).is_empty(),
@@ -906,7 +894,7 @@ async fn above_synced_never_fruitless_until_scanned() {
     // is now at an already-scanned height and counts. Three ticks trip.
     host.set_synced(6_000);
     for _ in 0..FRUITLESS_RESCAN_BREAKER_THRESHOLD {
-        d.tick(&host, &daemon).await;
+        d.tick(&host, &daemon, &NoSaveCommit).await;
     }
     assert_eq!(
         breaker_trips(&host.events()),
@@ -935,7 +923,7 @@ async fn missing_ledger_hash_defers_without_counting() {
     let mut d = driver();
 
     for _ in 0..5 {
-        d.tick(&host, &daemon).await;
+        d.tick(&host, &daemon, &NoSaveCommit).await;
     }
 
     assert!(breaker_trips(&host.events()).is_empty());
@@ -962,13 +950,13 @@ async fn confirmation_reaps_the_rescan_target() {
     let mut d = driver();
 
     // Two fruitless ticks (streak = 2, below threshold).
-    d.tick(&host, &daemon).await;
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert!(breaker_trips(&host.events()).is_empty());
 
     // Refresh confirms the tx: the target is reaped on projection-exit.
     host.confirm(&tx);
-    d.tick(&host, &daemon).await;
+    d.tick(&host, &daemon, &NoSaveCommit).await;
     assert!(!host.is_held(&tx));
     assert!(
         breaker_trips(&host.events()).is_empty(),

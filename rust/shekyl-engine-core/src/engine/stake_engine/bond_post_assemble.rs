@@ -19,9 +19,6 @@
 //! exists to keep visible: a debit signs with `bond_spend_sk`, a credit with
 //! `hybrid_sign_sk`.
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::Scalar;
-use rand_core::RngCore as _;
 use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
 use shekyl_archival_retention::bond_wire::ArchivalBondPostVin;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
@@ -33,7 +30,6 @@ use shekyl_tx_builder::{
 use shekyl_types::{GlobalOutputIndex, PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
-use zeroize::Zeroizing;
 
 use super::helpers::{construct_vouts_to_base, prepare_funding_inputs, ConstructedVouts};
 use crate::engine::bond_assembly::{
@@ -105,9 +101,7 @@ pub(crate) async fn assemble_signed_bond_post(
 ) -> Result<AssembledBondPostTx, BondAssemblyError> {
     require_funding_inputs(args.funding.len())?;
 
-    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-    rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
-    let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
 
     let ConstructedVouts {
         output_infos,

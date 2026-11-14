@@ -301,6 +301,14 @@ impl RpcSession {
                 proxy,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
+        // A stop signal (SIGTERM, SIGINT, SIGHUP; the Windows console's
+        // close, logoff and shutdown events) closes the open wallet through
+        // the server's own close, then ends the process. Without this a
+        // signal killed the CLI with the wallet open and nothing saved
+        // since the last close (A19).
+        runtime
+            .block_on(async { handle.exit_on_stop_signal() })
+            .map_err(|e| format!("failed to watch stop signals: {e}"))?;
         let transport = match &handle.listen {
             #[cfg(unix)]
             InProcessListen::Uds(path) => Transport::Uds(path.clone()),

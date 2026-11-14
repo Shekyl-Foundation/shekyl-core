@@ -145,7 +145,7 @@ pub(super) async fn close_shard_through_the_daemon(
         for _ in 0..MAX_BUILD_RETRIES {
             let attempt = {
                 let g = arc.read().await;
-                g.build_pending_tx_async(request).await
+                g.build_pending_tx(request).await
             };
             match attempt {
                 Ok(pending) => {

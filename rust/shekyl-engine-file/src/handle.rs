@@ -73,7 +73,7 @@ use shekyl_engine_state::{
 };
 use shekyl_types::{BlockCount, BlockHeight};
 
-use crate::atomic::{atomic_write_file, atomic_write_file_with};
+use crate::atomic::{atomic_write_file, atomic_write_file_with, Durability};
 use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
@@ -624,11 +624,16 @@ impl WalletFile {
     /// Seals with HKDF-derived `wrap_key_region_2` (session-cached on
     /// the handle via [`Self::session_wrap_key_region_2`]; no Argon2id
     /// on the save path — amended `docs/WALLET_FILE_FORMAT_V1.md` §4.3).
+    /// Returns the write's durability once the rename has landed.
+    /// [`Durability::Unconfirmed`] is still an applied write: the bytes are
+    /// the new file, and only the post-rename parent-directory fsync missed.
+    /// A caller that would broadcast on this save must require
+    /// [`Durability::Confirmed`] and must not undo the applied record.
     pub fn save_state(
         &self,
         wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         ledger: &WalletLedger,
-    ) -> Result<(), WalletFileError> {
+    ) -> Result<Durability, WalletFileError> {
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
@@ -640,8 +645,7 @@ impl WalletFile {
             .clone();
         let state_bytes =
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
-        atomic_write_file(&self.state_path, &state_bytes)?;
-        Ok(())
+        atomic_write_file(&self.state_path, &state_bytes)
     }
 
     /// Seal and atomically write `P`'s scan state to the `P`-isolated
@@ -729,7 +733,7 @@ impl WalletFile {
         &self,
         wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         body: &[u8],
-    ) -> Result<(), WalletFileError> {
+    ) -> Result<Durability, WalletFileError> {
         let framed = encode_payload(PayloadKind::PendingPostBlockPostcard, body)?;
         let keys_file_bytes = self
             .state
@@ -739,8 +743,7 @@ impl WalletFile {
             .clone();
         let sealed =
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
-        atomic_write_file(&self.pending_path, &sealed)?;
-        Ok(())
+        atomic_write_file(&self.pending_path, &sealed)
     }
 
     /// Load the pending-bond-post block from `.wallet.pending` using the

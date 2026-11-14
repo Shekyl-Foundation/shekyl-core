@@ -5,10 +5,11 @@
 
 //! Domain → OpenAPI projections (accounting facts only; no secrets).
 
+use shekyl_engine_core::engine::{HeldSend, WatchdogAlarmReason};
 use shekyl_engine_core::BalanceView;
 use shekyl_engine_core::PendingTx;
 use shekyl_engine_core::RefreshSummary;
-use shekyl_engine_core::SubmitOutcome;
+use shekyl_engine_core::{SubmitOutcome, SubmitReceipt};
 use shekyl_engine_state::{
     DisputeReason, LedgerBlock, ReceiveAttribution, SendRecord, SendState, TransferDetails,
 };
@@ -19,7 +20,7 @@ use crate::error::WalletRpcError;
 use crate::types::{
     BuildPendingTxResult, GetBalanceResult, ReceiveAttributionKind, ReceiveAttributionView,
     RefreshResult, RescanBlockchainResult, SubmitPendingTxResult, SubmitVerdictView,
-    TransferDirection, TransferState, TransferView,
+    TransferDirection, TransferState, TransferView, TxAlarmCause, TxAlarmView,
 };
 
 /// Serialize the engine's one-glance balance ([`BalanceView`]) as the
@@ -290,24 +291,53 @@ pub fn rescan_result(summary: &RefreshSummary, synced_height: i64) -> RescanBloc
 /// field exists only on `SubmitPendingTxResult` (structurally — no
 /// refresh-populated view shares it), so a client cannot mistake it
 /// for a refresh-observed confirmation.
-pub fn submit_pending_tx_result(outcome: &SubmitOutcome) -> SubmitPendingTxResult {
+///
+/// `verdict_saved` is the receipt's (A19): `false` when the send stands
+/// but saving what its verdict changed failed.
+pub fn submit_pending_tx_result(receipt: &SubmitReceipt) -> SubmitPendingTxResult {
+    let outcome = &receipt.outcome;
     let tx_hash = outcome.hash().to_string();
+    let verdict_saved = receipt.verdict_saved;
     match outcome {
         SubmitOutcome::Accepted { .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::Accepted,
             confirmed_height: None,
         },
         SubmitOutcome::AlreadyInPool { .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::AlreadyInPool,
             confirmed_height: None,
         },
         SubmitOutcome::AlreadyInChain { height, .. } => SubmitPendingTxResult {
             tx_hash,
+            verdict_saved,
             verdict: SubmitVerdictView::AlreadyInChain,
             confirmed_height: Some(i64::try_from(*height).unwrap_or(i64::MAX)),
         },
+    }
+}
+
+/// Project one held send to `tx_alarm`'s element. The one mapping from the
+/// engine's alarm reasons to the contract's keywords; exhaustive, so a new
+/// reason cannot reach the wire unnamed.
+pub fn tx_alarm_view(send: &HeldSend) -> TxAlarmView {
+    let alarm = match send.alarm {
+        WatchdogAlarmReason::DispatchedBeforeThisSession => TxAlarmCause::EarlierSession,
+        WatchdogAlarmReason::HeldOverdue => TxAlarmCause::Overdue,
+        WatchdogAlarmReason::OriginUntracked => TxAlarmCause::Untracked,
+        WatchdogAlarmReason::PublishedUnmined => TxAlarmCause::PublishedPastLookback,
+        WatchdogAlarmReason::DaemonPeerless => TxAlarmCause::Peerless,
+        WatchdogAlarmReason::DaemonOffline => TxAlarmCause::Offline,
+        WatchdogAlarmReason::ReferenceStaleNeedsRebuild => TxAlarmCause::ReferenceStale,
+        WatchdogAlarmReason::HeldBytesMissing => TxAlarmCause::BytesMissing,
+    };
+    TxAlarmView {
+        id: send.tx_hash.to_string(),
+        alarm,
+        sent_height: i64::try_from(send.sent_height.to_raw()).unwrap_or(i64::MAX),
     }
 }
 
@@ -443,23 +473,82 @@ mod tests {
     /// strings come from the OpenAPI contract (`wallet_rpc.yaml`
     /// `SubmitPendingTxResult.verdict` enum), not from the projection
     /// code under test.
+    fn receipt(outcome: SubmitOutcome) -> SubmitReceipt {
+        SubmitReceipt {
+            outcome,
+            verdict_saved: true,
+        }
+    }
+
+    /// A19: the receipt's `verdict_saved` reaches the wire as a required
+    /// key, `false` included (the send stands; the save failed).
+    #[test]
+    fn verdict_saved_rides_the_submit_result() {
+        let hash = TxHash::from_bytes([0x2d; 32]);
+        let unsaved = submit_pending_tx_result(&SubmitReceipt {
+            outcome: SubmitOutcome::Accepted { hash },
+            verdict_saved: false,
+        });
+        let json = serde_json::to_value(&unsaved).expect("serialize");
+        assert_eq!(json["verdict_saved"], false);
+        assert_eq!(json["verdict"], "ACCEPTED");
+        let saved = serde_json::to_value(submit_pending_tx_result(&receipt(
+            SubmitOutcome::Accepted { hash },
+        )))
+        .expect("serialize");
+        assert_eq!(saved["verdict_saved"], true);
+    }
+
+    /// Every engine alarm reason has its own `tx_alarm` keyword (the
+    /// mapping is exhaustive; no two reasons share a keyword), and the
+    /// element carries the id and the height the send left at.
+    #[test]
+    fn tx_alarm_view_names_every_reason() {
+        use shekyl_engine_core::engine::{HeldSend, WatchdogAlarmReason as R};
+        let reasons = [
+            (R::DispatchedBeforeThisSession, "earlier-session"),
+            (R::HeldOverdue, "overdue"),
+            (R::OriginUntracked, "untracked"),
+            (R::PublishedUnmined, "published-past-lookback"),
+            (R::DaemonPeerless, "peerless"),
+            (R::DaemonOffline, "offline"),
+            (R::ReferenceStaleNeedsRebuild, "reference-stale"),
+            (R::HeldBytesMissing, "bytes-missing"),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for (reason, keyword) in reasons {
+            let view = tx_alarm_view(&HeldSend {
+                tx_hash: TxHash::from_bytes([0x3a; 32]),
+                alarm: reason,
+                sent_height: shekyl_types::BlockHeight::from_raw(77),
+            });
+            let json = serde_json::to_value(&view).expect("serialize");
+            assert_eq!(json["alarm"], keyword);
+            assert_eq!(json["id"], "3a".repeat(32));
+            assert_eq!(json["sent_height"], 77);
+            assert!(seen.insert(keyword), "{keyword} named twice");
+        }
+    }
+
     #[test]
     fn submit_verdicts_project_one_to_one_with_verdict_scoped_height() {
         let hash = TxHash::from_bytes([0x2b; 32]);
         let hash_hex = "2b".repeat(32);
 
-        let accepted = submit_pending_tx_result(&SubmitOutcome::Accepted { hash });
+        let accepted = submit_pending_tx_result(&receipt(SubmitOutcome::Accepted { hash }));
         assert_eq!(accepted.tx_hash, hash_hex);
         assert_eq!(accepted.verdict, SubmitVerdictView::Accepted);
         assert_eq!(accepted.confirmed_height, None);
 
-        let in_pool = submit_pending_tx_result(&SubmitOutcome::AlreadyInPool { hash });
+        let in_pool = submit_pending_tx_result(&receipt(SubmitOutcome::AlreadyInPool { hash }));
         assert_eq!(in_pool.tx_hash, hash_hex);
         assert_eq!(in_pool.verdict, SubmitVerdictView::AlreadyInPool);
         assert_eq!(in_pool.confirmed_height, None);
 
-        let in_chain =
-            submit_pending_tx_result(&SubmitOutcome::AlreadyInChain { hash, height: 4242 });
+        let in_chain = submit_pending_tx_result(&receipt(SubmitOutcome::AlreadyInChain {
+            hash,
+            height: 4242,
+        }));
         assert_eq!(in_chain.tx_hash, hash_hex);
         assert_eq!(in_chain.verdict, SubmitVerdictView::AlreadyInChain);
         assert_eq!(in_chain.confirmed_height, Some(4242));
@@ -490,10 +579,10 @@ mod tests {
     #[test]
     fn submit_claimed_height_beyond_i64_saturates() {
         let hash = TxHash::from_bytes([0x2c; 32]);
-        let projected = submit_pending_tx_result(&SubmitOutcome::AlreadyInChain {
+        let projected = submit_pending_tx_result(&receipt(SubmitOutcome::AlreadyInChain {
             hash,
             height: u64::MAX,
-        });
+        }));
         assert_eq!(projected.confirmed_height, Some(i64::MAX));
     }
 
@@ -613,6 +702,7 @@ mod tests {
             }],
             lock_baseline: None,
             state,
+            tx_bytes: None,
         }
     }
 
