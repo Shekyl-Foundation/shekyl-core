@@ -424,11 +424,13 @@ mod tests {
         let mut greeting = [0u8; 5];
         ours.read_exact(&mut greeting).expect("the child writes");
         assert_eq!(&greeting, b"hello");
-        ours.write_all(b"x").expect("the child is reading");
-        assert!(child.wait().expect("the child exits").success());
         // Bounded, so a parent copy left open fails here instead of hanging.
+        // Set while the child still holds its end: macOS refuses the option
+        // on a socket whose peer has closed.
         ours.set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .expect("a read bound");
+        ours.write_all(b"x").expect("the child is reading");
+        assert!(child.wait().expect("the child exits").success());
         let mut rest = Vec::new();
         ours.read_to_end(&mut rest)
             .expect("EOF once the child is gone");

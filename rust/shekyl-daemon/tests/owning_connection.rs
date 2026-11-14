@@ -237,7 +237,7 @@ fn launch(test: &str, dir: &Path, data: &str, extra: &[&str]) -> (Child, End) {
 /// Read the ready line, bounded; panic with the daemon's evidence if it
 /// does not come.
 fn ready_or_panic(daemon: &mut Child, mut ours: End, dir: &Path, data: &str) -> End {
-    ours.set_read_timeout(Some(READY)).expect("a read bound");
+    bound(&ours);
     if let Err(e) = read_ready(&mut ours) {
         let status = daemon.try_wait().ok().flatten();
         panic!(
@@ -246,6 +246,17 @@ fn ready_or_panic(daemon: &mut Child, mut ours: End, dir: &Path, data: &str) -> 
         );
     }
     ours
+}
+
+/// Bound reads on the parent's end by [`READY`]. macOS refuses the option
+/// (`EINVAL`) on a socket whose peer has already closed; a read there
+/// returns at once, so it needs no bound.
+fn bound(end: &End) {
+    match end.set_read_timeout(Some(READY)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {}
+        Err(e) => panic!("a read bound: {e}"),
+    }
 }
 
 /// "This computer"'s client, told the harness's directory.
@@ -466,7 +477,7 @@ fn a_second_start_refuses_with_no_ready_line() {
     let ours = ready_or_panic(&mut first, ours, dir.path(), "first");
 
     let (mut second, mut theirs) = launch(NAME, dir.path(), "second", &[]);
-    theirs.set_read_timeout(Some(READY)).expect("a read bound");
+    bound(&theirs);
     let ready = read_ready(&mut theirs);
     let exit = ended_within(&mut second, STOP_ARRIVES);
     reap(&mut second);
