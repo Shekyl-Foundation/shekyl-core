@@ -14,7 +14,8 @@ docs/benchmarks/
 ├── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
 ├── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
                                         DRS-BENCH: consensus-store IBD artifacts
-└── measurement_ledger.toml             which constant rests on which capture, and which path set it budgets
+├── measurement_ledger.toml             which constant rests on which capture, and which path set it budgets
+└── FLOOR_RUN_SHEET.md                  the ledger's floor rows, by floor-device session
 ```
 
 (The tree above names the baseline set; ad-hoc Pi-4 captures,
@@ -334,6 +335,21 @@ statement disagrees with git in either direction:
 | `unmeasured` | No capture is in the tree; the constant names what will measure it | It claims a capture, or names no carrier |
 | `estimated` | A prediction for a path not yet built or not yet measured: a band with its unit (`estimate = { low, high, unit }`), the arithmetic (`basis`), and the capture files the arithmetic reads (`basis_captures`, each one exact tracked file) | The band is not two ordered numbers and a unit; a basis capture is not one tracked file; it claims a capture of its own; or it becomes current, stale or retired on a capture the parent tree already held |
 
+Each constant that is not `current` also names its `disposition`, what
+will make it current or why nothing will:
+
+| Disposition | Means | Its key, and what the check holds |
+| --- | --- | --- |
+| `ci` | A gated row re-captures it on the CI runner | `ci_row`, a `[[gated_row]]` bench |
+| `floor` | A floor-device session measures it | none; the constant is listed on [`FLOOR_RUN_SHEET.md`](FLOOR_RUN_SHEET.md), and the sheet lists no constant that is not a floor row |
+| `forge` | Its instrument needs chain state only the chain forge builds (a closed shard, a settled epoch, a claim, a slash, a discard, the design-load chain) | `forge_event`, an event in [`CHAIN_FORGE.md`](../design/CHAIN_FORGE.md)'s catalogue; the carrier says "chain forge" |
+| `retire` | It will not be measured | `replaced_by`, what took its place |
+
+A count from the CI runner is not a device time (rule 76), so a row whose
+figure is a floor time is a `floor` row, whatever bench measures it on CI.
+A constant turning stale or unmeasured takes a disposition in the same
+edit.
+
 A green run means the ledger tells the truth. It does not mean every capture
 is fresh: the stale constants are printed on every run, and each is a
 re-measurement somebody owes.
@@ -352,8 +368,9 @@ If every constant on the path set is `current`, one of three:
   reviewed with the diff. `cleared` is read only by a current constant.
   A path set whose constants are stale or unmeasured leaves the key off.
 - Set the constant `status = "stale"`, `stale_since` to the commit,
-  `carrier` to the benchmark run that will re-measure it, and start the
-  path set's `stale_through` with that commit.
+  `carrier` to the benchmark run that will re-measure it, its
+  `disposition` (above), and start the path set's `stale_through` with
+  that commit.
 
 If a constant on the path set is already `stale`, add a `stale_through`
 entry on the path set:

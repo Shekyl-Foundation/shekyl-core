@@ -31,6 +31,21 @@
 # that hardened. An estimate may be withdrawn to unmeasured; it may not
 # vanish.
 #
+# Every constant that is not current carries a `disposition`: what will
+# make it current, or why nothing will (ruled 2026-11-13, Brief D's sweep).
+#   ci      a gated row re-captures it on the CI runner (`ci_row`, a
+#           `[[gated_row]]` bench);
+#   floor   a floor-device session measures it: the constant is listed on
+#           the floor run sheet (`floor_run_sheet`), and the sheet lists no
+#           constant that is not a floor row;
+#   forge   its instrument needs chain state only the chain forge builds (a
+#           closed shard, a settled epoch, a claim, a slash, a discard, the
+#           design-load chain): `forge_event` names the event in the forge's
+#           catalogue (`forge_plan`), and the carrier says "chain forge";
+#   retire  it will not be measured: `replaced_by` names what took its
+#           place.
+# A current constant carries none of these.
+#
 # Exit 0: the ledger tells the truth. Exit 1: it disagrees with the tree.
 # Exit 2: the question could not be asked (rule 47). `--selftest` builds
 # throwaway repositories and bites each failure class.
@@ -82,7 +97,7 @@ HASH_COMMENT_SUFFIXES = {".py", ".sh", ".toml", ".yml", ".yaml"}
 
 HEADER_KEYS = {
     "tracked_set", "toolchain_file", "path_set", "constant", "toolchain",
-    "retired_estimate", "gated_row",
+    "retired_estimate", "gated_row", "floor_run_sheet", "forge_plan",
 }
 GATED_ROW_KEYS = {"bench", "measured_by", "path_set"}
 # The capture script whose `BENCHES` array is the per-PR gate's row list.
@@ -93,6 +108,16 @@ MEASURED_KEYS = {"capture", "capture_rev", "rev_source"}
 STALE_KEYS = {"stale_since", "carrier"}
 UNMEASURED_KEYS = {"carrier"}
 ESTIMATED_KEYS = {"estimate", "basis", "basis_captures", "carrier"}
+# Every constant that is not current: the disposition, and the one key its
+# value names.
+DISPOSITION_KEYS = {"disposition", "ci_row", "forge_event", "replaced_by"}
+# A floor run sheet names a constant as the first cell of a table row.
+SHEET_ROW_RE = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|", re.M)
+# The forge's event catalogue: `| CF-E<n> | `<name>` |`.
+FORGE_EVENT_RE = re.compile(r"^\| CF-E\d+ \| `([^`]+)` \|", re.M)
+# The words a forge row's carrier says, so a reader finds every row the
+# forge owes by one search.
+FORGE_CARRIER_WORDS = "chain forge"
 TOOLCHAIN_ACK_KEYS = {"commit", "note"}
 BAND_KEYS = {"low", "high", "unit"}
 RETIRED_KEYS = {"name", "estimate", "measured", "capture", "capture_rev", "verdict", "note"}
@@ -107,6 +132,30 @@ SHALLOW_MSG = (
 
 class GateError(Exception):
     """The gate could not ask its question (exit 2)."""
+
+
+class Disposition(enum.Enum):
+    CI = "ci"
+    FLOOR = "floor"
+    FORGE = "forge"
+    RETIRE = "retire"
+
+    @classmethod
+    def parse(cls, raw: object) -> Disposition | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
+
+    def key(self) -> str | None:
+        """The key this disposition names, if any."""
+        return {
+            Disposition.CI: "ci_row",
+            Disposition.FORGE: "forge_event",
+            Disposition.RETIRE: "replaced_by",
+        }.get(self)
 
 
 class Status(enum.Enum):
@@ -201,6 +250,10 @@ class Constant:
     estimate: Band | None = None
     basis: str | None = None
     basis_captures: tuple[str, ...] = ()
+    disposition: Disposition | None = None
+    # The value of the key the disposition names (`ci_row`, `forge_event`,
+    # `replaced_by`); None for a floor row.
+    disposed_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -515,6 +568,8 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
         )
         return None, fails
     allowed = set(CONSTANT_KEYS)
+    if status is not Status.CURRENT:
+        allowed |= DISPOSITION_KEYS
     if status is Status.UNMEASURED:
         allowed |= UNMEASURED_KEYS
     elif status is Status.ESTIMATED:
@@ -582,6 +637,43 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
             )
         else:
             basis_captures = tuple(item.strip() for item in raw_captures)
+    disposition: Disposition | None = None
+    disposed_to: str | None = None
+    if status is not Status.CURRENT:
+        disposition = Disposition.parse(table.get("disposition"))
+        if disposition is None:
+            fails.append(
+                f"{name}: {_article(status.value)} {status.value} constant names its "
+                "disposition, one of " + ", ".join(item.value for item in Disposition)
+                + f" (got {table.get('disposition')!r})"
+            )
+        else:
+            wanted = disposition.key()
+            for key in sorted((DISPOSITION_KEYS - {"disposition", wanted}) & set(table)):
+                fails.append(
+                    f"{name}: key {key!r} does not belong to a {disposition.value} disposition"
+                )
+            if wanted is not None:
+                raw = table.get(wanted, "")
+                if wanted == "replaced_by":
+                    # What took its place, said so a reader can find it.
+                    disposed_to = _sentence(raw)
+                else:
+                    # A bench or an event name, matched exactly below.
+                    disposed_to = raw.strip() if isinstance(raw, str) and raw.strip() else None
+                if disposed_to is None:
+                    fails.append(
+                        f"{name}: a {disposition.value} disposition names its {wanted!r}"
+                    )
+            if (
+                disposition is Disposition.FORGE
+                and carrier is not None
+                and FORGE_CARRIER_WORDS not in carrier
+            ):
+                fails.append(
+                    f"{name}: a forge row's carrier says {FORGE_CARRIER_WORDS!r}, so one "
+                    "search finds every row the forge owes"
+                )
     if status is Status.STALE:
         raw_since = table.get("stale_since", "")
         if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
@@ -593,7 +685,7 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     return Constant(
         name, defined_in, needle, measured_t, status, path_set,
         capture, capture_rev, rev_source, stale_since, carrier,
-        estimate, basis, basis_captures,
+        estimate, basis, basis_captures, disposition, disposed_to,
     ), fails
 
 
@@ -755,6 +847,61 @@ def capture_rows(root: Path) -> set[str]:
     if not rows:
         raise GateError(f"{CAPTURE_SCRIPT}'s BENCHES array holds no row — missing subject (rule 47)")
     return rows
+
+
+def _header_file(root: Path, data: dict, key: str, why: str) -> str:
+    """The text of the file a header key names. GateError when it is absent."""
+    rel = data.get(key, "")
+    path = root / rel if isinstance(rel, str) and rel else None
+    if path is None or not path.is_file():
+        raise GateError(f"{key} {rel!r} does not exist; {why} — missing subject (rule 47)")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def audit_dispositions(
+    root: Path, data: dict, constants: list[Constant], gated: tuple[GatedRow, ...]
+) -> list[str]:
+    """Each disposition points at something that exists, both ways for the floor."""
+    fails: list[str] = []
+    by = {item: [c for c in constants if c.disposition is item] for item in Disposition}
+    benches = {row.bench for row in gated}
+    for constant in by[Disposition.CI]:
+        if constant.disposed_to not in benches:
+            fails.append(
+                f"{constant.name}: ci_row {constant.disposed_to!r} is not a [[gated_row]] "
+                "bench. A row no capture runs re-captures nothing"
+            )
+    if by[Disposition.FORGE]:
+        text = _header_file(root, data, "forge_plan", "forge rows name its events")
+        events = set(FORGE_EVENT_RE.findall(text))
+        if not events:
+            raise GateError(f"{data.get('forge_plan')} has no CF-E event rows")
+        for constant in by[Disposition.FORGE]:
+            if constant.disposed_to not in events:
+                fails.append(
+                    f"{constant.name}: forge_event {constant.disposed_to!r} is not an "
+                    f"event of {data.get('forge_plan')}"
+                )
+    floor = {c.name for c in by[Disposition.FLOOR]}
+    if floor or "floor_run_sheet" in data:
+        text = _header_file(root, data, "floor_run_sheet", "floor rows are listed there")
+        listed = SHEET_ROW_RE.findall(text)
+        if not listed:
+            raise GateError(f"{data.get('floor_run_sheet')} lists no constant")
+        sheet = data.get("floor_run_sheet")
+        fails.extend(
+            f"{name}: a floor row the run sheet ({sheet}) does not list"
+            for name in sorted(floor - set(listed))
+        )
+        fails.extend(
+            f"{sheet} lists {name}, which is not a floor row of the ledger"
+            for name in sorted(set(listed) - floor)
+        )
+        fails.extend(
+            f"{sheet} lists {name} more than once"
+            for name in sorted({n for n in listed if listed.count(n) > 1})
+        )
+    return fails
 
 
 def audit_gated(root: Path, gated: tuple[GatedRow, ...]) -> list[str]:
@@ -1307,6 +1454,7 @@ def run(root: Path) -> int:
         data, t_rows = load(root)
         path_sets, constants, gated, fails = interpret(data, t_rows)
         fails.extend(audit_gated(root, gated))
+        fails.extend(audit_dispositions(root, data, constants, gated))
         notes: list[str] = []
         bases: dict[str, str] = {}
         spec_ok: dict[str, bool] = {}
@@ -1383,6 +1531,15 @@ def run(root: Path) -> int:
         f"{counts[Status.UNMEASURED]} unmeasured, {counts[Status.ESTIMATED]} estimated"
         + (f"; {len(gated)} gated rows name their path sets" if gated else "")
     )
+    disposed = {item: 0 for item in Disposition}
+    for constant in constants:
+        if constant.disposition is not None:
+            disposed[constant.disposition] += 1
+    if any(disposed.values()):
+        print(
+            "dispositions: "
+            + ", ".join(f"{disposed[item]} {item.value}" for item in Disposition)
+        )
     return 0
 
 
