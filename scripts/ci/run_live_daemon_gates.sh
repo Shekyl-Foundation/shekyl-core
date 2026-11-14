@@ -19,7 +19,8 @@
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
 # The accounting is the load-bearing ratchet: every ignored test is on
-# exactly one of the three lists below (ARMED, ARMED_SLOW, DECIDED_DARK),
+# exactly one of the four lists below (ARMED, ARMED_SLOW, ACCEPTANCE,
+# DECIDED_DARK),
 # so the undecided set is empty by construction.
 #
 # The work splits, and the split is deliberate. The per-name existence checks
@@ -37,9 +38,14 @@
 #           780 s measured 2026-09-08 local Release, and the two slice-7
 #           gates — too heavy per-PR, still consensus gates; four bonded
 #           walks since the DRS-X flip, two of which close and price an
-#           archival shard with real spends before they stake). The
-#           emission-claim walk is DECIDED_DARK: its credit comes only
-#           from an admitted bundle, read over Tor (the live-Tor lane).
+#           archival shard with real spends before they stake).
+#   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
+#           USAGE.md claim (Rick, 2026-11-14): the emission walk over live
+#           Tor, about six hours. Run now to close the switch's evidence,
+#           before each release cut, and whenever the recapture check says
+#           the emission-claim vector is stale. Per PR its coverage is that
+#           vector's replay in the Rust job. Needs SHEKYL_TEST_TOR_BINARY,
+#           the pinned bundle's tor (scripts/release/tor_bundle.py stage).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -303,15 +309,6 @@ ARMED_SLOW=(
 #     pass/fail proposition: each writes its trace under RT_P5_OUT and is
 #     run by hand when the registration says. The parser they rely on is
 #     covered by ordinary unit tests in the same module.
-#   e2e_emission_claim_accepted_and_applied — the third market-bond walk.
-#     Dark because its credit comes only from an admitted bundle (SO-D12
-#     4b): the persona serves shard 0 over Tor for the mining daemon's
-#     producer. On the flip binary it fills and prices shard 0, the
-#     market bond is admitted and confirmed, and the join epoch is read
-#     back (SEB 128, cap 16), green. Its A2 leg, the serving step, is the
-#     switch's live-Tor emission walk (FOLLOWUPS: the emission regtest
-#     walk), which arms it. Prior reds: sabotage 2026-09-08 (was
-#     ARMED_SLOW).
 #   capture_chain_keeps_its_datadir — the DX-Q8 chain generator. One
 #     regtest daemon, data directory kept on drop, the directory asserted
 #     still present. Run by hand with SHEKYLD_BIN before
@@ -336,10 +333,21 @@ DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run
+)
+
+# The acceptance lane's walks: over live Tor, hours long, run by hand (the
+# lane note above).
+#   e2e_emission_claim_accepted_and_applied — the emission walk (SO-D12 4b):
+#     two daemons on the pinned managed Tor, the persona's wallet serving
+#     its shard on an onion, the mining daemon's producer reading it, the
+#     served epoch's bundles admitted and settled, the claim accepted and
+#     paid. Its green run captures the emission-claim vector. Prior reds:
+#     sabotage 2026-09-08 (was ARMED_SLOW).
+ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
-for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do
+for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}"; do
   grep -qx "$a: test" "$ignored" || {
     echo "FATAL: listed gate '$a' names no ignored test — it was renamed or deleted, and its disposition is now dangling" >&2
     exit 1
@@ -357,9 +365,9 @@ done
 # its gate twice, and on this step that is minutes of CI spent re-proving one
 # result; a name on two run lanes is run twice across lanes the same way.
 # The name is the thing to delete, so the message says so.
-repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
+repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
 [ -z "$repeated" ] || {
-  echo "FATAL: repeated across ARMED/ARMED_SLOW/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "FATAL: repeated across ARMED/ARMED_SLOW/ACCEPTANCE/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
   echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
   exit 1
 }
@@ -376,9 +384,9 @@ repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}" |
 # It sums list LENGTHS, which equals the number of distinct names only
 # because the repeat check above rejects duplicates. That check is
 # load-bearing for this arithmetic, not housekeeping.
-accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#DECIDED_DARK[@]} ))
+accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#ACCEPTANCE[@]} + ${#DECIDED_DARK[@]} ))
 if [ "$regtest_ignored" -ne "$accounted" ]; then
-  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#DECIDED_DARK[@]} dark = $accounted." >&2
+  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#ACCEPTANCE[@]} acceptance + ${#DECIDED_DARK[@]} dark = $accounted." >&2
   echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW, or decided dark with its reason recorded here." >&2
   exit 1
 fi
@@ -399,8 +407,19 @@ case "$GATE_LANE" in
     }
     ;;
   slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
+  acceptance)
+    LANE_GATES=("${ACCEPTANCE[@]}")
+    # The walks read over Tor through the pinned bundle; without it the
+    # first daemon refuses to start its Tor, minutes in (rule 47).
+    [ -n "${SHEKYL_TEST_TOR_BINARY:-}" ] && [ -x "$SHEKYL_TEST_TOR_BINARY" ] || {
+      echo "FATAL: SHEKYL_TEST_TOR_BINARY names no executable. Stage the pinned bundle:" >&2
+      echo "  python3 scripts/release/tor_bundle.py fetch --host <triple> --sources <dir>" >&2
+      echo "  python3 scripts/release/tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor" >&2
+      exit 1
+    }
+    ;;
   *)
-    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr' or 'slow')" >&2
+    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr', 'slow' or 'acceptance')" >&2
     exit 1
     ;;
 esac
