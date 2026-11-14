@@ -140,11 +140,15 @@ fn darwin_user_temp_dir() -> Option<PathBuf> {
 
 /// The service's rendezvous directory, fixed per platform (`RPC_CHANNEL.md`
 /// §7.1): what the installer or the service manager creates, never the
-/// daemon.
+/// daemon. On FreeBSD that is the rc.d script's `start_precmd`
+/// (`contrib/packaging/freebsd/shekyld`); `/var/run` is FreeBSD's, which has
+/// no `/run`.
 #[must_use]
 pub fn service_rendezvous() -> Option<PathBuf> {
     if cfg!(target_os = "linux") {
         Some(PathBuf::from("/run/shekyl"))
+    } else if cfg!(target_os = "freebsd") {
+        Some(PathBuf::from("/var/run/shekyl"))
     } else if cfg!(target_os = "macos") {
         Some(PathBuf::from("/Library/Application Support/Shekyl"))
     } else if cfg!(windows) {
@@ -190,6 +194,24 @@ mod tests {
             Some(found) => assert_eq!(found, expected),
             None => assert!(!expected.is_dir(), "{} exists", expected.display()),
         }
+    }
+
+    /// The service's rendezvous directory is this platform's fixed one
+    /// (`RPC_CHANNEL.md` §7.1). Without a directory a service start is
+    /// refused on that platform, so a platform left out cannot run a
+    /// service at all.
+    #[test]
+    fn the_service_rendezvous_directory_is_this_platforms() {
+        let expected = if cfg!(target_os = "linux") {
+            Some("/run/shekyl")
+        } else if cfg!(target_os = "freebsd") {
+            Some("/var/run/shekyl")
+        } else if cfg!(target_os = "macos") {
+            Some("/Library/Application Support/Shekyl")
+        } else {
+            None
+        };
+        assert_eq!(service_rendezvous(), expected.map(PathBuf::from));
     }
 
     #[test]

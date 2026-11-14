@@ -134,6 +134,13 @@ script: |
     chmod 755 bin/*
     cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
+    # The rc.d script that runs shekyld as the machine's service
+    # (contrib/packaging/freebsd/shekyld; RPC_CHANNEL.md §7.1). The archive
+    # is FreeBSD's only delivery, so the script travels in it.
+    mkdir bin/rc.d
+    cp ../contrib/packaging/freebsd/shekyld bin/rc.d/shekyld
+    chmod 755 bin/rc.d
+    chmod 555 bin/rc.d/shekyld
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
     find ${DISTNAME}/ | sort | tar --no-recursion --owner=0 --group=0 -c -T - | bzip2 -9 > ${OUTDIR}/${DISTNAME}.tar.bz2

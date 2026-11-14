@@ -1,0 +1,70 @@
+#!/bin/sh
+#
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# PROVIDE: shekyld
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# The Shekyl daemon as the machine's service instance on FreeBSD
+# (`--service`; RPC_CHANNEL.md §7.1, INPUT_GRAMMAR.md IG-Q105).
+#
+# Install, as root:
+#
+#   pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin -c "Shekyl daemon"
+#   install -m 0555 shekyld /usr/local/etc/rc.d/shekyld
+#   sysrc shekyld_enable=YES
+#   service shekyld start
+#
+# Settings in /etc/rc.conf (sysrc):
+#
+#   shekyld_enable (bool)  Start at boot. Default NO.
+#   shekyld_args (str)     More options for shekyld, e.g. "--network testnet".
+#                          Default empty (mainnet).
+#
+# The daemon runs as the `shekyl` account under daemon(8), which restarts
+# it 30 s after it exits and sends what it prints to syslog as `shekyld`, so
+# a refused start is in /var/log/messages. Its own log is
+# /var/log/shekyl/shekyld.log. Its configuration file is
+# /etc/shekyl/shekyld-<network>.toml when one exists.
+#
+# The daemon creates none of the directories below; it checks them and
+# refuses to start naming the one that is wrong. This script creates them
+# before every start, because /var/run is emptied at boot:
+#
+#   /var/run/shekyl  the service's rendezvous directory: the account's,
+#                    readable by every user, writable by no one else
+#   /var/db/shekyl   the service's data home: the account's alone (0700)
+#   /var/log/shekyl  the daemon's log directory
+
+. /etc/rc.subr
+
+name=shekyld
+rcvar=shekyld_enable
+desc="Shekyl daemon"
+
+load_rc_config $name
+
+: ${shekyld_enable:=NO}
+: ${shekyld_args:=}
+
+pidfile="/var/run/${name}.pid"
+procname=/usr/sbin/daemon
+command=/usr/sbin/daemon
+command_args="-f -S -T ${name} -R 30 -P ${pidfile} -u shekyl /usr/local/bin/shekyld --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"
+start_precmd="${name}_prestart"
+
+shekyld_prestart()
+{
+	if ! pw usershow shekyl >/dev/null 2>&1; then
+		err 1 "the account shekyl does not exist; create it with: pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin -c \"Shekyl daemon\""
+	fi
+	install -d -o shekyl -g shekyl -m 0755 /var/run/shekyl || return 1
+	install -d -o shekyl -g shekyl -m 0700 /var/db/shekyl || return 1
+	install -d -o shekyl -g shekyl -m 0750 /var/log/shekyl || return 1
+}
+
+run_rc_command "$1"

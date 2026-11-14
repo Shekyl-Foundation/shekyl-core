@@ -239,7 +239,16 @@ keeps about 80 % of the CPU while a wallet in a user session serves
 archival shards beside it (the wallet itself is never a system service).
 A daemon started by hand runs in your session and has no slice, and it
 stops when your session ends; the shipped unit passes `--service`, which
-marks the machine's service instance. `--detach`, `--pidfile`, and the Windows `--*-service`
+marks the machine's service instance. On FreeBSD the release archive
+carries an rc.d script, `rc.d/shekyld` (in the tree at
+`contrib/packaging/freebsd/shekyld`). Create the `shekyl` account once
+(`pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin`), copy the
+script to `/usr/local/etc/rc.d/shekyld` with mode 0555, then
+`sysrc shekyld_enable=YES` and `service shekyld start`; set
+`shekyld_args="--network testnet"` with `sysrc` for another network. It
+runs the daemon as `shekyl` with `--service`, creates
+`/var/run/shekyl`, `/var/db/shekyl` and `/var/log/shekyl` before each
+start, and sends a refused start to syslog. `--detach`, `--pidfile`, and the Windows `--*-service`
 flags were removed in V3.1; the daemon now only runs in the foreground
 and is supervised externally. The GUI wallet embeds `shekyld` as a
 Tauri sidecar and does not require a separate service unit.
