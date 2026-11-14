@@ -669,10 +669,19 @@ impl RegtestDaemon {
     ) -> RegtestDaemon {
         let serial = serial_lock().lock_owned().await;
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
+        // A node with a Tor is not offline, and a node with no closed list
+        // has no view until a session opens: it would never post. Its
+        // closed list names one unanswered loopback port, so the operator
+        // has named the whole network and none of it is up: synced from
+        // open (`Declaration::Closed`, CS-Q2 step 8), as an offline node is.
         Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
                 .with_mine_address(mine_address)
+                .with_peering(Peering::Listening {
+                    p2p_port: Self::free_port(),
+                    requests: true,
+                })
                 .with_managed_tor(tor_file),
         )
         .await
@@ -757,6 +766,7 @@ impl RegtestDaemon {
         let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
+        let tor_on = tor_file.is_some();
         let p2p_ports: Vec<u16> = match &peering {
             Peering::Offline => Vec::new(),
             Peering::Linked {
@@ -950,7 +960,9 @@ impl RegtestDaemon {
             },
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
-            posts_at_open: offline,
+            // Synced from open: offline, or the Tor spawn's closed network
+            // of one unanswered port (`start_for_seed_with_schedule_on_tor`).
+            posts_at_open: offline || tor_on,
             keep_data,
             _serial: serial,
             recipe,
