@@ -657,6 +657,8 @@ impl InfoFacts for StoreFacts {
             free_space: self.node.free_space()?,
             alt_blocks_count: snap.alt_block_count().map_err(store_fault)?,
             version: self.identity.version.clone(),
+            randomx_caches: u64::try_from(self.hasher.resident().borrow().caches.len())
+                .unwrap_or(u64::MAX),
         })
     }
 

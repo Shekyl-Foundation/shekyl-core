@@ -23,7 +23,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use crate::connector::{Offered, Switched};
 use crate::pow::{Pow, ProductionPow};
-use crate::scenario::{FreeHash, Mined, Scenario, RULES};
+use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::schedule::ChainRules;
 use crate::service::service_tests::arrival;
 use crate::service::{Follow, Reply, Service, ServiceConfig};
@@ -40,10 +40,23 @@ fn seeds(of: &[BlockHash]) -> BTreeSet<[u8; 32]> {
     of.iter().map(|seed| *seed.as_bytes()).collect()
 }
 
+/// The service's boundary: the production one, judging each block at a
+/// clock ahead of every timestamp the scenario drivers stamp. Their
+/// clock starts past the wall clock's now, and CEN-C1 refuses a block
+/// from the future.
+type Judged = Clocked<ProductionPow>;
+
+fn ahead_of_the_drivers(own: &OwnHasher) -> Arc<Judged> {
+    let clock = Clocked::new(own.pow.clone());
+    clock.set_interval(std::num::NonZeroU64::new(1_000_000).expect("non-zero"));
+    clock.tick();
+    Arc::new(clock)
+}
+
 /// Offer `blocks` to `service` one span at a time and require each to
 /// connect. After every reply: no more caches than the cap (HA-R5's
 /// "always").
-async fn connect_all(service: &Service<ProductionPow>, own: &OwnHasher, blocks: &[Mined]) {
+async fn connect_all(service: &Service<Judged>, own: &OwnHasher, blocks: &[Mined]) {
     let door = service.door();
     let mut tag = 0u64;
     for chunk in blocks.chunks(door.room().max(1)) {
@@ -77,7 +90,7 @@ async fn connect_all(service: &Service<ProductionPow>, own: &OwnHasher, blocks: 
 /// HA-R5 for a service: once its hasher is quiet it holds what a fresh
 /// one fed the store's list holds. Returns what it holds.
 async fn settled(
-    service: &Service<ProductionPow>,
+    service: &Service<Judged>,
     own: &OwnHasher,
     rules: ChainRules,
 ) -> BTreeSet<[u8; 32]> {
@@ -108,7 +121,7 @@ async fn a_fresh_store_derives_the_null_seed_and_block_zeros_and_keeps_one() {
     let service = Service::start(
         Arc::new(open_store(&path)),
         RULES,
-        Arc::new(own.pow.clone()),
+        ahead_of_the_drivers(&own),
         ServiceConfig::default(),
         Follow::default(),
     );
@@ -319,7 +332,7 @@ async fn a_connect_past_the_windows_end_frees_the_previous_epochs_cache() {
             shekyl_chain_store::apply_policy::ApplyPolicy::Full,
         )),
         rules,
-        Arc::new(own.pow.clone()),
+        ahead_of_the_drivers(&own),
         ServiceConfig::default(),
         Follow::default(),
     );

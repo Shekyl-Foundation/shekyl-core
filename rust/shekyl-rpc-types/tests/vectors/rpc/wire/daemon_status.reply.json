@@ -42,6 +42,7 @@
   "started": 1767360000,
   "disk_free": 52428800000,
   "data_size": 734003200,
+  "randomx_caches": 2,
   "revision": "v3.1.0-a282ec1",
   "peer_outbound_count": 8,
   "peer_inbound_count": 3,

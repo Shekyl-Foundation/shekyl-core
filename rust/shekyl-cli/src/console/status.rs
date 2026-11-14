@@ -128,6 +128,10 @@ pub(super) fn sync_percentage(height: u64, target_height: u64) -> f64 {
     }
 }
 
+/// One RandomX cache, in MiB: what `randomx_caches` counts
+/// (`daemon_status`, 4.4).
+const RANDOMX_CACHE_MIB: u64 = 256;
+
 /// `status` / `show_status`.
 #[deny(clippy::arithmetic_side_effects)]
 pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, String> {
@@ -210,6 +214,17 @@ pub(super) fn show_status(daemon: &DaemonClient, now: u64) -> Result<String, Str
             (uptime / 3_600) % 24,
             (uptime / 60) % 60,
             uptime % 60
+        ));
+    }
+    // The node's RandomX caches, as memory: each is 256 MiB, and the node
+    // holds at most three. A third one means the node is proving headers
+    // ahead of its chain or holds a fork. Status, so a caller not shown it
+    // is told nothing: a count of zero would be a claim.
+    if let Some(caches) = info.randomx_caches.shown() {
+        line.push_str(&format!(
+            ", RandomX caches {} ({} MiB)",
+            caches.0,
+            caches.0.saturating_mul(RANDOMX_CACHE_MIB)
         ));
     }
     // The Tor status, in the one renderer's words; a caller not shown

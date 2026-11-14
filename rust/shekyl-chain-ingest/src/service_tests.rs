@@ -563,12 +563,12 @@ async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
 }
 
 /// A run across a seed boundary lands in one commit: the span
-/// `2107 ..= 2113` straddles height 2112, the first block hashed under
-/// the seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG`),
+/// `2107 ..= 2113` ends at height 2113, the first block hashed under the
+/// seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1`),
 /// so the run's forms are jobs on two seeds, and the run's one write
 /// records both halves. Afterwards the ranked list's first seed is the new
-/// epoch's. Ignored: it mines 2,114
-/// blocks, and the nightly ignored lane runs it.
+/// epoch's. Ignored: it mines 2,114 blocks, and the nightly ignored lane
+/// runs it.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
 async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
@@ -619,8 +619,8 @@ async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
         .collect();
     assert_eq!(
         seeds,
-        [vec![genesis; 5], vec![epoch_seed; 2]].concat(),
-        "each form is a job on its own seed: five under block 0's id, two under block 2048's"
+        [vec![genesis; 6], vec![epoch_seed; 1]].concat(),
+        "each form is a job on its own seed: six under block 0's id, the last under block 2048's"
     );
     // The ranker runs after the write; the list is read once it has.
     assert!(service.shared.ranked_now().await, "the service is running");

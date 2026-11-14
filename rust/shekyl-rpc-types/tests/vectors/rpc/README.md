@@ -40,6 +40,10 @@ each block's `section` and `section_body` (empty here: no block in these
 files admits a bundle), and no `complete_tree` on an `archival_claim_show`
 bond.
 
+At 4.4 `daemon_status.reply.json` gained `randomx_caches` in its Status
+part, by hand from the grammar's field census: the count of RandomX caches
+the node's hasher holds (`RANDOMX_CACHE_ACTOR.md` §5.6).
+
 ### Layout
 
 A method whose reply has fields a request switch selects has one pair per

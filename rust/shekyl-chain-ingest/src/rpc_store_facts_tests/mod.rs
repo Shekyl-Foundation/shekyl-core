@@ -596,6 +596,67 @@ async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node
     s.close().await;
 }
 
+/// `daemon_status` reports the hasher's live caches (4.4,
+/// `RANDOMX_CACHE_ACTOR.md` §5.6): the count is the length of the
+/// hasher's published `Resident::caches` when the call is made, in the
+/// part shown to `status`. A caller without that grant gets no part:
+/// absent, never zero (RK-D23).
+///
+/// The facts here ask a hasher of the test's own, ranked with two seeds:
+/// the status says two. The driver's chain is over the free longhash; the
+/// count is the hasher's and not the chain's.
+///
+/// Red edits: in `StoreFacts::status`, report `0`, or count only warm
+/// caches while one is building; in `info::daemon_status`, show the field
+/// under `on_chain` instead of `on`: the restricted caller is shown it.
+#[tokio::test]
+async fn daemon_status_reports_the_hashers_live_caches_to_status_alone() {
+    let mut s = Scenario::open("rpc-store-facts-caches");
+    s.mine(2).await;
+    let own = crate::test_support::own_hasher();
+    let seed = |fill: u8| shekyl_pow_randomx::Seedhash::from_bytes([fill; 32]);
+    own.hasher
+        .rank(shekyl_hasher::Ranked::new(seed(0xc1), Some(seed(0xc2)), None).expect("two seeds"));
+    assert_eq!(
+        crate::test_support::quiet_seeds(&own.hasher.resident()).len(),
+        2,
+        "the hasher holds the two ranked seeds' caches"
+    );
+    s.reopen(|path| {
+        let store = Arc::new(open_store(path));
+        let facts = facts_with_hasher(Arc::clone(&store), path, RULES, own.hasher.clone());
+        let full = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::FULL,
+            0,
+            tor_read(Disclosure::FULL),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
+        assert_eq!(
+            full.randomx_caches.shown().map(|count| count.0),
+            Some(2),
+            "a status call while the hasher holds two caches reports 2"
+        );
+        let restricted = daemon_status(
+            &facts,
+            &facts,
+            Disclosure::VIEW,
+            0,
+            tor_read(Disclosure::VIEW),
+        )
+        .unwrap_or_else(|_| panic!("daemon_status"));
+        assert!(
+            restricted.randomx_caches.is_withheld(),
+            "a caller without `status` gets no part"
+        );
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
+}
+
 /// An alt block by hash: every value from its own row — its cumulative
 /// difficulty, its weight, its recorded PoW — never the main chain's at
 /// its height; no confirmations on the main chain; no long-term weight.
