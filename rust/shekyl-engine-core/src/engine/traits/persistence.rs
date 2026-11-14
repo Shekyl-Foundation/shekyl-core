@@ -30,10 +30,13 @@
 //!
 //! # Durability and nonces
 //!
-//! On `Ok`, `.wallet` bytes are durable across power loss (`atomic_write_file`:
-//! tmp → fsync → rename → fsync parent). Region-2 AEAD uses a fresh 24-byte
-//! nonce from the OS CSPRNG on every save — never counter-derived
-//! (`seal_state_file` in `shekyl-crypto-pq`).
+//! `save_state` returns [`shekyl_engine_file::Durability`] once the rename has
+//! landed. [`shekyl_engine_file::Durability::Confirmed`] means the parent
+//! directory was fsynced too. [`shekyl_engine_file::Durability::Unconfirmed`]
+//! means that fsync missed: the write is applied, and a caller must not undo
+//! it. Only a confirmed save authorizes a broadcast. Region-2 AEAD uses a
+//! fresh 24-byte nonce from the OS CSPRNG on every save — never
+//! counter-derived (`seal_state_file` in `shekyl-crypto-pq`).
 //!
 //! # Stage-4 swap-in (§7)
 //!
@@ -157,7 +160,7 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
 
     /// Seal and atomically write the wallet's preferences file
     /// (`<base>.prefs.toml`), HMAC'd with `prefs_key`.

@@ -92,7 +92,48 @@ impl<
             self.persistence
                 .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
+        .map_err(|e| OpenError::Persistence(e.into()))
+        .map(|_| ())?;
+        drop(ledger_guard);
+        drive_persistence(
+            self.persistence
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
+        )
         .map_err(|e| OpenError::Persistence(e.into()))?;
+        Ok(())
+    }
+
+    /// Persist final state and prefs because the process is stopping (a stop
+    /// signal, a window closing), whatever is outstanding.
+    ///
+    /// [`Self::persist_for_close`] refuses while reservations are
+    /// outstanding, because a user's close should not drop work silently.
+    /// A process that is stopping has no such choice, and nothing is lost
+    /// by saving: a reservation built and not submitted lives only in
+    /// memory and ends with the process (its outputs were never on the
+    /// wire), and a send in flight had its dispatch saved before its bytes
+    /// left (A19), so the next open locks its inputs and lists it among the
+    /// held sends. The count of outstanding reservations is logged.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError::Persistence`] for state-save / prefs-save failures.
+    pub fn persist_for_shutdown(&self) -> Result<(), OpenError> {
+        let outstanding = self.outstanding_pending_txs();
+        if outstanding > 0 {
+            tracing::warn!(
+                outstanding,
+                "stopping with reservations outstanding: unsubmitted ones end with the \
+                 process; a send in flight is saved and is held at the next open"
+            );
+        }
+        let ledger_guard = self.ledger.read();
+        drive_persistence(
+            self.persistence
+                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))
+        .map(|_| ())?;
         drop(ledger_guard);
         drive_persistence(
             self.persistence

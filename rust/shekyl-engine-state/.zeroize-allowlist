@@ -213,3 +213,9 @@ rust/shekyl-engine-state/src/tx_meta_block.rs|pub scanned_pool_txs: BTreeMap<[u8
 # dispatch-authored non-secret history (addresses, amounts, gindexes,
 # lifecycle state); no wipe-on-drop material lives on a `SendRecord`.
 rust/shekyl-engine-state/src/send_journal_block.rs|pub rows: BTreeMap<[u8; 32], SendRecord>
+#
+# `SendRecord::tx_bytes` (A19) is the signed transaction exactly as it
+# left for the daemon: the bytes the network relays and the chain records,
+# public by construction. It carries no secret (the per-tx secret is
+# `tx_meta.tx_keys`, which stays wrapped), so it is not wiped on drop.
+rust/shekyl-engine-state/src/send_journal_block.rs|pub tx_bytes: Option<Vec<u8>>

@@ -47,8 +47,12 @@ impl<
         F: PersistenceEngine,
     > Engine<S, D, LocalLedger, E, R, P, F>
 {
-    /// Persist a new pending payment request and return its opaque id.
-    pub fn create_payment_request(&self, req: NewPaymentRequest) -> PaymentRequestId {
+    /// Add a new pending payment request **in memory only** and return its
+    /// opaque id. Private: the one entry point is
+    /// [`Self::create_payment_request_persisted`], which saves it before the
+    /// id can leave (A19 audit: this was `pub` and named "persist" while
+    /// saving nothing, so a caller could hand out a `rid` a restart lost).
+    fn record_payment_request(&self, req: NewPaymentRequest) -> PaymentRequestId {
         const MAX_ID_COLLISION_RETRIES: u32 = 64;
         let mut guard = self.ledger.write();
         let requests = &guard.ledger.bookkeeping.payment_requests;
@@ -88,7 +92,7 @@ impl<
     /// commit uses (mirrors `stake_persist::persist_bond_record`).
     ///
     /// The in-memory mutation happens first under a scoped write guard (via
-    /// [`Self::create_payment_request`]), which is dropped before the
+    /// [`Self::record_payment_request`]), which is dropped before the
     /// read-guarded save (same `RwLock`; overlapping would deadlock).
     ///
     /// # Errors
@@ -100,7 +104,7 @@ impl<
         &self,
         req: NewPaymentRequest,
     ) -> Result<PaymentRequestId, PersistenceError> {
-        let id = self.create_payment_request(req);
+        let id = self.record_payment_request(req);
 
         let save_result = {
             let ledger_guard = self.ledger.read();

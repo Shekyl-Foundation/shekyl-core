@@ -18,9 +18,11 @@
 # No earlier capture (the first night, or every earlier artifact expired)
 # is not a failure: there is nothing to drift from, and the run says so.
 #
-# Exit: compare.py's. 0 clean, 1 a row past its fail threshold or a row
-# gone, 2 an input error. Rule 46: the comparison's exit is kept and
-# returned; nothing here pipes a verdict.
+# Exit: compare.py's, through drift_report.sh, which the push to dev's
+# baseline update uses on the pull-request set. 0 clean (a warn is
+# clean), 1 a row past its fail threshold or a row gone, 2 an input
+# error. Rule 46: the comparison runs unpiped and its exit is this
+# script's exit.
 #
 # Needs GH_TOKEN (actions: read), GITHUB_REPOSITORY and GITHUB_RUN_ID, as
 # a workflow step has them, and gh, jq, unzip and python3.
@@ -61,16 +63,4 @@ if [ ! -s "${baseline}" ]; then
   exit 2
 fi
 
-status=0
-python3 "$(dirname "$0")/compare.py" \
-  --baseline "${baseline}" --pr "${current}" --out "${work}/report.json" || status=$?
-if [ -s "${work}/report.json" ]; then
-  jq -r '
-    "baseline " + .baseline_git_rev[0:10] + " -> tonight " + .pr_git_rev[0:10],
-    (.entries[] | "\(.verdict)\t\(.delta_pct | tostring | .[0:8])%\t\(.full_id)")' \
-    "${work}/report.json"
-fi
-if [ "${status}" -eq 1 ]; then
-  echo "::error::${name}: a row moved past its fail threshold, or a row is gone, against the capture before tonight's (artifact ${previous})"
-fi
-exit "${status}"
+"$(dirname "$0")/drift_report.sh" "${name}" "${baseline}" "${current}" "the capture before tonight's (artifact ${previous})"

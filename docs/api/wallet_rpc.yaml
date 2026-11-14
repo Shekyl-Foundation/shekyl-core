@@ -55,6 +55,12 @@
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
 #     abandon_tx                                   (PR-SJ-3 — the P3-4
 #                                                   user-authored abandon)
+#     tx_alarm, tx_resend                          (A19 — the held sends
+#                                                   that need the user's
+#                                                   decision, and the
+#                                                   user's resend; Part C
+#                                                   names, INPUT_GRAMMAR
+#                                                   §16.1)
 #     set_tx_note, get_tx_note                     (PR-SA-4 — SJ-DQ-7
 #                                                   per-txid annotation;
 #                                                   the reader is the only
@@ -483,7 +489,15 @@ info:
   # runs with Tor off and has no client to fetch a shard through. The
   # cause "skeleton_absent" is gone: no daemon refuses that way.
   # api_version stays 1.
-  version: 0.17.0
+  # 0.18.0: A19 (alpha.11 bug hunt) — a send is saved before its bytes
+  # leave. submit_pending_tx gains -29120 SEND_NOT_SAVED (the record could
+  # not be saved, so nothing was sent; the reservation is kept) and its
+  # result gains the required verdict_saved (false: the send stands, but
+  # saving its verdict failed). tx_alarm lists the held sends that need
+  # the user's decision; tx_resend resends one's saved bytes (-29121
+  # TX_NOT_HELD, -29122 TX_BYTES_MISSING; refusals as submit's).
+  # api_version stays 1.
+  version: 0.18.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -526,6 +540,8 @@ x-shekyl-method-registry:
   submit_pending_tx: { status: SPECIFIED }
   discard_pending_tx: { status: SPECIFIED }
   abandon_tx: { status: SPECIFIED }
+  tx_alarm: { status: SPECIFIED }
+  tx_resend: { status: SPECIFIED }
   set_tx_note: { status: SPECIFIED }
   get_tx_note: { status: SPECIFIED }
   get_transfers: { status: SPECIFIED }
@@ -657,6 +673,8 @@ components:
             - submit_pending_tx
             - discard_pending_tx
             - abandon_tx
+            - tx_alarm
+            - tx_resend
             - set_tx_note
             - get_tx_note
             - get_transfers
@@ -786,6 +804,9 @@ components:
         - -29117   # RESELECTION_REQUIRED
         - -29118   # DAEMON_FEE_RESPONSE_INVALID
         - -29119   # SIGNER_FAILED
+        - -29120   # SEND_NOT_SAVED
+        - -29121   # TX_NOT_HELD
+        - -29122   # TX_BYTES_MISSING
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -1017,6 +1038,25 @@ components:
                                           downstream failure stopped it
                                           (a device error, a remote actor
                                           disconnecting)
+          -29120 SEND_NOT_SAVED           submit: the send's record (its
+                                          signed bytes, tx secret and input
+                                          locks) is not confirmed on disk,
+                                          so the wallet sent NOTHING. A
+                                          failed save undoes the record; a
+                                          save whose durability was not
+                                          confirmed leaves the applied
+                                          record. The reservation is kept:
+                                          make the wallet directory writable
+                                          or free disk space and submit
+                                          again, or discard. The cause is
+                                          in the wallet's log (A19)
+          -29121 TX_NOT_HELD              tx_resend: no held send has this
+                                          id — it confirmed, was released,
+                                          or was never this wallet's
+          -29122 TX_BYTES_MISSING         tx_resend: the held send's record
+                                          holds no bytes to resend; abandon
+                                          it, or wait for refresh to settle
+                                          it
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it
@@ -2023,10 +2063,25 @@ components:
 
     SubmitPendingTxResult:
       type: object
-      required: [tx_hash, verdict]
+      required: [tx_hash, verdict, verdict_saved]
+      description: >
+        Also tx_resend's result. The send was saved before its bytes left
+        (A19): its record — the signed bytes, the retained tx secret, the
+        inputs its lock holds — is on disk before the daemon sees it, and a
+        save that fails sends nothing (-29120). What the daemon's verdict
+        changed is saved before this reply; verdict_saved says whether that
+        second save succeeded.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
+        verdict_saved:
+          type: boolean
+          description: >
+            false when the send went out and stands but saving what its
+            verdict changed failed (the cause is in the wallet's log). The
+            send is not undone; the next successful save writes it, and if
+            the wallet stops first the send is listed by tx_alarm when it
+            reopens (cause earlier-session).
         verdict:
           type: string
           enum: [ACCEPTED, ALREADY_IN_POOL, ALREADY_IN_CHAIN]
@@ -2081,6 +2136,77 @@ components:
           type: string
           enum: [ABANDONED]
           description: The row's resulting state (always ABANDONED).
+
+    TxAlarmParams:
+      type: object
+      description: >
+        `tx_alarm` (A19; DAEMON_SUBMIT_VERDICT.md §5.3 rung 2, "a human
+        decides") takes no parameters.
+
+    TxAlarmResult:
+      type: array
+      description: >
+        The held sends that need the user's decision, oldest first: every
+        held send dispatched before this session (a restart crossed its
+        verdict, so resending it — perhaps to a different daemon — is the
+        user's decision, never the wallet's), and every one the wallet's
+        watchdog has alarmed on in this session. Derived from the saved
+        send records each time; nothing about the alarm is stored. The
+        choices are tx_resend and abandon_tx; a send that confirms leaves
+        the list on the next refresh.
+      items:
+        $ref: "#/components/schemas/TxAlarmEntry"
+
+    TxAlarmEntry:
+      type: object
+      required: [id, alarm, sent_height]
+      properties:
+        id:
+          $ref: "#/components/schemas/Hex32"
+        alarm:
+          type: string
+          enum:
+            - earlier-session
+            - overdue
+            - untracked
+            - published-past-lookback
+            - peerless
+            - offline
+            - reference-stale
+            - bytes-missing
+          description: >
+            Why it needs a decision. earlier-session: sent before this
+            session. overdue: the daemon holds it past its own publication
+            budget. untracked: pool-resident with no record of publishing
+            it. published-past-lookback: published and unmined past the fee
+            ladder's lookback. peerless: the daemon has no peers. offline:
+            the daemon was started offline. reference-stale: the daemon
+            refused the bytes for a stale reference; they cannot be offered
+            again as built, and rebuilding is the user's decision.
+            bytes-missing: the record holds no bytes to resend.
+        sent_height:
+          type: integer
+          format: int64
+          description: The wallet's synced height when the send left.
+
+    TxResendParams:
+      type: object
+      required: [id]
+      description: >
+        `tx_resend` (A19): resend a held send's saved bytes to the wallet's
+        daemon, by the user's decision, and answer the daemon's verdict.
+        The bytes are exactly those that left at dispatch (same id; the
+        daemon dedups), so the resend is privacy-neutral and doubles as the
+        status query. From here the session owns the send: the wallet's
+        own same-bytes resubmission applies to it again. The result is
+        SubmitPendingTxResult; a refusal is -29106 with the same data as
+        submit's — a terminal refusal also releases the send's input locks,
+        since a definite refusal proves the bytes are in neither pool nor
+        chain — and no verdict is -29107. -29121 TX_NOT_HELD, -29122
+        TX_BYTES_MISSING.
+      properties:
+        id:
+          $ref: "#/components/schemas/Hex32"
 
     SetTxNoteParams:
       type: object

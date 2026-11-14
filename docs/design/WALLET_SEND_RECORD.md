@@ -301,6 +301,21 @@ only, never the read path.
   daemon), vs. finalize-accept. What does a crash between dispatch and
   verdict leave, and is the residue reconciled by the same paths that
   reconcile retention?
+  **Answered (A19, 2026-11-12):** at dispatch, **saved**, with the signed
+  bytes. The row (`SendRecord::tx_bytes` beside the dispatch facts) and
+  the retained secret are written and the whole ledger saved
+  (`save_state`) under one write guard before the bytes can leave; only
+  that save mints the `DurableTxBytes` the submitter takes
+  (`dispatch_durability.rs`). A failed save undoes the record under the
+  same guard and sends nothing (`-29120 SEND_NOT_SAVED`). The verdict's
+  changes are saved again before the submit returns. A crash between the
+  dispatch save and the verdict leaves a `Dispatched` row with no
+  baseline: open locks its inputs at its dispatch height
+  (`lock_unverdicted_dispatches`), and since this session did not send
+  it, the watchdog asks the user rather than resending (`tx_alarm`,
+  `earlier-session`; `tx_resend` or `abandon_tx`). A definite verdict on
+  the resend retires the record through the ordinary finalizer and
+  release paths.
 - **SJ-DQ-3 — state machine and per-edge authority.**
   `Dispatched → Confirmed{height} | TerminalRejected | PresumedDead |
   Abandoned`, plus reorg back-edges (`Confirmed → Dispatched`-class).
