@@ -619,3 +619,35 @@ const PINNED_RERANDOMIZATION: [&str; 4] = [
     "e73f786b2732bcca2588b686cbc0570cfb08af0e388034be0b77da3bf56ff32b",
     "df5c2eadc44c6d94a19a9aa118afe5ac3193d26401f76251f522ff042dfbcb92",
 ];
+
+/// A preprocess and a share round-trip through their bytes, and the
+/// decoders refuse what is not a canonical point or scalar.
+#[test]
+fn preprocesses_and_shares_round_trip_through_bytes() {
+    let g = group(3, 2);
+    let params = params_for(&g);
+    let [a, b] = [participant(0), participant(1)];
+    let (machine_a, pre_a) = preprocess(&params, g.keys[&a].clone(), &mut OsRng).unwrap();
+    let (machine_b, pre_b) = preprocess(&params, g.keys[&b].clone(), &mut OsRng).unwrap();
+    let bytes_b = preprocess_bytes(&pre_b);
+    assert!(read_preprocess(&machine_a, &bytes_b).unwrap() == pre_b);
+    let mut bad = bytes_b;
+    bad[..32].copy_from_slice(&EdwardsPoint::identity().to_bytes());
+    assert_eq!(
+        read_preprocess(&machine_a, &bad).err(),
+        Some(FrostSalError::Preprocess)
+    );
+    assert_eq!(
+        read_preprocess(&machine_a, &[0xFF; SAL_PREPROCESS_LEN]).err(),
+        Some(FrostSalError::Preprocess)
+    );
+
+    let (machine_a, _) = sign(machine_a, HashMap::from([(b, pre_b)])).unwrap();
+    let (_, share_b) = sign(machine_b, HashMap::from([(a, pre_a)])).unwrap();
+    let share_bytes_b = share_bytes(&share_b);
+    assert!(read_share(&machine_a, &share_bytes_b).unwrap() == share_b);
+    assert_eq!(
+        read_share(&machine_a, &[0xFF; SAL_SHARE_LEN]).err(),
+        Some(FrostSalError::Share)
+    );
+}

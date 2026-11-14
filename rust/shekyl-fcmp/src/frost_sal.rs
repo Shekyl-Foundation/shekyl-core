@@ -55,15 +55,15 @@ use ciphersuite::Ciphersuite;
 use dalek_ff_group::{EdwardsPoint, Scalar};
 use modular_frost::dkg::Interpolation;
 use modular_frost::sign::{
-    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine, PreprocessMachine,
-    SignMachine, SignatureMachine,
+    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine, CachedPreprocess,
+    PreprocessMachine, SignMachine, SignatureMachine, Writable,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
 use transcript::{RecommendedTranscript, Transcript};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-pub use modular_frost::sign::{CachedPreprocess, Preprocess, SignatureShare};
+pub use modular_frost::sign::{Preprocess, SignatureShare};
 pub use modular_frost::{FrostError, Participant, ThresholdKeys, ThresholdParams};
 pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
 use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
@@ -354,6 +354,12 @@ pub enum FrostSalError {
     /// other output or group.
     #[error("these keys do not open this output's rerandomized key")]
     KeysDoNotOpenOutput,
+    /// A preprocess is not two canonical, prime-order, non-identity points.
+    #[error("the preprocess does not decode")]
+    Preprocess,
+    /// A share is not a canonical scalar.
+    #[error("the signature share does not decode")]
+    Share,
 }
 
 /// One group output being spent, as every member knows it from its own
@@ -597,6 +603,65 @@ impl HeldSession {
     pub fn params(&self) -> &SalSigningParams {
         &self.params
     }
+}
+
+/// Bytes of a SAL preprocess: one nonce's two commitments on `T`, and an
+/// empty addendum.
+pub const SAL_PREPROCESS_LEN: usize = 64;
+
+/// Bytes of a SAL signature share: one scalar.
+pub const SAL_SHARE_LEN: usize = 32;
+
+/// A preprocess as its signer sends it.
+#[must_use]
+pub fn preprocess_bytes(preprocess: &SalPreprocess) -> [u8; SAL_PREPROCESS_LEN] {
+    let mut out = Vec::with_capacity(SAL_PREPROCESS_LEN);
+    preprocess
+        .write(&mut out)
+        .expect("writing to a Vec is infallible");
+    out.try_into()
+        .expect("a SAL preprocess is two commitments on T")
+}
+
+/// Another signer's preprocess, read by this signer's machine for the same
+/// input. `modular_frost` reads a preprocess only through a machine, which
+/// knows the algorithm's generators.
+///
+/// # Errors
+///
+/// [`FrostSalError::Preprocess`] for a point that is not canonical, not
+/// prime-order, or the identity.
+pub fn read_preprocess(
+    machine: &SalSignMachine,
+    bytes: &[u8; SAL_PREPROCESS_LEN],
+) -> Result<SalPreprocess, FrostSalError> {
+    machine
+        .read_preprocess(&mut bytes.as_slice())
+        .map_err(|_| FrostSalError::Preprocess)
+}
+
+/// A share as its signer sends it.
+#[must_use]
+pub fn share_bytes(share: &SalShare) -> [u8; SAL_SHARE_LEN] {
+    let mut out = Vec::with_capacity(SAL_SHARE_LEN);
+    share
+        .write(&mut out)
+        .expect("writing to a Vec is infallible");
+    out.try_into().expect("a SAL share is one scalar")
+}
+
+/// Another signer's share, read by the machine that completes the input.
+///
+/// # Errors
+///
+/// [`FrostSalError::Share`] for a scalar that is not canonical.
+pub fn read_share(
+    machine: &SalSignatureMachine,
+    bytes: &[u8; SAL_SHARE_LEN],
+) -> Result<SalShare, FrostSalError> {
+    machine
+        .read_share(&mut bytes.as_slice())
+        .map_err(|_| FrostSalError::Share)
 }
 
 /// Round 2: this member's share, over every other signer's preprocess. The
