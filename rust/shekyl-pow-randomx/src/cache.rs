@@ -222,8 +222,7 @@ pub(crate) struct Cache {
     /// bytes each, totaling [`CACHE_SIZE`] (256 MiB). Allocated as
     /// `Box<[Block]>` so the size is fixed at construction (no
     /// `Vec`-style growth surface) and the resulting `Cache` value is
-    /// `Send + Sync`-safe for the eventual Phase 2f `CacheStore`
-    /// `Arc<Cache>` shape.
+    /// `Send + Sync`-safe, so one cache serves hashes on many threads.
     ///
     /// Field is private; consumers go through [`Cache::derive`] for
     /// construction. Read access from [`Cache::derive_item`] flows

@@ -755,3 +755,68 @@ pub(crate) fn job_seat(
         posted,
     )
 }
+
+/// A production proof-of-work boundary over a hasher of the test's own, as
+/// each daemon has its own. Dropping it stops the hasher: every job has
+/// ended by then, since a job borrows the boundary.
+#[cfg(feature = "pipeline")]
+pub struct OwnHasher {
+    /// The boundary, to plug in. Cheap to clone.
+    pub pow: crate::pow::ProductionPow,
+    /// The hasher, for its `resident()` watch.
+    pub hasher: shekyl_hasher::Hasher,
+    _owner: shekyl_hasher::Owner,
+}
+
+/// The seeds `hasher` holds once it is quiet: [`shekyl_hasher::Resident::quiet`],
+/// the core's own fact. A job, a lease or a build in flight is waited out.
+#[cfg(feature = "pipeline")]
+pub async fn quiet_seeds(hasher: &shekyl_hasher::Hasher) -> std::collections::BTreeSet<[u8; 32]> {
+    let mut resident = hasher.resident();
+    let quiet = resident
+        .wait_for(|resident| resident.quiet)
+        .await
+        .expect("the hasher is running");
+    quiet
+        .caches
+        .iter()
+        .map(|(seed, _)| *seed.as_bytes())
+        .collect()
+}
+
+/// What `list` names, as [`quiet_seeds`] reports what is held: none when
+/// there is no list.
+#[cfg(feature = "pipeline")]
+pub fn named_seeds(list: Option<&shekyl_hasher::Ranked>) -> std::collections::BTreeSet<[u8; 32]> {
+    list.into_iter()
+        .flat_map(shekyl_hasher::Ranked::seeds)
+        .map(|seed| *seed.as_bytes())
+        .collect()
+}
+
+/// [`OwnHasher`] over a budget of this host's parallelism.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher() -> OwnHasher {
+    own_hasher_on(shekyl_hash_budget::Budget::of_host())
+}
+
+/// [`OwnHasher`] over `budget`.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher_on(budget: shekyl_hash_budget::Budget) -> OwnHasher {
+    let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
+    let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+    OwnHasher {
+        pow: crate::pow::ProductionPow::new(hasher.clone(), metrics),
+        hasher,
+        _owner: owner,
+    }
+}
+
+/// A running hasher nothing ranks, shared by the process's tests: every
+/// warm loan on it is declined, as on a node whose list names no such
+/// seed. For a test whose subject builds no cache.
+#[cfg(feature = "pipeline")]
+pub fn unranked_hasher() -> shekyl_hasher::Hasher {
+    static IDLE: std::sync::OnceLock<OwnHasher> = std::sync::OnceLock::new();
+    IDLE.get_or_init(own_hasher).hasher.clone()
+}

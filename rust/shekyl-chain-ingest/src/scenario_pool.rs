@@ -10,14 +10,11 @@
 //! the store the connector owns. [`Scenario::reorganize_with_pool`] offers
 //! a switch's returned transactions to the pool after the switch lands.
 
-use shekyl_chain_rules::Substrate;
+use crate::pow::Pow;
 
 use super::Scenario;
 
-impl<P: Substrate + Send + Sync + 'static> Scenario<P>
-where
-    P::Fault: std::fmt::Debug + Send,
-{
+impl<P: Pow> Scenario<P> {
     /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
     /// listed transactions go to `pool` after the switch lands
     /// (`SwitchDone::returned`'s caller), through the door against the chain

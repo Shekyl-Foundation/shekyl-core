@@ -415,6 +415,7 @@ impl Message<OfferAlt> for Connector {
         let offered = self
             .writer
             .with_store(|store| offer(store, rules, trust, msg.0))?;
+        self.seeds_may_have_moved();
         if let Offered::BeyondCap { evidence, .. } = &offered {
             self.note_degraded(*evidence)?;
         }
@@ -435,6 +436,7 @@ impl Message<Reorganize> for Connector {
         let switched = self
             .writer
             .with_store(|store| switch(store, rules, trust, memo, msg))?;
+        self.seeds_may_have_moved();
         if let Switched::Done(done) = &switched {
             self.tip_moved();
             if let Some(reorg) = deep_reorg(done) {
@@ -462,7 +464,11 @@ impl Message<RefusePromotion> for Connector {
         msg: RefusePromotion,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.writer.with_store(|store| refuse_promotion(store, msg))
+        let refused = self
+            .writer
+            .with_store(|store| refuse_promotion(store, msg))?;
+        self.seeds_may_have_moved();
+        Ok(refused)
     }
 }
 

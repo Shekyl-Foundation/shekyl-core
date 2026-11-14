@@ -323,6 +323,10 @@ pub fn daemon_status(
         started: shown(on, Time(status.as_ref().map_or(0, |(s, _)| s.start_time))),
         disk_free: shown(on, Size(status.as_ref().map_or(0, |(s, _)| s.free_space))),
         data_size: shown(on, Size(status.as_ref().map_or(0, |(_, size)| *size))),
+        randomx_cache_places: shown(
+            on,
+            Count(status.as_ref().map_or(0, |(s, _)| s.randomx_cache_places)),
+        ),
         revision: shown(
             on,
             Text(

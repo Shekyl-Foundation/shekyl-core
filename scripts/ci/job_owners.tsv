@@ -75,6 +75,7 @@ scripts/ci/check_pow_test_seam.sh	grep-gates:grep-gates
 scripts/ci/check_pr_event_triggers.py	grep-gates:grep-gates
 scripts/ci/check_probe_registry.py	rust-audit-test:rust-audit-and-test
 scripts/ci/check_production_lint_lane.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
+scripts/ci/check_randomx_cache_owner.sh	grep-gates:grep-gates
 scripts/ci/check_randomx_crate_invariants.sh	build:lint-rust-debug-macros,randomx-v2-differential:structural-validate
 scripts/ci/check_randomx_fpu_rounding.sh	build:lint-rust-debug-macros
 scripts/ci/check_randomx_symbol_isolation.sh	build:build-ubuntu,grep-gates:grep-gates,randomx-v2-differential:full-parity

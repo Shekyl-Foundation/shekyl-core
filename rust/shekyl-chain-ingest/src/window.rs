@@ -3,20 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The two cache slots, and the pool steps that run beside them.
+//! The ranker, and the pool steps that run beside it.
 //!
-//! [`install_blocking`] reads the seeds the reorg cap can name and pins
-//! them, transient then canonical, under one chain permit, and releases a
-//! seed the window it replaces named and it does not. A hash looks a
-//! cache up; it does not build one. A pool-file fault retires the pool.
-//! A chain-store fault stops the service.
+//! [`rank`] is the one task that tells the hasher which seeds the node
+//! needs (`RANDOMX_CACHE_ACTOR.md` §5.1). Each wake reads one fresh store
+//! snapshot and the frontier chain sync last published, computes the list
+//! ([`crate::cache_window::ranked_seeds`]) and sends it whole. Wakes
+//! coalesce, so the last list sent is always from the newest snapshot. A
+//! hash never waits on the list: every hash is a job on its own seed.
+//!
+//! A pool-file fault retires the pool. A chain-store fault stops the
+//! service.
 
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
-use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, Substrate, ViewRead};
+use shekyl_chain_rules::{AdmissionPolicy, Corrupt, Fault, RuleSet, ViewRead};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
-use shekyl_hash_budget::Class;
 use shekyl_mempool::{Pool, PoolFault};
 use shekyl_types::archival::MAX_SECTION_REFERENCES;
 use shekyl_types::{BlockHeight, TxHash, UnixSeconds};
@@ -26,128 +29,77 @@ use super::{
     Accepted, Arrival, ArrivalLengths, Door, Refusal, ReplySlot, ServiceFault, SessionId, Shared,
     Ticket,
 };
-use crate::cache_window::{self, SeedPair, SlotPair};
+use crate::cache_window::{self, Frontier};
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 use tokio::sync::oneshot;
 
-/// Install the seed window, or leave it when it is the window last
-/// installed and the slots hold exactly it. A stop returns before a pin. A
-/// store read that fails is the caller's to record ([`record_store_read`]).
+/// The ranker (module docs). It ends when the service stops.
 ///
-/// # Errors
+/// The connector wakes it after every write that can change the list: a
+/// tip move, and an alternative stored, promoted, refused or retired. A
+/// change on `frontier` wakes it too. When the frontier's sender closes,
+/// chain sync's owner has ended or stopped: the ranker goes on without a
+/// frontier and stops listening for one. That is not a fault here; the
+/// owner's end reaches the node as its own.
 ///
-/// The store's, while reading the seeds, or a hole below the tip where a
-/// seed block belongs.
-pub(super) fn install_blocking<S>(shared: &Shared<S>) -> Result<(), ViewRead<StoreError>>
-where
-    S: Substrate + Send + Sync,
-    S::Fault: core::fmt::Debug,
-{
-    if shared.stopping() {
-        return Ok(());
-    }
-    let pair = cache_window::seeds_for(&shared.store, shared.rules)?;
-    install_pair(shared, pair);
-    Ok(())
-}
-
-/// Install `pair`, the seed window read at the committed tip: pin it,
-/// release what the window last installed named and `pair` does not, and
-/// publish the slots. Leaves everything as it is when `pair` is the window
-/// last installed and the slots hold exactly it. A stop before the permit
-/// pins nothing.
-pub(super) fn install_pair<S>(shared: &Shared<S>, pair: SeedPair)
-where
-    S: Substrate + Send + Sync,
-    S::Fault: core::fmt::Debug,
-{
-    // Both, read together under the pin lock (taken and dropped here, before
-    // the permit): slots that hold the window are not enough, since the
-    // window last installed may name a seed this one does not, still to be
-    // released (A2).
-    if shared.window_is_settled(pair) {
-        return;
-    }
-    let Some(_permit) = shared
-        .budget
-        .acquire_unless(Class::Chain, &shared.stop_flag)
-    else {
-        return;
-    };
-    // The substrate is cloned so the closure does not borrow the service
-    // the pin lock borrows. Older endpoint first, so the second pin leaves
-    // it in the transient slot and the connecting height's seed canonical.
-    let substrate = Arc::clone(&shared.substrate);
-    shared.with_pin_lock(|installed| {
-        if let Some(transient) = pair.transient {
-            substrate.pin_seed(&transient);
+/// A store read that fails stops the service ([`record_store_read`]).
+pub(super) async fn rank<P: Pow>(
+    shared: Arc<Shared<P>>,
+    mut frontier: Option<tokio::sync::watch::Receiver<Option<Frontier>>>,
+) {
+    let mut stopping = shared.stop_signal();
+    loop {
+        if shared.stopping() {
+            return;
         }
-        substrate.pin_seed(&pair.canonical);
-        // A seed the previous window named and this one does not is
-        // released: nothing else would empty its slot before the next
-        // epoch's pin (A2). Only those. A run that begins at genesis pins
-        // block 0's id for block 1 before block 0 is stored, and this
-        // window, read at the committed tip, cannot name it
-        // (`a_run_from_genesis_hashes_under_a_seed_the_window_does_not_name`);
-        // a release by "whatever the second slot holds" evicted it under
-        // the run's forms.
-        if let Some(previous) = installed.replace(pair) {
-            for seed in [Some(previous.canonical), previous.transient]
-                .into_iter()
-                .flatten()
-            {
-                if !pair.holds(&seed) {
-                    substrate.release_seed(&seed);
+        // Read before the snapshot: a frontier published while the list is
+        // computed wakes the next round.
+        let ahead = frontier
+            .as_mut()
+            .and_then(|frontier| *frontier.borrow_and_update());
+        // Read before the snapshot too: every ask counted here was made
+        // before the snapshot this ranking reads.
+        let asked = shared.rank_asked();
+        let store = Arc::clone(&shared.store);
+        let rules = shared.rules;
+        let ranked = tokio::task::spawn_blocking(move || {
+            let snap = store.begin_read().map_err(ViewRead::View)?;
+            cache_window::ranked_on(&snap, rules, ahead)
+        })
+        .await;
+        match ranked {
+            Ok(Ok(list)) => {
+                if let Some(list) = list {
+                    shared.pow().rank(list);
                 }
+                shared.rank_served(asked);
+            }
+            Ok(Err(read)) => return record_store_read(&shared, read),
+            Err(join) => {
+                tracing::error!("reading the ranked list's snapshot panicked: {join}");
+                return shared.fail(ServiceFault::RankerEnded);
             }
         }
-    });
-}
-
-/// Why installing the seed window stops its caller.
-pub(crate) enum WindowStop {
-    /// A store read failed ([`install_blocking`]'s error).
-    Read(ViewRead<StoreError>),
-    /// The install panicked: a defect in this node.
-    Panicked,
-}
-
-/// [`install_blocking`] off the runtime.
-///
-/// # Errors
-///
-/// [`WindowStop::Read`] as [`install_blocking`]; [`WindowStop::Panicked`]
-/// when the blocking install panicked. The workspace's dev and release
-/// profiles abort on panic, so the second is reached only where a panic
-/// unwinds (the test profile). Either way the caller stops through
-/// [`record_window_stop`].
-pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), WindowStop>
-where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
-{
-    let shared = Arc::clone(shared);
-    match tokio::task::spawn_blocking(move || install_blocking(&shared)).await {
-        Ok(installed) => installed.map_err(WindowStop::Read),
-        Err(join) => {
-            tracing::error!("installing the seed window panicked: {join}");
-            Err(WindowStop::Panicked)
+        tokio::select! {
+            () = shared.ranked.notified() => {}
+            changed = changed(frontier.as_mut()) => {
+                if changed.is_err() {
+                    frontier = None;
+                }
+            }
+            _ = stopping.wait_for(|stop| *stop) => return,
         }
     }
 }
 
-/// Stop the service on a failed install. A failed read is recorded as
-/// [`record_store_read`] records it. A panic stops it as the follower's
-/// end does ([`ServiceFault::FollowerEnded`]): the follower then leaves its
-/// loop, and the miner's job is withdrawn with it.
-pub(crate) fn record_window_stop<S>(shared: &Shared<S>, stop: WindowStop)
-where
-    S: Substrate,
-    S::Fault: core::fmt::Debug,
-{
-    match stop {
-        WindowStop::Read(read) => record_store_read(shared, read),
-        WindowStop::Panicked => shared.fail(ServiceFault::FollowerEnded),
+/// The next change on the frontier watch. Never resolves without one.
+async fn changed(
+    frontier: Option<&mut tokio::sync::watch::Receiver<Option<Frontier>>>,
+) -> Result<(), tokio::sync::watch::error::RecvError> {
+    match frontier {
+        Some(frontier) => frontier.changed().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -155,10 +107,9 @@ where
 /// arrival is refused with what the failed read is
 /// ([`super::Refusal::StoreUnreadable`]); the span was not accepted, and
 /// the caller does not wait it out.
-pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
+pub(crate) fn record_store_read<P>(shared: &Shared<P>, read: ViewRead<StoreError>)
 where
-    S: Substrate,
-    S::Fault: core::fmt::Debug,
+    P: Pow,
 {
     let fault = match read {
         ViewRead::View(store) => ServiceFault::Store(store),
@@ -195,13 +146,12 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
 
 /// Run `f` over the pool against the chain the store holds now.
 /// `None` when no pool is wired, or the pool file has been retired.
-pub(crate) async fn with_pool<S, R, F>(
-    shared: &Arc<Shared<S>>,
+pub(crate) async fn with_pool<P, R, F>(
+    shared: &Arc<Shared<P>>,
     f: F,
 ) -> Option<Result<R, StoreError>>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
     R: Send + 'static,
     F: FnOnce(
             &mut Pool,
@@ -300,73 +250,6 @@ fn body_of(bodies: &[Transaction], txid: &TxHash) -> Option<Transaction> {
         .iter()
         .find(|tx| tx.txid_parts().hash == *txid)
         .cloned()
-}
-
-/// The window last installed, and the slots, read under the pin lock.
-pub(super) struct PinView {
-    /// The window last installed. `None` until the first install.
-    pub(super) window: Option<SeedPair>,
-    /// The seeds the slots hold. `None` until a seed is canonical.
-    pub(super) slots: Option<SlotPair>,
-    /// The pair last published, read under the same lock as `slots`.
-    /// The tests compare the two. Production reads `slots` for the
-    /// settled check, and the watch for everyone else.
-    #[cfg(test)]
-    pub(super) published: Option<SlotPair>,
-}
-
-impl<S: Substrate> Shared<S> {
-    /// Run `body` under the pin lock, then publish the slots before the
-    /// lock drops. A pin, a preparation and the install all enter here, so
-    /// a change to the slots cannot forget the publish. An unchanged pair
-    /// does not wake a waiter.
-    pub(super) fn with_pin_lock<R>(&self, body: impl FnOnce(&mut Option<SeedPair>) -> R) -> R {
-        // The guard, the slot read and the watch are three fields. Naming
-        // them keeps the publish inside the critical section: the slots are
-        // read and sent before the guard drops.
-        let Self {
-            pin_lock,
-            substrate,
-            seeds,
-            ..
-        } = self;
-        let mut installed = pin_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        let result = body(&mut installed);
-        let next = SlotPair::from_stored(substrate.slots());
-        seeds.send_if_modified(|current| {
-            if *current == next {
-                return false;
-            }
-            *current = next;
-            true
-        });
-        drop(installed);
-        result
-    }
-
-    /// The window and the slots, read together under the pin lock.
-    pub(super) fn pin_view(&self) -> PinView {
-        let Self {
-            pin_lock,
-            substrate,
-            #[cfg(test)]
-            seeds,
-            ..
-        } = self;
-        let installed = pin_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        PinView {
-            window: *installed,
-            slots: SlotPair::from_stored(substrate.slots()),
-            #[cfg(test)]
-            published: *seeds.borrow(),
-        }
-    }
-
-    /// `pair` is the window last installed and the slots hold exactly it.
-    fn window_is_settled(&self, pair: SeedPair) -> bool {
-        let view = self.pin_view();
-        view.window == Some(pair) && view.slots.is_some_and(|slots| slots.same_seeds(pair))
-    }
 }
 
 impl super::Admission {
