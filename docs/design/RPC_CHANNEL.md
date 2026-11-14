@@ -1182,7 +1182,7 @@ internals); the log may be specific.
 | Failure | Client can distinguish? | Client says | Daemon log says |
 |---|---|---|---|
 | Client holds a stale or wrong daemon bundle; client is on another network; version mismatch | No — all close after message 1, no reply | "The node at ADDRESS closed the connection without answering. It does not recognise this client's copy of its key, is on a different network, or runs a different version. The node's log records which." | Rate-limited, aggregated per source: "unauthenticated channel handshake from IP: the sender does not hold this node's current key, is on another network, or speaks another channel version" |
-| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enrol it on the node with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enrol it |
+| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enrol it on the node with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enrol it |
 | Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enrol." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
 | Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node you enrolled with. Do not connect; check the address." No retry | Nothing — a daemon with a different key never sends message 2 |
 | Requested grant exceeds the ceiling | Yes — message 4 carries the ceiling, and the client clamps its request to it | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
@@ -1210,7 +1210,7 @@ internals); the log may be specific.
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
 | Windows: the daemon runs for this user in **another logon session** (the pipe admits its own session only) | "Your Shekyl node is running in another sign-in session and can only be reached from there." Known from the rendezvous before dialling | — |
-| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" |
+| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" |
 
 ---
 
@@ -2060,7 +2060,11 @@ client never reaches the wrong network's node.
   **The service's rendezvous directory is fixed per platform and separate
   from `data-dir`** (Rick, 2026-11-12): `/run/shekyl` on Linux, which the
   unit's `RuntimeDirectory=shekyl` with `RuntimeDirectoryMode=0755`
-  creates; `/Library/Application Support/Shekyl` on macOS, which the
+  creates; `/var/run/shekyl` on FreeBSD (Rick, 2026-11-14), which the
+  rc.d script's `start_precmd` creates before every start with
+  `install -d -o shekyl -g shekyl -m 0755`
+  (`contrib/packaging/freebsd/shekyld`), checked exactly as on Linux;
+  `/Library/Application Support/Shekyl` on macOS, which the
   installer creates; and `%ProgramData%\shekyl` on Windows, unchanged
   (RT-16). **That directory is its containment**: only the service's
   account can place a file there. A service daemon checks it rather than
