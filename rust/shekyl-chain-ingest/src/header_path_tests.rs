@@ -825,6 +825,38 @@ fn appended_bytes_are_not_the_transaction() {
                         shekyl_wire::Transaction::from_bytes(&trailing).is_err(),
                         "validate's parser accepts a trailing byte"
                     );
+                    // The serve-credit input's tag, unassigned since the
+                    // switch (`SO-D12` 4b): no arm reads it, so a body whose
+                    // input carries it is not a transaction, and the pairing
+                    // refuses it (CEN-G2).
+                    let mut retired = body_of(candidate);
+                    {
+                        let TxBody::Full(bytes) = &mut retired.txs[0] else {
+                            panic!("body_of writes a full transaction");
+                        };
+                        let mut first = Vec::new();
+                        tx.prefix.inputs[0]
+                            .write(&mut first)
+                            .expect("write an input");
+                        let at = bytes
+                            .windows(first.len())
+                            .position(|w| w == first.as_slice())
+                            .expect("the first input is in its transaction");
+                        bytes[at] = 0x02;
+                        // Refused at the tag, not by bytes the splice
+                        // misaligned further on.
+                        let refused = shekyl_wire::Transaction::from_bytes(bytes)
+                            .expect_err("an input tagged 0x02 parses");
+                        assert!(
+                            refused.to_string().contains("unsupported input tag 0x02"),
+                            "an input tagged 0x02 is refused for another reason: {refused}"
+                        );
+                    }
+                    assert_eq!(
+                        bind_body(&header, &retired).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "an input tagged 0x02"
+                    );
                     let segments = tx.write_segments().expect("segments");
                     let archival_len = segments.archival_len();
                     let mut unprunable = segments.pruned.clone();
