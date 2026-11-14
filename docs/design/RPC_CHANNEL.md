@@ -2096,7 +2096,11 @@ client never reaches the wrong network's node.
   **The service's rendezvous directory is fixed per platform and separate
   from `data-dir`** (Rick, 2026-11-12): `/run/shekyl` on Linux, which the
   unit's `RuntimeDirectory=shekyl` with `RuntimeDirectoryMode=0755`
-  creates; `/Library/Application Support/Shekyl` on macOS, which the
+  creates; `/var/run/shekyl` on FreeBSD (Rick, 2026-11-14), which the
+  rc.d script's `start_precmd` creates before every start with
+  `install -d -o shekyl -g shekyl -m 0755`
+  (`contrib/packaging/freebsd/shekyld`), checked exactly as on Linux;
+  `/Library/Application Support/Shekyl` on macOS, which the
   installer creates; and `%ProgramData%\shekyl` on Windows, unchanged
   (RT-16). **That directory is its containment**: only the service's
   account can place a file there. A service daemon checks it rather than
