@@ -191,6 +191,7 @@ stale_through = [
   { through = "d51c1815ed", note = "The switch's C7 deletes the serve-credit input: in this path set, proofs.rs's I15 class match loses the ServeCreditOnly arm (a coinbase still skips the proof) and signature.rs loses SCHEME_DOMAIN_SERVE_CREDIT. A spend's proof verify and its hybrid signature verify are unchanged. Not re-measured; the rows stay stale from PL-D3." },
   { through = "68d94c8f5d", note = "CF-1b: signature.rs moves `sign_with_ml_dsa_seed` and `ML_DSA_SIGNING_SEED_LEN` from the `test-utils` cfg to the new TEST_ONLY `seeded-rng` cfg. Neither is in a production build before or after; `SignatureScheme::sign` and the verify path are untouched. Not re-measured." },
   { through = "bc14bc55f8", note = "CF-1b seam T1: proof.rs moves `prove` and `prove_membership_only` onto private generic bodies over one RNG (prove_inner, prove_membership_only_inner), production passing OsRng as before; the RNG-taking forms are public only under the TEST_ONLY `seeded-rng`. The same draws in the same order from the same OS generator, so no prover or verifier work changes; tests gain a shared depth-1 fixture. Not re-measured." },
+  { through = "955166e55d", note = "CF-1b: a test only. tests/sal/multisig.rs gains the_y_share_takes_its_nonce_from_frost_never_from_the_transcript (CF-R12 condition (a)); no prover, verifier or batch path changes. Not re-measured." },
 ]
 
 [[constant]]
