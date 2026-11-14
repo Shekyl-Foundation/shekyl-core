@@ -46,6 +46,9 @@ pub(crate) struct Parts {
     /// The port's receiving end ([`shekyl_chain_sync_runtime::port::port`]).
     pub(crate) inbound: tokio::sync::mpsc::UnboundedReceiver<Inbound>,
     pub(crate) state: tokio::sync::watch::Sender<SyncState>,
+    /// Where the owner publishes its header frontier for the ingest's
+    /// ranked list.
+    pub(crate) frontier: tokio::sync::watch::Sender<Option<shekyl_chain_ingest::service::Frontier>>,
 }
 
 /// The running owner.
@@ -118,6 +121,7 @@ pub(crate) fn spawn(parts: Parts) -> Result<Held, OpenError> {
         pool_hashes,
         inbound: parts.inbound,
         state: parts.state,
+        frontier: parts.frontier,
     })
     .map_err(OpenError::Runtime)?;
     Ok(Held { running })

@@ -45,6 +45,9 @@ shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# Each simulated node's own hasher, as each daemon has its own
+# (RANDOMX_CACHE_ACTOR.md): its own cap and its own ranked list.
+shekyl-hasher = { path = "../shekyl-hasher" }
 shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-p2p-session = { path = "../shekyl-p2p-session" }

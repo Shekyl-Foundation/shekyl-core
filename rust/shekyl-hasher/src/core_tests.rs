@@ -764,6 +764,26 @@ proptest! {
             };
             let Some(out) = apply(&mut world, op) else { continue };
             check(&world, op, &before, &out);
+            // The published `quiet` is the model's own quiescence, read
+            // off its ledger of drops, claims and derives, after every
+            // event. Red edit: drop the lease term, the entry term or
+            // the claim term from `Core::quiet`.
+            let at_rest =
+                world.quiet() && world.claimed.is_none() && world.deriving.is_none();
+            prop_assert_eq!(world.core.quiet(), at_rest, "quiet after {:?}", op);
+            // A job that waits always shows: no published state has a
+            // waiter beside caches that are all warm.
+            prop_assert!(
+                world.core.queue.is_empty()
+                    || !world.core.leases.is_empty()
+                    || world
+                        .core
+                        .entries
+                        .iter()
+                        .any(|entry| entry.state != EntryState::Resident),
+                "a job waits and nothing shows it, after {:?}",
+                op
+            );
             // HA-R5: at quiescence the entries are the list, and a fresh
             // core fed the same list reaches the same entries.
             if world.quiet() && world.claimed.is_none() && world.deriving.is_none() {

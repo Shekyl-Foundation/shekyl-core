@@ -68,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::connector::{BundleOffered, FiledBundle};
 use shekyl_chain_ingest::service::{
-    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Reply, SessionId, SlotPair,
+    Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Frontier, Reply, SessionId,
 };
 use shekyl_chain_ingest::{ChainRules, TipChanged};
 use shekyl_chain_rules::Tip;
@@ -93,7 +93,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::bundles::{relay_message, relayed, serve_bundle_bodies};
-use crate::executor::Executor;
+use crate::executor::{Executor, ProveFault};
 use crate::outcome;
 use crate::port::Inbound;
 use crate::relay;
@@ -150,6 +150,12 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     /// before it returns. Every exit publishes [`SyncState::NoView`] and
     /// drops the sender, so the watch closes on that state.
     pub state: watch::Sender<SyncState>,
+    /// Where the header frontier is published for the ingest's ranked
+    /// list (`RANDOMX_CACHE_ACTOR.md` §5.1): the seed and the proven work
+    /// of the run with the most of it. The node creates the channel before
+    /// either service starts and hands the ingest the receiver. Dropped
+    /// when the owner ends, which the ingest reads as no frontier.
+    pub frontier: watch::Sender<Option<Frontier>>,
 }
 
 /// The running owner.
@@ -227,11 +233,11 @@ impl Running {
 
 /// Start the owner on its own row, in the caller's tracing span.
 ///
-/// [`Running::stop`] stops the executor too, so a permit wait ends with
-/// the owner. The row's blocking-thread cap is derived: the hasher budget's
-/// permits, the most proof items that can hash at once. Serving and the
-/// cache derivations queue on the same threads. The workers are one: the
-/// owner is one task.
+/// [`Running::stop`] stops the executor too, so a job's wait for a cache
+/// or a permit ends with the owner. The row's blocking-thread cap is
+/// derived: the hasher's permits. A prove job is one blocking task, whose
+/// lanes are scoped threads of its own and not this row's, and serving
+/// queues on the same threads. The workers are one: the owner is one task.
 ///
 /// # Errors
 ///
@@ -315,8 +321,11 @@ pub enum EndCause {
     TipWatchClosed,
     /// The latch watch closed.
     LatchWatchClosed,
-    /// The seed watch closed.
-    SeedWatchClosed,
+    /// A prove job could not judge an item: a hash asked under a seed the
+    /// job did not borrow, or a clock before the epoch. A defect of this
+    /// node, not a verdict on a header, and planning the item again meets
+    /// it again.
+    ProofUnjudged(ProveFault),
 }
 
 impl EndCause {
@@ -329,14 +338,22 @@ impl EndCause {
             Self::EngineClosed => "the timing engine closed",
             Self::TipWatchClosed => "the connector's tip watch closed",
             Self::LatchWatchClosed => "the latch watch closed",
-            Self::SeedWatchClosed => "the seed watch closed",
+            Self::ProofUnjudged(fault) => fault.text(),
         }
     }
 }
 
 impl std::fmt::Display for EndCause {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.text())
+        match self {
+            // With the seeds, which the prose alone does not carry.
+            Self::ProofUnjudged(fault) => fault.fmt(formatter),
+            Self::Panicked
+            | Self::PortClosed
+            | Self::EngineClosed
+            | Self::TipWatchClosed
+            | Self::LatchWatchClosed => formatter.write_str(self.text()),
+        }
     }
 }
 
@@ -383,6 +400,9 @@ enum Input {
         job: Job,
         results: Vec<Proved>,
     },
+    /// A prove job could not judge an item ([`ProveFault`]): the owner
+    /// ends.
+    Unjudged(ProveFault),
     Entry {
         tag: u64,
         reply: Reply,
@@ -482,14 +502,10 @@ struct Owner<C: Clock + Clone, R> {
     /// whose handshake has not completed.
     sessions: BTreeMap<Session, Established>,
     seats: Option<usize>,
-    /// The seeds the slots hold, read when a proof found a seed absent
-    /// (`Command::SeedNotHeld`). The loop waits on its own receiver of
-    /// the same watch.
-    seeds: watch::Receiver<Option<SlotPair>>,
-    /// The pair the model was last told of. It hears `Event::Seeds` when
-    /// that pair differs: an epoch edge, or a seed a run or a branch
-    /// prepared that the window does not name.
-    seen_seeds: Option<SlotPair>,
+    /// The header frontier, published for the ingest's ranked list after
+    /// each batch of commands (`RANDOMX_CACHE_ACTOR.md` §5.1). The ingest
+    /// holds the receiver; neither service calls the other.
+    frontier: watch::Sender<Option<Frontier>>,
     state_tx: watch::Sender<SyncState>,
     published: Published,
     /// The 2016s each session has been sent and not yet answered, oldest
@@ -497,6 +513,10 @@ struct Owner<C: Clock + Clone, R> {
     /// session answers in the order it was asked, so a 2017 answers the
     /// first.
     bundle_asks: HashMap<Session, VecDeque<BundleAsk>>,
+    /// Set when the owner must end on its own for a cause no input's
+    /// closing carries ([`Self::unjudged`]). The task's loop reads it
+    /// before each wait.
+    failed: Option<EndCause>,
 }
 
 /// One 2016 this owner sent: the block whose section names the bodies, and
@@ -558,6 +578,7 @@ async fn run<C, R>(
         pool_hashes,
         mut inbound,
         state: state_tx,
+        frontier,
     } = parts;
     // Dropped with the task: every exit below sets `how` first.
     let mut end = EndGuard {
@@ -572,8 +593,6 @@ async fn run<C, R>(
     let base = (Instant::now(), timer.clock().now());
     let timer = Arc::new(timer);
     let wakes = Arc::clone(&timer);
-    let mut seeds = door.seeds();
-    let seen_seeds = *seeds.borrow_and_update();
     let mut filed = Some(door.filed());
     let mut owner = Owner {
         sync: Model::new(rules.trust(), schedule)
@@ -595,11 +614,11 @@ async fn run<C, R>(
         transit: Transit::default(),
         sessions: BTreeMap::new(),
         seats: None,
-        seeds: seeds.clone(),
-        seen_seeds,
+        frontier,
         state_tx,
         published,
         bundle_asks: HashMap::new(),
+        failed: None,
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -610,6 +629,10 @@ async fn run<C, R>(
     owner.tip(&first);
     owner.room();
     loop {
+        if let Some(cause) = owner.failed {
+            end.how = Ended::Failed(cause);
+            break;
+        }
         owner_select!(
             publish_rx,
             state,
@@ -640,14 +663,6 @@ async fn run<C, R>(
                 }
                 let set = latch.borrow_and_update().is_some();
                 owner.latch(set);
-            },
-            changed = seeds.changed() => {
-                if changed.is_err() {
-                    end.how = Ended::Failed(EndCause::SeedWatchClosed);
-                    break;
-                }
-                let pair = *seeds.borrow_and_update();
-                owner.seeds_published(pair);
             },
             bundle = next_filed(&mut filed), if filed.is_some() => {
                 if let Some(bundle) = bundle {
@@ -1220,6 +1235,7 @@ where
                 tracing::trace!(?job, proved = results.len(), last = ?results.last().map(outcome::proved_kind), "a prove job answered");
                 self.event(Event::Proven { job, results });
             }
+            Input::Unjudged(fault) => self.unjudged(fault),
             Input::Entry { tag, reply } => {
                 let offered = self.offered.remove(&tag);
                 if let Some(offered) = &offered {
@@ -1396,16 +1412,32 @@ where
         self.published.alarm_tx.send_replace(self.sync.alarm());
     }
 
-    /// The slots published `pair`. The model hears of it when it differs
-    /// from the pair it was last told of. The pair moves when the slots do:
-    /// at an epoch edge, and when a run or a branch prepares a seed the
-    /// window does not name.
-    fn seeds_published(&mut self, pair: Option<SlotPair>) {
-        if self.seen_seeds == pair {
+    /// A prove job could not judge an item: record the end, which the
+    /// task's loop takes before it reads another input. Logged here, once:
+    /// the first fault stands, and a second job's is the same defect.
+    fn unjudged(&mut self, fault: ProveFault) {
+        if self.failed.is_some() {
             return;
         }
-        self.seen_seeds = pair;
-        self.event(Event::Seeds);
+        tracing::error!(%fault, "a proof could not be judged: chain sync stops");
+        self.failed = Some(EndCause::ProofUnjudged(fault));
+    }
+
+    /// Publish the model's header frontier for the ranked list, when it
+    /// moved. A receiver that has gone is the ingest stopping; its end is
+    /// its own to report.
+    fn publish_frontier(&mut self) {
+        let frontier = self
+            .sync
+            .frontier()
+            .map(|(seed, work)| Frontier { seed, work });
+        self.frontier.send_if_modified(|current| {
+            if *current == frontier {
+                return false;
+            }
+            *current = frontier;
+            true
+        });
     }
 
     /// Report the door's room when it moved.
@@ -1491,7 +1523,7 @@ where
         if behind && matches!(view.state, SyncState::Synced | SyncState::Following { .. }) {
             // The per-block profile (CS-5 §8): every phase the node timed
             // since it opened, once each time a sync reaches the best chain.
-            match self.executor.metrics().snapshot().to_json_line() {
+            match self.executor.artifact().to_json_line() {
                 Ok(profile) => tracing::info!(
                     target_height = ?view.target.tip(),
                     %profile,
@@ -1520,13 +1552,9 @@ where
     }
 
     fn commands(&mut self, out: Vec<Command<Session>>) {
-        // A proof that missed a seed the window now holds tells the model
-        // the slots changed, after this batch. `seeds_published` would see
-        // the pair as already told: the watch fired before the gate closed.
-        let mut release_seed = None;
         // Bundle bodies the store held for a waiting block: told to the
-        // model after this batch, as `Event::Seeds` is, so its handling
-        // never runs while this batch is being drained.
+        // model after this batch, so its handling never runs while this
+        // batch is being drained.
         let mut held_bodies = Vec::new();
         for command in out {
             match command {
@@ -1573,15 +1601,19 @@ where
                 Command::Prove {
                     job,
                     class,
-                    cache,
+                    seed,
                     items,
                 } => {
-                    tracing::trace!(?job, ?class, ?cache, items = items.len(), "a prove job");
+                    tracing::trace!(?job, ?class, ?seed, items = items.len(), "a prove job");
                     let executor = Arc::clone(&self.executor);
                     let inputs = self.inputs.clone();
                     tokio::spawn(async move {
-                        let results = crate::executor::prove(executor, class, cache, items).await;
-                        let _gone = inputs.send(Input::Proven { job, results });
+                        let input = match crate::executor::prove(executor, class, seed, items).await
+                        {
+                            Ok(results) => Input::Proven { job, results },
+                            Err(fault) => Input::Unjudged(fault),
+                        };
+                        let _gone = inputs.send(input);
                     });
                 }
                 Command::Offer { arrivals } => self.offer(arrivals),
@@ -1591,22 +1623,6 @@ where
                 }
                 Command::HeadersSpent { session, cause } => {
                     tracing::debug!(%session, ?cause, "a session's headers from H* yielded nothing");
-                }
-                Command::SeedNotHeld { session, seed } => {
-                    // The lookup ran off the owner's task. A pair that holds
-                    // the seed now was published between the lookup and
-                    // this batch, and its change may already have been
-                    // told before the model closed the gate.
-                    let held = self.seeds.borrow().filter(|pair| pair.holds(&seed));
-                    tracing::debug!(
-                        %session,
-                        ?seed,
-                        held_now = held.is_some(),
-                        "a session's headers hash under a seed the window does not hold"
-                    );
-                    if let Some(pair) = held {
-                        release_seed = Some(pair);
-                    }
                 }
                 Command::RaiseAlarm { fork_at, tip, work } => {
                     // The latch watch carries the write back as `Latch`; a
@@ -1656,14 +1672,10 @@ where
                 }
             }
         }
-        if let Some(pair) = release_seed {
-            self.seen_seeds = Some(pair);
-            // `Event::Seeds` does not emit `SeedNotHeld`, so this does not recur.
-            self.event(Event::Seeds);
-        }
         for held in held_bodies {
             self.event(held);
         }
+        self.publish_frontier();
         self.publish_view();
     }
 

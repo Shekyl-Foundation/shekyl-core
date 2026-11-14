@@ -506,7 +506,11 @@ ingest deciding forks.**
             check runs.
           - **When it lands:** with chain sync's first caller, not
             before (rule 21). `shekyl-hash-budget` is DRS-X's crate.
-       2. **Its own cache, outside `CacheStore`'s two slots.**
+       2. **Its own cache, as a job inside the hasher's cap** (since
+          the hashing actor's cutover, 2026-11-14,
+          [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) HA-R3; as
+          ruled here it was a cache outside the cache store's two
+          slots, and the bullets below state that ruling).
           - Held only while that check runs; never canonical, never
             pinned.
           - It never evicts the ingest window's seed pair or an in-cap
@@ -700,6 +704,12 @@ ingest deciding forks.**
        session opens (whether or not a request is ever sent) and fired
        through the owner's timer like the other deadlines. No new
        constant.
+       **Since the hashing actor's cutover (2026-11-14,
+       [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)) there is no
+       slot to miss:** a header proof is a job on its seed and always
+       gets its cache, so `Proved::NotHeld`, `Command::SeedNotHeld` and
+       `Event::Seeds` are deleted, and the idle-joiner startup race this
+       item's 2026-11-02 amendment names cannot arise.
 
      Two readings of (a) are accepted as built (Rick, 2026-11-01): a
      session whose claim has not arrived is unanswered, and a header

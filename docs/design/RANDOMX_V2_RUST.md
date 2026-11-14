@@ -312,8 +312,8 @@ module-level mutable state.
 ## 5. FFI Surface
 
 The hashing export is one function. The daemon does not call it: since
-the DRS-X flip the Rust ingest owns the chain and hashes through its own
-`CacheStore` (§6). Callers are the C++ parity gates
+the DRS-X flip the Rust ingest owns the chain and hashes through the
+node's one hasher (§6). Callers are the C++ parity gates
 (`tests/unit_tests/mining_parity.cpp`, `tests/randomx_v2_parity`).
 
 ```c
@@ -387,34 +387,32 @@ have.
 
 ## 6. No Prewarm
 
-Prewarm is not an export, and a hash is not a cache fill.
+Prewarm is not an export, and a hash does not fill a cache on its own.
 
-The node's `CacheStore` is the one the ingest holds. Two calls build a
-cache, both under the caller's hasher permit:
+One crate owns every cache in the daemon: `shekyl-hasher`, above this
+one ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). This crate
+derives a cache and hashes under one; it keeps none.
 
-- `Substrate::pin_seed` derives the seed when no slot holds it and
-  sticky-pins the result (`CacheStore::pin_canonical`). The window
-  install and the tip follower pin each seed the window names, the next
-  epoch's included, before its first block is needed. A transient lookup
-  does not evict the canonical slot. That pin is the Decision #6
-  mitigation (`RANDOMX_V2_PLAN.md`; `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7).
-- `Substrate::prepare_seed` builds a branch seed into the transient slot
-  (`CacheStore::lookup_or_derive`) and leaves the canonical slot where
-  it is.
+- A hash is a job on its seed (`Hasher::run`, `Hasher::lend`). The
+  hasher builds that seed's cache for the job when it is not warm, on
+  its one builder thread and under a permit, inside a cap of three.
+- The ingest ranks the seeds the node needs: the window's one or two,
+  and the seed of the most-work chain the window does not cover. A
+  window seed is named once its block is on the chain, 64 blocks before
+  its first use, and the hasher builds it then. That is the Decision #6
+  mitigation (`RANDOMX_V2_PLAN.md`; `RANDOMX_V2_PHASE2C_PLAN.md`
+  §5.11.7).
+- The miner and the RPC's `pow` borrow only a cache that is already
+  warm (`Hasher::lend_warm`) and build none.
 
-`Substrate::longhash` looks up. A seed no slot holds is
-`SubstrateFault::CacheAbsent` and derives nothing. Gated in
-`shekyl-chain-ingest` by `a_longhash_of_an_unpinned_seed_does_not_derive`,
-`pinning_a_seed_derives_once_and_counts_it_at_the_source`, and
-`the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block`.
-*Records-was:* those three replace
-`set_canonical_eagerly_derives_off_the_verify_path`, deleted with the
-export.
+A job's substrate hashes under the job's seed and no other: a longhash
+asked for another seed is `SubstrateFault::SeedNotLent` and builds
+nothing. Gated in `shekyl-chain-ingest` by
+`a_longhash_for_another_seed_faults_and_builds_nothing`,
+`a_ranked_seed_is_built_once`, and
+`the_follower_waits_for_the_new_epochs_seed_and_the_miner_mines_its_first_block`.
 
-`shekyl_pow_randomx_v2_hash` still derives lazily, in the FFI store (§5).
-That path is not the node's.
-
-One derivation per epoch, paid at the pin:
+One derivation per epoch, paid when the window first names the seed:
 
 - `SEEDHASH_EPOCH_BLOCKS = 2048`
 - `DIFFICULTY_TARGET_V2 = 120` seconds
@@ -676,12 +674,10 @@ behind `BUILD_RANDOMX_V2_MINER_LIB=ON` and is never linked into
 
 The irreducible state is narrow and owned by its semantic owner:
 
-- The ingest owns the node's `CacheStore`: the canonical pin and the
-  transient preparation (§6). `shekyl-ffi` owns a separate `CacheStore`
-  behind `shekyl_pow_randomx_v2_hash`, so the parity gates memoize
-  across C calls. The two stores do not alias.
-- The chain owns which seedhash a height verifies under. The ingest pins
-  the seeds its window names.
+- `shekyl-hasher` owns every RandomX cache the daemon holds (§6): at
+  most three, each lent to jobs and freed when nothing needs it.
+- The chain owns which seedhash a height verifies under. The ingest
+  ranks the seeds its window names, and the hasher keeps those warm.
 - `SEEDHASH_EPOCH_BLOCKS` and `SEEDHASH_EPOCH_LAG` are protocol constants
   in `shekyl-difficulty::seed_epoch`. The FFI schedule exports read the
   latched pair.

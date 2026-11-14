@@ -36,7 +36,6 @@ use shekyl_daemon_rpc::reads::{
     fee,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, StoreFacts, SyncFacts};
-use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::kinds::Height;
 use shekyl_rpc_types::wire::block::{
     BlockSelect, BlockShowSelect, HeaderRange, HeaderRangeSelect, HeaderSelect,
@@ -54,6 +53,7 @@ use crate::test_support::{open_store, open_store_under, tmp};
 
 mod below_horizon;
 mod reads;
+mod status;
 
 // ---------------------------------------------------------------------------
 // The inputs the store does not hold
@@ -173,40 +173,24 @@ fn identity() -> NodeIdentity {
     }
 }
 
-/// The store-backed facts over the store at `path`, under `rules`.
+/// The store-backed facts over the store at `path`, under `rules`. `pow`
+/// asks a hasher nothing ranks, so it is declined.
 pub(crate) fn facts_over(
     store: Arc<ChainStore>,
     path: impl AsRef<Path>,
     rules: ChainRules,
 ) -> StoreFacts {
     let path: &Path = path.as_ref();
-    facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
+    facts_with_hasher(store, path, rules, crate::test_support::unranked_hasher())
 }
 
-/// [`facts_over`], hashing `pow` under the caches `caches` holds —
-/// the store a test's production substrate derived into, or an empty one.
-pub(crate) fn facts_with_caches(
+/// [`facts_over`], with `pow` asking `hasher` for its warm loan: the hasher
+/// a test's production boundary forms under.
+pub(crate) fn facts_with_hasher(
     store: Arc<ChainStore>,
     path: &Path,
     rules: ChainRules,
-    caches: Arc<CacheStore>,
-) -> StoreFacts {
-    facts_with_budget(
-        store,
-        path,
-        rules,
-        caches,
-        shekyl_hash_budget::Budget::of_host(),
-    )
-}
-
-/// [`facts_with_caches`], hashing `pow` under permits from `budget`.
-pub(crate) fn facts_with_budget(
-    store: Arc<ChainStore>,
-    path: &Path,
-    rules: ChainRules,
-    caches: Arc<CacheStore>,
-    budget: shekyl_hash_budget::Budget,
+    hasher: shekyl_hasher::Hasher,
 ) -> StoreFacts {
     StoreFacts::new(
         store,
@@ -214,8 +198,7 @@ pub(crate) fn facts_with_budget(
         Arc::new(move |h| rules.in_force(h)),
         Arc::new(TestNode::synced()),
         identity(),
-        caches,
-        budget,
+        hasher,
     )
 }
 
@@ -234,9 +217,10 @@ pub(crate) fn hex(hash: BlockHash) -> HashHex {
 /// that is not this block's own is visible, which an all-zero hash hides.
 pub(crate) struct KeccakPow;
 
+impl crate::pow::Fixture for KeccakPow {}
+
 impl Substrate for KeccakPow {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<shekyl_types::Timestamp, Self::Fault> {
         crate::scenario::FreeHash.local_clock()
@@ -517,95 +501,6 @@ async fn the_fee_estimate_is_the_ladder_at_the_connecting_height() {
         assert_eq!(fees[0], floor, "the economy rung is the floor (FL-R6)");
         assert!(fees[0] <= fees[1] && fees[1] <= fees[2], "{fees:?}");
         drop(snap);
-        drop(facts);
-        drop(store);
-    })
-    .await;
-    s.close().await;
-}
-
-/// `daemon_status` over the store: the chain part from the snapshot and the
-/// rules' derivations, everything else from the node's inputs.
-#[tokio::test]
-async fn daemon_status_reads_the_chain_from_the_store_and_the_rest_from_the_node() {
-    let mut s = Scenario::open("rpc-store-facts-info");
-    let mined = s.mine(5).await;
-    let last = mined.last().expect("tip").clone();
-    // The wire's `tx_count` excludes coinbases: every listed body, and
-    // nothing else.
-    let listed: u64 = mined
-        .iter()
-        .map(|m| u64::try_from(m.template.transactions.len()).expect("fits"))
-        .sum();
-    s.reopen(|path| {
-        let store = Arc::new(open_store(path));
-        let facts = facts_over(Arc::clone(&store), path, RULES);
-        let info = daemon_status(
-            &facts,
-            &facts,
-            Disclosure::FULL,
-            0,
-            tor_read(Disclosure::FULL),
-        )
-        .unwrap_or_else(|_| panic!("daemon_status"));
-        assert_eq!(info.height.0, last.height.to_raw(), "the tip's height");
-        assert_eq!(info.hash, hex(last.hash));
-        assert!(info.synchronized);
-        assert!(!info.degraded);
-        assert_eq!(
-            info.tx_count.shown().expect("the chain part is shown").0,
-            listed,
-            "every listed body, coinbases excluded"
-        );
-        assert_eq!(
-            info.emission
-                .shown()
-                .expect("the chain part is shown")
-                .to_atomic_units(),
-            last.emission.coins_generated,
-            "the accumulator through the tip"
-        );
-        // The scenario's fixed difficulty is the next block's too.
-        assert_eq!(
-            info.difficulty.shown().expect("the chain part is shown").0,
-            1
-        );
-        assert_eq!(
-            info.block_weight_max
-                .shown()
-                .expect("the chain part is shown")
-                .0,
-            2 * info
-                .block_weight_median
-                .shown()
-                .expect("the chain part is shown")
-                .0,
-            "the limit is twice the effective median (CEN-G6b)"
-        );
-        assert_eq!(
-            info.txpool_count
-                .shown()
-                .expect("the pool part is shown")
-                .0
-                .map(|count| count.0),
-            Some(3),
-            "the pool's broadcast count is the node's"
-        );
-        assert_eq!(
-            info.alt_count.shown().map(|count| count.0),
-            Some(0),
-            "a full disclosure shows Status"
-        );
-        let restricted = daemon_status(
-            &facts,
-            &facts,
-            Disclosure::VIEW,
-            0,
-            tor_read(Disclosure::VIEW),
-        )
-        .unwrap_or_else(|_| panic!("daemon_status"));
-        assert!(restricted.alt_count.is_withheld(), "Status is withheld");
-        assert!(restricted.connector.is_withheld(), "Peers is withheld");
         drop(facts);
         drop(store);
     })
@@ -952,24 +847,4 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
          {coinbase_figure_wraps}"
     );
     assert!(differences.is_empty(), "{} differences", differences.len());
-}
-
-/// What the daemon's Tor supervisor answers `disclosure`, which a store
-/// test does not run: a Tor-off node's `hiding`, and its status only for a
-/// caller shown Status, as the handler asks it.
-fn tor_read(disclosure: Disclosure) -> shekyl_daemon_rpc::tor_facts::TorRead {
-    use shekyl_tor_status::{Clearnet, Origination, Posture, TorSetting, TorStatus};
-    shekyl_daemon_rpc::tor_facts::TorRead {
-        hiding: false,
-        status: disclosure.status().then(|| TorStatus {
-            posture: Posture {
-                tor: TorSetting::Off,
-                clearnet: Clearnet::On,
-            },
-            origination: Origination::ClearnetOnly,
-            sync_connector: vec![],
-            tor_quiet: None,
-            tor: None,
-        }),
-    }
 }

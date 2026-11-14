@@ -59,11 +59,23 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
 /// version read reports the daemon newer.
 ///
-/// 4.4: enrolment over the channel (RT-W10 step 4; `INPUT_GRAMMAR.md`
+/// 4.4: `daemon_status` reports the hasher's RandomX cache places
+/// (`RANDOMX_CACHE_ACTOR.md` §5.6). `randomx_cache_places` joins the part
+/// shown to `status`, beside `data_size`: the places the node's one hasher
+/// has in use when the call is made, at most three. It is the quantity
+/// HA-R2 caps, an upper bound on the RandomX cache memory, never a reading
+/// of it: a place reserved for a build counts, and so does a derive still
+/// filling its pages, and a cache whose 256 MiB is still being returned. A
+/// caller without
+/// the grant finds the part absent (RK-D23). A 4.3 reader of a 4.4 Status
+/// part refuses the field it does not know after the version read reports
+/// the daemon newer.
+///
+/// 4.5: enrolment over the channel (RT-W10 step 4; `INPUT_GRAMMAR.md`
 /// IG-Q87). Five methods under `enrol`: `rpc_client_add`, `rpc_client_set`,
 /// `rpc_client_remove`, `rpc_client_list` and `rpc_bundle_show`. A ceiling
 /// is named by grant and preset keywords and listed as its expanded grants.
-pub const CORE_RPC_VERSION_MINOR: u32 = 4;
+pub const CORE_RPC_VERSION_MINOR: u32 = 5;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -77,15 +89,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 4)` is `(4 << 16) | 4` = 262148. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 5)` is `(4 << 16) | 5` = 262149. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_148);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 4);
+        assert_eq!(CORE_RPC_VERSION, 262_149);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 5);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 4);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.4");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 5);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.5");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }
