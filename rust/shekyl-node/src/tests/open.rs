@@ -161,20 +161,40 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     use std::time::{Duration, Instant};
 
     use shekyl_daemon_rpc::chain_facts::ChainFacts;
-    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowAdmission, PowSeed};
+    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowAnswer, PowSeed};
     use shekyl_hash_budget::Class;
 
-    /// The hash thread has not reached `acquire`.
+    /// The hash thread has not reached its permit wait.
     const ENTER_BOUND: Duration = Duration::from_secs(5);
+    /// The tip's seed was never built. One derive is about two seconds on
+    /// the floor device.
+    const WARM_BOUND: Duration = Duration::from_secs(120);
     /// The chain read shared the permit wait. The permits are still held.
     const READ_BOUND: Duration = Duration::from_secs(2);
 
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let budget = node.budget();
-    // Every free permit. `hash_admitted` then waits in `acquire` instead
-    // of hashing, which is the wait a chain read must not share. The
-    // admission is the lookup and takes no permit.
+    // The seed block 1 hashes under: block 0's id, which the list names
+    // once genesis has connected. `pow` hashes only on a warm loan, so
+    // wait for the hasher to have built it.
+    let seed = PowSeed::AtHeight(shekyl_types::BlockHeight::from_raw(1));
+    let warming = Instant::now();
+    loop {
+        match ChainReadFacts::pow(&*node.handles().chain, seed, &[], &mut || true) {
+            Ok(PowAnswer::Hashed(_)) => break,
+            Ok(PowAnswer::Declined(_)) => {}
+            other => panic!("pow at open: {other:?}"),
+        }
+        assert!(
+            warming.elapsed() < WARM_BOUND,
+            "the tip's seed was never warm"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Every free permit. `pow` then waits for one inside its loan instead
+    // of hashing, which is the wait a chain read must not share. The loan
+    // itself takes no permit.
     let held: Vec<_> = (0..budget.permits())
         .map_while(|_| budget.try_acquire(Class::Chain))
         .collect();
@@ -184,17 +204,13 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);
-        let admitted = match ChainReadFacts::admit_pow(&*chain, PowSeed::Given(BlockHash::NULL)) {
-            Ok(PowAdmission::Admitted(admitted)) => admitted,
-            other => panic!("the null seed is held at open: {other:?}"),
-        };
-        std::thread::spawn(move || ChainReadFacts::hash_admitted(&*chain, &[], &admitted))
+        std::thread::spawn(move || ChainReadFacts::pow(&*chain, seed, &[], &mut || true))
     };
     let entered = Instant::now();
     while budget.waiting(Class::CalcPow) == 0 {
         if hashing.is_finished() {
             let finished = hashing.join().expect("pow thread");
-            panic!("hash_admitted finished without waiting for a permit: {finished:?}");
+            panic!("pow finished without waiting for a permit: {finished:?}");
         }
         assert!(
             entered.elapsed() < ENTER_BOUND,
@@ -217,7 +233,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     drop(held);
     let hashed = hashing.join().expect("pow thread");
     assert!(
-        hashed.is_ok(),
+        matches!(hashed, Ok(PowAnswer::Hashed(_))),
         "the hash finishes once a permit is free: {hashed:?}"
     );
     reading.join().expect("the chain read");

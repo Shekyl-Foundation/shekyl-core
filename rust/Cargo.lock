@@ -4743,6 +4743,7 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-genesis-tool",
  "shekyl-hash-budget",
+ "shekyl-hasher",
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-onion-v3",
