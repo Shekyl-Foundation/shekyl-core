@@ -808,6 +808,63 @@ fn a_service_is_given_no_socket_directory() {
     assert_eq!(c.rpc.socket_dir, Some(PathBuf::from("/run/shekyl")));
 }
 
+/// The channel's listeners are any address, a wildcard included (RT-14),
+/// and `none` by default (no channel port is ruled).
+#[test]
+fn the_channel_listens_where_it_is_told_and_nowhere_by_default() {
+    assert!(build_from(&[], "").unwrap().rpc.channel_listen.is_empty());
+    let c = build_from(&["--rpc-listen", "0.0.0.0:28100"], "").unwrap();
+    assert_eq!(
+        c.rpc.channel_listen,
+        vec!["0.0.0.0:28100".parse::<std::net::SocketAddr>().unwrap()]
+    );
+}
+
+/// Only a service has a console key, so its reset is refused in any other
+/// run mode (IG-Q88). Red edit: drop the run-mode rule in
+/// `session_section`, and the run-as-user reset builds.
+#[cfg(not(windows))]
+#[test]
+fn the_console_key_reset_is_a_services() {
+    assert_eq!(
+        codes(build_from(&["--rpc-console-key-reset"], "")),
+        vec![(Code::ValueRequires, "rpc-console-key-reset".into())]
+    );
+    let c = build_from(
+        &[
+            "--service",
+            "--rpc-console-key-reset",
+            "--data-dir",
+            "/var/lib/shekyl",
+            "--log-file",
+            "/var/log/shekyl/shekyld.log",
+        ],
+        "",
+    )
+    .unwrap();
+    assert!(c.session.console_key_reset);
+}
+
+/// On Windows the owner's rendezvous directory is fixed, so a socket
+/// directory is refused with its own code (Rick, 2026-11-14).
+#[cfg(windows)]
+#[test]
+fn a_socket_directory_is_refused_on_windows() {
+    let d = codes(build_from(
+        &[
+            "--rpc-socket-dir",
+            &abs("/srv/s"),
+            "--data-dir",
+            &abs("/srv/chain"),
+        ],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
+    ));
+    assert!(
+        d.contains(&(Code::SocketDirPlatform, "rpc-socket-dir".into())),
+        "{d:?}"
+    );
+}
+
 /// On Windows `service` also answers the service manager, whose dispatcher
 /// is RT-W14's, so the switch is refused there as the reserved row was.
 #[cfg(windows)]

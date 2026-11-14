@@ -62,10 +62,11 @@ impl OwnerSocketPlan {
 ///
 /// On Unix the leg is a socket in the session directory or `rpc-socket-dir`.
 /// On Windows it is a pipe named in a rendezvous file in
-/// `%LOCALAPPDATA%\Shekyl\rendezvous`, or in the directory `rpc-socket-dir`
-/// names on a test host; a directory that already exists must pass the
-/// rendezvous directory's check (its owner, its protections, its no-read-up
-/// label), and one that does not is created by the start.
+/// `%LOCALAPPDATA%\Shekyl\rendezvous`, the only place it goes:
+/// `rpc-socket-dir` is refused there (Rick, 2026-11-14). A directory that
+/// already exists must pass the rendezvous directory's check (its owner, its
+/// protections, its no-read-up label), and one that does not is created by
+/// the start.
 ///
 /// `named_source` is where `rpc-socket-dir` came from, for the refusal.
 ///

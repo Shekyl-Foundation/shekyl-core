@@ -101,6 +101,15 @@ impl<'a> Reader<'a> {
         );
     }
 
+    /// The row is not available on this platform (`config.socket-dir.platform`).
+    pub(super) fn platform_refusal(&mut self, name: &str, reason: &str) {
+        self.faults.push(
+            Diagnostic::new(Code::SocketDirPlatform, self.source(name))
+                .option(name)
+                .param("reason", reason),
+        );
+    }
+
     pub(super) fn requires(&mut self, name: &str, requires: &str) {
         self.faults.push(
             Diagnostic::new(Code::ValueRequires, self.source(name))

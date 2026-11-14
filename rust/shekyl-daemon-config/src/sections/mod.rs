@@ -173,8 +173,10 @@ pub struct Rpc {
     /// default instance, or one the operator named.
     pub instance: shekyl_rpc_channel::Instance,
     /// The operator-named directory for the owner's socket, for an account
-    /// with no session directory. Never set in service mode.
+    /// with no session directory. Never set in service mode, nor on Windows.
     pub socket_dir: Option<PathBuf>,
+    /// The channel's listeners (RT-W10 step 4); empty is none.
+    pub channel_listen: Vec<SocketAddr>,
 }
 
 /// The logging owner's section.
@@ -302,6 +304,9 @@ pub struct Dev {
 pub struct Session {
     /// Check the configuration as a start would and exit without starting.
     pub verify: bool,
+    /// Replace the service's console key and exit (`INPUT_GRAMMAR.md`
+    /// IG-Q88).
+    pub console_key_reset: bool,
 }
 
 /// The whole configuration, by section.
@@ -399,7 +404,7 @@ pub fn build(
     let rpc = rpc_section(&mut r, run_mode);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
-    let session = session_section(&mut r);
+    let session = session_section(&mut r, run_mode);
     let notify = notify_section(&mut r);
 
     faults.append(&mut r.faults);
@@ -424,6 +429,7 @@ pub fn build(
                 .expect("rpc-connections-max was read or a fault was recorded"),
             instance: rpc.instance,
             socket_dir: rpc.socket_dir,
+            channel_listen: rpc.channel_listen,
         },
         notify,
         mine,
@@ -580,6 +586,7 @@ struct RpcRead {
     connections_max: Option<NonZeroU32>,
     instance: shekyl_rpc_channel::Instance,
     socket_dir: Option<PathBuf>,
+    channel_listen: Vec<SocketAddr>,
 }
 
 /// The RPC rows, and the two rules between them and the run mode
@@ -605,6 +612,12 @@ fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
         Read::Absent | Read::Unreadable => shekyl_rpc_channel::Instance::Default,
     };
     let socket_dir = r.optional_path("rpc-socket-dir").present();
+    if socket_dir.is_some() && cfg!(windows) {
+        r.platform_refusal(
+            "rpc-socket-dir",
+            "on Windows the owner's rendezvous directory is fixed, %LOCALAPPDATA%\\Shekyl\\rendezvous (RPC_CHANNEL.md §7.1)",
+        );
+    }
     if socket_dir.is_some() && run_mode == RunMode::Service {
         r.conflict(
             "rpc-socket-dir",
@@ -617,7 +630,8 @@ fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
         cors_origins: r.origin_list("rpc-cors-origin"),
         connections_max: r.required_count("rpc-connections-max"),
         instance,
-        socket_dir,
+        socket_dir: if cfg!(windows) { None } else { socket_dir },
+        channel_listen: r.endpoint_list("rpc-listen", true),
     }
 }
 
@@ -709,9 +723,20 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
     }
 }
 
-fn session_section(r: &mut Reader<'_>) -> Session {
+/// The session rows, and the console key's reset's rule (IG-Q88): only a
+/// service has a console key, so the reset is refused in any other run
+/// mode.
+fn session_section(r: &mut Reader<'_>, run_mode: RunMode) -> Session {
+    let console_key_reset = r.switch("rpc-console-key-reset");
+    if console_key_reset && run_mode != RunMode::Service {
+        r.requires(
+            "rpc-console-key-reset",
+            "`service`: only the machine's service instance has a console key",
+        );
+    }
     Session {
         verify: r.switch("config-verify"),
+        console_key_reset,
     }
 }
 

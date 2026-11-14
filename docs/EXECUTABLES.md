@@ -52,6 +52,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 |--------|------|---------|-------|---------|-------------|
 | `help` | switch | — | command line | no | Print the options and exit. |
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `rpc-console-key-reset` | switch | — | command line | no | Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrolment. Service mode only; refused while the daemon runs. |
 | `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
 | `service` | switch | — | command line | no | Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14). |
@@ -88,6 +89,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
 | `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener. |
 | `rpc-socket-dir` | absolute path | — | both | no | The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
 | `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |

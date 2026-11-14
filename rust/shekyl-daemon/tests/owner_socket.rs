@@ -14,10 +14,11 @@
 //! start while the first answers.
 //!
 //! Each test re-executes this binary as the daemon child, which runs
-//! `shekyl_daemon::run::main` with a private `--rpc-socket-dir`, as every
-//! harness does. On Windows that directory does not exist yet: the daemon
-//! creates it with its owner, protections and label, and refuses one that
-//! lacks them.
+//! `shekyl_daemon::run::main`. On Unix it names a private
+//! `--rpc-socket-dir`, as every harness does. Windows refuses that row (its
+//! rendezvous directory is fixed), so there the child's account root is the
+//! test's own directory and the rendezvous goes in `Shekyl\rendezvous` under
+//! it, which the daemon creates with its owner, protections and label.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -49,8 +50,8 @@ fn run_child_if_requested() {
     let dir = PathBuf::from(dir);
     let data_dir = dir.join(data);
     let log_file = data_dir.join("shekyld.log");
-    let socket_dir = dir.join("s");
-    let args: Vec<std::ffi::OsString> = [
+    let socket_dir = rendezvous_dir(&dir);
+    let mut args: Vec<&str> = vec![
         "shekyld",
         "--network",
         "regtest",
@@ -60,16 +61,21 @@ fn run_child_if_requested() {
         "off",
         "--rpc-admin-listen",
         "none",
-        "--rpc-socket-dir",
-        socket_dir.to_str().expect("a UTF-8 path"),
         "--data-dir",
         data_dir.to_str().expect("a UTF-8 path"),
         "--log-file",
         log_file.to_str().expect("a UTF-8 path"),
-    ]
-    .iter()
-    .map(std::ffi::OsString::from)
-    .collect();
+    ];
+    // Unix: a private socket directory, as every harness names. Windows
+    // refuses one (its rendezvous directory is fixed); this run's account
+    // root is the test's own directory, so the rendezvous is under it.
+    if cfg!(unix) {
+        args.extend([
+            "--rpc-socket-dir",
+            socket_dir.to_str().expect("a UTF-8 path"),
+        ]);
+    }
+    let args: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
     let status = shekyl_daemon::run::main(
         &args,
         &Platform {
@@ -80,6 +86,17 @@ fn run_child_if_requested() {
         },
     );
     std::process::exit(status);
+}
+
+/// Where the child's rendezvous goes: on Unix the private socket directory
+/// the harness names, on Windows `Shekyl\rendezvous` under the account root
+/// the child is given, the test's directory (`RPC_CHANNEL.md` §7.1).
+fn rendezvous_dir(dir: &Path) -> PathBuf {
+    if cfg!(unix) {
+        dir.join("s")
+    } else {
+        dir.join("Shekyl").join("rendezvous")
+    }
 }
 
 /// A daemon child and its directory.
@@ -159,7 +176,7 @@ impl Node {
     /// published: `shekyl-<24 hex>`, with `.sock` on Unix.
     fn socket(&self) -> Option<PathBuf> {
         let suffix = if cfg!(unix) { ".sock" } else { "" };
-        std::fs::read_dir(self.dir.join("s"))
+        std::fs::read_dir(rendezvous_dir(&self.dir))
             .ok()?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
