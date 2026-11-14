@@ -60,8 +60,10 @@ rand = "0.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 gungraun = "0.19"
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
-# test-utils for the transfer_e2e bench keypair (F-7)
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# The transfer_e2e benches: `test-utils` for the ephemeral keypair, and
+# `seeded-rng` for `sign_with_ml_dsa_seed`, whose fixed nonce keeps the
+# instruction count stable. Both TEST_ONLY; dev edge only.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils", "seeded-rng"] }
 rand_core = { version = "0.6", features = ["std"] }
 
 [[bench]]

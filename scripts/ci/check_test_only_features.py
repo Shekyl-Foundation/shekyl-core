@@ -117,12 +117,14 @@ DEFERRED_DOCS / bijection-allowlist shape that records each crate's **exact
 hit set** (feature, consumer, edge kind). A new feature or a new enabler on a
 listed crate is red (an owner-keyed exemption would have covered it
 silently); a recorded hit that vanished is red until deleted; a crate that
-has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
+has joined `GOVERNED_OWNERS` may not also be listed. Two of the entries are
 findings rather than chores — a feature whose name says test-only, enabled
-on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
-the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled on a normal edge only through
-`shekyl-p-serve`'s forwarding `test-signer` feature, is **FOLLOWUPS F-7**'s.
+on a **normal** edge — and are hygiene (move the edge, or rule PERMANENT with
+the reason) under the governance FOLLOWUPS row. A third,
+`shekyl-crypto-pq/test-utils` reaching a normal edge through
+`shekyl-p-serve`'s forwarding `test-signer`, left the list with `CF-1b`
+(CHAIN_FORGE.md): the forward was never needed and is gone, and the crate is
+governed, its `test-utils` and `seeded-rng` TEST_ONLY rows.
 
 # The production-shape lint lane lives next door
 
@@ -285,6 +287,24 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "from shekyl-relay's dev edge, which pins the origin publication "
     "budget to the recovery cycle count, and from this crate's own dev "
     "edge for its instruments. A shipped relay does not grade",
+    (
+        "shekyl-crypto-pq",
+        "test-utils",
+    ): "exposes test-support helpers that take no seed: an ephemeral, non-derived "
+    "hybrid keypair (generate_ephemeral_keypair_for_tests), an FN-DSA key made "
+    "undecodable in place (corrupt_fn_dsa_half_for_tests) and the persona's "
+    "onion-seed derivation (derive_p_hs_id_seed). A non-derived key must never "
+    "reach a wallet. Enabled from dev edges only; shekyl-p-serve's test-signer "
+    "no longer forwards it (it never needed it: F-7, CHAIN_FORGE.md CF-1b)",
+    (
+        "shekyl-crypto-pq",
+        "seeded-rng",
+    ): "exposes deterministic signing: sign_with_ml_dsa_seed, "
+    "sign_pqc_auth_for_output_with_ml_dsa_seed and both FN-DSA sign_with_rng_seed, "
+    "which sign with a caller's seed in place of the OS's. For KATs, "
+    "instruction-count benches and the chain forge's byte-identical chains "
+    "(CHAIN_FORGE.md §5.3, seam T3); no build that ships has these symbols, so "
+    "no production signer can be handed a seed (CF-R9)",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -468,6 +488,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-network",
         "randomx-v2-sys",
         "shekyl-fcmp",
+        "shekyl-crypto-pq",
     }
 )
 
@@ -480,34 +501,14 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 # and a vanished hit is red until deleted. Shrink-only: a crate leaves this
 # list by joining GOVERNED_OWNERS
 # with its features categorized (FOLLOWUPS "Thirteen crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the fourteenth entry,
-# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
+# governance trigger ungoverned", Target: pre-genesis; shekyl-crypto-pq left
+# with CF-1b, governed). Entries marked FINDING enable
 # a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first. Forwarding raised the count from twelve to fifteen
 # (shekyl-curve-io, shekyl-curve-primitives, shekyl-fcmp are reached only by
 # forwarded `std` / `multisig` features) and added the two forwarded
 # normal-edge test paths named in the FINDING notes.
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
-    "shekyl-crypto-pq": (
-        "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-p-serve on a NORMAL edge by forwarding (its test-signer feature, "
-        "itself a FINDING in shekyl-p-serve's entry). Leaves this list when F-7 lands. "
-        "The shekyl-verify-cost dev edge (2026-11-09, BA-T1) is the pool-admission drift "
-        "gate calling sign_pqc_auth_for_output_with_ml_dsa_seed, the wallet signer's "
-        "assembly with a seeded ML-DSA nonce — the same shape as shekyl-tx-builder's "
-        "transfer_e2e_iai. The shekyl-chain-store dev edge (2026-11-11, SO-D12 #1327) "
-        "is the shard-fill capture writer's regeneration guard, "
-        "test_support::regen_decision_or_refuse — the guard every pinned vector's "
-        "rewrite goes through, as in shekyl-archival-retention's gate-4 KAT.",
-        frozenset({
-            ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-chain-store", "dev"),
-            ("test-utils", "shekyl-p-fetch", "dev"),
-            ("test-utils", "shekyl-p-serve", "normal"),
-            ("test-utils", "shekyl-tx-builder", "dev"),
-            ("test-utils", "shekyl-verify-cost", "dev"),
-        }),
-    ),
     "shekyl-curve-generators": (
         "categorization only. The two normal-edge `std` hits are the build-edge "
         "forwards of shekyl-bulletproofs' and shekyl-fcmp-proofs' own `std`, seen "
