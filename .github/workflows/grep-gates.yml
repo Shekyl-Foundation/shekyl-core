@@ -260,6 +260,12 @@ jobs:
           # production code is red unless its site is listed with its group
           # (G0..G3). The selftest runs now; the live check joins once the
           # test-support crates' sites are ruled (CF-1b).
+          # CHAIN_FORGE.md §11.1 item 2: no shipped binary's resolved graph
+          # activates a harness or forge crate or turns a TEST_ONLY feature on.
+          run_one "No harness crate or test-only feature in a shipped graph (selftest)" \
+            python3 scripts/ci/check_production_graph.py --selftest
+          run_one "No harness crate or test-only feature in a shipped graph" \
+            python3 scripts/ci/check_production_graph.py
           run_one "No unlisted seedable generator in production code (selftest)" \
             python3 scripts/ci/check_seedable_rng.py --selftest
           run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
