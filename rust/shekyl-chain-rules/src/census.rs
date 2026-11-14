@@ -386,8 +386,8 @@ census_rows! {
         // no `Block` exists that the parser refused, so no rule sees one.
         // The path is the type — `use` cannot name an associated function.
         // A7's *value* is arm C: the wire refuses above `READ_LEN_CAP`
-        // (10^6), tighter than the census's 2^28, and the two bounds are
-        // one field's two undocumented values (FOLLOWUPS, CEN-A7's row).
+        // (10^6), tighter than the census's 2^28, and has no derivation
+        // (FOLLOWUPS, CEN-A7's row).
         A6 by_construction(shekyl_wire::Block, "a6_a_block_blob_the_wire_cannot_parse_is_refused"),
         A7 by_construction(shekyl_wire::Block, "a7_a_transaction_hash_count_above_the_bound_is_refused_before_any_hash_is_read"),
         // 4.B Block header: version, attestation, curve-tree root

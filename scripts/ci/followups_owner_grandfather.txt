@@ -5,19 +5,16 @@
 # lands a row written before this gate existed.
 Thirteen crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
-CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).
-`PDM` propagation sweep — DISCHARGED 2026-09-19, four PRs in the ruled order, one per document: `docs/pdm-sweep-psl` (PRINCIPAL_STAKE_LIFECYCLE → LIVING CONTRACT), `docs/pdm-sweep-acm` (ARCHIVAL_CHALLENGE_MECHANISM on the tx unit), `docs/pdm-sweep-v3sa` (V3_STAKER_ARCHIVAL contracted, 1,546 → 1,000 lines), `docs/pdm-sweep-ctc` (CURVE_TREE_CLIENT §7 resolved in two halves); PRs #795, #796, #797, #798 in that order (#798 merges last; it carries this line). Each carries `PDM-Q6` / `PDM-Q12` in its current-tense body, not as an appended banner; `grep -c PDM` at the closing pin: PSL 9, ACM 24, V3SA 25, CTC 21. The row's original text follows as the record of what was found.
+CEN-A7's per-block transaction-count bound is `10^6` (`shekyl_wire::READ_LEN_CAP`), a parser length cap with no derivation.
 `PRINCIPAL_STAKE_LIFECYCLE.md` §4a PR-row table: the dated UPDATE / Corrected chains accrete instead of resolving; PR-P4's row is the extreme case.
 The leaf-era archival data-scope schema (sets A/B/C, "B + C") survives outside its owner after `PDM-Q6` re-keyed `V3_STAKER_ARCHIVAL.md` §*Archival data scope* and its two declared consumers (`PUBLIC_NARRATIVE_FAQ.md`, `FOUNDATION_ARCHIVAL_DISCLOSURE.md`; #797).
 `CEN-L8`'s settlement clause has no production caller; census home is already the slash pass.
-Connect-path regression for the hash-gated FCMP++ proof-skip (`CEN-M8` fix wiring).
 `release_readiness` query (frozen §2 surface) deferred — blocker: persona addressing.
 `LmdbHashKey::from_bytes` / `Key::compare` still `expect` on redb's fixed-width promise.
 Collected-total earmark warning (§12.3 carve UX, ruled 2026-09-04 with the carve countersign).
 §12.3 carve UNMEASURED bound — rule-21 measurement obligation with a named expected resolution.
 Release-asset manifest signing owed before the first non-RC release tag (added 2026-08-14, SA-6 CBOM close; CORRECTED 2026-08-15 — a wiring task, not an open decision).
 GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)
-FFI *signature* drift has no remedy, unlike FFI *constant* drift [`audit_trail/2026-05-ffi-constant-drift-audit.md`](./audit_trail/2026-05-ffi-constant-drift-audit.md)
 TJ-1 (was CRITICAL) — leaf-index beacon MITIGATED 2026-08-24 (`PC-D3`); still closes by TJ-B deleting the vin-carried opening.
 TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item is discharged, one dependent fix remains.
 TJ-3/TJ-4 (HIGH, `(m, n)` re-pin inputs)
@@ -40,13 +37,9 @@ Workspace-wide `deny_unknown_fields` on the remaining wallet-RPC params structs 
 Wallet thin-market entry disclosure — the §13.2 re-disposition's build item.
 Solo address registry: decide (a registration tx type is genesis-only)
 Release verify: record-floor belt (the `ReinstateRecordFloorBroken` twin)
-RPC transport posture — RULED 2026-08-21; RT-W1 landed; RT-W2/W5/W7 authorized
 Daemon Axum: onion-as-remote-RPC docs + operator story
-Daemon Axum: connection caps + live `rpc_connections_count`
 Rust wallet stack: no Windows support (blocks Windows wallet [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)
-Phase 4b: `rescan_blockchain` needs an Engine rescan API
 Phase 4c: no way to abandon an unconfirmed submitted transaction, so a never-mined tx can wedge `rescan`
-Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing history surface lands.
 Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 reopen gated on anonymized segment fetch.
 GF4b-2 genesis gate — bond-post funding-input-count leak; `stake_in` single-structured-output funding must land before genesis.
 Block-height representation unification at the WI-2 anchoring seam
@@ -58,13 +51,9 @@ Corpus-freeze guards: align `address_derivation_freeze` error message [`rust/she
 Block-height-only `unlock_time`: native `Timelock`, a pruned-safe context-free ingestion validator, and daemon-side enforcement (flagged 2026-06-23, `feat/scan-refresh-wire-migration`).
 Repo-wide `RingCT`/`rct`/`RCT` → `CT` semantic sweep — a Shekyl tx is simply a confidential transaction (flagged 2026-06-22).
 Store-backed / pruned-tree path assembly (CT-3 pre-flight F5, [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)
-C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
 `get_curve_tree_leaves` daemon endpoint + KAT (CT-3 R1-Q1 deferral [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)
 Rollback-adjacent frozen-`R_k` recheck on plain resume (CT-3c C1 disposition, 2026-06-12).
 Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral, 2026-06-12).
-Refresh-over-spend reorg: optimistic-spend `spent_height` invariant + orphaned-spend un-mark (Track-2-surfaced + FIXED 2026-06-27).
-`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition — DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim implementation landed #252; F40 conformance LANDED 2026-07-05 (#254); targeted re-scan executor + F40-R2 breaker LANDED 2026-07-05 (`feat/submit-lifecycle-driver`) — RESOLVED.
-Submit-error reservation-id placeholder: split submitter error from orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED 2026-07-04 (2c pre-wiring).
 F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four implementation obligations open, and a hard ordering constraint.
 CT-2 Tier B reconstruct-root KATs (staked / non-coinbase maturity [`docs/completed/CT2_ROUND1_CLOSEOUT.md`](./completed/CT2_ROUND1_CLOSEOUT.md)
 CT-5 real-tree FCMP++ verify — deeper-tree + pin validation (depth-2 case [`docs/completed/DEPTH3_CURVE_TREE_CUTOVER.md`](completed/DEPTH3_CURVE_TREE_CUTOVER.md)
@@ -77,7 +66,6 @@ CT-5d: retire the vestigial `SnapshotId` / `SnapshotInvalidated` submit path, tr
 Full-segment freeze + prune-retention KAT at production `j=2` leaf count [`docs/completed/CT1_ROUND1_CLOSEOUT.md`](./completed/CT1_ROUND1_CLOSEOUT.md)
 Wallet-local `O.x → position` match index (`CurveTreeClient` §4.3 scan [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)
 Anonymized (Tor/I2P) routing for non-forward segment fetch (CT Round 0 [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)
-Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11 single-image amendment).
 Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).
 Foundation treasury diversification — floor capacity must not be pro-cyclical (swan-2/W4, 2026-06-11; re-scoped swan-3/W12–W13; re-anchored swan-4).
 Re-derive genesis-sealed redundancy params against the integer backend (+1 deep-tail margin) before seal (tail-margin finding, 2026-06-13).
@@ -95,15 +83,11 @@ Refresh bandwidth tradeoff under α — round-trip-bound block [`docs/design/STA
 F11-S Windows-midrange-PC measurement revisit at stressnet [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 Stage 1 PR 3 engine-property test re-location (trigger: the unified `KeyEngine` / `LedgerEngine` / `DaemonEngine` `pub(crate) → pub` visibility-promotion bundle per `STAGE_1_PR_3_KEY_ENGINE.md` §7.7; pre-RC1).
 `RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`.
-Full migration of remaining `SHEKYL_*` FFI constants to the JSON-authority pattern (target: post-stressnet, pre-audit-final).
-`wallet_storage`: cover loaded-wallet save-as branches in `wallet2::store_to`.
-Stage 1 performance baseline measurement before Stage 1 PRs land.
-`kameo` dependency pin and MSRV alignment before Stage 2 cuts.
+The `KeyEngine` and `EconomicsEngine` bench pairs have no captured baseline: the capture script lists none of the three.
 Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression when the Rust extractor gains `cfg(test)` awareness.
 Stage 2 — `KeyEngine` migration to actor.
 Subaddress mechanism under PQC — dedicated design round (2026-05-31, [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)
 FA-6 — PQ-safe view-tag pre-filter (T6 closure, genesis).
-Phase 2a send path — engine substrate (closed 2026-06).
 Phase 2b planning session — stake state-machine shape (gate for [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)
 Stage 3 — `StakeEngine` native actor build.
 Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units` single source (spawned 2026-06-05 by the `AtomicUnits` interim PR).
@@ -147,22 +131,18 @@ Non-`Clone` ban on `TransferDetails` — post-M3d structural [`docs/completed/ST
 `derive_output_handle` Python reference script.
 `Engine::ledger()` accessor cleanup.
 PQC Multisig : Rust engine integration design (carrier).
-PQC Multisig wire: MSW-1…MSW-8 (pre-genesis, priority 1).
 Term hygiene: "rotation" is a §11.8 defect on a noun — rename to "activation" (read-per-site, NOT grep-and-replace).
 PQC Multisig: MSW-6 landing residue.
 PQC Multisig : external adversarial review (Phase 5).
 Threshold signatures: one missing primitive, two named customers (ruled 2026-09-03).
 PQC Multisig : cryptographer review (Phase 6).
 PQC Multisig : headless co-signer service.
-PQC Multisig : wire `shekyl_pqc_verify_with_group_id` into [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)
 Resolution: FCMP++ historical-reference cutover via Stage 5 `ArchivalEngine`.
 Audit FCMP++ integration for paired computations.
-Regression test: `compute_leaf_count_at_height` vs LMDB drain.
 Expose FCMP++ verification cache stats via daemon RPC (stressnet F14).
 Rust replacements for chaingen-deleted validation invariants.
 Coordinated `TestLedgerBuilder` test-infrastructure substrate [`LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
 Define formal escalation policy for `shekyl-oxide` divergence [`docs/CI_BASELINE.md`](./CI_BASELINE.md)
-Migrate C++ `transfer_details` consumers to [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
 `WALLET_REWRITE_PLAN.md` systemic broken relative-link sweep.
 Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned by the gungraun 0.19 migration, 2026-06-16; cause closed 2026-08-14).
 rand 0.9 migration and curve25519-dalek 5 cascade.
@@ -175,7 +155,6 @@ Relay: a carrier verdict of `sent` means the transport ACCEPTED the bytes, not t
 §56.5 ruled the cadence memoryless; the shipped law is still bounded uniform, and nothing tracked it.
 Relay: the `t_core` arrival harness — the witness this path has never had.
 Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after origination.
-Wallet: stop holding a relay constant — ask the daemon whether a transaction is still in flight.
 Relay: the zone-route decision family moves to Rust
 Relay: re-derive `fluff_return_ms` once, when a degree distribution exists.
 Relay: the `F'` region and §15's launch condition are one condition, and neither section says so.
@@ -184,7 +163,6 @@ Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` fixed, an
 Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
 Relay: populate the 48-cell Pi verification surface, then consume it per shape.
 The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.
-Re-derive `drop_connections(address)`'s host-keyed severing together with the anonymity-zone inbound bound.
 Carry an anonymity-zone peer's endpoint in the handshake, and delete the `unknown()` sentinel with it.
 Sweep the tree for comparison tests built only from separately-constructed operands, adding an alias limb where one is missing.
 Extend PWD-B1's bucket to *every* dispatch — invoke and notify — and derive its four parameters.
@@ -195,24 +173,16 @@ Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.
 Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](completed/RULE_20_RUST_VS_CPP.md)
 FCMP++ sender-side output verification — inherited `wallet2::sanity_check` [`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc)
 Hardening-pass commit 8 follow-up: WalletPrefs round-trip property test (`2k.a2` deferred test).
-`tx_pool` / `blockchain_db` LMDB transactional wrapper — typed commit-or-abort.
 `shekyld` `fee_policy_version` daemon-side exposure.
 `ActivityMetric` producer actor (wallet-side coherent bundle).
 Daemon atomic activity snapshot RPC (conditional on RPC upstream).
-Workspace clippy `-D warnings` cleanup.
 RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.
-A UDS listener for the daemon RPC (posture 1 on the daemon)
 The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.
-Legacy spend-graph analysis utilities (`ancestry`/`depth`/`usage`): audit against FCMP++, then delete
 `atomic_write_file` power-loss crash-injection tests.
 Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).
 `WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).
-C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names (folded into Phase 4b's Shekyl-native RPC method-set work).
 Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).
 Restore semantic thread labels in the Rust subscriber ().
-Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().
-`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped.
-Re-examine the `/FIiso646.h` deferral.
 MSVC / Windows build-debt cluster (migrated from `STRUCTURAL_TODO.md`, 2026-05-30).
 P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5: "carry from X" is a re-walk trigger, not an exemption).
 `P`-lane fee uniformity — implementation rider (ratified 2026-07-19, `V3_WALLET_DECISION_LOG.md` "P-lane fees"; rides the `Unbond` wallet constructor, the SP-R0 arm-#2 production-discharge family).
