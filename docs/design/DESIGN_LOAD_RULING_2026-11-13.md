@@ -1,7 +1,7 @@
 # Design load vs. block weight — ruling and econ-sim question, 2026-11-13
 
-**Status:** RULED 2026-11-13 (Rick) for items 1–5 of the ruling; the questions for the economics simulation are OPEN, owned by that lane. The chain forge records items 1–4 as `CHAIN_FORGE.md` `CF-R19` and `CF-R21`.
-
+**Status:** Design
+**Revision 1, 2026-11-13.**
 Raised by the CI lane's D2 (#1365, block-template row). Applies to the CI lane, the chain forge lane (Chain P) and the economics sim lane.
 
 ## The facts (dev, `config/consensus_constants.json`)

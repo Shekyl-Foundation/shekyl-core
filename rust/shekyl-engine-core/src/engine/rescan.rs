@@ -433,6 +433,7 @@ mod tests {
                 }],
                 lock_baseline: Some(43),
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
         wallet.ledger.transfers.push(sample_transfer(2));

@@ -374,7 +374,12 @@ privacy. Binding invariant, enforced by PR-4 and tested in §10 item 8:
    second tx over the same inputs — **the same key image** — which by §7.1's
    mechanization is a broadcast-linkage artifact the wallet inflicts on
    itself. Post-F30 this is a priority-2 privacy regression, not only the
-   fund-safety hazard originally filed.
+   fund-safety hazard originally filed. The dispatch itself is saved
+   before the bytes leave (the send's record with its inputs, its secret
+   and its bytes; A19), and the verdict's baseline is saved before the
+   submit returns. A send whose verdict never arrived — the process ended
+   between the two saves — is locked at open at its dispatch height, as an
+   accept would have locked it.
 2. **Two release paths, both required.**
    - *Confirmed-present:* refresh observes the tx in the chain → outputs
      transition to refresh-authoritative spent. (The path everyone
@@ -1072,6 +1077,21 @@ de-risking the multi-daemon reopen in advance.
   F23 pool-pressure eviction): none can strand the wallet indefinitely.
   Wallet-facing severity of all three is demoted; their daemon-side kernels
   stand and are fixed as filed.
+- **The probe's bytes are saved; a resend after a restart is the
+  user's (A19).** The rung-1 probe re-offers the bytes saved on the send's
+  record at dispatch (`SendRecord::tx_bytes`), pruned by the record's
+  state once it settles (confirmed past the reorg margin, refused,
+  presumed dead), never by the held projection, which a send awaiting
+  its verdict is outside of. Within one session the probe stays
+  automatic. A held send this session did not dispatch — a restart
+  crossed its verdict, and the next offer might reach a different daemon —
+  is never re-offered by the watchdog: its probe rung is the operator
+  alarm (`DispatchedBeforeThisSession`), and the alarm reaches the user
+  through the wallet contract (`tx_alarm`, re-derived from the saved
+  records at every open, nothing about it stored). The user resends
+  (`tx_resend`, which returns the send to this session and its automatic
+  rung) or abandons (`abandon_tx`). A held row with no bytes alarms
+  `HeldBytesMissing`.
 - **`P`-submitter (SP-T4a):** relies solely on daemon-owned relay; there is
   no relay field left to branch on. Confirmed against the SP-T4 broadcast
   design.
@@ -1944,12 +1964,21 @@ enumeration above is the complete submit surface.
    `published_lookback_runs_from_the_first_observation`,
    `in_chain_waits_until_the_proof_life_ceiling`), confirmed-absent release
    (`terminal_probe_releases_confirmed_absent`), retryable-rejection alarm
-   (`retryable_rejection_alarms_needs_rebuild`), restart degradation
-   (`missing_bytes_degrade_probe_to_alarm`), health gating
+   (`retryable_rejection_alarms_needs_rebuild`), a held row with no bytes
+   (`missing_bytes_degrade_probe_to_alarm`), a send from an earlier
+   session alarming instead of resending
+   (`a_send_from_an_earlier_session_alarms_instead_of_resending`,
+   `a_resend_returns_the_send_to_the_automatic_rung`), health gating
    (`peerless_daemon_alarms_without_probing`, `syncing_daemon_still_probes`,
    `published_unmined_waits_while_unsynced`,
-   `health_failure_makes_no_decision`), and held-bytes pruning
-   (`held_bytes_pruned_on_confirmation`).
+   `health_failure_makes_no_decision`), and saved-bytes pruning
+   (`held_bytes_pruned_on_confirmation`). The A19 durability gates run a
+   real wallet server against a real daemon: killed after an accept
+   (`a_send_survives_a_kill_after_its_accept`), stopped by each signal
+   (`each_stop_signal_closes_the_wallet`), refused a write
+   (`a_send_that_cannot_be_saved_is_not_sent`); the crash between the
+   dispatch save and the send is
+   `a_crash_between_the_dispatch_save_and_the_send_reopens_held`.
 9. **Conceal constant-work (F41), one obligation per enforcement layer
    (§3.1 decomposition):
    (a) invocation-count tripwire** — a foreign-caller submit of

@@ -30,6 +30,10 @@ shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
 tempfile = "3"
+# `tests/save_state_timing.rs` (A19): a synthetic ledger's transfers carry a
+# point, a scalar and a commitment. Both crates are already in the workspace.
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
 # criterion + gungraun harness for the `open_cold` path. The

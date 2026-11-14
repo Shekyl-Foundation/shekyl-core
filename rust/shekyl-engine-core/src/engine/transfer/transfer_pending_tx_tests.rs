@@ -30,6 +30,7 @@ use crate::engine::diagnostics::{
     AssertionSink, DiagnosticSink, DiscardReason, PanickingSink, PanickingSinkTrigger,
     PendingTxDiagnostic, TracingDiagnosticSink,
 };
+use crate::engine::dispatch_durability::{DurableTxBytes, NoSaveCommit};
 use crate::engine::error::{
     AmbiguousErrorKind, PendingTxError, RetryableRejectCause, SendError, SubmitError,
     TerminalErrorKind,
@@ -145,7 +146,8 @@ impl TestTransactionSubmitter {
 }
 
 impl TransactionSubmitter for TestTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         if let Some(scripted) = self
             .scripted
             .lock()
@@ -1115,7 +1117,7 @@ async fn real_root_membership_proof_builds_and_submits() {
     );
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1252,7 +1254,7 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
     }
 
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("horizon re-anchor reproves and broadcasts transparently");
     assert_eq!(
@@ -1281,7 +1283,7 @@ async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
     advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(
@@ -1364,7 +1366,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     assert_eq!(pending.outstanding(), 1);
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1423,7 +1425,7 @@ async fn submit_persists_tx_key_and_pending_hash() {
     }
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1488,7 +1490,7 @@ async fn discard_never_persists_tx_key() {
 /// path 2 drives.
 #[tokio::test]
 async fn confirmed_absent_release_keeps_retention_record() {
-    use crate::engine::submit_lifecycle::WatchdogHost;
+    use crate::engine::submit_lifecycle::{ReleasePersistence, WatchdogHost};
 
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
@@ -1499,13 +1501,21 @@ async fn confirmed_absent_release_keeps_retention_record() {
         .await
         .expect("build ok");
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
 
-    let released = WatchdogHost::release_awaiting_confirmation(&pending, &HashSet::from([tx_hash]));
-    assert!(released > 0, "the F14 lock is released");
+    let released = WatchdogHost::release_awaiting_confirmation(
+        &pending,
+        &HashSet::from([tx_hash]),
+        &NoSaveCommit,
+    );
+    assert_eq!(
+        released,
+        ReleasePersistence::Confirmed,
+        "the F14 lock is released"
+    );
 
     let guard = pending.ledger.read();
     assert!(
@@ -1548,7 +1558,7 @@ async fn terminal_reject_retires_dispatch_persisted_record() {
         kind: TerminalErrorKind::DoubleSpend,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("terminal reject");
 
@@ -1580,7 +1590,7 @@ async fn retryable_reject_retires_dispatch_persisted_record() {
         cause: RetryableRejectCause::StaleRoot,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("retryable reject");
 
@@ -1614,7 +1624,7 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
         kind: AmbiguousErrorKind::DaemonTimeout,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("ambiguous verdict");
 
@@ -1669,7 +1679,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -1781,7 +1791,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -1870,7 +1880,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("a pool-resident duplicate resolves the submit successfully");
     assert_eq!(
@@ -1939,7 +1949,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -2013,10 +2023,10 @@ async fn production_submit_dispatch_projects_the_daemon_verdict() {
         // Nothing queued via `queue_submit_daemon_outcome`, so `submit_async`
         // takes the production branch and the scripted submitter answers.
         let outcome = pending
-            .submit(built.id, built.content_gen)
+            .submit(built.id, built.content_gen, &NoSaveCommit)
             .await
             .expect("submit resolves successfully");
-        (hash, outcome)
+        (hash, outcome.outcome)
     }
 
     let (hash, outcome) = submit_via_production_dispatch(|hash| {
@@ -2286,7 +2296,7 @@ async fn dispatch_writes_the_send_journal_row() {
         .expect("build ok");
     let expected_fee = wire_fee(&built.tx_bytes);
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok");
     let txid = outcome.hash();
@@ -2347,7 +2357,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
         kind: TerminalErrorKind::FeeTooLow,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("terminal refusal");
     {
@@ -2375,7 +2385,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
         cause: RetryableRejectCause::StaleRoot,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("retryable refusal");
     let guard = pending.ledger.read();
@@ -2913,7 +2923,7 @@ async fn submit_double_spend_emits_terminal_discarded() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2957,7 +2967,7 @@ async fn submit_fee_too_low_releases_outputs() {
         kind: TerminalErrorKind::FeeTooLow,
     }));
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2999,7 +3009,9 @@ async fn submit_malformed_releases_outputs() {
         kind: TerminalErrorKind::Malformed,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonRejectedTerminal {
             kind: TerminalErrorKind::Malformed
         })
@@ -3077,7 +3089,7 @@ async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
         .expect("build ok");
     pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("first rejection");
 
@@ -3088,7 +3100,7 @@ async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
         .expect("one-shot rebuild allowed after first rejection");
     pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
     pending
-        .submit(rebuilt.id, rebuilt.content_gen)
+        .submit(rebuilt.id, rebuilt.content_gen, &NoSaveCommit)
         .await
         .expect_err("second rejection");
 
@@ -3155,7 +3167,7 @@ async fn submit_retryable_rejection_restores_reservation() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -3201,7 +3213,7 @@ async fn submit_retryable_rejection_restores_reservation() {
 
     // The restored reservation resubmits — this time accepted.
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("restored reservation resubmits")
         .hash();
@@ -3223,7 +3235,7 @@ async fn submit_timeout_keeps_reservation_in_flight() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -3288,7 +3300,9 @@ async fn submit_daemon_unavailable_same_as_timeout() {
         kind: AmbiguousErrorKind::DaemonUnavailable,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonAmbiguous {
             kind: AmbiguousErrorKind::DaemonUnavailable,
             ..
@@ -3308,7 +3322,9 @@ async fn build_in_flight_via_daemon_timeout(pending: &TestPendingTx) -> PendingT
         kind: AmbiguousErrorKind::DaemonTimeout,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonAmbiguous {
             kind: AmbiguousErrorKind::DaemonTimeout,
             ..
@@ -3467,7 +3483,7 @@ async fn submit_carries_proof_across_benign_tip_advance() {
     );
 
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("benign tip advance broadcasts the existing proof as-is");
     assert_eq!(pending.outstanding(), 0, "submit consumed the reservation");
@@ -3526,7 +3542,7 @@ async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
     // Submit immediately (no tip advance → not stale, no re-anchor) with a
     // generation the consumer never saw: withhold, do not broadcast.
     let err = pending
-        .submit(built.id, built.content_gen + 1)
+        .submit(built.id, built.content_gen + 1, &NoSaveCommit)
         .await
         .unwrap_err();
     let SubmitError::ContentChanged {
@@ -3549,7 +3565,7 @@ async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
 
     // Re-confirming with the correct generation broadcasts.
     pending
-        .submit(built.id, 0)
+        .submit(built.id, 0, &NoSaveCommit)
         .await
         .expect("correct seen_gen broadcasts");
     assert_eq!(pending.outstanding(), 0);
@@ -3781,7 +3797,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     );
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -3820,14 +3836,14 @@ async fn daemon_dedupes_identical_tx_bytes() {
         .await
         .expect("build ok");
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("first submit");
     assert_eq!(daemon.submitted_count(), 1);
 
     let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
     let success = submitter
-        .submit(built.tx_bytes.clone())
+        .submit(DurableTxBytes::for_test(built.tx_bytes.clone()))
         .await
         .expect("daemon dedup accepts identical bytes");
     // A pool-resident duplicate is `AlreadyInPool` → the `Broadcast`
@@ -3843,11 +3859,140 @@ async fn daemon_dedupes_identical_tx_bytes() {
     assert_eq!(daemon.submitted_count(), 1);
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(
         matches!(err, SubmitError::ReservationNotFound { .. }),
         "reservation consumed after first submit: {err:?}"
+    );
+}
+
+/// A submitter that never answers: the bytes are in hand and the process
+/// dies before any verdict. The test seam for A19's crash window between
+/// the dispatch save and the send — the one window a real process cannot
+/// be stopped in reliably, since the daemon round-trip it would have to
+/// interrupt takes microseconds on loopback.
+struct NeverAnswers;
+
+impl TransactionSubmitter for NeverAnswers {
+    async fn submit(&self, _tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        std::future::pending().await
+    }
+}
+
+/// A commit seam that keeps what the save would write — the ledger's
+/// postcard bytes, which `save_state` seals into the wallet file — so a
+/// test can reopen from exactly that state.
+#[derive(Default)]
+struct CapturingCommit {
+    saved: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+impl crate::engine::dispatch_durability::LedgerCommit for CapturingCommit {
+    fn commit(
+        &self,
+        ledger: &shekyl_engine_state::WalletLedger,
+    ) -> Result<shekyl_engine_file::Durability, crate::engine::error::PersistenceError> {
+        let bytes = ledger.to_postcard_bytes().expect("the ledger serializes");
+        *self.saved.lock().expect("capture lock") = Some(bytes);
+        Ok(shekyl_engine_file::Durability::Confirmed)
+    }
+}
+
+/// A19, the crash between the dispatch save and the send. The submitter
+/// never answers and the submit is dropped (the process died with the
+/// bytes in hand); the wallet reopens from what the dispatch save wrote.
+/// The record is there with its signed bytes and its secret, open locks its
+/// inputs, and on the production host the send is held, has bytes to
+/// resend, and is not this session's — the three facts that make the
+/// watchdog alarm `DispatchedBeforeThisSession` instead of resending
+/// (`submit_lifecycle_tests` pins that reaction).
+#[tokio::test]
+async fn a_crash_between_the_dispatch_save_and_the_send_reopens_held() {
+    use crate::engine::submit_lifecycle::WatchdogHost;
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = LocalPendingTx::new(
+        Arc::new(LocalSigner::new(test_signer_handle())),
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        Arc::new(NeverAnswers),
+        Arc::clone(&ledger),
+        Some(tree),
+        Arc::new(TracingDiagnosticSink),
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+
+    let commit = CapturingCommit::default();
+    let submit = pending.submit(built.id, built.content_gen, &commit);
+    let outcome = tokio::time::timeout(std::time::Duration::from_millis(500), submit).await;
+    assert!(outcome.is_err(), "the submitter never answers");
+    drop(pending);
+
+    let saved = commit
+        .saved
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("the dispatch was saved before the bytes were handed over");
+    let mut reopened =
+        shekyl_engine_state::WalletLedger::from_postcard_bytes(&saved).expect("the save decodes");
+
+    let (txid, row) = reopened
+        .send_journal
+        .rows
+        .iter()
+        .next()
+        .map(|(k, v)| (*k, v.clone()))
+        .expect("the send's record was saved");
+    assert_eq!(
+        canonical_tx_id(row.tx_bytes.as_deref().expect("with its bytes")).to_bytes(),
+        txid,
+        "the saved bytes are the send's own"
+    );
+    assert_eq!(row.lock_baseline, None, "no verdict was recorded");
+    assert!(
+        reopened.tx_meta.tx_keys.contains_key(&txid),
+        "the tx secret was saved with the record"
+    );
+
+    // Open: the send whose verdict never arrived is locked and held.
+    assert_eq!(reopened.send_journal.lock_unverdicted_dispatches(), 1);
+    let locks = reopened.send_journal.spend_locks();
+    for input in &row.inputs {
+        assert!(
+            locks.contains(shekyl_types::GlobalOutputIndex::from_raw(input.gindex)),
+            "input {} is locked after the reopen",
+            input.gindex
+        );
+    }
+
+    let host = test_pending_tx(Arc::new(LocalLedger::new(
+        reopened,
+        shekyl_engine_state::LedgerIndexes::empty(),
+    )));
+    let tx_hash = shekyl_types::TxHash::from_bytes(txid);
+    assert!(
+        WatchdogHost::held_submits(&host)
+            .iter()
+            .any(|held| held.tx_hash == tx_hash),
+        "the send is held"
+    );
+    assert_eq!(
+        WatchdogHost::held_bytes_for(&host, &tx_hash).as_deref(),
+        row.tx_bytes.as_deref(),
+        "its bytes are there to resend"
+    );
+    assert!(
+        !WatchdogHost::dispatched_this_session(&host, &tx_hash),
+        "and it is not this session's, so resending is the user's decision"
     );
 }

@@ -8,11 +8,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::EdwardsPoint;
-use rand_core::{OsRng, RngCore};
 use shekyl_address::{Network, PaymentAddress, ShekylAddress};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
@@ -28,7 +25,6 @@ use shekyl_tx_builder::{
     WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
-use zeroize::Zeroizing;
 
 use super::error::KeyEngineError;
 use super::local_keys::LocalKeys;
@@ -351,11 +347,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         });
     };
 
-    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(tx_key_secret.as_mut());
-
-    let tx_pubkey_scalar = Scalar::from_bytes_mod_order(*tx_key_secret);
-    let tx_pubkey = &tx_pubkey_scalar * ED25519_BASEPOINT_TABLE;
+    // `r` is minted canonical by the crypto crate: it is retained for the
+    // OUTBOUND proof, which signs with it as a scalar (A19).
+    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
 
     let mut built_outputs: Vec<BuiltOutput> = Vec::new();
     let mut kem_blobs: Vec<Vec<u8>> = Vec::new();
@@ -597,6 +591,8 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
 mod tests {
     use super::*;
     use crate::engine::local_keys::LocalKeys;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::label::{classify_label_plaintext, LabelPlaintextKind};
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
