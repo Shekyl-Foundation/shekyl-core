@@ -1182,7 +1182,7 @@ internals); the log may be specific.
 | Failure | Client can distinguish? | Client says | Daemon log says |
 |---|---|---|---|
 | Client holds a stale or wrong daemon bundle; client is on another network; version mismatch | No — all close after message 1, no reply | "The node at ADDRESS closed the connection without answering. It does not recognise this client's copy of its key, is on a different network, or runs a different version. The node's log records which." | Rate-limited, aggregated per source: "unauthenticated channel handshake from IP: the sender does not hold this node's current key, is on another network, or speaks another channel version" |
-| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enrol it on the node with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enrol it |
+| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enrol it on the node with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enrol it |
 | Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enrol." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
 | Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node you enrolled with. Do not connect; check the address." No retry | Nothing — a daemon with a different key never sends message 2 |
 | Requested grant exceeds the ceiling | Yes — message 4 carries the ceiling, and the client clamps its request to it | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
@@ -1210,7 +1210,7 @@ internals); the log may be specific.
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
 | Windows: the daemon runs for this user in **another logon session** (the pipe admits its own session only) | "Your Shekyl node is running in another sign-in session and can only be reached from there." Known from the rendezvous before dialling | — |
-| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" |
+| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" |
 
 ---
 
@@ -1888,6 +1888,25 @@ a demonstrated operator recovery need returns it as a ruled capability.
   the single answer to three questions: two daemons on one data home, a
   named instance pointed at the default's state (§7.1), and an offline
   command racing a start.
+- **The channel's files (RT-O34; RT-W10 step 4).** The key
+  (`rpc-channel.key`, versioned and pinned by a known answer), the public
+  bundle (`rpc-channel.bundle`), a service's console key
+  (`rpc-console.key`) and the enrolled set (`rpc-enrolments.redb`, a redb
+  store of the channel's own) live in the network's data directory, the
+  one the exclusive lock covers. The key is made on the first start. Each
+  file is created readable by the daemon's account alone, in the creating
+  call (`0600` with `O_EXCL`; on Windows an owner-only descriptor with the
+  no-read-up label at `CreateFileW`), and a key file anyone else can read
+  refuses the start; it is never repaired.
+- **A service's data home (Rick, 2026-11-14, amending IG-Q36 and §7.1).**
+  A fixed root per platform: `/var/lib/shekyl` on Linux (the unit's
+  `StateDirectory=shekyl` with `StateDirectoryMode=0700`; the unit passes
+  no `data-dir`), `/var/db/shekyl` on FreeBSD and macOS (created by the
+  package or installer), `%ProgramData%\shekyl` on Windows. The daemon
+  checks it and never creates it: it exists, is not a link, is owned by
+  the daemon's account, has mode 0700 (on Windows the ruled ACL), and the
+  daemon is not root; otherwise `config.service.root` names the
+  condition. An explicit `data-dir` with `service` gets the same checks.
 - **Every new surface is Rust-owned** (rule 20). The channel listener's
   flags, the key paths, the enrolled set, and `rpc client add` / `rpc client remove`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added
