@@ -10,6 +10,7 @@
 //! file plus a rescan (`PQC_MULTISIG.md` §6.6, §8.4).
 
 use serde::{Deserialize, Serialize};
+use shekyl_address::multisig_address::MIN_MULTISIG_THRESHOLD;
 
 /// File format version. `2` adds the group KEM public key. A file of any
 /// other version is refused with [`GroupDescriptorError::UnsupportedVersion`],
@@ -86,7 +87,7 @@ impl GroupDescriptor {
         }
         let desc: Self = serde_json::from_str(json).map_err(parse_failed)?;
 
-        if desc.m_required == 0 || desc.m_required > desc.n_total {
+        if !(MIN_MULTISIG_THRESHOLD..=desc.n_total).contains(&desc.m_required) {
             return Err(GroupDescriptorError::InvalidThreshold {
                 m: desc.m_required,
                 n: desc.n_total,
@@ -118,7 +119,7 @@ pub enum GroupDescriptorError {
     UnsupportedVersion(u8),
     #[error("failed to parse descriptor: {0}")]
     ParseFailed(String),
-    #[error("invalid threshold: m={m} must be 1..=n={n}")]
+    #[error("invalid threshold: m={m} must be {min}..=n={n}", min = MIN_MULTISIG_THRESHOLD)]
     InvalidThreshold { m: u8, n: u8 },
     #[error("pubkey count mismatch: expected {expected}, got {got}")]
     PubkeyCountMismatch { expected: u8, got: u8 },
@@ -170,13 +171,16 @@ mod tests {
 
     #[test]
     fn rejects_invalid_threshold() {
-        let mut desc = make_test_descriptor();
-        desc.m_required = 5;
-        let json = serde_json::to_string(&desc).unwrap();
-        assert!(matches!(
-            GroupDescriptor::from_json(&json),
-            Err(GroupDescriptorError::InvalidThreshold { .. })
-        ));
+        // Above n, and R-11's 1-of-N.
+        for m in [5, 1] {
+            let mut desc = make_test_descriptor();
+            desc.m_required = m;
+            let json = serde_json::to_string(&desc).unwrap();
+            assert!(matches!(
+                GroupDescriptor::from_json(&json),
+                Err(GroupDescriptorError::InvalidThreshold { m: got, .. }) if got == m
+            ));
+        }
     }
 
     #[test]

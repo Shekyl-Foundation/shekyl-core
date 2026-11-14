@@ -96,6 +96,12 @@ pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// `verify_multisig`. `verify_multisig` uses this constant; production
 /// multisig signing is unbuilt (slice 3).
 pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
+/// A multisig ceremony file's sender signature (R-6): a member's long-term
+/// envelope key over the file's fields, framed under
+/// `shekyl/multisig-envelope-v1` (`crate::multisig_envelope`). Distinct from
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`]: an envelope signature is never a
+/// spend signature.
+pub const SCHEME_DOMAIN_MULTISIG_ENVELOPE: &[u8] = b"shekyl/multisig-envelope-scheme-v1";
 /// Emission claim-role auth (surface C).
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).

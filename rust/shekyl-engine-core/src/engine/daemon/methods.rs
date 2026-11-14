@@ -51,6 +51,59 @@ mod tests {
     /// compiled only under test.
     type Declaration = (Vec<PathBuf>, bool);
 
+    /// A `mod` line's name, and whether it opens an inline module (`mod x {`)
+    /// rather than declaring one loaded from a file (`mod x;`).
+    fn module_line(line: &str) -> Option<(&str, bool)> {
+        let rest = line
+            .strip_prefix("pub(crate) mod ")
+            .or_else(|| line.strip_prefix("pub(super) mod "))
+            .or_else(|| line.strip_prefix("pub mod "))
+            .or_else(|| line.strip_prefix("mod "))?;
+        if let Some(name) = rest.strip_suffix(';') {
+            return Some((name.trim(), false));
+        }
+        rest.strip_suffix('{').map(|name| (name.trim(), true))
+    }
+
+    /// The attribute and doc lines directly above line `i`, nearest first.
+    fn attributes_above<'a>(lines: &[&'a str], i: usize) -> Vec<&'a str> {
+        lines[..i]
+            .iter()
+            .rev()
+            .take_while(|l| l.starts_with("#[") || l.starts_with("///"))
+            .copied()
+            .collect()
+    }
+
+    /// Whether a `#[cfg(...test...)]` attribute is among `attrs`.
+    fn test_only(attrs: &[&str]) -> bool {
+        attrs
+            .iter()
+            .any(|l| l.starts_with("#[cfg(") && l.contains("test"))
+    }
+
+    /// `text` without its inline test module: everything from the first
+    /// attribute line above the first `mod <name> {` that a test-only cfg
+    /// stands on. A test-only declaration loaded from a file (`mod x;`) is
+    /// not cut here: the skip set drops its file, and the text after it is
+    /// production code.
+    fn without_inline_test_module(text: &str) -> &str {
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let starts: Vec<usize> = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(at, _)| at + 1))
+            .collect();
+        for (i, line) in lines.iter().enumerate() {
+            let Some((_, true)) = module_line(line) else {
+                continue;
+            };
+            let attrs = attributes_above(&lines, i);
+            if test_only(&attrs) {
+                return &text[..starts[i - attrs.len()]];
+            }
+        }
+        text
+    }
+
     /// A file's module declarations: each target path (a `#[path]` resolves
     /// against the file's own directory), and whether a `#[cfg(...test...)]`
     /// attribute stands on it.
@@ -66,22 +119,11 @@ mod tests {
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
         let mut out = Vec::new();
         for (i, line) in lines.iter().enumerate() {
-            let declared = line
-                .strip_prefix("pub(crate) mod ")
-                .or_else(|| line.strip_prefix("pub(super) mod "))
-                .or_else(|| line.strip_prefix("pub mod "))
-                .or_else(|| line.strip_prefix("mod "))
-                .and_then(|rest| rest.strip_suffix(';'));
-            let Some(name) = declared else { continue };
-            let attrs: Vec<&str> = lines[..i]
-                .iter()
-                .rev()
-                .take_while(|l| l.starts_with("#[") || l.starts_with("///"))
-                .copied()
-                .collect();
-            let test_only = attrs
-                .iter()
-                .any(|l| l.starts_with("#[cfg(") && l.contains("test"));
+            let Some((name, false)) = module_line(line) else {
+                continue;
+            };
+            let attrs = attributes_above(&lines, i);
+            let test_only = test_only(&attrs);
             let targets = match attrs
                 .iter()
                 .find_map(|l| l.strip_prefix("#[path = \"")?.strip_suffix("\"]"))
@@ -97,7 +139,7 @@ mod tests {
     /// The source of every module of `dir` that is compiled outside test: a
     /// module declared under a `#[cfg(...test...)]` attribute is skipped,
     /// with every module it declares in turn, and so is the text of each
-    /// file's own inline test module (from its `#[cfg(test)]` before `mod`).
+    /// file's own inline test module ([`without_inline_test_module`]).
     fn production_sources(dir: &Path) -> Vec<(PathBuf, String)> {
         let mut files = Vec::new();
         let mut stack = vec![dir.to_path_buf()];
@@ -139,10 +181,7 @@ mod tests {
             .filter(|file| !skipped(&skip, file))
             .map(|file| {
                 let text = std::fs::read_to_string(&file).expect("a source file");
-                let production = text
-                    .find("#[cfg(test)]\nmod ")
-                    .map_or(text.as_str(), |at| &text[..at])
-                    .to_owned();
+                let production = without_inline_test_module(&text).to_owned();
                 (file, production)
             })
             .collect()
@@ -252,7 +291,8 @@ mod tests {
     /// The list is the engine's daemon calls: a new call with no row fails,
     /// and so does a row whose last call is gone. Red edit: a
     /// `call::<wire::PeerConnections>` in a production module (`scan_floor.rs`),
-    /// with no row.
+    /// with no row; and one in `engine/mod.rs` just after its
+    /// `#[cfg(test)] mod daemon_observability;` line.
     #[test]
     fn the_list_is_the_engine_s_daemon_calls() {
         assert_eq!(
@@ -260,6 +300,20 @@ mod tests {
             listed(),
             "DAEMON_METHODS must name exactly the daemon methods the engine calls"
         );
+    }
+
+    /// The cut is the inline test module, never a test-only declaration: the
+    /// text after `#[cfg(test)] mod x;` is production code and is read.
+    #[test]
+    fn a_test_only_declaration_does_not_end_the_scanned_text() {
+        let text = "fn a() {}\n#[cfg(test)]\nmod observability;\nfn b() {}\n\n#[cfg(test)]\n#[path = \"t.rs\"]\nmod tests {\n    fn c() {}\n}\n";
+        let kept = without_inline_test_module(text);
+        assert!(kept.contains("fn b()"), "{kept}");
+        assert!(
+            !kept.contains("fn c()") && !kept.contains("#[path"),
+            "{kept}"
+        );
+        assert_eq!(without_inline_test_module("fn a() {}\n"), "fn a() {}\n");
     }
 
     /// The scan reads the helpers it maps calls through, so a renamed helper

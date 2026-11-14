@@ -850,6 +850,15 @@ jobs:
         if: '!cancelled()'
         run: python3 -I scripts/kat/multisig_fingerprint_oracle.py
 
+      - name: Run the multisig intent oracle
+        # R-5, R-13: a spend intent's canonical bytes carry the signer set
+        # and the responder, and its hash is Keccak-256 of them. This writes
+        # the layout from the spec, hashes with an anchored Keccak, and
+        # requires docs/test_vectors/MULTISIG_INTENT_V2.json to equal its
+        # output; exit 1 on a mismatch, 2 when the file pins nothing (rule 47).
+        if: '!cancelled()'
+        run: python3 -I scripts/kat/multisig_intent_oracle.py
+
       - name: Run clatter production-graph gate
         # clatter is an independent implementation of the RPC channel's
         # handshake pattern, in the workspace as a test-only cross-check

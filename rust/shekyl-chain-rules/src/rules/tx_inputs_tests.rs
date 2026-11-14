@@ -326,7 +326,7 @@ fn i16_every_structural_departure_of_a_pqc_auth_is_refused() {
         a.hybrid_public_key = vec![0; MULTISIG_KEY_BLOB_MIN];
     });
     assert!(tx_form(&minimal_multisig, TxSlot::Lone, &RuleSet::GENESIS)
-        .expect("a 1-of-1 blob's length is I16's floor; the parse is I18's")
+        .expect("a 2-of-2 blob's length is I16's floor; the parse is I18's")
         .contains(CenRow::I16));
 }
 

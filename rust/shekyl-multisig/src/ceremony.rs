@@ -50,9 +50,9 @@
 //!      nonce against two challenges — **fund theft**. Distinct from consume-once.
 //!
 //! `!Serialize` is *not* used as a guard: it is unprovable (a foreign `derive`
-//! lands in six months). "Restart forfeits the round" is dropped too: it is
-//! incompatible with the walk to the safe, which the transport decision made
-//! mandatory. What survives is consume-once + containment + intent-binding — and
+//! lands in six months). "Restart forfeits the round" is dropped too: a session
+//! spans bringing a safe-held device out, so a restart inside it must not
+//! cost the round. What survives is consume-once + containment + intent-binding — and
 //! the reason it is not just `!Serialize` is two dead rules and an `x = (s−k)/e`.
 //!
 //! # No live crypto in this slice (MS-5 S1)
@@ -143,8 +143,10 @@ impl EphemeralNonce {
     }
 }
 
-/// The proposer (A)'s FROST nonce, **held across round-trip 1** (the walk to the
-/// safe — hours, days). Reachable only from inside the same protected container
+/// The proposer (A)'s FROST nonce, **held across round-trip 1**: the signing
+/// session, which the intent's reference block bounds (R-13) — about three
+/// hours from a fresh anchor (`shekyl_curve_tree::PROOF_VALIDITY_HORIZON`
+/// blocks), within which a safe-held device comes out once. Reachable only from inside the same protected container
 /// as A's `y_group` share (**containment**). Consumed exactly once, bound to one
 /// intent, released to the share-producing path only through a [`ConsumedNonce`].
 /// Not `Serialize`: persistence rides the same sealed container as the share,
