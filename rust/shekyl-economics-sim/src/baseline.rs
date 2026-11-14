@@ -410,6 +410,50 @@ pub fn esr10_reach() -> (&'static str, &'static [Reader]) {
     ("--esr10", ESR10_READS)
 }
 
+/// The instruments that run all Standard (§5.32): ESR-10's readers less
+/// the Priority factor, which prices no rung they send demand to.
+pub const INSTRUMENT_READS: &[Reader] = &{
+    let esr10 = ESR10_READS;
+    let mut all = [read("", 0); 22];
+    let mut i = 0;
+    let mut j = 0;
+    while i < esr10.len() {
+        if !const_str_eq(esr10[i].path, "relay.priority_factor") {
+            all[j] = esr10[i];
+            j += 1;
+        }
+        i += 1;
+    }
+    assert!(j == all.len(), "the list is exactly the readers kept");
+    all
+};
+
+/// An instrument's mode and readers: the fields ESR-10's fold reads, which
+/// `every_declared_reader_moves_its_report` measures on `--esr10`'s probe.
+/// The instruments that run a rung mix (EI-6, EI-7) read the Priority
+/// factor as `--esr10` does; the rest run all Standard.
+///
+/// Whether a field reaches an instrument's own figures is checked where the
+/// cell runs, not here: the mode folds the baseline beside every cell, and
+/// a cell whose report equals its baseline's is refused (`main.rs`).
+/// Measuring each instrument's reach ahead of time costs a probe of the
+/// instrument per field, hours a night; a probe cut to fit leaves out the
+/// scenarios where a field acts, and so refuses fields the full report
+/// reads (§5.32.1).
+#[must_use]
+pub fn instrument_reach(instrument: crate::eup4::Instrument) -> (&'static str, &'static [Reader]) {
+    use crate::eup4::Instrument;
+    let reads = match instrument {
+        Instrument::PriorityElasticity | Instrument::MedianPath => ESR10_READS,
+        Instrument::MinerIncome
+        | Instrument::Predictability
+        | Instrument::DemandResponse
+        | Instrument::Capacity
+        | Instrument::StuffingEnvelope => INSTRUMENT_READS,
+    };
+    (instrument.flag(), reads)
+}
+
 /// `--stage2 --control-flat-fee`: the flat fee prices no ladder, so no
 /// relay field reaches it, and the long-term clamp moves no figure the
 /// control arm prints.

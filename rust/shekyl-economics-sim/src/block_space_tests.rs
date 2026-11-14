@@ -786,3 +786,61 @@ fn at_unequal_weights_the_admission_order_can_change_the_pool() {
         "cheapest first: Priority evicts both"
     );
 }
+
+/// EI-3's producer (§5.32): its own bodies go into the penalty-free room
+/// the pool's listing leaves and no further, so the reward is not
+/// penalised. They count in the block's transactions and fees, and in no
+/// rung's traffic.
+#[test]
+fn own_bodies_fill_the_penalty_free_room_and_no_more() {
+    let run = SimParams::default();
+    let params = run.economic();
+    let point = at(&run);
+    let mut honest = BlockSpace::default();
+    let alone = honest.fill(
+        1_000,
+        honest.medians(params),
+        &standard(5, baseline_tx()),
+        &point,
+    );
+    let own = OwnBodies {
+        tx: OrdinaryTx {
+            fee_atomic: 7,
+            weight: 14_000,
+        },
+    };
+    let mut stuffed = BlockSpace::default();
+    let with = stuffed.fill_with_own(
+        1_000,
+        stuffed.medians(params),
+        &standard(5, baseline_tx()),
+        &point,
+        Some(own),
+    );
+    assert_eq!(with.rungs, alone.rungs, "the pool's listing is the same");
+    assert!(with.own.txs > 0, "the room takes some");
+    let free = params.full_reward_zone;
+    assert!(with.block_weight <= free, "no penalty taken");
+    assert!(
+        with.block_weight + own.tx.weight > free,
+        "one more would pass the penalty-free weight"
+    );
+    assert_eq!(
+        with.paid_reward, alone.paid_reward,
+        "the reward is unpenalised"
+    );
+    assert_eq!(with.carried_txs(), alone.carried_txs() + with.own.txs);
+    assert_eq!(with.fees_atomic(), alone.fees_atomic() + 7 * with.own.txs);
+    let none = BlockSpace::default().fill_with_own(
+        1_000,
+        BlockSpace::default().medians(params),
+        &standard(5, baseline_tx()),
+        &point,
+        None,
+    );
+    assert_eq!(
+        none.own,
+        OwnListing::default(),
+        "nothing offered, nothing listed"
+    );
+}

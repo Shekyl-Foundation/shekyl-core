@@ -13,6 +13,7 @@ mod distribution;
 mod engine;
 mod escalation;
 mod esr10;
+mod eup4;
 mod fee_bar;
 mod fee_floor;
 mod fee_horizon;
@@ -35,6 +36,7 @@ mod secret_draw_production;
 mod stranding;
 mod swing;
 mod volume_window;
+mod window_stuffer;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
@@ -119,23 +121,72 @@ fn main() {
     // no baseline beside it.
     let stage2 = std::env::args().any(|a| a == "--stage2");
     let esr10 = std::env::args().any(|a| a == "--esr10");
-    if !params.overrides().is_empty() && !stage2 && !esr10 {
+    // EUP-4 prep 2 (§5.32): `--eup4` runs every instrument; each
+    // instrument's own mode runs it alone, and only that mode takes a cell.
+    let eup4 = std::env::args().any(|a| a == "--eup4");
+    let instrument = eup4::Instrument::ALL
+        .into_iter()
+        .find(|i| std::env::args().any(|a| a == i.flag()));
+    if !params.overrides().is_empty() && !stage2 && !esr10 && instrument.is_none() {
         refuse(
-            "overrides are read by --stage2 and --esr10 only: each prints a cell beside its baseline",
+            "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
+             prints a cell beside its baseline",
         );
     }
     if esr10 && control {
         refuse("--esr10 runs the production ladder: the flat control fee has no rungs to mix");
     }
+    if (eup4 || instrument.is_some()) && control {
+        refuse("the instruments name their fee arms: --control-flat-fee selects none of them");
+    }
     // An override on a field the mode's report does not read would print
     // the baseline, which reads as "no effect": refused before the fold.
-    let (mode, reads) = if esr10 {
+    let (mode, reads) = if let Some(instrument) = instrument {
+        baseline::instrument_reach(instrument)
+    } else if esr10 {
         baseline::esr10_reach()
     } else {
         baseline::stage2_reach(control)
     };
     if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
         refuse(&e.to_string());
+    }
+
+    if eup4 || instrument.is_some() {
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let summary =
+            eup4::run(&mut narration, &params, instrument).expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            eup4::run(&mut baseline_narration, &SimParams::default(), instrument)
+                .expect("String sink is infallible");
+            // The reach the mode declares is the fold's; whether the cell
+            // reaches this instrument's figures is read here, from the two
+            // reports, so a cell never prints its baseline as a result.
+            if narration == baseline_narration {
+                refuse(&format!(
+                    "the overrides move no figure {} prints: the cell's report is its baseline's",
+                    instrument.map_or("--eup4", eup4::Instrument::flag)
+                ));
+            }
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
+        let json = serde_json::to_string_pretty(&summary).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "{} wall time: {:.0} s",
+            instrument.map_or("--eup4", eup4::Instrument::flag),
+            started.elapsed().as_secs_f64()
+        );
+        return;
     }
 
     if std::env::args().any(|a| a == "--fb1c-c2") {

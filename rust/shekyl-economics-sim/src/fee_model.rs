@@ -218,6 +218,26 @@ impl FeeModel {
         }
     }
 
+    /// The ordinary transaction on `rung` at `at`, whatever the mix sends
+    /// it: a producer's own body is priced here (`chain_cursor::OwnFee`).
+    /// `None` on the control arm for any rung but Standard: its one flat fee
+    /// has no rungs.
+    #[must_use]
+    pub fn rung_tx(self, rung: Rung, at: &FeePoint<'_>) -> Option<OrdinaryTx> {
+        match self {
+            Self::FlatControl { .. } => self.rung_txs(at)[rung],
+            Self::Production { multiplier, .. } => {
+                let ladder = ladder_at(at);
+                let fee = match rung {
+                    Rung::Standard => standard_fee(ladder, multiplier, at),
+                    Rung::Economy => rung_fee(ladder.economy, at),
+                    Rung::Priority => rung_fee(ladder.priority, at),
+                };
+                Some(tx_paying(fee, at))
+            }
+        }
+    }
+
     /// What admission costs per byte at `at`: the Economy rung, which is the
     /// relay floor. A stuffer pays this and no more — it needs its
     /// transactions relayed, not prioritised — so the multiplier that stands
@@ -344,7 +364,7 @@ impl FeeModel {
 
 /// An ordinary transaction paying `fee_atomic` at `at`'s depth, at the
 /// weight that fee writes.
-fn tx_paying(fee_atomic: u64, at: &FeePoint<'_>) -> OrdinaryTx {
+pub(crate) fn tx_paying(fee_atomic: u64, at: &FeePoint<'_>) -> OrdinaryTx {
     OrdinaryTx {
         fee_atomic,
         weight: ordinary_tx_weight(at.chain_leaves, fee_atomic),

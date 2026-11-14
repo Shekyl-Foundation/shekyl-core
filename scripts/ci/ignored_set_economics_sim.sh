@@ -26,7 +26,9 @@
 # not fit this lane's budget beside its other tests, so it is named on
 # demand and never run here. The lane runs ESR-10's nightly scope instead:
 # every cell on both arms, on the baseline and the stuffing attack, against
-# its own fixture (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29).
+# its own fixture (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29). EUP-4 prep
+# 2's instruments (`--eup4`, §5.32) are pinned the same way: the full
+# narration on demand, its nightly scope here.
 #
 # Rule 47: the lane asserts its subject before running it. The crate's
 # ignored set must be EXACTLY the tests run here, the helpers and the
@@ -73,14 +75,17 @@ branch="${BRANCH:-the checked-out ref}"
 # the nightly's.
 narration_pins='stage2::tests::stage2_narration_matches_the_committed_fixture
 stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
-esr10::tests::esr10_nightly_narration_matches_the_committed_fixture'
+esr10::tests::esr10_nightly_narration_matches_the_committed_fixture
+eup4::tests::eup4_nightly_narration_matches_the_committed_fixture'
 run_tests="$narration_pins
 secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders
 baseline::tests::every_declared_reader_moves_its_report"
 helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures
-esr10::tests::regen_esr10_narration_fixtures'
-on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture'
+esr10::tests::regen_esr10_narration_fixtures
+eup4::tests::regen_eup4_narration_fixtures'
+on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
+eup4::tests::eup4_narration_matches_the_committed_fixture'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
@@ -122,7 +127,7 @@ cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim
   --ignored --exact --nocapture $lane_tests > sim-ignored.log 2>&1 || status=$?
 cat sim-ignored.log
 if [ "$status" -ne 0 ]; then
-  echo "::error::economics-sim ${lane} lane: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures or regen_esr10_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
+  echo "::error::economics-sim ${lane} lane: a named test failed. If a narration drifted and the sim change is intended, record it in ECONOMICS_SIM_PRODUCTION_REBASE.md and regenerate with regen_stage2_narration_fixtures, regen_esr10_narration_fixtures or regen_eup4_narration_fixtures under SHEKYL_PINNED_REGEN_DECISION citing that entry; otherwise the sim drifted from its record."
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
