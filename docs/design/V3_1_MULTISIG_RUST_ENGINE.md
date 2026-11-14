@@ -12,9 +12,9 @@ Protocol crypto: [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) (DRAFT v1.1).
 **E′ completion (2026-11-08/09).** Round 0 rulings R-1 (a group KEM key),
 R-2 (one ephemeral responder; everyone else holds a nonce), R-3 (the leaf
 commits to member key hashes), R-4 (a random XChaCha nonce in the ceremony
-blobs), and the deletions — recorded in §9. Slice 1 (receive and wire) is
-built; slices 2 (FROST correctness), 3 (the live ceremony) and 4 (wallet)
-follow.
+blobs), and the deletions — recorded in §9. Slices 1 (receive and wire),
+2 (FROST correctness) and 3 (the live ceremony) are built; slice 4 (the
+builder and the wallet) follows.
 
 ---
 
@@ -398,11 +398,10 @@ only moment a ceremony belongs — spending.**
 substrate, with the Option-D residue excised. **`state.rs` is DELETED** (the
 Option-D `IntentState` FSM; E′ rewrites the ceremony, it does not inherit it).
 
-**Adds:** the `FrostCeremony` FSM (four-blob / two-round-trip / pqc-last) +
-the SAL layer `shekyl_fcmp::frost_sal` (MS-2) + the **corrected nonce discipline** —
-*not* "reuse unrepresentable by type" (the old F-9 framing), but two shapes: B's
-ephemeral `!Clone` nonce, and A's held nonce under containment + a `ConsumedNonce`
-persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovable).
+**Adds:** the signing ceremony (`PQC_MULTISIG.md` §11) + the SAL layer
+`shekyl_fcmp::frost_sal` (MS-2) + the nonce discipline of MS-5: B's ephemeral
+nonce, and every other signer's held nonce under containment, use-once,
+intent-binding and parameter-binding, each a type.
 
 ### What it does *not* buy
 
@@ -936,7 +935,7 @@ one-type world) and V4 is years out, whereas one type would need a **one-variant
 `SigningCeremony` enum now** — coexistence machinery before coexistence. §15.5 (a
 group *is* its version; one Engine = one group = one version) makes the family
 shape what the version discipline already asserts. `MultisigSignerV2:
-EngineSignerKind`, `SigningCeremony = shekyl_multisig::FrostCeremony`
+EngineSignerKind`, `SigningCeremony = shekyl_multisig::Role`
 (`signer.rs`).
 
 R1-F-7 SoloSigner associated-item amend **landed** (`EngineSignerKind::SigningCeremony`,
@@ -952,13 +951,15 @@ Everything is Rust. The FROST layer lives in a crypto crate (rule 36):
 `shekyl_fcmp::frost_sal` holds the dealer split, the member-share loader
 (`threshold_keys`, 0-based member index → 1-based `Participant` in one
 place), `SalSigningParams` and the drivers over `modular_frost`'s own
-machines (`preprocess` / `from_cache` / `sign` / `complete` / `cache`), so
-the binding factor, nonce hedging and nonce custody are the machine's.
-`shekyl-multisig` carries bytes and does no curve arithmetic. Since slice 3
-PR-B it depends on `shekyl-crypto-pq` (the ceremony file's seal and its
-sender's envelope signature) and `shekyl-curve-tree` (the reference-block
-window, R-13); the end-to-end spend test moved into it, and `shekyl-fcmp`
-takes no edge back. The former
+machines (`preprocess`, `hold` / `HeldSession::resume`, `sign`,
+`complete`), so the binding factor, nonce hedging and nonce custody are
+the machine's. `shekyl-multisig` carries bytes and does no curve
+arithmetic of its own: it depends on `shekyl-crypto-pq` (the ceremony
+file's seal, its sender's envelope signature, the member signer and
+`verify_multisig`), `shekyl-curve-tree` (the reference-block window,
+R-13), `shekyl-fcmp` with `multisig` (the FROST layer, the FCMP++ prover
+and verifier) and `shekyl-bulletproofs` (the range proof), and none of
+them takes an edge back. The former
 `wallet2.cpp` group-create / `m_pqc_multisig_*` surface — once wrongly cited
 here as the "**correct** `shekyl_pqc_multisig_group_id`" caller — is **deleted**:
 it was a non-functional fossil (threw on every input) and group_id is retired.
@@ -1005,77 +1006,71 @@ Placement lean MS-4(a) (Refresh/scanner arm) still holds; the
 machinery dropped). (Round 1 closed 2026-07-16 on the F-* blockers; MS-4's
 E′-restated contents are Round-2 work, not a Round-1 gate.)
 
-### MS-5 — Spend path — **S1 LANDED (2026-07-17); restated under E′ (2026-07-15)**
+### MS-5 — Spend path — **the ceremony LANDED (slice 3); the DoD gate is open**
 
-**Prior lean (Option D):** `intent → canonical construction → prover →
-signature shares → assembly`. Gaps: no v31 `construction.rs`; F-7
-`EngineSignerKind` ceremony associated type.
+The spend is a **FROST ceremony over `y_group`** (with the public `y_kem`
+tweak) plus `m` hybrid `scheme_id = 2` signatures per input from each
+signer's KEM-derived per-output key; there is no prover handoff. The
+protocol, as built, is [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) §11 (roles,
+files, checks, the guards as types, nonces) and §13 (state and restarts);
+the bytes are [`SHEKYL_MULTISIG_WIRE_FORMAT.md`](../SHEKYL_MULTISIG_WIRE_FORMAT.md)
+§3.1. The roles come from the intent: proposer A, responder B, and every
+other signer a holder.
 
-**Under E′ the question changed.** Spend path is a **FROST ceremony over
-`y_group`** (with public `y_kem` tweak), plus M hybrid `scheme_id=2` sigs from
-per-participant KEM-derived keys — **not** a prover handoff.
+**Files and round trips.** A 2-of-N spend is four files in two round
+trips: A's `Proposal`, B's `ResponderShare`, A's `FinalTx`, B's
+`HybridSig`. Each holder adds four files and two visits; the responder's
+count is the same at any `m`. FROST needs every preprocess before any
+share, and the hybrid signatures come last, over the finished proofs. E′
+could reclaim a one-round-trip shape (B pre-shares a nonce commitment;
+A computes both shares), **but the price is a nonce on the safe key's
+disk between visits**, exactly where the containment rule forbids it.
+The responder therefore preprocesses and signs in one call and holds
+nothing. (On *on-chain invisibility* E′ is worse than Monero:
+`scheme_id = 2` and the `0x0D` entry permanently mark the spend. That is
+the PQC layer, not multisig; the compensation is post-quantum
+authorization and FROST instead of Monero's homebrew 2-of-N.)
 
-**Four blobs, two round-trips, pqc-last (recorded decision — a reviewer will ask
-why not two).** E′'s one structural win over Monero is **no balance dance**:
-`b_group` is group-plaintext, `compute_output_key_image` takes no ceremony, every
-wallet scans alone — the dance happens only on spend. But the spend went from the
-**two blobs** of the April file-based spec (a coordinator-held *classical* key
-meant leg 1 was already done when the request went out — one round-trip) to
-**four**, because FROST needs commitments before shares *and* pqc-last needs the
-aggregate before the hybrid sigs. E′ *could* reclaim Monero's one-round-trip shape
-(B pre-shares a nonce commitment; A computes both shares; one blob out) — **but
-the price is a nonce on the safe key's disk between visits**, exactly where the
-containment rule forbids it. So **four blobs is the price of not putting a nonce
-in the safe**, declined on the containment asymmetry. (Honestly: on *on-chain
-invisibility* E′ is worse than Monero — `scheme_id=2` + N KEM ciphertexts are
-permanently marked in `tx_extra`; that is the PQC layer, not multisig, and the
-compensation is post-quantum authorization + FROST instead of Monero's homebrew
-2-of-N.) The blobs: RT1 A→B commitment, B→A commitment+share; RT2 A→B SAL context,
-B→A hybrid sig; A assembles.
+**(D) two-leg binding: no new primitive.** The FROST SAL leg and the `m`
+hybrid `scheme_id = 2` legs are welded in both directions, as in the solo
+path: the PQC signed payload embeds the SAL through `prunable_hash`
+(`signed_hash(i)`, CEN-I17, the anti-substitution binding), and the
+curve-tree leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J` (opened
+in-circuit, `PL-D3`) binds the SAL to the key. For a multisig output the
+bytes `k` is derived from are the container's committed form
+`0x02 ‖ n ‖ m ‖ h_1 … h_n` (`PQC_MULTISIG.md` §7.5). The ceremony
+extends this unchanged; it only forces the **pqc-last** order.
 
-**(D) two-leg binding — no new primitive.** The FROST SAL leg and the M hybrid
-`scheme_id=2` legs are *already* welded bidirectionally in the solo path: the pqc
-signed payload embeds the SAL via `prunable_hash` (`signed_hash(i)`, CEN-I17,
-the anti-substitution binding), and the curve-tree leaf commitment
-`CM = H_ℓ(pqc_pk)·G_k + r·J` (opened in-circuit, `PL-D3`) binds the SAL to the
-key. For a multisig output the bytes `k` is derived from are the container's
-committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n` (`PQC_MULTISIG.md` §7.5). MS-5 extends this unchanged; it only
-forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
+**The nonce rule (the load-bearing security part).** Two shapes, because
+the danger is scoped to one role:
+1. **B's nonce (the safe key): ephemeral.** Born, used and dropped in
+   one call, never persisted. B is protected by the ceremony's shape.
+2. **A's and each holder's nonce: held across round 1**, under four
+   guards, each a type (`PQC_MULTISIG.md` §11.3–§11.4): (a)
+   **containment**: the `HeldNonce` lives in the store the caller
+   injects, in the same protected container as the member's `y_group`
+   share, so a nonce disclosure costs the same breach as a share
+   disclosure (and alone leaks the share through `x = (s − k)/e`); (b)
+   **used once**: the nonce is moved out of the store, and a
+   `ConsumedNonce` exists only after the durable monotonic counter
+   commits, which stops the two-signature share extraction (**key
+   theft**); (c) **bound to one intent**: the store is keyed by intent
+   hash, which stops a cosigner inducing a member to sign one nonce
+   against two challenges (**fund theft**); (d) **bound to its
+   parameters**: a `HeldSession` owns the parameters and keys it was
+   made under and resumes only with them, because `from_cache` ignores
+   its parameters.
 
-**The nonce rule (corrected — the load-bearing security part).** Two shapes,
-because the danger is scoped to one role — **not** "nonces unrepresentable /
-non-persistable by type" (the earlier F-9 framing), **not** `!Serialize` (which is
-unprovable — a foreign `derive` lands in six months), and **not** "restart
-forfeits the round" (a signing session spans bringing a safe-held device out
-once, and a restart inside it must not cost the round; the session itself is
-bounded by the intent's reference block, about three hours from a fresh
-anchor, `PROOF_VALIDITY_HORIZON` blocks, R-13):
-1. **B's nonce (the safe key): ephemeral `!Clone`** — born, used, and dropped in
-   one call, never persisted. B is protected by the *ceremony's shape*.
-2. **A's nonce (online): held across RT1, under three guards** — (a) **containment**
-   (reachable only from inside the same protected container as A's `y_group`
-   share; a nonce disclosure then costs the same breach as a share disclosure, and
-   disclosure alone leaks the share via `x = (s − k)/e`); (b) **consume-once** via
-   a `ConsumedNonce` persist-before-use typestate minted only after the durable
-   monotonic counter commits — stops the two-signature share extraction (**key
-   theft**); (c) **intent-binding** — the token is bound to one `intent_hash` —
-   stops a cosigner inducing A to sign one nonce against two challenges (**fund
-   theft**). Distinct halves; neither covers the other.
+A restart inside a session does not cost the round: the proposer is
+rebuilt from its own `Proposal` file, a holder from its context and its
+store, and the second round is stateless. The session itself is bounded
+by the intent's reference block (`PROOF_VALIDITY_HORIZON` blocks, R-13).
 
-**What S1 shipped (`shekyl-multisig`, this PR — mechanical then behavior).**
-`state.rs` (the Option-D `IntentState` FSM) is **deleted, not inherited**; the
-surviving format modules (`intent`, `messages`, `encryption`, `invariants`,
-`group_descriptor`) moved into the crate with the Option-D residue excised
-(`relays`; the prover / heartbeat / counter-proof / veto / rotation `MessageType`
-discriminants; `input_assigned_prover_indices`); the `FrostCeremony` FSM in the
-four-blob / two-round-trip / pqc-last order with both nonce shapes, the
-`ConsumedNonce` typestate + `NonceCounterSink` capability, and the
-`SpendRequest`/`SpendResponse` blob newtypes. **No live crypto** — the FROST
-rounds, SAL aggregation (`frost_sal.rs`), `y_kem` tweak, and hybrid sigs are
-S2/S3; the clean build is the proof (the `!Clone` guards + the share-releasing
-path gated on `ConsumedNonce`). `MultisigSignerV2: EngineSignerKind` in
-engine-core. S2 (live nonce + FROST rounds + tweak), S3 (assembly), S4 (dealer
-split + address), and S5 (the DoD gate below) each return as their own slices.
+**What remains: the multisig builder (slice 4a).** The unsigned spend's
+derivation from the intent (`PQC_MULTISIG.md` §9.5), the scheme-2 fee
+size, the builder seam in `shekyl-tx-builder`, and the wallet's
+`HeldNonceStore` and `NonceCounterSink`. The ceremony's tests build the
+unsigned spend directly.
 
 **DoD gate (inherited from MSW-6, non-negotiable).** MSW-6 dropped the
 *consensus* rule that forbade co-spending a solo (scheme-1) and a multisig
@@ -1135,10 +1130,10 @@ not a quiet reopen of MS-8.
 | ID | Status | Notes |
 | --- | --- | --- |
 | MS-1 | **DECIDED** | `shekyl-multisig` crate (MS-1(a), the "no transport" ban is the dep list); per-version family `MultisigSignerV2`; no const generics; F-3 lineage **CLOSED** (v31 only) |
-| MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate), `shekyl-multisig` does no curve arithmetic (its curve-tree edge is the reference window, R-13) |
+| MS-2 | **OPEN** | Lean holds; the FROST layer is `shekyl_fcmp::frost_sal` (crypto crate); `shekyl-multisig` calls the provers and verifiers and does no curve arithmetic of its own |
 | MS-3 | **OPEN** | Amended: positive CI (F-6); F-3 = delete fossil before flip |
 | MS-4 | **OPEN — restated E′** | No I7 / prover; local KI via `b`; KEM fan-out + `O` verify |
-| MS-5 | **S1 LANDED** | `shekyl-multisig` crate + `FrostCeremony` FSM (four-blob/two-round-trip/pqc-last) + both nonce shapes + `ConsumedNonce` typestate; no live crypto (S2/S3); DoD gate = S5 |
+| MS-5 | **Ceremony LANDED** | The signing ceremony (`PQC_MULTISIG.md` §11, §13): roles from the intent, every guard a type, held and ephemeral nonces; 2-of-3 and 3-of-5 spends verify from the wire. Open: the multisig builder (slice 4a) and the DoD gate |
 | MS-6 | **OPEN** | Lean holds |
 | MS-7 | **OPEN** | R6 vs **v31** persist only; versioned discriminator (R1-F-11) |
 | MS-8 | **RETIRED** | redundancy; leaf change not required |
@@ -1269,3 +1264,4 @@ rust/shekyl-crypto-pq/src/multisig.rs  MULTISIG_KEY_BLOB_MIN (the one floor; K13
 | 2026-07-18 | **E′ address (PR #323 merged) + group_id / Option-D deletion.** Address: `MultisigAddressPayload` carries `B_group`/`Y_group`; `spend_auth_version = 0x02`; fingerprint = `cSHAKE256(canonical, "shekyl/multisig-address-v1")` (domained, not `cn_fast_hash`); full address is file-based (bech32m can't hold ~4019 chars > 1023-char limit), the fingerprint (67 chars) is the shareable id. Deletion: `multisig_group_id` had **no consumer** under E′, computed a **per-output** container hash under a per-group name, and its one long-term caller (`wallet2::create_pqc_multisig_group`) **threw on every input** — deleted with its FFI (`shekyl_pqc_multisig_group_id`, `_verify_with_group_id`), `verify_multisig` check 9 + `expected_group_id`, the Option-D receive unit (`rotating_prover_index` + construct + validate + griefing/persisted residue), tag-0x05 unchanged (deferred), and the wallet2 C++ surface (safe: epee cache never wrote the fields). Group identity = address fingerprint. FFI code 9 retired (gap; 10/11 fixed). Consequence recorded: **no multisig output constructor exists until S2/S4 writes the E′ two-component one** (better than one building unspendable outputs). Container-lifetime ambiguity (`MultisigKeyContainer` per-output in Rust vs long-term in wallet2/KAT) filed as an S2-blocking slice. |
 | 2026-11-09 | **E′ completion Round 0 ruled; slice 1 (receive and wire) built.** Rulings (Rick, 2026-11-08/09): **R-1** a group hybrid KEM key in the address (`70 + (N+1)·1216` B); each output carries one `0x06` ciphertext to it, so the group scans as a solo wallet does. **R-2** at most one ephemeral responder per ceremony, every other signer holds its nonce (slice 3). **R-3** the leaf commits to member key hashes: committed form `0x02 ‖ n ‖ m ‖ h_1 … h_n`, `h_i = frame(shekyl/multisig-key-hash-v1, network_id, [pk_i])`, published encrypted in the new tag `0x0D`, so `m` signers spend without the other `n − m` (with the full keys in the container, as before, every spend needed all `n`). **R-4** XChaCha20-Poly1305 with a random nonce in the ceremony blobs (slice 3). **Deletions approved:** `frost_sal`'s session/coordinator and `frost_dkg` (slice 2); `multisig_receiving.rs`, container `spend_auth_pubkeys`, tags `0x09`/`0x0A`, `InvariantId::I7` (slice 1). Slice 1: tag `0x0D` + CEN-I19's clause; container v`0x02` and `verify_multisig` with the network-bound hash check; both consensus `k` derivations over the committed form; address v`0x02`; the member file; `construct_multisig_output` and `open_multisig_entry`; the scanner's member context. The per-output cost is `≈ 1120 + 64 + 1152·n + 18` B (4.7 KB at n = 3, 7.0 KB at n = 5). |
 | 2026-11-10 | **Slice 1 merged (#1328); slice 2 (FROST correctness) built.** The SAL leg is a FROST signature through `modular_frost`'s machines (`shekyl_fcmp::frost_sal`); `FrostSalSession`, the coordinator and `frost_dkg.rs` are deleted, and `dkg-pedpop` leaves the graph. The dealer split (`dkg-dealer`'s `key_gen` over `Ed25519T`) and the member-share loader live in `shekyl-fcmp`, not `shekyl-multisig` as the brief placed the dealer (rule 36; the ceremony crate takes no curve dependency). `preprocess` / `from_cache` offset the keys by `y_kem − o_blind` and refuse keys that do not open the rerandomized output, so `SalAlgorithm`'s offset contract holds by construction. Where `modular_frost` rejects, as tested: no `y_kem` offset → `complete` finds no one to blame (`InternalError`); a stray rerandomization or a preprocess from another session → `InvalidShare` naming the signer at `complete` (not at `sign`: a one-generator preprocess carries nothing `sign` can check); `m − 1` signers → refused at `sign`. Gate: 2-of-3 and 3-of-5 spends of two slice-1 outputs from member files verify through `prove_with_sal` and `verify` (`rust/shekyl-fcmp/tests/frost_spend.rs`). The tweak-soundness question (§0.5) stays Phase 6. |
+| 2026-11-14 | **Slice 3 built: the signing ceremony.** PR-B (#1368) landed the ceremony file v2, the envelope keys and intent v2. PR-C: the ceremony in `shekyl-multisig`'s `ceremony` module, under Rick's ruling that every guard is a type (2026-11-14): `Authenticated<B>`, `ValidatedIntent`, `CommittedMemberKey`, `PreprocessSet`, `HeldNonce` / `ConsumedNonce`, a `HeldSession` that owns its parameters, per-role typestates, and a `SignableTransaction` each signer assembles itself from verified proofs. `FrostCeremony`, `SpendRequest` / `SpendResponse` and engine-core's `MultisigNonceSink` stub are deleted; message types `0x09` and `0x0B` are REJECTED. Gate: 2-of-3 and 3-of-5 groups each spend two outputs, verified from the wire; every adversary of the brief is a test; each body decoder is a fuzz target. Protocol: `PQC_MULTISIG.md` §11, §13. |
