@@ -64,6 +64,11 @@ impl Session {
         Self { send, recv }
     }
 
+    /// The two halves apart, for the rows that count one call each.
+    pub fn into_halves(self) -> (SendHalf, RecvHalf) {
+        (self.send, self.recv)
+    }
+
     pub fn seal_open(&mut self, plaintext: &[u8]) -> usize {
         let wire = self.send.seal(plaintext).expect("seal");
         let (opened, consumed) = self.recv.open_one(&wire).expect("open");
@@ -102,6 +107,17 @@ impl Windows {
         let (send, _init_recv) = initiator.directions();
         let (_resp_send, recv) = responder.directions();
         Self { send, recv }
+    }
+
+    /// Seal `window`: one AEAD seal. The instruction-count rows take the
+    /// two calls apart (`benches/c5_iai.rs`).
+    pub fn seal(&mut self, window: &[u8]) -> Vec<u8> {
+        self.send.seal(window, b"window").expect("seal").0
+    }
+
+    /// Open one sealed window: one AEAD open.
+    pub fn open(&mut self, sealed: &[u8]) -> Vec<u8> {
+        self.recv.open(sealed, b"window").expect("open").0
     }
 
     /// Seal `window` and open it. Returns the ciphertext length.
