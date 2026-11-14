@@ -1054,6 +1054,7 @@ stale_through = [
   { through = "a86a01a60", note = "A19 review: generate_tx_key holds its scalar in Zeroizing from the draw instead of wiping a bare Scalar by hand. The scan does not call it. construct_output and scan_output_recover are unchanged. Not re-measured; the rows stay stale." },
   { through = "4a22840849", note = "The switch's C1: scan.rs renames the header field attestation_root to bundle_root in two test-block fixtures and fills it with the empty bundle root. Decapsulation and the output scan are unchanged. Not re-measured." },
   { through = "1e6f95a13e", note = "IG-Q102 (the switch): scan.rs's two test-block fixtures rename the header field bundle_root to section_root and its type to SectionRoot. A rename only; decapsulation and the output scan are unchanged. Not re-measured." },
+  { through = "80e26ff5d5", note = "PR #1380 named-constants sweep (80e26ff5d5): shekyl-scanner's scan.rs and bench_fixtures.rs write a test transaction's unlock_time as TxPrefix::NO_UNLOCK_TIME instead of 0. Same value, no change to the scan path or its cost." },
 ]
 
 [[constant]]
