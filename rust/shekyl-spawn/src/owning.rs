@@ -147,6 +147,10 @@ pub fn read_ready(ours: &mut End) -> io::Result<()> {
 /// # Errors
 ///
 /// [`AdoptError`], naming the condition that failed.
+#[allow(
+    unsafe_code,
+    reason = "adopt takes ownership of a raw descriptor or socket its caller hands over"
+)]
 pub unsafe fn adopt(number: u64) -> Result<OwningConnection, AdoptError> {
     #[cfg(unix)]
     {
@@ -159,6 +163,10 @@ pub unsafe fn adopt(number: u64) -> Result<OwningConnection, AdoptError> {
 }
 
 #[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "fcntl, fstat, getsockopt and getpeername have no safe wrapper"
+)]
 fn adopt_unix(number: u64) -> Result<OwningConnection, AdoptError> {
     use std::os::fd::FromRawFd;
 
@@ -234,6 +242,10 @@ fn adopt_unix(number: u64) -> Result<OwningConnection, AdoptError> {
 }
 
 #[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Winsock's checks and the socket's ownership have no safe wrapper"
+)]
 fn adopt_windows(number: u64) -> Result<OwningConnection, AdoptError> {
     use std::os::windows::io::FromRawSocket;
     use windows_sys::Win32::Networking::WinSock::{
@@ -298,6 +310,10 @@ fn adopt_windows(number: u64) -> Result<OwningConnection, AdoptError> {
 }
 
 #[cfg(all(test, unix))]
+#[allow(
+    unsafe_code,
+    reason = "the tests plant, probe and hand over raw descriptors"
+)]
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
@@ -391,6 +407,10 @@ mod tests {
 }
 
 #[cfg(all(test, windows))]
+#[allow(
+    unsafe_code,
+    reason = "the tests plant, probe and hand over raw descriptors"
+)]
 mod windows_tests {
     use super::*;
     use std::os::windows::io::IntoRawSocket;

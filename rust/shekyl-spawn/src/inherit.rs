@@ -98,6 +98,10 @@ impl StdioOnly {
 /// error. A launch that keeps a descriptor calls [`StdioOnly::apply`] in its
 /// own `pre_exec` and clears that descriptor after it.
 #[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "pre_exec installs the descriptor walk in the child"
+)]
 pub fn stdio_only(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
     let stdio_only = StdioOnly::prepare();
@@ -116,6 +120,7 @@ pub fn stdio_only(_cmd: &mut std::process::Command) {}
 /// that predates the call (`ENOSYS`) or its close-on-exec flag (`EINVAL`), or
 /// on any other refusal, and the caller walks the table instead.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "close_range has no safe wrapper")]
 fn mark_by_range() -> bool {
     // The raw call, not glibc's wrapper: the wrapper needs glibc 2.34.
     // SAFETY: `close_range` with `CLOSE_RANGE_CLOEXEC` changes only the
@@ -133,6 +138,7 @@ fn mark_by_range() -> bool {
 
 /// Mark `fd` close-on-exec. A descriptor that is not open is skipped.
 #[cfg(unix)]
+#[allow(unsafe_code, reason = "fcntl has no safe wrapper")]
 fn mark(fd: libc::c_int) -> std::io::Result<()> {
     // SAFETY: `fcntl` with `F_GETFD` / `F_SETFD` reads and writes only this
     // descriptor's flags.
@@ -155,6 +161,7 @@ fn mark(fd: libc::c_int) -> std::io::Result<()> {
 
 /// The descriptor table's size: the soft limit on open files.
 #[cfg(unix)]
+#[allow(unsafe_code, reason = "the descriptor table's size comes from libc")]
 fn table_size() -> libc::c_int {
     // macOS reports the soft limit through `getdtablesize`, already capped at
     // the per-process maximum; `sysconf` can report an unlimited soft limit.
@@ -171,6 +178,10 @@ fn table_size() -> libc::c_int {
 }
 
 #[cfg(all(test, unix))]
+#[allow(
+    unsafe_code,
+    reason = "the tests plant, probe and hand over raw descriptors"
+)]
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;

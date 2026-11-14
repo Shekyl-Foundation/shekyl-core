@@ -23,6 +23,8 @@
 //!   elsewhere). On Windows the pipe's peer check is
 //!   `shekyl_win_sec::open_verified`, which opens and checks in one call.
 
+#![deny(unsafe_code)]
+
 use std::path::PathBuf;
 
 /// This process's effective user id.

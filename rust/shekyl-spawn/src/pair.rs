@@ -262,6 +262,7 @@ fn raw_end(socket: &End) -> RawEnd {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code, reason = "SetHandleInformation has no safe wrapper")]
 fn set_inheritable(socket: &End, inherit: bool) -> io::Result<()> {
     use std::os::windows::io::AsRawSocket;
     use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
@@ -291,6 +292,7 @@ fn set_inheritable(socket: &End, inherit: bool) -> io::Result<()> {
 ///
 /// The `fcntl` error.
 #[cfg(unix)]
+#[allow(unsafe_code, reason = "fcntl has no safe wrapper")]
 pub fn clear_cloexec(fd: RawEnd) -> io::Result<()> {
     // SAFETY: `fcntl` with `F_GETFD` / `F_SETFD` reads and writes only this
     // descriptor's flags. The caller is `pre_exec`, so no other thread exists
@@ -349,6 +351,10 @@ impl ChildKeeps {
 /// the command: the end is inheritable for the length of the spawn
 /// ([`EndPair::spawn`]).
 #[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "pre_exec clears the end's close-on-exec in the child"
+)]
 pub fn keep_in_child(cmd: &mut std::process::Command, end: RawEnd) {
     use std::os::unix::process::CommandExt;
     let keeps = ChildKeeps::prepare(end);
@@ -364,6 +370,10 @@ pub fn keep_in_child(cmd: &mut std::process::Command, end: RawEnd) {
 pub fn keep_in_child(_cmd: &mut std::process::Command, _end: RawEnd) {}
 
 #[cfg(test)]
+#[allow(
+    unsafe_code,
+    reason = "the tests plant, probe and hand over raw descriptors"
+)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};

@@ -27,6 +27,8 @@
 //! owning control connection (`TOR_SUPERVISOR.md` `TSR-Q7`), and a GUI that
 //! starts the daemon holding its owning connection (`GUI_SYNC_LANE.md` GS-C3).
 
+#![deny(unsafe_code)]
+
 pub mod inherit;
 pub mod owning;
 pub mod pair;
