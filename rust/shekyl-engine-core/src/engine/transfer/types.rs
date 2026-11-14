@@ -343,9 +343,9 @@ pub(crate) struct PendingTxState {
     /// beside the alarm derived from the saved journal; never persisted.
     pub raised_alarms: HashMap<TxHash, crate::engine::diagnostics::WatchdogAlarmReason>,
     /// F40 targeted re-scan requests awaiting the driver's next tick.
-    /// `finalize_submit_already_in_chain` pushes here (alongside the
-    /// observability diagnostic) whenever the daemon claims a confirming
-    /// height at-or-below the wallet's synced height (§2.5(b)); the driver
+    /// `submit_async` pushes here, after the verdict commit, whenever the
+    /// daemon claims a confirming height at-or-below the wallet's synced
+    /// height (§2.5(b)); the driver
     /// drains it and runs the cheap-check-then-escalate executor under the
     /// F40-R2 breaker.
     ///

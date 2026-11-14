@@ -22,6 +22,7 @@
 use shekyl_types::TxHash;
 
 use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
+use super::super::dispatch_durability::VerdictEdit;
 use super::super::error::{
     AmbiguousErrorKind, RetryableRejectCause, SubmitError, TerminalErrorKind,
 };
@@ -36,7 +37,7 @@ use super::super::transaction_submitter::{
 };
 use super::engine::LocalPendingTx;
 use super::support::release_output_locks_for;
-use super::types::{PendingTxState, RescanRequest, Stage1LedgerSpendableAccess};
+use super::types::{PendingTxState, Stage1LedgerSpendableAccess};
 
 /// `#[allow(private_bounds)]`: the where-bounds name crate-private traits
 /// (`FeeSnapshotSource`, `TransactionSubmitter`,
@@ -57,14 +58,16 @@ where
     /// disposition (§2.5) cannot fork on it — the caller projects the
     /// Engine-public outcome from the kind *after* this returns
     /// (`BroadcastKind::into_outcome`, the single mapping site).
+    /// State half of an accept. The journal edit is [`VerdictEdit::LockAtSyncedHeight`];
+    /// the caller commits it after releasing the pending-tx lock.
     pub(super) fn finalize_submit_accept(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         tx_hash: TxHash,
-    ) -> TxHash {
+    ) -> VerdictEdit {
         // The network-exposed bytes the watchdog's rung-1 probe re-offers
-        // were saved on the journal row at dispatch (A19), so dropping the
+        // were saved on the journal row at dispatch, so dropping the
         // in-flight entry loses nothing.
         //
         // WI-RPC-3 retention: nothing to write here — the record was
@@ -80,17 +83,6 @@ where
         // (it does not clear a tripped breaker — see `SubmitLoopBreaker`).
         state.loop_breaker.record_accept();
 
-        // F14 (`DAEMON_SUBMIT_VERDICT.md` §2.6) via the journal (C2):
-        // the accepting verdict means the tx is network-exposed, not
-        // settled. Stamp the baseline on the owning journal row; the
-        // F14 field is the derived cache and is re-derived from the
-        // carried input set (spent race-guard included). Same path as
-        // `AlreadyInChain` — only the baseline height differs.
-        self.ledger.with_wallet_ledger_mut(|wallet| {
-            let accepted_at_height = wallet.ledger.height().to_raw();
-            wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), accepted_at_height);
-        });
-
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
             PendingTxDiagnostic::SubmitSucceeded {
@@ -99,53 +91,41 @@ where
             },
         );
 
-        tx_hash
+        // F14 via the journal: the accepting verdict means the tx is
+        // network-exposed, not settled. The baseline is the wallet's
+        // synced height, read inside the save's guard.
+        VerdictEdit::LockAtSyncedHeight {
+            txid: tx_hash.to_bytes(),
+        }
     }
 
-    /// Resolve a submit whose verdict was `AlreadyInChain { height }`
-    /// (F40, §2.5): confirmation observed by verdict — the reservation is
-    /// done, but **refresh remains the settlement authority**.
+    /// State half of an already-in-chain verdict (F40, §2.5).
     ///
-    /// The F14 awaiting-confirmation lock is placed in **both** height
-    /// cases (fund safety first: a no-lock disposition leaves a
-    /// selectable-input window an adversary who slows the wallet's own
-    /// daemon's block delivery can steer it into). The lock is baselined
-    /// at the daemon-claimed confirming `height`, not at the wallet's
-    /// current height; `height` decides only the **release path**:
+    /// Refresh remains the settlement authority. The journal edit places
+    /// the F14 lock in both height cases, baselined at the daemon-claimed
+    /// height and clamped to a height this wallet has reached. `height`
+    /// decides the release path, which the caller applies after the save:
     ///
-    /// - *`height` > wallet synced height:* the ordinary §2.6 path-1
-    ///   release — refresh reaches the confirming block and `mark_spent`
-    ///   settles spent-marking, clearing the lock.
-    /// - *`height` ≤ wallet synced height:* refresh already passed that
-    ///   height without observing the spend — path-1 is unreachable by
-    ///   construction (the FOLLOWUPS stranded-lock wedge). Emit
-    ///   [`PendingTxDiagnostic::TargetedRescanRequested`] so the driving
-    ///   actor enqueues a targeted re-scan of the window around `height`
-    ///   (reorg-heal machinery). A failed re-scan **never releases**
-    ///   (F40-R1); it falls through to the F31 resubmit-as-status-query
-    ///   via the watchdog, and consecutive fruitless re-scans are
-    ///   breaker-bounded (F40-R2) → operator alarm.
+    /// - `height` above the synced height: refresh reaches the confirming
+    ///   block and settles the spend.
+    /// - `height` at or behind the synced height: the caller enqueues a
+    ///   targeted rescan. A failed rescan never releases (F40-R1); it
+    ///   falls through to the watchdog, and fruitless rescans are
+    ///   breaker-bounded (F40-R2).
     ///
-    /// The verdict authorizes lock-lifecycle transitions only; `spent`
-    /// stays refresh-written (`docs/FOLLOWUPS.md` "`AlreadyInChain` submit
-    /// verdict", closed with the disposition split; reshaped to F40 with
-    /// the `height` carve-out).
-    /// Kind-blind like [`Self::finalize_submit_accept`]: places the F14
-    /// lock and enqueues the release-path side effects, then returns
-    /// the (unchanged) `tx_hash`. The caller constructs the public
-    /// [`SubmitOutcome::AlreadyInChain`] from `tx_hash` + `height` so
-    /// both success finalizers share the same return shape.
+    /// `spent` stays refresh-written. Nothing here releases the lock the
+    /// edit places.
     pub(super) fn finalize_submit_already_in_chain(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         tx_hash: TxHash,
         height: u64,
-    ) -> TxHash {
+    ) -> VerdictEdit {
         // The AlreadyInChain arm holds too, so a fruitless-re-scan
         // escalation can fall through to the F31 resubmit-as-status-query
-        // with the original bytes — saved on the journal row at dispatch
-        // (A19), so dropping the in-flight entry loses nothing.
+        // with the original bytes — saved on the journal row at dispatch,
+        // so dropping the in-flight entry loses nothing.
         //
         // WI-RPC-3 retention: as on the accept path, the record was
         // saved at dispatch — an AlreadyInChain verdict changes the
@@ -156,54 +136,6 @@ where
         // consecutive-rejection streak, same as a fresh accept.
         state.loop_breaker.record_accept();
 
-        let synced_height = self.ledger.with_wallet_ledger_mut(|wallet| {
-            let synced_height = wallet.ledger.height().to_raw();
-            // F40 §2.5(a): baseline at the claimed confirming height, not
-            // the wallet's current height. An in-chain observation later
-            // counts the proof-life ceiling from the baseline a probe
-            // records; until that probe, the sight is unread and is asked
-            // on the next chain advance.
-            //
-            // Clamped to a height this wallet has reached. The claim is
-            // untrusted (§7.2 rider row `AlreadyInChain.height`). An
-            // unread sight does not read the baseline, so the claim
-            // cannot park the status probe. The clamp still keeps an
-            // absurd height out of the journal. The raw claim still
-            // routes the release path and still rides the verdict; only
-            // the persisted baseline is bounded.
-            //
-            // Journal owns the baseline (C2), and since PR-SJ-1b the F14
-            // lock set *is* a view of it — the same accepting-verdict
-            // site as fresh accept, so there is one write and the two
-            // paths have nothing to diverge on.
-            let baseline_height = height.min(synced_height);
-            wallet.stamp_send_lock_baseline(&tx_hash.to_bytes(), baseline_height);
-            synced_height
-        });
-
-        // F40 §2.5(b): a claim refresh has already scanned past routes to
-        // the targeted re-scan. Requesting is all that happens here — the
-        // R1 never-release property is structural (nothing below this
-        // point can release the lock just placed), and the R2 breaker
-        // lives with the re-scan executor.
-        if height <= synced_height {
-            // Decision 3: enqueue the control-flow request on the dedicated
-            // queue the driver drains; the diagnostic below is the
-            // observability trace only (sinks are observability-only).
-            state.rescan_queue.push(RescanRequest {
-                tx_hash,
-                claimed_height: height,
-            });
-            emit_pending_tx_diagnostic(
-                self.sink.as_ref(),
-                PendingTxDiagnostic::TargetedRescanRequested {
-                    reservation_id: id,
-                    tx_hash,
-                    claimed_height: height,
-                },
-            );
-        }
-
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
             PendingTxDiagnostic::SubmitSucceeded {
@@ -212,7 +144,16 @@ where
             },
         );
 
-        tx_hash
+        // F40 §2.5(a): the commit clamps the baseline to a height this
+        // wallet has reached and, when the raw claim is at or behind
+        // that height, tells the caller to enqueue the targeted rescan.
+        // The R1 never-release property is structural: this edit places
+        // the lock and does not clear it. The R2 breaker lives with the
+        // re-scan executor.
+        VerdictEdit::LockAtClaimedHeight {
+            txid: tx_hash.to_bytes(),
+            claimed_height: height,
+        }
     }
 
     /// Finalize one submit success and project the public outcome — the
@@ -233,20 +174,22 @@ where
     /// Both dispatch sites — the test-injected reply and the production
     /// submitter reply — route here, so a test that certifies one is
     /// certifying the other.
+    /// State half of one submit success, plus the journal edit the caller
+    /// commits after releasing the pending-tx lock.
     pub(super) fn finalize_submit_success(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         success: SubmitSuccess,
-    ) -> SubmitOutcome {
+    ) -> (SubmitOutcome, VerdictEdit) {
         match success {
             SubmitSuccess::Broadcast { hash, kind } => {
-                let hash = self.finalize_submit_accept(state, id, hash);
-                kind.into_outcome(hash)
+                let edit = self.finalize_submit_accept(state, id, hash);
+                (kind.into_outcome(hash), edit)
             }
             SubmitSuccess::AlreadyInChain { hash, height } => {
-                let hash = self.finalize_submit_already_in_chain(state, id, hash, height);
-                SubmitOutcome::AlreadyInChain { hash, height }
+                let edit = self.finalize_submit_already_in_chain(state, id, hash, height);
+                (SubmitOutcome::AlreadyInChain { hash, height }, edit)
             }
         }
     }
@@ -258,12 +201,14 @@ where
     /// pass-through-with-sentinel-rid arm unrepresentable. Shared by the
     /// injected and production dispatch sites, as with
     /// [`Self::finalize_submit_success`].
+    /// State half of one submit failure, plus the journal edit when the
+    /// refusal changed the dispatch record. An ambiguous verdict has no edit.
     pub(super) fn finalize_submit_error(
         &self,
         state: &mut PendingTxState,
         id: ReservationId,
         err: &SubmitterError,
-    ) -> SubmitError {
+    ) -> (SubmitError, Option<VerdictEdit>) {
         match err {
             SubmitterError::RejectedTerminal { kind } => {
                 self.finalize_submit_terminal(state, id, *kind)
@@ -271,7 +216,9 @@ where
             SubmitterError::RejectedRetryable { cause } => {
                 self.finalize_submit_retryable(state, id, *cause)
             }
-            SubmitterError::Ambiguous { kind } => self.finalize_submit_ambiguous(state, id, *kind),
+            SubmitterError::Ambiguous { kind } => {
+                (self.finalize_submit_ambiguous(state, id, *kind), None)
+            }
         }
     }
 
@@ -280,21 +227,20 @@ where
         state: &mut PendingTxState,
         id: ReservationId,
         kind: TerminalErrorKind,
-    ) -> SubmitError {
-        if let Some(flight) = state.in_flight.remove(&id) {
+    ) -> (SubmitError, Option<VerdictEdit>) {
+        let edit = if let Some(flight) = state.in_flight.remove(&id) {
             // WI-RPC-3 retention: a terminal verdict is a definite
             // refusal — the daemon did not relay (single-egress), so
-            // exposure never began. Retire the dispatch-persisted
-            // record; a refused build leaves no residue (pin 1's
-            // discard side).
+            // exposure never began. The caller retires the dispatch
+            // record under the save's guard. The journal row survives
+            // as failed-send history; only the secret retires.
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.retire_retained_tx_key(&txid.to_bytes());
-                // PR-SJ-1: the journal row survives as failed-send
-                // history (SJ-DQ-3, rule 82) — only the secret retires.
-                wallet.send_journal.mark_terminal_rejected(&txid.to_bytes());
-            });
-        }
+            Some(VerdictEdit::TerminalRefusal {
+                txid: txid.to_bytes(),
+            })
+        } else {
+            None
+        };
         release_output_locks_for(state, id);
 
         emit_pending_tx_diagnostic(
@@ -318,7 +264,7 @@ where
             );
         }
 
-        SubmitError::DaemonRejectedTerminal { kind }
+        (SubmitError::DaemonRejectedTerminal { kind }, edit)
     }
 
     /// Restore a reservation whose daemon verdict was a §2.5 retryable
@@ -340,26 +286,21 @@ where
         state: &mut PendingTxState,
         id: ReservationId,
         cause: RetryableRejectCause,
-    ) -> SubmitError {
-        if let Some(flight) = state.in_flight.remove(&id) {
+    ) -> (SubmitError, Option<VerdictEdit>) {
+        let edit = if let Some(flight) = state.in_flight.remove(&id) {
             // WI-RPC-3 retention: §2.5 retryable is likewise definite
-            // ("provably unrelayed") — retire the dispatch-persisted
-            // record. The next `submit(id, gen)` re-persists at its own
-            // dispatch, possibly under a new canonical txid after a
-            // re-anchor rebuild, so retiring here also prevents a stale
-            // record for bytes that will never be re-offered.
+            // ("provably unrelayed"). The caller removes the dispatch
+            // record under the save's guard. The next `submit(id, gen)`
+            // re-persists at its own dispatch, possibly under a new
+            // canonical txid after a re-anchor.
             let txid = canonical_tx_id(&flight.entry.tx_bytes);
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.retire_retained_tx_key(&txid.to_bytes());
-                // PR-SJ-1: a retryable refusal undoes the dispatch — the
-                // reservation returns to consumer_held and the next
-                // submit re-dispatches (possibly under a new txid after
-                // a re-anchor). The journal row mirrors the retention
-                // record: removed here, re-born at the next dispatch.
-                wallet.send_journal.undo_dispatch(&txid.to_bytes());
-            });
             state.consumer_held.insert(id, flight.entry);
-        }
+            Some(VerdictEdit::RetryableRefusal {
+                txid: txid.to_bytes(),
+            })
+        } else {
+            None
+        };
 
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
@@ -369,10 +310,13 @@ where
             },
         );
 
-        SubmitError::DaemonRejectedRetryable {
-            cause,
-            reservation_id: id,
-        }
+        (
+            SubmitError::DaemonRejectedRetryable {
+                cause,
+                reservation_id: id,
+            },
+            edit,
+        )
     }
 
     pub(super) fn finalize_submit_ambiguous(

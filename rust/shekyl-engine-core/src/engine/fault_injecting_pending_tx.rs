@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 use super::dispatch_durability::LedgerCommit;
 use super::error::{PendingTxError, SendError, SubmitError};
-use super::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
+use super::pending::{PendingTx, ReservationId, TxRequest};
 use super::traits::pending_tx::PendingTxEngine;
 
 /// Composable failure-injection wrapper over any
@@ -140,7 +140,8 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
         id: ReservationId,
         seen_gen: u64,
         commit: &C,
-    ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+    ) -> impl std::future::Future<Output = Result<super::pending::SubmitReceipt, SubmitError>> + Send
+    {
         let injected = self
             .queued_submit_failures
             .lock()
@@ -186,7 +187,7 @@ mod tests {
     use super::*;
     use crate::engine::diagnostics::DiscardReason;
     use crate::engine::dispatch_durability::NoSaveCommit;
-    use crate::engine::pending::{FeePriority, TxHash};
+    use crate::engine::pending::{FeePriority, SubmitOutcome, TxHash};
     use crate::engine::traits::PendingTxEngine;
 
     struct DelegationStub {
@@ -228,10 +229,15 @@ mod tests {
             _id: ReservationId,
             _seen_gen: u64,
             _commit: &C,
-        ) -> impl std::future::Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+        ) -> impl std::future::Future<
+            Output = Result<super::super::pending::SubmitReceipt, SubmitError>,
+        > + Send {
             async {
-                Ok(SubmitOutcome::Accepted {
-                    hash: TxHash::from_bytes([1u8; 32]),
+                Ok(super::super::pending::SubmitReceipt {
+                    outcome: SubmitOutcome::Accepted {
+                        hash: TxHash::from_bytes([1u8; 32]),
+                    },
+                    verdict_saved: true,
                 })
             }
         }

@@ -3,46 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The engine's submit, and the two saves around it (A19).
+//! The engine's submit.
 //!
-//! The dispatch record is saved before the bytes leave, inside
-//! [`PendingTxEngine::submit`] through the [`LedgerCommit`] the engine lends
-//! it ([`dispatch_durability`](super::dispatch_durability)); what the
-//! daemon's verdict changed is saved before [`Engine::submit_pending_tx`]
-//! returns, and reported in the [`SubmitReceipt`]. Specialized to
-//! [`LocalLedger`], like `abandon_tx_persisted` and `persist_bond_record`:
-//! the verdict save writes the whole `WalletLedger`, which only the local
-//! ledger hands out.
+//! Specialized to [`LocalLedger`], like `abandon_tx_persisted` and
+//! `persist_bond_record`: both saves write the whole `WalletLedger`,
+//! which only the local ledger hands out. The dispatch record is saved
+//! before the bytes leave, and the verdict's journal edit is saved with
+//! that edit, inside [`PendingTxEngine::submit`]
+//! ([`dispatch_durability`](super::dispatch_durability)). The receipt
+//! reports whether the verdict save confirmed.
 
-use shekyl_engine_file::Durability;
+pub use super::pending::SubmitReceipt;
 
-use super::dispatch_durability::{EngineLedgerCommit, LedgerCommit};
+use super::dispatch_durability::EngineLedgerCommit;
 use super::error::SubmitError;
-use super::pending::{ReservationId, SubmitOutcome};
+use super::pending::ReservationId;
 use super::traits::{DaemonEngine, PendingTxEngine, RefreshEngine};
 use super::{Engine, EngineSignerKind, LocalLedger};
-
-/// What [`Engine::submit_pending_tx`]
-/// returns on success: the daemon's verdict, and whether the wallet saved
-/// what that verdict changed (A19).
-///
-/// The dispatch itself was saved before the bytes left — a submit whose
-/// dispatch save fails sends nothing and returns
-/// [`SubmitError::DispatchNotSaved`].
-/// The verdict save (the F14 lock baseline the accept stamped) runs after
-/// the bytes left, so its failure cannot undo the send: it is reported
-/// here instead. The send stands, the record of it is on disk, and the
-/// next successful save writes the baseline; until then a restart treats
-/// the send as one whose verdict never arrived (locked at its dispatch
-/// height, and a resend is the user's decision).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubmitReceipt {
-    /// The daemon's verdict.
-    pub outcome: SubmitOutcome,
-    /// `false` when the save of the verdict's changes failed (see the
-    /// type docs). The cause is in the wallet's log.
-    pub verdict_saved: bool,
-}
 
 #[allow(private_bounds)]
 impl<
@@ -54,13 +31,13 @@ impl<
         F: super::traits::PersistenceEngine,
     > Engine<S, D, LocalLedger, E, R, P, F>
 {
-    /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
+    /// Submit a [`PendingTx`](super::pending::PendingTx) handle via [`PendingTxEngine::submit`].
     ///
     /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
     /// it gates broadcast against a submit-time re-anchor that changed the
     /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
     ///
-    /// Success is the identity-bearing [`SubmitOutcome`] — fresh accept,
+    /// Success is the identity-bearing [`SubmitOutcome`](super::pending::SubmitOutcome) — fresh accept,
     /// pool-resident duplicate, or the daemon's already-in-chain claim
     /// with its claimed height (all sharing the §2.5 lock disposition) —
     /// inside a [`SubmitReceipt`] that says whether the verdict was saved.
@@ -75,68 +52,17 @@ impl<
     /// submit (wallet-RPC uses a read guard) without stalling concurrent
     /// read RPCs for the duration of the network call.
     ///
-    /// Two saves (A19): the dispatch record is saved before the bytes
-    /// leave (inside [`PendingTxEngine::submit`]; a failure is
-    /// [`SubmitError::DispatchNotSaved`] and nothing was sent), and what
-    /// the verdict changed is saved before this returns
-    /// ([`SubmitReceipt::verdict_saved`]).
+    /// The dispatch record is saved before the bytes leave. A failure is
+    /// [`SubmitError::DispatchNotSaved`] and nothing was sent. The
+    /// verdict's journal edit is saved with that edit;
+    /// [`SubmitReceipt::verdict_saved`] says whether the save confirmed.
+    /// A refusal's save failure is logged: the receipt is the refusal.
     pub async fn submit_pending_tx(
         &self,
         id: ReservationId,
         seen_gen: u64,
     ) -> Result<SubmitReceipt, SubmitError> {
         let commit = EngineLedgerCommit::new(&self.persistence, self.state_wrap_key());
-        let result = self.pending.submit(id, seen_gen, &commit).await;
-        self.save_verdict(&commit, result)
-    }
-
-    /// Save what a definite verdict changed: the F14 lock baseline an
-    /// accept or an already-in-chain claim stamped, or the record a
-    /// terminal or retryable refusal retired. An ambiguous verdict, and
-    /// every refusal before the dispatch, changed nothing on disk.
-    ///
-    /// The bytes have left, so a failure here does not undo the send. On
-    /// success it is reported in [`SubmitReceipt::verdict_saved`]; on a
-    /// refusal it is logged — the saved row still says dispatched, so a
-    /// restart locks it and lists it among the held sends, and a resend
-    /// returns the same refusal and releases it.
-    fn save_verdict(
-        &self,
-        commit: &EngineLedgerCommit<'_, F>,
-        result: Result<SubmitOutcome, SubmitError>,
-    ) -> Result<SubmitReceipt, SubmitError> {
-        let definite = matches!(
-            result,
-            Ok(_)
-                | Err(SubmitError::DaemonRejectedTerminal { .. }
-                    | SubmitError::DaemonRejectedRetryable { .. })
-        );
-        let saved = if definite {
-            let guard = self.ledger.read();
-            match commit.commit(&guard.ledger) {
-                Ok(Durability::Confirmed) => true,
-                Ok(Durability::Unconfirmed) => {
-                    tracing::warn!(
-                        "submit: the send left and stands, but saving its verdict was not \
-                         confirmed; the next save writes it"
-                    );
-                    false
-                }
-                Err(error) => {
-                    tracing::error!(
-                        %error,
-                        "submit: the send left and stands, but saving its verdict failed; \
-                         the next save writes it"
-                    );
-                    false
-                }
-            }
-        } else {
-            true
-        };
-        result.map(|outcome| SubmitReceipt {
-            outcome,
-            verdict_saved: saved,
-        })
+        self.pending.submit(id, seen_gen, &commit).await
     }
 }

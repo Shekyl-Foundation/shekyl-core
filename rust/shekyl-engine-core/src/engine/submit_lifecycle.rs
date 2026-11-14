@@ -84,6 +84,7 @@ use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
 use super::dispatch_durability::LedgerCommit;
+pub(crate) use super::dispatch_durability::ReleasePersistence;
 use super::local_pending_tx::RescanRequest;
 use super::submit_watchdog::{
     apply_probe_outcome, escape_ladder_step, AlarmReason, HeldSubmit, ProbeDisposition,
@@ -141,28 +142,6 @@ pub(crate) fn held_send_attention(
         HeldSendAttention::Ask(WatchdogAlarmReason::DispatchedBeforeThisSession)
     } else {
         HeldSendAttention::Automatic { latched }
-    }
-}
-
-/// What a confirmed-absent release did with the ledger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReleasePersistence {
-    /// No row held a lock. Nothing was written.
-    Unchanged,
-    /// The release is on disk and the parent-directory fsync confirmed it.
-    Confirmed,
-    /// The release was applied and the parent-directory fsync did not
-    /// confirm it. The in-memory rows match that applied write.
-    Unconfirmed,
-    /// The save failed before the rename. The rows were restored.
-    NotSaved,
-}
-
-impl ReleasePersistence {
-    /// The inputs are free across a crash: nothing was locked, or the
-    /// release was confirmed.
-    pub(crate) fn inputs_confirmed_free(self) -> bool {
-        matches!(self, Self::Confirmed | Self::Unchanged)
     }
 }
 

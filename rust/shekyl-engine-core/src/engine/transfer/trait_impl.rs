@@ -16,14 +16,12 @@ use shekyl_engine_state::LedgerBlock;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic, WatchdogAlarmReason,
 };
-use shekyl_engine_file::Durability;
-
-use super::super::dispatch_durability::LedgerCommit;
+use super::super::dispatch_durability::{commit_release, LedgerCommit};
 use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::output_selector::OutputSelector;
-use super::super::pending::{PendingTx, ReservationId, SubmitOutcome, TxHash, TxRequest};
+use super::super::pending::{PendingTx, ReservationId, SubmitReceipt, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
 use super::super::submit_lifecycle::{HeldSendFact, ReleasePersistence, WatchdogHost};
@@ -142,59 +140,11 @@ where
         // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
         // death rule).
         //
-        // A19: the release frees inputs a new send can select, so it is
-        // saved under the same guard before anything can act on it. A
-        // save that fails before the rename restores the rows. A rename
-        // whose parent-directory fsync did not confirm leaves the applied
-        // rows: undoing them would diverge from disk.
-        self.ledger.with_wallet_ledger_mut(|wallet| {
-            let before: Vec<([u8; 32], shekyl_engine_state::SendState, Option<u64>)> = tx_hashes
-                .iter()
-                .filter_map(|tx| {
-                    let key = tx.to_bytes();
-                    wallet
-                        .send_journal
-                        .rows
-                        .get(&key)
-                        .map(|row| (key, row.state, row.lock_baseline))
-                })
-                .collect();
-            submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes);
-            let changed = before.iter().any(|(key, state, baseline)| {
-                wallet
-                    .send_journal
-                    .rows
-                    .get(key)
-                    .is_some_and(|row| row.state != *state || row.lock_baseline != *baseline)
-            });
-            if !changed {
-                return ReleasePersistence::Unchanged;
-            }
-            match commit.commit(wallet) {
-                Ok(Durability::Confirmed) => ReleasePersistence::Confirmed,
-                Ok(Durability::Unconfirmed) => {
-                    tracing::warn!(
-                        "watchdog: the release of a send that will not confirm was applied \
-                         but not confirmed; the next confirmed save writes it"
-                    );
-                    ReleasePersistence::Unconfirmed
-                }
-                Err(error) => {
-                    for (key, state, baseline) in before {
-                        if let Some(row) = wallet.send_journal.rows.get_mut(&key) {
-                            row.state = state;
-                            row.lock_baseline = baseline;
-                        }
-                    }
-                    tracing::error!(
-                        %error,
-                        "watchdog: the release of a send that will not confirm could not be \
-                         saved; its inputs stay locked and the next probe asks again"
-                    );
-                    ReleasePersistence::NotSaved
-                }
-            }
-        })
+        // The release frees inputs a new send can select, so it is saved
+        // under the same guard. [`commit_release`] restores the whole row
+        // when the rename does not land.
+        self.ledger
+            .with_wallet_ledger_mut(|wallet| commit_release(wallet, commit, tx_hashes))
     }
 
     fn held_send_facts(&self) -> Vec<HeldSendFact> {
@@ -474,7 +424,7 @@ where
         id: ReservationId,
         seen_gen: u64,
         commit: &C,
-    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+    ) -> impl Future<Output = Result<SubmitReceipt, SubmitError>> + Send {
         let this = self;
         async move { this.submit_async(id, seen_gen, commit).await }
     }

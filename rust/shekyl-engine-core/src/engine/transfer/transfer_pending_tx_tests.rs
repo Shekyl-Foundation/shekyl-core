@@ -2026,7 +2026,7 @@ async fn production_submit_dispatch_projects_the_daemon_verdict() {
             .submit(built.id, built.content_gen, &NoSaveCommit)
             .await
             .expect("submit resolves successfully");
-        (hash, outcome)
+        (hash, outcome.outcome)
     }
 
     let (hash, outcome) = submit_via_production_dispatch(|hash| {

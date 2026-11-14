@@ -163,7 +163,7 @@ impl<
         // audit): without the undo the unsaved slot stayed in memory and
         // the next unrelated save wrote a bond record no bond was signed
         // for.
-        self.save_or_rollback(&mut guard, |state| {
+        let durability = self.save_or_rollback(&mut guard, |state| {
             let staking = &mut state.ledger.staking;
             (
                 staking.staking_enabled,
@@ -172,6 +172,10 @@ impl<
             ) = before;
         })?;
         drop(guard);
+        // The ticket authorizes signing, and the signed post is broadcast.
+        // An unconfirmed parent fsync keeps the applied record and mints
+        // nothing; a retry saves again.
+        super::dispatch_durability::require_confirmed(durability)?;
 
         Ok(PersistedBondTicket { p_slot: slot })
     }

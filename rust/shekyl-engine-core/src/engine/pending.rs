@@ -274,6 +274,42 @@ pub enum SubmitOutcome {
     },
 }
 
+/// What [`crate::engine::Engine::submit_pending_tx`] returns on success:
+/// the daemon's verdict, and whether the wallet saved what that verdict
+/// changed.
+///
+/// The dispatch itself was saved before the bytes left. A submit whose
+/// dispatch save fails sends nothing and returns
+/// [`SubmitError::DispatchNotSaved`](crate::engine::error::SubmitError::DispatchNotSaved).
+/// The verdict save runs after the bytes left, under the same ledger
+/// write guard as the journal edit, so its failure cannot undo the send:
+/// it is reported here. The send stands, and the next successful save
+/// writes the baseline. Until then a restart treats the send as one whose
+/// verdict never arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubmitReceipt {
+    /// The daemon's verdict.
+    pub outcome: SubmitOutcome,
+    /// `false` when the save of the verdict's changes failed. The cause
+    /// is in the wallet's log.
+    pub verdict_saved: bool,
+}
+
+impl SubmitReceipt {
+    /// The locally computed canonical tx id of [`Self::outcome`].
+    pub fn hash(&self) -> TxHash {
+        self.outcome.hash()
+    }
+}
+
+impl PartialEq<SubmitOutcome> for SubmitReceipt {
+    /// Verdict equality. [`Self::verdict_saved`] is not part of it: a
+    /// test that cares about the save reads the field.
+    fn eq(&self, other: &SubmitOutcome) -> bool {
+        self.outcome == *other
+    }
+}
+
 impl SubmitOutcome {
     /// The locally computed canonical tx id, whichever verdict arrived.
     pub fn hash(&self) -> TxHash {

@@ -31,20 +31,32 @@
 //!   [`Durability::Confirmed`] mints. A save that fails before the rename
 //!   undoes the record under the same guard. A rename whose parent-directory
 //!   fsync did not confirm leaves the applied record and mints nothing.
-//! - [`DurableTxBytes::from_sealed`] — a claim, drain, release or bond
-//!   post: `submit_bound` receives [`PBoundBytes`] only from a record sealed
-//!   in its pending store before the call (`claim_dispatch.rs`,
-//!   `drain_dispatch.rs`, `release_dispatch.rs`, `pscan/dispatch.rs`).
+//! - [`DurableTxBytes::from_fresh_seal`] — a claim, drain, release or bond
+//!   post whose pending-store save just returned [`Durability::Confirmed`].
+//! - [`DurableTxBytes::from_loaded_seal`] — a resend of bytes
+//!   [`PBoundBytes::from_pending`] read back out of that store.
 //!
 //! The watchdog's probe and the user's resend of a held send
 //! (`held_sends.rs`) re-offer bytes read back from the saved journal row
 //! straight to the daemon, not through a submitter: each is a status query
 //! over bytes whose record is already on disk.
+//!
+//! # One save
+//!
+//! [`commit_or_restore`] and [`commit_keeping`] are the two policies over
+//! one save. A broadcast that has not yet left restores the edit when the
+//! rename does not land ([`commit_dispatch`], [`commit_release`]). A fact
+//! that has already happened keeps the edit, so this process and the disk
+//! agree once the next save confirms ([`commit_verdict`]). Only
+//! [`Durability::Confirmed`] mints bytes that may leave.
+
+use std::collections::HashSet;
 
 use shekyl_engine_file::Durability;
-use shekyl_engine_state::{SendInputRef, SendRecipient, TxSecretKey, WalletLedger};
+use shekyl_engine_state::{SendInputRef, SendRecipient, SendRecord, TxSecretKey, WalletLedger};
+use shekyl_types::TxHash;
 
-use super::bond_assembly::PBoundBytes;
+use super::bond_assembly::{LoadedSeal, PBoundBytes};
 use super::error::PersistenceError;
 use super::lifecycle::drive_persistence;
 use super::sealing_keys::StateWrapKey;
@@ -66,12 +78,26 @@ impl std::fmt::Debug for DurableTxBytes {
 }
 
 impl DurableTxBytes {
-    /// Bytes from a record sealed in a staking pending store before the
-    /// dispatch call (claim, drain, release, bond post). `submit_bound` is
-    /// the only caller; every [`PBoundBytes`] that reaches it was sealed
-    /// first (module docs).
-    pub(crate) fn from_sealed(bound: PBoundBytes) -> Self {
-        Self(bound.into_bytes())
+    /// Bytes whose pending-store save just returned `durability`.
+    ///
+    /// Only [`Durability::Confirmed`] mints. [`Durability::Unconfirmed`]
+    /// keeps the applied seal and refuses the hand-off: the rename is
+    /// visible, and a crash before the directory entry is journaled must
+    /// not meet bytes that have already left.
+    pub(crate) fn from_fresh_seal(
+        bound: PBoundBytes,
+        durability: Durability,
+    ) -> Result<Self, PersistenceError> {
+        require_confirmed(durability)?;
+        Ok(Self(bound.into_bytes()))
+    }
+
+    /// Bytes [`PBoundBytes::from_pending`] read back from the sealed store.
+    ///
+    /// The load is the witness: the store returned the record. A fresh
+    /// assembly does not construct a [`LoadedSeal`].
+    pub(crate) fn from_loaded_seal(seal: LoadedSeal) -> Self {
+        Self(seal.into_bytes())
     }
 
     /// Consume into the bytes, for the transport.
@@ -141,6 +167,260 @@ impl<F: PersistenceEngine> LedgerCommit for EngineLedgerCommit<'_, F> {
     }
 }
 
+/// Apply `edit`, then save. A save that fails before the rename runs
+/// `restore` under the caller's guard and returns the error. An applied
+/// write, confirmed or not, leaves the edit in place.
+pub(crate) fn commit_or_restore<C, E, R>(
+    wallet: &mut WalletLedger,
+    commit: &C,
+    edit: E,
+    restore: R,
+) -> Result<Durability, PersistenceError>
+where
+    C: LedgerCommit + ?Sized,
+    E: FnOnce(&mut WalletLedger),
+    R: FnOnce(&mut WalletLedger),
+{
+    edit(wallet);
+    restore_unless_saved(commit.commit(wallet), || restore(wallet))
+}
+
+/// Apply `edit`, then save. A failed save leaves the edit: the fact it
+/// records has already happened, and undoing it would drop a lock whose
+/// bytes have left, or forget a refusal the daemon already gave.
+pub(crate) fn commit_keeping<C, E>(
+    wallet: &mut WalletLedger,
+    commit: &C,
+    edit: E,
+) -> Result<Durability, PersistenceError>
+where
+    C: LedgerCommit + ?Sized,
+    E: FnOnce(&mut WalletLedger),
+{
+    edit(wallet);
+    commit.commit(wallet)
+}
+
+/// `Ok` passes through. `Err` runs `restore`, then returns the error.
+pub(crate) fn restore_unless_saved(
+    result: Result<Durability, PersistenceError>,
+    restore: impl FnOnce(),
+) -> Result<Durability, PersistenceError> {
+    match result {
+        Ok(durability) => Ok(durability),
+        Err(error) => {
+            restore();
+            Err(error)
+        }
+    }
+}
+
+/// The save authorized a broadcast.
+pub(crate) fn require_confirmed(durability: Durability) -> Result<(), PersistenceError> {
+    match durability {
+        Durability::Confirmed => Ok(()),
+        Durability::Unconfirmed => Err(PersistenceError::DurabilityUnconfirmed),
+    }
+}
+
+/// An applied write is enough: nothing will be broadcast on this save.
+///
+/// Exhaustive so a third [`Durability`] variant has to choose a policy.
+pub(crate) fn accept_applied(durability: Durability) {
+    match durability {
+        Durability::Confirmed | Durability::Unconfirmed => {}
+    }
+}
+
+/// What a definite daemon verdict writes on the send journal.
+///
+/// The finalizer names the edit. [`commit_verdict`] applies it and saves
+/// it under one ledger write guard, after the pending-tx state lock has
+/// been released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VerdictEdit {
+    /// Fresh accept or pool duplicate. Baseline the lock at the wallet's
+    /// synced height, read inside the save's guard.
+    LockAtSyncedHeight {
+        /// Canonical transaction id.
+        txid: [u8; 32],
+    },
+    /// Already-in-chain. Baseline at `min(claimed_height, synced)`.
+    LockAtClaimedHeight {
+        /// Canonical transaction id.
+        txid: [u8; 32],
+        /// Daemon-claimed confirming height. Untrusted; the baseline is
+        /// clamped to a height this wallet has reached.
+        claimed_height: u64,
+    },
+    /// Definite terminal refusal. The row stays as failed-send history.
+    TerminalRefusal {
+        /// Canonical transaction id.
+        txid: [u8; 32],
+    },
+    /// Definite retryable refusal. The dispatch row is removed.
+    RetryableRefusal {
+        /// Canonical transaction id.
+        txid: [u8; 32],
+    },
+}
+
+/// What [`commit_verdict`] did with a [`VerdictEdit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppliedVerdict {
+    /// The parent-directory fsync confirmed the edit.
+    pub saved: bool,
+    /// The already-in-chain claim sits at or behind the synced height,
+    /// so the caller enqueues a targeted rescan after releasing this guard.
+    /// The pair is `(txid, claimed_height)`.
+    pub rescan: Option<([u8; 32], u64)>,
+}
+
+/// Apply `edit` and save it, keeping the edit if the save fails.
+///
+/// The bytes have already left, or the daemon has already refused them.
+/// A pre-rename failure is logged and reported through
+/// [`AppliedVerdict::saved`]; the in-memory edit stays so this process
+/// keeps the lock or the refusal. The next successful save writes it.
+pub(crate) fn commit_verdict<C: LedgerCommit + ?Sized>(
+    wallet: &mut WalletLedger,
+    commit: &C,
+    edit: VerdictEdit,
+) -> AppliedVerdict {
+    let saved = match commit_keeping(wallet, commit, |wallet| apply_verdict(wallet, edit)) {
+        Ok(Durability::Confirmed) => true,
+        Ok(Durability::Unconfirmed) => {
+            tracing::warn!(
+                "submit: the verdict stands, but saving it was not confirmed; \
+                 the next save writes it"
+            );
+            false
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "submit: the verdict stands, but saving it failed; the next save writes it"
+            );
+            false
+        }
+    };
+    let rescan = match edit {
+        VerdictEdit::LockAtClaimedHeight {
+            txid,
+            claimed_height,
+        } if claimed_height <= wallet.ledger.height().to_raw() => Some((txid, claimed_height)),
+        _ => None,
+    };
+    AppliedVerdict { saved, rescan }
+}
+
+fn apply_verdict(wallet: &mut WalletLedger, edit: VerdictEdit) {
+    match edit {
+        VerdictEdit::LockAtSyncedHeight { txid } => {
+            let height = wallet.ledger.height().to_raw();
+            wallet.stamp_send_lock_baseline(&txid, height);
+        }
+        VerdictEdit::LockAtClaimedHeight {
+            txid,
+            claimed_height,
+        } => {
+            let synced = wallet.ledger.height().to_raw();
+            wallet.stamp_send_lock_baseline(&txid, claimed_height.min(synced));
+        }
+        VerdictEdit::TerminalRefusal { txid } => {
+            wallet.retire_retained_tx_key(&txid);
+            wallet.send_journal.mark_terminal_rejected(&txid);
+        }
+        VerdictEdit::RetryableRefusal { txid } => {
+            wallet.retire_retained_tx_key(&txid);
+            wallet.send_journal.undo_dispatch(&txid);
+        }
+    }
+}
+
+/// What [`commit_release`] did with the confirmed-absent release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReleasePersistence {
+    /// No row held a lock. Nothing was written.
+    Unchanged,
+    /// The release is on disk and the parent-directory fsync confirmed it.
+    Confirmed,
+    /// The release was applied and the parent-directory fsync did not
+    /// confirm it. The in-memory rows match that applied write.
+    Unconfirmed,
+    /// The save failed before the rename. The rows were restored.
+    NotSaved,
+}
+
+impl ReleasePersistence {
+    /// The inputs are free across a crash: nothing was locked, or the
+    /// release was confirmed.
+    pub(crate) fn inputs_confirmed_free(self) -> bool {
+        matches!(self, Self::Confirmed | Self::Unchanged)
+    }
+}
+
+/// Release the F14 locks under `tx_hashes` and save that release.
+///
+/// The whole [`SendRecord`] is the undo image. A save that fails before
+/// the rename puts those rows back, so a later field of the release
+/// cannot survive a failed save. Nothing is written when no lock clears.
+pub(crate) fn commit_release<C: LedgerCommit + ?Sized>(
+    wallet: &mut WalletLedger,
+    commit: &C,
+    tx_hashes: &HashSet<TxHash>,
+) -> ReleasePersistence {
+    if tx_hashes.is_empty() {
+        return ReleasePersistence::Unchanged;
+    }
+    let before: Vec<([u8; 32], SendRecord)> = tx_hashes
+        .iter()
+        .filter_map(|tx| {
+            let key = tx.to_bytes();
+            wallet
+                .send_journal
+                .rows
+                .get(&key)
+                .cloned()
+                .map(|row| (key, row))
+        })
+        .collect();
+    super::submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes);
+    let changed = before
+        .iter()
+        .any(|(key, row)| wallet.send_journal.rows.get(key) != Some(row));
+    if !changed {
+        return ReleasePersistence::Unchanged;
+    }
+    match restore_unless_saved(commit.commit(wallet), || {
+        for (key, row) in before {
+            match wallet.send_journal.rows.get_mut(&key) {
+                Some(slot) => *slot = row,
+                None => {
+                    wallet.send_journal.rows.insert(key, row);
+                }
+            }
+        }
+    }) {
+        Ok(Durability::Confirmed) => ReleasePersistence::Confirmed,
+        Ok(Durability::Unconfirmed) => {
+            tracing::warn!(
+                "watchdog: the release of a send that will not confirm was applied \
+                 but not confirmed; the next confirmed save writes it"
+            );
+            ReleasePersistence::Unconfirmed
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "watchdog: the release of a send that will not confirm could not be \
+                 saved; its inputs stay locked and the next probe asks again"
+            );
+            ReleasePersistence::NotSaved
+        }
+    }
+}
+
 /// The dispatch facts [`commit_dispatch`] writes, and the bytes it may mint.
 ///
 /// One value, so the row and the hand-off cannot carry different bytes.
@@ -187,23 +467,22 @@ pub(crate) fn commit_dispatch<C: LedgerCommit + ?Sized>(
         inputs,
         tx_bytes,
     } = record;
-    wallet.record_retained_tx_key(txid, retained);
-    wallet.record_dispatched_send(txid, fee, recipients, inputs, tx_bytes);
-    match commit.commit(wallet) {
-        Ok(Durability::Confirmed) => {
-            let bytes = wallet
-                .send_journal
-                .tx_bytes(&txid)
-                .expect("commit_dispatch stored the bytes it authorizes")
-                .to_vec();
-            Ok(DurableTxBytes(bytes))
-        }
-        Ok(Durability::Unconfirmed) => Err(PersistenceError::DurabilityUnconfirmed),
-        Err(error) => {
-            wallet.undo_unsaved_dispatch(&txid);
-            Err(error)
-        }
-    }
+    let durability = commit_or_restore(
+        wallet,
+        commit,
+        |wallet| {
+            wallet.record_retained_tx_key(txid, retained);
+            wallet.record_dispatched_send(txid, fee, recipients, inputs, tx_bytes);
+        },
+        |wallet| wallet.undo_unsaved_dispatch(&txid),
+    )?;
+    require_confirmed(durability)?;
+    let bytes = wallet
+        .send_journal
+        .tx_bytes(&txid)
+        .expect("commit_dispatch stored the bytes it authorizes")
+        .to_vec();
+    Ok(DurableTxBytes(bytes))
 }
 
 #[cfg(test)]
@@ -296,5 +575,59 @@ mod tests {
         assert_eq!(wallet.send_journal.tx_bytes(&[3; 32]), Some(&[4u8, 5][..]));
         assert!(wallet.tx_meta.tx_keys.contains_key(&[3; 32]));
         assert!(wallet.sync_state.pending_tx_hashes.contains(&[3; 32]));
+    }
+
+    #[test]
+    fn a_failed_verdict_save_keeps_the_lock() {
+        let mut wallet = WalletLedger::empty();
+        let confirmed = CountingCommit {
+            answer: CommitAnswer::Confirmed,
+            calls: AtomicUsize::new(0),
+        };
+        commit_dispatch(&mut wallet, &confirmed, dispatch_record([4; 32], vec![1]))
+            .expect("dispatch saved");
+        let fail = CountingCommit {
+            answer: CommitAnswer::Fail,
+            calls: AtomicUsize::new(0),
+        };
+        let applied = commit_verdict(
+            &mut wallet,
+            &fail,
+            VerdictEdit::TerminalRefusal { txid: [4; 32] },
+        );
+        assert!(!applied.saved);
+        let row = wallet.send_journal.rows.get(&[4; 32]).unwrap();
+        assert!(matches!(
+            row.state,
+            shekyl_engine_state::SendState::TerminalRejected
+        ));
+        assert!(row.tx_bytes.is_none());
+    }
+
+    #[test]
+    fn a_failed_release_restores_the_whole_row() {
+        let mut wallet = WalletLedger::empty();
+        let confirmed = CountingCommit {
+            answer: CommitAnswer::Confirmed,
+            calls: AtomicUsize::new(0),
+        };
+        commit_dispatch(
+            &mut wallet,
+            &confirmed,
+            dispatch_record([5; 32], vec![8, 8]),
+        )
+        .expect("dispatch saved");
+        let before = wallet.send_journal.rows.get(&[5; 32]).unwrap().clone();
+        let fail = CountingCommit {
+            answer: CommitAnswer::Fail,
+            calls: AtomicUsize::new(0),
+        };
+        let mut held = std::collections::HashSet::new();
+        held.insert(TxHash::from_bytes([5; 32]));
+        assert_eq!(
+            commit_release(&mut wallet, &fail, &held),
+            ReleasePersistence::NotSaved
+        );
+        assert_eq!(wallet.send_journal.rows.get(&[5; 32]), Some(&before));
     }
 }

@@ -4155,7 +4155,9 @@ async fn stake_persona_and_submit_bond(
     let swept_gindexes: Vec<u64> = post.funding_gindexes.iter().map(|g| g.to_raw()).collect();
     let daemon_client = { arc.read().await.daemon().clone() };
     let submitter = BroadcastSubmitter::local(persona_id, Arc::new(daemon_client));
-    let verdict = submitter.submit_bound(bound).await;
+    let verdict = submitter
+        .submit_bound(super::transaction_submitter::BoundForSend::Loaded(bound))
+        .await;
 
     SubmittedBondPost {
         arc,

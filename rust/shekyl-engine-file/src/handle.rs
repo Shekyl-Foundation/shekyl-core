@@ -733,7 +733,7 @@ impl WalletFile {
         &self,
         wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         body: &[u8],
-    ) -> Result<(), WalletFileError> {
+    ) -> Result<Durability, WalletFileError> {
         let framed = encode_payload(PayloadKind::PendingPostBlockPostcard, body)?;
         let keys_file_bytes = self
             .state
@@ -743,8 +743,7 @@ impl WalletFile {
             .clone();
         let sealed =
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
-        atomic_write_file(&self.pending_path, &sealed)?;
-        Ok(())
+        atomic_write_file(&self.pending_path, &sealed)
     }
 
     /// Load the pending-bond-post block from `.wallet.pending` using the

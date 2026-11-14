@@ -383,8 +383,8 @@ where
             reference_height,
             terminal: None,
         };
-        let attempt = store
-            .mutate(move |block| {
+        let (attempt, durability) = store
+            .mutate_reporting(move |block| {
                 // §3 "user work always wins", the authoritative half: this
                 // closure runs under the pending write lock, which totally
                 // orders it against every foreground registration and every
@@ -442,7 +442,12 @@ where
         // so only the record's end date ends it, and the cause names the
         // outcome there.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let sent = submitter.submit_bound(assembled.bound_tx.clone()).await;
+        let sent = submitter
+            .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
+                assembled.bound_tx.clone(),
+                durability,
+            ))
+            .await;
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {

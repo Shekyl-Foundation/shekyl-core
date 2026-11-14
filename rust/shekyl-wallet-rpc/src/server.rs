@@ -535,7 +535,7 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
 ///
 /// The stop signals are SIGTERM, SIGINT and SIGHUP on Unix, and on
 /// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
-/// events ([`watch_stop_signals`]). The first stops the listener, lets
+/// events ([`crate::stop_signals`]). The first stops the listener, lets
 /// in-flight requests finish, and closes the wallet through the
 /// `close_wallet` choreography with the shutdown save; a second exits at
 /// once.
@@ -552,7 +552,7 @@ pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     let state = AppState::new(config);
     let app = build_router(state.clone());
 
-    watch_stop_signals(Arc::clone(&state), AfterClose::Return)?;
+    crate::stop_signals::watch(Arc::clone(&state), crate::stop_signals::AfterClose::Return)?;
     bound.log_ready("shekyl-wallet-rpc listening")?;
     serve_then_close(bound, app, state).await?;
     Ok(())
@@ -571,119 +571,6 @@ async fn serve_then_close(
     crate::lifecycle::close_for_shutdown(&state.tenants).await;
     state.closed.notify_one();
     served
-}
-
-/// What a stop-signal watcher does once the wallet is closed.
-#[derive(Clone, Copy)]
-enum AfterClose {
-    /// Nothing: the host's own serve call returns ([`run_server`]).
-    Return,
-    /// End the process: the host's main thread is not waiting on the
-    /// server ([`InProcessHandle::exit_on_stop_signal`], `shekyl-cli`).
-    Exit,
-}
-
-/// The process's stop signals, registered once.
-struct StopSignals {
-    #[cfg(unix)]
-    term: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    int: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    hup: tokio::signal::unix::Signal,
-    #[cfg(windows)]
-    ctrl_c: tokio::signal::windows::CtrlC,
-    #[cfg(windows)]
-    ctrl_break: tokio::signal::windows::CtrlBreak,
-    #[cfg(windows)]
-    close: tokio::signal::windows::CtrlClose,
-    #[cfg(windows)]
-    logoff: tokio::signal::windows::CtrlLogoff,
-    #[cfg(windows)]
-    shutdown: tokio::signal::windows::CtrlShutdown,
-}
-
-impl StopSignals {
-    fn register() -> std::io::Result<Self> {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            Ok(Self {
-                term: signal(SignalKind::terminate())?,
-                int: signal(SignalKind::interrupt())?,
-                hup: signal(SignalKind::hangup())?,
-            })
-        }
-        #[cfg(windows)]
-        {
-            use tokio::signal::windows;
-            Ok(Self {
-                ctrl_c: windows::ctrl_c()?,
-                ctrl_break: windows::ctrl_break()?,
-                // Close, logoff and shutdown end the process when the
-                // handler returns; tokio parks the handler thread instead,
-                // so the wallet closes inside the system's grace period.
-                close: windows::ctrl_close()?,
-                logoff: windows::ctrl_logoff()?,
-                shutdown: windows::ctrl_shutdown()?,
-            })
-        }
-    }
-
-    /// The next stop signal's name.
-    async fn next(&mut self) -> &'static str {
-        #[cfg(unix)]
-        {
-            tokio::select! {
-                _ = self.term.recv() => "SIGTERM",
-                _ = self.int.recv() => "SIGINT",
-                _ = self.hup.recv() => "SIGHUP",
-            }
-        }
-        #[cfg(windows)]
-        {
-            tokio::select! {
-                _ = self.ctrl_c.recv() => "ctrl-c",
-                _ = self.ctrl_break.recv() => "ctrl-break",
-                _ = self.close.recv() => "console close",
-                _ = self.logoff.recv() => "logoff",
-                _ = self.shutdown.recv() => "system shutdown",
-            }
-        }
-    }
-}
-
-/// Watch the process's stop signals for `state`'s server: the first
-/// requests shutdown, which closes the open wallet ([`serve_then_close`]);
-/// a second exits at once, saving nothing more. With [`AfterClose::Exit`]
-/// the process also exits once the wallet is closed.
-fn watch_stop_signals(state: Arc<AppState>, after: AfterClose) -> std::io::Result<()> {
-    let mut signals = StopSignals::register()?;
-    tokio::spawn(async move {
-        let first = signals.next().await;
-        info!(
-            signal = first,
-            "stopping: closing the open wallet; a second signal exits at once"
-        );
-        state.shutdown.notify_one();
-        match after {
-            AfterClose::Return => {
-                let second = signals.next().await;
-                warn!(signal = second, "second stop signal: exiting at once");
-                std::process::exit(130);
-            }
-            AfterClose::Exit => {
-                tokio::select! {
-                    () = state.closed.notified() => std::process::exit(130),
-                    second = signals.next() => {
-                        warn!(signal = second, "second stop signal: exiting at once");
-                        std::process::exit(130);
-                    }
-                }
-            }
-        }
-    });
-    Ok(())
 }
 
 /// A listener bound to its address, per platform — **the** `cfg` seam.
@@ -963,7 +850,10 @@ impl InProcessHandle {
     ///
     /// The signal handlers could not be registered.
     pub fn exit_on_stop_signal(&self) -> std::io::Result<()> {
-        watch_stop_signals(Arc::clone(&self.state), AfterClose::Exit)
+        crate::stop_signals::watch(
+            Arc::clone(&self.state),
+            crate::stop_signals::AfterClose::Exit,
+        )
     }
 
     /// Request graceful shutdown and wait for the serve task to finish; the

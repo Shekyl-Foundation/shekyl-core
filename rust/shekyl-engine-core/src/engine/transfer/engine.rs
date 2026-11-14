@@ -21,7 +21,7 @@ use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
     PendingTxDiagnostic,
 };
-use super::super::dispatch_durability::LedgerCommit;
+use super::super::dispatch_durability::{commit_verdict, LedgerCommit};
 use super::super::error::{
     OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
 };
@@ -30,8 +30,8 @@ use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxRecipient,
-    TxRecipientSummary, TxRequest,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
@@ -1328,7 +1328,7 @@ where
         id: ReservationId,
         seen_gen: u64,
         commit: &C,
-    ) -> Result<SubmitOutcome, SubmitError> {
+    ) -> Result<SubmitReceipt, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1480,46 +1480,85 @@ where
             dispatch
         };
 
-        // --- save before send (A19): only a saved dispatch can be handed over ---
+        // --- save before send: only a saved dispatch can be handed over ---
         let durable = self.save_dispatch(id, dispatch, commit)?;
 
-        let durable = {
-            let mut state = self
+        // The daemon round-trip does not hold the pending-tx lock. A
+        // test-injected reply takes the same path as the transport, and
+        // its bytes are dropped unsent.
+        let daemon_result = {
+            let state = self
                 .state
                 .lock()
                 .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
             if let Some(outcome) = self.take_queued_submit_outcome() {
-                // Test-injected daemon reply: same save, same finalization as
-                // the production dispatch below, through the same methods, so
-                // the injected path cannot certify a projection the real one
-                // does not perform. The durable bytes are dropped unsent.
                 drop(durable);
-                return match outcome {
-                    Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
-                    Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
-                };
-            }
-            durable
-        };
-
-        let submitter = Arc::clone(&self.submitter);
-        let success = match submitter.submit(durable).await {
-            Ok(success) => success,
-            Err(submit_err) => {
-                let mut state = self
-                    .state
-                    .lock()
-                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-                return Err(self.finalize_submit_error(&mut state, id, &submit_err));
+                outcome
+            } else {
+                drop(state);
+                let submitter = Arc::clone(&self.submitter);
+                submitter.submit(durable).await
             }
         };
 
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+        // State edits under the pending-tx lock. The journal edit is
+        // named here and committed below, after this lock drops: a build
+        // holds the state lock across a ledger read, and the save must
+        // not nest the other way either.
+        let (result, edit) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            match daemon_result {
+                Ok(success) => {
+                    let (outcome, edit) = self.finalize_submit_success(&mut state, id, success);
+                    (Ok(outcome), Some(edit))
+                }
+                Err(err) => {
+                    let (error, edit) = self.finalize_submit_error(&mut state, id, &err);
+                    (Err(error), edit)
+                }
+            }
+        };
 
-        Ok(self.finalize_submit_success(&mut state, id, success))
+        let applied = if let Some(edit) = edit {
+            self.ledger
+                .with_wallet_ledger_mut(|wallet| commit_verdict(wallet, commit, edit))
+        } else {
+            super::super::dispatch_durability::AppliedVerdict {
+                saved: true,
+                rescan: None,
+            }
+        };
+
+        if let Some((txid, claimed_height)) = applied.rescan {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            let tx_hash = TxHash::from_bytes(txid);
+            state.rescan_queue.push(RescanRequest {
+                tx_hash,
+                claimed_height,
+            });
+            emit_pending_tx_diagnostic(
+                self.sink.as_ref(),
+                PendingTxDiagnostic::TargetedRescanRequested {
+                    reservation_id: id,
+                    tx_hash,
+                    claimed_height,
+                },
+            );
+        }
+
+        match result {
+            Ok(outcome) => Ok(SubmitReceipt {
+                outcome,
+                verdict_saved: applied.saved,
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn discard_sync(
