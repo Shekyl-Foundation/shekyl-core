@@ -305,6 +305,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         backing.input,
         terms.clone(),
         FEE,
+        &backing.network,
         &backing.tree,
     );
     assert_eq!(claim.persona, persona.id());
@@ -483,6 +484,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         twin_backing.input,
         terms.clone(),
         FEE,
+        &twin_backing.network,
         &twin_backing.tree,
     );
     let twin_tx = Transaction::from_bytes(&twin.bytes).expect("the twin's bytes parse");
@@ -513,6 +515,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
             backing.input,
             terms,
             FEE,
+            &backing.network,
             &backing.tree,
         );
         Transaction::from_bytes(&broken.bytes).expect("the broken claim's bytes parse")

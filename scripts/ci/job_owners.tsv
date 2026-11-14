@@ -84,6 +84,7 @@ scripts/ci/check_release_archive_docs.py	docs-gates:check-doc-links
 scripts/ci/check_rpc_route_liveness.sh	rpc-route-liveness:rpc-route-liveness
 scripts/ci/check_rt_p4_standing.py	grep-gates:grep-gates
 scripts/ci/check_secret_byte_locality.py	docs-gates:check-doc-links
+scripts/ci/check_shard_fill_frozen.py	grep-gates:grep-gates
 scripts/ci/check_shell_gate_exits.py	docs-gates:check-doc-links
 scripts/ci/check_sim_integer_seams.py	grep-gates:grep-gates
 scripts/ci/check_spawn_children_inherit_stdio_only.py	grep-gates:grep-gates

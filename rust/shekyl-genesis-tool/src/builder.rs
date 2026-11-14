@@ -209,3 +209,54 @@ pub fn genesis_block(tx: Transaction) -> Result<Block, GenesisToolError> {
         transaction_hashes: Vec::new(),
     })
 }
+
+/// `network`'s genesis block as the node connects it: the table's coinbase
+/// under [`genesis_block`]'s header, refused when that block is not the one
+/// the table pins (`NETWORK_IDENTITY.md` NI-Q3).
+///
+/// # Errors
+///
+/// The table's coinbase is not hex, does not decode, or the assembled block
+/// hashes to something other than the pin. The node maps this onto its open
+/// error; a scenario chain panics, because a build whose table and header
+/// disagree cannot connect.
+pub fn pinned_genesis(network: Network) -> Result<Block, GenesisToolError> {
+    let genesis = network.genesis();
+    let bytes = hex::decode(genesis.tx_hex()).map_err(|error| {
+        invalid(format!(
+            "{network}'s genesis transaction is not hex: {error}"
+        ))
+    })?;
+    let tx = Transaction::from_bytes(&bytes).map_err(|error| {
+        invalid(format!(
+            "{network}'s genesis transaction did not decode: {error}"
+        ))
+    })?;
+    let block = genesis_block(tx)?;
+    let pinned = BlockHash::from_bytes(genesis.hash());
+    if block.hash() != pinned {
+        return Err(invalid(format!(
+            "{network}'s assembled genesis is {:?}, and the table pins {pinned:?}",
+            block.hash()
+        )));
+    }
+    Ok(block)
+}
+
+#[cfg(test)]
+mod pinned_tests {
+    use super::*;
+
+    #[test]
+    fn every_networks_pinned_genesis_is_the_block_the_table_names() {
+        for network in Network::ALL {
+            let block =
+                pinned_genesis(network).unwrap_or_else(|error| panic!("{network}: {error}"));
+            assert_eq!(
+                block.hash().to_bytes(),
+                network.genesis().hash(),
+                "{network}"
+            );
+        }
+    }
+}
