@@ -10,11 +10,13 @@ emission is the tail subsidy.
   baseline_steady_state  y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
       tail era: not reached by y60
   stuffing_attack        y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
 == inherited | flat control
   baseline_steady_state  y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
       tail era: not reached by y60
   stuffing_attack        y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
 == re-derived | production x1
   baseline_steady_state  y1 870.48 (2.2%) y4 754.14 (2.3%) y8 610.37 (2.3%) y10 545.97 (2.3%) y12 487.02 (2.3%) y15 409.09 (2.4%) y20 303.19 (2.4%) y30 164.11 (2.4%) y40 88.09 (2.4%) y60 25.21 (2.4%)
@@ -148,6 +150,18 @@ change less its fees, SKL).
   re-derived    5   33% enforced   uniform    8400   1437  1.1169      10979.0       41049.98
   re-derived    5   33% enforced   edge       8400   1437  1.1169      10979.0       41049.98
 
+EI-3 — ROW 5, EVERY MINER STUFFS (added after the registered run, on review). Every block's
+producer lists its own bodies in its free room for 2160 blocks from the start of a year, so
+every block in the volume window carries them: the ordinary 1-in/2-out at the block's depth. A
+lighter valid shape would list more, since M_r counts transactions. Where M_r rests at the
+span's end, its mean over the span, the longest run of M_r > 1.0, and every block's payout less
+the bodies' fees against no stuffing (SKL).
+  arm           y fee         bodies  at rest    mean    run   net gain SKL
+  inherited     5 unenforced       0   0.8000  0.8000      0           0.00
+  inherited     5 enforced         0   0.8000  0.8000      0           0.00
+  re-derived    5 unenforced   75600   1.3000  1.2785   2159      442070.63
+  re-derived    5 enforced     75600   1.3000  1.2785   2159      440760.38
+
 EI-5 — STUFFING. The ESR-7 envelope's minimum on each chain (today; and with the floor
 enforced on a block's own bodies) per archival byte, over the relay floor's rate at the same
 block, in floors per byte, at ESR-7's rows; production x1. Then the window-edge stuffer as a
@@ -203,9 +217,11 @@ per block at the sampled years (SKL).
       owed y1 907.13 y4 787.99 y8 641.11 y10 574.97 y12 512.89 y15 431.75 y20 319.98 y30 173.19 y40 92.97 y60 26.61
 
 EI-7 — MEDIAN PATH-DEPENDENCE. The inherited arm's 15/80/5 baseline with a demand blip, the
-demand multiplied for a number of blocks from the start of a year: one volume window (720,
-registered), and half the long-term median's window (50000, added after the registered run, which
-no window's blip can reach). Per run: the year blocks grow, the long-term median at y30 and
+demand multiplied for a number of blocks from the start of a year. Registered: one volume
+window (720). Added after the registered run: half the long-term window (50000), the
+longest blip that cannot move a median over 100000 blocks; then, on review, doublings of
+60000, 100000 and 200000 blocks, a halving, and the stuffing attack's x5 for 21600 blocks and for
+100000, each then stopped. Per run: the year blocks grow, the long-term median at y30 and
 y60 (KB), and Economy carried over Economy demanded over the run.
   blip none                     blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
   blip x2.0 at y17 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
@@ -222,3 +238,9 @@ y60 (KB), and Economy carried over Economy demanded over the run.
   blip x2.0 at y21 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.7%
   blip x1.5 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.1%
   blip x3.0 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x2.0 at y19 for 60000    blocks grow y19    median y30  734K y60  734K; Economy served 52.0%
+  blip x2.0 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x2.0 at y19 for 200000   blocks grow y19    median y30  734K y60  734K; Economy served 51.5%
+  blip x0.5 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 52.4%
+  blip x5.0 at y19 for 21600    blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x5.0 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 50.9%

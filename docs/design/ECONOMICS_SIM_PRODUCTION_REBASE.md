@@ -3726,29 +3726,56 @@ own bodies (EI-3's stuffer) and a Priority share that answers its fee
 | **EI-4.** Inherited ×1 year 20; re-derived year 1; flat inherited years 35–50, flat re-derived year 1 | **Held but for the flat control's inherited arm**, which never carries 50 by year 60 (missed). Its fee is a fixed 0.1 SKL; the reward falls 20 times over 60 years and the fee never pays the penalty. Inherited ×1 from year 20, re-derived from year 1 on both fee arms |
 | **EI-5.** Inherited about 4 / 3 / 2.5 floors a byte, 0 today and 0.2 enforced below the zone; re-derived 0 today in every era, under 1 enforced; the window-edge member negative | **Held in shape; the inherited eras about a fifth under.** Inherited today / enforced: 3.417 / 3.477 constrained, 2.510 / 2.769 carried, 1.985 / 2.356 tail, 0.000 / 0.197 below the zone. Re-derived: 0.000 today in every era; enforced 0.104, 0.279, 0.367 and 0.204. The window-edge stuffer at 20 %: −38.2 floors a byte from year 5 and −23.8 from year 30 re-derived (−38.1 and −23.3 enforced); nothing listed inherited |
 | **EI-6.** Onsets at 2.5 %: y35–37 inherited, y29–30 re-derived; at 1 %: y32–34 and y28; the elastic arm within a year of 5 % | **Held.** 2.5 %: y36 and y30. 1 %: y33 and y28. The fee leg at the flat-25 onset falls with Priority's share: 617 132, 425 325, 260 417 and 118 673 SKL a year inherited (90.2 %, 76.6 %, 55.0 %, 28.6 % of the budget). The elastic cell sheds nothing inherited, every line equal to the 5 % cell's; re-derived it sheds a little in the first years (year-1 miner income 907.13 against 915.87) and its onset is the same, y32. The per-block fees §5.32 put on the composition are not a column the instrument prints |
-| **EI-7.** A blip before the ratchet does not move it; a blip at or after it lifts the resting median to the full demand's weight and Economy's service toward 100 % | **Held for the ratchet year, missed for the resting point.** Blocks grow in year 19 under every blip. The long-term median rests at 734 KB at years 30 and 60 under every blip, and Economy is served 52.2 % (from 51.7 % to 52.2 %) |
+| **EI-7.** A blip before the ratchet does not move it; a blip at or after it lifts the resting median to the full demand's weight and Economy's service toward 100 % | **Held for the ratchet year, missed for the resting point.** Blocks grow in year 19 under every blip. The long-term median rests at 734 KB at years 30 and 60 under every blip, registered or added (below), and Economy is served 50.9 %–52.4 % against 52.2 % unblipped |
 
 **EI-7's added blips.** The registered blip lasts one volume window. The
 long-term median is a median over 100 000 blocks, so a blip of 720 blocks
 cannot move it: every registered row equals the unblipped one in the
-median, and in Economy's service to the fifth digit. A second set was
-added after the registered run showed it: the same years and sizes, each
-lasting half the long-term window (50 000 blocks), which a median can
-answer. Those move nothing either. On the inherited 15/80/5 baseline the
-long-term median rests at the full demand's weight, 734 KB, whatever
-these blips do, so **the resting point is not a function of this
-history.** §5.29.1 found it neutrally stable on the stuffing attack
-(631–659 KB); on the baseline it returns to the same weight.
+median, and in Economy's service to the fifth digit. Added after the
+registered run, the same years and sizes lasting half the long-term
+window (50 000 blocks). That is the longest blip that still cannot move a
+median over 100 000 blocks, so its null is by construction, not a
+finding. Added on review, at the ratchet year: doublings of 60 000,
+100 000 and 200 000 blocks, a halving for 100 000, and the stuffing
+attack's ×5 for its 21 600 blocks and for 100 000, each then stopped.
+Every one of them leaves the median at 734 KB at years 30 and 60, the
+full demand's weight, and moves Economy's service by under 1.5 points.
+What the instrument reads is where the median rests a decade after the
+blip, once the window has turned over, not how far it moved during it:
+**on the inherited 15/80/5 baseline the resting point returns to the full
+demand's weight after every perturbation tried, up to twice the
+long-term window.** §5.29.1's lower plateau (631–659 KB) is the stuffing
+attack's from genesis, before any ratchet, a different history from a
+blip after one.
 
 **What the stuffer says (not a verdict: row 5 and Stuffing are graded at
 EUP-4).** On the re-derived arm, a miner with free room in its blocks is
 paid to stuff them. Each own body raises the volume window for 720 blocks.
 `M_r` moves the reward on every block in that window, and a fifth of
 those blocks are the miner's. The floor on its own bodies (C2-R2 Q9's
-fix) costs it 0.4 % of the gain. On the inherited arm the honest fill
-leaves no free room, so the miner lists nothing. Taking the penalty to
-stuff is ESR-7's per-block packing; a campaign that optimises it is not
-built.
+fix) costs it 0.4 % of the gain, because the fee it pays comes back to it
+less the burn. On the inherited arm the honest fill leaves no free room,
+so the miner lists nothing. Taking the penalty to stuff is ESR-7's
+per-block packing; a campaign that optimises it is not built.
+
+**Every miner stuffs (added on review).** A higher `M_r` raises every
+block's emission, so every miner with free room gains from stuffing,
+whether or not it lists anything itself: stuffing is an equilibrium, not
+an attack. The every-miner arm measures it. With every producer filling
+its free room for three windows from year 5 on the re-derived arm, `M_r`
+rests at its 1.3 cap (mean 1.279 over the span) and every block's payout
+less the bodies' fees rises by about 442 100 SKL over the span (101 000
+from year 30); enforcing the floor changes that by 0.3 %. The inherited
+arm lists nothing. `M_r` counts transactions, so the room that matters is
+the free weight over the lightest valid transaction; the arm lists the
+ordinary 1-in/2-out, and a lighter shape would list more. The zone and
+the volume signal therefore cannot be ruled apart: a larger zone is more
+free count room. The signal's design is a question for EUP-5, Rick's to
+open and to place.
+
+**The refusal, tested.** `baseline::unmoved_cell_refusal` holds the
+comparison the modes refuse on, and `a_cell_that_moves_nothing_is_refused`
+tests both outcomes without a fold.
 
 **Each mode's `--set` reach.** A mode refuses an override its report does
 not read (ESR-16 completion, ruling 6), and the reader lists are measured
@@ -3780,7 +3807,15 @@ release build; its timeout is 35 minutes, about twice that.
 2: the --eup4 narration's first fixtures, its instruments predicted in
 ECONOMICS_SIM_PRODUCTION_REBASE.md §5.32 and read in §5.32.1"`, through
 `regen_eup4_narration_fixtures`: `eup4_narration.txt` and
-`eup4_narration_nightly.txt`, their first generation.
+`eup4_narration_nightly.txt`, their first generation. The review's arms
+were then added, and both regenerated, on the fleet host, under
+`SHEKYL_PINNED_REGEN_DECISION="2026-11-14 EUP-4 prep 2, the review of
+#1375: the every-miner arm, the review blips and EI-1s same-as-baseline
+note join the --eup4 narration; recorded in
+ECONOMICS_SIM_PRODUCTION_REBASE.md §5.32.1"` (2 144 s on eight threads).
+Only the --eup4 fixtures moved: the every-miner section, the review's
+blip rows and EI-7's header, and EI-1's notes where a scenario matches
+the baseline.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

@@ -14,10 +14,13 @@ emission is the tail subsidy.
   sustained_growth       y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 475.81 (0.7%) y30 212.32 (0.0%) y40 94.77 (0.4%) y60 33.11 (44.0%)
       tail era: not reached by y60
   stuffing_attack        y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   stake_concentration    y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   mass_unstaking         y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   chain_bootstrap        y1 691.56 (0.9%) y4 639.95 (3.7%) y8 544.47 (3.7%) y10 499.38 (3.7%) y12 456.77 (3.7%) y15 397.98 (3.7%) y20 492.35 (2.2%) y30 218.19 (1.0%) y40 97.05 (1.0%) y60 19.07 (1.0%)
       tail era: not reached by y60
@@ -31,12 +34,16 @@ emission is the tail subsidy.
   boom_bust_cycle        y1 687.19 (0.3%) y4 617.44 (0.2%) y8 525.57 (0.3%) y10 482.13 (0.3%) y12 441.08 (0.3%) y15 384.84 (0.4%) y20 303.58 (0.4%) y30 186.67 (0.6%) y40 114.01 (1.0%) y60 42.61 (2.6%)
       tail era: not reached by y60
   sustained_growth       y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   stuffing_attack        y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   stake_concentration    y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   mass_unstaking         y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   chain_bootstrap        y1 685.60 (0.1%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
       tail era: not reached by y60
@@ -54,8 +61,10 @@ emission is the tail subsidy.
   stuffing_attack        y1 888.61 (1.9%) y4 752.94 (2.3%) y8 609.40 (2.3%) y10 545.10 (2.3%) y12 486.30 (2.3%) y15 408.44 (2.4%) y20 302.71 (2.4%) y30 163.84 (2.4%) y40 87.95 (2.4%) y60 25.17 (2.4%)
       tail era: not reached by y60
   stake_concentration    y1 870.48 (2.2%) y4 754.14 (2.3%) y8 610.37 (2.3%) y10 545.97 (2.3%) y12 487.02 (2.3%) y15 409.09 (2.4%) y20 303.19 (2.4%) y30 164.11 (2.4%) y40 88.09 (2.4%) y60 25.21 (2.4%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   mass_unstaking         y1 870.48 (2.2%) y4 754.14 (2.3%) y8 610.37 (2.3%) y10 545.97 (2.3%) y12 487.02 (2.3%) y15 409.09 (2.4%) y20 303.19 (2.4%) y30 164.11 (2.4%) y40 88.09 (2.4%) y60 25.21 (2.4%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   chain_bootstrap        y1 686.64 (0.2%) y4 782.70 (2.3%) y8 780.30 (3.4%) y10 672.22 (3.4%) y12 578.36 (3.5%) y15 458.73 (3.5%) y20 309.48 (3.5%) y30 138.81 (3.5%) y40 61.74 (3.5%) y60 12.13 (3.5%)
       tail era: not reached by y60
@@ -73,8 +82,10 @@ emission is the tail subsidy.
   stuffing_attack        y1 877.19 (0.6%) y4 740.33 (0.6%) y8 599.61 (0.7%) y10 536.59 (0.7%) y12 478.90 (0.8%) y15 402.27 (0.9%) y20 298.77 (1.1%) y30 162.86 (1.8%) y40 88.58 (3.1%) y60 27.15 (9.5%)
       tail era: not reached by y60
   stake_concentration    y1 855.98 (0.6%) y4 741.51 (0.6%) y8 600.56 (0.7%) y10 537.44 (0.7%) y12 479.67 (0.8%) y15 402.91 (0.9%) y20 299.25 (1.1%) y30 163.12 (1.8%) y40 88.72 (3.1%) y60 27.19 (9.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   mass_unstaking         y1 855.98 (0.6%) y4 741.51 (0.6%) y8 600.56 (0.7%) y10 537.44 (0.7%) y12 479.67 (0.8%) y15 402.91 (0.9%) y20 299.25 (1.1%) y30 163.12 (1.8%) y40 88.72 (3.1%) y60 27.19 (9.5%)
+      the same as baseline_steady_state at every sampled year: the scenario runs, and its blocks carry what the baseline's do
       tail era: not reached by y60
   chain_bootstrap        y1 685.60 (0.1%) y4 769.50 (0.6%) y8 759.70 (0.8%) y10 654.84 (0.8%) y12 562.97 (0.9%) y15 447.11 (1.0%) y20 302.58 (1.3%) y30 137.32 (2.5%) y40 62.71 (5.0%) y60 14.70 (20.4%)
       tail era: not reached by y60
@@ -284,6 +295,22 @@ change less its fees, SKL).
   re-derived   30   33% enforced   uniform    7680   1437  1.1069      10719.6        8527.19
   re-derived   30   33% enforced   edge       7680   1437  1.1069      10719.6        8527.19
 
+EI-3 — ROW 5, EVERY MINER STUFFS (added after the registered run, on review). Every block's
+producer lists its own bodies in its free room for 2160 blocks from the start of a year, so
+every block in the volume window carries them: the ordinary 1-in/2-out at the block's depth. A
+lighter valid shape would list more, since M_r counts transactions. Where M_r rests at the
+span's end, its mean over the span, the longest run of M_r > 1.0, and every block's payout less
+the bodies' fees against no stuffing (SKL).
+  arm           y fee         bodies  at rest    mean    run   net gain SKL
+  inherited     5 unenforced       0   0.8000  0.8000      0           0.00
+  inherited     5 enforced         0   0.8000  0.8000      0           0.00
+  inherited    30 unenforced       0   1.0000  1.0000      0           0.00
+  inherited    30 enforced         0   1.0000  1.0000      0           0.00
+  re-derived    5 unenforced   75600   1.3000  1.2785   2159      442070.63
+  re-derived    5 enforced     75600   1.3000  1.2785   2159      440760.38
+  re-derived   30 unenforced   69120   1.3000  1.2765   2159      101016.66
+  re-derived   30 enforced     69120   1.3000  1.2765   2159       99115.62
+
 EI-5 — STUFFING. The ESR-7 envelope's minimum on each chain (today; and with the floor
 enforced on a block's own bodies) per archival byte, over the relay floor's rate at the same
 block, in floors per byte, at ESR-7's rows; production x1. Then the window-edge stuffer as a
@@ -345,9 +372,11 @@ per block at the sampled years (SKL).
       owed y1 907.13 y4 787.99 y8 641.11 y10 574.97 y12 512.89 y15 431.75 y20 319.98 y30 173.19 y40 92.97 y60 26.61
 
 EI-7 — MEDIAN PATH-DEPENDENCE. The inherited arm's 15/80/5 baseline with a demand blip, the
-demand multiplied for a number of blocks from the start of a year: one volume window (720,
-registered), and half the long-term median's window (50000, added after the registered run, which
-no window's blip can reach). Per run: the year blocks grow, the long-term median at y30 and
+demand multiplied for a number of blocks from the start of a year. Registered: one volume
+window (720). Added after the registered run: half the long-term window (50000), the
+longest blip that cannot move a median over 100000 blocks; then, on review, doublings of
+60000, 100000 and 200000 blocks, a halving, and the stuffing attack's x5 for 21600 blocks and for
+100000, each then stopped. Per run: the year blocks grow, the long-term median at y30 and
 y60 (KB), and Economy carried over Economy demanded over the run.
   blip none                     blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
   blip x2.0 at y17 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
@@ -364,3 +393,9 @@ y60 (KB), and Economy carried over Economy demanded over the run.
   blip x2.0 at y21 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.7%
   blip x1.5 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.1%
   blip x3.0 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x2.0 at y19 for 60000    blocks grow y19    median y30  734K y60  734K; Economy served 52.0%
+  blip x2.0 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x2.0 at y19 for 200000   blocks grow y19    median y30  734K y60  734K; Economy served 51.5%
+  blip x0.5 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 52.4%
+  blip x5.0 at y19 for 21600    blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
+  blip x5.0 at y19 for 100000   blocks grow y19    median y30  734K y60  734K; Economy served 50.9%
