@@ -1057,11 +1057,17 @@ with that increment. What it brings to the switch: an alt block stores
 bundle *references* `(h, kept bytes, prunable hash)` in place of the
 witness (B10, rule 42's bump); arrival checks over references are
 stateless (well-formed; root equals header; the budget sum when `D` is
-known at or below the fork point, else at the switch); before the closure
-every referenced body is fetched and checked against its hash, and an
-unfetchable body means no switch, a local outcome; inside the closure
-`validate` runs the bundle verifier, and an invalid bundle fails the switch
-(`E5-7`).
+known at or below the fork point, else at the switch). Every referenced
+body is fetched and checked against its hash **before the block is
+offered**, not at the switch: chain sync holds an arrival until each
+reference has its body (`shekyl-chain-sync` `runs/awaiting.rs`, 2014 and
+2016/2017), a local block carries its posted job's, and an alternative
+block's row holds its bodies until a switch connects it or the branch is
+removed (SI-41). An unfetchable body therefore means the block is never
+offered and makes no switch, a local outcome
+(`an_announcer_that_withholds_its_bundle_body_is_closed_and_its_block_never_offered`).
+Inside the closure `validate` runs the bundle verifier, and an invalid
+bundle fails the switch (`E5-7`).
 
 ---
 

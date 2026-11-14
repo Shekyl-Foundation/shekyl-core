@@ -199,6 +199,14 @@ crate::wire_object! {
         /// The body of each reference this node still holds, in no set
         /// order: a reader matches each to its reference by hash.
         pub section_body: Vec<Bytes>,
+        /// The draws the count rule issued at this block, `count(h)`
+        /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3): public consensus state,
+        /// written by every node at connect and carried by the reference of
+        /// a bundle filed for the block (`SCS-P39`). Which pairs were drawn
+        /// stays secret until the reveal. `null` where this node holds no
+        /// row: an alternative block, or a height below the draw rows' floor
+        /// (4.4).
+        pub draws: Nullable<Count>,
     }
 }
 

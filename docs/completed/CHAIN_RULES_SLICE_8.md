@@ -11,7 +11,7 @@ name. **Open residue lives in FOLLOWUPS, not here** (the I13/I15 flip
 and the bond post's funding-spend judgement, owner
 [`CHAIN_RULES_SLICE_6.md`](CHAIN_RULES_SLICE_6.md) §5 rows
 6/8; the attestation-record producer, owner
-[`ARCHIVAL_CREDIT_WIRE.md`](../design/ARCHIVAL_CREDIT_WIRE.md)). Do not
+[`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md)). Do not
 implement from this file; the living contracts are
 [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6 and the
 census's 4.J, B4, A3, H21, I13 and I15 cells.

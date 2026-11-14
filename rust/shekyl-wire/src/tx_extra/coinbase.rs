@@ -147,7 +147,7 @@ pub enum CoinbaseGrammarError {
         /// How many `0x0C` fields were present.
         count: usize,
     },
-    /// A tag outside [`COINBASE_TAGS`].
+    /// A tag outside `COINBASE_TAGS`.
     ForeignTag {
         /// The tag that is not in the grammar.
         tag: u8,
@@ -305,8 +305,8 @@ fn canonical_nonce(fields: &[TxExtraField], n_outputs: usize) -> Option<&[u8]> {
 /// The coinbase extra grammar.
 ///
 /// CEN-I19 runs on the parsed fields either way, so a wrong KEM or leaf is
-/// that verdict. The layout itself is [`canonical_nonce`]: the success arm
-/// is the slice match, and everything else is named by [`diagnose`].
+/// that verdict. The layout itself is `canonical_nonce`: the success arm
+/// is the slice match, and everything else is named by `diagnose`.
 pub fn check_coinbase_extra_shape(
     fields: &[TxExtraField],
     n_outputs: usize,

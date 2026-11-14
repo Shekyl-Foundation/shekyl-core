@@ -39,6 +39,8 @@ At 4.3 the files were edited by hand from the grammar as IG-Q102 amends it
 each block's `section` and `section_body` (empty here: no block in these
 files admits a bundle), and no `complete_tree` on an `archival_claim_show`
 bond.
+At 4.4 each block in `block_show` and `block_list` carries `draws`, its draw
+count (IG-Q106); every file shows a count, `1`.
 
 ### Layout
 

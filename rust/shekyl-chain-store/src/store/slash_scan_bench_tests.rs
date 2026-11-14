@@ -800,82 +800,40 @@ impl SlashedChain {
 /// bonds, fourteen closed epochs' budget rows and the thirteen settled
 /// epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
-/// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
-/// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
-/// change, and once more at their merge: the emission speed factor became
-/// per block (22, the design's, where the per-minute convention had run
-/// 21), which halves the emission each closed epoch's budget row records;
-/// and the fixture personas gained derived keys and recomputed ids (E6
-/// slice 8 row 4) — same byte count, same row count, the bond rows' keys
-/// and ids moved, the codec did not. Re-pinned 2026-10-08 at the CEN-I13
-/// flip: the thirty-one padding bodies became serve credits
-/// (the bench's padded credits), which the record carries as thirty-one
-/// `ServeCredit` rows — 31 × (4 + 56) = 1 860 bytes, the whole delta from
-/// 17 536 — and nothing else moved: the slash families are spelled and
-/// asserted above; the bond rows are the same joins; the budget rows are
-/// inflow; and every Σwork row is zero and no `R_market` row exists, as
-/// before, because a complete-tree persona is not a market member
-/// (`shekyl_archival_retention::market_member_at_epoch`:
-/// `is_support_complete_tree ⇒ false`),
-/// so its credits earn no work and count in no shard. Re-pinned
-/// 2026-10-08 again at CEN-J27: the joins became real bond posts, so the
-/// four personas are the harness's (`Persona::at(0..4)`, whose keys and
-/// ids differ from the fixture tag personas') — the bond, slash-log and
-/// slash-applied rows carry the new ids at the same widths — and the
-/// padding became twenty-two credits on eleven heights by personas 0 and
-/// 1 in place of thirty-one by persona 0: nine `ServeCredit` rows fewer,
-/// 9 × 60 = 540 bytes, the whole delta from 19 396. The budget rows are
-/// emission inflow and a join pays no fee, so they did not move; the
-/// Σwork rows are zero as before. Re-pinned 2026-10-09 at `SO-D11`: an
-/// epoch's Σwork row is written by its slash pass, an epoch after its
-/// close, so the tip holds thirteen budget rows (epochs 0–12) and twelve
-/// Σwork rows (epochs 0–11) where it held thirteen of each — one row
-/// fewer, 4 + 16 = 20 bytes, the whole delta from 18 856. Nothing else
-/// moved. Re-pinned 2026-10-12 with the receipt key (FN-DSA increment 3,
-/// `FN_DSA_HYBRID.md` `FND-17`): every bond record carries its persona's
-/// receipt key, 1 837 bytes fixed-width with no length prefix, and the four
-/// personas' joins commit theirs — 4 × 1 837 = 7 348 bytes, the whole delta
-/// from 18 836, the row count unchanged at 60. Nothing else moved: the slash
-/// families are spelled and asserted above, and the credit, budget and
-/// Σwork rows do not read a bond's keys. Re-pinned 2026-11-03 with the
-/// wallet derivation change (`NI-R7` / `NI-R10`, `NETWORK_IDENTITY.md`:
-/// the HKDF salt is the network's tag with no seed-format component), so
-/// `Persona::at` derives new keys and ids from the same master seed. No
-/// codec changed: same 26 184 bytes, same 60 rows in every family. The
-/// parent's body maps onto this one byte for byte by substituting each
-/// persona's id, identity key, bond-spend key and receipt key; the only
-/// other movement is order — the bond and slash-applied rows sort by the
-/// new ids, and the slash-log `seq` follows bond-table order, so it
-/// renumbers. The budget and Σwork rows are byte-identical. *Records-was:*
+/// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin.
+///
+/// The chain starts from the captured shard fill and the four harness
+/// personas (`Persona::at(0..4)`) join in epoch [`JOIN_EPOCH`] by real bond
+/// posts. Each bond record carries its persona's receipt key (1 837 bytes,
+/// fixed width, `FN_DSA_HYBRID.md` `FND-17`). An epoch's Σwork row is
+/// written by its slash pass, an epoch after its close, so the tip holds
+/// one more budget row than Σwork rows. The slash families are spelled and
+/// asserted above.
+///
+/// *Records-was* (each until the change named after it):
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
-/// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
-/// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
-/// (derived keys alone); `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
-/// (both, 17 536 bytes, 39 rows, until the I13 flip);
+/// (2026-10-02, `ARW-Q18`);
+/// `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
+/// (the per-block speed factor alone);
+/// `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
+/// (the derived persona keys alone);
+/// `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
+/// (both, 17 536 bytes, 39 rows, until CEN-I13, 2026-10-08);
 /// `d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b`
-/// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27);
+/// (19 396 bytes, 70 rows, until CEN-J27, 2026-10-08);
 /// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
-/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`);
+/// (18 856 bytes, 61 rows, until `SO-D11`, 2026-10-09);
 /// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
-/// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key);
+/// (18 836 bytes, 60 rows, until the receipt key, 2026-10-12);
 /// `937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f`
-/// (the receipt key, 26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`);
+/// (26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`, 2026-11-03);
 /// `ae8dc7a86f9a1a1597dd7805221da8ebb9dc36de3c4364b2388036de9db81a71`
-/// (`NI-R7` / `NI-R10`, 26 184 bytes, 60 rows, until the salt
-/// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04: again only the persona
-/// keys and ids moved, with the same size and row counts, and every
-/// family's section still equal to its own derivation above);
+/// (26 184 bytes, 60 rows, until the salt
+/// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04);
 /// `2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8`
-/// (the salt, 26 184 bytes, 60 rows, until the switch's C7). Re-pinned
-/// 2026-11-11 at the switch's C7, the last step of the bench's epoch shift
-/// (Rick's bench ruling, option 1): the serve-credit input and its
-/// `archival_serve_credit` family are deleted, so the twenty-two padding
-/// credits go — 22 × 60 = 1 320 bytes — with the family's eight-byte row
-/// count; the chain now starts from the captured shard fill and the joins
-/// land in epoch [`JOIN_EPOCH`], so the slashing tip is one epoch later
-/// and holds one more budget row and one more Σwork row, 2 × 20 = 40
-/// bytes. 26 184 − 1 320 − 8 + 40 = 24 896, the whole delta; 60 − 22 + 2
-/// = 40 rows. The slash families are spelled and asserted above.
+/// (26 184 bytes, 60 rows, until the switch's C7, 2026-11-11, which
+/// deleted the serve-credit family and started the chain from the captured
+/// shard fill).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
     "88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8";
 

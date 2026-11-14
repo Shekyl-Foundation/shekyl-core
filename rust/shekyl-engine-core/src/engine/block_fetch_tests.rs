@@ -146,6 +146,7 @@ fn served_block(block: &Block, tx: &[OrArchived<BlockTx>], output_index: u64) ->
         "output_index": output_index,
         "section": [],
         "section_body": [],
+        "draws": 1,
     })
 }
 

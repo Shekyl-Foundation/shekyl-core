@@ -15,13 +15,6 @@
 
 use super::super::*;
 use super::*;
-/// The origin's shipped retry, spelled here for these walks only.
-///
-/// The relay crate owns the derivation. The submit watchdog does not
-/// read this duration: overdue is the daemon's judgment, and this
-/// harness waits out the same interval the origin's embargo fires on.
-const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
-
 /// RX-1 on two live daemons: the origin's only peer is the sink, so it has
 /// no alternate, and its first embargo fire, at the derived retry interval
 /// (1,148 s), fluffs as the last resort (W3b): the transaction is shown at

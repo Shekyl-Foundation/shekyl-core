@@ -645,6 +645,7 @@ pub(crate) mod tests {
                     ],
                     bundle_references: Vec::new(),
                     bundle_bodies: Vec::new(),
+                    draws: Some(2),
                 }),
                 chain_height,
             })

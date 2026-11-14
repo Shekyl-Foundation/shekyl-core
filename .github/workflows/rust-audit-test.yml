@@ -465,6 +465,11 @@ jobs:
         # `shekyl-tor-status` joined when it landed: its docs state the wire
         # contract every client of the Tor status reads.
         #
+        # `shekyl-wire` joined after the switch (`SO-D12` 4b) deleted
+        # `Input::ServeCredit` and left the crate doc linking it, which no
+        # gate saw: its docs name the consensus encodings, and a link to a
+        # deleted or private item is a claim about the wire nobody checked.
+        #
         # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
         # compiles to nothing on this runner, so documenting it would gate an
         # empty crate and pass forever. Its rustdoc gate runs on the Windows
@@ -477,6 +482,7 @@ jobs:
           -p shekyl-hasher
           -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
           -p shekyl-onion-key -p shekyl-heap-secret -p shekyl-tor-status
+          -p shekyl-wire
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp

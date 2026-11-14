@@ -1,8 +1,12 @@
 # Archival credit wire — TJ-B step 3 (design round, OPENED 2026-08-03)
 
-**Status:** **Round opened.** Framing + grounding + decision structure. No wire
-byte-layout is pinned yet; the gating decision (record format + field residence,
-§3) is posed, not resolved.
+**Status: RETIRED 2026-11-13 — the switch (`SO-D12` 4b, #1327) deleted the
+carrier this round designed.** The coinbase attestation field (`tx_extra` tag
+`0x0B`) is an unknown tag that CEN-I20 refuses, the attestation witness and its
+tables are gone, and a block's serve credit is its bundle section
+([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
+§7.5, CEN-J29 to J37). Owns no open residue. Do not implement from this record;
+the text below is the round as it stood.
 
 > **SUPERSEDED IN PART (2026-08-07)** by
 > `ARCHIVAL_CHALLENGE_MECHANISM.md`. That round ruled **derived assignment**
@@ -105,7 +109,7 @@ leaf parameterisation).
 
 ## 3. THE GATING DECISION — record format + field residence
 
-> **Specification:** the record, its kept and prunable parts and the bundle that carries it are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 and §8. This section describes the attestation path, which is live code. Its pass records and witness are replaced by the bundle, with the reason, in the specification's §11.1 (`SCS-P16`, 2026-10-11, which reverses `SCS-P11`).
+> **Specification:** the record, its kept and prunable parts and the bundle that carries it are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../design/ARCHIVAL_SERVE_CREDIT_SPEC.md) §7 and §8. This section describes the attestation path, which is live code. Its pass records and witness are replaced by the bundle, with the reason, in the specification's §11.1 (`SCS-P16`, 2026-10-11, which reverses `SCS-P11`).
 
 The scan (§4) and the deletion (§5) both key off *what the record is*, so this
 is decided first. **Two standing principles drive the shape to its floor
@@ -408,7 +412,7 @@ none, and propagates the gap.
 
 ## 4. Settlement-scan fold (depends on §3)
 
-> **Specification:** issuance, misses and settlement are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.2–§9.4. This section describes the fold over the attestation path's records, which is live code and goes with them (specification §11.1, `SCS-P11`).
+> **Specification:** issuance, misses and settlement are [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../design/ARCHIVAL_SERVE_CREDIT_SPEC.md) §9.2–§9.4. This section describes the fold over the attestation path's records, which is live code and goes with them (specification §11.1, `SCS-P11`).
 
 The current scan assumes a beacon fired and writes **one bit per epoch**. Under
 miner-chosen records it must fold, **per `(P, s)` per epoch**, the multiset of
