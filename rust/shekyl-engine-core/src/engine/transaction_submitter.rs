@@ -13,6 +13,7 @@ use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
 use super::bond_assembly::PBoundBytes;
+use super::dispatch_durability::DurableTxBytes;
 use super::error::{AmbiguousErrorKind, CenRowName, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
 use super::posture::BroadcastPosture;
@@ -282,10 +283,14 @@ fn submitter_error_from_cause(cause: &Rejection) -> SubmitterError {
 }
 
 /// Broadcast signed transaction bytes to the network.
+///
+/// Takes [`DurableTxBytes`], not raw bytes: a caller can only hand over
+/// bytes whose record is already durably on disk
+/// ([`dispatch_durability`](super::dispatch_durability), A19).
 pub(crate) trait TransactionSubmitter: Send + Sync + 'static {
     fn submit(
         &self,
-        tx_bytes: Vec<u8>,
+        tx: DurableTxBytes,
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, SubmitterError>> + Send;
 }
 
@@ -304,7 +309,8 @@ impl<D> TransactionSubmitter for DaemonTransactionSubmitter<D>
 where
     D: DaemonEngine,
 {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
         // carry the same hash this computes locally. Computed only in debug builds so
         // release does no extra parse. Graceful on a malformed blob (the daemon path
@@ -398,7 +404,8 @@ impl PTransactionSubmitter {
 }
 
 impl TransactionSubmitter for PTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
         // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
@@ -465,6 +472,58 @@ pub(crate) enum BroadcastSubmitError {
     /// The pairing was sound; the delegated submit failed.
     #[error(transparent)]
     Submit(#[from] SubmitterError),
+    /// The pending-store save that sealed these bytes was applied, and
+    /// the parent-directory fsync did not confirm it. Nothing was sent.
+    /// The sealed record stays; a later load may resend it.
+    #[error("the pending seal was applied but its crash-durability was not confirmed")]
+    SealUnconfirmed,
+}
+
+/// A [`PBoundBytes`](super::bond_assembly::PBoundBytes) whose record is
+/// durable enough to broadcast.
+///
+/// [`Self::Fresh`] carries the durability the pending-store save just
+/// returned. [`Self::Loaded`] is a record read back from that store.
+pub(crate) enum BoundForSend {
+    /// Sealed by the save that returned this durability.
+    Fresh(PBoundBytes, shekyl_engine_file::Durability),
+    /// Read back from the pending store.
+    Loaded(super::bond_assembly::LoadedSeal),
+}
+
+impl BoundForSend {
+    /// The persona these bytes are bound to.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        match self {
+            Self::Fresh(bound, _) => bound.persona(),
+            Self::Loaded(seal) => seal.persona(),
+        }
+    }
+
+    /// The transaction bytes, before the hand-off consumes them.
+    ///
+    /// Test broadcasts record the bytes they were handed. Production
+    /// reads them through [`Self::into_durable`].
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Fresh(bound, _) => bound.bytes(),
+            Self::Loaded(seal) => seal.bytes(),
+        }
+    }
+
+    fn into_durable(
+        self,
+    ) -> Result<super::dispatch_durability::DurableTxBytes, super::error::PersistenceError> {
+        match self {
+            Self::Fresh(bound, durability) => {
+                super::dispatch_durability::DurableTxBytes::from_fresh_seal(bound, durability)
+            }
+            Self::Loaded(seal) => {
+                Ok(super::dispatch_durability::DurableTxBytes::from_loaded_seal(seal))
+            }
+        }
+    }
 }
 
 /// Tor's conventional local SOCKS port. A **placeholder** feeding
@@ -575,26 +634,30 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
     /// see the variant docs) and the bytes delegate directly.
     pub(crate) async fn submit_bound(
         &self,
-        bound: PBoundBytes,
+        handoff: BoundForSend,
     ) -> Result<SubmitSuccess, BroadcastSubmitError> {
         if let Self::PerP(submitter) = self {
-            if bound.persona() != submitter.persona() {
+            if handoff.persona() != submitter.persona() {
                 debug_assert!(
                     false,
                     "submit_bound: bytes bound to {:?} handed to a submitter bound to {:?} — \
                      a P-bound tx must be dispatched through the submitter constructed for \
                      its own persona (§3.1 part 4; the P-1 single-mint-site pin makes this \
                      unreachable from production flow)",
-                    bound.persona(),
+                    handoff.persona(),
                     submitter.persona(),
                 );
                 return Err(BroadcastSubmitError::PersonaMismatch {
-                    bytes_persona: *bound.persona(),
+                    bytes_persona: *handoff.persona(),
                     submitter_persona: *submitter.persona(),
                 });
             }
         }
-        Ok(self.submit(bound.into_bytes()).await?)
+        let tx = handoff.into_durable().map_err(|error| {
+            tracing::warn!(%error, "submit_bound: the seal was not confirmed; nothing was sent");
+            BroadcastSubmitError::SealUnconfirmed
+        })?;
+        Ok(self.submit(tx).await?)
     }
 }
 
@@ -604,10 +667,10 @@ impl<D: DaemonEngine> TransactionSubmitter for BroadcastSubmitter<D> {
     /// (the shared verdict mapping, the watchdog probe rung); the `P`-bound
     /// path goes through [`Self::submit_bound`], and the P-2 store-wrapped
     /// pin keeps retries on that façade.
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
         match self {
-            Self::Local(submitter) => submitter.submit(tx_bytes).await,
-            Self::PerP(submitter) => submitter.submit(tx_bytes).await,
+            Self::Local(submitter) => submitter.submit(tx).await,
+            Self::PerP(submitter) => submitter.submit(tx).await,
         }
     }
 }

@@ -54,6 +54,7 @@ fn test_state() -> Arc<AppState> {
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 

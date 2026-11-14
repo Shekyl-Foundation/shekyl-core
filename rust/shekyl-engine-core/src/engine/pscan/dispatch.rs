@@ -76,11 +76,13 @@ pub(crate) trait PendingSealStore: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<Option<PendingPostBlock>, Self::Error>> + Send;
 
     /// Seal the whole block (one postcard blob → one AEAD envelope → one
-    /// atomic write; the R2-2 structural crash-atomicity).
+    /// atomic write; the R2-2 structural crash-atomicity). Returns the
+    /// write's [`shekyl_engine_file::Durability`]. A broadcast requires
+    /// [`shekyl_engine_file::Durability::Confirmed`].
     fn save(
         &self,
         block: &PendingPostBlock,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
 }
 
 /// The single shared write path over the pending seal (§3.3 writer
@@ -139,6 +141,21 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         &self,
         f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
     ) -> Result<R, S::Error> {
+        let (out, durability) = self.mutate_reporting(f).await?;
+        // A non-broadcast edit treats an applied write as success.
+        crate::engine::dispatch_durability::accept_applied(durability);
+        Ok(out)
+    }
+
+    /// [`Self::mutate`], and the durability of the save it performed.
+    ///
+    /// An unchanged block reports [`shekyl_engine_file::Durability::Confirmed`]:
+    /// nothing new was written. A broadcast caller refuses
+    /// [`shekyl_engine_file::Durability::Unconfirmed`].
+    pub(crate) async fn mutate_reporting<R>(
+        &self,
+        f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
+    ) -> Result<(R, shekyl_engine_file::Durability), S::Error> {
         let _guard = self.gate.lock().await;
         let mut block = self
             .seal
@@ -146,10 +163,12 @@ impl<S: PendingSealStore> PendingPostStore<S> {
             .await?
             .unwrap_or_else(PendingPostBlock::empty);
         let (changed, out) = f(&mut block);
-        if changed {
-            self.seal.save(&block).await?;
-        }
-        Ok(out)
+        let durability = if changed {
+            self.seal.save(&block).await?
+        } else {
+            shekyl_engine_file::Durability::Confirmed
+        };
+        Ok((out, durability))
     }
 }
 
@@ -168,7 +187,7 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
     /// the seam.
     fn submit_bound(
         &self,
-        bound: PBoundBytes,
+        handoff: crate::engine::transaction_submitter::BoundForSend,
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, BroadcastSubmitError>> + Send;
 }
 
@@ -767,7 +786,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         let persona = post.persona;
         let outcome = self
             .broadcast
-            .submit_bound(PBoundBytes::from_pending(&post))
+            .submit_bound(crate::engine::transaction_submitter::BoundForSend::Loaded(
+                PBoundBytes::from_pending(&post),
+            ))
             .await;
 
         // -- Phase 4: outcome handling (§3.4) --------------------------------
@@ -850,6 +871,13 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             // pin makes it unreachable from production flow). Nothing was
             // sent; the record stays held (funds-safe) and the defect is
             // loud.
+            Err(BroadcastSubmitError::SealUnconfirmed) => {
+                tracing::warn!(
+                    attempts,
+                    "bond-post dispatch: the seal was applied but not confirmed; nothing was \
+                     sent, and the next tick resends the stored bytes"
+                );
+            }
             Err(BroadcastSubmitError::PersonaMismatch { .. }) => {
                 tracing::error!(
                     "bond-post dispatch DEFECT: persona mismatch at the submit choke — the \

@@ -45,6 +45,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
         auth: Arc::new(auth),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 
@@ -61,6 +62,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 
@@ -791,6 +793,7 @@ async fn create_wallet_into_a_missing_directory_says_so() {
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     });
     let out = rpc(
         state,

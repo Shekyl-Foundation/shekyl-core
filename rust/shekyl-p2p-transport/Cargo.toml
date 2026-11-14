@@ -24,10 +24,20 @@ c5-bench = ["shekyl-noise/rekey-timing"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# The instruction-count harness of `benches/c5_iai.rs`, at the version
+# every other gated bench uses.
+gungraun = "0.19"
 rand = "0.8"
 shekyl-levin = { path = "../shekyl-levin" }
 
 [[bench]]
 name = "c5"
+harness = false
+required-features = ["c5-bench"]
+
+# C5's cells as instruction counts (BA-T24's per-PR arm): the handshake's
+# steps, one record and one window sealed and opened, one rekey.
+[[bench]]
+name = "c5_iai"
 harness = false
 required-features = ["c5-bench"]

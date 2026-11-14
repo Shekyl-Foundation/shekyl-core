@@ -9,10 +9,14 @@
 The capture runs each registered row's gungraun bench and writes a
 `==== <crate>::<bench> ====` marker before its stdout. Within a section:
 
-    <bench_binary>::<group>::<function> <run_id>:<args>
+    <bench_binary>::<group>::<function> <run_id>[:<args>]
       Instructions:    <n>|...
       L1 Hits:         <n>|...
       ...
+
+A case with no arguments and no setup prints `<function> <run_id>` and
+no colon. That is still one entry: left unread, its metric lines attach
+to the entry before it. A case with arguments prints `:<args>`.
 
 A measurement the parser does not read is a gate that cannot fail
 (rule 50): the row is captured, the envelope never holds it, and the
@@ -35,7 +39,7 @@ SECTION_RE = re.compile(
     r"^==== (?P<crate>[\w-]+)::(?P<bench>[\w_]+) ====$", re.MULTILINE)
 HEADER_RE = re.compile(
     r"^(?P<bin>[A-Za-z_][\w]*)::(?P<group>[A-Za-z_][\w]*)::"
-    r"(?P<function>[A-Za-z_][\w]*)\s+(?P<run_id>[^:\s]+):(?P<setup>.+)$")
+    r"(?P<function>[A-Za-z_][\w]*)\s+(?P<run_id>[^:\s]+)(?::(?P<setup>.+))?$")
 # Anything shaped like a function header, read or not.
 HEADER_SHAPE_RE = re.compile(
     r"^[A-Za-z_]\w*::[A-Za-z_]\w*::[A-Za-z_]\w*(\s|$)")
@@ -102,15 +106,16 @@ def parse(text: str, rows: list[tuple[str, str]]) -> list[dict]:
                     "group": hm.group("group"),
                     "function": hm.group("function"),
                     "run_id": hm.group("run_id"),
-                    "setup": hm.group("setup").strip(),
+                    "setup": (hm.group("setup") or "").strip(),
                     "metrics": {},
                 }
                 continue
             if HEADER_SHAPE_RE.match(line) is not None:
                 problems.append(
                     f"{crate}::{bench}: a function header the parse does "
-                    f"not read (no `<run_id>:<args>`; give the bench a "
-                    f"`#[bench::<id>(...)]` case): {line.strip()!r}")
+                    f"not read (a `#[bench::<id>(...)]` case prints "
+                    f"`<run_id>`, and `:<args>` only when the case has "
+                    f"arguments): {line.strip()!r}")
                 if current is not None:
                     entries.append(current)
                 current = None

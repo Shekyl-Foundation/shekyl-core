@@ -127,14 +127,7 @@ impl BlockPath {
     /// which `bench_fixture_tests.rs` regenerates.
     #[must_use]
     pub fn replayed(corpus: &[u8]) -> (Self, Candidate) {
-        let mut reader = CorpusReader::open(Cursor::new(corpus)).expect("a corpus header");
-        let mut blocks = Vec::new();
-        while let Some(event) = reader.next().expect("a finished corpus") {
-            match event.event {
-                IngestEvent::Extend(candidate) => blocks.push(*candidate),
-                other => panic!("a block-path fixture is extend-only, found {other:?}"),
-            }
-        }
+        let mut blocks = blocks_of(corpus);
         let subject = blocks.pop().expect("a fixture holds its subject block");
         assert!(!blocks.is_empty(), "a fixture holds a history");
 
@@ -275,6 +268,47 @@ impl BlockPath {
     pub const fn store(&self) -> &ChainStore {
         &self.store
     }
+
+    /// The store, shared, with the file it lives in and the directory
+    /// that holds it: what the RPC's store facts are built over. The
+    /// directory is returned so the caller keeps it for as long as the
+    /// store.
+    #[must_use]
+    pub fn into_shared(
+        self,
+    ) -> (
+        std::sync::Arc<ChainStore>,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let file = self._dir.path().join("chain.redb");
+        (std::sync::Arc::new(self.store), file, self._dir)
+    }
+
+    /// The connected blocks' identities, by height.
+    #[must_use]
+    pub fn hashes(&self) -> &[BlockHash] {
+        &self.hashes
+    }
+}
+
+/// Every block of `corpus`, in chain order: the history and then the
+/// subject block.
+///
+/// # Panics
+///
+/// The corpus is not a finished extend-only corpus.
+#[must_use]
+pub fn blocks_of(corpus: &[u8]) -> Vec<Candidate> {
+    let mut reader = CorpusReader::open(Cursor::new(corpus)).expect("a corpus header");
+    let mut blocks = Vec::new();
+    while let Some(event) = reader.next().expect("a finished corpus") {
+        match event.event {
+            IngestEvent::Extend(candidate) => blocks.push(*candidate),
+            other => panic!("a block-path fixture is extend-only, found {other:?}"),
+        }
+    }
+    blocks
 }
 
 /// `form`'s claims for `candidate` connecting above `hashes`, read off the

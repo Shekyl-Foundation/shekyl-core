@@ -78,7 +78,6 @@ use super::dispatch::{
     BondBroadcast, DispatchConfig, DispatchDriver, PendingPostStore, PendingSealStore,
 };
 use super::task::{run_pscan_task, PScanConfig, PScanStore};
-use crate::engine::bond_assembly::PBoundBytes;
 use crate::engine::signer::EngineSignerKind;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine,
@@ -490,14 +489,14 @@ where
     fn save(
         &self,
         block: &PendingPostBlock,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send
+    {
         let engine = self.engine.clone();
         // Encode before taking the lock — postcard needs no engine state.
         let body = block.to_postcard_bytes();
         async move {
             let body = body.map_err(WalletFilePendingStoreError::Codec)?;
-            with_persistence_read(&engine, |wf, key| wf.save_pending_posts(key, &body)).await?;
-            Ok(())
+            Ok(with_persistence_read(&engine, |wf, key| wf.save_pending_posts(key, &body)).await?)
         }
     }
 }
@@ -545,12 +544,13 @@ struct LocalBondBroadcast<D> {
 impl<D: DaemonEngine> BondBroadcast for LocalBondBroadcast<D> {
     fn submit_bound(
         &self,
-        bound: PBoundBytes,
+        handoff: crate::engine::transaction_submitter::BoundForSend,
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, BroadcastSubmitError>> + Send {
         let daemon = self.daemon.clone();
         async move {
-            BroadcastSubmitter::local(*bound.persona(), daemon)
-                .submit_bound(bound)
+            let persona = *handoff.persona();
+            BroadcastSubmitter::local(persona, daemon)
+                .submit_bound(handoff)
                 .await
         }
     }

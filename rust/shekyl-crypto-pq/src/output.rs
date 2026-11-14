@@ -242,6 +242,26 @@ impl std::fmt::Debug for ScannedOutput {
     }
 }
 
+/// Mint a transaction key: the secret `r`, as a canonical scalar's
+/// bytes, and its public point `R = r·G`.
+///
+/// Canonical because the wallet retains `r` for the OUTBOUND payment proof
+/// (`shekyl_proofs::tx_proof`), which signs with `r` as a scalar and
+/// refuses bytes that are not one. A key drawn as 32 raw random bytes and
+/// reduced only to compute `R` fails that check for fifteen keys in
+/// sixteen (alpha.11 bug hunt §A19: an OUTBOUND proof for a settled payment
+/// that could not be made). The scalar is [`Zeroizing`], so an unwind wipes
+/// it. The output constructions take these same bytes
+/// ([`construct_output_with_label_plaintext`]), so every use of `r` agrees.
+/// The one mint for the wallet's transfers, drains and bond posts (rule 36:
+/// the reduction lives in this crate).
+pub fn generate_tx_key() -> (Zeroizing<[u8; 32]>, EdwardsPoint) {
+    let r = Zeroizing::new(Scalar::random(&mut rand::rngs::OsRng));
+    let secret = Zeroizing::new(r.to_bytes());
+    let public = G * *r;
+    (secret, public)
+}
+
 /// Construct a two-component output with deterministic KEM from `tx_key_secret`.
 ///
 /// `spend_key` is interpreted as a **compressed Edwards point** (opaque B),
@@ -1536,6 +1556,23 @@ fn compute_pqc_leaf(
 
     pqc_leaf_commitment(combined_ss, output_index, &pk_bytes)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("PQC leaf commitment guard: {e:?}")))
+}
+
+#[cfg(test)]
+mod tx_key_tests {
+    use super::*;
+
+    /// Every minted key is a canonical scalar, so the OUTBOUND proof can
+    /// sign with it, and its public point is `r·G`.
+    #[test]
+    fn a_minted_tx_key_is_canonical_and_matches_its_point() {
+        for _ in 0..256 {
+            let (secret, public) = generate_tx_key();
+            let r: Option<Scalar> = Scalar::from_canonical_bytes(*secret).into();
+            let r = r.expect("canonical");
+            assert_eq!(G * r, public);
+        }
+    }
 }
 
 #[cfg(test)]
