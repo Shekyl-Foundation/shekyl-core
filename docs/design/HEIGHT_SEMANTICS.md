@@ -33,11 +33,17 @@ Owner: the count-versus-height FOLLOWUPS row. Spawned from
 Every `u64` on the block axis is one of these, or a **difference** (an
 age / depth / window — neither):
 
-| Quantity | Meaning | Genesis-only chain | Type today |
-| --- | --- | --- | --- |
-| Ordinal height | which block; genesis = 0 | tip = 0 | `BlockHeight` |
-| Chain count | how many blocks; = tip + 1 | 1 | `ChainCount` (`rust/shekyl-types/src/lib.rs:360-389`) |
-| Difference | span between two instants | n/a | `BlockCount` (`rust/shekyl-types/src/lib.rs:342-348`) |
+| Quantity | Meaning | Genesis-only chain | Type today | Shown to people as |
+| --- | --- | --- | --- | --- |
+| Ordinal height | which block; genesis = 0 | tip = 0 | `BlockHeight` | "block number", or "block N" |
+| Chain count | how many blocks; = tip + 1 | 1 | `ChainCount` (`rust/shekyl-types/src/lib.rs:360-389`) | "block count", where a count is shown at all; a count shown as the block it reaches converts through `tip()` |
+| Difference | span between two instants | n/a | `BlockCount` (`rust/shekyl-types/src/lib.rs:342-348`) | "N blocks" |
+
+**Display words (Rick, 2026-11-12).** What people read never says
+"height": a block's own number is "block number" (or "block N"), a count
+is "block count", a span is "N blocks". The wire, the types and every
+typed name (CLI options, command words, config keys, wire and contract
+fields) keep their names. The GUI explains "block number" with a tooltip.
 
 C++ overloads "height" for the count (`m_db->height()`, `get_height`,
 and `get_info.height`, which the C++ handler wrote as the top block's

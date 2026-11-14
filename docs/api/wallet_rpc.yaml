@@ -2521,8 +2521,9 @@ components:
           format: int64
           nullable: true
           description: >-
-            Daemon chain height (its block count, the daemon's own
-            get_height), or null when the daemon is unreachable. The
+            The daemon's block count: its `chain_height` reply (the tip's
+            own number) plus one, as shekyl-rpc-client's `get_height`
+            computes it. null when the daemon is unreachable. The
             wallet_height is still returned in that case so an offline or
             still-syncing node does not hide the wallet's own status.
 

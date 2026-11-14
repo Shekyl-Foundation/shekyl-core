@@ -148,8 +148,36 @@ pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The block a count of blocks reaches: a count the wallet contract carries
+/// (a wallet's synced height, the daemon's chain height) shown as the newest
+/// block it includes, the block's own number (`HEIGHT_SEMANTICS.md` §1).
+/// `None` for 0: no block yet.
+#[must_use]
+pub fn block_of_count(count: u64) -> Option<u64> {
+    shekyl_types::ChainCount::from_raw(count)
+        .tip()
+        .map(shekyl_types::BlockHeight::to_raw)
+}
+
+/// "N", or `none` for a count of 0, for a line that names the block a
+/// count reaches.
+#[must_use]
+pub fn block_of_count_text(count: u64, none: &str) -> String {
+    block_of_count(count).map_or_else(|| none.to_owned(), |block| block.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    /// A count names the block it reaches; an empty count names none.
+    #[test]
+    fn a_count_names_the_block_it_reaches() {
+        assert_eq!(super::block_of_count(0), None);
+        assert_eq!(super::block_of_count(1), Some(0));
+        assert_eq!(super::block_of_count(1200), Some(1199));
+        assert_eq!(super::block_of_count_text(0, "nothing yet"), "nothing yet");
+        assert_eq!(super::block_of_count_text(1557, "nothing yet"), "1556");
+    }
+
     use super::{sanitize_for_terminal, short_address};
     use crate::catalog::omit_from_history;
     use std::borrow::Cow;

@@ -130,10 +130,10 @@ fn format_record(row: &Value) -> String {
         format!("  State:      {}", text("state")),
         format!("  Amount:     {} SKL", format_amount_str(&text("amount"))),
         format!("  Fee:        {} SKL", format_amount_str(&text("fee"))),
-        format!("  Height:     {}", format_height(row)),
+        format!("  Block:      {}", format_height(row)),
     ];
     if let Some(spent) = row.get("spent_height").and_then(Value::as_i64) {
-        lines.push(format!("  Spent at:   {spent}"));
+        lines.push(format!("  Spent at:   block {spent}"));
     }
     if let Some(reason) = row.get("unspendable_reason").and_then(Value::as_str) {
         lines.push(format!(
