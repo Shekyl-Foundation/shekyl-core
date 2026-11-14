@@ -947,6 +947,36 @@ pub enum ResponderInput<'f> {
 
 /// The responder, B: one step, which preprocesses and signs inside one
 /// call. It holds no nonce and has no way to cache one.
+///
+/// Its one transition takes no nonce store and returns only its share
+/// file:
+///
+/// ```
+/// use rand_core::OsRng;
+/// use shekyl_multisig::{LiveCeremonies, Responder, ResponderInput, SigningContext};
+///
+/// fn respond(ctx: &SigningContext<'_>, received: ResponderInput<'_>, live: &mut impl LiveCeremonies) {
+///     let _: Result<Vec<u8>, _> = Responder::respond(ctx, received, live, &mut OsRng);
+/// }
+/// ```
+///
+/// so a responder cannot put a nonce away:
+///
+/// ```compile_fail,E0061
+/// use rand_core::OsRng;
+/// use shekyl_multisig::{
+///     HeldNonceStore, LiveCeremonies, Responder, ResponderInput, SigningContext,
+/// };
+///
+/// fn respond(
+///     ctx: &SigningContext<'_>,
+///     received: ResponderInput<'_>,
+///     store: &mut impl HeldNonceStore,
+///     live: &mut impl LiveCeremonies,
+/// ) {
+///     let _ = Responder::respond(ctx, received, store, live, &mut OsRng);
+/// }
+/// ```
 pub struct Responder;
 
 impl Responder {

@@ -31,6 +31,34 @@ use shekyl_fcmp::frost_sal::HeldSession;
 
 /// One member's held round-1 state for one intent: a session per input,
 /// in the intent's input order. Not `Clone`; each session wipes on drop.
+///
+/// A held session owns the parameters and keys it was made under, and
+/// resumes only with them:
+///
+/// ```
+/// use shekyl_fcmp::frost_sal::HeldSession;
+///
+/// fn resume(held: HeldSession) {
+///     let _ = held.resume();
+/// }
+/// ```
+///
+/// There is no resume with other parameters:
+///
+/// ```compile_fail,E0061
+/// use shekyl_fcmp::frost_sal::{HeldSession, SalSigningParams};
+///
+/// fn resume(held: HeldSession, foreign: SalSigningParams) {
+///     let _ = held.resume(foreign);
+/// }
+/// ```
+///
+/// and no function that rebuilds a session from a seed and parameters
+/// given separately:
+///
+/// ```compile_fail,E0425
+/// let _ = shekyl_fcmp::frost_sal::from_cache;
+/// ```
 pub struct HeldNonce {
     intent_hash: [u8; 32],
     sessions: Vec<HeldSession>,
@@ -118,6 +146,53 @@ pub struct NonceCounterError(pub String);
 /// A held nonce whose use is durably recorded: the only thing that signs.
 /// Made only by [`consume`], after the store has given the nonce up and
 /// the counter persist has returned `Ok`.
+///
+/// A holder signs only through the store and the counter sink, which is
+/// how it gets its `ConsumedNonce`:
+///
+/// ```
+/// use rand_core::OsRng;
+/// use shekyl_multisig::ceremony::files::SigningSet;
+/// use shekyl_multisig::ceremony::roles::Committed;
+/// use shekyl_multisig::{Authenticated, HeldNonceStore, Holder, NonceCounterSink};
+///
+/// fn sign(
+///     holder: Holder<'_, Committed>,
+///     set: &Authenticated<SigningSet>,
+///     store: &mut impl HeldNonceStore,
+///     sink: &mut impl NonceCounterSink,
+/// ) {
+///     let _ = holder.sign(set, store, sink, &mut OsRng);
+/// }
+/// ```
+///
+/// It cannot sign without the persist:
+///
+/// ```compile_fail,E0061
+/// use rand_core::OsRng;
+/// use shekyl_multisig::ceremony::files::SigningSet;
+/// use shekyl_multisig::ceremony::roles::Committed;
+/// use shekyl_multisig::{Authenticated, HeldNonceStore, Holder};
+///
+/// fn sign(
+///     holder: Holder<'_, Committed>,
+///     set: &Authenticated<SigningSet>,
+///     store: &mut impl HeldNonceStore,
+/// ) {
+///     let _ = holder.sign(set, store, &mut OsRng);
+/// }
+/// ```
+///
+/// and a `ConsumedNonce` cannot be made from a nonce taken out of a store
+/// by hand:
+///
+/// ```compile_fail,E0451
+/// use shekyl_multisig::{ConsumedNonce, HeldNonce};
+///
+/// fn forge(nonce: HeldNonce) -> ConsumedNonce {
+///     ConsumedNonce { nonce, counter: 0 }
+/// }
+/// ```
 pub struct ConsumedNonce {
     nonce: HeldNonce,
     counter: u64,

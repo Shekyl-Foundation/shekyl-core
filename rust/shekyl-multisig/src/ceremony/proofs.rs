@@ -226,6 +226,42 @@ impl VerifiedRangeProof {
 
 /// The transaction this member signs: its own unsigned spend, the two
 /// verified proofs, and a key blob per input built from checked keys.
+///
+/// A cosigner signs the `FinalTx` it received, from which it assembles
+/// this type itself:
+///
+/// ```
+/// use rand_core::OsRng;
+/// use shekyl_multisig::ceremony::files::FinalTx;
+/// use shekyl_multisig::{Authenticated, Cosigner, SigningContext};
+///
+/// fn sign(ctx: &SigningContext<'_>, received: &Authenticated<FinalTx>) {
+///     let _ = Cosigner::sign_final_tx(ctx, received, &mut OsRng);
+/// }
+/// ```
+///
+/// It cannot sign a transaction it did not assemble:
+///
+/// ```compile_fail,E0308
+/// use rand_core::OsRng;
+/// use shekyl_multisig::{Cosigner, SigningContext};
+/// use shekyl_wire::Transaction;
+///
+/// fn sign(ctx: &SigningContext<'_>, received: &Transaction) {
+///     let _ = Cosigner::sign_final_tx(ctx, received, &mut OsRng);
+/// }
+/// ```
+///
+/// and nothing outside the assembly makes one:
+///
+/// ```compile_fail,E0451
+/// use shekyl_multisig::ceremony::SignableTransaction;
+/// use shekyl_wire::Transaction;
+///
+/// fn forge(tx: Transaction) -> SignableTransaction {
+///     SignableTransaction { tx, hashes: Vec::new() }
+/// }
+/// ```
 pub struct SignableTransaction {
     tx: Transaction,
     hashes: Vec<SigningPayloadHash>,
