@@ -239,7 +239,7 @@ impl Drop for ParentEnd {
         reason = "Windows can fail SetHandleInformation; other targets have no inherit bit"
     )
 )]
-fn set_inherit_bit(socket: &End, inherit: bool) -> io::Result<()> {
+pub(crate) fn set_inherit_bit(socket: &End, inherit: bool) -> io::Result<()> {
     #[cfg(windows)]
     return set_inheritable(socket, inherit);
     #[cfg(not(windows))]

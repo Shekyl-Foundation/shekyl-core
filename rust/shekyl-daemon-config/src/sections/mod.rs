@@ -296,12 +296,17 @@ pub struct Dev {
     pub archival_reorg_depth: Option<u64>,
 }
 
-/// Whether this start checks the configuration and exits (`config-verify`,
-/// IG-Q58).
+/// This process start: whether it checks the configuration and exits
+/// (`config-verify`, IG-Q58), and the owning connection it was handed
+/// (`owning-connection`, IG-Q106).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Session {
     /// Check the configuration as a start would and exit without starting.
     pub verify: bool,
+    /// The number of the inherited end the starting process holds this
+    /// daemon's life by. The daemon adopts it before it loads the
+    /// configuration; this is the value the checks and the report read.
+    pub owning_connection: Option<u64>,
 }
 
 /// The whole configuration, by section.
@@ -399,7 +404,7 @@ pub fn build(
     let rpc = rpc_section(&mut r, run_mode);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
-    let session = session_section(&mut r);
+    let session = session_section(&mut r, run_mode);
     let notify = notify_section(&mut r);
 
     faults.append(&mut r.faults);
@@ -697,21 +702,32 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         }
     };
     Dev {
-        difficulty: r.dev_integer("dev-difficulty"),
+        difficulty: r.optional_integer("dev-difficulty"),
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
         rpc: r.switch("dev-rpc"),
-        pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
-        pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
-        settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),
-        archival_reorg_depth: r.dev_integer("dev-archival-reorg-depth"),
+        pow_seed_epoch_blocks: r.optional_integer("dev-pow-seed-epoch-blocks"),
+        pow_seed_epoch_lag: r.optional_integer("dev-pow-seed-epoch-lag"),
+        settlement_epoch_blocks: r.optional_integer("dev-settlement-epoch-blocks"),
+        archival_reorg_depth: r.optional_integer("dev-archival-reorg-depth"),
     }
 }
 
-fn session_section(r: &mut Reader<'_>) -> Session {
+/// The session rows, and the rule between the owning connection and the
+/// run mode (IG-Q106): the service manager holds a service's life, so a
+/// service is handed no owning connection.
+fn session_section(r: &mut Reader<'_>, run_mode: RunMode) -> Session {
+    let owning_connection = r.optional_integer("owning-connection");
+    if owning_connection.is_some() && run_mode == RunMode::Service {
+        r.conflict(
+            "owning-connection",
+            "`service` is set: the service manager holds a service's life",
+        );
+    }
     Session {
         verify: r.switch("config-verify"),
+        owning_connection,
     }
 }
 

@@ -31,8 +31,9 @@ use tokio::sync::watch;
 
 use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig};
 use shekyl_daemon_config::{announce, marker, Lock, Platform, TABLE};
-use shekyl_options::read_cli;
+use shekyl_options::{read_cli, Code, Diagnostic};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
+use shekyl_spawn::owning::OwningConnection;
 
 use shekyl_daemon_config::exit::refuse;
 use shekyl_daemon_config::{load, Loaded};
@@ -66,6 +67,13 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     let cli = match read_cli(&TABLE, rest.iter().cloned()) {
         Ok(cli) => cli,
         Err(ds) => return refuse(&ds),
+    };
+    // The owning connection, adopted before anything else this process does
+    // (IG-Q106): close-on-exec or not inheritable before any child can be
+    // spawned, so none holds a copy that outlives the daemon.
+    let owning = match adopt_owning_connection(&cli) {
+        Ok(owning) => owning,
+        Err(d) => return refuse(&[d]),
     };
     // The build identity, from the one home every binary reads (DC-Q20).
     let release_name = shekyl_version::RELEASE_NAME;
@@ -278,7 +286,19 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         network,
         Arc::new(move |limits| link_owner.set_limits(limits)),
     ));
-    let status = supervise(&config, &pool, options, node, tor_inbox, prepared);
+    // The owning connection's watch, after the stop owner: `own` clears a
+    // latched stop, and a close must not be cleared.
+    let ready = match owning.map(watch_owning_connection).transpose() {
+        Ok(ready) => ready,
+        Err(e) => {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the owning connection could not be watched: {e}"),
+            );
+            return EXIT_FAILED;
+        }
+    };
+    let status = supervise(&config, &pool, options, node, tor_inbox, prepared, ready);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -316,6 +336,7 @@ fn supervise(
     node: shekyl_node::Node,
     tor_inbox: tor::Prepared,
     prepared: shekyl_daemon_rpc::run::Prepared,
+    ready: Option<OwningConnection>,
 ) -> i32 {
     // The RPC, bound before anything is announced as up. A refusal is a
     // failed start: the node is torn down the one way. The owner's socket
@@ -338,6 +359,13 @@ fn supervise(
             None
         }
     };
+    // The owner's leg is bound, served and published: the starting process
+    // may call. A failed write is that process gone, which the watch reports.
+    if let (Some(_), Some(mut ready)) = (&rpc, ready) {
+        if let Err(e) = ready.write_ready() {
+            tracing::debug!(target: "daemon", "the ready line was not written: {e}");
+        }
+    }
     // The notify runner, pushed from the chain's tip watch; its children
     // run on the signal owner's runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
@@ -479,8 +507,59 @@ fn stop_report(cause: signals::StopCause) -> StopReport {
         | signals::StopCause::RendezvousGone => {
             StopReport::Announce(format!("stop requested by {cause}"))
         }
+        signals::StopCause::OwningConnectionClosed => StopReport::Announce(
+            "the process that started this daemon closed its owning connection".to_owned(),
+        ),
         signals::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
     }
+}
+
+/// Adopt the owning connection the command line names, if it names one
+/// (IG-Q106). A number that is not a connected stream socket refuses the
+/// start, naming the condition.
+fn adopt_owning_connection(
+    cli: &shekyl_options::Cli,
+) -> Result<Option<OwningConnection>, Diagnostic> {
+    let Some(given) = cli.given.iter().find(|g| g.row.name == "owning-connection") else {
+        return Ok(None);
+    };
+    let shekyl_options::Value::Integer(number) = given.value else {
+        unreachable!("the row's kind is an integer");
+    };
+    shekyl_spawn::owning::adopt(number).map(Some).map_err(|e| {
+        Diagnostic::new(Code::OwningConnectionUnusable, given.source.clone())
+            .option("owning-connection")
+            .param("value", number.to_string())
+            .param("found", e.describe())
+    })
+}
+
+/// Start the owning connection's watch on a thread of its own, and return
+/// the handle the ready line is written on. The watch reads until the
+/// starting process closes its end or dies, then stops the daemon through
+/// the one stop owner. Bytes that process sends are discarded, and said
+/// once.
+fn watch_owning_connection(owning: OwningConnection) -> std::io::Result<OwningConnection> {
+    let ready = owning.try_clone()?;
+    std::thread::Builder::new()
+        .name("shekyld-owning".to_owned())
+        .spawn(move || {
+            let mut said = false;
+            let closed = owning.wait_for_close(|bytes| {
+                if !said {
+                    said = true;
+                    tracing::warn!(
+                        target: "daemon",
+                        "the process that started this daemon sent {bytes} bytes on its owning connection; it carries nothing to the daemon, and they are discarded"
+                    );
+                }
+            });
+            if let Err(e) = closed {
+                tracing::debug!(target: "daemon", "the owning connection failed: {e}");
+            }
+            signals::owning_connection_closed();
+        })?;
+    Ok(ready)
 }
 
 fn deliver(report: StopReport) {
@@ -700,6 +779,7 @@ mod tests {
             node,
             crate::tor::prepare().0,
             shekyl_daemon_rpc::run::prepare(None).expect("the RPC's runtime"),
+            None,
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");

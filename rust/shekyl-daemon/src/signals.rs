@@ -82,6 +82,9 @@ pub enum StopCause {
     /// The owner's socket, or its directory, went from under the running
     /// daemon: the session that started it ended (`RPC_CHANNEL.md` §7.1).
     RendezvousGone,
+    /// The process that started this daemon closed its owning connection,
+    /// or died (`INPUT_GRAMMAR.md` IG-Q106).
+    OwningConnectionClosed,
     /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]).
     Fatal(NodeEnd),
 }
@@ -92,6 +95,9 @@ impl fmt::Display for StopCause {
             Self::Signal(signal) => f.write_str(signal.name()),
             Self::Requested => f.write_str("the RPC's daemon_stop"),
             Self::RendezvousGone => f.write_str("the owner's socket going"),
+            Self::OwningConnectionClosed => {
+                f.write_str("the process that started this daemon closing its owning connection")
+            }
             Self::Fatal(end) => write!(f, "{end}"),
         }
     }
@@ -128,6 +134,12 @@ pub fn request_stop() {
 /// ends (`RPC_CHANNEL.md` §7.1). A clean stop.
 pub fn rendezvous_gone() {
     latch(StopCause::RendezvousGone);
+}
+
+/// The process that started this daemon closed its owning connection or
+/// died (IG-Q106). A clean stop: the daemon's life was that process's.
+pub fn owning_connection_closed() {
+    latch(StopCause::OwningConnectionClosed);
 }
 
 /// A task the node owns ended on its own, as `end` says.

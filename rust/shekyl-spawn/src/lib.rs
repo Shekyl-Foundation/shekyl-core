@@ -28,5 +28,6 @@
 //! starts the daemon holding its owning connection (`GUI_SYNC_LANE.md` GS-C3).
 
 pub mod inherit;
+pub mod owning;
 pub mod pair;
 pub mod spawn_lock;
