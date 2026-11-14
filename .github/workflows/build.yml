@@ -565,7 +565,7 @@ jobs:
         working-directory: rust
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn --no-fail-fast *> daemon-crates.out
+          cargo test --locked -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport --no-fail-fast *> daemon-crates.out
           $rc = $LASTEXITCODE
           Get-Content daemon-crates.out
           if ($rc -ne 0) { exit $rc }
@@ -583,8 +583,11 @@ jobs:
           # is unix-only, so it is not in the binary.
           # shekyl-spawn (GS-C3, 2026-11-13): the pair's two tests and the
           # adoption's inherit-flag test, the Windows arm of the owning
-          # connection's first layer.
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3 }
+          # connection's first layer. shekyl-rpc-transport: its library, and
+          # local_peer_check, the Windows-only test 7 (a pipe failing the
+          # peer check is a security failure, dialled once), which no other
+          # job compiles; 42 passed in the lib on the Windows host.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber

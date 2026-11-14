@@ -516,7 +516,11 @@ fn stop_report(cause: signals::StopCause) -> StopReport {
 
 /// Adopt the owning connection the command line names, if it names one
 /// (IG-Q106). A number that is not a connected stream socket refuses the
-/// start, naming the condition.
+/// start, naming the condition. Called once, first in the start.
+#[allow(
+    unsafe_code,
+    reason = "adopt takes ownership of the inherited end the command line names"
+)]
 fn adopt_owning_connection(
     cli: &shekyl_options::Cli,
 ) -> Result<Option<OwningConnection>, Diagnostic> {
@@ -526,12 +530,18 @@ fn adopt_owning_connection(
     let shekyl_options::Value::Integer(number) = given.value else {
         unreachable!("the row's kind is an integer");
     };
-    shekyl_spawn::owning::adopt(number).map(Some).map_err(|e| {
-        Diagnostic::new(Code::OwningConnectionUnusable, given.source.clone())
-            .option("owning-connection")
-            .param("value", number.to_string())
-            .param("found", e.describe())
-    })
+    // SAFETY: the number is the end the starting process created for this
+    // daemon and handed it by inheritance (IG-Q106); nothing else in this
+    // process holds it, and the start adopts it once, before the walk, the
+    // lock or any child.
+    unsafe { shekyl_spawn::owning::adopt(number) }
+        .map(Some)
+        .map_err(|e| {
+            Diagnostic::new(Code::OwningConnectionUnusable, given.source.clone())
+                .option("owning-connection")
+                .param("value", number.to_string())
+                .param("found", e.describe())
+        })
 }
 
 /// Start the owning connection's watch on a thread of its own, and return

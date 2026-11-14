@@ -34,10 +34,10 @@
 //! walk checked.
 
 #[cfg(unix)]
-pub use unix::{serve_ready, OwnerListener, OwnerSocket, Place, Rendezvous};
+pub use unix::{serve_ready, OwnerListener, OwnerSocket, Place, Rendezvous, ServedListener};
 
 #[cfg(not(unix))]
-pub use windows::{serve_ready, OwnerListener, OwnerSocket, Place, Rendezvous};
+pub use windows::{serve_ready, OwnerListener, OwnerSocket, Place, Rendezvous, ServedListener};
 
 /// How often the watch looks at the rendezvous. A socket removed under a
 /// running daemon is noticed within this long.
@@ -322,6 +322,9 @@ mod windows {
         }
     }
 
+    /// The listener as the server accepts on it: the pipe listener itself.
+    pub type ServedListener = OwnerListener;
+
     /// The listener in the server's runtime, announced.
     ///
     /// # Errors
@@ -331,7 +334,7 @@ mod windows {
         clippy::unnecessary_wraps,
         reason = "one signature with Unix, whose socket the runtime can refuse"
     )]
-    pub fn serve_ready(listener: OwnerListener) -> io::Result<OwnerListener> {
+    pub fn serve_ready(listener: OwnerListener) -> io::Result<ServedListener> {
         tracing::info!(
             target: "global",
             "shekyl-daemon-rpc listening on the owner's pipe (its name is in the rendezvous)"
@@ -460,12 +463,18 @@ mod unix {
     /// server.
     pub type OwnerListener = UnixListener;
 
-    /// The listener in the server's runtime.
+    /// The listener as the server accepts on it: registered with the
+    /// server's runtime.
+    pub type ServedListener = tokio::net::UnixListener;
+
+    /// The listener in the server's runtime. Called inside that runtime,
+    /// before the start returns: a socket the runtime refuses is a refused
+    /// start, never a daemon announced as ready with no owner's leg.
     ///
     /// # Errors
     ///
     /// The runtime would not take the socket.
-    pub fn serve_ready(listener: OwnerListener) -> io::Result<tokio::net::UnixListener> {
+    pub fn serve_ready(listener: OwnerListener) -> io::Result<ServedListener> {
         let listener = tokio::net::UnixListener::from_std(listener)?;
         if let Ok(addr) = listener.local_addr() {
             if let Some(path) = addr.as_pathname() {
@@ -685,6 +694,26 @@ mod unix {
     mod tests {
         use super::*;
         use shekyl_rpc_channel::Instance;
+
+        /// A listener the runtime cannot take is refused by `serve_ready`,
+        /// the one fallible step between the bind and the accept loop, which
+        /// the start runs before it returns (so the daemon writes no ready
+        /// line). On Linux a regular file cannot join the runtime's epoll
+        /// set.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_listener_the_runtime_cannot_take_is_refused() {
+            let file = tempfile::tempfile().expect("a file");
+            let listener = OwnerListener::from(std::os::fd::OwnedFd::from(file));
+            // Nonblocking, as the bound socket is.
+            listener.set_nonblocking(true).expect("nonblocking");
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            let _runtime = rt.enter();
+            assert!(serve_ready(listener).is_err());
+        }
 
         fn plan_in(dir: &Path) -> OwnerSocketPlan {
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();

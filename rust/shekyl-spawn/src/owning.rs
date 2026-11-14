@@ -131,10 +131,23 @@ pub fn read_ready(ours: &mut End) -> io::Result<()> {
 /// connection: check it, then make it close-on-exec (Unix) or not inheritable
 /// (Windows) before any child can be spawned.
 ///
+/// The checks run before ownership is taken: a number that is not open, not
+/// a connected stream socket, or a standard stream is refused and left
+/// alone.
+///
+/// # Safety
+///
+/// `number`, once it passes the checks, becomes owned by the returned
+/// connection, which closes it when dropped. The caller transfers that
+/// ownership: `number` is an end this process inherited for this purpose,
+/// nothing else in the process holds or will close it, and it is adopted
+/// once. The daemon's start is the one caller, with the number its command
+/// line names (`INPUT_GRAMMAR.md` IG-Q106).
+///
 /// # Errors
 ///
 /// [`AdoptError`], naming the condition that failed.
-pub fn adopt(number: u64) -> Result<OwningConnection, AdoptError> {
+pub unsafe fn adopt(number: u64) -> Result<OwningConnection, AdoptError> {
     #[cfg(unix)]
     {
         adopt_unix(number)
@@ -290,7 +303,9 @@ mod tests {
     use std::os::fd::AsRawFd;
 
     fn refused(number: u64) -> AdoptError {
-        match adopt(number) {
+        // SAFETY: a refused number is left alone; the numbers here are
+        // never adopted.
+        match unsafe { adopt(number) } {
             Ok(_) => panic!("{number} was adopted"),
             Err(e) => e,
         }
@@ -340,7 +355,8 @@ mod tests {
         // SAFETY: reads only this descriptor's flags.
         let before = unsafe { libc::fcntl(number, libc::F_GETFD) };
         assert_eq!(before & libc::FD_CLOEXEC, 0, "the end arrives inheritable");
-        let owning = adopt(u64::try_from(number).unwrap()).expect("adopted");
+        // SAFETY: `theirs` was forgotten above; the adoption is its one owner.
+        let owning = unsafe { adopt(u64::try_from(number).unwrap()) }.expect("adopted");
         // SAFETY: reads only this descriptor's flags.
         let after = unsafe { libc::fcntl(number, libc::F_GETFD) };
         assert_ne!(after & libc::FD_CLOEXEC, 0, "adopted close-on-exec");
@@ -354,7 +370,8 @@ mod tests {
         let number = theirs.as_raw_fd();
         // Hand the descriptor over: the adoption owns it from here.
         std::mem::forget(theirs);
-        let mut owning = adopt(u64::try_from(number).unwrap()).expect("adopted");
+        // SAFETY: `theirs` was forgotten above; the adoption is its one owner.
+        let mut owning = unsafe { adopt(u64::try_from(number).unwrap()) }.expect("adopted");
         owning.write_ready().unwrap();
         read_ready(&mut ours).expect("the ready line");
         ours.write_all(b"ignored").unwrap();
@@ -407,7 +424,9 @@ mod windows_tests {
         // Hand the socket over: the adoption owns it from here.
         let number = theirs.into_raw_socket();
         assert!(inheritable(number), "the end arrives inheritable");
-        let owning = adopt(number).expect("adopted");
+        // SAFETY: `into_raw_socket` gave up ownership; the adoption is its one
+        // owner.
+        let owning = unsafe { adopt(number) }.expect("adopted");
         assert!(!inheritable(number), "adopted not inheritable");
         drop(owning);
     }

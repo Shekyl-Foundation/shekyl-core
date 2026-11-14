@@ -212,7 +212,7 @@ pub async fn serve_listeners(
     submit_engine: Arc<DaemonSubmitEngine>,
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
-    owner: Option<crate::owner::OwnerListener>,
+    owner: Option<crate::owner::ServedListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn_tracker = ConnTracker::new(config.conn_limits);
@@ -312,7 +312,7 @@ impl Listener {
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
     sets: Vec<(Listener, Router, Vec<BoundListener>)>,
-    owner: Option<(Router, crate::owner::OwnerListener)>,
+    owner: Option<(Router, crate::owner::ServedListener)>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -329,7 +329,6 @@ pub(crate) async fn serve_bound(
         }
     };
     if let Some((app, listener)) = owner {
-        let listener = crate::owner::serve_ready(listener)?;
         serves.spawn(crate::listener_http::serve_plaintext(
             LimitedListener::new(listener, conn_tracker.clone()),
             app,
@@ -664,6 +663,8 @@ mod lifecycle_tests {
         let path = dir.path().join("owner.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
         listener.set_nonblocking(true).unwrap();
+        // Into the runtime as the start puts it, before the serve.
+        let listener = crate::owner::serve_ready(listener).unwrap();
         // The handler reports the authority the gate stamped.
         let owner_app = gate(
             axum::Router::new().route(
