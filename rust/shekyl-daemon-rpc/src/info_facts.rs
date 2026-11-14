@@ -97,10 +97,11 @@ pub struct InfoStatusFacts {
     pub alt_blocks_count: u64,
     /// The build's version string.
     pub version: String,
-    /// The RandomX caches the node's hasher holds when the call is made:
-    /// the length of its published `Resident::caches`, the one source of
-    /// that count.
-    pub randomx_caches: u64,
+    /// The places the node's hasher has in use for RandomX caches when the
+    /// call is made: the length of its published `Resident::caches`, the
+    /// one source of that count. The quantity HA-R2 caps, an upper bound
+    /// on the RandomX cache memory, never a reading of it.
+    pub randomx_cache_places: u64,
 }
 
 /// The Peers part's facts: whether P2P runs, and when it does, one row

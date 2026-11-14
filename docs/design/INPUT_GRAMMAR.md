@@ -884,7 +884,7 @@ Each shape's fields today, and their names under this Part. The names the types 
 | `connectors` (a list of rows) | `connector`, a map from connector to its counts (IG-Q82) | `p2p` (`running`, `offline`) | goes: it repeats `offline` |
 | `pool_retired` | `txpool_retired` (status; IG-Q74) | `tx_pool_unbroadcast_count` (host-only, RT-O9.3) | `txpool_private_count` (host-only) |
 | `restricted` | `grant` (the grants the caller holds, `RPC_CHANNEL.md` §6.2) | — | `writer` (health; IG-Q92) |
-| — | `randomx_caches` (status; the live RandomX caches, a count: [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.6; wire 4.4) | | |
+| — | `randomx_cache_places` (status; the places the hasher has in use for RandomX caches, a count and an upper bound on that memory: [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.6; wire 4.4) | | |
 
 A connector's counts (`connector`'s values): `incoming_sockets` → `inbound_count`; `outgoing_sockets` → `outbound_count`; `white_peerlist_size` → `peer_white_count`; `gray_peerlist_size` → `peer_gray_count`. `txpool_count` and `txpool_private_count` are `null` when `txpool_retired` is true.
 
@@ -1021,7 +1021,8 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | extra | template | the coinbase's reserved extra-nonce bytes; with `offset`, where they start | |
 | revision | daemon | the build's version string | |
 | randomx | — | the RandomX proof-of-work function as this node runs it: `pow` is a proof, this is the machinery that computes one ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)) | |
-| caches | randomx | the RandomX caches the node's hasher holds now, 256 MiB each; a count, at most three | |
+| cache | randomx | a RandomX cache: the 256 MiB a seed's hashes are computed from, held by the node's one hasher | |
+| places | cache | the places the hasher has in use for caches, at most three; a count. The quantity the cap bounds: an upper bound on the cache memory, never a reading of it, since a place reserved for a build or one whose cache is being returned counts | |
 | joined | bond, claim | the epoch the bond joined | |
 | closing | epoch, shard | the epoch's closing height | |
 | hashing | template, pow | the bytes proof of work hashes | |

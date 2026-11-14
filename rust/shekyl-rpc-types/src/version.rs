@@ -59,10 +59,14 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
 /// version read reports the daemon newer.
 ///
-/// 4.4: `daemon_status` reports the live RandomX caches
-/// (`RANDOMX_CACHE_ACTOR.md` §5.6). `randomx_caches` joins the part shown
-/// to `status`, beside `data_size`: the count of caches the node's one
-/// hasher holds when the call is made, at most three. A caller without
+/// 4.4: `daemon_status` reports the hasher's RandomX cache places
+/// (`RANDOMX_CACHE_ACTOR.md` §5.6). `randomx_cache_places` joins the part
+/// shown to `status`, beside `data_size`: the places the node's one hasher
+/// has in use when the call is made, at most three. It is the quantity
+/// HA-R2 caps, an upper bound on the RandomX cache memory, never a reading
+/// of it: a place reserved for a build counts, and so does a derive still
+/// filling its pages, and a cache whose 256 MiB is still being returned. A
+/// caller without
 /// the grant finds the part absent (RK-D23). A 4.3 reader of a 4.4 Status
 /// part refuses the field it does not know after the version read reports
 /// the daemon newer.

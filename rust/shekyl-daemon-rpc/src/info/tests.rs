@@ -126,7 +126,7 @@ pub(crate) fn synced_facts() -> FakeInfoFacts {
             alt_blocks_count: 3,
             version: "3.1.0-oracle".to_owned(),
             // Two caches: a window that spans a seed boundary.
-            randomx_caches: 2,
+            randomx_cache_places: 2,
         },
         peers: PeerFacts::Running(ConnectorMap {
             clearnet: Some(counts(13, 10, 500, 2500)),
@@ -239,7 +239,7 @@ const STATUS_KEYS: [&str; 15] = [
     "started",
     "disk_free",
     "data_size",
-    "randomx_caches",
+    "randomx_cache_places",
     "revision",
     "peer_outbound_count",
     "peer_inbound_count",
@@ -290,7 +290,7 @@ fn a_synced_node_answers_every_member_in_its_kind() {
     assert_eq!(wire["started"], 1_699_990_000);
     assert_eq!(wire["disk_free"], 123_456_789_012_u64);
     assert_eq!(wire["data_size"], 7 * 1024 * 1024 * 1024 + 1_u64);
-    assert_eq!(wire["randomx_caches"], 2, "the hasher's live caches");
+    assert_eq!(wire["randomx_cache_places"], 2, "the hasher's live caches");
     assert_eq!(wire["revision"], "3.1.0-oracle");
     assert_eq!(wire["peer_outbound_count"], 8);
     assert_eq!(wire["peer_inbound_count"], 12);

@@ -348,7 +348,7 @@ pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
         "started": 1_700_000_000_u64,
         "disk_free": 1_u64 << 40,
         "data_size": 1_u64 << 30,
-        "randomx_caches": 1,
+        "randomx_cache_places": 1,
         "revision": "3.1.0-test",
         "peer_outbound_count": 8,
         "peer_inbound_count": 3,
@@ -387,7 +387,7 @@ const STATUS_PART_KEYS: &[&str] = &[
     "started",
     "disk_free",
     "data_size",
-    "randomx_caches",
+    "randomx_cache_places",
     "revision",
     "peer_outbound_count",
     "peer_inbound_count",
@@ -1398,7 +1398,10 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     );
     // The node's live caches, as memory (4.4). Red edit: drop the clause
     // from `show_status`.
-    assert!(out.contains(", RandomX caches 1 (256 MiB)"), "{out}");
+    assert!(
+        out.contains(", RandomX cache places 1 (at most 256 MiB)"),
+        "{out}"
+    );
 }
 
 /// Eight hashes in ten seconds is 0.80 H/s.
