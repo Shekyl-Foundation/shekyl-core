@@ -82,11 +82,7 @@ fn wire_inputs(
     }
     Ok(key_images
         .iter()
-        .map(|ki| Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: *ki,
-        })
+        .map(|ki| Input::fcmp_spend(*ki))
         .chain(extra_inputs.iter().cloned())
         .collect())
 }
@@ -196,7 +192,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         .map(|a| WirePqcAuth {
             auth_version: a.auth_version,
             scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
-            flags: 0,
+            flags: WirePqcAuth::NO_FLAGS,
             hybrid_public_key: a.public_key.clone(),
             hybrid_signature: a.signature.clone(),
         })
@@ -221,7 +217,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
 
     Ok(Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: wire_inputs(&input.key_images, &input.extra_inputs)?,
             outputs: wire_outputs(&input.output_keys, &input.output_amounts, &input.view_tags)?,
             extra: input.tx_extra.clone(),
@@ -274,7 +270,7 @@ fn prefix_only_tx(
 ) -> Result<Transaction, TxBuilderError> {
     Ok(Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: wire_inputs(key_images, extra_inputs)?,
             outputs: wire_outputs(output_keys, output_amounts, view_tags)?,
             extra: tx_extra.to_vec(),

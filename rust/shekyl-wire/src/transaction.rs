@@ -436,6 +436,18 @@ fn check_emission_blob(canonical_bytes: &[u8]) -> io::Result<()> {
 }
 
 impl Input {
+    /// The FCMP++ spend of the output whose key image is `key_image`: a
+    /// key-imaged input with no amount and no ring offsets, since the
+    /// membership proof names no member.
+    #[must_use]
+    pub fn fcmp_spend(key_image: [u8; 32]) -> Self {
+        Input::ToKey {
+            amount: 0,
+            key_offsets: Vec::new(),
+            key_image,
+        }
+    }
+
     /// Key-imaged spend (`txin_to_key`). Twin of C++ `txin_to_key`.
     #[must_use]
     pub fn is_spend(&self) -> bool {
@@ -899,6 +911,25 @@ pub struct PqcAuth {
 }
 
 impl PqcAuth {
+    /// The authentication version consensus requires (CEN-I16).
+    pub const VERSION: u8 = 1;
+    /// The flags consensus requires: none (CEN-I16; an unknown bit is
+    /// refused).
+    pub const NO_FLAGS: u16 = 0;
+
+    /// An input's slot before it is signed: `scheme_id` and the key blob,
+    /// at [`Self::VERSION`] with [`Self::NO_FLAGS`], and no signature yet.
+    #[must_use]
+    pub fn unsigned(scheme_id: u8, hybrid_public_key: Vec<u8>) -> Self {
+        Self {
+            auth_version: Self::VERSION,
+            scheme_id,
+            flags: Self::NO_FLAGS,
+            hybrid_public_key,
+            hybrid_signature: Vec::new(),
+        }
+    }
+
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_all(&[self.auth_version, self.scheme_id])?;
         w.write_all(&self.flags.to_le_bytes())?;
@@ -1323,6 +1354,9 @@ pub struct TxPrefix {
 }
 
 impl TxPrefix {
+    /// The `unlock_time` of a transaction with no additional timelock.
+    pub const NO_UNLOCK_TIME: u64 = 0;
+
     /// The prefix hash of **this prefix** — `keccak256(varint(TX_VERSION) ‖
     /// write)`, the one derivation [`Transaction::prefix_hash`] delegates to.
     /// Taking the prefix rather than the transaction lets a consumer hash a
