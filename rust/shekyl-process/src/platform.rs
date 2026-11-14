@@ -185,20 +185,42 @@ pub fn service_rendezvous() -> Option<PathBuf> {
     program_data().map(|dir| windows_service_rendezvous(&dir))
 }
 
+/// Linux: systemd's `StateDirectory` root. The launch-recipe gate reads
+/// this constant and requires the packaged unit's `StateDirectory` to be
+/// the data home under it, at mode 0700.
+const LINUX_SERVICE_PARENT: &str = "/var/lib";
+
+/// FreeBSD (`contrib/packaging/freebsd/shekyld`). The launch-recipe gate
+/// reads this constant and requires the rc.d script's prestart to create
+/// the data home under it, at mode 0700.
+const FREEBSD_SERVICE_PARENT: &str = "/var/db";
+
+/// macOS; the installer creates the data home under it.
+const MACOS_SERVICE_PARENT: &str = "/var/db";
+
+/// The fixed parent of a service's data home for `os`
+/// (`std::env::consts::OS`), or `None` when that operating system has no
+/// fixed one. Windows is `None` here: its parent is [`program_data`].
+fn fixed_service_parent(os: &str) -> Option<&'static str> {
+    match os {
+        "linux" => Some(LINUX_SERVICE_PARENT),
+        "freebsd" => Some(FREEBSD_SERVICE_PARENT),
+        "macos" => Some(MACOS_SERVICE_PARENT),
+        _ => None,
+    }
+}
+
 /// The machine-wide parent of a service's data home, `shekyl` under it
 /// (Rick, 2026-11-14, amending IG-Q36 and `RPC_CHANNEL.md` §7.1):
-/// `%ProgramData%` on Windows, `/var/lib` on Linux, `/var/db` on FreeBSD and
-/// macOS. The service manager or the installer creates `shekyl` there; the
-/// daemon checks it and never creates it.
+/// `/var/lib` on Linux, `/var/db` on FreeBSD and macOS, `%ProgramData%` on
+/// Windows. The service manager, the rc.d script or the installer creates
+/// `shekyl` there; the daemon checks it and never creates it. The paths are
+/// data, so a test on any host pins every platform.
 #[must_use]
 pub fn service_parent() -> Option<PathBuf> {
-    if cfg!(target_os = "linux") {
-        Some(PathBuf::from("/var/lib"))
-    } else if cfg!(any(target_os = "freebsd", target_os = "macos")) {
-        Some(PathBuf::from("/var/db"))
-    } else {
-        program_data()
-    }
+    fixed_service_parent(std::env::consts::OS)
+        .map(PathBuf::from)
+        .or_else(program_data)
 }
 
 /// This account's and this machine's roots, as the daemon's configuration
@@ -247,15 +269,16 @@ mod tests {
     }
 }
 
-/// The rendezvous rows, on every host. A `cfg!` ladder would leave
-/// FreeBSD's path unexecuted on the Linux runners, and a second copy of
+/// The rendezvous and data-home rows, on every host. A `cfg!` ladder would
+/// leave FreeBSD's paths unexecuted on the Linux runners, and a second copy of
 /// that ladder would stay green when both copies moved together.
 #[cfg(test)]
-mod service_rendezvous_directories {
+mod service_directories {
     use std::path::{Path, PathBuf};
 
     use super::{
-        fixed_service_rendezvous, program_data, service_rendezvous, windows_service_rendezvous,
+        fixed_service_parent, fixed_service_rendezvous, program_data, service_parent,
+        service_rendezvous, windows_service_rendezvous,
     };
 
     /// Every platform's directory is the ruled one (`RPC_CHANNEL.md`
@@ -282,5 +305,21 @@ mod service_rendezvous_directories {
             .map(PathBuf::from)
             .or_else(|| program_data().map(|dir| windows_service_rendezvous(&dir)));
         assert_eq!(service_rendezvous(), expected);
+    }
+
+    /// Every platform's data-home parent is the ruled one (Rick,
+    /// 2026-11-14). Red edit: return another FreeBSD parent from
+    /// `fixed_service_parent` and this fails on a Linux runner.
+    #[test]
+    fn every_platforms_service_data_home_parent_is_the_ruled_one() {
+        assert_eq!(fixed_service_parent("linux"), Some("/var/lib"));
+        assert_eq!(fixed_service_parent("freebsd"), Some("/var/db"));
+        assert_eq!(fixed_service_parent("macos"), Some("/var/db"));
+        assert_eq!(fixed_service_parent("windows"), None);
+        assert_eq!(fixed_service_parent("openbsd"), None);
+        let expected = fixed_service_parent(std::env::consts::OS)
+            .map(PathBuf::from)
+            .or_else(program_data);
+        assert_eq!(service_parent(), expected);
     }
 }

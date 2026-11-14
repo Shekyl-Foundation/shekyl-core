@@ -15,7 +15,11 @@ Five checks over an enumerated set of files:
 2. A unit that names `--data-dir` names `/var/lib/<StateDirectory>`, and a
    unit that names `--log-file` names a file under `/var/log/<LogsDirectory>`:
    the paths systemd creates and the paths the daemon writes are one pair,
-   not two that happen to agree today.
+   not two that happen to agree today. A `--service` unit's data home (its
+   `--data-dir`, or else the daemon's default: `SERVICE_DATA_HOME` in
+   `rust/shekyl-daemon-config/src/paths.rs` under `LINUX_SERVICE_PARENT`
+   in `rust/shekyl-process/src/platform.rs`) is `/var/lib/<StateDirectory>`
+   at `StateDirectoryMode=0700`, the mode the daemon checks.
 3. Every key the fleet's generators write into a node's TOML
    (`echo "key = …"` lines) is a row the file accepts, and the generator's
    default roots are the fleet units' `StateDirectory` and `LogsDirectory`.
@@ -32,10 +36,12 @@ Five checks over an enumerated set of files:
    arguments: each is a command-line row, `--service` is present, and
    `--rpc-socket-dir` is absent. `start_precmd` names a function, and the
    directories are created in that function's body — an uncalled function
-   does not count. The data home is mode 0700, the log directory is mode
-   0750, and the rendezvous directory is the path of
-   `FREEBSD_SERVICE_RENDEZVOUS` in `rust/shekyl-process/src/platform.rs`,
-   at the shipped unit's `RuntimeDirectoryMode`. daemon(8) is not passed
+   does not count. The data home is `SERVICE_DATA_HOME` under
+   `FREEBSD_SERVICE_PARENT`, made at mode 0700 (a `--data-dir`, when one
+   is given, names it); the log directory is mode 0750; and the rendezvous
+   directory is the path of `FREEBSD_SERVICE_RENDEZVOUS` in
+   `rust/shekyl-process/src/platform.rs`, at the shipped unit's
+   `RuntimeDirectoryMode`. daemon(8) is not passed
    `-r` or `-R`: FreeBSD 14 restarts every termination under those flags,
    including a clean exit. The script's `restart_seconds` equals the
    shipped unit's `RestartSec`, and that unit is `Restart=on-failure`.
@@ -55,9 +61,15 @@ from pathlib import Path
 
 TABLE_FRAGMENT = "docs/generated/shekyld_options.md"
 PLATFORM_RS = "rust/shekyl-process/src/platform.rs"
+PATHS_RS = "rust/shekyl-daemon-config/src/paths.rs"
 # The constant `service_rendezvous()` returns on FreeBSD. The gate reads
-# the path from the source so the script and the daemon cannot diverge.
+# the paths from the source so the launchers and the daemon cannot diverge.
 FREEBSD_RENDEZVOUS_CONST = "FREEBSD_SERVICE_RENDEZVOUS"
+# The parents `service_parent()` returns on Linux and FreeBSD (in
+# PLATFORM_RS), and the data home's leaf under them (in PATHS_RS).
+LINUX_PARENT_CONST = "LINUX_SERVICE_PARENT"
+FREEBSD_PARENT_CONST = "FREEBSD_SERVICE_PARENT"
+DATA_HOME_CONST = "SERVICE_DATA_HOME"
 
 SHIPPED_UNIT = "contrib/packaging/linux/shekyld.service"
 UNITS = [
@@ -139,7 +151,7 @@ def command_line_rows(rel: str, where: str, flags: list[str], live: dict[str, st
     return errors
 
 
-def check_unit(rel: str, text: str, live: dict[str, str]) -> list[str]:
+def check_unit(rel: str, text: str, live: dict[str, str], service_home: str) -> list[str]:
     errors: list[str] = []
     fields = unit_fields(text)
     exec_start = fields.get("ExecStart")
@@ -165,6 +177,17 @@ def check_unit(rel: str, text: str, live: dict[str, str]) -> list[str]:
             errors.append(f"{rel}: ExecStart names --service and --rpc-socket-dir; a service is given no socket directory")
         if runtime != "shekyl" or fields.get("RuntimeDirectoryMode") != "0755":
             errors.append(f"{rel}: a --service unit needs the service's rendezvous directory: RuntimeDirectory=shekyl with RuntimeDirectoryMode=0755")
+        if "data-dir" not in values and state and f"/var/lib/{state}" != service_home:
+            errors.append(
+                f"{rel}: a --service unit's data home is the daemon's default {service_home}, "
+                f"but StateDirectory makes /var/lib/{state}"
+            )
+        if not state:
+            errors.append(f"{rel}: a --service unit has no StateDirectory for its data home")
+        elif fields.get("StateDirectoryMode") != DATA_HOME_MODE:
+            errors.append(
+                f"{rel}: the service's data home /var/lib/{state} is not StateDirectoryMode={DATA_HOME_MODE}"
+            )
     elif "rpc-socket-dir" not in values:
         errors.append(f"{rel}: ExecStart names neither --service nor --rpc-socket-dir; a unit has no session directory, so the daemon would refuse to start")
     elif not runtime:
@@ -209,9 +232,9 @@ def made_dirs(body: str) -> dict[str, str]:
     return dict((d, mode) for mode, d in re.findall(pattern, body, flags=re.M))
 
 
-def freebsd_rendezvous_directory(text: str) -> str | None:
-    """The path `FREEBSD_SERVICE_RENDEZVOUS` names, or None when the constant is absent."""
-    m = re.search(rf'^const {FREEBSD_RENDEZVOUS_CONST}: &str = "([^"]+)";', text, flags=re.M)
+def string_constant(text: str, name: str) -> str | None:
+    """The value of `const NAME: &str = "…";`, or None when the constant is absent."""
+    m = re.search(rf'^const {re.escape(name)}: &str = "([^"]+)";', text, flags=re.M)
     return m.group(1) if m else None
 
 
@@ -230,6 +253,7 @@ def check_rc_script(
     text: str,
     live: dict[str, str],
     rendezvous: str,
+    data_home: str,
     shipped: dict[str, str],
 ) -> list[str]:
     errors: list[str] = []
@@ -285,12 +309,13 @@ def check_rc_script(
     if pre_body is None:
         return errors + [f"{rel}: start_precmd names {prestart}(), which is not defined"]
     made = made_dirs(pre_body)
-    if "data-dir" in values:
-        mode = made.get(values["data-dir"])
-        if mode is None:
-            errors.append(f"{rel}: --data-dir {values['data-dir']} is not made by {prestart}()")
-        elif mode != DATA_HOME_MODE:
-            errors.append(f"{rel}: the data home {values['data-dir']} is made at mode {mode}, not {DATA_HOME_MODE}")
+    if "data-dir" in values and values["data-dir"] != data_home:
+        errors.append(f"{rel}: --data-dir {values['data-dir']} is not the service's data home {data_home}")
+    mode = made.get(data_home)
+    if mode is None:
+        errors.append(f"{rel}: the service's data home {data_home} is not made by {prestart}()")
+    elif mode != DATA_HOME_MODE:
+        errors.append(f"{rel}: the data home {data_home} is made at mode {mode}, not {DATA_HOME_MODE}")
     if "log-file" in values:
         parent = str(Path(values["log-file"]).parent)
         mode = made.get(parent)
@@ -347,6 +372,25 @@ def check(
         return [f"cannot read {TABLE_FRAGMENT}: {e}"]
     if len(live) < 10:
         return [f"{TABLE_FRAGMENT} names {len(live)} rows — the fragment or the pattern is wrong"]
+    sources: dict[str, str] = {}
+    for rel in (PLATFORM_RS, PATHS_RS):
+        try:
+            sources[rel] = (repo / rel).read_text(encoding="utf-8")
+        except OSError as e:
+            return [f"cannot read {rel}: {e}"]
+    constants: dict[str, str] = {}
+    for rel, name in (
+        (PLATFORM_RS, FREEBSD_RENDEZVOUS_CONST),
+        (PLATFORM_RS, LINUX_PARENT_CONST),
+        (PLATFORM_RS, FREEBSD_PARENT_CONST),
+        (PATHS_RS, DATA_HOME_CONST),
+    ):
+        value = string_constant(sources[rel], name)
+        if value is None:
+            return [f"{rel}: {name} is not a string constant — the gate has no path to check"]
+        constants[name] = value
+    linux_home = f"{constants[LINUX_PARENT_CONST]}/{constants[DATA_HOME_CONST]}"
+    freebsd_home = f"{constants[FREEBSD_PARENT_CONST]}/{constants[DATA_HOME_CONST]}"
     unit_texts: dict[str, dict[str, str]] = {}
     for rel in units:
         try:
@@ -355,7 +399,7 @@ def check(
             errors.append(f"cannot read {rel}: {e}")
             continue
         unit_texts[rel] = unit_fields(text)
-        errors.extend(check_unit(rel, text, live))
+        errors.extend(check_unit(rel, text, live, linux_home))
     for rel, unit_rels in generators.items():
         try:
             text = (repo / rel).read_text(encoding="utf-8")
@@ -370,20 +414,14 @@ def check(
             shipped: dict[str, str] = {}
         else:
             shipped = unit_texts[shipped_unit]
-        try:
-            platform = (repo / PLATFORM_RS).read_text(encoding="utf-8")
-        except OSError as e:
-            return errors + [f"cannot read {PLATFORM_RS}: {e}"]
-        rendezvous = freebsd_rendezvous_directory(platform)
-        if rendezvous is None:
-            return errors + [f"{PLATFORM_RS}: {FREEBSD_RENDEZVOUS_CONST} is not a string constant — the gate has no rendezvous path"]
+        rendezvous = constants[FREEBSD_RENDEZVOUS_CONST]
         for rel in scripts:
             try:
                 text = (repo / rel).read_text(encoding="utf-8")
             except OSError as e:
                 errors.append(f"cannot read {rel}: {e}")
                 continue
-            errors.extend(check_rc_script(rel, text, live, rendezvous, shipped))
+            errors.extend(check_rc_script(rel, text, live, rendezvous, freebsd_home, shipped))
     if not units and not generators and not scripts:
         errors.append("no unit, rc.d script, or generator is listed — the gate has no subject")
     return errors
@@ -408,8 +446,8 @@ def selftest() -> int:
         "<!-- development rows, live on the named networks only and not in --help: dev-difficulty (regtest) -->\n"
     )
     unit_ok = (
-        "[Service]\nExecStart=/usr/local/bin/shekyld --service --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log\n"
-        "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl\nLogsDirectory=shekyl\n"
+        "[Service]\nExecStart=/usr/local/bin/shekyld --service --log-file /var/log/shekyl/shekyld.log\n"
+        "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl\nStateDirectoryMode=0700\nLogsDirectory=shekyl\n"
         "Restart=on-failure\nRestartSec=30\n"
     )
     fleet_ok = (
@@ -422,9 +460,13 @@ def selftest() -> int:
     )
     cases = [
         ("agreeing recipes pass", unit_ok, fleet_ok, gen_ok, []),
-        ("a dead flag on ExecStart is named", unit_ok.replace("--data-dir", "--non-interactive --data-dir"), fleet_ok, gen_ok, ["`--non-interactive`, which is not a row"]),
-        ("a file-only row on ExecStart is named", unit_ok.replace("--data-dir", "--notify-block x --data-dir"), fleet_ok, gen_ok, ["`--notify-block`, a file-only row"]),
-        ("a data dir off StateDirectory is named", unit_ok.replace("/var/lib/shekyl", "/srv/shekyl"), fleet_ok, gen_ok, ["is not /var/lib/shekyl (StateDirectory)"]),
+        ("a dead flag on ExecStart is named", unit_ok.replace("--log-file", "--non-interactive --log-file"), fleet_ok, gen_ok, ["`--non-interactive`, which is not a row"]),
+        ("a file-only row on ExecStart is named", unit_ok.replace("--log-file", "--notify-block x --log-file"), fleet_ok, gen_ok, ["`--notify-block`, a file-only row"]),
+        ("a service data dir on StateDirectory passes", unit_ok.replace("--service ", "--service --data-dir /var/lib/shekyl "), fleet_ok, gen_ok, []),
+        ("a data dir off StateDirectory is named", unit_ok.replace("--service ", "--service --data-dir /srv/shekyl "), fleet_ok, gen_ok, ["is not /var/lib/shekyl (StateDirectory)"]),
+        ("a service StateDirectory off the daemon's data home is named", unit_ok.replace("\nStateDirectory=shekyl", "\nStateDirectory=other"), fleet_ok, gen_ok, ["the daemon's default /var/lib/shekyl, but StateDirectory makes /var/lib/other"]),
+        ("a service data home not 0700 is named", unit_ok.replace("StateDirectoryMode=0700", "StateDirectoryMode=0755"), fleet_ok, gen_ok, ["is not StateDirectoryMode=0700"]),
+        ("a service unit without a StateDirectory is named", unit_ok.replace("\nStateDirectory=shekyl\nStateDirectoryMode=0700", ""), fleet_ok, gen_ok, ["has no StateDirectory for its data home"]),
         ("a log file off LogsDirectory is named", unit_ok.replace("/var/log/shekyl/shekyld.log", "/var/log/other/shekyld.log"), fleet_ok, gen_ok, ["is not under /var/log/shekyl (LogsDirectory)"]),
         ("a dead key written by a generator is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"no-igd = '), ["`no-igd = …`, which is not a row"]),
         ("a command-line row written into a file is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"network = '), ["`network = …`, a command-line-only row"]),
@@ -439,7 +481,7 @@ def selftest() -> int:
         "name=shekyld\n"
         'start_precmd="${name}_prestart"\n'
         'command_args="-f -S -T ${name} -P ${pidfile} -u shekyl /bin/sh /usr/local/etc/rc.d/shekyld supervise'
-        ' --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"\n'
+        ' --service --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"\n'
         "shekyld_supervise()\n"
         "{\n"
         "\trestart_seconds=30\n"
@@ -459,11 +501,21 @@ def selftest() -> int:
         "\tinstall -d -o shekyl -g shekyl -m 0750 /var/log/shekyl || return 1\n"
         "}\n"
     )
-    platform_ok = 'const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";\n'
+    platform_ok = (
+        'const FREEBSD_SERVICE_RENDEZVOUS: &str = "/var/run/shekyl";\n'
+        'const LINUX_SERVICE_PARENT: &str = "/var/lib";\n'
+        'const FREEBSD_SERVICE_PARENT: &str = "/var/db";\n'
+    )
+    paths_ok = 'const SERVICE_DATA_HOME: &str = "shekyl";\n'
     rc_cases = [
         ("an agreeing rc.d script passes", rc_ok, platform_ok, unit_ok, []),
-        ("a dead flag on the rc.d command line is named", rc_ok.replace("--data-dir", "--detach --data-dir"), platform_ok, unit_ok, ["`--detach`, which is not a row"]),
-        ("an rc.d data home the prestart function does not make is named", rc_ok.replace("-m 0700 /var/db/shekyl", "-m 0700 /var/db/other"), platform_ok, unit_ok, ["--data-dir /var/db/shekyl is not made by shekyld_prestart()"]),
+        ("a dead flag on the rc.d command line is named", rc_ok.replace("--log-file", "--detach --log-file"), platform_ok, unit_ok, ["`--detach`, which is not a row"]),
+        ("an rc.d data home the prestart function does not make is named", rc_ok.replace("-m 0700 /var/db/shekyl", "-m 0700 /var/db/other"), platform_ok, unit_ok, ["the service's data home /var/db/shekyl is not made by shekyld_prestart()"]),
+        ("an rc.d --data-dir naming the data home passes", rc_ok.replace("--service ", "--service --data-dir /var/db/shekyl "), platform_ok, unit_ok, []),
+        ("an rc.d --data-dir off the data home is named", rc_ok.replace("--service ", "--service --data-dir /var/db/other "), platform_ok, unit_ok, ["--data-dir /var/db/other is not the service's data home /var/db/shekyl"]),
+        ("an rc.d data home off the platform constant is named", rc_ok, platform_ok.replace('"/var/db"', '"/var/other"'), unit_ok, ["the service's data home /var/other/shekyl is not made"]),
+        ("a unit data home off the platform constant is named", rc_ok, platform_ok.replace('"/var/lib"', '"/srv"'), unit_ok, ["the daemon's default /srv/shekyl, but StateDirectory makes /var/lib/shekyl"]),
+        ("a missing data-home constant is refused", rc_ok, platform_ok.replace("LINUX_SERVICE_PARENT", "LINUX_PARENT"), unit_ok, ["LINUX_SERVICE_PARENT is not a string constant"]),
         ("an rc.d data home not 0700 is named", rc_ok.replace("-m 0700 /var/db/shekyl", "-m 0750 /var/db/shekyl"), platform_ok, unit_ok, ["made at mode 0750, not 0700"]),
         ("an rc.d log directory the prestart function does not make is named", rc_ok.replace("-m 0750 /var/log/shekyl", "-m 0750 /var/log/other"), platform_ok, unit_ok, ["which shekyld_prestart() does not make"]),
         ("an rc.d log directory not 0750 is named", rc_ok.replace("-m 0750 /var/log/shekyl", "-m 0777 /var/log/shekyl"), platform_ok, unit_ok, ["made at mode 0777, not 0750"]),
@@ -487,6 +539,8 @@ def selftest() -> int:
         (repo / "u").mkdir()
         (repo / "rust" / "shekyl-process" / "src").mkdir(parents=True)
         (repo / PLATFORM_RS).write_text(platform_ok)
+        (repo / "rust" / "shekyl-daemon-config" / "src").mkdir(parents=True)
+        (repo / PATHS_RS).write_text(paths_ok)
         shipped = "u/shipped.service"
         for title, unit, fleet, gen, expect in cases:
             (repo / "u" / "shipped.service").write_text(unit)

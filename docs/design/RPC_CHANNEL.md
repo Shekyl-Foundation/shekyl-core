@@ -1907,8 +1907,11 @@ a demonstrated operator recovery need returns it as a ruled capability.
 - **A service's data home (Rick, 2026-11-14, amending IG-Q36 and §7.1).**
   A fixed root per platform: `/var/lib/shekyl` on Linux (the unit's
   `StateDirectory=shekyl` with `StateDirectoryMode=0700`; the unit passes
-  no `data-dir`), `/var/db/shekyl` on FreeBSD and macOS (created by the
-  package or installer), `%ProgramData%\shekyl` on Windows. The daemon
+  no `data-dir`), `/var/db/shekyl` on FreeBSD (the rc.d script's prestart
+  makes it at mode 0700; the script passes no `data-dir`) and on macOS
+  (the installer's), `%ProgramData%\shekyl` on Windows. The launch-recipe
+  gate reads the daemon's constants and holds the unit and the script to
+  them. The daemon
   checks it and never creates it: it exists, is not a link, is owned by
   the daemon's account, has mode 0700 (on Windows the ruled ACL), and the
   daemon is not root; otherwise `config.service.root` names the
