@@ -374,6 +374,8 @@ is a 3c deliverable. Until then the C constants
 
 ## 6. Phase 3a — FFI export + flag-gated coherent swap
 
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
+
 ### 6.1 Deliverables
 
 1. Add `shekyl-pow-randomx` as a dependency of `shekyl-ffi`.
