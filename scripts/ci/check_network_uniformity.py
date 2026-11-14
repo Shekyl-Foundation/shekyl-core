@@ -267,6 +267,51 @@ def test_module_files(path, code, raw, features):
     return files
 
 
+def declared_modules(path, code, raw):
+    """Files `path` declares as modules (`mod name;`, any cfg), resolved as
+    rustc resolves them: a `#[path]` relative to the declaring file's
+    directory, else `name.rs` or `name/mod.rs` beside a `lib.rs`, `mod.rs`
+    or `main.rs`, and under the file's own stem otherwise."""
+    files = []
+    for m in re.finditer(
+        r'((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;', code
+    ):
+        path_attr = re.search(r'#\[\s*path\s*=\s*"([^"]*)"\s*\]', raw[m.start() : m.end()])
+        here = path.parent if path.name in ("lib.rs", "mod.rs", "main.rs") else path.parent / path.stem
+        if path_attr:
+            candidates = [path.parent / path_attr.group(1)]
+        else:
+            candidates = [here / f"{m.group(2)}.rs", here / m.group(2) / "mod.rs"]
+        files.extend(c.resolve() for c in candidates if c.exists())
+    return files
+
+
+def test_file_closure(files, features):
+    """The files of `files` that are test code: each declared as a module
+    under a test-only cfg, and every module declared below one of those,
+    however deep and by whatever path (`#[path]` or a `mod.rs` directory)."""
+    texts = {f.resolve(): f.read_text(encoding="utf-8") for f in files}
+    # Raw-text prefilters, so only a file that can declare such a module pays
+    # for the comment- and string-aware reading (which re-checks each match).
+    cfg_mod = re.compile(r"#\[cfg\(.*?\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;", re.S)
+    any_mod = re.compile(r"\bmod\s+\w+\s*;")
+    test = set()
+    for f, raw in texts.items():
+        if cfg_mod.search(raw):
+            test.update(test_module_files(f, strip(raw), raw, features))
+    queue = list(test)
+    while queue:
+        f = queue.pop()
+        raw = texts.get(f)
+        if raw is None or not any_mod.search(raw):
+            continue
+        for child in declared_modules(f, strip(raw), raw):
+            if child not in test:
+                test.add(child)
+                queue.append(child)
+    return test
+
+
 def hits_in(code):
     flat = re.sub(r"\s+", " ", code)
     out = []
@@ -286,16 +331,10 @@ def crate_hits(crate, features, fail):
     if not files:
         fail(f"fenced crate {crate} enumerates no source files (rule 47)")
         return []
-    excluded = set()
-    for f in files:
-        raw = f.read_text(encoding="utf-8")
-        excluded.update(test_module_files(f, strip(raw), raw, features))
+    excluded = test_file_closure(files, features)
     out = []
     for f in files:
-        resolved = f.resolve()
-        if resolved in excluded or any(
-            str(resolved).startswith(str(e.with_suffix("")) + "/") for e in excluded
-        ):
+        if f.resolve() in excluded:
             continue
         raw = f.read_text(encoding="utf-8")
         code = drop_test_items(strip(raw), raw, features)
