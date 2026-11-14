@@ -272,6 +272,18 @@ pub struct Anchor {
 /// fixture that drives admission without a serving host; the verifier
 /// checks the receipt and the anchor, never the bytes served.
 ///
+/// The delivery digest is a fixed `[0xDD; 32]`, and that is sound because
+/// no rule checks a delivery digest against anything: CEN-J37 rebuilds the
+/// transcript from the digest the record carries (`archival/bundle_records.rs`)
+/// and verifies the receipt over it. `shekyl-p-host`'s production pass
+/// signer, over a real serve, would therefore change no verdict, so the
+/// scenario driver and the chain forge sign through this stand-in
+/// (`CHAIN_FORGE.md` `CF-R16`). It is test-only: the `harness` feature is a
+/// TEST_ONLY row of `scripts/ci/check_test_only_features.py`, so no release
+/// build carries it; `CF-1b` puts it on the seedable-RNG gate's site list.
+/// If a rule ever judges the delivery digest, this reasoning ends and
+/// `CF-R16` is reopened.
+///
 /// # Panics
 ///
 /// If signing fails.

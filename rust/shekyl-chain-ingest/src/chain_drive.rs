@@ -188,6 +188,7 @@ pub(crate) async fn priced_emission_claim(
             backing.input,
             parts.terms.clone(),
             fee,
+            &backing.network,
             &backing.tree,
         );
         let tx = Transaction::from_bytes(&claim.bytes).expect("the claim parses");
