@@ -819,6 +819,8 @@ fn every_way_to_hash_gives_the_randomx_known_answer() {
 
 /// `Hasher::permits` is the budget's: what a consumer that holds no
 /// budget sizes its lanes by.
+///
+/// Red edit: have `Hasher::permits` return a constant.
 #[test]
 fn the_hasher_reports_its_budgets_permits() {
     let _serial = serial();
