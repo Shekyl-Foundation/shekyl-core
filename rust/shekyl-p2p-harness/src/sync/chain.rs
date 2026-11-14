@@ -265,11 +265,11 @@ pub fn quiet_seeds(
 /// The two differ.
 pub fn assert_quiet_is_fresh(
     resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-    list: Option<shekyl_hasher::Ranked>,
+    list: Option<&shekyl_hasher::Ranked>,
 ) {
     let fresh = own_hasher(2);
-    if let Some(list) = list.clone() {
-        fresh.hasher.rank(list);
+    if let Some(list) = list {
+        fresh.hasher.rank(list.clone());
     }
     let expected = quiet_seeds(&fresh.hasher.resident());
     let held = quiet_seeds(resident);
@@ -430,7 +430,7 @@ impl Chain {
             shekyl_chain_ingest::service::ranked_on(&snap, rules, None).expect("the store ranks")
         };
         let resident = own.hasher.resident();
-        tokio::task::spawn_blocking(move || assert_quiet_is_fresh(&resident, list))
+        tokio::task::spawn_blocking(move || assert_quiet_is_fresh(&resident, list.as_ref()))
             .await
             .expect("the quiet hasher holds what a fresh one holds (HA-R5)");
         let _stopped = service.stop().await;

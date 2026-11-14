@@ -844,11 +844,11 @@ pub fn quiet_seeds(
 #[cfg(feature = "pipeline")]
 pub fn assert_quiet_is_fresh(
     resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-    list: Option<shekyl_hasher::Ranked>,
+    list: Option<&shekyl_hasher::Ranked>,
 ) {
     let fresh = own_hasher();
-    if let Some(list) = list.clone() {
-        fresh.hasher.rank(list);
+    if let Some(list) = list {
+        fresh.hasher.rank(list.clone());
     }
     let expected = quiet_seeds(&fresh.hasher.resident());
     let held = quiet_seeds(resident);

@@ -50,10 +50,10 @@
 //!   which asks for no job.
 //!
 //! A granted form holds a thread until it has hashed, so the count must
-//! not be one that ungranted forms alone can fill: it is permits + window
-//! + 1. A local arrival waits for its seat without a thread. The ranker
-//! reads its snapshot on one more blocking task, briefly, and is not
-//! counted: it waits for nothing.
+//! not be one that ungranted forms alone can fill: it is the permits, plus
+//! the window, plus one. A local arrival waits for its seat without a
+//! thread. The ranker reads its snapshot on one more blocking task,
+//! briefly, and is not counted: it waits for nothing.
 //!
 //! # The board
 //!

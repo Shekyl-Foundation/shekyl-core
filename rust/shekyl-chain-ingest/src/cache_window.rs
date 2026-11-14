@@ -422,24 +422,22 @@ mod tests {
         }
     }
 
-    fn frontier(fill: u8, raw: u128) -> Option<Frontier> {
-        Some(Frontier {
+    fn frontier(fill: u8, raw: u128) -> Frontier {
+        Frontier {
             seed: seed(fill),
             work: work(raw),
-        })
+        }
     }
 
     /// The list `ranked_seeds` must return: the window's seeds, canonical
     /// first, then the third and its class.
-    fn list(other: Option<u8>, third: Option<(u8, Class)>) -> Option<Ranked> {
-        Some(
-            Ranked::new(
-                seedhash(&seed(1)),
-                other.map(|fill| seedhash(&seed(fill))),
-                third.map(|(fill, class)| (seedhash(&seed(fill)), class)),
-            )
-            .expect("distinct seeds"),
+    fn list(other: Option<u8>, third: Option<(u8, Class)>) -> Ranked {
+        Ranked::new(
+            seedhash(&seed(1)),
+            other.map(|fill| seedhash(&seed(fill))),
+            third.map(|(fill, class)| (seedhash(&seed(fill)), class)),
         )
+        .expect("distinct seeds")
     }
 
     /// `RANDOMX_CACHE_ACTOR.md` §8's table for the ranked list. Each row:
@@ -452,7 +450,7 @@ mod tests {
     /// row).
     #[test]
     fn the_ranked_list_is_the_window_then_the_most_work_chain_outside_it() {
-        type Row = (&'static str, Gathered, Option<Frontier>, Option<Ranked>);
+        type Row = (&'static str, Gathered, Option<Frontier>, Ranked);
         let fork = Class::Unsolicited;
         let ahead = Class::HeaderPow;
         let rows: Vec<Row> = vec![
@@ -489,25 +487,25 @@ mod tests {
             (
                 "a header frontier ahead of the window",
                 gathered(true, &[]),
-                frontier(9, 50),
+                Some(frontier(9, 50)),
                 list(Some(2), Some((9, ahead))),
             ),
             (
                 "a frontier and a fork: the frontier has more work",
                 gathered(false, &[(7, 10)]),
-                frontier(9, 11),
+                Some(frontier(9, 11)),
                 list(None, Some((9, ahead))),
             ),
             (
                 "a frontier and a fork: the fork has more work",
                 gathered(false, &[(7, 12)]),
-                frontier(9, 11),
+                Some(frontier(9, 11)),
                 list(None, Some((7, fork))),
             ),
             (
                 "a frontier and a fork of equal work: the fork",
                 gathered(false, &[(7, 11)]),
-                frontier(9, 11),
+                Some(frontier(9, 11)),
                 list(None, Some((7, fork))),
             ),
             (
@@ -519,18 +517,22 @@ mod tests {
             (
                 "a frontier whose seed is the window's: not listed twice",
                 gathered(false, &[]),
-                frontier(1, 50),
+                Some(frontier(1, 50)),
                 list(None, None),
             ),
             (
                 "the heaviest is in the window: the next-heaviest does not take the place",
                 gathered(true, &[(7, 10)]),
-                frontier(2, 50),
+                Some(frontier(2, 50)),
                 list(Some(2), None),
             ),
         ];
         for (name, gathered, frontier, expected) in rows {
-            assert_eq!(ranked_seeds(Some(&gathered), frontier), expected, "{name}");
+            assert_eq!(
+                ranked_seeds(Some(&gathered), frontier),
+                Some(expected),
+                "{name}"
+            );
         }
     }
 
@@ -541,7 +543,7 @@ mod tests {
     #[test]
     fn nothing_is_ranked_on_a_store_with_no_block() {
         assert_eq!(ranked_seeds(None, None), None);
-        assert_eq!(ranked_seeds(None, frontier(9, 50)), None);
+        assert_eq!(ranked_seeds(None, Some(frontier(9, 50))), None);
     }
 
     fn tip(height: BlockHeight, fill: u8) -> Tip {

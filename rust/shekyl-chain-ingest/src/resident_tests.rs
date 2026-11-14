@@ -99,7 +99,7 @@ async fn settled(
         let snap = service.store().begin_read().expect("read");
         crate::service::ranked_on(&snap, rules, None).expect("the store ranks")
     };
-    assert_quiet_is_fresh(&own.hasher.resident(), list);
+    assert_quiet_is_fresh(&own.hasher.resident(), list.as_ref());
     quiet(own)
 }
 

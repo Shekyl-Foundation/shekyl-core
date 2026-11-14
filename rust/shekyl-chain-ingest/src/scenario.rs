@@ -205,7 +205,7 @@ impl<P: Pow> Scenario<P> {
         if let Some(list) = list.clone() {
             self.substrate.rank(list);
         }
-        crate::test_support::assert_quiet_is_fresh(&resident, list);
+        crate::test_support::assert_quiet_is_fresh(&resident, list.as_ref());
     }
 
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
