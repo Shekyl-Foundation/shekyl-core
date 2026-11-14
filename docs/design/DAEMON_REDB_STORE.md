@@ -184,8 +184,8 @@ the two 2026-09-22 deaths leave 47. Dispositions:
 | Table | Disposition (pin `3247fe3b6` → `9742ec4f6`) |
 | --- | --- |
 | `alt_blocks` | in code at pin, documented at pin |
-| `archival_alt_attestation_witness` | born since pin — `3dee502595` (2026-08-04, credit-wire PR-B2; schema v9) |
-| `archival_attestation_witness` | born since pin — `a308eb430a` (2026-08-04, credit-wire PR-B2; schema v9) |
+| `archival_alt_attestation_witness` | born since pin — `3dee502595` (2026-08-04, credit-wire PR-B2; schema v9); folded into `alt_blocks` 2026-09-25 (S-ALT, layout 13), and gone with the witness at the switch (`SO-D12` 4b, 2026-11-13) |
+| `archival_attestation_witness` | born since pin — `a308eb430a` (2026-08-04, credit-wire PR-B2; schema v9); deleted at the switch (`SO-D12` 4b, 2026-11-13), which records a block's section in `archival_bundle_references` |
 | `archival_bond` | in code at pin, documented at pin |
 | `archival_bond_holdings_update_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
 | `archival_bond_reinstate_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
@@ -2632,7 +2632,7 @@ reasons row for row** — two instruments, one field, cross-checked:
 
 | Group | Tables | Why replay cannot produce them |
 | --- | --- | --- |
-| **Not chain state** | ~~`txpool_meta`, `txpool_blob`~~ (**moved out of this file 2026-09-24, S-POOL, layout 12** — the boundary this row predicted, drawn: they are `pool_meta` / `pool_blob` in `shekyl-chain-store::pool`'s own file and cannot be in a digest over this one), `alt_blocks` (~~`archival_alt_attestation_witness`~~ — **folded into `alt_blocks` 2026-09-25, S-ALT, layout 13**: the witness is `AltBlock::attestation_witness`, one row, one lifetime) | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception — **built by S-POOL**; the alt surface's file was S-ALT's question (`SPL-Q2`'s reopener) and was **answered the other way** 2026-09-25 — it stays in this file, `Excluded`, because a switch is one transaction with `connect`/`pop` or it is not a switch (`DRS_E1_SALT.md` SAL-1, SAL-10); the boundary is now **enforced** by a test, not only declared (SAL-15) |
+| **Not chain state** | ~~`txpool_meta`, `txpool_blob`~~ (**moved out of this file 2026-09-24, S-POOL, layout 12** — the boundary this row predicted, drawn: they are `pool_meta` / `pool_blob` in `shekyl-chain-store::pool`'s own file and cannot be in a digest over this one), `alt_blocks` (an alternative block's bundle references ride its row: one row, one lifetime), `archival_bundle_queue` and `archival_bundle_body` (the bundles filed and not yet admitted, and the bodies a queue entry, an alternative block or a main-chain block not past `D_max` holds, SI-41) | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception — **built by S-POOL**; the alt surface's file was S-ALT's question (`SPL-Q2`'s reopener) and was **answered the other way** 2026-09-25 — it stays in this file, `Excluded`, because a switch is one transaction with `connect`/`pop` or it is not a switch (`DRS_E1_SALT.md` SAL-1, SAL-10); the boundary is now **enforced** by a test, not only declared (SAL-15) |
 | **Node-local by prune policy** | `txs_prunable` (`txs_prunable_tip` and `output_metadata` were in this class until their deletion, 2026-09-22) | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
 | **Dead** | none: `txs` (DRS-W4) and `hf_starting_heights` (DRS-W5) left the catalogue at layout 34 | — |
 
@@ -2747,10 +2747,10 @@ reasons row for row** — two instruments, one field, cross-checked:
 > `PDM-Q` by this block**; the uniform-schedule-versus-uniform-content
 > distinction above is what forced the question to be stated precisely enough to
 > be seen as malformed, and that is all it was needed for.
-> **`archival_attestation_witness`'s row is closed as corpus** (`SB-Q8`,
-> 2026-10-31): the discard shape is ruled and built (`PDM-Q2`, S-PRUNE), it
-> is uniform, and the witness is bound for every body, so the row reopens
-> only if a S-PRUNE horizon ever names the table.
+> **`archival_bundle_references` is corpus** (`SB-Q8` as the switch
+> carries it, below): the discard shape is ruled and built (`PDM-Q2`,
+> S-PRUNE), it is uniform, and a block's section is bound for every body,
+> so the row reopens only if a S-PRUNE horizon ever names the table.
 >
 > **Cross-reference:** slice A reached the same place from the digest side, and
 > its reopening subsection states the conjunct this trigger needs — *discard
@@ -2807,21 +2807,28 @@ reasons row for row** — two instruments, one field, cross-checked:
 > (`DRS_SB_BELOW_HORIZON.md` `SB-Q4`, `SB-F1`).
 
 
-**And the row that was CONDITIONAL, closed as corpus (`SB-Q8`, RULED
-2026-10-31).** `archival_attestation_witness` is class `small` — digested,
-consensus-bearing, not excluded by anyone — and reaches the store from the
-block's connect supplement, populated by the transport. It was graded
-*reconstructible iff the node retains the prunable region* because its bytes
-ride the coinbase transaction's prunable side on the wire
-(`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence row). That conditional has no
-instance: the table is **corpus** (§9's KEEP-C), written at connect and kept
-on every node, never discarded, never derived from the prunable region —
-because `bind_body` (`rust/shekyl-chain-rules/src/header_path.rs`,
-`B4::bind_root`) binds the attestation witness for **every** body, skeleton
-bodies included, so skeleton sync below the horizon needs it and it can never
-enter set B. Falsifier: a skeleton-synced store binds a block whose shard is
-discarded and its `attestation_witness_at(h)` reads `Recorded`. A S-PRUNE
-horizon that ever names the table reopens this row.
+**The section references are corpus (`SB-Q8`, RULED 2026-10-31 for the
+attestation witness they replaced; carried by the switch, `SO-D12` 4b).**
+`archival_bundle_references` holds each block's bundle section, the
+references its header's `section_root` commits (S-ARCH A10). It is written
+at connect, removed by pop, kept on every node and never discarded, and it
+is digested (the archival snapshot's `BundleReferences` family). It is
+corpus for the reason the witness was: `bind_body`
+(`rust/shekyl-chain-rules/src/header_path.rs`) holds every body's section
+to its header's root (CEN-J29), skeleton bodies included, and a node
+syncing the skeleton checks each bundle's kept bytes against that root
+(`ARCHIVAL_SERVE_CREDIT_SPEC.md` §8), so skeleton sync below the horizon
+needs it and it can never enter set B. Falsifier: a skeleton-synced store
+binds a block whose shard is discarded and its `bundle_references_at(h)`
+reads `Recorded`. A S-PRUNE horizon that ever names the table reopens this
+row.
+
+The switch's other tables are not corpus. `archival_support_block` is
+derived at connect, one row per block stepping the carry from its parent's
+(SI-43), removed by pop and retired with the draw rows on their floor
+(SI-34). `archival_bundle_queue` and `archival_bundle_body` are not chain
+state (§11.2's first group): the queue holds bundles filed and not yet
+admitted, and a body is kept while something holds it (SI-41).
 
 **Consequence, stated rather than patched.** D10 reads *"All non-block-corpus
 tables must be rebuildable by replaying local blocks through `apply_block`"*.

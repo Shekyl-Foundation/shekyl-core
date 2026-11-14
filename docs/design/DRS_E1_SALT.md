@@ -57,7 +57,7 @@ witness pair lands **here**, as an alt-block attribute, not as an archival
 read); from [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
 CEN-K3 ("belt survives the engine change only if re-specified" — this is the
 re-specification) and the §4.K slice's six walks; and from
-[`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §3 CW-2 (the hash-keyed
+[`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md) §3 CW-2 (the hash-keyed
 witness is *owned by the alt-block table* and never outlives its block).
 Process per `26-sub-pr-design-discipline.mdc`; identifier families **`SAL-`**
 (findings) and **`SAL-Q`** (round questions) registered in

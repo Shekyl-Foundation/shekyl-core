@@ -1747,7 +1747,7 @@ Named now so they are not discovered later.
   independently confirms F18's `output_metadata` grading (its read
   chain `get_output_metadata → is_output_pruned` has no call site,
   `:1255-1266`).
-- **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md)
+- **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md)
   prunable-residence row: *Header kept; 3.43 KB countersignature on the
   coinbase-tx prunable side*. If `PDM-Q6` rules that side into the
   archival subject, `CR-D2` reopens and the carrier decision changes.

@@ -1192,7 +1192,7 @@ What Q6 must rule, in this order:
    **RULED 2026-08-24** and implemented, and then overtaken: `RF-D8`
    (i) was **retracted 2026-08-26** and the whole leaf-opening cluster
    — `challenge_leaf_index`, the fire schedule, the path opening — is
-   on [`ARCHIVAL_CREDIT_WIRE.md`](../design/ARCHIVAL_CREDIT_WIRE.md) §2's
+   on [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §2's
    deletion surface (`PC-D3`'s own disposition note says so: *"this
    hardened a function that DELETES"*, kept only as `TJ-1`'s interim
    mitigation). The successor is not a leaf opening of any unit: a
@@ -2435,7 +2435,7 @@ Named now so they are not discovered later.
   independently confirms F18's `output_metadata` grading (its read
   chain `get_output_metadata → is_output_pruned` has no call site,
   `:1255-1266`).
-- **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](../design/ARCHIVAL_CREDIT_WIRE.md)
+- **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md)
   prunable-residence row: *Header kept; 3.43 KB countersignature on the
   coinbase-tx prunable side*. If `PDM-Q6` rules that side into the
   archival subject, `CR-D2` reopens and the carrier decision changes.
