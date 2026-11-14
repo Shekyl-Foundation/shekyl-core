@@ -165,6 +165,7 @@ stale_through = [
   { through = "5f057e54d1", note = "Multisig slice 3 PR-A (5f057e54d1): in this path set, frost_sal.rs's SalSigningParams::propose takes the commitment mask and pseudo-out blind and builds the rerandomization with with_commitment_blind, behind the multisig feature; frost_sal_tests.rs and tests/frost_spend.rs follow. No function the capture times reads it. Not re-measured; the rows stay stale." },
   { through = "02a5092b61", note = "Multisig slice 3 PR-A review (02a5092b61): RerandomizedOutput::for_pseudo_out holds r_c = a − z. prove_with_rng and SalSigningParams::propose both call it, then the same with_commitment_blind the call sites called before. Same scalar subtraction, same rerandomization. Not re-measured; the rows stay stale." },
   { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. No hash, derivation or verify function changed. Not re-measured; the rows stay stale from PL-D3." },
+  { through = "1af80ca09", note = "The hashing actor's cutover: in this path set, shekyl-pow-randomx loses cache_store.rs, the two-slot store, and its docs are restated; who holds a cache moves to shekyl-hasher. PreparedCache::derive, compute_hash and every verify function are unchanged, so nothing the block-verify capture priced has moved. Not re-measured; the rows stay stale from PL-D3." },
   { through = "d51c1815ed", note = "The switch's C7 deletes the serve-credit input: in this path set, proofs.rs's I15 class match loses the ServeCreditOnly arm (a coinbase still skips the proof) and signature.rs loses SCHEME_DOMAIN_SERVE_CREDIT. A spend's proof verify and its hybrid signature verify are unchanged. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
@@ -1149,6 +1150,7 @@ stale_through = [
   { through = "aeca4af6dd", note = "A2's record (#1338): CacheStore::slots reads which seeds the two slots hold. Derivation is unchanged; the row stays stale." },
   { through = "c42ef64a2d", note = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "4943ebc7f7", note = "rpc 4.0: one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. Cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
+  { through = "1af80ca09", note = "The hashing actor's cutover: cache_store.rs is deleted and the crate's docs restated; the caller of the derivation is now shekyl-hasher's builder thread. PreparedCache::derive itself is unchanged, so the 341 ms record and the 200 ms target are untouched, and the row stays stale. The floor device's derive is on record since 2026-11-10 (docs/benchmarks/cache_derive_pi4_20261110.txt, about 2.1 s) under the gated row cache_derive_iai." },
 ]
 
 [[constant]]
@@ -1333,6 +1335,7 @@ cleared = [
   { through = "c42ef64a2d", reason = "C++ removal (#1299): comments only in shekyl-pow-randomx lib.rs and vm.rs; no code path changed, and nothing the capture priced has moved." },
   { through = "f4d64460e4", reason = "rpc 4.0: HashBudget::spend drops its method-name argument and budget_empty no longer names the method. The charge is still one HASH_CPU_NANOS, and the diagnostic code is bound.hash. The RandomX sources this row watches are unchanged, so the capture still prices this tree." },
   { through = "4943ebc7f7", reason = "rpc 4.0: comments in hash_budget.rs rename calc_pow and fill_pow_hash to pow and a header read with pow, and one doc comment in shekyl-pow-randomx's lib.rs renames calc_pow to pow. HASH_CPU_NANOS is unchanged and no hash path changed, so the capture still prices this tree." },
+  { through = "1af80ca09", reason = "The hashing actor's cutover: in the RandomX sources this row watches, cache_store.rs is deleted and docs are restated. compute_hash is unchanged, and pow still runs one hash under one CalcPow permit, now on a warm loan from the hasher. The per-hash thread CPU the capture timed has not moved, and HASH_CPU_NANOS is unchanged." },
 ]
 
 [[constant]]
