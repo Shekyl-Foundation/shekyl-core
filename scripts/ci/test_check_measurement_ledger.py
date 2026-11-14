@@ -22,7 +22,11 @@ import check_measurement_ledger as gate
 LEDGER = gate.LEDGER
 HEADER = gate.REV_SOURCE_HEADER
 TRACKED = "| Id | Benchmark |\n| --- | --- |\n| **BA-T1** | a |\n| **BA-T2** | b |\n"
-CARRIER = 'carrier = "BA-T1 floor re-run, owed"\n'
+# Every constant that is not current names its disposition. The fixtures
+# retire theirs: `replaced_by` reads no other file, so a scenario about
+# something else does not have to build a run sheet or a forge plan.
+DISPOSED = 'disposition = "retire"\nreplaced_by = "the selftest names its replacement"\n'
+CARRIER = 'carrier = "BA-T1 floor re-run, owed"\n' + DISPOSED
 SENTENCE = "selftest: cost effect noted"
 
 
@@ -340,7 +344,7 @@ def scenario_stale_and_comments(results: Results) -> None:
             "disagrees with the revision",
         )
         unmeasured = constant(
-            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n'
+            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n' + DISPOSED
         )
         results.expect(
             root, document(path_set() + path_set("other", '["src/cold"]'), fresh + unmeasured.replace(
@@ -700,7 +704,7 @@ def scenario_subject_and_shallow(results: Results) -> None:
         # After init_tree the hot path has not moved (c2 touched cold). c1 is current.
         results.expect(root, document("", ""), 2, "an empty ledger is a missing subject")
         only = constant(
-            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n'
+            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n' + DISPOSED
         )
         results.expect(
             root, document(path_set(), only), 2,
@@ -1098,8 +1102,120 @@ def scenario_gated_rows(results: Results) -> None:
         )
 
 
+SHEET = "docs/benchmarks/RUN_SHEET.md"
+PLAN = "docs/design/FORGE.md"
+FORGE_CATALOGUE = (
+    "| ID | Name |\n| --- | --- |\n| CF-E10 | `shard-<k>-closed` |\n"
+    "| CF-E11 | `first-compact-join` |\n"
+)
+
+
+def disposed(name: str, body: str, carrier: str = "BA-T1 floor re-run, owed") -> str:
+    """An unmeasured constant with `body` as its disposition."""
+    return constant(name, "unmeasured", body=f'carrier = "{carrier}"\n' + body)
+
+
+def scenario_dispositions(results: Results) -> None:
+    """Every constant that is not current names where its measurement comes from."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        oids = init_tree(root)
+        control = constant("control", "current", oids["c1"])
+        heads = f'floor_run_sheet = "{SHEET}"\nforge_plan = "{PLAN}"\n'
+
+        def ledger(rows: str, extra: str = "") -> str:
+            return heads + document(path_set(), control + rows) + extra
+
+        floor = disposed("on_floor", 'disposition = "floor"\n')
+        results.expect(
+            root, ledger(floor), 2,
+            "a floor row with no run sheet in the tree", says="missing subject",
+        )
+        write(root, SHEET, "| Constant | Reads |\n| --- | --- |\n| `on_floor` | its time |\n")
+        write(root, PLAN, FORGE_CATALOGUE)
+        results.expect(
+            root, ledger(floor), 0,
+            "a floor row the run sheet lists", says="1 floor",
+        )
+        results.expect(
+            root, ledger(disposed("elsewhere", 'disposition = "floor"\n') + floor), 1,
+            "a floor row the run sheet does not list", says="elsewhere: a floor row the run sheet",
+        )
+        results.expect(
+            root, ledger(disposed("on_floor", DISPOSED)), 1,
+            "the run sheet lists a row that is not a floor row",
+            says="lists on_floor, which is not a floor row",
+        )
+        write(root, SHEET, "| `on_floor` | a |\n| `on_floor` | b |\n")
+        results.expect(
+            root, ledger(floor), 1, "a row listed twice", says="more than once",
+        )
+        write(root, SHEET, "no table here\n")
+        results.expect(
+            root, ledger(floor), 2, "a run sheet that lists nothing", says="lists no constant",
+        )
+        write(root, SHEET, "| `on_floor` | its time |\n")
+        results.expect(
+            root, ledger(disposed("no_word", "")), 1,
+            "an unmeasured row with no disposition", says="names its disposition",
+        )
+        results.expect(
+            root, ledger(disposed("bad_word", 'disposition = "someday"\n')), 1,
+            "a disposition outside the four", says="one of ci, floor, forge, retire",
+        )
+        results.expect(
+            root, ledger(constant(
+                "current_too", "current", oids["c1"], body='disposition = "floor"\n'
+            )), 1,
+            "a current constant with a disposition", says="not valid for a current constant",
+        )
+        results.expect(
+            root, ledger(disposed("mixed", 'disposition = "floor"\nreplaced_by = "something else now"\n')), 1,
+            "a key of another disposition", says="does not belong to a floor disposition",
+        )
+        results.expect(
+            root, ledger(disposed("bare_retire", 'disposition = "retire"\n')), 1,
+            "a retire row that names nothing in its place", says="names its 'replaced_by'",
+        )
+        forge = 'disposition = "forge"\nforge_event = "first-compact-join"\n'
+        results.expect(
+            root, ledger(floor + disposed("waits", forge, carrier="chain forge F4, then BA-T7")), 0,
+            "a forge row on an event of the plan",
+        )
+        results.expect(
+            root, ledger(disposed("waits", forge)), 1,
+            "a forge row whose carrier does not say so", says="carrier says 'chain forge'",
+        )
+        results.expect(
+            root, ledger(disposed(
+                "waits", 'disposition = "forge"\nforge_event = "first-slash"\n',
+                carrier="chain forge F4, then BA-T7",
+            )), 1,
+            "a forge event the plan does not catalogue", says="is not an event of",
+        )
+        results.expect(
+            root, ledger(floor + disposed(
+                "waits", 'disposition = "forge"\nforge_event = "shard-<k>-closed"\n',
+                carrier="chain forge F4, then BA-T7",
+            )), 0,
+            "an event name read exactly as the catalogue spells it",
+        )
+        write(root, gate.CAPTURE_SCRIPT, CAPTURE)
+        commit(root, "the capture script and the plan")
+        rows = gated("crate-a::wall_iai") + gated("crate-b::count_iai")
+        results.expect(
+            root, ledger(floor + disposed("counted", 'disposition = "ci"\nci_row = "crate-a::wall_iai"\n'), rows), 0,
+            "a ci row on a gated bench",
+        )
+        results.expect(
+            root, ledger(disposed("counted", 'disposition = "ci"\nci_row = "crate-z::none_iai"\n'), rows), 1,
+            "a ci row on a bench no capture runs", says="is not a [[gated_row]] bench",
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_dispositions(results)
     scenario_gated_rows(results)
     scenario_estimated(results)
     scenario_retired(results)
