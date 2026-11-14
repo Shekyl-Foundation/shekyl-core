@@ -26,6 +26,13 @@ Three checks over an enumerated set of files:
    `--rpc-socket-dir /run/<RuntimeDirectory>` with
    `RuntimeDirectoryMode=0700` (RPC_CHANNEL.md §7.1; INPUT_GRAMMAR.md
    IG-Q104, IG-Q105). Neither is a daemon that refuses to start.
+5. The FreeBSD rc.d script holds the same: every flag its shekyld command
+   line passes is a command-line row; the directories it names for
+   `--data-dir` and `--log-file` are made by its `start_precmd` with
+   `install -d -o shekyl -g shekyl`, the data home at mode 0700; and it
+   passes `--service` and makes the service's rendezvous directory,
+   `/var/run/shekyl`, at mode 0755 (RPC_CHANNEL.md §7.1; Rick, 2026-11-14).
+   The daemon creates none of these; it checks them.
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -45,6 +52,11 @@ UNITS = [
     "contrib/packaging/linux/shekyld.service",
     "utils/fleet/skl-node@.service",
     "utils/fleet/skl-clearnet@.service",
+]
+
+# FreeBSD's rc.d scripts (check 5).
+RC_SCRIPTS = [
+    "contrib/packaging/freebsd/shekyld",
 ]
 
 # generator -> (the units whose directories it must agree with)
@@ -135,6 +147,56 @@ def check_unit(rel: str, text: str, live: dict[str, str]) -> list[str]:
     return errors
 
 
+def rc_command_line(text: str) -> str | None:
+    """The words after shekyld's path on the script's `command_args` line."""
+    m = re.search(r'^command_args="([^"]*)"', text, flags=re.M)
+    if not m:
+        return None
+    words = m.group(1).split()
+    for i, w in enumerate(words):
+        if w.endswith("/shekyld"):
+            return " ".join(words[i + 1 :])
+    return None
+
+
+def rc_made_dirs(text: str) -> dict[str, str]:
+    """directory -> mode, for each `install -d -o shekyl -g shekyl -m M D` line."""
+    return dict(
+        (d, mode)
+        for mode, d in re.findall(r"^\s*install -d -o shekyl -g shekyl -m (\d{4}) (/\S+)", text, flags=re.M)
+    )
+
+
+def check_rc_script(rel: str, text: str, live: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    line = rc_command_line(text)
+    if line is None:
+        return [f"{rel}: no command_args line that runs shekyld"]
+    flags, values = exec_flags(line)
+    for flag in flags:
+        where = live.get(flag)
+        if where is None:
+            errors.append(f"{rel}: the command line passes `--{flag}`, which is not a row of the daemon's table")
+        elif where == "file":
+            errors.append(f"{rel}: the command line passes `--{flag}`, a file-only row")
+    made = rc_made_dirs(text)
+    if "data-dir" in values:
+        mode = made.get(values["data-dir"])
+        if mode is None:
+            errors.append(f"{rel}: --data-dir {values['data-dir']} is not made by start_precmd")
+        elif mode != "0700":
+            errors.append(f"{rel}: the data home {values['data-dir']} is made at mode {mode}, not 0700")
+    if "log-file" in values:
+        parent = str(Path(values["log-file"]).parent)
+        if parent not in made:
+            errors.append(f"{rel}: --log-file {values['log-file']} is in {parent}, which start_precmd does not make")
+    if "service" not in flags:
+        errors.append(f"{rel}: the command line does not pass --service; a service script has no session directory")
+    elif made.get("/var/run/shekyl") != "0755":
+        errors.append(f"{rel}: a --service script needs the service's rendezvous directory: /var/run/shekyl made at mode 0755")
+    return errors
+
+
 def check_generator(rel: str, text: str, live: dict[str, str], units: dict[str, dict[str, str]]) -> list[str]:
     errors: list[str] = []
     keys = re.findall(r'echo\s+\\?"([a-z][a-z0-9-]*) = ', text)
@@ -157,7 +219,7 @@ def check_generator(rel: str, text: str, live: dict[str, str], units: dict[str, 
     return errors
 
 
-def check(repo: Path, units: list[str], generators: dict[str, list[str]]) -> list[str]:
+def check(repo: Path, units: list[str], generators: dict[str, list[str]], rc_scripts: list[str] | None = None) -> list[str]:
     errors: list[str] = []
     try:
         live = rows((repo / TABLE_FRAGMENT).read_text(encoding="utf-8"))
@@ -181,7 +243,14 @@ def check(repo: Path, units: list[str], generators: dict[str, list[str]]) -> lis
             errors.append(f"cannot read {rel}: {e}")
             continue
         errors.extend(check_generator(rel, text, live, {u: unit_texts[u] for u in unit_rels if u in unit_texts}))
-    if not units and not generators:
+    for rel in rc_scripts or []:
+        try:
+            text = (repo / rel).read_text(encoding="utf-8")
+        except OSError as e:
+            errors.append(f"cannot read {rel}: {e}")
+            continue
+        errors.extend(check_rc_script(rel, text, live))
+    if not units and not generators and not rc_scripts:
         errors.append("no unit and no generator is listed — the gate has no subject")
     return errors
 
@@ -231,6 +300,22 @@ def selftest() -> int:
         ("a socket directory off RuntimeDirectory is named", unit_ok, fleet_ok.replace("--rpc-socket-dir /run/f/%i", "--rpc-socket-dir /run/g/%i"), gen_ok, ["is not /run/f/%i (RuntimeDirectory)"]),
         ("a socket directory not 0700 is named", unit_ok, fleet_ok.replace("RuntimeDirectoryMode=0700", "RuntimeDirectoryMode=0755"), gen_ok, ["is not RuntimeDirectoryMode=0700"]),
     ]
+    rc_ok = (
+        'command_args="-f -u shekyl /usr/local/bin/shekyld --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"\n'
+        "\tinstall -d -o shekyl -g shekyl -m 0755 /var/run/shekyl || return 1\n"
+        "\tinstall -d -o shekyl -g shekyl -m 0700 /var/db/shekyl || return 1\n"
+        "\tinstall -d -o shekyl -g shekyl -m 0750 /var/log/shekyl || return 1\n"
+    )
+    rc_cases = [
+        ("an agreeing rc.d script passes", rc_ok, []),
+        ("a dead flag on the rc.d command line is named", rc_ok.replace("--data-dir", "--detach --data-dir"), ["`--detach`, which is not a row"]),
+        ("an rc.d data home start_precmd does not make is named", rc_ok.replace("-m 0700 /var/db/shekyl", "-m 0700 /var/db/other"), ["--data-dir /var/db/shekyl is not made by start_precmd"]),
+        ("an rc.d data home not 0700 is named", rc_ok.replace("-m 0700 /var/db/shekyl", "-m 0750 /var/db/shekyl"), ["made at mode 0750, not 0700"]),
+        ("an rc.d log directory start_precmd does not make is named", rc_ok.replace("-m 0750 /var/log/shekyl", "-m 0750 /var/log/other"), ["which start_precmd does not make"]),
+        ("an rc.d script without --service is named", rc_ok.replace("--service ", ""), ["does not pass --service"]),
+        ("an rc.d script without the rendezvous directory is named", rc_ok.replace("-m 0755 /var/run/shekyl", "-m 0700 /var/run/shekyl"), ["/var/run/shekyl made at mode 0755"]),
+        ("an rc.d script that runs no shekyld is named", rc_ok.replace("/usr/local/bin/shekyld", "/usr/local/bin/other"), ["no command_args line that runs shekyld"]),
+    ]
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
@@ -245,6 +330,15 @@ def selftest() -> int:
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
             failures += 0 if ok else 1
+        for title, script, expect in rc_cases:
+            (repo / "u" / "shipped.service").write_text(unit_ok)
+            (repo / "u" / "fleet@.service").write_text(fleet_ok)
+            (repo / "u" / "gen.sh").write_text(gen_ok)
+            (repo / "u" / "rc").write_text(script)
+            errors = check(repo, ["u/shipped.service", "u/fleet@.service"], {"u/gen.sh": ["u/fleet@.service"]}, ["u/rc"])
+            ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
+            print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
+            failures += 0 if ok else 1
         errors = check(repo, [], {})
         ok = bool(errors)
         print(f"{'ok' if ok else 'FAIL'}: an empty subject is refused")
@@ -256,12 +350,15 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
     repo = Path(__file__).resolve().parents[2]
-    errors = check(repo, UNITS, GENERATORS)
+    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS)
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 2 if any("cannot read" in e or "pattern is wrong" in e or "no subject" in e for e in errors) else 1
-    print(f"launch recipes: {len(UNITS)} unit(s) and {len(GENERATORS)} generator(s) say only what the daemon's table says")
+    print(
+        f"launch recipes: {len(UNITS)} unit(s), {len(RC_SCRIPTS)} rc.d script(s) and {len(GENERATORS)} generator(s) "
+        "say only what the daemon's table says"
+    )
     return 0
 
 
