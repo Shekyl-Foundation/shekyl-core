@@ -987,8 +987,9 @@ holders **H**, every other signer (none when `m = 2`).
 
 `m = 2` is files 1, 4, 8 and 9. Each holder adds four files and two
 visits; the responder's count is the same at any `m`. Every per-input
-list is in the intent's input order and has the intent's input count.
-The body layouts are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §3.1.
+list is in the transaction's input order, key images strictly descending
+(CEN-I5), which every member computes alike, and has the intent's input
+count. The body layouts are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §3.1.
 
 **Why every signer's keys travel in round 1.** `signed_hash(i)` covers
 the hash of every input's key blob (CEN-I17), and a scheme-2 key blob
@@ -1042,7 +1043,9 @@ own ledger's committed forms: the second round is stateless.
   (I4). The SALs bind `tx_signable` and each input's rerandomized tuple,
   not the range proof or the tree depth: the member verifies the one and
   sets the other, and its hybrid signature then covers the whole
-  prunable part. Only that transaction is signed.
+  prunable part. The transaction must also be well formed by the wire's
+  structural rules, which the pool applies before any proof. Only that
+  transaction is signed.
 - **On `HybridSig`** (A): each signature verifies under that signer's
   key from round 1 over `signed_hash(i)`; then `verify_multisig` runs on
   every input before the transaction is released.
@@ -1063,7 +1066,7 @@ cannot be reached with an unchecked value.
 | A held nonce is used only with the parameters it was made for | `HeldSession` owns its parameters and keys; `resume(self)` uses them, and no function pairs a seed with parameters given separately |
 | The responder never holds a nonce | `Responder::respond` takes no nonce store; it preprocesses and signs inside one call |
 | A file is refused out of phase | per-role typestates (`Proposer<Collecting>`, `<SharesPending>`, `<AwaitingSignatures>`; `Holder<Committed>`), each with only its legal transitions |
-| Every byte a hybrid signature covers was built or verified by the signer | `VerifiedMembershipProof`, `VerifiedRangeProof`; `SignableTransaction`, made only by assembling the member's context, the two verified proofs and the checked keys, is all the member signer signs |
+| Every byte a hybrid signature covers was built or verified by the signer, and the pool would admit its shape | `VerifiedMembershipProof`, `VerifiedRangeProof`; `SignableTransaction`, made only by assembling the member's context, the two verified proofs and the checked keys and passing the wire's structural rules, is all the member signer signs |
 
 `compile_fail` doctests pin the transitions that must not exist
 (`ceremony::nonce`, `ceremony::roles`, `ceremony::proofs`).
@@ -1108,17 +1111,24 @@ deletes durably before it returns (the wallet's store, slice 4a).
   and the member's own ledger: the network id; per input the spent
   output (`O`, `C`, `x`, `y_kem`, `z`), its pseudo-out blind and
   rerandomization seed (§9.5), its key image, its committed form and the
-  member's own `0x0D` ciphertexts; the unsigned spend (prefix, fee,
-  reference block, base), from which `tx_signable` is derived; the
-  reference root and tree depth; and the member file, from which the
-  member's threshold keys load. Its constructor checks that the member
-  signs the intent, that the inputs are the intent's and the prefix
-  spends them in order, that the fee is the intent's, that each
-  committed form is for this group, and that the member's keys open
-  every input.
-- **`ProposerInputs`**, A only: each output's amount and mask (for the
-  range proof) and each input's leaf chunk and branch (for the
-  membership proof).
+  member's own `0x0D` ciphertexts; what the member's construction adds
+  to the intent (the outputs, their `tx_extra` fields and the committed
+  base); the reference root and layer count; and the member file, from
+  which the member's threshold keys load. What the intent fixes is not
+  carried twice: the fee and the reference block are read from the
+  intent, and the inputs are the member's own key images, put in the
+  transaction's order. So the transaction every member hashes and signs
+  is built in one place, and an unsigned spend that disagrees with its
+  intent cannot be written down. The constructor checks that the member
+  signs the intent, that there is one input per intent input and no key
+  image twice, that each committed form is for this group, that a spend
+  proves under the layer count, and that the member's keys open every
+  input.
+- **`ProposerInputs`**, A only: each output's opening, a commitment
+  with its amount and mask that wipes on drop (for the range proof), and
+  each input's path to the reference root, named by the input's key
+  image (for the membership proof). The ceremony never reads a mask
+  itself: the opening is the crypto crate's type (rule 36).
 - **`HeldNonceStore`**, **`NonceCounterSink`** and **`LiveCeremonies`**:
   the durable writes the ceremony needs but does not own.
 
@@ -1246,18 +1256,25 @@ it until the transaction is released or the reference block ages out
 
 Every member keeps its monotonic nonce counter, and a responder's
 wallet keeps the hashes of the intents it approved (no secret), so its
-second visit is a check, not a decision. Nothing else is durable: the ceremony's own state is its typestates (§11.3), rebuilt
-after a restart from the member's context, its store and the files it
+second visit is a check, not a decision. Nothing else is durable: the
+ceremony's own state is its typestates (§11.3), rebuilt after a restart
+from the member's context, its store, and the files it sent and
 received:
 
-- the proposer is rebuilt from its own `Proposal` file
-  (`Proposer::resume`) and replays the files it received;
+- the proposer is rebuilt from the last file it sent: from its
+  `Proposal` before step 7 (`Proposer::resume`), replaying the files it
+  received; from its `FinalTx` after (`Proposer::resume_after_finish`),
+  re-checking and re-signing that transaction as a cosigner would and
+  replaying the hybrid signatures it received. A crash inside step 7,
+  after the nonce is consumed and before the `FinalTx` is written,
+  forfeits the ceremony, as every consumed nonce does;
 - a holder is rebuilt as committed (`Holder::committed`) and signs from
   its held nonce;
 - the second round is stateless (`Cosigner`).
 
 A held nonce is used once: a holder that crashes after signing finds no
-nonce to sign from again.
+nonce to sign from again, and a member whose counter write fails has
+already given its nonce up and cannot retry.
 
 ### 13.2 Disagreement resolution
 
@@ -1595,14 +1612,20 @@ rust/shekyl-multisig/src/
 ├── ceremony/              — the signing ceremony (§11)
 │   ├── mod.rs             — Role, CeremonyError
 │   ├── context.rs         — SigningContext, InputContext, UnsignedSpend,
-│   │                        ProposerInputs (§11.5)
+│   │                        ProposerInputs, InputPath (§11.5)
 │   ├── files.rs           — the bodies, Authenticated<B>, import (§11.1,
 │   │                        wire format §3.1)
 │   ├── nonce.rs           — HeldNonce, HeldNonceStore, NonceCounterSink,
 │   │                        ConsumedNonce, LiveCeremonies (§11.4)
 │   ├── proofs.rs          — CommittedMemberKey, the verified proofs,
 │   │                        SignableTransaction (§11.3)
-│   └── roles.rs           — Proposer, Holder, Responder, Cosigner
+│   └── roles/             — the shared steps (mod.rs) and one module per
+│       │                    role (§11.1)
+│       ├── proposer.rs    — Proposer<Collecting | SharesPending |
+│       │                    AwaitingSignatures>, both resumes (§13.1)
+│       ├── holder.rs      — Holder<Committed>
+│       ├── responder.rs   — Responder, ResponderInput
+│       └── cosigner.rs    — Cosigner
 ├── intent.rs              — SpendIntent v2, canonical serialization (§9)
 ├── envelope.rs            — the ceremony file: seal as a member, trial-decrypt
 │                            import, the plaintext codec (§12.1)
@@ -1781,7 +1804,17 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - A replayed file, and a file of another intent
 - A holder signing twice from one held nonce (impossible)
 - A second intent on a live input (refused)
-- Every member restarting between files (the spend completes)
+- The durable nonce-counter write failing, at a holder and at the
+  proposer (no share; the nonce is gone; a retry finds nothing)
+- Every member restarting between files, and the proposer restarting
+  after step 7, straight after it and after one hybrid signature (the
+  spend completes); the proposer resumes only from its own `FinalTx`
+- Inputs supplied in any order (the context puts them in the
+  transaction's order)
+
+Every ceremony test checks the released transaction from the wire:
+the wire's structural rules, the intent's fee and reference block, every
+input's authorization and the FCMP++ proof.
 
 **Adversarial (receive, §8.2):**
 - A sender lies about one member's key hash: that member sees `MemberKeyHash`, every other member `LeafMismatch`

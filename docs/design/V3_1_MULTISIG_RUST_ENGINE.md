@@ -1062,8 +1062,9 @@ the danger is scoped to one role:
    its parameters.
 
 A restart inside a session does not cost the round: the proposer is
-rebuilt from its own `Proposal` file, a holder from its context and its
-store, and the second round is stateless. The session itself is bounded
+rebuilt from the last file it sent (its `Proposal`, then its `FinalTx`),
+a holder from its context and its store, and the second round is
+stateless. The session itself is bounded
 by the intent's reference block (`PROOF_VALIDITY_HORIZON` blocks, R-13).
 
 **What remains: the multisig builder (slice 4a).** The unsigned spend's

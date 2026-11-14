@@ -1,1 +1,23 @@
-- **Multisig groups can sign a spend: the Option E′ signing ceremony is built** (slice 3). From their member files, a 2-of-3 group (no holder) and a 3-of-5 group (one holder) each spend two of their outputs, and the transaction passes `verify_multisig` and FCMP++ verification after a round trip through the wire format. Each guard is a type whose only constructor runs the check, and the signing step takes that type. A file is `Authenticated` to the member it names. The intent is a `ValidatedIntent` checked against the member's own ledger. A per-output key is a `CommittedMemberKey`, and the preprocess set is a `PreprocessSet` of exactly the other signers. A held nonce is used once, only after its use is durably recorded (`ConsumedNonce`), and only with the parameters it was made under, because a `HeldSession` owns them. The responder holds nothing. A cosigner signs only a `SignableTransaction` that it assembles itself from verified proofs. Test coverage: each adversary in `PQC_MULTISIG.md` §16.8 has a test, a restart test has every member restart between files, `compile_fail` doctests pin the transitions that must not exist, and each body decoder is a fuzz target. Removed: `FrostCeremony`, `SpendRequest` / `SpendResponse` and engine-core's `MultisigNonceSink` stub. Message types `0x09` (InvariantViolation) and `0x0B` (EquivocationProof) are REJECTED: a member that refuses an intent tells its own human and sends nothing. The protocol is `PQC_MULTISIG.md` §11 and §13, and the body layouts are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §3.1 (v2.1). The rest of the Option D prover material in both documents and in `MULTISIG_OPERATIONS.md` is deleted.
+- **Multisig groups can sign a spend: the Option E′ signing ceremony is built** (slice 3).
+  - **What works.** From their member files, a 2-of-3 group (no holder) and a 3-of-5 group (one holder) each spend two of their outputs. The transaction passes the wire's structural check, `verify_multisig` and FCMP++ verification after a round trip through the wire format.
+  - **Each guard is a type.** Each guard's only constructor runs the check, and the signing step takes that type:
+    - a file is `Authenticated` to the member it names;
+    - the intent is a `ValidatedIntent`, checked against the member's own ledger;
+    - a per-output key is a `CommittedMemberKey`;
+    - the preprocess set is a `PreprocessSet` of exactly the other signers;
+    - a held nonce is used once, and only after its use is durably recorded (`ConsumedNonce`);
+    - a held nonce is used only with the parameters it was made under, because a `HeldSession` owns them;
+    - the responder holds nothing;
+    - a cosigner signs only a `SignableTransaction`. The cosigner assembles it from its own context and the verified proofs, and it passes the pool's structural rules.
+  - **One layout.** Every member builds the same transaction from the intent. Its inputs are the member's own key images, in the order consensus requires (CEN-I5), and its fee and reference block are read from the intent. So an unsigned spend cannot disagree with its intent.
+  - **Restarts.** A restart does not cost the round. The proposer is rebuilt from the last file it sent: its `Proposal`, then its `FinalTx`. A holder is rebuilt from its held nonce, and the second round is stateless.
+  - **No mask in the ceremony crate.** The proposer receives the outputs' openings as `shekyl-curve-primitives` commitments, which wipe on drop, so `shekyl-multisig` never reads a mask (rule 36).
+  - **Tests.** Each adversary in `PQC_MULTISIG.md` §16.8 has a test, including a failed nonce-counter write. `compile_fail` doctests pin the transitions that must not exist, and each ceremony body decoder is a fuzz target.
+  - **Removed.** `FrostCeremony`, `SpendRequest` / `SpendResponse`, and engine-core's `MultisigNonceSink` stub. Message types `0x09` (InvariantViolation) and `0x0B` (EquivocationProof) are REJECTED: a member that refuses an intent tells its own human and sends nothing.
+  - **Docs.** The protocol is `PQC_MULTISIG.md` §11 and §13. The body layouts are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §3.1 (v2.1). The Option D prover material is deleted from both documents and from `MULTISIG_OPERATIONS.md`.
+- **Transaction builders share their consensus constants and constructors.** `shekyl-wire` gains:
+  - `PqcAuth::VERSION`, `PqcAuth::NO_FLAGS` and `PqcAuth::unsigned`;
+  - `Input::fcmp_spend`;
+  - `TxPrefix::NO_UNLOCK_TIME`.
+
+  `shekyl-fcmp` gains `curve_trees_tree_depth` with `MIN_SPEND_LAYERS`, the checked conversion from an FCMP++ layer count to the on-chain depth. `shekyl-curve-primitives` gains `Commitment::from_canonical_mask`, which reads a commitment mask in the crate that owns it. `shekyl-tx-builder` and the multisig ceremony both use them, in place of literals each had written for itself.

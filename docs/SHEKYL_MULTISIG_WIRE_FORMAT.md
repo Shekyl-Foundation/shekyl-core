@@ -246,7 +246,8 @@ sends each type, and when, is `PQC_MULTISIG.md` §11.1.
 Every body parses **exactly**: each count and length is bounded before
 it is read, every field is read in full, and no bytes may follow the
 last field. A per-input list leads with its count `n` (one byte,
-`1 ≤ n ≤ MAX_INPUTS` = 8) and is in the intent's input order; a
+`1 ≤ n ≤ MAX_INPUTS` = 8) and is in the transaction's input order (key
+images strictly descending, CEN-I5); a
 per-signer list leads with its count (one byte, at most
 `MAX_MULTISIG_PARTICIPANTS` = 5). A length prefix is a `u32` LE,
 at most `MAX_FILE_LEN`.
