@@ -66,8 +66,12 @@ const OTHER_NETWORK_ID: NetworkId = [0x0f; 16];
 /// The handshake carries both as opaque bytes; these are stand-ins of fixed,
 /// different lengths, not RT-O31's encoding, and the pinned vectors hold
 /// their bytes.
-const GRANT_REQUEST: &[u8] = b"grant-request:view";
-const CEILING: &[u8] = b"grant:view";
+/// Message 3's payload: the `view` preset asked for, as RT-O31 writes a
+/// grant set (version 1, the bits little-endian, thirteen zero bytes).
+/// Written out here, not computed by the code under comparison.
+const GRANT_REQUEST: &[u8] = &[1, 0x07, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// Message 4's payload: the client's ceiling, `view`, in the same form.
+const CEILING: &[u8] = &[1, 0x07, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const FIRST_REQUEST: &[u8] = b"first transport record, client to daemon";
 const FIRST_REPLY: &[u8] = b"first transport record, daemon to client";
 

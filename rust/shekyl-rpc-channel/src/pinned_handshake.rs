@@ -35,7 +35,7 @@ use shekyl_noise::KeyEpoch;
 
 use super::{
     Client, Daemon, Message1Admission, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN,
-    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TRANSPORT_AD,
+    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, PAYLOAD_LEN, TRANSPORT_AD,
 };
 use crate::budget::HandshakeBudget;
 use crate::{NetworkId, MAC1_LEN};
@@ -124,7 +124,15 @@ fn run() -> Run {
     let client = client
         .read_message2(&message2)
         .expect("client reads message 2");
-    let (client, message3) = client.write_message3(&payloads[2]).expect("message 3");
+    let request_payload: [u8; PAYLOAD_LEN] = payloads[2]
+        .as_slice()
+        .try_into()
+        .expect("message 3's pinned payload is RT-O31's length");
+    let ceiling_payload: [u8; PAYLOAD_LEN] = payloads[3]
+        .as_slice()
+        .try_into()
+        .expect("message 4's pinned payload is RT-O31's length");
+    let (client, message3) = client.write_message3(&request_payload).expect("message 3");
     let daemon = daemon
         .read_message3(&message3)
         .expect("daemon reads message 3");
@@ -134,12 +142,12 @@ fn run() -> Run {
         "message 3's claim is the client's fingerprint, and only that"
     );
     let (pending, message4) = daemon
-        .write_from(&payloads[3], &mut daemon_rng)
+        .write_from(&ceiling_payload, &mut daemon_rng)
         .expect("message 4");
     let (client, grant) = client
         .read_message4(&message4)
         .expect("client reads message 4");
-    assert_eq!(grant, payloads[3], "message 4's payload");
+    assert_eq!(grant.as_slice(), payloads[3], "message 4's payload");
 
     let handshake_hash = [client.handshake_hash(), pending.handshake_hash()];
 
@@ -157,7 +165,11 @@ fn run() -> Run {
         })
         .expect("the client's first message opens");
     assert_eq!(first_message, request);
-    assert_eq!(session.request, payloads[2], "message 3's payload");
+    assert_eq!(
+        session.request.as_slice(),
+        payloads[2],
+        "message 3's payload"
+    );
     assert_eq!(
         session.client.x25519(),
         client_static.public().x25519(),

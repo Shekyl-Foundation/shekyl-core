@@ -8,6 +8,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Message 3's and message 4's payload is a grant set, one length for every
+# set (RT-O31); the handshake takes that length from the set's owner.
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 # Pinned exactly, to the version `shekyl-crypto-pq` and the P2P handshake
 # pin. RT-P4's constant-time result is a statement about this build of this
 # crate, and the handshake is what puts its decapsulation in front of a

@@ -245,12 +245,73 @@ impl GrantSet {
         }
     }
 
+    /// The channel's message-3 or message-4 payload carrying this set
+    /// (RT-O31): byte 0 the version, [`PAYLOAD_VERSION`]; bytes 1 and 2 the
+    /// bits, little-endian; bytes 3 to 15 zero.
+    #[must_use]
+    pub const fn to_payload(self) -> [u8; PAYLOAD_LEN] {
+        let bits = self.0.to_le_bytes();
+        let mut payload = [0u8; PAYLOAD_LEN];
+        payload[0] = PAYLOAD_VERSION;
+        payload[1] = bits[0];
+        payload[2] = bits[1];
+        payload
+    }
+
+    /// The set a message-3 or message-4 payload carries. Anything but
+    /// [`PAYLOAD_LEN`] bytes of [`PAYLOAD_VERSION`] with zero reserved bytes
+    /// and known bits is refused, never ignored (RT-O31).
+    ///
+    /// # Errors
+    ///
+    /// [`PayloadRefused`], naming what was wrong.
+    pub const fn from_payload(payload: &[u8]) -> Result<Self, PayloadRefused> {
+        if payload.len() != PAYLOAD_LEN {
+            return Err(PayloadRefused::Length);
+        }
+        if payload[0] != PAYLOAD_VERSION {
+            return Err(PayloadRefused::Version(payload[0]));
+        }
+        let mut at = 3;
+        while at < PAYLOAD_LEN {
+            if payload[at] != 0 {
+                return Err(PayloadRefused::Reserved);
+            }
+            at += 1;
+        }
+        match Self::from_bits(u16::from_le_bytes([payload[1], payload[2]])) {
+            Ok(set) => Ok(set),
+            Err(UnknownGrantBits(bits)) => Err(PayloadRefused::UnknownGrants(bits)),
+        }
+    }
+
     /// The grants this set names, in the table's order.
     pub fn iter(self) -> impl Iterator<Item = Grant> {
         Grant::ALL
             .into_iter()
             .filter(move |grant| self.names(*grant))
     }
+}
+
+/// The length of the channel's message-3 and message-4 payloads: one
+/// length for every grant set, so each message is one size on the wire
+/// (RT-O31).
+pub const PAYLOAD_LEN: usize = 16;
+
+/// The payload's version, its first byte.
+pub const PAYLOAD_VERSION: u8 = 1;
+
+/// Why a message-3 or message-4 payload was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayloadRefused {
+    /// Not [`PAYLOAD_LEN`] bytes.
+    Length,
+    /// A version this build does not read.
+    Version(u8),
+    /// A reserved byte is not zero.
+    Reserved,
+    /// Bits no grant has.
+    UnknownGrants(u16),
 }
 
 /// What an operator names at enrolment (`RPC_CHANNEL.md` §6.1).
@@ -333,6 +394,47 @@ mod tests {
                 assert!(!status.holds(grant), "{grant:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_payload_is_pinned_and_round_trips() {
+        // RT-O31: version 1, the view preset's bits little-endian, zeros.
+        let view = Preset::View.grants().to_payload();
+        assert_eq!(view, [1, 0x07, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let admin = GrantSet::ALL.to_payload();
+        assert_eq!(&admin[..3], &[1, 0xFF, 0x0F]);
+        for set in [GrantSet::EMPTY, Preset::Wallet.grants(), GrantSet::ALL] {
+            assert_eq!(GrantSet::from_payload(&set.to_payload()), Ok(set));
+        }
+    }
+
+    /// Each way a payload can be wrong is refused. Red edit: skip the
+    /// reserved-byte loop, and the payload with byte 15 set is read.
+    #[test]
+    fn a_payload_that_is_not_the_format_is_refused() {
+        let good = GrantSet::ALL.to_payload();
+        assert_eq!(
+            GrantSet::from_payload(&good[..15]),
+            Err(PayloadRefused::Length)
+        );
+        let mut version = good;
+        version[0] = 2;
+        assert_eq!(
+            GrantSet::from_payload(&version),
+            Err(PayloadRefused::Version(2))
+        );
+        let mut reserved = good;
+        reserved[15] = 1;
+        assert_eq!(
+            GrantSet::from_payload(&reserved),
+            Err(PayloadRefused::Reserved)
+        );
+        let mut unknown = good;
+        unknown[2] = 0x1F;
+        assert_eq!(
+            GrantSet::from_payload(&unknown),
+            Err(PayloadRefused::UnknownGrants(0x1000))
+        );
     }
 
     #[test]
