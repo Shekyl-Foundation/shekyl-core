@@ -429,11 +429,23 @@ impl Deadlined {
     }
 }
 
+/// A bound the socket refused because its peer has closed: macOS refuses
+/// `SO_RCVTIMEO` and `SO_SNDTIMEO` (`EINVAL`) on such a socket. A read there
+/// returns at once, with what is buffered or end of stream, and a write
+/// fails at once, so the operation needs no bound and goes ahead.
+#[cfg(unix)]
+fn bounded(set: std::io::Result<()>) -> std::io::Result<()> {
+    match set {
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
+    }
+}
+
 #[cfg(unix)]
 impl Read for Deadlined {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let left = self.left()?;
-        self.stream.set_read_timeout(Some(left))?;
+        bounded(self.stream.set_read_timeout(Some(left)))?;
         self.stream.read(buf)
     }
 }
@@ -442,7 +454,7 @@ impl Read for Deadlined {
 impl Write for Deadlined {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let left = self.left()?;
-        self.stream.set_write_timeout(Some(left))?;
+        bounded(self.stream.set_write_timeout(Some(left)))?;
         self.stream.write(buf)
     }
 
@@ -730,6 +742,36 @@ mod tests {
         assert!(took < Duration::from_secs(3), "{took:?}");
         drop(release);
         daemon.join().unwrap();
+    }
+
+    /// **A reply the daemon sends whole and then closes is read whole.**
+    /// The call reads on to the end of stream after the daemon has closed,
+    /// where macOS refuses a read bound. Red edit (macOS): treat that
+    /// refusal as an error, and the call fails after the reply arrived.
+    #[cfg(unix)]
+    #[test]
+    fn a_reply_followed_by_the_close_is_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let target =
+            LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
+        let daemon = serve_once(&target, |mut stream| {
+            // The whole request, headers and the two-byte body, so the close
+            // leaves nothing unread (an unread byte turns the close into a
+            // reset).
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.ends_with(b"\r\n\r\n{}") {
+                let n = stream.read(&mut chunk).unwrap();
+                assert_ne!(n, 0, "the request ended early");
+                request.extend_from_slice(&chunk[..n]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let reply = target.post("json_rpc", b"{}", Duration::from_secs(5));
+        daemon.join().unwrap();
+        assert_eq!(&reply.expect("the reply")[..], b"{}");
     }
 
     /// **A daemon that answers a byte at a time is given up at the bound.**
