@@ -27,9 +27,9 @@ use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::schedule::ChainRules;
 use crate::service::service_tests::arrival;
 use crate::service::{Follow, Reply, Service, ServiceConfig};
-use crate::test_support::{
-    assert_quiet_is_fresh, open_store, open_store_under, own_hasher, quiet_seeds, tmp, OwnHasher,
-};
+use shekyl_hasher::quiet::{assert_matches_fresh, seeds as quiet_seeds};
+
+use crate::test_support::{open_store, open_store_under, own_hasher, tmp, OwnHasher};
 
 /// The seeds resident once `own`'s hasher is quiet.
 fn quiet(own: &OwnHasher) -> BTreeSet<[u8; 32]> {
@@ -99,7 +99,7 @@ async fn settled(
         let snap = service.store().begin_read().expect("read");
         crate::service::ranked_on(&snap, rules, None).expect("the store ranks")
     };
-    assert_quiet_is_fresh(&own.hasher.resident(), list.as_ref());
+    assert_matches_fresh(&own.hasher.resident(), list.as_ref());
     quiet(own)
 }
 

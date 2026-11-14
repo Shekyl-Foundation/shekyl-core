@@ -217,68 +217,6 @@ pub fn own_hasher(permits: usize) -> OwnHasher {
     }
 }
 
-/// The seeds a hasher's `resident` watch shows once it is quiet: every
-/// cache warm, and nothing changing for a third of a second.
-///
-/// # Panics
-///
-/// The hasher did not settle within two minutes.
-#[must_use]
-pub fn quiet_seeds(
-    resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-) -> std::collections::BTreeSet<[u8; 32]> {
-    use std::time::{Duration, Instant};
-    let started = Instant::now();
-    let mut stable: Option<(shekyl_hasher::Resident, Instant)> = None;
-    loop {
-        let now = resident.borrow().clone();
-        let warm = now
-            .caches
-            .iter()
-            .all(|(_, state)| *state == shekyl_hasher::Residency::Warm);
-        match &stable {
-            Some((held, since)) if warm && *held == now => {
-                if since.elapsed() >= Duration::from_millis(300) {
-                    return now
-                        .caches
-                        .iter()
-                        .map(|(seed, _)| *seed.as_bytes())
-                        .collect();
-                }
-            }
-            _ => stable = warm.then(|| (now.clone(), Instant::now())),
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(120),
-            "the hasher never went quiet: {now:?}"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// HA-R5 on a node's production path: once the hasher behind `resident`
-/// is quiet it holds exactly the caches a fresh hasher fed `list` reaches.
-/// The fresh one is started here and derives each listed seed. Blocking.
-///
-/// # Panics
-///
-/// The two differ.
-pub fn assert_quiet_is_fresh(
-    resident: &tokio::sync::watch::Receiver<shekyl_hasher::Resident>,
-    list: Option<&shekyl_hasher::Ranked>,
-) {
-    let fresh = own_hasher(2);
-    if let Some(list) = list {
-        fresh.hasher.rank(list.clone());
-    }
-    let expected = quiet_seeds(&fresh.hasher.resident());
-    let held = quiet_seeds(resident);
-    assert_eq!(
-        held, expected,
-        "a quiet hasher holds what a fresh one fed the same list holds (HA-R5); the list: {list:?}"
-    );
-}
-
 /// A real store with its ingest service running.
 pub struct Chain {
     /// The store.
@@ -430,9 +368,11 @@ impl Chain {
             shekyl_chain_ingest::service::ranked_on(&snap, rules, None).expect("the store ranks")
         };
         let resident = own.hasher.resident();
-        tokio::task::spawn_blocking(move || assert_quiet_is_fresh(&resident, list.as_ref()))
-            .await
-            .expect("the quiet hasher holds what a fresh one holds (HA-R5)");
+        tokio::task::spawn_blocking(move || {
+            shekyl_hasher::quiet::assert_matches_fresh(&resident, list.as_ref())
+        })
+        .await
+        .expect("the quiet hasher holds what a fresh one holds (HA-R5)");
         let _stopped = service.stop().await;
         drop(store);
         drop(own);

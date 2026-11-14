@@ -17,10 +17,7 @@ mod dial;
 mod node;
 mod peer;
 
-pub use chain::{
-    assert_quiet_is_fresh, fork_headers, open_store, own_hasher, quiet_seeds, Chain, Corpus,
-    OwnHasher, Step,
-};
+pub use chain::{fork_headers, open_store, own_hasher, Chain, Corpus, OwnHasher, Step};
 pub use dial::{empty_claim, PeerDial, Silent, SyncPeer};
 pub use node::{MinerSeat, Node, Record, NETWORK_ID};
 pub use peer::{

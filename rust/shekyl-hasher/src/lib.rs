@@ -74,6 +74,7 @@
 #![deny(unsafe_code)]
 
 mod core;
+pub mod quiet;
 
 use std::cell::Cell;
 use std::fmt;
