@@ -19,8 +19,7 @@ pub fn account_home() -> Option<PathBuf> {
     use std::ffi::{CStr, OsStr};
     use std::os::unix::ffi::OsStrExt;
 
-    // SAFETY: no preconditions; returns the effective user id.
-    let uid = unsafe { libc::geteuid() };
+    let uid = shekyl_os_account::effective_uid();
     // SAFETY: `passwd` is plain data; a zeroed value is a valid out-struct
     // for `getpwuid_r` to fill.
     let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
@@ -108,7 +107,7 @@ pub fn current() -> shekyl_daemon_config::Platform {
         program_data: program_data(),
         // The session directory is read where the client that resolves
         // "this computer" reads it (`RPC_CHANNEL.md` RT-15): one reader.
-        session_dir: shekyl_rpc_transport::local::session_dir(),
+        session_dir: shekyl_os_account::session_dir(),
         service_rendezvous: service_rendezvous(),
     }
 }

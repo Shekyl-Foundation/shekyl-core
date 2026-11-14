@@ -53,14 +53,14 @@ serde_json = { workspace = true }
 shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 shekyl-network = { path = "../shekyl-network" }
 
-[target.'cfg(unix)'.dependencies]
-# The account's session directory (`geteuid`, macOS `confstr`) and the
-# owner's leg's peer check (`SO_PEERCRED`, `getpeereid`).
-libc = "0.2"
+# The account's root and, on Unix, the peer's account for the owner's leg's
+# check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
+# the daemon's process crate reads the same root from.
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 [target.'cfg(windows)'.dependencies]
-# The local application data folder, the logon session, and the pipe's
-# open with its peer check (`open_verified`).
+# The logon session, and the pipe's open with its peer check
+# (`open_verified`).
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]

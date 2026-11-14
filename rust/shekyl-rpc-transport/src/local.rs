@@ -25,10 +25,9 @@
 //! connection error would make the security failure retryable.
 //!
 //! The account's root (the session directory on Unix, the local
-//! application data folder on Windows) is read here, from the platform's
-//! own interface and never the environment (IG-Q14); the daemon's start
-//! reads it through `shekyl_process::platform`, which calls
-//! [`session_dir`].
+//! application data folder on Windows) and the peer's account on Unix come
+//! from `shekyl_os_account`, the leaf the daemon's process crate reads the
+//! same root from: one reader, and no network stack under it.
 
 use std::fmt;
 use std::io::{Read, Write};
@@ -174,7 +173,7 @@ impl LocalTarget {
         };
         let dir = match dir {
             Some(dir) => dir.to_path_buf(),
-            None => match account_root() {
+            None => match shekyl_os_account::account_root() {
                 Some(root) => rendezvous::account_dir(&root),
                 None => return Err(LocalFault::NoPlace { node }),
             },
@@ -261,7 +260,7 @@ impl LocalTarget {
 fn dial(node: &str, path: &Path) -> Result<LocalStream, LocalFault> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
-    let me = effective_uid();
+    let me = shekyl_os_account::effective_uid();
     // What is at the path, before anything is sent to it: a socket of this
     // account, or the wrong thing.
     let meta = match std::fs::symlink_metadata(path) {
@@ -312,7 +311,7 @@ fn dial(node: &str, path: &Path) -> Result<LocalStream, LocalFault> {
         Err(e) => return Err(LocalFault::Unreachable(e.to_string())),
     };
     // The peer is the process that answers: it must run as this account.
-    let peer = peer_uid(&stream)
+    let peer = shekyl_os_account::peer_uid(&stream)
         .map_err(|e| LocalFault::PeerCheck(format!("the peer's account cannot be read: {e}")))?;
     if peer != me {
         return Err(LocalFault::PeerCheck(format!(
@@ -502,125 +501,6 @@ fn decode_chunked(body: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
     }
 }
 
-/// The account's root for a rendezvous: the session directory on Unix, the
-/// local application data folder on Windows. `None` where there is none.
-#[must_use]
-pub fn account_root() -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        session_dir()
-    }
-    #[cfg(windows)]
-    {
-        shekyl_win_sec::known_folder::local_app_data()
-    }
-}
-
-/// The account's per-user session directory, from the platform's own
-/// interface, never `XDG_RUNTIME_DIR` (IG-Q14): `/run/user/<euid>` on Linux
-/// when it is a directory (the session, or linger, keeps it), and
-/// `confstr(_CS_DARWIN_USER_TEMP_DIR)` on macOS. `None` elsewhere and when
-/// absent. What is found is only a candidate: the owner's socket asserts
-/// its owner and mode before binding (`RPC_CHANNEL.md` §7.1).
-#[must_use]
-pub fn session_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        let dir = PathBuf::from(format!("/run/user/{}", effective_uid()));
-        std::fs::symlink_metadata(&dir)
-            .is_ok_and(|meta| meta.is_dir())
-            .then_some(dir)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        darwin_user_temp_dir()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        None
-    }
-}
-
-/// This process's effective user id.
-#[cfg(unix)]
-#[allow(unsafe_code, reason = "geteuid has no safe wrapper in std")]
-fn effective_uid() -> u32 {
-    // SAFETY: no preconditions; returns the effective user id.
-    unsafe { libc::geteuid() }
-}
-
-/// `confstr(_CS_DARWIN_USER_TEMP_DIR)`: the per-user, per-boot temporary
-/// directory macOS keeps for the account, with no environment read.
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code, reason = "confstr has no safe wrapper")]
-fn darwin_user_temp_dir() -> Option<PathBuf> {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut buffer = vec![0u8; 1024];
-    // SAFETY: `buffer` is a live allocation of the length passed; `confstr`
-    // writes at most that many bytes, NUL included, and returns the length
-    // it needs.
-    let needed = unsafe {
-        libc::confstr(
-            libc::_CS_DARWIN_USER_TEMP_DIR,
-            buffer.as_mut_ptr().cast::<libc::c_char>(),
-            buffer.len(),
-        )
-    };
-    if needed == 0 || needed > buffer.len() {
-        return None;
-    }
-    // `needed` counts the terminating NUL.
-    buffer.truncate(needed - 1);
-    let dir = PathBuf::from(OsStr::from_bytes(&buffer));
-    // The interface's spelling ends in a separator; the directory is the
-    // same without it.
-    Some(dir.components().collect())
-}
-
-/// The account of the process at the other end of `stream`.
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code, reason = "SO_PEERCRED has no safe wrapper in std")]
-fn peer_uid(stream: &LocalStream) -> std::io::Result<u32> {
-    use std::os::fd::AsRawFd;
-
-    // SAFETY: `ucred` is plain data; a zeroed value is a valid out-struct.
-    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
-    let mut length = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
-        .expect("ucred's size fits socklen_t");
-    // SAFETY: `cred` and `length` are locals of the sizes passed, and the
-    // descriptor is `stream`'s, open for the call.
-    let failed = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&raw mut cred).cast::<libc::c_void>(),
-            &raw mut length,
-        )
-    } != 0;
-    if failed {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(cred.uid)
-}
-
-/// The account of the process at the other end of `stream`.
-#[cfg(all(unix, not(target_os = "linux")))]
-#[allow(unsafe_code, reason = "getpeereid has no safe wrapper in std")]
-fn peer_uid(stream: &LocalStream) -> std::io::Result<u32> {
-    use std::os::fd::AsRawFd;
-
-    let mut uid: libc::uid_t = 0;
-    let mut gid: libc::gid_t = 0;
-    // SAFETY: `uid` and `gid` are locals; the descriptor is `stream`'s.
-    if unsafe { libc::getpeereid(stream.as_raw_fd(), &raw mut uid, &raw mut gid) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(uid)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,21 +600,5 @@ mod tests {
             LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
         let _listener = std::os::unix::net::UnixListener::bind(target.path()).unwrap();
         target.dial().expect("this account's socket");
-    }
-
-    /// On Linux the session directory is `/run/user/<euid>`, or none; it is
-    /// never what `XDG_RUNTIME_DIR` says. The test sets that variable to a
-    /// directory that exists and is not the session directory.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_linux_session_directory_is_the_uids_and_not_the_environments() {
-        let elsewhere = tempfile::tempdir().expect("a directory");
-        // No test in this crate reads the variable.
-        std::env::set_var("XDG_RUNTIME_DIR", elsewhere.path());
-        let expected = PathBuf::from(format!("/run/user/{}", effective_uid()));
-        match session_dir() {
-            Some(found) => assert_eq!(found, expected),
-            None => assert!(!expected.is_dir(), "{} exists", expected.display()),
-        }
     }
 }

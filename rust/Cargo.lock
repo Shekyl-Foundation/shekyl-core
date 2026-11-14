@@ -4834,6 +4834,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-os-account"
+version = "3.1.0"
+dependencies = [
+ "libc",
+ "shekyl-win-sec",
+ "tempfile",
+]
+
+[[package]]
 name = "shekyl-p-fetch"
 version = "3.1.0"
 dependencies = [
@@ -5070,7 +5079,7 @@ version = "3.1.0"
 dependencies = [
  "libc",
  "shekyl-daemon-config",
- "shekyl-rpc-transport",
+ "shekyl-os-account",
  "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",
@@ -5222,11 +5231,11 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
- "libc",
  "serde",
  "serde_json",
  "shekyl-address",
  "shekyl-network",
+ "shekyl-os-account",
  "shekyl-rpc-channel",
  "shekyl-rpc-client",
  "shekyl-rpc-types",

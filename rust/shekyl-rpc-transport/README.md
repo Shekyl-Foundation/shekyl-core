@@ -18,6 +18,7 @@ Three things, because they must not disagree:
    rendezvous record names on Windows, one connection per call. "Not
    running" and a failed peer check are distinct failures (`LocalFault`);
    the peer check's is a security failure and is never retried
-   (`docs/design/RPC_CHANNEL.md` RT-15, §7.1). The account's session
-   directory and the local legs' HTTP exchange are read here once, for the
-   daemon's start and every client.
+   (`docs/design/RPC_CHANNEL.md` RT-15, §7.1). The local legs' HTTP
+   exchange lives here once, for every client. The account's root and the
+   Unix peer's account come from `shekyl-os-account`, the leaf with no
+   network stack that the daemon's process crate reads the same root from.
