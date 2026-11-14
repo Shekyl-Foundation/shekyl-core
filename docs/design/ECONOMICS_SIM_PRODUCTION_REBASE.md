@@ -3464,6 +3464,243 @@ cheaper option; it was not built, because it would pin a second, smaller
 narration that the full ones already cover, and the pins fit beside the
 Rust job.
 
+### 5.32 EUP-4 prep 2, the criteria's instruments, predicted before they are built (2026-11-14)
+
+Written against `dev` at `58212dc72`, before any code. The brief is EUP-4
+prep 2 ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §4): an
+instrument for each criterion in §4's table that is not yet measured, and
+two stresses ESR-10 left open (§5.29.1, P3 and P4). An instrument prints
+measures, never a verdict against a criterion. Each one below gets its
+own mode, its own `--set` reach (`baseline.rs`), and its own lines in the
+`--eup4` narration, which runs all seven. Nothing below is a result.
+
+A prediction that restates a recorded run says so and names the run.
+Every other prediction is blind: it is the arithmetic of the mechanism it
+names, written without running anything. The family is `EI-1`…`EI-7`,
+one per instrument.
+
+**The shared fold.** Rows 2, 3 and Capacity read the same runs: both
+`w_ref` arms (§5.29) × the production fee at ×1 all-Standard and the flat
+control × every scenario, each to the onset horizon (60 years), on
+ESR-10's fold (`stage2::a1_year_aggs`). That is 36 folds, about 20
+CPU-minutes. A reader takes what it prints from the fold; none of them
+changes it, so the four committed narrations must pass unregenerated.
+
+**EI-1. Row 2, miner income** (`--miner-income`). Per block, by year:
+production's `PaidEmission::owed`, the miner leg of the emission plus the
+miner's fee income, and the fee part of it (`BurnSplit::miner_fee_income`),
+read from the composition rather than subtracted. The narration prints
+§4.1's sample years; the summary carries every year. The tail era's fee
+share is the fee part over `owed` in the blocks whose effective emission
+is the tail subsidy.
+
+- **Year 1 on the baseline, production ×1 (blind).** Inherited: about
+  705 SKL a block, about 3.7 % of it fee. Re-derived: about 863 SKL, about
+  2.3 % fee. The reward is 799.01 and 992.58 SKL (restated from §5.29.1
+  R4). The staker's emission share is 15 % in year 1, and the burn is
+  `0.5 · √(V/50) · supply/asymptote`, about 2 % in year 1, so the miner
+  keeps about 98 % of the fees: 26.2 SKL a block inherited (§5.29.1 P1),
+  50 × 0.3944 re-derived.
+- **The flat control (blind).** The same reward, and fees of 0.1 SKL a
+  transaction: about 681 SKL inherited (22 carried), about 849 re-derived
+  (50 carried).
+- **The tail era is not reached (blind).** No scenario's effective
+  emission comes down to the 0.6 SKL tail inside 60 years. The neutral
+  trajectory meets the tail at block 19 158 412 (FL-V7), about year 72.9.
+  The baseline pays 30.96 SKL a block at year 60 (the `--esr10`
+  fixture). The late-chain tail starts 95 % emitted, where the curve still
+  pays about 51 SKL. The tail-era share prints "not reached by year 60"
+  on every scenario. Reaching it is EUP-4 prep 3, the horizon.
+
+**EI-2. Row 3, predictability** (`--predictability`). The emitted
+fraction, `already_generated` over the asymptote, at each sample year, and
+the block at which each scenario first reaches 50 % and 80 %, as a year.
+Its distance in years from the neutral trajectory's own crossings, which
+the instrument reads from production's inverse, `neutral_height_reaching`:
+blocks 2 907 270 and 6 750 472, years 11.06 and 25.69, the heights
+`the_curve_is_the_designs_esf_22_per_block` pins. The paid reward is
+`M_r · curve(remaining)`, so the remainder decays at a rate proportional
+to `M_r`.
+
+- **Re-derived baseline (blind).** `M_r` is 1.0 from genesis (§5.29.1
+  R4), so 50 % at 11.06 and 80 % at 25.69, a distance of 0.0 (± 0.05,
+  the penalty).
+- **Inherited baseline (blind).** `M_r` is at its 0.8 floor until the
+  blocks grow at year 19 (22 carried against a baseline of 50), then 1.0.
+  50 % at 11.06 / 0.8 ≈ 13.8 (+2.8). The emitted fraction at year 19 is
+  `1 − e^(−0.8·19·ln 2/11.06)` ≈ 0.614, so 80 % at about 29.5 (+3.8).
+- **Re-derived, demand above the baseline (blind).** Sustained growth
+  carries more than 65 a block from about year 2, so `M_r` sits at its
+  1.3 cap: 50 % at about 8.6 (−2.5). Boom-bust alternates the cap and the
+  floor, a mean near 1.05: 50 % at about 10.5 (−0.5). Chain bootstrap
+  carries 5, 10 and 25 in its first three years: later, about +0.5.
+- **Already past at the start.** The late-chain tail and high history
+  start past 80 %. They print "before the fold" for both crossings.
+- The flat control's crossings are printed and not predicted: whether its
+  inherited arm grows its blocks inside 60 years is EI-4's open case.
+
+**EI-3. Row 5, demand response** (`--demand-response`). Production ×1,
+both `w_ref` arms.
+
+- **The step response.** A declared step schedule: 50 a block, 200 from
+  the start of year 2, 50 again from the start of year 3, four years in
+  all. Boom-bust and the stuffing attack are run beside it. Across each
+  edge the narration prints `M_r` and the burn rate every 60 blocks, from
+  120 blocks before the edge to 2 160 after it. It also prints the blocks
+  each takes to cover 95 % of its move, where the new level is its value
+  2 160 blocks after the edge.
+- **Inherited arm, before its ratchet (blind).** Neither moves. `M_r` and
+  the burn read the volume window, which counts carried transactions, and
+  the constrained block carries about 22 whatever is offered. `M_r` stays
+  on its 0.8 floor and the burn is flat. The step reaches the pool, not
+  the emission.
+- **Re-derived arm (blind).** The room is about 100 a block, and blocks
+  track demand above it at once (§5.29.1 R2), so they carry between
+  about 100 and 200 from the up-edge. `M_r` reaches its 1.3 cap once the
+  window's mean passes 65: between about 70 blocks (carrying 200) and 220
+  (carrying 100), 95 % of the move a few blocks earlier. The burn tracks the window's
+  mean through `√V` and covers 95 % in about 690 blocks. At the
+  down-edge `M_r` holds 1.3 until the mean falls under 65, about 500
+  blocks, and covers 95 % at about 700. The burn covers 95 % at about
+  690.
+- **The window-edge stuffer** (also EI-5's member). A miner with a
+  declared hashrate share `h` of 10 %, 20 % (the stuffing attack's) or
+  33 % mines every `round(1/h)`-th block. In those blocks it lists its
+  own bodies: the ordinary 1-in/2-out at the block's depth, as many as
+  fit under the penalty-free weight after the honest fill. It takes no
+  penalty. It runs on two terms, unenforced (no fee, as today) and
+  enforced (paying the relay floor, C2-R2 Q9's fix), and over a campaign
+  of one window at two timings with equal bodies: uniform, in every own
+  block, and edge, packed into the campaign's first own blocks. Unlike
+  ESR-7's one-block envelope, its bodies enter the volume window and the
+  medians. The campaign starts at year 5 (the inherited constrained era)
+  and at year 30 (after the inherited ratchet).
+- **What the stuffer prints.**
+  - The longest run of `M_r > 1.0` from the campaign's start, and `M_r`'s
+    mean over it.
+  - Its gross cost in floors. One floor is the relay floor's fee for one
+    reference transaction at the campaign's first block.
+  - Its net gain, against the same blocks with no stuffing: the change in
+    `owed` on its own blocks, less the fees it paid, plus the staker-pool
+    share of those fees that comes back to it. That makes it the miner
+    `miner_stuffer.rs` prices, run for a window.
+- **The stuffer, re-derived arm, year 5 (blind).** About 50 free bodies
+  fit in each own block (`zone′` holds about 100, and the honest fill is
+  50). At 20 % that is about 10 a block on average, a window mean near
+  60, so `M_r` is about 1.2. The longest run is the campaign plus the
+  window, about 1 440 blocks. Edge timing cannot pack more than the room,
+  so it matches uniform to within a window.
+- **Its gain and cost there (blind).** The extra emission is about
+  0.2 × the curve on each of the stuffer's blocks over the run: tens of
+  thousands of SKL. Its cost is zero unenforced, and enforced it is the
+  burned share of its own floor fees, about 3 % of about 7 200 floors.
+  The stuffer gains by about three orders of magnitude over its cost.
+  Wherever `M_r` sits inside its clamp and the block has free room, the
+  emission pays a miner to stuff it.
+- **The stuffer, inherited arm (blind).** No free room at either start:
+  the honest fill holds the block at its median (324 KB at year 5,
+  765 KB after the ratchet). It lists nothing, the run is 0 and the gain
+  is 0. A stuffer that takes the penalty is ESR-7's per-block packing,
+  and a campaign that optimises it is not built here.
+
+**EI-4. Capacity** (`--capacity`). The first year whose blocks carry the
+baseline's 50 within one transaction, per `w_ref` arm and fee arm, from
+the shared fold.
+
+- **Restated from §5.29.1 P1, P2 and R1.** Inherited ×1: year 20, the
+  blocks growing in year 19. Re-derived ×1: year 1.
+- **Flat control (blind, weak).** Its fee does not fall with the reward,
+  so its ratio to the reward rises as the reward falls. The inherited arm
+  grows later than ×1, between years 35 and 50. Re-derived: year 1, since
+  50 fit under `zone′` at any fee.
+
+**EI-5. Stuffing** (`--stuffing-envelope`). The ESR-7 envelope's minimum
+on each chain (today, and with the floor enforced) per archival byte,
+over the relay floor's rate at the same block, in floors per byte. It is
+taken at ESR-7's four rows (constrained, carried, tail, below the zone),
+on both `w_ref` arms, production ×1. The window-edge stuffer (EI-3) is a
+further member: its net cost per archival byte it adds, over the floor.
+
+- **Inherited arm (restated from the `--stage2` fixture's ESR-7 table,
+  converted at its rates).** About 4 floors a byte constrained, about 3
+  carried and about 2.5 in the tail. Below the zone (high history,
+  year 50) it is 0 today, a miner's free room, and about 0.2 enforced.
+- **Re-derived arm (blind).** Free room in every era at the baseline's 50
+  (`zone′` holds 100), so today's minimum is 0 in every era, and the
+  enforced minimum is the floor's burned share, under 1.
+- **The window-edge member (blind).** Negative wherever EI-3's stuffer
+  gains: the emission pays more than the bytes cost. It is 0 where it
+  lists nothing (inherited).
+
+**EI-6. Priority elasticity** (`--priority-elasticity`). The 15/80/5 mix
+with Priority's demand share at 5 %, 2.5 %, 1 % and 0, the share removed
+moving to Standard (15/85/0's precedent). Beside them is an elastic arm,
+a declared behaviour: Priority's share is `5 % · min(1, P₀/P(t))^ε` with
+`ε = 1`, so Priority demand halves when its fee doubles. `P₀` is
+Priority's fee at the scenario's first block, and the share it sheds
+moves to Standard. It runs on both `w_ref` arms over every scenario, on
+demand. The nightly takes the baseline only. It reports A1's fee leg and
+onset (ESR-10's columns) and miner income by year (EI-1's reader).
+
+- **Fees fall with Priority's share (blind, from §5.29.1 P3's
+  composition).** At 5 %, Priority pays 87 % of the year-1 fees, 179.3
+  SKL a block on the inherited baseline. At 2.5 %, about 102. At 1 %,
+  about 56. At 0, about 26 (×1's 26.2, P5).
+- **Onsets move toward 15/85/0's (blind, bracketed by recorded cells).**
+  The recorded cells are 15/80/5 at y40 and 15/85/0 at y31 inherited, y32
+  and y27 re-derived (the `--esr10` summary). At 2.5 %, about y35–37
+  inherited and y29–30 re-derived. At 1 %, about y32–34 and y28.
+- **The elastic arm sheds almost nothing (blind).** Priority's fee is
+  proportional to the reward, which falls, so `P(t) ≤ P₀` almost
+  everywhere and the share stays at 5 %. The one rise is the inherited
+  ratchet, where `M_r` goes from 0.8 to 1.0 and the fee rises by about
+  25 %, shedding about a fifth of Priority for as long as the reward
+  stays above its year-1 level. The arm's onset is within a year of the
+  5 % cell's and its miner income within 5 %. A Priority that responds
+  to price sheds nothing on a chain whose fees fall.
+
+**EI-7. Median path-dependence** (`--median-path`). On the inherited
+arm's 15/80/5 baseline, P4's case: blocks grow in year 19, the median
+settles at 733–735 KB, and Economy is served 52 % (§5.29.1). A declared
+demand blip, the demand doubled for one window, is placed at the start
+of years 17, 18, 19, 20 and 21, the ratchet year −2…+2. At the ratchet
+year two more sizes are run, ×1.5 and ×3, to vary the overshoot. Each
+run prints the year blocks grow, the long-term median at years 30 and 60,
+and Economy's served fraction over 60 years. The blip is a parameter, so
+the zone derivation (umbrella §4.3) can reuse the reader.
+
+- **A blip before the ratchet does not move it (blind).** The year
+  blocks grow is the year `m·ρ` first reaches `θ` (§5.29.1 P2), and a
+  blip moves neither: before that year no miner takes the penalty, so
+  the blip waits in the pool and expires. The growth year stays 19 at
+  years 17 and 18. A demand blip cannot move the ratchet earlier, so
+  "the ratchet year −1, −2" is not reachable by this perturbation, and
+  the narration says so with the year it measures.
+- **A blip at or after the ratchet moves the resting point (blind).**
+  The median is neutrally stable between the non-Economy demand's weight
+  (42.5 a block, about 624 KB) and the full demand's (50, about 733 KB).
+  A blip at year 19, 20 or 21 pushes the median above the full demand's
+  weight. Blocks then carry every rung, the median decays back to the
+  full demand's weight, and stays. Resting median about 733–765 KB, and
+  Economy served from about 90 % after the blip, against 52 % unblipped.
+  The ×1.5, ×2 and ×3 blips at year 19 all land on the full demand's
+  weight: the resting point depends on whether the overshoot passes the
+  full demand, not on its size.
+- **The answer to "is the resting point a function of the history, and
+  by how much?" (blind).** Yes. It spans the band between the
+  non-Economy and the full demand's weight, 624–765 KB, and Economy's
+  service spans 5 %–100 % across it. Where the chain rests is decided by
+  the last overshoot.
+
+**Cost (blind; measured with the build).** The shared fold is about 20
+CPU-minutes. EI-3 is 12 four-year folds and the stuffer's campaigns.
+EI-5 is four folds to year 50. EI-7 is eight folds to year 60. EI-6 over
+every scenario is about 90 folds, about 55 CPU-minutes, so it runs on
+demand and its baseline joins the nightly. The per-PR narration job keeps
+the three pins it has (`ignored_set_economics_sim.sh --narrations`). The
+`--eup4` fixture joins the nightly if it fits its budget, and is named
+in `nightly.yml` either way.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
