@@ -385,6 +385,11 @@ mod tests {
         // SAFETY: the parent handed this process the end at `number`, open and
         // owned by nothing else here.
         let mut end = unsafe { <End as std::os::fd::FromRawFd>::from_raw_fd(number) };
+        // Winsock is started per process, and std starts it only when it makes
+        // a socket itself: a process whose only socket is inherited starts
+        // it first (the daemon's adoption calls `WSAStartup`).
+        #[cfg(windows)]
+        drop(std::net::UdpSocket::bind("127.0.0.1:0").expect("Winsock starts"));
         #[cfg(windows)]
         // SAFETY: as on Unix: the inherited socket at `number`.
         let mut end =
