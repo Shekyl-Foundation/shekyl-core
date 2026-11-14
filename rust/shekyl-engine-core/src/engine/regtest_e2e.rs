@@ -613,7 +613,7 @@ fn section_bodies_for_capture(
 }
 
 /// The draws [`RegtestDaemon::generate_blocks`] waits on, as a peer sees
-/// them: a block's `draws` (`count(h)`, 4.4) and the references its
+/// them: a block's `draws` (`count(h)`, 4.5) and the references its
 /// section admits ([`RegtestDaemon::watch_draws`]).
 #[derive(Clone)]
 struct DrawWatch {
@@ -6784,7 +6784,7 @@ async fn maybe_capture_chain_vector(
     };
 
     // The trace is the Rust baseline (`DAEMON_REDB_STORE.md` §12.1): the
-    // corpus replayed against a fresh store under the production substrate
+    // corpus replayed against a fresh store under the production proof-of-work boundary
     // and the rules this chain was mined under, then the store's chain
     // written out. A chain the replay refuses is no baseline, and the
     // capture fails here rather than pinning a half-chain.

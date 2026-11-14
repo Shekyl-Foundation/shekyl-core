@@ -205,7 +205,7 @@ crate::wire_object! {
         /// a bundle filed for the block (`SCS-P39`). Which pairs were drawn
         /// stays secret until the reveal. `null` where this node holds no
         /// row: an alternative block, or a height below the draw rows' floor
-        /// (4.4).
+        /// (4.5).
         pub draws: Nullable<Count>,
     }
 }

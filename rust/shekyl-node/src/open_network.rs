@@ -21,12 +21,11 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_chain_ingest::service::{Alarm, Departed, Door, PoolHealth};
-use shekyl_chain_ingest::{ChainRules, ProductionSubstrate, TipChanged};
+use shekyl_chain_ingest::{ChainRules, ProductionPow, TipChanged};
 use shekyl_chain_store::store::ChainStore;
 use shekyl_chain_sync::{Declaration, Requesting, SyncState};
 use shekyl_chain_sync_runtime::executor::Executor;
 use shekyl_daemon_rpc::submit::RelayNudge;
-use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
 use shekyl_p2p::{CoreSyncData, Network, NetworkParts, NetworkPlan, NodeSync, SupervisorFeeds};
 use shekyl_relay::owner::{PoolDoor, RelayHandle};
@@ -68,8 +67,11 @@ pub(crate) struct Parts<'a> {
     pub door: Door,
     pub alarm: Alarm,
     pub latch: tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
-    pub budget: Budget,
-    pub sync_substrate: ProductionSubstrate,
+    /// The boundary over the node's one hasher, for chain sync's executor.
+    pub sync_pow: ProductionPow,
+    /// Where chain sync's owner publishes its header frontier; the ingest
+    /// holds the receiver.
+    pub frontier: tokio::sync::watch::Sender<Option<shekyl_chain_ingest::service::Frontier>>,
     pub rules: ChainRules,
     pub requesting: Requesting,
     pub declaration: Declaration,
@@ -111,8 +113,8 @@ pub(crate) fn start(parts: Parts<'_>) -> Result<Started, OpenError> {
         door,
         alarm,
         latch,
-        budget,
-        sync_substrate,
+        sync_pow,
+        frontier,
         rules,
         requesting,
         declaration,
@@ -146,7 +148,8 @@ pub(crate) fn start(parts: Parts<'_>) -> Result<Started, OpenError> {
         alarm,
         tips,
         latch,
-        executor: Arc::new(Executor::new(budget, sync_substrate)),
+        executor: Arc::new(Executor::new(sync_pow)),
+        frontier,
         engine: network.engine(),
         rules,
         requesting,

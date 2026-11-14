@@ -507,12 +507,7 @@ fn a_job_that_frees_the_third_builds_only_once_the_thirds_memory_is_returned() {
 fn a_quiet_hasher_holds_what_a_fresh_one_holds_for_the_same_list() {
     let _serial = serial();
     let list = Ranked::new(s(1), Some(s(2)), Some((s(3), Class::HeaderPow))).expect("distinct");
-    let quiet = |r: &Resident| {
-        r.caches.len() == 3
-            && r.caches
-                .iter()
-                .all(|(_, residency)| *residency == Residency::Warm)
-    };
+    let quiet = |r: &Resident| r.quiet;
     let worked = {
         let (hasher, owner) = start(4);
         hasher.rank(window(&[s(5)]));
@@ -536,6 +531,100 @@ fn a_quiet_hasher_holds_what_a_fresh_one_holds_for_the_same_list() {
         fresh
     };
     assert_eq!(seeds(&worked), seeds(&fresh));
+}
+
+/// What a list names, as a caller compares it with [`Resident::caches`].
+fn named(list: &Ranked) -> Vec<[u8; 32]> {
+    let mut seeds: Vec<[u8; 32]> = list.seeds().map(|seed| *seed.as_bytes()).collect();
+    seeds.sort_unstable();
+    seeds
+}
+
+/// `Resident::quiet` is the core's fact, and a quiet hasher holds exactly
+/// the seeds its last list names (HA-R5): nothing before a list, the
+/// list's seeds once they are built, and the same seeds again after a job
+/// on a seed the list does not name has come and gone. A list that names a
+/// seed the hasher was never sent is not what it holds.
+///
+/// Red edits: publish `quiet: true` always in `Shared::publish`: the first
+/// read after `rank` finds a quiet hasher that holds nothing. Have
+/// `Ranked::seeds` leave the third out: the first comparison fails.
+#[test]
+fn a_quiet_hasher_holds_exactly_the_seeds_its_last_list_names() {
+    let _serial = serial();
+    let (hasher, owner) = start(2);
+    let before = hasher.resident().borrow().clone();
+    assert!(before.quiet, "a hasher asked for nothing is quiet");
+    assert!(before.caches.is_empty());
+    let list = Ranked::new(s(1), Some(s(2)), Some((s(3), Class::HeaderPow))).expect("distinct");
+    hasher.rank(list.clone());
+    assert!(
+        !hasher.resident().borrow().quiet,
+        "a list with nothing built is not quiet when `rank` returns"
+    );
+    let built = until(&hasher, "quiet on the list", |r| r.quiet);
+    assert_eq!(seeds(&built), named(&list));
+    // A job on a seed the list does not name: its cache is gone again at
+    // quiescence, and the third it pushed out is back.
+    let stop = AtomicBool::new(false);
+    assert!(hasher
+        .run(Class::Evidence, s(7), &stop, |lent| lent.hash(b"x"))
+        .is_some());
+    let after = until(&hasher, "quiet after an outside job", |r| r.quiet);
+    assert_eq!(seeds(&after), named(&list));
+    assert_eq!(after.builds, 5, "the outside seed, and the third again");
+    // The comparison a caller makes fails against a list never sent.
+    let never_sent =
+        Ranked::new(s(1), Some(s(2)), Some((s(9), Class::HeaderPow))).expect("distinct");
+    assert_ne!(seeds(&after), named(&never_sent));
+    owner.stop();
+}
+
+/// A job that waits keeps the hasher from reading quiet. On a one-permit
+/// budget whose permit the test holds, a job on the list's own warm seed
+/// is granted its lease and parks for the permit: nothing is being built
+/// and nothing is freed, and `quiet` is false until the job has hashed and
+/// returned. Reading "every cache warm for a while" as quiet is the guess
+/// this replaces; the core's property test holds that no published state
+/// has a waiting job beside caches that are all warm.
+///
+/// Red edit: drop the lease term from `Core::quiet`.
+#[test]
+fn a_job_parked_for_its_permit_keeps_the_hasher_from_reading_quiet() {
+    let _serial = serial();
+    let pool = budget(1);
+    let (hasher, owner) = started(Hasher::start(pool.clone()));
+    let list = window(&[s(1)]);
+    hasher.rank(list.clone());
+    until(&hasher, "quiet on the list", |r| r.quiet);
+    let held = pool.acquire(Class::Chain);
+    let job = {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            hasher.lend(Class::CalcPow, s(1), &stop, |loan| {
+                loan.hash(b"parked").is_ok()
+            })
+        })
+    };
+    let deadline = Instant::now() + PATIENCE;
+    while pool.waiting(Class::CalcPow) == 0 {
+        assert!(Instant::now() < deadline, "the job parks for the permit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let parked = hasher.resident().borrow().clone();
+    assert!(!parked.quiet, "a parked job is not quiet: {parked:?}");
+    assert!(holds(&parked, s(1), Residency::Leased));
+    std::thread::sleep(QUIET);
+    assert!(
+        !hasher.resident().borrow().quiet,
+        "and waiting does not make it quiet"
+    );
+    drop(held);
+    assert_eq!(job.join().expect("the job returns"), Some(true));
+    let rested = until(&hasher, "quiet once the job returned", |r| r.quiet);
+    assert_eq!(seeds(&rested), named(&list));
+    owner.stop();
 }
 
 /// §5.4 on a one-permit budget: a refill of the third waits for the permit
@@ -760,6 +849,75 @@ fn a_job_asking_for_another_job_panics() {
     owner.stop();
 }
 
+/// The RandomX known-answer vector, through every way the hasher hands
+/// out a hash: the v2 fork's `randomx_calculate_hash` output at pin
+/// `aaafe71` for the canonical seedhash and data input
+/// (`shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin`,
+/// the verifier's one end-to-end vector). The inputs are restated here
+/// from `shekyl-pow-randomx/src/vm.rs`'s tests; a drift on either side
+/// fails against the vector.
+const KAT_SEED: [u8; 32] = [
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+];
+const KAT_DATA: &[u8] = b"phase2c-t8-end-to-end-stub-nop-hash-canonical-data-input-padding-to-256-bytes-so-the-blake2b-input-spans-multiple-blocks-and-the-fillaes1rx4-scratchpad-init-consumes-a-non-trivial-seed.....END";
+const KAT_HASH: &[u8; 32] = include_bytes!(
+    "../../shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin"
+);
+
+/// Consensus results cannot move with who holds the cache
+/// (`RANDOMX_CACHE_ACTOR.md` §8): a hash under a lent cache is the
+/// verifier's own. `Lent::hash` in a `run` job, `Loan::hash` and
+/// `Loan::hash_timed` in a `lend` job, and `Loan::hash` on a warm loan
+/// each equal the fork's vector.
+///
+/// Red edit: in `Lent::hash`, hash `&blob[1..]`, or hash under another
+/// seed's cache: the output is not the vector's.
+#[test]
+fn every_way_to_hash_gives_the_randomx_known_answer() {
+    let _serial = serial();
+    let (hasher, owner) = start(2);
+    let seed = Seedhash::from_bytes(KAT_SEED);
+    let running = AtomicBool::new(false);
+    assert_eq!(KAT_DATA.len(), 192, "the vector's data input is 192 bytes");
+    let lent = hasher
+        .run(Class::Chain, seed, &running, |lent| lent.hash(KAT_DATA))
+        .expect("granted");
+    assert_eq!(&lent, KAT_HASH, "Lent::hash in a run job");
+    let (loaned, timed) = hasher
+        .lend(Class::Chain, seed, &running, |loan| {
+            (
+                loan.hash(KAT_DATA).expect("a job's loan hashes"),
+                loan.hash_timed(KAT_DATA).expect("a job's loan hashes").0,
+            )
+        })
+        .expect("granted");
+    assert_eq!(&loaned, KAT_HASH, "Loan::hash in a lend job");
+    assert_eq!(&timed, KAT_HASH, "Loan::hash_timed in a lend job");
+    hasher.rank(window(&[seed]));
+    until(&hasher, "the ranked seed is warm", |resident| {
+        holds(resident, seed, Residency::Warm)
+    });
+    let warm = hasher
+        .lend_warm(Class::CalcPow, seed, &running, |loan| loan.hash(KAT_DATA))
+        .expect("the seed is listed and built")
+        .expect("the loan is not cancelled");
+    assert_eq!(&warm, KAT_HASH, "Loan::hash on a warm loan");
+    owner.stop();
+}
+
+/// `Hasher::permits` is the budget's: what a consumer that holds no
+/// budget sizes its lanes by.
+///
+/// Red edit: have `Hasher::permits` return a constant.
+#[test]
+fn the_hasher_reports_its_budgets_permits() {
+    let _serial = serial();
+    let (hasher, owner) = start(3);
+    assert_eq!(hasher.permits(), 3);
+    owner.stop();
+}
+
 #[test]
 fn a_ranked_list_naming_a_seed_twice_is_refused() {
     assert_eq!(
@@ -896,13 +1054,7 @@ fn a_long_random_sequence_through_the_shell_keeps_the_cap_and_quiesces_to_the_li
     for job in jobs {
         job.join().expect("a job returns");
     }
-    let listed = 1 + usize::from(last.window.len() == 2) + usize::from(last.third.is_some());
-    let quiet = |r: &Resident| {
-        r.caches.len() == listed
-            && r.caches
-                .iter()
-                .all(|(_, residency)| *residency == Residency::Warm)
-    };
+    let quiet = |r: &Resident| r.quiet;
     let worked = until(&hasher, "quiet on the last list", quiet);
     watching.store(false, Ordering::Release);
     let most = watcher.join().expect("the watcher returns");

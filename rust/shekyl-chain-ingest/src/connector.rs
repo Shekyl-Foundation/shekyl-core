@@ -429,6 +429,11 @@ pub struct ConnectorArgs {
     /// is rebuilt with the section that names it (module docs of
     /// `connector_bundles`). `None` where no follower builds jobs.
     pub bundle_queued: Option<Arc<tokio::sync::Notify>>,
+    /// The ranker's wake (`service` module docs, *The ranked list*): fired
+    /// after every write that can change which seeds the node needs: a
+    /// tip move, and an alternative stored, promoted, refused or retired.
+    /// `None` where nothing ranks.
+    pub ranked: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// The store behind its latch: the only way to a write closure, refusing
@@ -505,6 +510,8 @@ pub struct Connector {
     rules: ChainRules,
     /// [`ConnectorArgs::bundle_queued`].
     bundle_queued: Option<Arc<tokio::sync::Notify>>,
+    /// [`ConnectorArgs::ranked`].
+    ranked: Option<Arc<tokio::sync::Notify>>,
     /// Drawable sets the count has already built, keyed by the epoch and
     /// the opening block's hash. Not chain state (`SO-D12b`).
     memo: DrawableMemo,
@@ -527,6 +534,7 @@ impl Actor for Connector {
             writer: Writer::live(args.store),
             rules: args.rules,
             bundle_queued: args.bundle_queued,
+            ranked: args.ranked,
             memo: DrawableMemo::new(),
         };
         // The bundle queue and the body store are reconciled at open
@@ -586,6 +594,16 @@ impl Connector {
                 now.seq += 1;
                 now.tip = tip;
             });
+        }
+        self.seeds_may_have_moved();
+    }
+
+    /// Wake the ranker: a write may have changed the seeds the node needs
+    /// ([`ConnectorArgs::ranked`]). The ranker reads a fresh snapshot, so
+    /// a wake for a write that changed nothing costs one read.
+    pub(crate) fn seeds_may_have_moved(&self) {
+        if let Some(ranked) = &self.ranked {
+            ranked.notify_one();
         }
     }
 }

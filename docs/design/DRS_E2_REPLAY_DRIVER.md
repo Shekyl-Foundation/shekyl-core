@@ -219,7 +219,7 @@ And not a consumer of the mining JIT for validation (§1.3).
 | --- | --- | --- | --- |
 | 1 | `Fault::Corrupt` → writer halt | `CHAIN_RULES_SLICE_2.md` §4.3; FOLLOWUPS row | Receive a `Corrupt` from `validate` and arm the store's halt at the noted height, as a belt does; the store API is **minted here, with its caller** (RD-Q4). |
 | 2 | `Stale::Seed` → bounded retry — **BUILT for replay, increment 2 (commit 5): surfaced as a run-ending fault on first occurrence, the validator's `Retry` carried on it; the wrong-seed test. The re-`form` loop that consumes that `Retry` has no driver in replay (RD-Q5's second sentence) and is DRS-X's, with the live feed as its caller** | `fault.rs` (`FormAttempt`, `Retry`, `MAX_FORM_ATTEMPTS`); slice 2 Q8 (the ruling that minted the arm and its bound) | In replay any `Stale::Seed` is a **driver defect** — record and surface the first occurrence (RD-Q5, RULED); the bounded loop lands with the source that can honestly re-`form` (DRS-X), the bound already typed on the fault. |
-| 3 | The production `Substrate` — **BUILT, increment 1 (#804); metrics + `EpochPin` added in increment 2 (RD-F20)** | `substrate.rs`; slice 2 Q1 | Real `longhash` through `shekyl-pow-randomx`'s production surface (`PreparedCache::derive` + `compute_hash`; `CacheStore`), a real clock; the seed claim from the chain (RD-Q3). |
+| 3 | The production `Substrate` — **BUILT, increment 1 (#804); metrics + `EpochPin` added in increment 2 (RD-F20)** | `substrate.rs`; slice 2 Q1 | Real `longhash` through the node's one hasher (`shekyl-hasher`, [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)): each block is formed as a job on its seed through `ProductionPow` (`shekyl-chain-ingest/src/pow.rs`), which hashes with `shekyl-pow-randomx`'s `compute_hash`; a real clock; the seed claim from the chain (RD-Q3). The replay tool starts a hasher of its own and ranks the seed it forms under. |
 | 4 | `RuleSet::fakechain` wiring — **BUILT, increment 2 (commit 6b)** | slice 2 Q10 / F10; FOLLOWUPS row | `--regtest` / `--fixed-difficulty` reach `RuleSet::fakechain` through the driver (RD-Q7). |
 | 5 | The test-deviation register's first consumer — **§5 carries it; the grader's `Borrowed` clause is the consumer** | F12; FOLLOWUPS row (falsifier: *this* pre-flight) | §5 carries the section F12's falsifier demands. |
 | 6 | LWMA-1 conformance past `N` — **NOT YET: the regtest runs were fixed-difficulty (D4 ran under `Fixed`); a regtest chain mined without `--fixed-difficulty` ramps past CPU mining within 20 blocks (§7 item 8), so this leg is testnet's** | `conformance_tests.rs` header; `CHAIN_RULES_CRATE.md` §8.8 | The first replay past 91 blocks exercises D4's window against a real store. |
@@ -296,8 +296,9 @@ And not a consumer of the mining JIT for validation (§1.3).
 ### 3.3 RandomX (`shekyl-pow-randomx`, at `dev`)
 
 `PreparedCache::derive(Seedhash)` (the 256 MiB Argon2d fill),
-`compute_hash(&PreparedCache, &[u8]) -> [u8;32]`, `CacheStore::{lookup,
-lookup_or_derive, set_canonical}` (the daemon's two-epoch cache). `VmStatePool`
+`compute_hash(&PreparedCache, &[u8]) -> [u8;32]`. The crate keeps no
+cache of its own: the daemon's are `shekyl-hasher`'s
+([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). `VmStatePool`
 + `compute_hash_with_pool` exist but only under `cfg(any(test, feature =
 "internal-pool-bench"))` — bench scaffolding, not production (RD-F14). **Cache-only today, as a measure-first staging —
 not a foreclosure** (RD-F11, corrected 2026-09-19): `Cache::derive_item` is

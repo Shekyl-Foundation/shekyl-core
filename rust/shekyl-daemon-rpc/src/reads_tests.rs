@@ -11,11 +11,11 @@ use crate::chain_facts::decode_target_count;
 use crate::core::ArchivalGood;
 use crate::methods::tests::{facts, patterned_hash, tagged_bytes, tagged_hash, FakeFacts};
 use crate::read_facts::{
-    AdmittedPow, AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx,
-    ShardCoverage, TransactionsAt,
+    AltChainFacts, BlockRead, BlocksAt, ClaimSource, CurveTreeFacts, ListedTx, ShardCoverage,
+    TransactionsAt,
 };
 use serde_json::json;
-use shekyl_types::{CurveTreeRoot, PowHash, ShardId};
+use shekyl_types::{CurveTreeRoot, ShardId};
 use shekyl_wire::Transaction;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -75,10 +75,12 @@ impl ChainReadFacts for FakeRead {
     fn coinbase_sum(&self, _start: BlockHeight, _count: u64) -> Result<CoinbaseRange, FactsFault> {
         self.coinbase.ok_or(FactsFault::NotReady)
     }
-    fn admit_pow(&self, _seed: PowSeed) -> Result<PowAdmission, FactsFault> {
-        Err(FactsFault::NotReady)
-    }
-    fn hash_admitted(&self, _blob: &[u8], _admitted: &AdmittedPow) -> Result<PowHash, FactsFault> {
+    fn pow(
+        &self,
+        _seed: PowSeed,
+        _pow_blob: &[u8],
+        _pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault> {
         Err(FactsFault::NotReady)
     }
     fn emission_claim_source(&self, _persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {

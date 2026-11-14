@@ -58,13 +58,14 @@ use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{run, Disagreement, PipelineConfig, RunReport};
 use shekyl_chain_ingest::rebaseline::write_trace_file;
 use shekyl_chain_ingest::schedule::ChainRules;
-use shekyl_chain_ingest::substrate::ProductionSubstrate;
 use shekyl_chain_ingest::trace::Trace;
+use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
+use shekyl_hash_budget::Budget;
+use shekyl_hasher::Hasher;
 use shekyl_network::Network;
-use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_transport::HttpRpc;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -291,7 +292,7 @@ fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
     })
 }
 
-/// Connect the corpus under the production substrate and `trace`.
+/// Connect the corpus under the production proof-of-work boundary and `trace`.
 ///
 /// The measurement is printed and, when asked, written whether or not the
 /// run finished: hours of hashing are the measurement whether or not the
@@ -313,13 +314,13 @@ async fn drive(
     }
     let store = ChainStore::with_horizons(&flags.store, ApplyPolicy::default(), prepared.horizons)?;
     let metrics = Arc::new(Metrics::new());
-    let substrate = Arc::new(ProductionSubstrate::new(
-        Arc::new(CacheStore::new()),
-        Arc::clone(&metrics),
-    ));
+    // The run's own hasher, with one permit per `--hashers`: the same
+    // owner of caches the daemon runs, so a replay measures that path.
+    let (hasher, owner) = Hasher::start(Budget::new(prepared.cfg.hashers))?;
+    let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
     let outcome = run(
         &mut source,
-        substrate,
+        Arc::clone(&pow),
         Arc::clone(&metrics),
         prepared.rules,
         store,
@@ -328,7 +329,11 @@ async fn drive(
     )
     .await;
 
-    let measured = metrics.snapshot();
+    let measured = pow.artifact();
+    // Every form has ended, so no lease is out: the stop frees the caches
+    // and joins the builder.
+    drop(pow);
+    owner.stop();
     eprintln!(
         "randomx light mode: {} hash(es), mean {:?} ns; {} derive(s), mean {:?} ns; {} block(s) formed, mean {:?} ns; {:?}",
         measured.hashes,

@@ -174,7 +174,7 @@ pub struct HeaderProspect {
 ///
 /// The substrate's fault, from the clock or the longhash. A refusal is
 /// `Ok(Err(_))`.
-pub fn form_header<S: Substrate>(
+pub fn form_header<S: Substrate + ?Sized>(
     pow: &PowBlob,
     rule_set: &RuleSet,
     substrate: &S,
