@@ -944,7 +944,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
     // `Scanner::scan` recovers nothing; `Block::hash` is well-defined.
     let miner_transaction = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(height)],
             outputs: vec![],
             extra: vec![],

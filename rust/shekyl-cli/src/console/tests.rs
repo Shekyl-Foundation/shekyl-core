@@ -247,12 +247,10 @@ fn console_spend() -> shekyl_wire::Transaction {
     use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, TxPrefix};
     shekyl_wire::Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: vec![],
-                key_image: [0x42; 32],
-            }],
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
+            inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                [0x42; 32],
+            ))],
             outputs: vec![
                 Output {
                     amount: 0,
@@ -276,9 +274,9 @@ fn console_spend() -> shekyl_wire::Transaction {
                 commitments: vec![[2; 32], [3; 32]],
             },
             pqc_auths: vec![PqcAuth {
-                auth_version: 1,
-                scheme_id: 1,
-                flags: 0,
+                auth_version: PqcAuth::VERSION,
+                scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                flags: PqcAuth::NO_FLAGS,
                 hybrid_public_key: vec![0; PQC_HYBRID_SINGLE_KEY_LEN],
                 hybrid_signature: vec![0; PQC_HYBRID_SINGLE_SIG_LEN],
             }],

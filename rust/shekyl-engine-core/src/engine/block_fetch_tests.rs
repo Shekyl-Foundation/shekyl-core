@@ -196,7 +196,7 @@ fn coinbase_block(number: u64) -> Block {
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(number)],
                 outputs: vec![Output {
                     amount: 0,
@@ -284,7 +284,7 @@ fn bind_skeleton_rejects_coinbase_shaped() {
     // `gen` reward output the wallet has no business ingesting from this path).
     let real_coinbase = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(7)],
             outputs: vec![Output {
                 amount: 0,
@@ -310,7 +310,7 @@ fn bind_skeleton_rejects_coinbase_shaped() {
     // (a coinbase must carry a Null ct, §2.5).
     let gen_fcmp = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(7)],
             outputs: vec![Output {
                 amount: 0,
@@ -364,11 +364,9 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: vec![],
-                key_image: [0x42u8; 32],
-            }],
+            inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                [0x42u8; 32],
+            ))],
             outputs: vec![
                 Output {
                     amount: 0,
@@ -435,9 +433,9 @@ fn full_spend_tx() -> Transaction {
         unreachable!("pruned_spend_tx is Fcmp by construction");
     };
     *pqc_auths = vec![PqcAuth {
-        auth_version: 1,
-        scheme_id: 1,
-        flags: 0,
+        auth_version: PqcAuth::VERSION,
+        scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        flags: PqcAuth::NO_FLAGS,
         hybrid_public_key: vec![0u8; PQC_HYBRID_SINGLE_KEY_LEN],
         hybrid_signature: vec![0u8; PQC_HYBRID_SINGLE_SIG_LEN],
     }];

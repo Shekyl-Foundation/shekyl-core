@@ -45,7 +45,7 @@ use std::io::{self, BufRead, Read, Write};
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{
-    ArchivalLength, BlockHash, CtBaseHash, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
+    ArchivalLength, BlockHash, CtBaseHash, KeyImage, PCanonicalId, PrefixHash, MAX_HOLDINGS_SHARDS,
 };
 
 use crate::bytes::{read_array, read_byte};
@@ -440,11 +440,11 @@ impl Input {
     /// key-imaged input with no amount and no ring offsets, since the
     /// membership proof names no member.
     #[must_use]
-    pub fn fcmp_spend(key_image: [u8; 32]) -> Self {
+    pub fn fcmp_spend(key_image: KeyImage) -> Self {
         Input::ToKey {
             amount: 0,
             key_offsets: Vec::new(),
-            key_image,
+            key_image: *key_image.as_bytes(),
         }
     }
 
@@ -2265,7 +2265,7 @@ mod min_segment_tests {
     fn empty_null() -> Transaction {
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 extra: Vec::new(),

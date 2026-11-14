@@ -337,7 +337,7 @@ fn spend(
             unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: inputs
                 .iter()
-                .map(|spent| Input::fcmp_spend(*spent.key_image.as_bytes()))
+                .map(|spent| Input::fcmp_spend(spent.key_image))
                 .collect(),
             outputs: unsigned.outputs.clone(),
             extra: unsigned.extra.clone(),

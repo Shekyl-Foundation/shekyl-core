@@ -10,7 +10,7 @@ use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_network::NetworkId;
-use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash};
+use shekyl_types::{BlockHash, KeyImage, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -82,7 +82,7 @@ fn wire_inputs(
     }
     Ok(key_images
         .iter()
-        .map(|ki| Input::fcmp_spend(*ki))
+        .map(|ki| Input::fcmp_spend(KeyImage::from_bytes(*ki)))
         .chain(extra_inputs.iter().cloned())
         .collect())
 }
@@ -412,7 +412,7 @@ mod tests {
             reference_block: BlockHash::from_bytes([0xAB; 32]),
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
-                auth_version: 1,
+                auth_version: crate::types::PQC_AUTH_VERSION,
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
@@ -560,7 +560,7 @@ mod tests {
         input.extra_inputs = vec![synthetic_bond_post()];
         // 1 spend + 1 extra ⇒ 2 pqc_auths, still 1 pseudo_out.
         input.pqc_auths.push(PqcAuth {
-            auth_version: 1,
+            auth_version: crate::types::PQC_AUTH_VERSION,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
@@ -652,13 +652,9 @@ mod tests {
     #[test]
     fn tokey_extra_input_is_rejected() {
         let mut input = minimal_input();
-        input.extra_inputs = vec![Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: [9u8; 32],
-        }];
+        input.extra_inputs = vec![Input::fcmp_spend(KeyImage::from_bytes([9u8; 32]))];
         input.pqc_auths.push(PqcAuth {
-            auth_version: 1,
+            auth_version: crate::types::PQC_AUTH_VERSION,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
