@@ -191,6 +191,20 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
             .as_ref()
             .map(|plan| owner_socket_line(network.name(), plan.instance_label(), &plan.path)),
     );
+    announced
+        .rest
+        .extend(walked.service_rendezvous.as_deref().map(|dir| {
+            service_rendezvous_line(
+                network.name(),
+                config.rpc.instance.label(),
+                &shekyl_daemon_rpc::channel::rendezvous::record_path(
+                    dir,
+                    &network_id,
+                    &config.rpc.instance,
+                ),
+                !config.rpc.channel_listen.is_empty(),
+            )
+        }));
     let lines = announced.into_lines();
     announce_all(&lines);
 
@@ -204,6 +218,8 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
         data_dir: config.data_dir.clone(),
         network_id,
         service: config.run_mode == shekyl_daemon_config::RunMode::Service,
+        service_rendezvous: walked.service_rendezvous.clone(),
+        instance: config.rpc.instance.clone(),
     };
     let prepared = match shekyl_daemon_rpc::run::prepare(
         walked
@@ -560,6 +576,29 @@ pub fn mining_notice(config: &DaemonConfig) -> Option<String> {
 /// The line a start announces about its owner's socket (`RPC_CHANNEL.md`
 /// §7.1): the socket's name is a hash, so the operator is told which
 /// network and instance it serves and where it is.
+/// What a service says at start about its machine-wide rendezvous (§7.1;
+/// Rick, 2026-11-14): where it publishes the record when it listens on the
+/// channel, and that it publishes none when it does not.
+fn service_rendezvous_line(
+    network: &str,
+    instance: &str,
+    path: &std::path::Path,
+    listens: bool,
+) -> String {
+    if listens {
+        format!(
+            "service rendezvous: network {network}, instance {instance}, at {}",
+            path.display()
+        )
+    } else {
+        format!(
+            "service rendezvous: none for network {network}, instance {instance}: rpc-listen is none, \
+             so no client finds this service by its rendezvous; local tools reach it on the \
+             plaintext admin listener"
+        )
+    }
+}
+
 fn owner_socket_line(network: &str, instance: &str, path: &std::path::Path) -> String {
     let leg = if cfg!(windows) {
         "owner's rendezvous"

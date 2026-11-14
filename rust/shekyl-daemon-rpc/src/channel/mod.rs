@@ -22,6 +22,7 @@
 
 pub mod files;
 pub mod listener;
+pub mod rendezvous;
 pub mod sessions;
 pub mod store;
 
@@ -73,6 +74,13 @@ pub struct ChannelSetup {
     /// Whether this is the machine's service instance, which has a console
     /// key (§5).
     pub service: bool,
+    /// A service's rendezvous directory, checked by the walk; `None` for a
+    /// daemon run as its user. A service started with `rpc-listen`
+    /// publishes its machine-wide rendezvous record there (§7.1).
+    pub service_rendezvous: Option<PathBuf>,
+    /// The instance, whose name the record's file name hashes with the
+    /// network id (RT-O10).
+    pub instance: shekyl_rpc_channel::Instance,
 }
 
 /// A channel connection's caller, stamped on each of its requests beside
@@ -129,6 +137,8 @@ pub struct Channel {
     pub(crate) store: Store,
     pub(crate) sessions: Arc<Sessions>,
     pub(crate) budget: HandshakeBudget,
+    /// Where a service publishes its rendezvous record, when it listens.
+    pub(crate) service_rendezvous: Option<PathBuf>,
 }
 
 impl Channel {
@@ -182,6 +192,10 @@ impl Channel {
             store,
             sessions: Arc::new(Sessions::default()),
             budget: HandshakeBudget::new(Instant::now()),
+            service_rendezvous: setup
+                .service_rendezvous
+                .as_deref()
+                .map(|dir| rendezvous::record_path(dir, &setup.network_id, &setup.instance)),
         }))
     }
 
@@ -374,7 +388,7 @@ fn write_console_key(
 
 /// The public bundle as it travels: the X25519 key, then the ML-KEM-768
 /// encapsulation key.
-fn bundle(key: &StaticKeypair) -> Vec<u8> {
+pub(crate) fn bundle(key: &StaticKeypair) -> Vec<u8> {
     let mut out = key.public().x25519().to_vec();
     out.extend_from_slice(key.public().mlkem_ek());
     out

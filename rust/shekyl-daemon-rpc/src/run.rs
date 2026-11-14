@@ -53,6 +53,8 @@ pub struct Running {
     rt: Pool,
     serve: tokio::task::JoinHandle<()>,
     owner: Option<Owner>,
+    /// A service's published rendezvous record; dropped first on stop.
+    service_rendezvous: Option<crate::channel::rendezvous::ServiceRendezvous>,
 }
 
 /// The server's runtime, and the owner's leg bound on it, before the node
@@ -176,6 +178,34 @@ pub fn start(
                 .map_err(|e| format!("bind failed on {addr}: {e}"))?,
         );
     }
+    // A service that listens on the channel publishes its machine-wide
+    // rendezvous record once its listeners are bound; one that does not
+    // publishes nothing (`RPC_CHANNEL.md` §7.1; Rick, 2026-11-14).
+    let service_rendezvous = match (&channel, channel_listen.is_empty()) {
+        (Some(channel), false) => match &channel.service_rendezvous {
+            Some(path) => {
+                let bound: Vec<SocketAddr> = channel_listen
+                    .iter()
+                    .map(BoundListener::local_addr)
+                    .collect();
+                Some(
+                    crate::channel::rendezvous::ServiceRendezvous::publish(
+                        path,
+                        &bound,
+                        &crate::channel::bundle(&channel.key),
+                    )
+                    .map_err(|e| {
+                        format!(
+                            "the service's rendezvous {} could not be published: {e}",
+                            path.display()
+                        )
+                    })?,
+                )
+            }
+            None => None,
+        },
+        _ => None,
+    };
     crate::handles::publish_live(&handles);
     let config = ServerConfig {
         cors_origins: section.cors_origins.clone(),
@@ -233,6 +263,7 @@ pub fn start(
         rt,
         serve,
         owner,
+        service_rendezvous,
     })
 }
 
@@ -246,7 +277,11 @@ impl Running {
             rt,
             serve,
             owner,
+            service_rendezvous,
         } = self;
+        // A service's record first, so no client is pointed at a daemon
+        // that is draining (§7.1).
+        drop(service_rendezvous);
         // The owner's socket first: the watch stops, so removing the socket
         // is not read as its going, and then the socket is removed, so no
         // client reaches a daemon that is draining (`RPC_CHANNEL.md` §7.1).

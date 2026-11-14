@@ -4171,8 +4171,13 @@ dependencies = [
 name = "shekyl-daemon"
 version = "3.1.0"
 dependencies = [
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "rustix",
+ "serde_json",
  "shekyl-address",
  "shekyl-archival-retention",
  "shekyl-daemon-config",
@@ -4184,6 +4189,9 @@ dependencies = [
  "shekyl-options",
  "shekyl-p2p",
  "shekyl-process",
+ "shekyl-rpc-channel",
+ "shekyl-rpc-grants",
+ "shekyl-rpc-stream",
  "shekyl-runtime",
  "shekyl-socks",
  "shekyl-timing-engine",

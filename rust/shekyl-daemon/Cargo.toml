@@ -57,7 +57,17 @@ tempfile = "3"
 # owns that grammar.
 shekyl-address = { path = "../shekyl-address" }
 # The driver's stop-vs-ask race is tested on tokio's paused clock.
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time", "test-util"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util", "net", "io-util"] }
+# tests/service_rendezvous.rs dials a service as the record it publishes
+# says: the channel's handshake and record stream, and HTTP over them.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
+hyper = { version = "1", default-features = false, features = ["http1", "client"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+hex = "0.4"
+serde_json = { workspace = true }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # The notify driver's tests build chain tips.
 shekyl-types = { path = "../shekyl-types" }

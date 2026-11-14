@@ -31,6 +31,9 @@ pub(crate) struct Walked {
     /// Where the owner's socket goes, checked; `None` for a service
     /// (`RPC_CHANNEL.md` §7.1, IG-Q105).
     pub(crate) owner_socket: Option<shekyl_daemon_config::OwnerSocketPlan>,
+    /// A service's rendezvous directory, checked; `None` for a daemon run
+    /// as its user (`RPC_CHANNEL.md` §7.1).
+    pub(crate) service_rendezvous: Option<std::path::PathBuf>,
 }
 
 /// The walk (IG-Q59), in a start's order, stopping at the first refusal
@@ -58,7 +61,7 @@ pub(crate) fn walk(
     // it is the machine's service, and a non-service account that gives
     // `service` is refused for that, not for a data directory it could
     // not open (`RPC_CHANNEL.md` §7.1).
-    owner_socket::service_rendezvous(config, platform).map_err(one)?;
+    let service_rendezvous = owner_socket::service_rendezvous(config, platform).map_err(one)?;
     // A service's data home is the service manager's or the installer's,
     // checked and never created (Rick, 2026-11-14): the given data
     // directory, or the service's root the default one sits in.
@@ -116,6 +119,7 @@ pub(crate) fn walk(
         network_id,
         warnings,
         owner_socket,
+        service_rendezvous,
     })
 }
 
