@@ -244,7 +244,7 @@ impl Transaction {
     /// That last case is not "the accepted txid is 3-part" — the accepted
     /// identity of a discarded-auths spend is reconstructed with
     /// [`Self::hash_with_supplied_components`]. The arity of this body is
-    /// [`Self::prefix_carries_pqc_component`] together with whether auths are
+    /// `prefix_carries_pqc_component` together with whether auths are
     /// present on it — never per input arm: a bond-post carries its identity
     /// signature in a tx-level `pqc_auths` slot and so is 4-part like any
     /// spend; an emission takes whatever arity its auth count yields.
@@ -289,7 +289,7 @@ impl Transaction {
     /// under `PDM-Q6` item 2, or that holds a band-1 skeleton (`PDM-Q-F28`)
     /// with neither region, cannot derive the txid's arity from
     /// `pqc_auths.is_empty()` on a body that is not there — so the arity is
-    /// the supplied `Option` after [`Self::prefix_carries_pqc_component`]
+    /// the supplied `Option` after `prefix_carries_pqc_component`
     /// drops a `Some` the prefix cannot carry (`SkeletonTx::txid` refuses
     /// that `Some` before reaching here; this mixer stays total). The
     /// skeleton is the one pruned form (`SB-Q2`): a body that keeps its

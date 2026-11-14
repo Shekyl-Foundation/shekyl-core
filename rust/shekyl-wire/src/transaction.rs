@@ -192,7 +192,7 @@ const COINBASE_OUTPUTS: usize = 1;
 ///
 /// The prefix with every free varint at its widest (`u64` amount, height
 /// and unlock time), one [`Input::Gen`], one [`Output`], [`Ct::Null`], and
-/// the extra at [`crate::tx_extra::coinbase_extra_len`] for [`COINBASE_OUTPUTS`].
+/// the extra at [`crate::tx_extra::coinbase_extra_len`] for `COINBASE_OUTPUTS`.
 /// Counts and the version are the grammar's, so their varints are the
 /// widths [`crate::varint::varint_len`] gives those values, not ten bytes. The Bp+
 /// clawback is zero on `Ct::Null`, so the weight is the serialized length.
@@ -1171,7 +1171,7 @@ impl Ct {
         }
     }
 
-    /// `H(base)`: `keccak256` of the base segment ([`Self::write_base`]),
+    /// `H(base)`: `keccak256` of the base segment (`write_base`),
     /// the txid's second component (GENESIS_TX_WIRE_FORMAT.md §11). The
     /// txid and [`TxSignableHash`](shekyl_types::TxSignableHash) both read
     /// it here.
@@ -1691,7 +1691,7 @@ impl Transaction {
     }
 
     /// Parse the pruned segment exactly: version, prefix and the committed
-    /// base, the bytes [`Self::write_pruned`] emits, and nothing after them.
+    /// base, the bytes `write_pruned` emits, and nothing after them.
     ///
     /// [`Self::read`] treats bytes after the base as authentications and
     /// proof data. A skeleton's txid ignores both, so those bytes would

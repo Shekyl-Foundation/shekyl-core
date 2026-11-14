@@ -3,14 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Archival input-arm serializer tests (dense tags: `serve_credit` 0x02, `bond_post` 0x03).
+//! The bond post's input-arm serializer (tag `0x03`).
 //!
-//! These arms are **Shekyl-native** — there is no C++ oracle (the C++/`bond_wire`
-//! impl is incomplete; notably it omits `bond_spend_pk`), so the design docs +
-//! Rust impl are authority and the test is a synthetic round-trip
-//! (`read(write(x)) == x`). Layouts transcribed from
-//! `shekyl-archival-retention::bond_wire` + GENESIS_TX_WIRE_FORMAT.md
-//! §9.10/§9.11, with `bond_spend_pk` added per §9.11.
+//! The arm is **Shekyl-native**, with no external oracle, so the design docs
+//! and the Rust impl are the authority and the test is a synthetic round
+//! trip (`read(write(x)) == x`). The layout is transcribed from
+//! `shekyl-archival-retention::bond_wire` and GENESIS_TX_WIRE_FORMAT.md
+//! §9.11, with `bond_spend_pk` per §9.11. Input tag `0x02` is unassigned
+//! (§9.10); `emission_input_arm.rs` holds that it does not parse.
 
 use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::{BOND_POST_KIND_JOINMARKET, PQC_HYBRID_SINGLE_KEY_LEN};

@@ -19,8 +19,8 @@
 //! (≤ [`TX_EXTRA_PADDING_MAX_COUNT`]). Inherited Monero tags that are **not**
 //! part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
 //! minergate" (`0xDE`) — are **rejected** (rule 60): they parse as unknown
-//! tags. The coinbase admission grammar (CEN-I20) is [`coinbase`]: one
-//! constructor and one slice match. The `0x0D` entry codec is [`multisig`].
+//! tags. The coinbase admission grammar (CEN-I20) is `coinbase`: one
+//! constructor and one slice match. The `0x0D` entry codec is `multisig`.
 //! This file is the tag parser those call.
 
 use std::borrow::Cow;
@@ -657,7 +657,7 @@ impl std::error::Error for PqcFieldShapeError {}
 /// Why a parsed `extra` is refused at admission: CEN-I19, the coinbase
 /// grammar, or a `0x02` on a transaction that is not a coinbase.
 ///
-/// One type so the daemon logs one [`Display`] and a caller matches one
+/// One type so the daemon logs one [`Display`](core::fmt::Display) and a caller matches one
 /// enum. The variants do not overlap: a missing pubkey is
 /// [`CoinbaseGrammarError::PubkeyMissing`], never [`PqcFieldShapeError::Missing`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
