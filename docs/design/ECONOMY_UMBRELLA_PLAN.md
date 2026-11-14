@@ -296,7 +296,11 @@ across BA-T10's whole plausible range of S (a review recommendation).
 
 ## 4. The assessment set, written before EUP-4 runs
 
-Graded at EUP-4 against the design curve, both fee arms, every scenario. A
+Graded at EUP-4 against the design curve, both fee arms, every scenario.
+Each row's measure has an instrument in the sim (EUP-4 prep 2,
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.32), which prints the measure and grades nothing; `--eup4` runs them
+all. A
 criterion with an April number takes it; a criterion April did not set is
 **PROPOSED** until Rick ratifies it, before EUP-4 runs — setting a
 threshold after seeing the numbers is the failure this section exists to
@@ -305,14 +309,14 @@ still his to set.
 
 | Design goal (`DESIGN_CONCEPTS.md` §1) | Measured as | April's figure | Criterion |
 | --- | --- | --- | --- |
-| 2. Long-run security budget | Miner income (reward + kept fees) per block, by year; the tail era's share that is fee | Miner income ≥ 85 % of no-share in year 1, 95 % by year 10 | Holds on the baseline and the boom/bust schedule. **RATIFIED (Rick, 2026-11-13):** no year in which the tail-era miner income falls below the tail subsidy alone |
-| 3. Predictability | Emitted fraction by year; release multiplier's range | 50 % ~year 11, 80 % ~year 25 | The owner's curve test pins April's figures on the neutral trajectory. **RATIFIED (Rick, 2026-11-13):** within ±1 year of them on every scenario |
-| 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response | M_r in [0.8, 1.3] | **RATIFIED (Rick, 2026-11-13):** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
+| 2. Long-run security budget | Miner income (reward + kept fees) per block, by year; the tail era's share that is fee. Instrument: `--miner-income` (EI-1) | Miner income ≥ 85 % of no-share in year 1, 95 % by year 10 | Holds on the baseline and the boom/bust schedule. **RATIFIED (Rick, 2026-11-13):** no year in which the tail-era miner income falls below the tail subsidy alone |
+| 3. Predictability | Emitted fraction by year; release multiplier's range. Instrument: `--predictability` (EI-2) | 50 % ~year 11, 80 % ~year 25 | The owner's curve test pins April's figures on the neutral trajectory. **RATIFIED (Rick, 2026-11-13):** within ±1 year of them on every scenario |
+| 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response. Instrument: `--demand-response` (EI-3, with the window-edge stuffer) | M_r in [0.8, 1.3] | **RATIFIED (Rick, 2026-11-13):** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
 | 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **RATIFIED (Rick, 2026-11-13):** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
-| Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **RATIFIED (Rick, 2026-11-13):** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
+| Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50. Instrument: `--capacity` (EI-4) | — (April assumed blocks carry demand) | **RATIFIED (Rick, 2026-11-13):** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
 | Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **RATIFIED (Rick, 2026-11-06):** the year-1 Standard-rung fee for an ordinary 1-in/2-out transaction is at most **0.05 %** of the year-1 block reward: about 0.496 SKL (496 289 839 atomic) on the design curve, whose year-1 mean block reward is 992.58 SKL (`projected_already_generated` over the first 262 800 blocks, read at `b8b11453e`). The floor is the stuffing criterion, applied in year 1. Set before ESR-10 runs, which prints this fee for every cell |
 | Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **RATIFIED except `k` (Rick, 2026-11-13; Rick sets `k`):** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`. The tail's ratio of the asymptote per year is read off this table and then ratified |
-| Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **RATIFIED (Rick, 2026-11-13):** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
+| Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era. Instrument: `--stuffing-envelope` (EI-5) | "Marginally profitable short-term" | **RATIFIED (Rick, 2026-11-13):** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
 their own tests, and are not graded here.
