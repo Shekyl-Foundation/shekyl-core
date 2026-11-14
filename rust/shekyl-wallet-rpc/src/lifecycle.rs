@@ -450,6 +450,55 @@ async fn take_and_close_tenant(
     Ok(name)
 }
 
+/// Close the open wallet because the server is stopping (a stop signal, a
+/// window closing, the in-process host shutting down): the `close_wallet`
+/// choreography — background tasks first, then the save, then the stores
+/// released — with the shutdown save, which does not refuse over
+/// outstanding reservations (`Engine::persist_for_shutdown`). Called after
+/// the listener has stopped and every in-flight request has finished, so
+/// no handler holds the engine; if something still does, the save runs
+/// through a read guard anyway, since the process is ending either way.
+/// A wallet that is not open, or is mid-open or mid-close, is left alone.
+pub(crate) async fn close_for_shutdown(tenants: &tokio::sync::Mutex<TenantState>) {
+    let taken = tenants.lock().await.tenant.take_open();
+    let Some((name, shared, tasks)) = taken else {
+        return;
+    };
+    tasks.shutdown().await;
+    match Arc::try_unwrap(shared) {
+        Ok(lock) => {
+            let engine = lock.into_inner();
+            match tokio::task::block_in_place(|| engine.persist_for_shutdown()) {
+                Ok(()) => {
+                    tracing::info!(wallet = %name, "stopping: the wallet is saved and closed")
+                }
+                Err(error) => tracing::error!(
+                    wallet = %name,
+                    %error,
+                    "stopping: saving the wallet failed; what was saved before stands"
+                ),
+            }
+            engine.release().await;
+        }
+        Err(shared) => {
+            let engine = shared.read().await;
+            match tokio::task::block_in_place(|| engine.persist_for_shutdown()) {
+                Ok(()) => tracing::warn!(
+                    wallet = %name,
+                    "stopping: the wallet is saved; a task still held it, so its stores \
+                     close with the process"
+                ),
+                Err(error) => tracing::error!(
+                    wallet = %name,
+                    %error,
+                    "stopping: saving the wallet failed; what was saved before stands"
+                ),
+            }
+        }
+    }
+    tenants.lock().await.tenant.clear_closing();
+}
+
 pub(crate) async fn close_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,

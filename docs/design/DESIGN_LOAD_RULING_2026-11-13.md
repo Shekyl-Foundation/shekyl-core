@@ -1,6 +1,7 @@
 # Design load vs. block weight — ruling and econ-sim question, 2026-11-13
 
 **Status: RULED 2026-11-13 (Rick). The questions for the econ sim below are open.**
+**Revision 1, 2026-11-13.**
 
 Raised by the CI lane's D2 (#1365, block-template row). Applies to the CI lane, the chain forge lane (Chain P) and the economics sim lane.
 

@@ -245,6 +245,24 @@ pub enum SubmitError {
         reservation_id: ReservationId,
     },
 
+    /// A19: the dispatch record (journal row with the signed bytes, the
+    /// retained tx secret, the inputs the F14 lock holds) is not
+    /// confirmed on disk, so **nothing was sent**. A save that failed
+    /// before the rename undoes the record under the same guard. A rename
+    /// whose parent-directory fsync did not confirm leaves the applied
+    /// record (undoing it would diverge from disk) and still sends
+    /// nothing. Either way the reservation is back in `consumer_held`
+    /// with its output locks; the consumer may retry the submit once the
+    /// cause is fixed, or discard.
+    #[error("send not saved durably, so not sent (reservation {reservation_id:?} kept): {source}")]
+    DispatchNotSaved {
+        /// The reservation, kept for a retry.
+        reservation_id: ReservationId,
+        /// Why the save failed.
+        #[source]
+        source: super::PersistenceError,
+    },
+
     /// P2: rid was found in `in_flight` at submit entry — a second
     /// `submit` is being attempted while the first is still
     /// daemon-pending.

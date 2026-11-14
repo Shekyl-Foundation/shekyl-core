@@ -117,9 +117,11 @@ impl<
             SetTxNoteOutcome::Applied { previous, stored } => {
                 // Save under the guard we already hold; on failure the undo
                 // runs before we return, still exclusive.
-                self.save_or_rollback(&mut guard, |state| {
+                let durability = self.save_or_rollback(&mut guard, |state| {
                     state.ledger.tx_meta.restore_note(previous);
                 })?;
+                // A note does not broadcast. An applied write stands.
+                super::super::dispatch_durability::accept_applied(durability);
                 Ok(stored)
             }
         }

@@ -124,9 +124,15 @@ pub enum StakeSelfCertFailure {
 /// [`ChangePasswordError`] on [`crate::engine::Engine::change_password`](crate::engine::Engine::change_password).
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
-    /// On-disk wallet envelope / atomic-write failure.
+    /// On-disk wallet envelope / atomic-write failure. The target was not
+    /// replaced.
     #[error("wallet file error: {0}")]
     WalletFile(#[from] shekyl_engine_file::WalletFileError),
+
+    /// The rename landed and the parent-directory fsync did not. The write
+    /// is applied, so the in-memory record stays; a broadcast must not.
+    #[error("wallet write applied but its crash-durability was not confirmed")]
+    DurabilityUnconfirmed,
 
     /// Prefs sidecar load/save/HMAC failure.
     #[error("prefs error: {0}")]

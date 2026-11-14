@@ -143,14 +143,13 @@ use crate::error::WalletFileError;
 /// filesystem journals the directory entry could revert the rename (the same
 /// window any program that does not fsync the parent dir already lives with).
 ///
-/// No caller branches on this today; it is **returned rather than swallowed**
-/// so a durability-sensitive path — e.g. write-once keys-file creation — can
-/// later choose to fail loud on `Unconfirmed` without re-litigating the
-/// atomic-write contract. It is deliberately not an error: the write is
-/// applied, so surfacing it as `Err` would force every caller to unwind an
-/// already-committed write.
+/// The dispatch mint branches on it: only [`Durability::Confirmed`] authorizes
+/// a broadcast (`commit_dispatch`). It is deliberately not an error: the write
+/// is applied, so surfacing it as `Err` would force every caller to unwind an
+/// already-committed write. A caller that does not broadcast treats either
+/// variant as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Durability {
+pub enum Durability {
     /// The write is applied and the parent-directory fsync succeeded.
     Confirmed,
     /// The write is applied, but the post-rename parent-directory fsync

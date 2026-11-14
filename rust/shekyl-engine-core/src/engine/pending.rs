@@ -109,7 +109,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::engine::{
     diagnostics::DiscardReason,
-    error::{PendingTxError, SendError, SubmitError},
+    error::{PendingTxError, SendError},
     traits::{DaemonEngine, LedgerEngine, PendingTxEngine, RefreshEngine},
     Engine, EngineSignerKind,
 };
@@ -272,6 +272,42 @@ pub enum SubmitOutcome {
         /// release-path metadata (§7.2), never settlement truth.
         height: u64,
     },
+}
+
+/// What [`crate::engine::Engine::submit_pending_tx`] returns on success:
+/// the daemon's verdict, and whether the wallet saved what that verdict
+/// changed.
+///
+/// The dispatch itself was saved before the bytes left. A submit whose
+/// dispatch save fails sends nothing and returns
+/// [`SubmitError::DispatchNotSaved`](crate::engine::error::SubmitError::DispatchNotSaved).
+/// The verdict save runs after the bytes left, under the same ledger
+/// write guard as the journal edit, so its failure cannot undo the send:
+/// it is reported here. The send stands, and the next successful save
+/// writes the baseline. Until then a restart treats the send as one whose
+/// verdict never arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubmitReceipt {
+    /// The daemon's verdict.
+    pub outcome: SubmitOutcome,
+    /// `false` when the save of the verdict's changes failed. The cause
+    /// is in the wallet's log.
+    pub verdict_saved: bool,
+}
+
+impl SubmitReceipt {
+    /// The locally computed canonical tx id of [`Self::outcome`].
+    pub fn hash(&self) -> TxHash {
+        self.outcome.hash()
+    }
+}
+
+impl PartialEq<SubmitOutcome> for SubmitReceipt {
+    /// Verdict equality. [`Self::verdict_saved`] is not part of it: a
+    /// test that cares about the save reads the field.
+    fn eq(&self, other: &SubmitOutcome) -> bool {
+        self.outcome == *other
+    }
 }
 
 impl SubmitOutcome {
@@ -951,57 +987,6 @@ pub(crate) fn discard_pending_tx_in_state(
 // `Engine<S, D, L, E, R, P, F>` pending dispatch.
 // ---------------------------------------------------------------------------
 
-use std::future::Future;
-use std::pin::pin;
-use std::task::{Context, Poll, Waker};
-
-use super::error::AmbiguousErrorKind;
-
-/// Poll a future that the V3.0 sync `Engine` API expects to complete
-/// immediately.
-///
-/// Stage 1 [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
-/// satisfies this by returning `std::future::ready` from `build` /
-/// `submit`. A future `PendingTxEngine` that performs real async I/O
-/// must pair with async `Engine` methods (or documented `block_on`
-/// policy) — the sync wrappers return structured errors rather than
-/// panicking when a future returns [`Poll::Pending`].
-fn poll_immediate_build<F>(future: F) -> Result<PendingTx, SendError>
-where
-    F: Future<Output = Result<PendingTx, SendError>>,
-{
-    let mut cx = Context::from_waker(Waker::noop());
-    let mut pinned = pin!(future);
-    match pinned.as_mut().poll(&mut cx) {
-        Poll::Ready(val) => val,
-        // Production `LocalPendingTx::build` awaits FCMP++ assembly and
-        // parks on the engine-owned build permit when another build is
-        // in flight — both are legitimate `Poll::Pending` reasons that
-        // the sync wrapper cannot drive. Callers on an async runtime
-        // must use `build_pending_tx_async`.
-        Poll::Pending => Err(SendError::BuildInvariant {
-            reason: "sync Engine::build_pending_tx requires an immediately-ready \
-                     PendingTxEngine future (async assembly or build-permit \
-                     contention — use build_pending_tx_async)",
-        }),
-    }
-}
-
-fn poll_immediate_submit<F>(id: ReservationId, future: F) -> Result<SubmitOutcome, SubmitError>
-where
-    F: Future<Output = Result<SubmitOutcome, SubmitError>>,
-{
-    let mut cx = Context::from_waker(Waker::noop());
-    let mut pinned = pin!(future);
-    match pinned.as_mut().poll(&mut cx) {
-        Poll::Ready(val) => val,
-        Poll::Pending => Err(SubmitError::DaemonAmbiguous {
-            kind: AmbiguousErrorKind::DaemonUnavailable,
-            reservation_id: id,
-        }),
-    }
-}
-
 #[allow(private_bounds)]
 impl<
         S: EngineSignerKind,
@@ -1030,69 +1015,16 @@ impl<
 
     /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
     ///
-    /// `&self` (W-B step 1): build's mutation runs under the
-    /// implementor's interior mutability, and the production
-    /// `LocalPendingTx` serializes builds on an engine-owned permit of
-    /// one — so embedders may call this through a shared borrow (e.g. a
-    /// `RwLock` read guard) without changing the network observable.
-    pub fn build_pending_tx(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
-        poll_immediate_build(self.pending.build(request.clone()))
-    }
-
-    /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
-    ///
-    /// `seen_gen` is the [`PendingTx::content_gen`] the consumer last reviewed;
-    /// it gates broadcast against a submit-time re-anchor that changed the
-    /// authorized content (CT-5d, [`docs/design/CT5D_REANCHOR.md`] §4).
-    ///
-    /// Success is the identity-bearing [`SubmitOutcome`] — fresh accept,
-    /// pool-resident duplicate, or the daemon's already-in-chain claim
-    /// with its claimed height (all sharing the §2.5 lock disposition).
-    ///
-    /// `&self` (same interior-mutability insight as build, W-B review):
-    /// submit mutates only under the implementor's own state lock and
-    /// awaits the daemon RPC without needing an exclusive Engine borrow.
-    pub fn submit_pending_tx(
-        &self,
-        id: ReservationId,
-        seen_gen: u64,
-    ) -> Result<SubmitOutcome, SubmitError> {
-        poll_immediate_submit(id, self.pending.submit(id, seen_gen))
-    }
-
-    /// Async counterpart to [`Self::build_pending_tx`].
-    ///
     /// The production [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
-    /// `build` performs real async I/O — it awaits the curve-tree actor's
-    /// `AssembleTx` to assemble the FCMP++ membership path — so the sync wrapper's
-    /// immediate-ready contract ([`poll_immediate_build`]) cannot drive it and
-    /// returns `BuildInvariant`. Callers already on an async runtime use this method
-    /// (the "async `Engine` methods" pairing the sync wrapper's doc anticipates).
+    /// `build` performs real async I/O: it awaits the curve-tree actor's
+    /// `AssembleTx` to assemble the FCMP++ membership path.
     /// `&self` (W-B step 1): the slow FCMP++ membership assembly inside
     /// build no longer needs the embedder's exclusive Engine borrow —
     /// read RPCs proceed while a build runs. Serialization of the build
     /// itself (and its `AssembleTx` network observable) is owned by the
     /// production implementor's permit of one, not by the borrow.
-    pub async fn build_pending_tx_async(
-        &self,
-        request: &TxRequest,
-    ) -> Result<PendingTx, SendError> {
+    pub async fn build_pending_tx(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
         self.pending.build(request.clone()).await
-    }
-
-    /// Async counterpart to [`Self::submit_pending_tx`] — the production submit
-    /// awaits the daemon RPC. See [`Self::build_pending_tx_async`].
-    ///
-    /// `&self`: the daemon round-trip is implementor-owned interior
-    /// mutability, so embedders may hold a shared Engine borrow across
-    /// submit (wallet-RPC uses a read guard) without stalling concurrent
-    /// read RPCs for the duration of the network call.
-    pub async fn submit_pending_tx_async(
-        &self,
-        id: ReservationId,
-        seen_gen: u64,
-    ) -> Result<SubmitOutcome, SubmitError> {
-        self.pending.submit(id, seen_gen).await
     }
 
     /// Discard a reservation via [`PendingTxEngine::discard`].

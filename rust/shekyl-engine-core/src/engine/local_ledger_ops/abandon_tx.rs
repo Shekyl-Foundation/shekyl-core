@@ -128,9 +128,11 @@ impl<
                 // Fail closed under the same exclusive guard: restore the
                 // pre-abandon shape. Abandon never touched baseline/locks,
                 // so state + pending is a full undo.
-                self.save_or_rollback(&mut guard, |state| {
+                let durability = self.save_or_rollback(&mut guard, |state| {
                     state.ledger.unabandon_send(&key, previous, was_pending);
                 })?;
+                // Abandon does not broadcast. An applied write stands.
+                super::super::dispatch_durability::accept_applied(durability);
                 Ok(AbandonTxOutcome::Abandoned)
             }
         }
@@ -232,6 +234,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state,
+                tx_bytes: None,
             },
         );
     }
@@ -303,6 +306,7 @@ mod tests {
                     state: SendState::Confirmed {
                         height: shekyl_types::BlockHeight::from_raw(25),
                     },
+                    tx_bytes: None,
                 },
             );
         }

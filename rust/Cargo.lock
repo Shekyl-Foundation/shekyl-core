@@ -4431,10 +4431,12 @@ name = "shekyl-engine-file"
 version = "3.1.0"
 dependencies = [
  "criterion",
+ "curve25519-dalek",
  "fd-lock",
  "gungraun",
  "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-curve-primitives",
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-types",

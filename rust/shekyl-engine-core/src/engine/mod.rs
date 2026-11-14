@@ -235,6 +235,7 @@ pub(crate) mod claim_dispatch;
 pub(crate) mod claim_orchestrator;
 pub mod daemon;
 pub(crate) mod diagnostics;
+pub(crate) mod dispatch_durability;
 pub(crate) mod drain_amount;
 /// F-D2 drain assembly (`ARCHIVAL_P_DRAIN.md` §DS-PR-1): the `P`→principal
 /// value-out transaction builder. Produces a **transfer-shaped** tx (two
@@ -278,6 +279,7 @@ pub(crate) mod drain_read;
 /// vector — a guarded module the M1 import-check arm keeps blind to the
 /// lineage tag and the persisted funding record.
 pub(crate) mod drain_select;
+pub mod held_sends;
 /// SP-T2 (DQ-T2.3): daemon-posture selection — the no-silent-③ invariant (a
 /// posture is named, never defaulted; no-choice + local-unreachable *refuses*,
 /// never falls back to a remote/third-party node). §2b build invariant 3.
@@ -392,6 +394,7 @@ pub(crate) mod stake_persist;
 /// (distinct inner types → compile error on cross-apply). Design-now; real checks
 /// wire in cold-start / 2d wiring.
 pub(crate) mod stake_timing;
+pub mod submit;
 /// Transfer / pending-tx workflow (extracted from the former monofile
 /// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
 pub mod transfer;
@@ -473,6 +476,7 @@ pub use shekyl_address::ShekylAddress;
 // `shekyl-scanner`; do not wrap or redefine (type-placement).
 pub use shekyl_scanner::ScannableBlock;
 
+pub use held_sends::{HeldSend, HeldSends, ResendError};
 pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
 };
@@ -481,6 +485,7 @@ pub use pending::{
     SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
     DEFAULT_RESERVATION_TTL,
 };
+pub use submit::SubmitReceipt;
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
@@ -730,7 +735,8 @@ pub struct Engine<
     /// entry point itself takes `&self`. The guard is the *driver's*
     /// lock, independent of the ledger `RwLock`, so a tick never blocks
     /// the merge write-lock.
-    submit_driver: tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
+    pub(in crate::engine) submit_driver:
+        tokio::sync::Mutex<submit_lifecycle::SubmitLifecycleDriver>,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
@@ -1298,8 +1304,10 @@ impl<
     /// `WatchdogHost` implementor); fault-injection test wrappers that do
     /// not implement the host contract do not expose this entry point.
     pub async fn run_submit_lifecycle_tick(&self) {
+        let commit =
+            dispatch_durability::EngineLedgerCommit::new(&self.persistence, self.state_wrap_key());
         let mut driver = self.submit_driver.lock().await;
-        driver.tick(&self.pending, &self.daemon).await;
+        driver.tick(&self.pending, &self.daemon, &commit).await;
     }
 }
 

@@ -149,7 +149,11 @@ use crate::{
 /// `24` (2026-11-09): [`crate::transfer::UnspendableReason`] names each
 /// multisig receive refusal (`LEDGER_BLOCK_VERSION` 14). A version-23
 /// wallet file is refused; pre-genesis does not migrate it.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 24;
+///
+/// `25` (2026-11-12, A19): `SendRecord::tx_bytes` — the send journal saves
+/// each send's signed bytes at dispatch (`SEND_JOURNAL_BLOCK_VERSION` 6).
+/// A version-24 wallet file is refused; pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 25;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -421,10 +425,21 @@ impl WalletLedger {
         fee: u64,
         recipients: Vec<SendRecipient>,
         inputs: Vec<SendInputRef>,
+        tx_bytes: Vec<u8>,
     ) {
         let height = self.ledger.height();
         self.send_journal
-            .record_dispatched(txid, height, fee, recipients, inputs);
+            .record_dispatched(txid, height, fee, recipients, inputs, tx_bytes);
+    }
+
+    /// Undo a dispatch whose save failed, before its bytes left: the
+    /// journal row and the retained secret go, and the pending reference
+    /// [`Self::record_retained_tx_key`] added goes with them. Runs under
+    /// the same write guard as the record and the failed save, so no
+    /// other path can have advanced the row in between.
+    pub fn undo_unsaved_dispatch(&mut self, txid: &[u8; 32]) {
+        self.send_journal.undo_dispatch(txid);
+        self.retire_retained_tx_key(txid);
     }
 
     /// Accepting-verdict write for the journal (`WALLET_SEND_RECORD.md`
@@ -1247,6 +1262,7 @@ mod tests {
                     }],
                     lock_baseline: Some(25),
                     state: SendState::Dispatched,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1281,6 +1297,7 @@ mod tests {
                 inputs: vec![SendInputRef { gindex, amount: 1 }],
                 lock_baseline: Some(25),
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
     }
@@ -1411,6 +1428,7 @@ mod tests {
                     ],
                     lock_baseline: Some(25),
                     state: SendState::Dispatched,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1447,6 +1465,32 @@ mod tests {
     /// sole write (C2) — the derived lock view arms with it, and
     /// nothing is written to any ledger row. This is the site both
     /// fresh accept and AlreadyInChain share.
+    /// A dispatch whose save failed is undone whole under the same
+    /// guard: no journal row, no retained secret, no pending reference —
+    /// so the next unrelated save cannot write a send the user was told
+    /// did not go.
+    #[test]
+    fn undo_unsaved_dispatch_removes_row_secret_and_pending_reference() {
+        let txid = [0x46; 32];
+        let mut w = WalletLedger::empty();
+        w.record_retained_tx_key(
+            txid,
+            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5C; 32])),
+        );
+        w.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), vec![0xAA]);
+        assert!(w.send_journal.rows.contains_key(&txid));
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        assert!(w.sync_state.pending_tx_hashes.contains(&txid));
+
+        w.undo_unsaved_dispatch(&txid);
+
+        assert!(!w.send_journal.rows.contains_key(&txid));
+        assert!(!w.tx_meta.tx_keys.contains_key(&txid));
+        assert!(!w.sync_state.pending_tx_hashes.contains(&txid));
+        w.check_invariants()
+            .expect("an undone dispatch leaves no orphan");
+    }
+
     #[test]
     fn stamp_send_lock_baseline_arms_the_derived_view() {
         use crate::send_journal_block::{SendInputRef, SendRecipient};
@@ -1471,6 +1515,7 @@ mod tests {
                 gindex: 300,
                 amount: 10,
             }],
+            vec![0xAA],
         );
         assert!(
             w.spend_locks().is_empty(),
@@ -1542,6 +1587,7 @@ mod tests {
                 ],
                 lock_baseline: Some(25),
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
 
@@ -1590,6 +1636,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state: SendState::PresumedDead,
+                tx_bytes: None,
             },
         );
         w.check_invariants().expect("pre-abandon shape is valid");
@@ -1648,6 +1695,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
 
@@ -1687,6 +1735,7 @@ mod tests {
                 state: SendState::Confirmed {
                     height: BlockHeight::from_raw(30),
                 },
+                tx_bytes: None,
             },
         );
 
@@ -1736,6 +1785,7 @@ mod tests {
                     inputs: vec![SendInputRef { gindex, amount: 1 }],
                     lock_baseline: baseline,
                     state: SendState::Abandoned,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1792,6 +1842,7 @@ mod tests {
                 inputs: Vec::new(),
                 lock_baseline: None,
                 state: SendState::Abandoned,
+                tx_bytes: None,
             },
         );
 
@@ -1835,6 +1886,7 @@ mod tests {
                 inputs: Vec::new(),
                 lock_baseline: None,
                 state: SendState::PresumedDead,
+                tx_bytes: None,
             },
         );
 

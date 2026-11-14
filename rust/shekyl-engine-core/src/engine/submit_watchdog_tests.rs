@@ -78,6 +78,7 @@ fn journal_row(
                 .collect(),
             lock_baseline,
             state,
+            tx_bytes: None,
         },
     );
 }
@@ -201,6 +202,7 @@ fn release_confirmed_absent_clears_only_the_named_tx() {
                     .collect(),
                 lock_baseline: Some(4_000),
                 state: shekyl_engine_state::SendState::Dispatched,
+                tx_bytes: None,
             },
         );
     }
