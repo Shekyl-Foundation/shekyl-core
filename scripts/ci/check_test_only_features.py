@@ -343,7 +343,9 @@ PERMANENT: dict[tuple[str, str], str] = {
         "shekyl-chain-ingest",
         "bench-internals",
     ): "the bench capture's selector: scripts/bench/capture_rust_baseline.sh "
-    "passes it, with `harness`, to build benches/block_path_iai.rs, and it "
+    "passes it, with `harness`, to build benches/block_path_iai.rs and the "
+    "four benches that read or serve from the same store (serve_bodies, "
+    "levin_bodies, block_template, wallet_block_read), and it "
     "compiles bench_support.rs, the connector's form, validate and connect "
     "calls made on one thread over a committed corpus. It turns on the "
     "optional tempfile edge for the bench store's directory and enables no "
