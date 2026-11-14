@@ -33,6 +33,7 @@
 #![deny(unsafe_code)]
 
 pub mod ceremony;
+pub mod envelope;
 pub mod group_descriptor;
 pub mod intent;
 pub mod invariants;
@@ -43,6 +44,10 @@ pub use ceremony::{
     CeremonyError, ConsumedNonce, FrostCeremony, NonceCounterError, NonceCounterSink, SpendRequest,
     SpendResponse,
 };
+pub use envelope::{
+    open_envelope, seal_envelope, ImportRefusal, OpenedEnvelope, SealError, MAX_BODY_LEN,
+    SENDER_SIG_LEN,
+};
 pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use intent::{
     ChainStateFingerprint, SpendIntent, SpendIntentError, MAX_ADDRESS_LEN, MAX_INPUTS,
@@ -52,9 +57,7 @@ pub use invariants::{
     check_pre_signing_invariants, InvariantCheckInput, InvariantCheckResult, InvariantId,
 };
 pub use member_file::{MemberFile, MemberFileError, MemberSecrets};
-pub use messages::{
-    DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope, MAX_PAYLOAD_LEN, MAX_SIG_LEN,
-};
+pub use messages::MessageType;
 
 #[cfg(test)]
 mod tests;

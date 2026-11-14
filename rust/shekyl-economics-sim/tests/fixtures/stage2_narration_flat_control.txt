@@ -19,7 +19,7 @@ stuffing_attack             2       21891404         127.64      42545          
 stake_concentration        10      105987270         631.67     210555             6.32
 mass_unstaking              5       53427270         316.65     105549             3.17
 chain_bootstrap             5       39891330         235.52      78506             2.36
-late_chain_tail             5      604038598        3707.62    1235874            37.08
+late_chain_tail             5      604034362        3707.60    1235866            37.08
 high_history_low_activity     60      526470776        3217.90    1072633            32.18
 
 Reading: `final_n` is the D2 operand at horizon; `final_burden` is the
@@ -96,7 +96,7 @@ stuffing_attack      90%/10000000       inf     inf     inf       inf     inf   
 stake_concentration    90%/500000    382.96  155.01   77.81    384.38  155.58   78.10     466.87   468.60
 mass_unstaking         90%/500000   1659.62  671.75  337.21   1660.57  672.13  337.41    2023.28  2024.44
 chain_bootstrap        90%/500000   2231.31  903.15  453.37   2232.26  903.53  453.57    2720.24  2721.40
-late_chain_tail        90%/500000     11.89    4.81    2.42     41.70   16.88    8.47      14.49    50.84
+late_chain_tail        90%/500000     11.89    4.81    2.42     41.70   16.88    8.47      14.50    50.84
 high_history_low_act   90%/500000      0.29    0.12    0.06      0.97    0.39    0.20       0.35     1.18
   -> rate cols each = [0.02, 0.05, 0.1] (10% binding, last). The D2 case is where the
 best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation
@@ -135,7 +135,7 @@ stuffing_attack         1293851    y31       y43   never       y36     y41      
 stake_concentration     1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
 mass_unstaking          1293851    y31       y43   never       y36     y41       y32     y34   77.81 8.35 1.27 0.27 0.11 0.07
 chain_bootstrap         1265364    y31       y43   never       y36     y41       y32     y34   89.28 8.92 1.33 0.28 0.11 0.07
-late_chain_tail        14619989     y3       y59   never       y24   never       y12     y43   1.19 0.59 0.39 0.30 0.24 0.20
+late_chain_tail        14619980     y3       y59   never       y24   never       y12     y43   1.19 0.59 0.39 0.30 0.24 0.20
 high_history_low_act    1072633    y32       y43     y59       y36     y39       y32     y34   77.81 8.35 1.34 0.28 0.10 0.06
   -> ORDINARY FEE per transaction, mean over the year (SKL), at y10/20/30/40/50/60.
 The run's fee arm made visible: a year's fees are its traffic times this.
@@ -382,35 +382,35 @@ A6 — swing / band width (§12.2): the empirical check on §6.0's STRUCTURAL cl
 that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by
 operand). Binding input is a W9 FLOOD, not organic growth — a stuffer buying
 archival bytes at the block-weight ceiling is the fastest n can physically move.
-Ceiling: 300000 B/block floor x4 surge = 1200000 B, reached after
+Ceiling: 300000 B/block floor x3 surge = 900000 B, reached after
 ~102 blocks of sustained flood (1.0% of an epoch); epoch = 10000 blocks;
 reorg reach = 720 blocks. Curve = steepest candidate (asymptote 90%,
 knee 500000) — a cliff would surface there first.
         n     Δn/epoch   Δshare/epoch   Δshare %pts/ep %pts/ep w/penalty reorg Δshare%pt
-        0         3865          10049          1.0049%           2.0100%         0.0722%
-   100000         3877          10080          1.0080%           2.0160%         0.0725%
-   500000         3877              0          0.0000%           0.0000%         0.0000%
-  2250000         3808              0          0.0000%           0.0000%         0.0000%
- 10000000         3808              0          0.0000%           0.0000%         0.0000%
+        0         2832           7363          0.7363%           1.5074%         0.0527%
+   100000         2907           7558          0.7558%           1.5119%         0.0543%
+   500000         2907              0          0.0000%           0.0000%         0.0000%
+  2250000         2844              0          0.0000%           0.0000%         0.0000%
+ 10000000         2844              0          0.0000%           0.0000%         0.0000%
   -> Read: 'Δshare %pts/ep' is the MAXIMUM the staker share can move in one
 settlement epoch when an adversary floods at the surge ceiling for the whole
-epoch — the worst case for §6.0's no-swing claim. Worst observed: 1.0080 points.
+epoch — the worst case for §6.0's no-swing claim. Worst observed: 0.7558 points.
 The reorg column bounds the only DOWN-swing that exists (monotonicity holds in
 the canonical chain; a reorg can re-open at most 720 blocks' worth).
-VERDICT: see the slew reading below.
+VERDICT: worst penalty-free slew 0.7558 points an epoch at S = 3, under the 1.0 gate
   -> §6.0/§6.1 SEPARATED, because they are different claims:
 (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is
 monotone and a single shard never moves it discontinuously; the family's
 `no_cliff_bounded_slope` test pins that, and the reorg column shows the only
-down-swing reaches 0.0725 points. W8 stands armed BY OPERAND.
-(b) ADVERSARIAL SLEW RATE (economic) — 1.0080 pts/epoch penalty-free, 2.0160
+down-swing reaches 0.0543 points. W8 stands armed BY OPERAND.
+(b) ADVERSARIAL SLEW RATE (economic) — 0.7558 pts/epoch penalty-free, 1.5119
 pts/epoch if the flooder also compensates the miner penalty (the legal 2x
 limit). MEASURED against blockchain.cpp's ArticMine algorithm, not derived —
 the ceiling a flood can force at maximum effort. A rate, not a cliff,
 and it is bounded, monotone and one-directional — but it is NOT invisible,
 which is the honest correction to a purely structural reading of §6.0.
 It is also PRICED, and the legal-limit price is dominated by a term that is
-NOT the fees: ~7174 SKL/epoch in stuffing fees at the A4 rate, PLUS
+NOT the fees: ~5380 SKL/epoch in stuffing fees at the A4 rate, PLUS
 ~5120000 SKL/epoch of miner-reward penalty compensation — at B = 2M the
 production penalty formula (get_block_reward) pays the miner EXACTLY ZERO,
 so the flooder must fund the whole block reward, every block, or no rational
@@ -436,7 +436,7 @@ stuffing_attack          0.0000         0.0000         0.0000          0/    0/ 
 stake_concentration      0.0000         0.2461         0.4859      84548/100000/10
 mass_unstaking           0.0000         0.2461         0.4859      84548/100000/10
 chain_bootstrap          0.0000         0.3484         0.6585      36504/100000/10
-late_chain_tail          0.0000         1.7469         8.6914     992527/100000/10
+late_chain_tail          0.0000         1.7469         8.6915     992518/100000/10
 high_history_low_act     0.0000         0.2461         0.4859      84548/100000/10
   -> W9 gate (realistic hHold=4 end): FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8). Flat-25 = 0 (no share lever): the
 premium is purely the escalation's. A steeper share (higher asymptote /
@@ -458,7 +458,7 @@ sustained_growth            4880.3  54.21%   1.0     26456.3   92522.4 15000.00 
 stake_concentration         4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
 mass_unstaking              4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
 chain_bootstrap             5111.6  73.28%   1.0     37456.5   92522.4 15000.00      0.2      0.12
-late_chain_tail           204984.8   9.16%   1.0    187790.8   92497.7 15000.00      1.9      0.58
+late_chain_tail           204984.8   9.16%   1.0    187792.3   92497.7 15000.00      1.9      0.58
 high_history_low_act        4880.3  54.21%   1.0     26456.3   92522.4 15000.00      0.1      0.08
   -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is
 pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker

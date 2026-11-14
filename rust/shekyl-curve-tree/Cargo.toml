@@ -71,6 +71,11 @@ test-tamper = []
 
 [dev-dependencies]
 ciphersuite = "0.4"
+# The reference-window predicates are pinned against CEN-I11 itself
+# (`reference::tests::the_window_is_cen_i11`): the wallet's window is
+# the consensus window, measured from the connecting height, or the test
+# fails. Test-only; `shekyl-chain-rules` does not reach this crate.
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 rand_chacha = { workspace = true }
 serde_json = { workspace = true }

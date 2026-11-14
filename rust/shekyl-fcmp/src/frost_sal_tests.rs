@@ -150,7 +150,7 @@ fn ps(indices: &[u8]) -> Vec<Participant> {
 /// moves them, or the 0-based → 1-based conversion, shows here.
 #[test]
 fn every_member_of_a_split_loads_as_its_participant() {
-    for (n, m) in [(3, 2), (5, 3), (1, 1), (5, 5)] {
+    for (n, m) in [(3, 2), (5, 3), (2, 2), (5, 5)] {
         let g = group(n, m);
         for i in 0..n {
             let keys = &g.keys[&participant(i)];
@@ -180,7 +180,7 @@ fn a_share_loaded_at_the_wrong_index_is_refused() {
 
 #[test]
 fn no_split_exists_for_a_shape_no_address_carries() {
-    for (n, m) in [(0, 0), (3, 0), (3, 4), (6, 3)] {
+    for (n, m) in [(0, 0), (3, 0), (1, 1), (3, 1), (3, 4), (6, 3)] {
         assert_eq!(
             dealer_split(n, m, &mut OsRng).err(),
             Some(FrostKeyError::GroupShape { n, m })

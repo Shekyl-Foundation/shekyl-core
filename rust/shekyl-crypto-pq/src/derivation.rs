@@ -17,6 +17,7 @@
 
 use hkdf::Hkdf;
 use sha2::Sha512;
+use zeroize::Zeroizing;
 
 use fips204::ml_dsa_65;
 
@@ -43,6 +44,49 @@ pub fn keygen_from_seed(
     let mut rng = crate::seeded_rng::SeededRng::from_seed(seed);
     ml_dsa_65::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
+}
+
+/// A hybrid Ed25519 + ML-DSA-65 keypair from 64 seed bytes: the first half
+/// is the Ed25519 seed, the second the ML-DSA-65 seed ([`keygen_from_seed`]).
+///
+/// The one place a 64-byte hybrid signing seed becomes a keypair: a multisig
+/// member's per-output signing key (`multisig_output`) and its long-term
+/// envelope key (`multisig_envelope`) both come through here. The member
+/// derivation's KAT pins the result.
+pub(crate) fn hybrid_keypair_from_seed(
+    seed: &[u8; 64],
+) -> Result<
+    (
+        crate::signature::HybridPublicKey,
+        crate::signature::HybridSecretKey,
+    ),
+    CryptoError,
+> {
+    use ed25519_dalek::SigningKey;
+    use fips204::traits::SerDes;
+
+    let ed_seed: Zeroizing<[u8; 32]> =
+        Zeroizing::new(seed[..32].try_into().expect("first half of 64"));
+    let ml_seed: Zeroizing<[u8; 32]> =
+        Zeroizing::new(seed[32..].try_into().expect("second half of 64"));
+
+    let ed_signing = SigningKey::from_bytes(&ed_seed);
+    let (ml_pk, ml_sk) = keygen_from_seed(&ml_seed)?;
+    let public = crate::signature::HybridPublicKey {
+        ed25519: ed_signing.verifying_key().to_bytes(),
+        ml_dsa: ml_pk.into_bytes().to_vec(),
+    };
+    // The serialized halves are secret. `to_bytes` / `into_bytes` return
+    // them by value; wrapping that value in `Zeroizing` wipes the source
+    // array when the copy into `HybridSecretKey` is done (rule 35).
+    let ed_sk_bytes = Zeroizing::new(ed_signing.to_bytes());
+    let ml_sk_bytes = Zeroizing::new(ml_sk.into_bytes());
+    let mut ed25519 = vec![0u8; ed_sk_bytes.len()];
+    ed25519.copy_from_slice(ed_sk_bytes.as_slice());
+    let mut ml_dsa = vec![0u8; ml_sk_bytes.len()];
+    ml_dsa.copy_from_slice(ml_sk_bytes.as_slice());
+    let secret = crate::signature::HybridSecretKey { ed25519, ml_dsa };
+    Ok((public, secret))
 }
 
 /// Derive the canonical hybrid public key bytes from combined shared secret and

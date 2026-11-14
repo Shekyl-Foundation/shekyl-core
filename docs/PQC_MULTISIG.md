@@ -131,8 +131,8 @@ sign-off before addition.
 | Malicious prover | Tries to construct invalid or substitute proof | §2.7 I3, I4 signer-side proof verification before signing |
 | Malicious assembler | Tries to broadcast tampered tx | §2.7 I6 tx-hash commitments |
 | Network observer | Tries to identify groups, link spends | §6 file-based addresses; §7 per-output ephemeral keys; §12 encrypted transport |
-| Malicious relay operator | Drops, reorders, injects messages | §12.4 mandatory multi-relay with operator uniqueness; §13.3 heartbeat protocol |
-| Network partition | Causes state divergence | §13.4 CounterProof recovery |
+| Whoever carries a ceremony file | Reads, drops, reorders, or injects files | §12.1 files are sealed and signed by their sender; §12.5 nothing but the format version is in the clear; a dropped file stalls the session until it is sent again, and the session ends with its reference block (§9.6) |
+| Network partition | Causes state divergence | §9.3 chain state fingerprint: a member whose view differs does not sign until it has synced |
 | Scanner resource exhaustion | Burns scanner CPU via griefing outputs | §7.6 per-sender griefing scores + hard caps |
 
 ### 3.2 Out of scope
@@ -172,7 +172,7 @@ consensus-layer fix would require a chain-anchored group registry
 | Key substitution by a signer | `verify_multisig`: each revealed key must hash to the committed `h_i` at its index (§7.5) |
 | Blob truncation/padding | Exact-length parses in `MultisigKeyBlob` / `MultisigSigContainer`; CEN-I16's floor and ceiling |
 | Replay across groups | **address-fingerprint** binding in the canonical signing intent (I1; §5.3 — replaces the retired `group_id`) |
-| Replay within group | `intent_id` + `tx_counter` + `expires_at` + `reference_block_hash` + `kem_randomness_seed` freshness |
+| Replay within group | The reference block's age (§9.6), the held nonce bound to one intent hash, consensus key images; one live intent per input (§9.2 item 6) |
 
 ---
 
@@ -205,8 +205,13 @@ that role.
 
 A group is defined by:
 
-- `n_total`: total signers, `1 ≤ n_total ≤ MAX_MULTISIG_PARTICIPANTS`
-- `m_required`: threshold, `1 ≤ m_required ≤ n_total`
+- `n_total`: total signers, `2 ≤ n_total ≤ MAX_MULTISIG_PARTICIPANTS`
+- `m_required`: threshold, `2 ≤ m_required ≤ n_total`
+  (`MIN_MULTISIG_THRESHOLD`, R-11). With `m = 1` the FROST polynomial is a
+  constant: every member holds the whole of `y_group`, the PQ leg is 1-of-N
+  and the ceremony has no responder — a shared key under a multisig label.
+  The address, the dealer split, the on-chain container (CEN-I16/I18) and
+  the spend intent each refuse it.
 - `group_version`: `0x01` for V3.1 (reserved for future rotation)
 - `spend_auth_version`: **`0x02` for Option E′** (product path —
   threshold FROST SAL on `y`; dealer-mode). **`0x01` is never issued**
@@ -311,7 +316,7 @@ Concrete steps for participants forming a new group:
 8. Participants store group state: their own keypairs, the N pubkeys of
    others, the **address fingerprint** (§5.3), group_version,
    spend_auth_version, threshold parameters, DKG-derived shared secret,
-   acknowledgments, and an initial `tx_counter = 0`.
+   and acknowledgments.
 
 ---
 
@@ -345,8 +350,8 @@ MultisigAddressPayload {
     group_version:       u8   (= 0x01)
     spend_auth_version:  u8   (= 0x02, Option E′)
     network_byte:        u8
-    n_total:             u8   (1..=MAX_MULTISIG_PARTICIPANTS = 5)
-    m_required:          u8   (1..=n_total)
+    n_total:             u8   (2..=MAX_MULTISIG_PARTICIPANTS = 5)
+    m_required:          u8   (2..=n_total)
 
     b_group:             [u8; 32]   // B = b·G. Every member holds b.
     y_group:             [u8; 32]   // Y = y·T. y is FROST-shared, M-of-N.
@@ -387,7 +392,6 @@ the short identifier participants compare.
 
 | N | Canonical bytes |
 |---|---|
-| 1 | 2,502 B |
 | 2 | 3,718 B |
 | 3 | 4,934 B |
 | 5 | 7,366 B |
@@ -483,12 +487,12 @@ explicitly out of V3.1 scope and would be a consensus change.
 ### 6.6 The member file
 
 The dealer gives each member one file (`shekyl-multisig::member_file`,
-layout version 1). It holds everything that member needs to receive and to
+layout version 2). It holds everything that member needs to receive and to
 sign:
 
 | Field | Size | What it is |
 |---|---|---|
-| magic, version | 4 + 1 B | `"SKMF"`, `1` |
+| magic, version | 4 + 1 B | `"SKMF"`, `2` |
 | address payload | `u32_le` length + §6.2 payload | the group's public state and identity |
 | `member_index` | 1 B | `0..n` |
 | `b` | 32 B | the group-plaintext spend scalar |
@@ -496,7 +500,9 @@ sign:
 | verification shares | `n × 32` B | every member's, member order |
 | group KEM secret | 2432 B | X25519 (32) ‖ ML-KEM-768 decapsulation key (2400) |
 | member KEM secret | 2432 B | this member's own, same layout |
-| transport secret | 32 B | keys the ceremony blobs (§12) |
+| transport secret | 32 B | keys the ceremony files (§12) |
+| envelope secret | 64 B | this member's long-term envelope key: Ed25519 seed ‖ ML-DSA-65 seed (R-6) |
+| envelope public keys | `n × 1996` B | every member's, member order |
 
 `y_share` is the Shamir share at FROST participant `member_index + 1`.
 `shekyl_fcmp::frost_sal::threshold_keys` loads it, with the verification
@@ -514,6 +520,16 @@ with salt `salt_for(network)` (the network's `name_id`, then
 seed, and info `shekyl/multisig-transport-v1`. The dealer derives it once
 and writes the same value into every member file. The file stores the bytes;
 it does not derive them.
+
+The **envelope keys** are minted by the dealer, one keypair per member from
+fresh randomness (`shekyl_crypto_pq::multisig_envelope::mint_multisig_envelope_keypair`).
+They derive from no spend secret and sign nothing but ceremony files: a
+member signs every file it sends with its secret, and every other member
+checks it under the public key at the sender's index (§12.1). The file
+refuses a list of the wrong length, a malformed key, two equal keys (a
+file could not then say which of them sent it), and an envelope secret
+that is not behind the member's own slot. A version-1 file, which had no
+envelope keys, is refused.
 
 This is the plaintext serialization. Keeping the file encrypted at rest is
 the wallet's job, as for every other key file. Every secret is wiped on
@@ -672,7 +688,8 @@ the bitmap's set bits.
 So `m` signers spend without the other `n − m`: they reveal only their own
 keys, and every member can read every `h_j` from the `0x0D` entry. A
 non-signer's key never reaches the chain. CEN-I16's structural floor for a
-scheme-2 key blob is `MULTISIG_KEY_BLOB_MIN = 2032` bytes (a 1-of-1).
+scheme-2 key blob is `MULTISIG_KEY_BLOB_MIN = 4060` bytes (a 2-of-2
+revealing both keys; R-11 refuses a smaller group).
 
 ### 7.6 Outputs a group cannot spend
 
@@ -772,32 +789,30 @@ open and one leaf commitment.
 
 ```
 SpendIntent {
-    // Versioning
-    version:                  u8 (= 1)
+    version:                  u8 (= 2)
     intent_id:                [u8; 32]   // random per intent
 
-    // Group binding — the address fingerprint (§5.3; was `group_id`)
+    // Group binding — the address fingerprint (§5.3)
     address_fingerprint:      [u8; 32]
 
-    // Proposer
+    // Who signs (R-5)
     proposer_index:           u8
-    proposer_sig:             HybridSignature   // over all other fields
+    signers:                  [u8]       // exactly m, strictly ascending, the proposer among them
+    responder_index:          u8         // one of signers, not the proposer
 
-    // Temporal binding
-    created_at:               u64
-    expires_at:               u64
-    tx_counter:               u64
+    // Display and chain binding
+    created_at:               u64        // unix seconds; display only (R-13)
     reference_block_height:   u64
     reference_block_hash:     [u8; 32]
 
     // Content
     recipients: [
-        { address: Bech32mAddress, amount: u64 }
+        { address: bytes, amount: u64 }
     ]   // sorted
     fee:                      u64
-    input_global_indices:     [u64]   // sorted ascending
+    input_global_indices:     [u64]
 
-    // Determinism anchor
+    // Determinism anchor (R-7, §9.5)
     kem_randomness_seed:      [u8; 32]   // 32 fresh random bytes
 
     // Chain state fingerprint
@@ -805,28 +820,49 @@ SpendIntent {
 }
 ```
 
+The byte layout is `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.2. The intent has
+no signature field: a `Proposal` file carries it, and that file's sender
+signature, under the proposer's envelope key (§12.1), is the proposal's.
+Its `sender_index` must equal `proposer_index`.
+
 ### 9.2 Invariants (verified before any signer signs; honest-signer invariant I1)
 
-1. `version == 1`
+1. `version == 2`
 2. `address_fingerprint` matches the verifier's group (§5.3)
-3. `proposer_index < n_total`
-4. `proposer_sig` verifies against `hybrid_signing_pubkeys[proposer_index]`
-5. `created_at ≤ now ≤ expires_at`
-6. `expires_at - created_at ≤ 86400` (24-hour validity max)
-7. `tx_counter` equals the group's currently-expected counter
-8. `reference_block_height ≥ FCMP_REFERENCE_BLOCK_MIN_AGE` blocks behind
-   tip and `≤ FCMP_REFERENCE_BLOCK_MAX_AGE`
-9. `reference_block_hash` matches the chain's block at
+3. `2 ≤ m ≤ n` (R-11); `proposer_index < n_total`
+4. `signers` holds exactly `m` indices, strictly ascending, each `< n`,
+   the proposer among them; `responder_index` is a signer and not the
+   proposer
+5. The `Proposal` file that carried the intent verified under
+   `envelope_public_keys[proposer_index]` (§12.1)
+6. None of `input_global_indices` is spent by another of this member's
+   live ceremonies: a member commits to at most one live intent per
+   input, and refuses to commit to any other (the check is the
+   ceremony's, slice 3 PR-C)
+7. A spend anchored at `reference_block_height` can still be listed: its
+   age measured from the connecting height is in
+   `[FCMP_REFERENCE_BLOCK_MIN_AGE, FCMP_REFERENCE_BLOCK_MAX_AGE]` (CEN-I11;
+   `shekyl_curve_tree::reference`). This is the intent's only deadline
+   (R-13, §9.6)
+8. `reference_block_hash` matches the chain's block at
    `reference_block_height` per the verifier's local view
-10. All `input_global_indices` are owned by the group, unspent, and
-    eligible at the reference height, with each input's
-    `assigned_prover_index` locally known
-11. Recipients are sorted; no duplicate (address, amount) tuples
-12. `sum(recipient.amount) + fee == sum(input.amount)` per local view
-13. `kem_randomness_seed` is unique within the group's history of
+9. All `input_global_indices` are owned by the group, unspent, and in the
+   tree at the reference height; `1 ≤ count ≤ MAX_INPUTS`
+10. Recipients are sorted; no duplicate (address, amount) tuples; at most
+    `MAX_RECIPIENTS`
+11. `sum(recipient.amount) + fee == sum(input.amount)` per local view
+12. `kem_randomness_seed` is unique within the group's history of
     `seen_intents` (replay/linkability prevention)
-14. `chain_state_fingerprint` matches the verifier's local fingerprint
+13. `chain_state_fingerprint` matches the verifier's local fingerprint
     (see §9.3); mismatch → do not sign; trigger sync
+
+No invariant reads a clock.
+
+**Replay.** There is no group counter. Three things stop an intent, or a
+signature over it, being used twice: the reference block's age ends every
+intent (§9.6); a member's held FROST nonce is bound to one intent hash and
+consumed once; and consensus refuses a second spend of a key image. Item 6
+keeps a member from committing to two live intents that spend one input.
 
 ### 9.3 Chain state fingerprint (honest-signer invariant I2)
 
@@ -837,24 +873,17 @@ chain_state_fingerprint = keccak256(
     reference_block_hash ||
     sorted_concat(input_global_indices) ||
     sorted_concat(input_eligible_heights) ||
-    sorted_concat(input_amounts) ||
-    sorted_concat(input_assigned_prover_indices)
+    sorted_concat(input_amounts)
 )
 ```
 
 Where `keccak256` — here and in every live hash definition below — is
 **original-padding Keccak-256** (`0x01` padding, NOT FIPS-202 SHA3-256's
-`0x06`), implemented as `shekyl_crypto_hash::keccak256` and byte-identical
-to the C++ daemon's `cn_fast_hash` (the C++/ABI side keeps the CryptoNote
-name; see `SHEKYL_MULTISIG_WIRE_FORMAT.md` §2.4).
+`0x06`), implemented as `shekyl_crypto_hash::keccak256`.
 
 The proposer computes this. Each verifier independently recomputes from
 their local view. Mismatch indicates state divergence or manipulation:
 do not sign; trigger sync.
-
-Including `input_assigned_prover_indices` ensures all members agree on
-which prover is responsible for each input — any disagreement on this is
-itself a state divergence that must be resolved before signing.
 
 ### 9.4 Intent hash
 
@@ -862,8 +891,45 @@ itself a state divergence that must be resolved before signing.
 intent_hash = keccak256(canonical_serialize(SpendIntent))
 ```
 
-`intent_hash` is the durable identifier. All subsequent messages
-reference it.
+`intent_hash` is the durable identifier. Every ceremony file carries it,
+and because the signer set and the responder are in the canonical bytes,
+every file binds them.
+
+### 9.5 The intent is the only trusted input (R-7)
+
+A signer trusts the intent and nothing else. It rebuilds every signing
+input from the intent itself — the outputs, their commitments, the
+pseudo-outs, each input's rerandomization, the transaction prefix and
+base — and a file that disagrees with its rebuild is refused. Nothing a
+member sends after the `Proposal` can change what a signer signs.
+
+`kem_randomness_seed` is the root of every value the transaction needs
+that solo would draw at random. One HKDF label per derived value; this
+table is what the ceremony and the builder both read:
+
+| Value | Label | Indexed by |
+|---|---|---|
+| The transaction key: it seeds every output's KEM encapsulation, and so every output key and every output commitment mask, under the solo labels (`shekyl-output-kem-v1`, `shekyl-output-mask`, …) | `shekyl/multisig-intent-tx-key-v1` | — |
+| Each input's pseudo-out blind `a_j`, but the last, which balances the commitments as solo does | `shekyl/multisig-intent-pseudo-out-blind-v1` | input position |
+| Each input's rerandomization (`RerandomizedOutput`'s blinds) | `shekyl/multisig-intent-rerandomize-v1` | input position |
+
+The three labels are RESERVED: no code derives under them yet. The
+derivation lands with the multisig builder (slice 4a), and each label is
+registered in `CRYPTO_DOMAIN_REGISTRY.tsv` with the code that uses it.
+
+### 9.6 The session clock (R-13)
+
+The intent expires when its reference block does: the last block that can
+list the spend is `reference_block_height + FCMP_REFERENCE_BLOCK_MAX_AGE`,
+measured as consensus measures it (§9.2 item 7). A wallet anchors a new
+spend `REF_ANCHOR_AGE` blocks below the tip, so a signing session has
+`PROOF_VALIDITY_HORIZON` blocks — about three hours at the target block
+time. There is no wall-clock expiry: devices in one session do not agree
+to the second, and a device kept in a safe may have a wrong clock.
+
+An offline signer has no chain view and cannot check the deadline. That
+is acceptable: signing a stale intent produces a transaction no block can
+list, not a loss.
 
 ---
 
@@ -955,57 +1021,6 @@ signing_payload = keccak256(
 Where `RctSigPrunable_skeleton` excludes the FCMP++ proof (comes from
 the prover asynchronously). Its hash is included separately in the
 signature share commitment (§12.2.1).
-
-### 10.5 Tiebreaker for conflicting intents
-
-When two proposers publish conflicting intents at the same `tx_counter`:
-
-```
-winner = intent for which the prover (per §11.1) emits a signed
-         ProverReceipt first, where ProverReceipt is published only
-         after full invariant verification
-```
-
-**ProverReceipt mechanics** (strengthened from v1.0 in response to R3):
-
-```
-ProverReceipt {
-    prover_index:        u8
-    intent_hash:         [u8; 32]
-    received_at:         u64
-    local_counter:       u64   // monotonic, prover-local, increments per receipt
-    sig:                 HybridSignature
-}
-```
-
-Requirements:
-
-- Prover emits `ProverReceipt` **only after completing full §9.2
-  invariant verification** on the intent. A malformed or invariant-failing
-  intent never earns a receipt.
-- Prover MUST publish the receipt to **all subscribed relays
-  simultaneously** (multi-relay mandatory per §12.4)
-- `local_counter` is prover-local, monotonic, increments once per receipt.
-  Two receipts from the same prover with non-monotonic counters is
-  equivocation (§12.2.4)
-- Signers observing conflicting intents wait **conflict window**
-  (default: 30 seconds) after the first intent before acting, to allow
-  the prover's receipt to propagate across relays
-- Signers accept the intent for which the ProverReceipt shows the
-  lowest `local_counter` (earliest-observed by prover)
-- Members who already signed the losing intent publish a `Veto` to reset
-
-**Why the monotonic counter matters:** an attacker controlling network
-delivery to the prover can attempt to equivocate (claim "received A first"
-to some signers, "received B first" to others). The monotonic
-`local_counter` in the receipt makes equivocation detectable: two
-receipts with the same counter or out-of-order counters = equivocation
-= prover marked untrusted via EquivocationProof (§12.2.4).
-
-**Why not hash-based tiebreaking:** grindable by attacker varying
-intent content fields. Prover-receipt shifts the tiebreaker to prover's
-observation order, which requires network-level asymmetry to exploit
-rather than content grinding.
 
 ---
 
@@ -1226,171 +1241,92 @@ This bounds verification work to ≤ N concurrent intents.
 
 ## 12. Messages and Transport
 
-### 12.1 Common envelope
+### 12.1 The ceremony file
+
+Members exchange **files** (R-9). One file is one message from one member:
 
 ```
-MultisigEnvelope {
-    version:        u8 (= 1)
-    group_id:       [u8; 32]
-    message_type:   u8                  // ENCRYPTED in payload
-    intent_hash:    [u8; 32]
-    sender_index:   u8
-    sender_sig:     HybridSignature     // over all above + payload
-    payload:        EncryptedBlob
-}
+file      = format_version(1) ‖ nonce(24) ‖ XChaCha20-Poly1305(ciphertext) ‖ tag(16)
+plaintext = address_fingerprint(32) ‖ intent_hash(32) ‖ sender_index(1) ‖ message_type(1)
+            ‖ u32_le(body_len) ‖ body ‖ u32_le(sig_len) ‖ sender_sig
 ```
 
-The envelope's `message_type` is encrypted in the payload (§12.3) to
-prevent role-pattern leakage. Cleartext envelope fields: `version`,
-`group_id`, `sender_index`, `intent_hash`, `sender_sig`, encrypted
-payload.
+Only the format version is in the clear (R-10). The sender signs every
+plaintext field but the signature with its envelope key (§6.6), framed
+with the network id under `shekyl/multisig-envelope-v1` and signed under
+`shekyl/multisig-envelope-scheme-v1` (R-6). A member who holds the
+transport secret can write a file that opens for the group, but not one
+that verifies as another member's.
+
+A wallet imports a file by **trial decryption**: it tries each of its
+groups' keys, and a file that opens under none is not for it. A file that
+opens is checked in order — exact parse, the fingerprint is that group's,
+the sender index names a member, the signature verifies under that
+member's envelope key, the message type is live — and its body reaches
+nothing before every check has passed. The byte layout, the bounds and
+the check order are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §1.
 
 ### 12.2 Message types (encrypted)
 
 | Type | Name | Purpose |
 |---|---|---|
-| 0x01 | SpendIntent | Proposer publishes |
-| 0x02 | ProverOutput | FCMP++ proof (BP+ is now in main tx per §10.2) |
-| 0x03 | SignatureShare | Signer's hybrid signature + commitments |
-| 0x04 | Veto | Refusal or abort |
-| 0x05 | ProverReceipt | Prover's tiebreaker acknowledgment |
-| 0x06 | Heartbeat | Liveness + censorship detection |
-| 0x07 | CounterProof | State recovery |
-| 0x08 | GroupStateSummary | Periodic synchronization |
-| **0x09** | **InvariantViolation** | **Signed notice that an honest-signer invariant failed** |
-| 0x0A | RotationIntent (RESERVED) | V3.2 full rotation protocol; reserved in V3.1 |
-| 0x0B | EquivocationProof | Prover equivocation evidence |
+| 0x03 | SignatureShare | A FROST signature share |
+| 0x09 | InvariantViolation | Notice that an honest-signer invariant failed: how a signer that refuses an intent tells the others, who treat it as a signal to refuse too and to compare their own state |
+| 0x0B | EquivocationProof | Two conflicting messages signed by one member |
+| 0x0C | Proposal | The intent and the proposer's preprocesses |
+| 0x0D | Commitment | A holder's preprocesses |
+| 0x0E | SigningSet | The preprocess set |
+| 0x0F | ResponderShare | The responder's preprocesses and shares |
+| 0x10 | FinalTx | The finished transaction |
+| 0x11 | HybridSig | Per input: the signer's per-output key and hybrid signature |
 
-#### 12.2.1 SignatureShare structure
-
-```
-SignatureShare {
-    signer_index:              u8
-    hybrid_sig:                HybridSignature
-    tx_hash_commitment:        [u8; 32]
-    fcmp_proof_commitment:     [u8; 32]
-    bp_plus_proof_commitment:  [u8; 32]
-}
-```
-
-#### 12.2.4 Prover equivocation detection
-
-If a malicious prover sends different `ProverOutput` messages to
-different signer subsets, signature shares will disagree on
-`fcmp_proof_commitment`. Members publish:
-
-```
-EquivocationProof {
-    prover_index:    u8
-    intent_hash:     [u8; 32]
-    proof_a:         ProverOutput  // including prover_sig
-    proof_b:         ProverOutput  // different, including prover_sig
-}
-```
-
-Also detected: two `ProverReceipt` messages from the same prover for the
-same intent with non-monotonic or duplicate `local_counter` values.
-
-#### 12.2.6 InvariantViolation structure
-
-```
-InvariantViolation {
-    reporter_index:      u8
-    intent_hash:         [u8; 32]
-    invariant_id:        u8         // which of I1-I7 from §2.7 was violated
-    evidence:            bytes      // intent or proof bytes demonstrating the violation
-    reporter_sig:        HybridSignature
-}
-```
-
-Publishing an InvariantViolation is how honest signers signal that they
-refused to sign a specific intent. Other members treat a published
-InvariantViolation as a strong signal to also refuse, and to investigate
-whether their own state disagrees.
+`0x01`, `0x02`, `0x04`–`0x08` and `0x0A` are REJECTED and never reused
+(`SHEKYL_MULTISIG_WIRE_FORMAT.md` §3). Each body is defined with the
+ceremony (slice 3 PR-C).
 
 ### 12.3 Encryption
 
-Every ceremony blob's payload is sealed with XChaCha20-Poly1305
-(`shekyl_crypto_pq::multisig_blob`; Round 0 ruling R-4):
-
 ```
-key    = HKDF-SHA-512(ikm = transport_secret).expand(
-             "shekyl/multisig-blob-key-v1" ‖ intent_hash ‖ u8(message_type) ‖ u8(sender_index), 32)
-aad    = version ‖ address_fingerprint ‖ intent_hash ‖ u8(sender_index)   // 66 bytes, BLOB_AAD_LEN
-sealed = nonce(24, random) ‖ XChaCha20-Poly1305(key, nonce, aad, payload) ‖ tag(16)
+key  = HKDF-SHA-512(ikm = transport_secret, info = "shekyl/multisig-blob-key-v1", 32)
+aad  = format_version
+file = format_version ‖ nonce(24, random) ‖ XChaCha20-Poly1305(key, nonce, aad, plaintext) ‖ tag(16)
 ```
 
 `transport_secret` is the group transport secret every member file holds
-(§6.6), derived by the dealer under `salt_for`. The associated data is the
-envelope's prefix through the sender index
-(`SHEKYL_MULTISIG_WIRE_FORMAT.md` §4.3). The message type is a key field
-and stays inside the payload (SS12.5). The sender signature is not
-associated data: its preimage is the sealed payload, so binding it would
-make sealing and signing depend on each other. The nonce is drawn at
-random for every blob: a nonce derived from a persisted counter would
-repeat after a wallet is restored from a backup, and a repeated nonce
-under this AEAD leaks the XOR of two payloads and the Poly1305 key. A
-ceremony's message counter orders blobs and refuses replays; it is not an
-input to the AEAD. A blob sealed for one header does not open as another.
+(§6.6). One key per group. The nonce is drawn at random for every file: a
+nonce derived from persisted state would repeat after a wallet is
+restored from a backup, and a repeated nonce under this AEAD leaks the
+XOR of two plaintexts and the Poly1305 key. Replays and ordering are the
+ceremony's phase checks (slice 3 PR-C), not a counter (R-12).
 
-### 12.4 Multi-relay with operator uniqueness (mandatory)
+### 12.4 Transport: files only (R-9)
 
-Members MUST publish each message to **at least 3 independent relays
-operated by disjoint operators**. The relay list is part of group state.
+The wallet moves no bytes. A member writes a ceremony file and passes it
+to the others by whatever means the group uses — email, a messenger, a
+USB stick, a shared folder. There are no relays, no relay directory and
+no heartbeat; a group agrees a time, passes files, and a device kept in
+a safe comes out once per session (`MULTISIG_OPERATIONS.md`).
 
-**Operator uniqueness enforcement:**
+An online mailbox is **DEFERRED** (rule 23): `docs/FOLLOWUPS.md`
+"Multisig: an online mailbox for ceremony files". It reopens only if
+file-based sessions are shown to be what stops groups from spending, and
+then starts from an outbound-only mailbox over Tor with a per-intent
+drop-box address.
 
-1. Wallets MUST consume a signed **relay directory** (updated via GitHub
-   releases or published on-chain as a special metadata transaction).
-   The directory maps relay URLs to operator identifiers.
-2. At group setup, each participant MUST select relays from at least
-   3 distinct operators per the directory.
-3. Each `Heartbeat` message (§13.3) includes the sender's **observed relay
-   operator IDs** — the operator IDs corresponding to relays where that
-   member has actually received messages in the last interval.
-4. Members compare observed operator IDs from heartbeats; if all
-   heartbeats come from relays operated by the same entity (or a small
-   subset), they flag this as potential centralization and warn users.
+### 12.5 What a file reveals
 
-This closes the attack where a single operator running three relays
-under different names could satisfy "3 relays" without providing actual
-censorship resistance.
+Nothing is in the clear but the format version. A file shows its size and
+that it is a Shekyl multisig file; which group, which intent, which
+member and which step are inside the ciphertext, so files carried or
+found by others are not linkable to a group or to each other.
 
-### 12.5 Cleartext envelope minimization
+### 12.6 File naming
 
-The encrypted `message_type` prevents passive observers from inferring
-roles (only-prover-sends-0x02, only-signers-send-0x03). Observers see
-encrypted blobs at varying sizes addressed to a stable `group_id`.
-
-Future V3.2 traffic padding + batched delivery can strengthen this; not
-in V3.1 scope.
-
-### 12.6 Transport bindings
-
-**Nostr relay binding:** Each message posted as Nostr kind-30000
-replaceable event; `d` tag includes `group_id` hash + unique message
-identifier. Nostr signature is for relay acceptance only.
-
-**Direct P2P binding:** Members connect via mTLS with hybrid
-certificates when topology permits. Messages still subject to envelope
-/encryption requirements.
-
-**File binding (air-gap) with opaque naming:**
-
-Rather than the previous draft's metadata-leaking filename convention,
-file transport now uses:
-
-- **Random opaque filenames** (e.g., `shekyl-ms-<random64hex>.bin`)
-- **Encrypted manifest** inside the file metadata (not in filename)
-  that contains the `group_id`, `intent_hash`, `message_type`,
-  `sender_index` for wallet ingestion
-- **Display-only filenames** in the UI (e.g.,
-  "Intent 0x1a2b... message from member 3") derived from the encrypted
-  manifest once decrypted; never written to disk
-
-This preserves air-gap compatibility while preventing filesystem metadata
-leakage when files end up on shared media, USB drives, cloud backups,
-or forensic images.
+Files use **random opaque filenames** (`shekyl-ms-<random64hex>.bin`,
+from a CSPRNG), never metadata. A wallet shows a display name derived
+from the opened file (e.g., "Proposal 0x1a2b… from member 3") and never
+writes it to disk. This keeps files that end up on shared media, cloud
+backups or forensic images from leaking anything through their names.
 
 ---
 
@@ -1406,112 +1342,15 @@ SIGNED         → this member produced and published SignatureShare
 ASSEMBLED      → M signatures observed
 BROADCAST      → tx confirmed in mempool / on-chain
 REJECTED       → veto/invariant-violation threshold reached or chain-rejected
-TIMED_OUT      → expires_at reached without BROADCAST
+TIMED_OUT      → the reference block aged out without BROADCAST (§9.6)
 ```
 
-### 13.2 tx_counter advancement
+### 13.2 Disagreement resolution
 
-`tx_counter` advances ONLY upon observed chain state, not local optimism.
-Specifically: tx_counter increments to k+1 when a member observes the
-broadcast tx confirmed in their local chain at height ≥ N confirmations
-(default N=3; configurable).
+**Conflicting intents spending one input** → a member commits to at most
+one of them (§9.2 item 6); the other times out
 
-### 13.3 Heartbeat protocol
-
-Members publish `Heartbeat` every `HEARTBEAT_INTERVAL` (default 5 min)
-to all subscribed relays:
-
-```
-Heartbeat {
-    sender_index:             u8
-    timestamp:                u64
-    last_seen_intent:         [u8; 32]
-    observed_relay_ops:       [RelayOperatorId]   // which operators this member sees
-    local_tx_counter:         u64
-    sig:                      HybridSignature
-}
-```
-
-Members compare heartbeats to detect:
-
-- Missing heartbeats from a specific member (offline or censored)
-- Disagreement on `last_seen_intent` (relay censorship)
-- Collapse of observed relay operator diversity (censorship + operator
-  collusion)
-- tx_counter divergence
-- Time skew
-
-Action on anomaly: retry across all subscribed relays, escalate to user,
-do not advance state optimistically.
-
-### 13.4 CounterProof recovery (strengthened formalization)
-
-When a member is at stale `tx_counter`, recovery uses cryptographic
-chain proof with **explicit advancement-lineage verification**:
-
-```
-CounterProof {
-    sender_index:           u8
-    advancing_to:           u64
-    tx_hash:                [u8; 32]
-    block_height:           u64
-    block_hash:             [u8; 32]
-    tx_position:            u16
-    consumed_inputs:        [[u8; 32]]   // key images of consumed inputs
-    resulting_outputs:      [[u8; 32]]   // output pubkeys produced by the tx
-    intent_hash:            [u8; 32]     // the intent this tx broadcast
-    sender_sig:             HybridSignature
-}
-```
-
-**Verification rules (strengthened from v1.0):**
-
-A stale member receiving a `CounterProof` MUST verify, in order:
-
-1. `block_hash` matches their local chain at `block_height`
-   (if local chain lacks this block, wait for sync; do not reject)
-2. `tx_hash` appears at `tx_position` in that block
-3. `tx.pqc_auths[i].scheme_id == 2` for all inputs (multisig spend)
-4. `pqc_key_scalar(tx.pqc_auths[i].hybrid_public_key)` matches
-   the tracked key scalar of an output in local state with matching
-   `group_id`
-5. The `consumed_inputs` listed in CounterProof match the tx's actual
-   input key images exactly (no loose matching)
-6. All `consumed_inputs` are in local state as tracked unspent outputs
-   owned by the group
-7. `intent_hash` references an intent the member has seen (or, if
-   unseen, a note is logged: member was absent during proposal)
-8. `sender_sig` verifies
-
-**Advancement rule:** only after all checks pass, the member:
-
-1. Marks all `consumed_inputs` as spent in local state
-2. Adds all `resulting_outputs` to scanning (if they belong to the group)
-3. Advances `tx_counter` to `advancing_to`
-
-**If any check fails:**
-- If the failure is "I don't have the block yet": wait for sync; do not
-  reject; do not advance
-- If the failure is "I don't recognize these inputs as my tracked outputs":
-  trigger full wallet rescan from reference height; do not advance based
-  on this CounterProof
-- If the failure is structural (scheme_id wrong, leaf hash doesn't
-  match): CounterProof is invalid; do not advance; publish Veto
-
-This formalization prevents:
-- Attackers forging CounterProofs for arbitrary on-chain transactions
-  (must reference the group's actual tracked inputs)
-- Loose matching leading to false advancement (exact input/output match
-  required)
-- Advancement without state consistency (rescan forced if local state
-  is out of sync)
-
-### 13.5 Disagreement resolution
-
-**Conflicting intents same counter** → §10.5 ProverReceipt with
-monotonic counter
-
-**Proposer disappears** → `expires_at` → TIMED_OUT
+**Proposer disappears** → the reference block ages out (§9.6) → TIMED_OUT
 
 **Prover disappears for an output** → intent times out; rotating prover
 means different outputs have different provers; 1/N permanent-loss per
@@ -1547,8 +1386,8 @@ published; intent REJECTED
 | Spend-to-spend unlinkability (within scheme-2) | Different ephemeral N-key blobs per spend — **but see stream attribution below** |
 | Group identity privacy from passive observer | group_id not on-chain; encrypted transport |
 | Group size | **Not private.** Each `0x0D` entry gives the receiving group's `n` (§7.4); inherent to Option E′ |
-| Role-pattern privacy from relay observers | Encrypted message_type in envelope |
-| Filesystem metadata privacy | Opaque filenames + encrypted manifest (§12.6) |
+| Role-pattern privacy from whoever carries a file | Nothing but the format version is in the clear (§12.5) |
+| Filesystem metadata privacy | Opaque filenames; the header is inside the ciphertext (§12.6) |
 
 **Stream attribution (honest statement, 2026-07-15).** Do **not** write
 "accepted given negligible multisig volume" — that is circular: the
@@ -1575,8 +1414,8 @@ stream**, not as "same privacy as solo at small volume."
 | Proposer disappearance recovery | Yes (timeout + re-propose) |
 | Signer disappearance recovery | Yes if M others remain |
 | Prover disappearance per-output | Limited; 1/N outputs lock per missing prover (V4 fixes) |
-| Network partition recovery | Yes via formalized CounterProof |
-| Relay censorship resistance | Multi-relay + operator uniqueness + heartbeat |
+| Network partition recovery | Yes: a member syncs, and the chain state fingerprint (§9.3) agrees again |
+| A carrier withholding files | Members send by another means; files are the only transport (§12.4) |
 | Scanner resource bounds | Hard caps + per-sender griefing scores (§7.6) |
 
 ### 14.4 Integrity
@@ -1586,8 +1425,7 @@ stream**, not as "same privacy as solo at small volume."
 | Tx hash integrity through assembly | tx_hash_commitment in SignatureShare (I6) |
 | Prover proof integrity | fcmp_proof_commitment + bp_plus_proof_commitment |
 | Prover non-equivocation | EquivocationProof detection (§12.2.4) |
-| Counter integrity | Formalized CounterProof advancement lineage (§13.4) |
-| Replay resistance | intent_id, kem_randomness_seed freshness, expires_at, reference_block_hash, tx_counter |
+| Replay resistance | The reference block's age, the held nonce bound to one intent hash, consensus key images; kem_randomness_seed freshness |
 | Invariant enforcement | §2.7 mechanical, unbypassable in signing path |
 
 ---
@@ -1854,8 +1692,8 @@ dependency list *is* the "no transport" ban. The Option-D modules the earlier pl
 listed — `prover.rs` (rotating prover), `signing.rs`, `transport/*` (nostr / p2p /
 relay directory), `heartbeat.rs`, `counter_proof.rs`, `construction.rs`, and the
 per-intent `state.rs` FSM — are **deleted**: E′ has no prover, no heartbeat, no
-counter-proof, and the wallet owns **no transport** (it emits/consumes a
-self-authenticating blob over a bring-your-own channel; MS-5 S1 landed this).
+counter-proof, and the wallet owns **no transport**: it writes and reads
+ceremony files that members pass by any means (R-9, §12.4).
 
 ```
 rust/shekyl-multisig/src/
@@ -1864,11 +1702,13 @@ rust/shekyl-multisig/src/
 │                            pqc-last); both nonce shapes; the ConsumedNonce
 │                            persist-before-use typestate; NonceCounterSink;
 │                            SpendRequest / SpendResponse blob newtypes
-├── intent.rs              — SpendIntent type, canonical serialization
-├── messages.rs            — envelope + E′ message types (Option-D discriminants excised)
+├── intent.rs              — SpendIntent v2, canonical serialization (§9)
+├── envelope.rs            — the ceremony file: seal as a member, trial-decrypt
+│                            import, the plaintext codec (§12.1)
+├── messages.rs            — the message-type discriminants (§12.2)
 ├── invariants.rs          — honest-signer invariant checks
 ├── group_descriptor.rs    — public group identity (no share, no KEM secret)
-└── build.rs               — FCMP reference-block consts from config JSON
+└── build.rs               — the CT type from config JSON
 
 rust/shekyl-engine-core/src/engine/signer.rs
 ├── MultisigSignerV2        — EngineSignerKind marker (spend_auth 0x02);
@@ -1876,10 +1716,17 @@ rust/shekyl-engine-core/src/engine/signer.rs
 └── MultisigNonceSink       — engine-core's durable NonceCounterSink impl (body: S2)
 
 rust/shekyl-multisig/src/member_file.rs
-└── MemberFile — §6.6 (stores the transport secret; does not derive it)
+└── MemberFile — §6.6 (stores the transport and envelope secrets; derives neither)
 
 rust/shekyl-crypto-pq/src/derivation.rs
 └── derive_group_transport_secret — §6.6
+
+rust/shekyl-crypto-pq/src/multisig_blob.rs
+└── seal_blob / open_blob / check_blob_version — §12.3
+
+rust/shekyl-crypto-pq/src/multisig_envelope.rs
+├── mint_multisig_envelope_keypair             — §6.6
+└── envelope_message / sign_ / verify_multisig_envelope — §12.1
 
 rust/shekyl-crypto-pq/src/multisig.rs
 ├── MultisigCommittedForm, MultisigKeyBlob     — §7.5
@@ -1970,7 +1817,6 @@ rust/shekyl-scanner/src/scan.rs
 - Multisig page: 1/N loss acknowledgment gate at group setup
 - Multisig page: prover-responsibility distribution view
 - Multisig page: address provenance tracking UI with change warnings
-- Settings: relay configuration (minimum 3 with operator diversity check)
 - DKG ceremony UI for group setup
 - Invariant violation alerts surfaced to user
 
@@ -2026,9 +1872,7 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - A member decapsulating another member's ciphertext cannot pass that member's hash
 
 **Adversarial (other):**
-- Network partition + CounterProof recovery (including malformed proofs)
-- Relay censorship; operator collusion detection
-- Conflicting simultaneous intents (ProverReceipt tiebreaking)
+- Two live intents spending one input: a member commits to one of them
 - Rotation rule grinding attempts
 - Prover equivocation (detection + EquivocationProof)
 - Sustained griefing: per-sender score effectiveness, state bounds
@@ -2047,18 +1891,17 @@ the rejected fixed `pqc_public_key` fossil behind this flag.
 - Scanner cost at 10k+ tx/block with 5%, 10%, 25% multisig adoption
 - Griefing score lookup performance
 - Prover proof construction time
-- Multi-relay overhead
 
 ### 16.9 Fuzz targets
 
 ```
 fuzz_spend_intent_deserialize
 fuzz_construction_determinism
-fuzz_envelope_parser
+fuzz_envelope_v2_decode              (the ceremony file's plaintext; landed)
+fuzz_multisig_blob_roundtrip         (the file seal; landed)
 fuzz_multisig_address_parse
 fuzz_view_tag_hint_check
 fuzz_rotating_prover_assignment      (uniformity + grindability)
-fuzz_counter_proof_verifier          (strengthened rules)
 fuzz_equivocation_proof_verifier
 fuzz_invariant_violation_parser
 fuzz_spend_auth_pubkey_derivation
@@ -2070,8 +1913,8 @@ fuzz_receive_time_validation
 | Phase | Duration | Content |
 |---|---|---|
 | 1 | 4-6 wk | Receiving model (Option C + Solution C), spend-auth derivation, tx_extra tag 0x0A, address format, wallet-side filtering with griefing scores, defense-in-depth wiring |
-| 2 | 4-6 wk | Governance protocol, invariants (§2.7), state machine, CounterProof, heartbeat with operator IDs, multi-relay + directory, DKG mandatory enforcement, InvariantViolation message type |
-| 3 | 3-4 wk | GUI: fingerprint (3-representation) verification, 1/N acknowledgment gate, prover distribution view, address provenance tracking, relay diversity check, DKG ceremony UI |
+| 2 | 4-6 wk | Governance protocol, invariants (§2.7), state machine, ceremony files (§12), DKG mandatory enforcement, InvariantViolation message type |
+| 3 | 3-4 wk | GUI: fingerprint (3-representation) verification, 1/N acknowledgment gate, prover distribution view, address provenance tracking, DKG ceremony UI |
 | 4 | 3-4 wk | Test matrix, fuzz harness, cross-platform determinism, interop tests across conforming clients |
 | 5 | 2-3 wk | External adversarial review (reviewer round 4) |
 | 6 | TBD | Cryptographer review of specific targets (see ANALYSIS §7) |
@@ -2091,8 +1934,7 @@ cannot is non-conforming.
 > **deleted**: `group_id` (A.1 — identity is the address fingerprint, §5.3),
 > `construct_multisig_output` / `assigned_prover_index` (A.2 — no constructor
 > and no mandatory prover under E′; the two-component `O = ho·G + B_group +
-> y_out·T` constructor lands in S2/S4), and the CounterProof vector (A.5 —
-> §11 deleted machinery). `spend_auth_version` is **`0x02`**, not `1`. These
+> y_out·T` constructor lands in S2/S4). `spend_auth_version` is **`0x02`**, not `1`. These
 > specs are rewritten to E′ shape as S2/S4 lands the live crypto; treat the
 > Option-D-named outputs here as historical until then.
 
@@ -2122,7 +1964,9 @@ least two independent implementations before being locked.
    - Input: fixed group state (from A.1), fixed input list, fixed
      recipient list, fixed parameters
    - Output: canonical serialized SpendIntent, intent_hash,
-     chain_state_fingerprint
+     chain_state_fingerprint. The intent half is pinned:
+     `docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+     `scripts/kat/multisig_intent_oracle.py`
 
 4. **Full-construction vector**
    - Input: fixed spend intent (from A.3), fixed chain reference data
@@ -2130,13 +1974,7 @@ least two independent implementations before being locked.
      rct_prunable_skeleton + pqc_auth_header), signing_payload hash,
      deterministic BP+ bytes
 
-5. **CounterProof vector**
-   - Input: fixed consumed inputs, fixed resulting outputs, fixed
-     block data
-   - Output: canonical CounterProof bytes, verification pass/fail cases
-     (including malformed attempts)
-
-6. **Prover-assignment vector**
+5. **Prover-assignment vector**
    - Input: grid of (group_id, output_index_in_tx, tx_secret_key_hash,
      reference_block_hash, n_total)
    - Output: expected prover_index for each combination (uniformity

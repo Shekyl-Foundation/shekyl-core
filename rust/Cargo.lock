@@ -4155,6 +4155,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "redb",
  "serde_json",
+ "shekyl-chain-rules",
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
@@ -4505,12 +4506,10 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
- "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
- "shekyl-multisig",
  "shekyl-types",
  "thiserror",
  "tracing",
@@ -4691,13 +4690,21 @@ dependencies = [
 name = "shekyl-multisig"
 version = "3.1.0"
 dependencies = [
+ "ciphersuite",
  "criterion",
+ "curve25519-dalek",
  "rand 0.8.6",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-generators",
+ "shekyl-curve-tree",
+ "shekyl-fcmp",
+ "shekyl-network",
+ "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
@@ -4715,6 +4722,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-crypto-hash",
+ "zeroize",
 ]
 
 [[package]]
