@@ -454,6 +454,17 @@ pub fn instrument_reach(instrument: crate::eup4::Instrument) -> (&'static str, &
     (instrument.flag(), reads)
 }
 
+/// The refusal for a cell whose report is its baseline's: the overrides
+/// moved no figure `mode` prints, so printing the cell would read as "no
+/// effect". `None` when the two reports differ. An instrument's mode asks
+/// this after folding both ([`instrument_reach`]).
+#[must_use]
+pub fn unmoved_cell_refusal(cell: &str, baseline: &str, mode: &str) -> Option<String> {
+    (cell == baseline).then(|| {
+        format!("the overrides move no figure {mode} prints: the cell's report is its baseline's")
+    })
+}
+
 /// `--stage2 --control-flat-fee`: the flat fee prices no ladder, so no
 /// relay field reaches it, and the long-term clamp moves no figure the
 /// control arm prints.
@@ -958,6 +969,19 @@ mod tests {
             "declared but the report did not move:\n  {}",
             unmoved.join("\n  ")
         );
+    }
+
+    /// An instrument's cell is refused exactly when its report equals its
+    /// baseline's, and the refusal names the mode.
+    #[test]
+    fn a_cell_that_moves_nothing_is_refused() {
+        let baseline = "EI-4 — CAPACITY.\n  inherited   production x1  carries 50 from y20\n";
+        let moved = "EI-4 — CAPACITY.\n  inherited   production x1  carries 50 from y19\n";
+        assert_eq!(unmoved_cell_refusal(moved, baseline, "--capacity"), None);
+        let refusal = unmoved_cell_refusal(baseline, baseline, "--capacity")
+            .expect("an unmoved cell is refused");
+        assert!(refusal.contains("--capacity"), "{refusal}");
+        assert!(refusal.contains("baseline"), "{refusal}");
     }
 
     #[test]

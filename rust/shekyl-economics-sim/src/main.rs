@@ -166,11 +166,12 @@ fn main() {
             // The reach the mode declares is the fold's; whether the cell
             // reaches this instrument's figures is read here, from the two
             // reports, so a cell never prints its baseline as a result.
-            if narration == baseline_narration {
-                refuse(&format!(
-                    "the overrides move no figure {} prints: the cell's report is its baseline's",
-                    instrument.map_or("--eup4", eup4::Instrument::flag)
-                ));
+            if let Some(reason) = baseline::unmoved_cell_refusal(
+                &narration,
+                &baseline_narration,
+                instrument.map_or("--eup4", eup4::Instrument::flag),
+            ) {
+                refuse(&reason);
             }
             eprint!(
                 "{}",

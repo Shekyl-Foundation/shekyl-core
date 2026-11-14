@@ -293,6 +293,8 @@ struct Campaign {
     timing: Timing,
     /// Bodies an edge campaign lists in all: its uniform twin's.
     budget: Option<u64>,
+    /// Blocks a uniform campaign lists in, from `start`.
+    blocks: u64,
 }
 
 /// What a campaign's fold reads: `M_r` over the measured blocks, and the
@@ -324,7 +326,7 @@ impl FoldProbe for StufferProbe<'_> {
             return None;
         }
         let listing = match self.campaign.timing {
-            Timing::Uniform => block < self.campaign.start + CAMPAIGN_BLOCKS,
+            Timing::Uniform => block < self.campaign.start + self.campaign.blocks,
             Timing::Edge => self.listed < self.campaign.budget.unwrap_or(0),
         };
         listing.then_some(fee)
@@ -468,6 +470,7 @@ pub(crate) fn stuffer_rows(arms: &[Arm], start_years: &[u64], shares: &[u64]) ->
                 fee,
                 timing: Timing::Uniform,
                 budget: None,
+                blocks: CAMPAIGN_BLOCKS,
             },
         )
     });
@@ -492,6 +495,7 @@ pub(crate) fn stuffer_rows(arms: &[Arm], start_years: &[u64], shares: &[u64]) ->
                     fee: Some(fee),
                     timing: Timing::Edge,
                     budget: Some(twin.listed),
+                    blocks: CAMPAIGN_BLOCKS,
                 },
             )
         },
@@ -540,6 +544,112 @@ fn reading(
         net_cost_floors_per_byte: (bytes > 0 && folded.floor_rate > 0)
             .then(|| -(gain as f64) / bytes as f64 / folded.floor_rate as f64),
     }
+}
+
+/// Every miner stuffing (the review of #1375): each block's producer
+/// lists its own bodies in its free room for the whole measured span, so
+/// every block in the volume window carries them. Where `M_r` rests is the
+/// equilibrium a stuffing that every miner gains from leads to.
+#[derive(Debug, Clone, Serialize)]
+pub struct AllMinersRow {
+    arm: &'static str,
+    start_year: u64,
+    fee: &'static str,
+    bodies: u64,
+    /// `M_r` at the measured span's last block, and its mean over the span.
+    m_r_at_rest: f64,
+    mean_m_r: f64,
+    longest_run_blocks: u64,
+    /// Every block's payout over the span, less the fees the bodies paid,
+    /// against no stuffing, SKL.
+    net_gain_skl: f64,
+}
+
+/// Every miner stuffing, on `arms` from each of `start_years`.
+pub(crate) fn all_miners_rows(arms: &[Arm], start_years: &[u64]) -> Vec<AllMinersRow> {
+    let cells: Vec<(usize, u64, Option<OwnFee>)> = (0..arms.len())
+        .flat_map(|a| {
+            start_years.iter().flat_map(move |&year| {
+                [None, Some(OwnFee::None), Some(OwnFee::RelayFloor)].map(move |fee| (a, year, fee))
+            })
+        })
+        .collect();
+    let folded = crate::parallel::map(&cells, |&(a, year, fee)| {
+        let arm = &arms[a];
+        fold_campaign(
+            &arm.params,
+            year,
+            Campaign {
+                every: 1,
+                start: (year - 1) * arm.params.blocks_per_year(),
+                fee,
+                timing: Timing::Uniform,
+                budget: None,
+                blocks: MEASURED_BLOCKS,
+            },
+        )
+    });
+    let mut rows = Vec::new();
+    for (&(a, year, fee), run) in cells.iter().zip(&folded) {
+        let Some(fee) = fee else { continue };
+        let base = cells
+            .iter()
+            .zip(&folded)
+            .find(|(&(b, y, f), _)| b == a && y == year && f.is_none())
+            .expect("every cell has its counterfactual")
+            .1;
+        let (longest, _) = longest_run_above_one(&run.m_r);
+        let gain = i128::try_from(run.own_owed).expect("a span's payout fits")
+            - i128::try_from(base.own_owed).expect("a span's payout fits")
+            - i128::try_from(run.own_fees).expect("a span's fees fit");
+        let mean = run.m_r.iter().map(|&m| u128::from(m)).sum::<u128>() as f64
+            / run.m_r.len().max(1) as f64
+            / SCALE as f64;
+        rows.push(AllMinersRow {
+            arm: arms[a].which.name(),
+            start_year: year,
+            fee: fee_name(fee),
+            bodies: run.listed,
+            m_r_at_rest: run.m_r.last().map_or(0.0, |&m| scaled(m)),
+            mean_m_r: mean,
+            longest_run_blocks: longest,
+            net_gain_skl: gain as f64 / crate::burden::COIN as f64,
+        });
+    }
+    rows
+}
+
+/// EI-3's every-miner arm.
+pub(crate) fn write_all_miners(out: &mut impl fmt::Write, rows: &[AllMinersRow]) -> fmt::Result {
+    writeln!(
+        out,
+        "\nEI-3 — ROW 5, EVERY MINER STUFFS (added after the registered run, on review). Every block's\n\
+         producer lists its own bodies in its free room for {MEASURED_BLOCKS} blocks from the start of a year, so\n\
+         every block in the volume window carries them: the ordinary 1-in/2-out at the block's depth. A\n\
+         lighter valid shape would list more, since M_r counts transactions. Where M_r rests at the\n\
+         span's end, its mean over the span, the longest run of M_r > 1.0, and every block's payout less\n\
+         the bodies' fees against no stuffing (SKL)."
+    )?;
+    writeln!(
+        out,
+        "  {:<11} {:>3} {:<10} {:>7} {:>8} {:>7} {:>6} {:>14}",
+        "arm", "y", "fee", "bodies", "at rest", "mean", "run", "net gain SKL"
+    )?;
+    for r in rows {
+        writeln!(
+            out,
+            "  {:<11} {:>3} {:<10} {:>7} {:>8.4} {:>7.4} {:>6} {:>14.2}",
+            r.arm,
+            r.start_year,
+            r.fee,
+            r.bodies,
+            r.m_r_at_rest,
+            r.mean_m_r,
+            r.longest_run_blocks,
+            r.net_gain_skl,
+        )?;
+    }
+    Ok(())
 }
 
 /// EI-3's stuffer: every campaign.

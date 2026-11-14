@@ -305,6 +305,23 @@ fn per_block(atomic: u128, blocks: u64) -> f64 {
     skl(atomic) / blocks as f64
 }
 
+/// A run's miner income at the sampled years, as EI-1 prints it.
+fn sampled_income(years: &[YearRead], bpy: u64) -> String {
+    let mut line = String::new();
+    for year in BLOCK_SPACE_YEARS {
+        if let Some(y) = years.iter().find(|y| y.year == year) {
+            let owed = per_block(y.miner_owed_atomic, bpy);
+            let share = if y.miner_owed_atomic == 0 {
+                0.0
+            } else {
+                100.0 * y.miner_fee_atomic as f64 / y.miner_owed_atomic as f64
+            };
+            line.push_str(&format!(" y{year} {owed:.2} ({share:.1}%)"));
+        }
+    }
+    line
+}
+
 /// EI-1 (row 2): miner income per block by year, and the tail era's fee
 /// share.
 pub(crate) fn write_miner_income(
@@ -323,19 +340,24 @@ pub(crate) fn write_miner_income(
     for (arm, fee) in shared.cells() {
         writeln!(out, "== {arm} | {}", fee.name())?;
         for run in shared.of_cell(arm, fee) {
-            let mut line = format!("  {:<22}", crate::stage2::trunc(&run.scenario, 22));
-            for year in BLOCK_SPACE_YEARS {
-                if let Some(y) = run.years.iter().find(|y| y.year == year) {
-                    let owed = per_block(y.miner_owed_atomic, bpy);
-                    let share = if y.miner_owed_atomic == 0 {
-                        0.0
-                    } else {
-                        100.0 * y.miner_fee_atomic as f64 / y.miner_owed_atomic as f64
-                    };
-                    line.push_str(&format!(" y{year} {owed:.2} ({share:.1}%)"));
-                }
+            let figures = sampled_income(&run.years, bpy);
+            writeln!(
+                out,
+                "  {:<22}{figures}",
+                crate::stage2::trunc(&run.scenario, 22)
+            )?;
+            if run.scenario != BASELINE_STEADY_STATE
+                && shared
+                    .of_cell(arm, fee)
+                    .find(|r| r.scenario == BASELINE_STEADY_STATE)
+                    .is_some_and(|baseline| sampled_income(&baseline.years, bpy) == figures)
+            {
+                writeln!(
+                    out,
+                    "      the same as {BASELINE_STEADY_STATE} at every sampled year: the scenario runs, and \
+                     its blocks carry what the baseline's do"
+                )?;
             }
-            writeln!(out, "{line}")?;
             let (tail_blocks, tail_owed, tail_fee) =
                 run.years.iter().fold((0u64, 0u128, 0u128), |t, y| {
                     (
@@ -689,11 +711,55 @@ const fn blips_of(blocks: u64) -> [Blip; 7] {
 pub(crate) const REGISTERED_BLIPS: [Blip; 7] = blips_of(TX_VOLUME_WINDOW);
 pub(crate) const LONG_BLIPS: [Blip; 7] = blips_of(BLOCK_WEIGHT_LONG_TERM_WINDOW / 2);
 
-/// No blip, then the registered blips, then the long ones.
+/// The demand the stuffing attack offers above the baseline (`scenarios.rs`:
+/// five times it), and for how long.
+const STUFFING_FACTOR_MILLI: u64 = 5_000;
+const STUFFING_BLOCKS: u64 = 21_600;
+
+/// Blips added on review, after the registered run: at the ratchet year, a
+/// doubling for longer than half the long-term window (which a median can
+/// answer), a halving, and the stuffing attack's demand, for its 21 600
+/// blocks and for a long-term window, then stopped.
+pub(crate) const REVIEW_BLIPS: [Blip; 6] = [
+    Blip {
+        year: 19,
+        factor_milli: 2_000,
+        blocks: BLOCK_WEIGHT_LONG_TERM_WINDOW * 3 / 5,
+    },
+    Blip {
+        year: 19,
+        factor_milli: 2_000,
+        blocks: BLOCK_WEIGHT_LONG_TERM_WINDOW,
+    },
+    Blip {
+        year: 19,
+        factor_milli: 2_000,
+        blocks: 2 * BLOCK_WEIGHT_LONG_TERM_WINDOW,
+    },
+    Blip {
+        year: 19,
+        factor_milli: 500,
+        blocks: BLOCK_WEIGHT_LONG_TERM_WINDOW,
+    },
+    Blip {
+        year: 19,
+        factor_milli: STUFFING_FACTOR_MILLI,
+        blocks: STUFFING_BLOCKS,
+    },
+    Blip {
+        year: 19,
+        factor_milli: STUFFING_FACTOR_MILLI,
+        blocks: BLOCK_WEIGHT_LONG_TERM_WINDOW,
+    },
+];
+
+/// No blip, then the registered blips, the half-window ones, and the
+/// review's.
 pub(crate) fn every_blip() -> Vec<Option<Blip>> {
     core::iter::once(None)
         .chain(REGISTERED_BLIPS.into_iter().map(Some))
         .chain(LONG_BLIPS.into_iter().map(Some))
+        .chain(REVIEW_BLIPS.into_iter().map(Some))
         .collect()
 }
 
@@ -761,11 +827,17 @@ pub(crate) fn write_median_path(
     writeln!(
         out,
         "\nEI-7 — MEDIAN PATH-DEPENDENCE. The inherited arm's 15/80/5 baseline with a demand blip, the\n\
-         demand multiplied for a number of blocks from the start of a year: one volume window ({TX_VOLUME_WINDOW},\n\
-         registered), and half the long-term median's window ({}, added after the registered run, which\n\
-         no window's blip can reach). Per run: the year blocks grow, the long-term median at y30 and\n\
+         demand multiplied for a number of blocks from the start of a year. Registered: one volume\n\
+         window ({TX_VOLUME_WINDOW}). Added after the registered run: half the long-term window ({}), the\n\
+         longest blip that cannot move a median over {BLOCK_WEIGHT_LONG_TERM_WINDOW} blocks; then, on review, doublings of\n\
+         {}, {} and {} blocks, a halving, and the stuffing attack's x5 for {STUFFING_BLOCKS} blocks and for\n\
+         {}, each then stopped. Per run: the year blocks grow, the long-term median at y30 and\n\
          y{ONSET_HORIZON_YEARS} (KB), and Economy carried over Economy demanded over the run.",
-        BLOCK_WEIGHT_LONG_TERM_WINDOW / 2
+        BLOCK_WEIGHT_LONG_TERM_WINDOW / 2,
+        BLOCK_WEIGHT_LONG_TERM_WINDOW * 3 / 5,
+        BLOCK_WEIGHT_LONG_TERM_WINDOW,
+        2 * BLOCK_WEIGHT_LONG_TERM_WINDOW,
+        BLOCK_WEIGHT_LONG_TERM_WINDOW,
     )?;
     let folded = crate::parallel::map(blips, |&blip| {
         let config = to_years(blipped(&params, blip), years);
@@ -857,6 +929,7 @@ pub struct Summary {
     predictability: Option<Vec<PredictabilityRow>>,
     step_response: Option<Vec<crate::window_stuffer::StepRow>>,
     window_edge_stuffer: Option<Vec<crate::window_stuffer::StufferRow>>,
+    every_miner_stuffs: Option<Vec<crate::window_stuffer::AllMinersRow>>,
     capacity: Option<Vec<CapacityRow>>,
     stuffing: Option<Vec<crate::window_stuffer::StuffingRow>>,
     priority_elasticity: Option<Vec<PriorityRow>>,
@@ -992,6 +1065,14 @@ pub fn run_scoped(
             crate::window_stuffer::write_stuffer(out, rows)?;
             summary.window_edge_stuffer = Some(rows.clone());
         }
+        let starts: &[u64] = match scope {
+            Scope::Full => &crate::window_stuffer::CAMPAIGN_START_YEARS,
+            #[cfg(test)]
+            Scope::Nightly => &crate::window_stuffer::CAMPAIGN_START_YEARS[..1],
+        };
+        let every_miner = crate::window_stuffer::all_miners_rows(&arms, starts);
+        crate::window_stuffer::write_all_miners(out, &every_miner)?;
+        summary.every_miner_stuffs = Some(every_miner);
     }
     if runs(Instrument::StuffingEnvelope) {
         if let (Some(shared), Some(rows)) = (&shared, &stuffer) {
