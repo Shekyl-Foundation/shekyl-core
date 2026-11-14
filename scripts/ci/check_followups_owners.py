@@ -109,13 +109,14 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # on 2026-11-12 when the switch's C8 closed the LMDB serve-credit scans row
 # (its tables are gone), and 265 the same day when it closed the
 # duplicate-archival-keys row (the template leaves a later conflicting
-# transaction unselected), the list's length; 234 on 2026-11-13 when the
-# FOLLOWUPS sweep after the C++ removal and the 4b switch closed 31 rows
+# transaction unselected), the list's length; 235 on 2026-11-13 when the
+# FOLLOWUPS sweep after the C++ removal and the 4b switch closed 30 listed rows
 # whose code is gone or whose work landed (the C++ and FFI rows #1299
 # deleted the subject of, rows already marked closed in their own titles,
-# and rows whose PRs merged) and restated the CEN-A7 row under its Rust
-# bound, the list's length.
-GRANDFATHER_CEILING = 234
+# and rows whose PRs merged) and restated two under their current subject
+# (CEN-A7's Rust bound; the engine bench pairs the capture script omits),
+# the list's length.
+GRANDFATHER_CEILING = 235
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

@@ -625,6 +625,9 @@ Default. Lands before genesis if it should exist at launch.
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`.**
   - Target: pre-genesis
 
+- **The `KeyEngine` and `EconomicsEngine` bench pairs have no captured baseline: the capture script lists none of the three.** `engine_trait_bench_key_account_public_address`, `engine_trait_bench_economics_base_emission_at` and `engine_trait_bench_economics_parameters_snapshot` are registered `[[bench]]` pairs in `shekyl-engine-core`, but `scripts/bench/capture_rust_baseline.sh`'s `BENCHES` names none of them, so no CI capture has recorded their figures ([`PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md), the three bench sections). Falsify by: the three in `BENCHES` and their captured figures in `PERFORMANCE_BASELINE.md`.
+  - Target: pre-genesis
+
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression when the Rust extractor gains `cfg(test)` awareness.**
   - Target: pre-genesis
 
@@ -1250,7 +1253,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-B1 (the safety bound's unbounded cases, `INPUT_GRAMMAR.md` IG-Q40)
   - Target: pre-genesis
 
-- **A Windows node's inbound connections are bounded by rate only, not by count.** Windows has no per-process descriptor limit, so the inbound ceiling resolves `Unbounded(NoPerProcessLimit)` (`shekyl-p2p/src/descriptors.rs`, `shekyl-peer-policy/src/inbound_ceiling.rs`); the per-connector and per-host accept-rate bound (#1226, `shekyl-transport-layer/src/accept_rate.rs`) applies on every platform. Whether a count bound is owed on Windows is PWD-B1's; evidence is in [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) §PWD-B1.
+- **A Windows node's inbound connections are bounded by rate only, not by count.** Windows has no per-process descriptor limit, so the inbound ceiling resolves `Unbounded(NoPerProcessLimit)` (`shekyl-p2p/src/descriptors.rs`, `shekyl-peer-policy/src/inbound_ceiling.rs`); the per-connector and per-host accept-rate bound (#1226, `shekyl-transport-layer/src/accept_rate.rs`) covers clearnet accepts on every platform, and Tor accepts take no rate bound by design: they rely on the onion service's proof-of-work (`accept_bound` is `AcceptBound::OnionPow` for Tor). Whether a count bound is owed on Windows is PWD-B1's; evidence is in [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) §PWD-B1.
   - Owner: [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-B1
   - Target: pre-genesis
 

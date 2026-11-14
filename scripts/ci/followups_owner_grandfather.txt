@@ -84,6 +84,7 @@ Refresh bandwidth tradeoff under α — round-trip-bound block [`docs/design/STA
 F11-S Windows-midrange-PC measurement revisit at stressnet [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
 Stage 1 PR 3 engine-property test re-location (trigger: the unified `KeyEngine` / `LedgerEngine` / `DaemonEngine` `pub(crate) → pub` visibility-promotion bundle per `STAGE_1_PR_3_KEY_ENGINE.md` §7.7; pre-RC1).
 `RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`.
+The `KeyEngine` and `EconomicsEngine` bench pairs have no captured baseline: the capture script lists none of the three.
 Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression when the Rust extractor gains `cfg(test)` awareness.
 Stage 2 — `KeyEngine` migration to actor.
 Subaddress mechanism under PQC — dedicated design round (2026-05-31, [#112](https://github.com/Shekyl-Foundation/shekyl-core/pull/112)
