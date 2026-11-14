@@ -1340,9 +1340,7 @@ mod s6_self_cert {
 mod emission_claim_assembly {
     use super::*;
 
-    use shekyl_chain_ingest::emission_assembly::{
-        assemble_emission_claim, ClaimAnchor, ClaimTerms,
-    };
+    use shekyl_chain_ingest::emission_assembly::{assemble_emission_claim, ClaimTerms};
     use shekyl_crypto_pq::archival_p::ArchivalPKeys;
     use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
     use shekyl_tx_builder::{LeafEntry, SpendInput};
@@ -1773,11 +1771,9 @@ mod emission_claim_assembly {
                 reward_amount_plain: claims.reward_amount_plain,
             },
             shape.fee,
-            ClaimAnchor {
-                // The id the actor under test was spawned with (`test_fixtures`).
-                network: &shekyl_network::HARNESS_NETWORK_ID,
-                tree: &shape.tree_ctx,
-            },
+            // The id the actor under test was spawned with (`test_fixtures`).
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &shape.tree_ctx,
         );
 
         // Same length with the randomized legs in; identical with them out.

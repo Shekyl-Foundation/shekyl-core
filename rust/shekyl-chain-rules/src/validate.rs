@@ -361,37 +361,6 @@ pub fn judge_slot_stateless(
     Ok(verified)
 }
 
-/// The proof half of [`judge_slot_stateless`], judged on its own.
-///
-/// That function names a bad signature before it names a bad proof, so a
-/// transaction signed for one network is CEN-I18's under every other id
-/// and the proof row is never reached. This judges the proof row by
-/// itself, over `claims`, under `network`: CEN-I15 on a spend, CEN-J26 on
-/// an emission, CEN-J27's verify half on a bond post. A class that carries
-/// no proof yields `Ok(None)`. A reference with no claim, or a declared
-/// depth this function cannot size, yields `Ok(None)` too — those are
-/// CEN-I10/I11 and CEN-I13, which [`validate`] keeps.
-///
-/// # Errors
-///
-/// The class's proof row, at `slot`, when the proof fails. A class that
-/// does not derive is that derivation's row (CEN-H5 or CEN-H6).
-///
-/// Test and harness builds only: no production path judges a proof apart
-/// from its signatures, and its one reader is the chain forge's identity
-/// test (`CHAIN_FORGE.md` §6, lock 3).
-#[cfg(any(test, feature = "harness"))]
-pub fn judge_claimed_proof(
-    tx: &Transaction,
-    slot: TxSlot,
-    network: &NetworkId,
-    claims: &ReferenceClaims,
-) -> Verdict<Option<VerifiedReference>> {
-    let mut coverage = RuleCoverage::EMPTY;
-    let cx = rules::TxContext::derive(tx, slot, &mut coverage)?.on_network(*network);
-    judge_proofs(&cx, claims, &mut coverage)
-}
-
 /// What a transaction's whole stateless judgement at [`TxSlot::Lone`]
 /// established — the pool's (DRS-E5 PR-b; the review of #1102, S1), and
 /// CEN-M8's cache. Only [`judge_lone_stateless`] constructs one.

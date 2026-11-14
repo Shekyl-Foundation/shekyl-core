@@ -7219,9 +7219,11 @@ consensus PR's own diff.
   coinbases can be spent by anyone who restores it, which is intended.
   Its addresses are refused on mainnet and testnet because their prefixes
   do not match, and a test holds that refusal.
-- The emission claim's network id and proof reference travel as one
-  argument (`ClaimAnchor`): grouping them fixes the design, where an
-  `#[allow]` would have hidden the lint.
+- The emission claim takes the chain's network id and the proof
+  reference as two arguments (revised in review before #1370 merged).
+  Pairing them in one struct held no invariant the parameters do not
+  name. The two public wrappers carry the same scoped
+  `too_many_arguments` allow the private assembler already has.
 
 **Why.** An identity kept for convenience is the one that quietly comes
 back; a dated deletion with a gate behind it does not. A public seed is

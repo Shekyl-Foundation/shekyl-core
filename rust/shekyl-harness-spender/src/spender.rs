@@ -21,8 +21,8 @@ use shekyl_curve_tree::{
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_tx_builder::{
-    open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
-    InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
+    open_spend, sign_pqc_auths, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra,
+    AuthSlots, InputTerm, LeafEntry, OutputInfo, OutputTerm, SpendInput, SpendLayout, TreeContext,
 };
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
@@ -396,6 +396,69 @@ impl Spender {
         bond: Option<&PostedBond<'_>>,
     ) -> Transaction {
         self.spend_coinbase_to(wallet, height, connecting, fee, bond, wallet.recipient())
+    }
+
+    /// `spent` with its authorizations replaced by ones that verify under
+    /// `network`. The proof bytes stay the ones `spent` carries, which this
+    /// spender made under its own id.
+    ///
+    /// The production builder refuses to sign under an id other than the
+    /// one the proof was made over (`open_spend` holds the two
+    /// `tx_signable`s equal). This re-signs after that check: the payload
+    /// hashes are the wire's own under `network`, the spend slots are the
+    /// coinbase's keys, and the bond slot, when `bond` is set, is the
+    /// persona's. Under `network`, [`shekyl_chain_rules::judge_lone_stateless`]
+    /// verifies those signatures and names the proof row when `network` is
+    /// not this chain's id.
+    ///
+    /// # Panics
+    ///
+    /// If `spent`'s auth slots are not this coinbase spend plus `bond`, or
+    /// a replaced signature's public key is not the key already on the slot.
+    #[must_use]
+    pub fn signed_under(
+        &self,
+        spent: &Transaction,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        bond: Option<&PostedBond<'_>>,
+        network: &shekyl_network::NetworkId,
+    ) -> Transaction {
+        let spend = self.source_coinbase(wallet, height, connecting);
+        let spend_inputs = [spend.input];
+        let hashes = spent.pqc_signing_payload_hashes(network);
+        let extra = usize::from(bond.is_some());
+        assert_eq!(
+            hashes.len(),
+            spend_inputs.len() + extra,
+            "the body has one auth per spend input and one per bond slot"
+        );
+        let spend_auths = sign_pqc_auths(&hashes[..spend_inputs.len()], &spend_inputs)
+            .expect("the coinbase's key signs under the named network");
+        let mut body = spent.clone();
+        let Ct::Fcmp { pqc_auths, .. } = &mut body.ct else {
+            panic!("a spend carries FCMP authorizations");
+        };
+        for (auth, slot) in spend_auths.iter().zip(pqc_auths.iter()) {
+            assert_eq!(
+                auth.public_key, slot.hybrid_public_key,
+                "the spend slot's key is the one the body carries"
+            );
+        }
+        for (slot, auth) in pqc_auths.iter_mut().zip(spend_auths) {
+            slot.hybrid_signature = auth.signature;
+        }
+        if let Some(posted) = bond {
+            let slot = pqc_auths.last_mut().expect("the bond slot");
+            assert_eq!(
+                slot.hybrid_public_key, posted.slot_pk,
+                "the bond slot's key is the persona's"
+            );
+            slot.hybrid_signature = posted.sign_slot(&hashes[spend_inputs.len()]);
+        }
+        let bytes = body.serialize();
+        Transaction::from_bytes(&bytes).expect("the re-signed spend parses")
     }
 
     /// Source an output for spending: the scanner's recovery of what `tx`'s

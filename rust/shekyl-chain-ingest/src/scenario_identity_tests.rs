@@ -27,13 +27,16 @@
 //!    rules, regtest's block 0 is refused by CEN-E1 at height 0; that
 //!    network's own table genesis connects through the same offer.
 //! 3. **Signatures and proofs.** Every listed transaction passes the
-//!    production stateless judgement under regtest's id. Under every other
-//!    id the signature sequence refuses it at CEN-I18, and the proof leg —
-//!    judged on its own, because that sequence stops at the first row —
-//!    refuses it at the class's proof row. This chain's one body is a
-//!    join, so that row is CEN-J27, whose body is CEN-I15's verifier. A
-//!    validator that skipped the genesis pin still refuses the chain
-//!    transaction by transaction.
+//!    production stateless judgement under regtest's id, and that pass
+//!    verified the proof (`StatelessPass::proven`). Under every other id
+//!    the same body is CEN-I18's, because the judgement names a bad
+//!    signature before a bad proof. The proof row is reached through that
+//!    same judgement: [`Spender::signed_under`] keeps the regtest proof and
+//!    replaces the authorizations with ones that verify under the other
+//!    id, so the signatures pass and the proof row refuses. This chain's
+//!    one body is a join, so that row is CEN-J27, whose body is CEN-I15's
+//!    verifier. A validator that skipped the genesis pin still refuses the
+//!    chain transaction by transaction.
 //! 4. **The wire.** A node of another network does not complete a
 //!    handshake with a regtest node: the transport's prefix is derived from
 //!    the network id (`PWD-T5`, `shekyl-network`'s `prefix_for`). That lock
@@ -44,15 +47,15 @@
 //!    zero bytes and seals a session opened with its own.
 
 use shekyl_chain_rules::{
-    judge_claimed_proof, judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim,
-    ReferenceClaims, StatelessPass, TxSlot,
+    judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim, ReferenceClaims,
+    StatelessPass,
 };
+use shekyl_genesis_tool::builder::pinned_genesis;
 use shekyl_harness_spender::{coinbase_maturity, complete_tree, Linked, Persona, Spender};
 use shekyl_network::{Lever, Network, NetworkId};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 
-use super::genesis::table_genesis;
 use super::{FreeHash, Scenario, StepOutcome};
 use crate::archival_driver::{ENDPOINT, FEE};
 use crate::scenario_shard::levered_rules;
@@ -71,11 +74,20 @@ struct Connected {
     listed: Vec<Transaction>,
 }
 
+/// The chain's one listed body proved under regtest, with its
+/// authorizations signed under `network` ([`Spender::signed_under`]).
+struct SignedFor {
+    network: Network,
+    body: Transaction,
+}
+
 /// The regtest chain the locks are asserted on, and its store.
 struct Chain {
     scenario: Scenario<FreeHash>,
     genesis: Block,
     blocks: Vec<Connected>,
+    /// The join, re-signed for every network but regtest.
+    signed_for: Vec<SignedFor>,
 }
 
 /// Mine regtest's chain: block 0 the table's, then the regtest miner's
@@ -125,6 +137,22 @@ async fn regtest_chain(name: &str) -> Chain {
         FEE,
         Some(&join),
     );
+    // The proof stays regtest's. Each other id signs the authorizations,
+    // so the production judge under that id reaches the proof row.
+    let signed_for = OTHERS
+        .into_iter()
+        .map(|network| SignedFor {
+            network,
+            body: spender.signed_under(
+                &spend,
+                scenario.wallet(),
+                first_coinbase,
+                connecting,
+                Some(&join),
+                &network.network_id(),
+            ),
+        })
+        .collect();
     let joined = scenario
         .mine_listing(vec![spend])
         .await
@@ -165,6 +193,7 @@ async fn regtest_chain(name: &str) -> Chain {
         scenario,
         genesis,
         blocks,
+        signed_for,
     }
 }
 
@@ -238,7 +267,8 @@ async fn a_regtest_chain_never_validates_as_another_network() {
             }
             outcome => panic!("{other} took regtest's genesis: {outcome:?}"),
         }
-        let own = table_genesis(other);
+        let own = pinned_genesis(other)
+            .unwrap_or_else(|error| panic!("{other}'s table genesis assembles: {error}"));
         assert_eq!(
             elsewhere
                 .offer_genesis(&own)
@@ -250,19 +280,18 @@ async fn a_regtest_chain_never_validates_as_another_network() {
         elsewhere.close().await;
     }
 
-    // Lock 3 — signatures and proofs, transaction by transaction. The full
-    // judgement stops at CEN-I18, so the proof row is asked on its own.
+    // Lock 3 — signatures and proofs, transaction by transaction. The
+    // chain's own body is CEN-I18's under every other id. The same
+    // judgement, over that body re-signed for the other id, names the
+    // proof row.
     let mut judged_bodies = 0;
     for connected in &chain.blocks {
         for tx in &connected.listed {
             let claims = claims_for(&chain.blocks, connected);
-            judged(tx, &chain, connected, &regtest, &claims)
+            let pass = judged(tx, &chain, connected, &regtest, &claims)
                 .unwrap_or_else(|refused| panic!("under regtest's id: {refused:?}"));
-            let proven = judge_claimed_proof(tx, TxSlot::Lone, &regtest, &claims).unwrap_or_else(
-                |refused| panic!("under regtest's id the proof passes: {refused:?}"),
-            );
             assert!(
-                proven.is_some(),
+                pass.proven().is_some(),
                 "the join's proof was verified against its claim"
             );
             for other in OTHERS {
@@ -271,9 +300,24 @@ async fn a_regtest_chain_never_validates_as_another_network() {
                     Err(refused) => assert_eq!(refused.rule, CenRow::I18, "{other}: {refused:?}"),
                     Ok(_) => panic!("{other}'s id passed a regtest body"),
                 }
-                match judge_claimed_proof(tx, TxSlot::Lone, &id, &claims) {
-                    Err(refused) => assert_eq!(refused.rule, CenRow::J27, "{other}: {refused:?}"),
-                    Ok(proven) => panic!("{other}'s id passed the join's proof: {proven:?}"),
+            }
+            assert_eq!(
+                chain.signed_for.len(),
+                OTHERS.len(),
+                "one re-signed body per other network"
+            );
+            for signed in &chain.signed_for {
+                let id = signed.network.network_id();
+                match judged(&signed.body, &chain, connected, &id, &claims) {
+                    Err(refused) => {
+                        assert_eq!(refused.rule, CenRow::J27, "{}: {refused:?}", signed.network);
+                    }
+                    Ok(proven) => {
+                        panic!(
+                            "{}'s id passed the join's proof: {proven:?}",
+                            signed.network
+                        );
+                    }
                 }
             }
             judged_bodies += 1;

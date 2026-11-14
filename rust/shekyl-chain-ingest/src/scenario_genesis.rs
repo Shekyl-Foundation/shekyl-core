@@ -11,53 +11,28 @@
 //! the harness id and replay under no network's rules. A chain the forge
 //! keeps is regtest's instead: its rules are [`ChainRules::new`] for
 //! [`Network::Regtest`], whose pin is the table's genesis; its block 0 is
-//! that genesis, assembled from the table's coinbase under the fixed
-//! genesis header the way the node assembles it (`shekyl-node`'s
-//! `pinned_genesis`, through the same [`genesis_block`]) and connected
+//! [`pinned_genesis`], the assembly the node connects, and it is connected
 //! through the connector's door, where CEN-E1 holds it to the pin; its
 //! miner is the wallet regtest derives from the harness seed
 //! ([`MinerWallet::harness_regtest`]). Every network-bound signature the
 //! chain's spends carry is then over regtest's id, which the spender reads
 //! from [`Scenario::network_id`] (`Spender::on`).
 //!
-//! Nothing here mines block 0 or chooses its bytes: the table does, and a
-//! change to the genesis header or the table's coinbase moves this chain's
-//! block 0 with the node's.
+//! Nothing here mines block 0 or chooses its bytes. A change to the genesis
+//! header or the table's coinbase moves this chain's block 0 with the
+//! node's, because both call [`pinned_genesis`].
 
 use core::num::NonZeroU128;
 
 use shekyl_chain_rules::{Candidate, CappedEpoch, Substrate};
-use shekyl_genesis_tool::builder::genesis_block;
+use shekyl_genesis_tool::builder::pinned_genesis;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::{Network, NetworkId};
 use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::{Block, Transaction};
+use shekyl_wire::Block;
 
 use super::{MinerKeys, Scenario, StepOutcome};
 use crate::schedule::ChainRules;
-
-/// `network`'s genesis block as the node connects it: the table's coinbase
-/// under the fixed genesis header ([`genesis_block`]), held to the hash the
-/// table pins.
-///
-/// # Panics
-///
-/// If the table's coinbase does not decode or the assembled block is not
-/// the pinned one: the build's genesis table and its header disagree, which
-/// the node refuses at open too.
-#[must_use]
-pub(crate) fn table_genesis(network: Network) -> Block {
-    let genesis = network.genesis();
-    let bytes = hex::decode(genesis.tx_hex()).expect("the table's genesis coinbase is hex");
-    let tx = Transaction::from_bytes(&bytes).expect("the table's genesis coinbase decodes");
-    let block = genesis_block(tx).expect("the genesis block assembles");
-    assert_eq!(
-        block.hash(),
-        BlockHash::from_bytes(genesis.hash()),
-        "{network}'s assembled genesis is the block the table pins"
-    );
-    block
-}
 
 impl<P: Substrate + Send + Sync + 'static> Scenario<P>
 where
@@ -72,7 +47,8 @@ where
     ///
     /// # Panics
     ///
-    /// If regtest's table genesis does not connect under regtest's rules.
+    /// If regtest's table genesis does not assemble, or does not connect
+    /// under regtest's rules.
     pub async fn open_regtest(name: &str, pow: P, schedule: CappedEpoch) -> (Self, Block) {
         let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), schedule)
             .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"));
@@ -85,7 +61,8 @@ where
             ml_kem_ek: recipient.ml_kem_ek.clone(),
         };
         scenario.wallet = miner;
-        let genesis = table_genesis(Network::Regtest);
+        let genesis = pinned_genesis(Network::Regtest)
+            .unwrap_or_else(|error| panic!("regtest's table genesis assembles: {error}"));
         let connected = scenario
             .offer_genesis(&genesis)
             .await

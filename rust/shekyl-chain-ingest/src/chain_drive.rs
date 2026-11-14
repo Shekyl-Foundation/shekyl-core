@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 
 use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, Rewound};
-use crate::emission_assembly::{assemble_emission_claim, ClaimAnchor, ClaimTerms};
+use crate::emission_assembly::{assemble_emission_claim, ClaimTerms};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
 use shekyl_chain_rules::SettlementSchedule;
 
@@ -188,10 +188,8 @@ pub(crate) async fn priced_emission_claim(
             backing.input,
             parts.terms.clone(),
             fee,
-            ClaimAnchor {
-                network: &backing.network,
-                tree: &backing.tree,
-            },
+            &backing.network,
+            &backing.tree,
         );
         let tx = Transaction::from_bytes(&claim.bytes).expect("the claim parses");
         let weight = u64::try_from(tx.weight()).expect("a weight fits");

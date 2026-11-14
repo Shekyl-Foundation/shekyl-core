@@ -81,21 +81,6 @@ pub struct ClaimTerms {
     pub reward_amount_plain: Vec<u64>,
 }
 
-/// Where a claim lists: the id of the chain's network and the reference
-/// its proofs anchor at. Every network-bound message the claim carries —
-/// the transaction's `tx_signable`, the vin's auth digests, the fee
-/// spends' proofs and slots — is framed with `network`: the harness id on
-/// a chain that mines its own genesis, the table network's on one that
-/// carries its identity (`CHAIN_FORGE.md` §6). A spender hands both out
-/// with every sourced output (`Sourced::network`, `Sourced::tree`).
-#[derive(Clone, Copy)]
-pub struct ClaimAnchor<'a> {
-    /// The chain's network id.
-    pub network: &'a NetworkId,
-    /// The reference the backing and the fee spends are proved at.
-    pub tree: &'a TreeContext,
-}
-
 /// The assembled claim: the wire bytes, and the facts a caller verifies
 /// them with.
 pub struct AssembledClaim {
@@ -137,8 +122,17 @@ pub struct AssembledClaim {
 /// membership-only proof over it; 12–13 the vin and its dual auth;
 /// 14 the full prefix hash; 15 the fee-side proving with the reward as the
 /// input-side cleartext term; 16–17 the PQC auth slots, fee keys then the
-/// identity key; 19 the production encoder. `anchor` says which chain
-/// the claim lists on and where its proofs anchor ([`ClaimAnchor`]).
+/// identity key; 19 the production encoder. `network` is the chain the
+/// claim lists on: every network-bound message (the `tx_signable`, the
+/// vin's auth digests, the fee spends' proofs and slots) is framed with
+/// it. `tree` is the reference those proofs anchor at. A spender hands
+/// both out with every sourced output (`Sourced::network`, `Sourced::tree`).
+// CLIPPY: the network id and the proof reference are separate inputs.
+// Pairing them held no invariant the two parameters do not name.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the claim; the network id and the proof reference are not one value"
+)]
 pub fn assemble_emission_claim(
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
@@ -146,17 +140,18 @@ pub fn assemble_emission_claim(
     backing: SpendInput,
     terms: ClaimTerms,
     fee: u64,
-    anchor: ClaimAnchor<'_>,
+    network: &NetworkId,
+    tree: &TreeContext,
 ) -> AssembledClaim {
     assemble(
-        anchor.network,
+        network,
         keys,
         tx_key_secret,
         fee_inputs,
         backing,
         terms,
         fee,
-        anchor.tree,
+        tree,
         FeeProof::AsProved,
     )
 }
@@ -169,6 +164,11 @@ pub fn assemble_emission_claim(
 /// CEN-J26 is the only row that can refuse it. A proof flipped after
 /// signing is CEN-I18's refusal instead, and I18 runs first. The same
 /// shape as the spender's `spend_coinbase_breaking_range_proof`.
+// CLIPPY: same argument list as [`assemble_emission_claim`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the claim; the network id and the proof reference are not one value"
+)]
 pub fn assemble_emission_claim_breaking_fee_proof(
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
@@ -176,17 +176,18 @@ pub fn assemble_emission_claim_breaking_fee_proof(
     backing: SpendInput,
     terms: ClaimTerms,
     fee: u64,
-    anchor: ClaimAnchor<'_>,
+    network: &NetworkId,
+    tree: &TreeContext,
 ) -> AssembledClaim {
     assemble(
-        anchor.network,
+        network,
         keys,
         tx_key_secret,
         fee_inputs,
         backing,
         terms,
         fee,
-        anchor.tree,
+        tree,
         FeeProof::FlippedBeforeSigning,
     )
 }
