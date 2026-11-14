@@ -672,10 +672,12 @@ mod tests {
     /// A socket left behind with nothing listening is stale, not a security
     /// failure; a file that is not a socket is the wrong thing there.
     /// A call's outcome and how long it took.
+    #[cfg(unix)]
     type Timed = (Result<Zeroizing<Vec<u8>>, LocalFault>, Duration);
 
     /// `post` on a thread: its outcome and how long it took, or `None` if
     /// it is still running at `guard` (a call the bound did not end).
+    #[cfg(unix)]
     fn post_guarded(target: LocalTarget, within: Duration, guard: Duration) -> Option<Timed> {
         let (sent, outcome) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
