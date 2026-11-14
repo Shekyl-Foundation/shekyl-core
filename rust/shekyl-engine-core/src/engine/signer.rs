@@ -93,9 +93,9 @@ pub trait EngineSignerKind: private::Sealed + 'static {
     /// same compile-forced guarantee as the `!Clone` archival keys. The multisig
     /// signer kind is a per-version family (MS-1, no const generics):
     /// `MultisigSignerV2` (spend-auth version `0x02`, Option E′) sets this to
-    /// `shekyl_multisig::FrostCeremony`, its four-blob two-round-trip FROST
-    /// ceremony; a future V4 marker gets its own type, so "a V4 wallet ran an E′
-    /// ceremony" is a compile error.
+    /// `shekyl_multisig::Role`, the role a member plays in an E′ ceremony,
+    /// whose steps are `shekyl_multisig::ceremony`'s; a future V4 marker gets
+    /// its own type, so "a V4 wallet ran an E′ ceremony" is a compile error.
     type SigningCeremony;
 }
 
@@ -162,37 +162,8 @@ impl private::Sealed for MultisigSignerV2 {}
 
 #[cfg(feature = "multisig")]
 impl EngineSignerKind for MultisigSignerV2 {
-    /// The four-blob, two-round-trip, pqc-last FROST ceremony (`shekyl-multisig`).
-    type SigningCeremony = shekyl_multisig::FrostCeremony;
-}
-
-/// engine-core's durable impl of the ceremony's persist-before-use capability
-/// ([`shekyl_multisig::NonceCounterSink`]).
-///
-/// The proposer's held FROST nonce is released to the share-producing path only
-/// after this sink durably advances the monotonic nonce counter (the ceremony
-/// then mints a `ConsumedNonce`). engine-core owns the ledger, so it — not
-/// `shekyl-multisig`, which owns no I/O — carries the durable write. S2 wires the
-/// body to the wallet ledger's crash-atomic `save_state` path (the
-/// `persist_bond_record` discipline); here it is the compile-time proof that the
-/// cross-crate capability is impl-able from the ledger side.
-#[cfg(feature = "multisig")]
-#[allow(dead_code)] // constructed + wired to the ceremony in MS-5 S2
-pub(crate) struct MultisigNonceSink {
-    _private: (),
-}
-
-#[cfg(feature = "multisig")]
-impl shekyl_multisig::NonceCounterSink for MultisigNonceSink {
-    fn persist_nonce_counter(
-        &mut self,
-        _intent_hash: [u8; 32],
-        _counter: u64,
-    ) -> Result<(), shekyl_multisig::NonceCounterError> {
-        Err(shekyl_multisig::NonceCounterError(
-            "durable nonce-counter persist not yet wired to the ledger (MS-5 S2)".to_string(),
-        ))
-    }
+    /// The E′ ceremony's roles (`shekyl_multisig::ceremony`).
+    type SigningCeremony = shekyl_multisig::Role;
 }
 
 // ----------------------------------------------------------------------------

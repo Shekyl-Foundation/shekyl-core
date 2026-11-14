@@ -38,6 +38,18 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-network = { path = "../shekyl-network" }
 shekyl-types = { path = "../shekyl-types" }
+# The signing ceremony (`ceremony/`): the FROST SAL machines and the FCMP++
+# prove and verify (`shekyl-fcmp`, feature `multisig`), the transaction it
+# assembles and signs over (`shekyl-wire`), and the range proof the proposer
+# makes and every signer verifies (`shekyl-bulletproofs`, over
+# `shekyl-curve-primitives`' commitments). Crypto and wire crates only: none
+# reaches a transport crate. `shekyl-fcmp` takes no edge back to this crate.
+shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand = "0.8"
 serde = { workspace = true }
 serde_json = "1"
@@ -51,18 +63,10 @@ zeroize = { workspace = true }
 serde_json = "1"
 
 [dev-dependencies]
-# Test-only: `intent.rs`'s canonical-bytes test cross-checks against
-# `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge, so it never
-# enters the runtime dependency surface the ban covers.
-shekyl-wire = { path = "../shekyl-wire" }
-# `tests/frost_spend.rs`: a multisig spend end to end, from a dealt group's
-# member files and slice 1's outputs through FROST SAL into one FCMP++ proof.
-# Test-only; `shekyl-fcmp` takes no edge back to this crate, so there is no
-# cycle through `shekyl-curve-tree`.
-shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
+# `tests/`: the spend end to end, from a dealt group's member files and slice
+# 1's outputs, through the ceremony into a transaction.
 ciphersuite = "0.4"
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 

@@ -284,8 +284,10 @@ pub fn threshold_keys(
     )
 }
 
-/// dkg's participant for a 0-based member index.
-fn participant(member_index: u8) -> Participant {
+/// dkg's participant for a 0-based member index: the one place the
+/// member file's index becomes FROST's 1-based participant.
+#[must_use]
+pub fn participant(member_index: u8) -> Participant {
     Participant::new(u16::from(member_index) + 1).expect("index + 1 is never zero")
 }
 
@@ -556,6 +558,19 @@ impl fmt::Debug for HeldSession {
             .field("params", &self.params)
             .finish_non_exhaustive()
     }
+}
+
+/// Whether `keys` open `params`' output: the check every machine
+/// constructor makes, for a caller that wants to refuse before round 1.
+///
+/// # Errors
+///
+/// [`FrostSalError::KeysDoNotOpenOutput`].
+pub fn check_keys_open(
+    params: &SalSigningParams,
+    keys: &ThresholdKeys<Ed25519T>,
+) -> Result<(), FrostSalError> {
+    params.offset_keys(keys.clone()).map(|_| ())
 }
 
 /// Round 1 for one input whose share is released later: this member's
