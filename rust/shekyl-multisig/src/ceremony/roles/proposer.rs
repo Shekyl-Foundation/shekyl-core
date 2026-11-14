@@ -35,7 +35,7 @@ use shekyl_wire::{Ct, Transaction};
 use super::super::context::{ProposerInputs, SigningContext};
 use super::super::files::{
     open_forwarded, Authenticated, Commitment, FinalTx, HybridSig, Incoming, Proposal,
-    ResponderShare, RoundOne, SignatureShare, SigningSet,
+    ResponderShare, SignatureShare, SigningSet,
 };
 use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies, NonceCounterSink};
 use super::super::proofs::{
@@ -43,8 +43,8 @@ use super::super::proofs::{
 };
 use super::super::{CeremonyError, Role};
 use super::{
-    check_final_tx, check_rounds, expect_role, from_role, hold_all, preprocesses,
-    responder_preprocesses, seal_as, sign_held, PreprocessSet,
+    check_final_tx, check_rounds, expect_role, from_role, hold_all, seal_as, sign_held,
+    CheckedRounds, PreprocessSet,
 };
 
 /// The proposer, A, in state `S`.
@@ -57,14 +57,14 @@ pub struct Proposer<'a, S> {
 /// Waiting for every holder's `Commitment`, then the responder's share.
 pub struct Collecting {
     inputs: ProposerInputs,
-    own: Vec<RoundOne>,
+    own: CheckedRounds,
     commitments: BTreeMap<u8, Authenticated<Commitment>>,
 }
 
 /// The responder's share is in; waiting for every holder's share.
 pub struct SharesPending {
     inputs: ProposerInputs,
-    own: Vec<RoundOne>,
+    own: CheckedRounds,
     commitments: BTreeMap<u8, Authenticated<Commitment>>,
     responder: Authenticated<ResponderShare>,
     holder_shares: BTreeMap<u8, Authenticated<SignatureShare>>,
@@ -110,7 +110,7 @@ impl<'a> Proposer<'a, Collecting> {
             &ctx,
             &Proposal {
                 intent: ctx.intent.intent().clone(),
-                rounds: own.clone(),
+                rounds: own.rounds().to_vec(),
             },
             rng,
         )?;
@@ -143,14 +143,15 @@ impl<'a> Proposer<'a, Collecting> {
         };
         from_role(&ctx, &sent, Role::Proposer)?;
         let inputs = inputs.for_context(&ctx)?;
-        let own = sent.into_body().rounds;
+        let sender = sent.sender();
+        let own = CheckedRounds::new(&ctx, sender, sent.into_body().rounds)?;
         Ok(Self::collecting(ctx, inputs, own, proposal_file))
     }
 
     fn collecting(
         ctx: SigningContext<'a>,
         inputs: ProposerInputs,
-        own: Vec<RoundOne>,
+        own: CheckedRounds,
         proposal_file: Vec<u8>,
     ) -> Self {
         Self {
@@ -323,16 +324,28 @@ impl<'a> Proposer<'a, SharesPending> {
             holder_shares,
         } = self.state;
 
-        let set = PreprocessSet::new(
-            ctx,
-            commitments
-                .iter()
-                .map(|(&holder, c)| (holder, preprocesses(&c.body().rounds)))
-                .chain(std::iter::once((
-                    responder.sender(),
-                    responder_preprocesses(&responder.body().inputs),
-                ))),
-        )?;
+        let mut others = Vec::with_capacity(commitments.len() + 1);
+        for (&holder, file) in &commitments {
+            others.push((
+                holder,
+                CheckedRounds::new(ctx, holder, file.body().rounds.clone())?,
+            ));
+        }
+        let responder_index = responder.sender();
+        others.push((
+            responder_index,
+            CheckedRounds::new(
+                ctx,
+                responder_index,
+                responder
+                    .body()
+                    .inputs
+                    .iter()
+                    .map(|input| input.round.clone())
+                    .collect(),
+            )?,
+        ));
+        let set = PreprocessSet::new(ctx, others)?;
         let consumed = consume(ctx.intent.hash(), store, sink)?;
         let signed = sign_held(consumed, &own, &set)?;
         let sals = complete_sals(signed, &responder, &holder_shares)?;
@@ -376,22 +389,29 @@ fn complete_sals(
         .into_iter()
         .enumerate()
         .map(|(input, (machine, _own))| {
-            let others =
-                std::iter::once((responder.sender(), &responder.body().inputs[input].share)).chain(
-                    holder_shares
-                        .iter()
-                        .map(|(&holder, file)| (holder, &file.body().shares[input])),
-                );
-            let shares = others
-                .map(|(member, share)| {
+            let mut shares = HashMap::new();
+            let responder_share = per_input(&responder.body().inputs, input)?.share;
+            shares.insert(
+                participant(responder.sender()),
+                read_share(&machine, &responder_share)
+                    .map_err(|source| CeremonyError::Frost { input, source })?,
+            );
+            for (&holder, file) in holder_shares {
+                let share = per_input(&file.body().shares, input)?;
+                shares.insert(
+                    participant(holder),
                     read_share(&machine, share)
-                        .map(|share| (participant(member), share))
-                        .map_err(|source| CeremonyError::Frost { input, source })
-                })
-                .collect::<Result<HashMap<_, _>, _>>()?;
+                        .map_err(|source| CeremonyError::Frost { input, source })?,
+                );
+            }
             complete(machine, shares).map_err(|source| CeremonyError::Signing { input, source })
         })
         .collect()
+}
+
+/// `items[input]`, or [`CeremonyError::InputCount`] when the list is short.
+fn per_input<T>(items: &[T], input: usize) -> Result<&T, CeremonyError> {
+    items.get(input).ok_or(CeremonyError::InputCount)
 }
 
 /// The FCMP++ proof with every input's SAL, verified as every signer will
@@ -438,7 +458,7 @@ fn prove_range(
 /// Every signer's per-output key per input, in the intent's signer order.
 fn signer_keys(
     ctx: &SigningContext<'_>,
-    own: &[RoundOne],
+    own: &CheckedRounds,
     commitments: &BTreeMap<u8, Authenticated<Commitment>>,
     responder: &Authenticated<ResponderShare>,
 ) -> Result<Vec<Vec<HybridPublicKey>>, CeremonyError> {
@@ -451,14 +471,16 @@ fn signer_keys(
                 .iter()
                 .map(|&member| {
                     if member == me {
-                        Ok(own[input].key.clone())
+                        Ok(own.key(input)?.clone())
                     } else if member == responder.sender() {
-                        Ok(responder.body().inputs[input].round.key.clone())
+                        Ok(per_input(&responder.body().inputs, input)?
+                            .round
+                            .key
+                            .clone())
                     } else {
-                        commitments
-                            .get(&member)
-                            .map(|c| c.body().rounds[input].key.clone())
-                            .ok_or(CeremonyError::Incomplete)
+                        let commitment =
+                            commitments.get(&member).ok_or(CeremonyError::Incomplete)?;
+                        Ok(per_input(&commitment.body().rounds, input)?.key.clone())
                     }
                 })
                 .collect()
@@ -574,8 +596,15 @@ impl<'a> Proposer<'a, AwaitingSignatures> {
                 sig_count,
                 sigs: signers
                     .iter()
-                    .map(|member| self.state.signatures[member][input].clone())
-                    .collect(),
+                    .map(|member| {
+                        self.state
+                            .signatures
+                            .get(member)
+                            .and_then(|sigs| sigs.get(input))
+                            .cloned()
+                            .ok_or(CeremonyError::InputCount)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
                 signer_indices: signers.clone(),
             };
             auth.hybrid_signature = container

@@ -54,11 +54,21 @@ use shekyl_fcmp::frost_sal::HeldSession;
 /// }
 /// ```
 ///
-/// and no function that rebuilds a session from a seed and parameters
-/// given separately:
+/// and the sign machine has no `cache` and no `from_cache`, so the seed
+/// cannot be copied out and resumed under other parameters:
 ///
-/// ```compile_fail,E0425
-/// let _ = shekyl_fcmp::frost_sal::from_cache;
+/// ```compile_fail,E0599
+/// use shekyl_fcmp::frost_sal::SalSignMachine;
+/// fn leak(machine: SalSignMachine) {
+///     let _ = machine.cache();
+/// }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use shekyl_fcmp::frost_sal::SalSignMachine;
+/// fn rebuild() {
+///     let _ = SalSignMachine::from_cache();
+/// }
 /// ```
 pub struct HeldNonce {
     intent_hash: [u8; 32],

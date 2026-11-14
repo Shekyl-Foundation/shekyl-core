@@ -349,10 +349,12 @@ fn a_preprocess_depends_on_its_seed_and_share_but_not_its_params() {
     let g = group(3, 2);
     let one = params_for(&g);
     let other = params_for(&g);
+    // The inner constructor, which the public machine does not expose:
+    // `modular_frost` rebuilds a preprocess from the seed alone.
     let seeded = |params: &SalSigningParams, p: u8, seed: u8| {
         let keys = params.offset_keys(g.keys[&participant(p)].clone()).unwrap();
         let cached = CachedPreprocess(Zeroizing::new([seed; 32]));
-        SalSignMachine::from_cache(params.algorithm(), keys, cached).1
+        AlgorithmSignMachine::from_cache(params.algorithm(), keys, cached).1
     };
     assert!(seeded(&one, 0, 1) == seeded(&one, 0, 1));
     assert!(seeded(&one, 0, 1) != seeded(&one, 0, 2));
@@ -394,7 +396,9 @@ fn without_the_y_kem_offset_the_aggregate_does_not_verify() {
     let g = group(3, 2);
     let params = params_for(&g);
     let signers = ps(&[0, 1]);
-    let (machines, preprocesses): (HashMap<_, _>, HashMap<_, _>) = signers
+    // Built on the inner machine, past the offset check. `sign` does not
+    // accept this machine: the public type is only made with the tweak.
+    let (mut machines, preprocesses): (HashMap<_, _>, HashMap<_, _>) = signers
         .iter()
         .map(|&p| {
             let keys = g.keys[&p].clone().offset(-params.rerandomized.o_blind());
@@ -403,7 +407,16 @@ fn without_the_y_kem_offset_the_aggregate_does_not_verify() {
             ((p, machine), (p, pre))
         })
         .unzip();
-    for (_, result) in sign_and_complete(&signers, machines, &preprocesses) {
+    let (machines, shares): (HashMap<_, _>, HashMap<_, _>) = signers
+        .iter()
+        .map(|&p| {
+            let machine = machines.remove(&p).unwrap();
+            let (machine, share) = machine.sign(others(&preprocesses, p), &[]).unwrap();
+            ((p, machine), (p, share))
+        })
+        .unzip();
+    for (p, machine) in machines {
+        let result = machine.complete(others(&shares, p));
         assert!(
             matches!(result, Err(FrostError::InternalError(_))),
             "{result:?}"

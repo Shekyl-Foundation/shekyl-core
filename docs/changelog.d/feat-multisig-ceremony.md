@@ -4,9 +4,9 @@
     - a file is `Authenticated` to the member it names;
     - the intent is a `ValidatedIntent`, checked against the member's own ledger;
     - a per-output key is a `CommittedMemberKey`;
-    - the preprocess set is a `PreprocessSet` of exactly the other signers;
+    - the preprocess set is a `PreprocessSet` of exactly the other signers, one preprocess per input;
     - a held nonce is used once, and only after its use is durably recorded (`ConsumedNonce`);
-    - a held nonce is used only with the parameters it was made under, because a `HeldSession` owns them;
+    - a held nonce is used only with the parameters it was made under. A `HeldSession` owns them, and the sign machine does not expose `from_cache`;
     - the responder holds nothing;
     - a cosigner signs only a `SignableTransaction`. The cosigner assembles it from its own context and the verified proofs, and it passes the pool's structural rules.
   - **One layout.** Every member builds the same transaction from the intent. Its inputs are the member's own key images, in the order consensus requires (CEN-I5), and its fee and reference block are read from the intent. So an unsigned spend cannot disagree with its intent.

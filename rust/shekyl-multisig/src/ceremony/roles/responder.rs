@@ -16,10 +16,7 @@ use super::super::files::{
 };
 use super::super::nonce::LiveCeremonies;
 use super::super::{CeremonyError, Role};
-use super::{
-    check_rounds, expect_role, from_role, own_keys, preprocesses, seal_as, OpenedSet,
-    PreprocessSet, Preprocesses,
-};
+use super::{expect_role, from_role, own_keys, seal_as, CheckedRounds, OpenedSet, PreprocessSet};
 
 /// What the responder receives: the `Proposal` when M = 2, the proposer's
 /// `SigningSet` otherwise.
@@ -106,21 +103,21 @@ impl Responder {
         seal_as(ctx, &ResponderShare { inputs }, rng)
     }
 
-    /// Every other signer's preprocesses, from what the responder received:
+    /// Every other signer's first round, from what the responder received:
     /// with no holders the `Proposal`; otherwise the `SigningSet`, which
     /// carries the `Proposal` and every `Commitment` and no responder's
     /// rounds.
     fn others(
         ctx: &SigningContext<'_>,
         received: ResponderInput<'_>,
-    ) -> Result<Vec<(u8, Preprocesses)>, CeremonyError> {
+    ) -> Result<Vec<(u8, CheckedRounds)>, CeremonyError> {
         let proposer = ctx.intent.intent().proposer_index;
         let has_holders = ctx.holders().next().is_some();
         match received {
             ResponderInput::Proposal(p) if !has_holders => {
                 from_role(ctx, p, Role::Proposer)?;
-                check_rounds(ctx, p.sender(), p.body().rounds.iter())?;
-                Ok(vec![(proposer, preprocesses(&p.body().rounds))])
+                let rounds = CheckedRounds::new(ctx, p.sender(), p.body().rounds.clone())?;
+                Ok(vec![(proposer, rounds)])
             }
             ResponderInput::SigningSet(set) if has_holders => {
                 let OpenedSet {
@@ -131,12 +128,8 @@ impl Responder {
                 else {
                     return Err(CeremonyError::SigningSetContents);
                 };
-                Ok(std::iter::once((proposer, preprocesses(&proposal)))
-                    .chain(
-                        commitments
-                            .iter()
-                            .map(|(&holder, rounds)| (holder, preprocesses(rounds))),
-                    )
+                Ok(std::iter::once((proposer, proposal))
+                    .chain(commitments)
                     .collect())
             }
             _ => Err(CeremonyError::SigningSetContents),

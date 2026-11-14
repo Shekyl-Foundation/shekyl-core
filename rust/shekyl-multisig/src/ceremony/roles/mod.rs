@@ -42,8 +42,7 @@ use shekyl_fcmp::frost_sal::{
 
 use super::context::SigningContext;
 use super::files::{
-    open_forwarded, seal, Authenticated, Body, FinalTx, Incoming, ResponderRound, RoundOne,
-    SigningSet,
+    open_forwarded, seal, Authenticated, Body, FinalTx, Incoming, RoundOne, SigningSet,
 };
 use super::nonce::{ConsumedNonce, HeldNonce, HeldNonceStore};
 use super::proofs::{
@@ -129,13 +128,16 @@ fn check_rounds<'r>(
     Ok(())
 }
 
-/// Hold a nonce for every input, put it in `store`, and return this
-/// member's first rounds.
+/// Hold a nonce for every input and return this member's first rounds.
+///
+/// The rounds are checked against the committed hashes before the nonce
+/// goes into `store`. A key that does not match drops the sessions, wiped,
+/// and leaves the store unchanged.
 fn hold_all(
     ctx: &SigningContext<'_>,
     store: &mut impl HeldNonceStore,
     rng: &mut (impl RngCore + CryptoRng),
-) -> Result<Vec<RoundOne>, CeremonyError> {
+) -> Result<CheckedRounds, CeremonyError> {
     let keys = own_keys(ctx)?;
     let mut sessions = Vec::with_capacity(keys.len());
     let mut rounds = Vec::with_capacity(keys.len());
@@ -148,39 +150,83 @@ fn hold_all(
             key,
         });
     }
+    let rounds = CheckedRounds::new(ctx, ctx.member.member_index(), rounds)?;
     store.put(HeldNonce::new(*ctx.intent.hash(), sessions))?;
     Ok(rounds)
 }
 
-/// One member's preprocess per input.
+/// One member's preprocess per input, in the transaction's input order.
 type Preprocesses = Vec<[u8; SAL_PREPROCESS_LEN]>;
 
-/// The preprocesses of `rounds`, in input order.
-fn preprocesses<'r>(rounds: impl IntoIterator<Item = &'r RoundOne>) -> Preprocesses {
-    rounds.into_iter().map(|round| round.preprocess).collect()
+/// A member's first round for every input of one context.
+///
+/// The length is the context's input count, and each key matches its
+/// committed hash. [`CheckedRounds::new`] is the only constructor, so a
+/// later step indexes a list that has already been refused if it was short
+/// or long.
+struct CheckedRounds {
+    rounds: Vec<RoundOne>,
 }
 
-/// The preprocesses of the responder's rounds, in input order.
-fn responder_preprocesses(rounds: &[ResponderRound]) -> Preprocesses {
-    preprocesses(rounds.iter().map(|r| &r.round))
+impl CheckedRounds {
+    /// Check `rounds` as `member`'s first round for every input of `ctx`.
+    fn new(
+        ctx: &SigningContext<'_>,
+        member: u8,
+        rounds: Vec<RoundOne>,
+    ) -> Result<Self, CeremonyError> {
+        check_rounds(ctx, member, rounds.iter())?;
+        Ok(Self { rounds })
+    }
+
+    fn len(&self) -> usize {
+        self.rounds.len()
+    }
+
+    fn rounds(&self) -> &[RoundOne] {
+        &self.rounds
+    }
+
+    /// The preprocess for `input`.
+    fn preprocess(&self, input: usize) -> Result<[u8; SAL_PREPROCESS_LEN], CeremonyError> {
+        self.rounds
+            .get(input)
+            .map(|round| round.preprocess)
+            .ok_or(CeremonyError::InputCount)
+    }
+
+    /// The per-output key for `input`.
+    fn key(&self, input: usize) -> Result<&HybridPublicKey, CeremonyError> {
+        self.rounds
+            .get(input)
+            .map(|round| &round.key)
+            .ok_or(CeremonyError::InputCount)
+    }
+
+    fn preprocesses(&self) -> Preprocesses {
+        self.rounds.iter().map(|round| round.preprocess).collect()
+    }
 }
 
 /// The other signers' preprocesses, per member, per input: exactly the
-/// intent's signers but this member, once each, each read from a file its
-/// sender signed whose keys were checked on receipt. Made only by
-/// [`PreprocessSet::new`], and signing takes one, never a bare map. This
-/// member's own preprocess is the one its machine produces, so "mine is
-/// the one I sent" holds by construction.
+/// intent's signers but this member, once each, each a [`CheckedRounds`].
+/// Made only by [`PreprocessSet::new`], and signing takes one, never a
+/// bare map. This member's own preprocess is the one its machine produces,
+/// so "mine is the one I sent" holds by construction.
 struct PreprocessSet(BTreeMap<u8, Preprocesses>);
 
 impl PreprocessSet {
     fn new(
         ctx: &SigningContext<'_>,
-        others: impl IntoIterator<Item = (u8, Preprocesses)>,
+        others: impl IntoIterator<Item = (u8, CheckedRounds)>,
     ) -> Result<Self, CeremonyError> {
         let mut set = BTreeMap::new();
-        for (member, preprocesses) in others {
-            if set.insert(member, preprocesses).is_some() {
+        let inputs = ctx.inputs.len();
+        for (member, rounds) in others {
+            if rounds.len() != inputs {
+                return Err(CeremonyError::InputCount);
+            }
+            if set.insert(member, rounds.preprocesses()).is_some() {
                 return Err(CeremonyError::Duplicate { member });
             }
         }
@@ -201,7 +247,8 @@ impl PreprocessSet {
         self.0
             .iter()
             .map(|(&member, per_input)| {
-                read_preprocess(machine, &per_input[input])
+                let bytes = per_input.get(input).ok_or(CeremonyError::InputCount)?;
+                read_preprocess(machine, bytes)
                     .map(|preprocess| (participant(member), preprocess))
                     .map_err(|source| CeremonyError::Frost { input, source })
             })
@@ -209,22 +256,26 @@ impl PreprocessSet {
     }
 }
 
-/// Resume a consumed nonce and sign every input over `set`; each rebuilt
-/// preprocess must be the one this member `sent`.
+/// Resume a consumed nonce and sign every input over `set`. The session
+/// count is `sent`'s length, and each rebuilt preprocess is the one this
+/// member sent. A short or long nonce signs nothing.
 fn sign_held(
     consumed: ConsumedNonce,
-    sent: &[RoundOne],
+    sent: &CheckedRounds,
     set: &PreprocessSet,
 ) -> Result<Vec<(SalSignatureMachine, SalShare)>, CeremonyError> {
-    consumed
-        .into_sessions()
+    let sessions = consumed.into_sessions();
+    if sessions.len() != sent.len() {
+        return Err(CeremonyError::HeldNonceMismatch);
+    }
+    sessions
         .into_iter()
         .enumerate()
         .map(|(input, session)| {
             let (machine, rebuilt) = session
                 .resume()
                 .map_err(|source| CeremonyError::Frost { input, source })?;
-            if sent.get(input).map(|round| round.preprocess) != Some(preprocess_bytes(&rebuilt)) {
+            if sent.preprocess(input)? != preprocess_bytes(&rebuilt) {
                 return Err(CeremonyError::HeldNonceMismatch);
             }
             let preprocesses = set.read(&machine, input)?;
@@ -234,13 +285,14 @@ fn sign_held(
 }
 
 /// A forwarded set, opened: each file under its own sender's signature,
-/// for this intent, every key checked. The round-1 contributions by
-/// member, and the responder's rounds if the set carries them.
+/// for this intent, every first round a [`CheckedRounds`]. A responder's
+/// shares are not kept: the holder signs from the rounds, and the proposer
+/// reads the shares from the file it stored.
 #[derive(Default)]
 struct OpenedSet {
-    proposal: Option<Vec<RoundOne>>,
-    commitments: BTreeMap<u8, Vec<RoundOne>>,
-    responder: Option<(u8, Vec<ResponderRound>)>,
+    proposal: Option<CheckedRounds>,
+    commitments: BTreeMap<u8, CheckedRounds>,
+    responder: Option<(u8, CheckedRounds)>,
 }
 
 impl OpenedSet {
@@ -254,34 +306,33 @@ impl OpenedSet {
             match open_forwarded(ctx.member, &ctx.network_id, ctx.intent.hash(), file)? {
                 Incoming::Proposal(p) => {
                     from_role(ctx, &p, Role::Proposer)?;
-                    check_rounds(ctx, p.sender(), p.body().rounds.iter())?;
-                    if opened.proposal.replace(p.into_body().rounds).is_some() {
-                        return Err(CeremonyError::Duplicate {
-                            member: ctx.intent.intent().proposer_index,
-                        });
+                    let sender = p.sender();
+                    let rounds = CheckedRounds::new(ctx, sender, p.into_body().rounds)?;
+                    if opened.proposal.replace(rounds).is_some() {
+                        return Err(CeremonyError::Duplicate { member: sender });
                     }
                 }
                 Incoming::Commitment(c) => {
                     from_role(ctx, &c, Role::Holder)?;
-                    check_rounds(ctx, c.sender(), c.body().rounds.iter())?;
                     let sender = c.sender();
-                    if opened
-                        .commitments
-                        .insert(sender, c.into_body().rounds)
-                        .is_some()
-                    {
+                    let rounds = CheckedRounds::new(ctx, sender, c.into_body().rounds)?;
+                    if opened.commitments.insert(sender, rounds).is_some() {
                         return Err(CeremonyError::Duplicate { member: sender });
                     }
                 }
                 Incoming::ResponderShare(r) => {
                     from_role(ctx, &r, Role::Responder)?;
-                    check_rounds(ctx, r.sender(), r.body().inputs.iter().map(|i| &i.round))?;
                     let sender = r.sender();
-                    if opened
-                        .responder
-                        .replace((sender, r.into_body().inputs))
-                        .is_some()
-                    {
+                    let rounds = CheckedRounds::new(
+                        ctx,
+                        sender,
+                        r.into_body()
+                            .inputs
+                            .into_iter()
+                            .map(|input| input.round)
+                            .collect(),
+                    )?;
+                    if opened.responder.replace((sender, rounds)).is_some() {
                         return Err(CeremonyError::Duplicate { member: sender });
                     }
                 }

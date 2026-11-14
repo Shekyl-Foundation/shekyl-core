@@ -1058,8 +1058,9 @@ the danger is scoped to one role:
    hash, which stops a cosigner inducing a member to sign one nonce
    against two challenges (**fund theft**); (d) **bound to its
    parameters**: a `HeldSession` owns the parameters and keys it was
-   made under and resumes only with them, because `from_cache` ignores
-   its parameters.
+   made under and resumes only with them. The public sign machine is a
+   newtype, so `modular_frost`'s `from_cache` (which ignores its
+   parameters) is not a method of it.
 
 A restart inside a session does not cost the round: the proposer is
 rebuilt from the last file it sent (its `Proposal`, then its `FinalTx`),

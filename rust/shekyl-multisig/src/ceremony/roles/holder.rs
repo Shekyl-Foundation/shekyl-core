@@ -17,8 +17,7 @@ use super::super::files::{Authenticated, Commitment, Proposal, SignatureShare, S
 use super::super::nonce::{consume, HeldNonceStore, LiveCeremonies, NonceCounterSink};
 use super::super::{CeremonyError, Role};
 use super::{
-    check_rounds, expect_role, from_role, hold_all, preprocesses, responder_preprocesses, seal_as,
-    sign_held, OpenedSet, PreprocessSet,
+    check_rounds, expect_role, from_role, hold_all, seal_as, sign_held, OpenedSet, PreprocessSet,
 };
 
 /// A holder, H, in state `S`.
@@ -51,7 +50,13 @@ impl<'a> Holder<'a, Committed> {
         check_rounds(&ctx, proposal.sender(), proposal.body().rounds.iter())?;
         live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
         let rounds = hold_all(&ctx, store, rng)?;
-        let file = seal_as(&ctx, &Commitment { rounds }, rng)?;
+        let file = seal_as(
+            &ctx,
+            &Commitment {
+                rounds: rounds.rounds().to_vec(),
+            },
+            rng,
+        )?;
         Ok((
             Self {
                 ctx,
@@ -109,13 +114,10 @@ impl<'a> Holder<'a, Committed> {
             .ok_or(CeremonyError::SigningSetContents)?;
         let set = PreprocessSet::new(
             ctx,
-            commitments
-                .iter()
-                .map(|(&holder, rounds)| (holder, preprocesses(rounds)))
-                .chain([
-                    (ctx.intent.intent().proposer_index, preprocesses(&proposal)),
-                    (responder, responder_preprocesses(&responder_rounds)),
-                ]),
+            commitments.into_iter().chain([
+                (ctx.intent.intent().proposer_index, proposal),
+                (responder, responder_rounds),
+            ]),
         )?;
         let consumed = consume(ctx.intent.hash(), store, sink)?;
         let shares = sign_held(consumed, &own, &set)?

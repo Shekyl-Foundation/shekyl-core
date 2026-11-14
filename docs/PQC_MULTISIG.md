@@ -1090,14 +1090,16 @@ deletes durably before it returns (the wallet's store, slice 4a).
   monotonic nonce counter), and only then holds a `ConsumedNonce`. One
   persist covers every input of the intent. If the persist fails, the
   nonce is dropped and the ceremony is forfeit: a new intent is needed.
-- **Bound to its parameters.** `from_cache` cannot fail and ignores its
-  parameters: the nonces are a hash of the 32-byte seed and the member's
-  share, and every SAL commitment is on `T`, so `modular_frost` gives no
-  protection of its own. A held session therefore owns its parameters
-  and resumes only with them. Every signer builds the same parameters
+- **Bound to its parameters.** `modular_frost`'s `from_cache` cannot fail
+  and ignores its parameters: the nonces are a hash of the 32-byte seed
+  and the member's share, and every SAL commitment is on `T`. The public
+  sign machine does not expose `cache` or `from_cache`. A held session
+  owns its parameters and is the only resume, and it feeds that
+  constructor its own parameters. Every signer builds the same parameters
   independently, from the input's rerandomization seed and pseudo-out
   blind (§9.5), and a preprocess rebuilt from a held session is checked
-  against the one its member sent.
+  against the one its member sent. A session count other than the rounds
+  this member sent signs nothing.
 - **The responder never holds.** It preprocesses and signs in one call,
   and the machine is dropped.
 - **Equivocation buys nothing.** If A shows different preprocess sets to

@@ -22,7 +22,9 @@ use common::{found_group, pay_group_twice, rebuild_paths, GroupOutputs, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
-use shekyl_multisig::ceremony::files::{Body, Commitment, FinalTx, SignatureShare, SigningSet};
+use shekyl_multisig::ceremony::files::{
+    Body, Commitment, FinalTx, Proposal, SignatureShare, SigningSet,
+};
 use shekyl_multisig::ceremony::nonce::{ConsumeError, InputInUse};
 use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
@@ -695,6 +697,43 @@ fn a_proposer_restarting_after_finish_still_releases() {
         }
         verify_from_the_wire(&proposer.release().unwrap(), &s.paid);
     }
+}
+
+/// A `Proposal` whose round count is not the intent's input count is
+/// refused at resume, before the held nonce is touched. The honest file
+/// still resumes.
+#[test]
+fn a_proposer_resumes_only_a_proposal_with_one_round_per_input() {
+    let (s, m, mut ca, _, _) = setup();
+    let (_, proposal) = Proposer::propose(
+        s.ctx(&m.a),
+        s.proposer_inputs(),
+        &mut ca.store,
+        &mut ca.live,
+        &mut OsRng,
+    )
+    .unwrap();
+    let body = expect!(import_for(&m.a, &proposal), Proposal).into_body();
+    let hash = s.intent.intent_hash().unwrap();
+    for rounds in [body.rounds[..1].to_vec(), {
+        let mut long = body.rounds.clone();
+        long.push(body.rounds[0].clone());
+        long
+    }] {
+        let file = s.sealed(
+            &m.a,
+            &Proposal {
+                intent: body.intent.clone(),
+                rounds,
+            },
+        );
+        assert!(matches!(
+            Proposer::resume(s.ctx(&m.a), s.proposer_inputs(), file).err(),
+            Some(CeremonyError::InputCount)
+        ));
+    }
+    assert!(ca.store.0.contains_key(&hash), "the nonce is still held");
+    Proposer::resume(s.ctx(&m.a), s.proposer_inputs(), proposal).unwrap();
 }
 
 /// The proposer is rebuilt as finished only from its own `FinalTx`: not

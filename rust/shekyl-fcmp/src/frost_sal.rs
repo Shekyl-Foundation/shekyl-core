@@ -26,18 +26,19 @@
 //!   `y_kem`. The same inputs give the same value, so every signer's
 //!   [`SalAlgorithm`] has one transcript.
 //! - [`preprocess`], [`hold`], [`HeldSession::resume`], [`sign`] and
-//!   [`complete`] drive the machines. A sign machine exists only through
+//!   [`complete`] drive the machines. [`SalSignMachine`] exists only through
 //!   [`preprocess`] or [`HeldSession::resume`], and both offset the keys and
 //!   check that they open the rerandomized output, so the `SalAlgorithm`
 //!   contract ("the keys are already offset; undefined behavior if not") is
-//!   met by construction.
+//!   met by construction. The machine is not `modular_frost`'s: that type's
+//!   `cache` and `from_cache` are not methods of this one.
 //! - A round-1 state that has to wait for other members is a
 //!   [`HeldSession`]: the cached seed together with the parameters and keys
 //!   it was made under. `modular_frost`'s `from_cache` ignores the
 //!   parameters (its nonces are a hash of the seed and the share), so a seed
 //!   resumed under other parameters would sign one nonce twice and reveal
-//!   the share. No function here takes a seed and parameters separately:
-//!   [`HeldSession::resume`] uses its own.
+//!   the share. The only resume is [`HeldSession::resume`], which feeds
+//!   `from_cache` the parameters and keys the session holds.
 //!
 //! Nonce custody is the machine's: `modular_frost` hedges each nonce with
 //! the secret share and binds every signer's nonces to the whole signing
@@ -74,14 +75,49 @@ use shekyl_crypto_pq::multisig::{MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHO
 
 /// The SAL algorithm every signer of one input runs.
 pub type FrostSal = SalAlgorithm<ChaCha20Rng, RecommendedTranscript>;
-/// A signer after round 1 (preprocess), holding its nonces.
-pub type SalSignMachine = AlgorithmSignMachine<Ed25519T, FrostSal>;
-/// A signer after round 2 (sign), waiting for the other shares.
-pub type SalSignatureMachine = AlgorithmSignatureMachine<Ed25519T, FrostSal>;
 /// One signer's round-1 message.
 pub type SalPreprocess = Preprocess<Ed25519T, ()>;
 /// One signer's round-2 message.
 pub type SalShare = SignatureShare<Ed25519T>;
+
+/// A signer after round 1, holding its nonces.
+///
+/// Built only by [`preprocess`] and [`HeldSession::resume`]. Both offset the
+/// keys and check that they open the output. The nonce seed stays inside:
+/// `modular_frost`'s `cache` and `from_cache` are not methods of this type,
+/// so a seed cannot be copied out and resumed under other parameters.
+///
+/// ```compile_fail,E0599
+/// use shekyl_fcmp::frost_sal::SalSignMachine;
+/// fn leak(machine: SalSignMachine) {
+///     let _ = machine.cache();
+/// }
+/// ```
+///
+/// ```compile_fail,E0599
+/// use shekyl_fcmp::frost_sal::SalSignMachine;
+/// fn rebuild() {
+///     let _ = SalSignMachine::from_cache();
+/// }
+/// ```
+pub struct SalSignMachine {
+    inner: AlgorithmSignMachine<Ed25519T, FrostSal>,
+}
+
+impl SalSignMachine {
+    /// The nonce seed, once. Signing twice from one seed reveals the share,
+    /// so this consumes the machine and the seed does not leave the module.
+    fn into_seed(self) -> CachedPreprocess {
+        self.inner.cache()
+    }
+}
+
+/// A signer after round 2, waiting for the other shares.
+///
+/// Built only by [`sign`].
+pub struct SalSignatureMachine {
+    inner: AlgorithmSignatureMachine<Ed25519T, FrostSal>,
+}
 
 // ---------------------------------------------------------------------------
 // Dealer split and the member-share loader
@@ -534,7 +570,8 @@ pub fn preprocess(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
     let keys = params.offset_keys(keys)?;
-    Ok(AlgorithmMachine::new(params.algorithm(), keys).preprocess(rng))
+    let (inner, preprocess) = AlgorithmMachine::new(params.algorithm(), keys).preprocess(rng);
+    Ok((SalSignMachine { inner }, preprocess))
 }
 
 /// A round-1 state held across a wait for other members: the cached seed,
@@ -589,7 +626,7 @@ pub fn hold(
         HeldSession {
             params,
             keys,
-            cached: machine.cache(),
+            cached: machine.into_seed(),
         },
         preprocess,
     ))
@@ -598,19 +635,22 @@ pub fn hold(
 impl HeldSession {
     /// The sign machine this session was made as, rebuilt from its seed
     /// under its own parameters and keys, and the preprocess it sent.
-    /// Consumes the session: the seed is used once.
+    /// Consumes the session: the seed moves into the machine once.
     ///
     /// # Errors
     ///
     /// [`FrostSalError::KeysDoNotOpenOutput`], which [`hold`] already
     /// refused for these parameters and keys.
     pub fn resume(self) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
-        let keys = self.params.offset_keys(self.keys.clone())?;
-        Ok(SalSignMachine::from_cache(
-            self.params.algorithm(),
+        let HeldSession {
+            params,
             keys,
-            CachedPreprocess(self.cached.0.clone()),
-        ))
+            cached,
+        } = self;
+        let keys = params.offset_keys(keys)?;
+        let (inner, preprocess) =
+            AlgorithmSignMachine::from_cache(params.algorithm(), keys, cached);
+        Ok((SalSignMachine { inner }, preprocess))
     }
 
     /// The parameters this session was made under.
@@ -651,6 +691,7 @@ pub fn read_preprocess(
     bytes: &[u8; SAL_PREPROCESS_LEN],
 ) -> Result<SalPreprocess, FrostSalError> {
     machine
+        .inner
         .read_preprocess(&mut bytes.as_slice())
         .map_err(|_| FrostSalError::Preprocess)
 }
@@ -675,6 +716,7 @@ pub fn read_share(
     bytes: &[u8; SAL_SHARE_LEN],
 ) -> Result<SalShare, FrostSalError> {
     machine
+        .inner
         .read_share(&mut bytes.as_slice())
         .map_err(|_| FrostSalError::Share)
 }
@@ -693,7 +735,10 @@ pub fn sign(
     machine: SalSignMachine,
     preprocesses: HashMap<Participant, SalPreprocess>,
 ) -> Result<(SalSignatureMachine, SalShare), FrostError> {
-    machine.sign(preprocesses, &[])
+    machine
+        .inner
+        .sign(preprocesses, &[])
+        .map(|(inner, share)| (SalSignatureMachine { inner }, share))
 }
 
 /// The aggregate SAL from every other signer's share. `modular_frost`
@@ -710,7 +755,7 @@ pub fn complete(
     machine: SalSignatureMachine,
     shares: HashMap<Participant, SalShare>,
 ) -> Result<SpendAuthAndLinkability, FrostError> {
-    machine.complete(shares)
+    machine.inner.complete(shares)
 }
 
 #[cfg(test)]
