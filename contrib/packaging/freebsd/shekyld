@@ -12,10 +12,12 @@
 # The Shekyl daemon as the machine's service instance on FreeBSD
 # (`--service`; RPC_CHANNEL.md §7.1, INPUT_GRAMMAR.md IG-Q105).
 #
-# Install, as root:
+# The release archive holds the binary at `shekyld` and this script at
+# `rc.d/shekyld`. Install both, as root:
 #
+#   install -m 0555 shekyld /usr/local/bin/shekyld
 #   pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin -c "Shekyl daemon"
-#   install -m 0555 shekyld /usr/local/etc/rc.d/shekyld
+#   install -m 0555 rc.d/shekyld /usr/local/etc/rc.d/shekyld
 #   sysrc shekyld_enable=YES
 #   service shekyld start
 #
@@ -25,11 +27,18 @@
 #   shekyld_args (str)     More options for shekyld, e.g. "--network testnet".
 #                          Default empty (mainnet).
 #
-# The daemon runs as the `shekyl` account under daemon(8), which restarts
-# it 30 s after it exits and sends what it prints to syslog as `shekyld`, so
-# a refused start is in /var/log/messages. Its own log is
+# The daemon runs as the `shekyl` account. daemon(8) supervises the
+# `supervise` branch below and sends what the daemon prints to syslog as
+# `shekyld`, so a refused start is in /var/log/messages. Its own log is
 # /var/log/shekyl/shekyld.log. Its configuration file is
 # /etc/shekyl/shekyld-<network>.toml when one exists.
+#
+# FreeBSD 14's daemon(8) restarts on every child termination when -R is
+# set, including a clean exit. The Linux unit is Restart=on-failure, so
+# the restart lives in `shekyld_supervise` instead: a non-zero exit is
+# retried after restart_seconds (the unit's RestartSec), and exit 0 ends
+# the supervisor. An RPC stop and SIGTERM both leave 0. A refused start
+# is non-zero, so it is retried, and the refusal is in syslog.
 #
 # The daemon creates none of the directories below; it checks them and
 # refuses to start naming the one that is wrong. This script creates them
@@ -39,6 +48,44 @@
 #                    readable by every user, writable by no one else
 #   /var/db/shekyl   the service's data home: the account's alone (0700)
 #   /var/log/shekyl  the daemon's log directory
+
+# The supervised command (`service` runs this file with `start`; daemon(8)
+# runs it with `supervise`). Defined before `/etc/rc.subr` so the
+# supervise branch does not load the rc functions.
+shekyld_supervise()
+{
+	# The packaged unit's RestartSec. The launch-recipe gate holds the
+	# two equal.
+	restart_seconds=30
+	child=0
+	on_stop() {
+		if [ "$child" -ne 0 ]; then
+			kill -TERM "$child" 2>/dev/null
+			wait "$child" 2>/dev/null
+		fi
+		exit 0
+	}
+	trap on_stop TERM
+	while :; do
+		/usr/local/bin/shekyld "$@" &
+		child=$!
+		wait "$child"
+		status=$?
+		child=0
+		if [ "$status" -eq 0 ]; then
+			exit 0
+		fi
+		sleep "$restart_seconds" &
+		child=$!
+		wait "$child"
+		child=0
+	done
+}
+
+if [ "${1:-}" = "supervise" ]; then
+	shift
+	shekyld_supervise "$@"
+fi
 
 . /etc/rc.subr
 
@@ -54,7 +101,10 @@ load_rc_config $name
 pidfile="/var/run/${name}.pid"
 procname=/usr/sbin/daemon
 command=/usr/sbin/daemon
-command_args="-f -S -T ${name} -R 30 -P ${pidfile} -u shekyl /usr/local/bin/shekyld --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"
+# No -r and no -R. Those flags restart a clean exit; shekyld_supervise
+# is where a failure is retried. -P is the supervisor's pid, so
+# `service stop` signals daemon(8), which signals this script.
+command_args="-f -S -T ${name} -P ${pidfile} -u shekyl /bin/sh /usr/local/etc/rc.d/${name} supervise --service --data-dir /var/db/shekyl --log-file /var/log/shekyl/shekyld.log ${shekyld_args}"
 start_precmd="${name}_prestart"
 
 shekyld_prestart()

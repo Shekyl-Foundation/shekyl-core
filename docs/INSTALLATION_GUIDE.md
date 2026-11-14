@@ -229,29 +229,44 @@ Start daemon in foreground:
 ```
 
 Run the daemon in the background via your platform's service manager
-(systemd on Linux, launchd on macOS, Task Scheduler on Windows). An
-shipped systemd unit lives at `contrib/packaging/linux/shekyld.service`,
-with `shekyl.slice` beside it; the `.deb` installs both, or copy both to
-`/etc/systemd/system/` and `systemctl enable --now shekyld`. The slice is
-the daemon's own top-level control group, weighed 4:1 against
-`user.slice` under contention, so a daemon that is syncing or verifying
-keeps about 80 % of the CPU while a wallet in a user session serves
-archival shards beside it (the wallet itself is never a system service).
-A daemon started by hand runs in your session and has no slice, and it
-stops when your session ends; the shipped unit passes `--service`, which
-marks the machine's service instance. On FreeBSD the release archive
-carries an rc.d script, `rc.d/shekyld` (in the tree at
-`contrib/packaging/freebsd/shekyld`). Create the `shekyl` account once
-(`pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin`), copy the
-script to `/usr/local/etc/rc.d/shekyld` with mode 0555, then
-`sysrc shekyld_enable=YES` and `service shekyld start`; set
-`shekyld_args="--network testnet"` with `sysrc` for another network. It
-runs the daemon as `shekyl` with `--service`, creates
+(systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
+Windows). A shipped systemd unit lives at
+`contrib/packaging/linux/shekyld.service`, with `shekyl.slice` beside
+it; the `.deb` installs both, or copy both to `/etc/systemd/system/` and
+`systemctl enable --now shekyld`. The slice is the daemon's own
+top-level control group, weighed 4:1 against `user.slice` under
+contention, so a daemon that is syncing or verifying keeps about 80 % of
+the CPU while a wallet in a user session serves archival shards beside
+it (the wallet itself is never a system service). A daemon started by
+hand runs in your session and has no slice, and it stops when your
+session ends; the shipped unit passes `--service`, which marks the
+machine's service instance.
+
+On FreeBSD the release archive carries the daemon binary and an rc.d
+script, `rc.d/shekyld` (in the tree at
+`contrib/packaging/freebsd/shekyld`). The script runs
+`/usr/local/bin/shekyld`, so install that binary from the archive, then
+the script:
+
+```bash
+install -m 0555 shekyld /usr/local/bin/shekyld
+pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin -c "Shekyl daemon"
+install -m 0555 rc.d/shekyld /usr/local/etc/rc.d/shekyld
+sysrc shekyld_enable=YES
+service shekyld start
+```
+
+`sysrc shekyld_args="--network testnet"` selects another network. The
+script runs the daemon as `shekyl` with `--service`, creates
 `/var/run/shekyl`, `/var/db/shekyl` and `/var/log/shekyl` before each
-start, and sends a refused start to syslog. `--detach`, `--pidfile`, and the Windows `--*-service`
-flags were removed in V3.1; the daemon now only runs in the foreground
-and is supervised externally. The GUI wallet embeds `shekyld` as a
-Tauri sidecar and does not require a separate service unit.
+start, and restarts it 30 seconds after a failed exit. A clean stop
+stays stopped. A refused start is a failed exit, so it is retried, and
+the refusal is in syslog.
+
+`--detach`, `--pidfile`, and the Windows `--*-service` flags were
+removed in V3.1; the daemon now only runs in the foreground and is
+supervised externally. The GUI wallet embeds `shekyld` as a Tauri
+sidecar and does not require a separate service unit.
 
 RPC is operator-to-operator. Restricted RPC is a view-only listener for
 your own wallet, not a public remote node.
