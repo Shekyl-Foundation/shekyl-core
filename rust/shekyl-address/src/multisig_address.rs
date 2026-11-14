@@ -68,6 +68,15 @@ pub const PER_PARTICIPANT_LEN: usize = HYBRID_KEM_PUBKEY_LEN;
 /// cross-crate pin `const _` assert in that crate (MSW-1).
 pub const MAX_MULTISIG_PARTICIPANTS: u8 = 5;
 
+/// The smallest threshold a group may have, and so the smallest group
+/// (R-11, ruled 2026-11-12). With `m = 1` the FROST polynomial is a
+/// constant: every member holds the whole spend share, the PQ leg is
+/// 1-of-N, and the ceremony has no responder — a shared key under a
+/// multisig label, still marked on chain as a multisig output. Mirrored in
+/// `shekyl-crypto-pq::multisig::MIN_MULTISIG_THRESHOLD`, pinned equal there
+/// at compile time as the participant cap is.
+pub const MIN_MULTISIG_THRESHOLD: u8 = 2;
+
 /// Header: version + group_version + spend_auth_version + network + n_total + m_required.
 ///
 /// The E′ group points (`B_group`, `Y_group`) follow the header rather than
@@ -171,10 +180,14 @@ fn reject_aliased_kem_keys(
 /// Errors specific to multisig address operations.
 #[derive(Debug, thiserror::Error)]
 pub enum MultisigAddressError {
-    #[error("participant count {n} out of range 1..={max}", max = MAX_MULTISIG_PARTICIPANTS)]
+    #[error(
+        "participant count {n} out of range {min}..={max}",
+        min = MIN_MULTISIG_THRESHOLD,
+        max = MAX_MULTISIG_PARTICIPANTS
+    )]
     InvalidParticipantCount { n: u8 },
 
-    #[error("threshold {m} out of range 1..={n}")]
+    #[error("threshold {m} out of range {min}..={n}", min = MIN_MULTISIG_THRESHOLD)]
     InvalidThreshold { m: u8, n: u8 },
 
     #[error("expected {expected} KEM pubkeys, got {got}")]
@@ -254,8 +267,8 @@ pub enum MultisigAddressError {
 ///     group_version: 1,
 ///     spend_auth_version: 2,
 ///     network: shekyl_address::Network::Mainnet,
-///     n_total: 1,
-///     m_required: 1,
+///     n_total: 2,
+///     m_required: 2,
 ///     b_group: [0; 32],
 ///     y_group: [0; 32],
 ///     group_kem_pubkey: vec![],
@@ -298,10 +311,10 @@ impl MultisigAddressPayload {
         group_kem_pubkey: Vec<u8>,
         hybrid_kem_pubkeys: Vec<Vec<u8>>,
     ) -> Result<Self, MultisigAddressError> {
-        if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
+        if !(MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS).contains(&n_total) {
             return Err(MultisigAddressError::InvalidParticipantCount { n: n_total });
         }
-        if m_required == 0 || m_required > n_total {
+        if !(MIN_MULTISIG_THRESHOLD..=n_total).contains(&m_required) {
             return Err(MultisigAddressError::InvalidThreshold {
                 m: m_required,
                 n: n_total,
@@ -466,10 +479,10 @@ impl MultisigAddressPayload {
         let network = Network::from_code(network_byte)
             .ok_or(MultisigAddressError::UnknownNetwork { byte: network_byte })?;
 
-        if n_total == 0 || n_total > MAX_MULTISIG_PARTICIPANTS {
+        if !(MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS).contains(&n_total) {
             return Err(MultisigAddressError::InvalidParticipantCount { n: n_total });
         }
-        if m_required == 0 || m_required > n_total {
+        if !(MIN_MULTISIG_THRESHOLD..=n_total).contains(&m_required) {
             return Err(MultisigAddressError::InvalidThreshold {
                 m: m_required,
                 n: n_total,
@@ -697,14 +710,50 @@ mod tests {
     }
 
     #[test]
-    fn canonical_roundtrip_1_of_1() {
-        let payload = make_test_payload(1, 1);
+    fn canonical_roundtrip_2_of_2() {
+        let payload = make_test_payload(2, 2);
         let bytes = payload.to_canonical_bytes();
-        // PQC_MULTISIG.md §6.2's table: 70 + 2 · 1216.
-        assert_eq!(bytes.len(), 2502);
-        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(1));
+        // PQC_MULTISIG.md §6.2's table: 70 + 3 · 1216.
+        assert_eq!(bytes.len(), 3718);
+        assert_eq!(bytes.len(), MultisigAddressPayload::canonical_len_for(2));
         let decoded = MultisigAddressPayload::from_canonical_bytes(&bytes).unwrap();
         assert_eq!(payload, decoded);
+    }
+
+    /// R-11: a 1-of-N group is a shared key under a multisig label. Neither
+    /// the constructor nor the decoder makes one, and a one-member group
+    /// is refused as a participant count before its threshold is read.
+    #[test]
+    fn refuses_a_threshold_of_one_by_name() {
+        let keys = |n: u8| (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect();
+        let new = |n: u8, m: u8| {
+            MultisigAddressPayload::new(
+                Network::Mainnet,
+                n,
+                m,
+                [0xB1; 32],
+                [0x71; 32],
+                vec![0x40; HYBRID_KEM_PUBKEY_LEN],
+                keys(n),
+            )
+        };
+        assert!(matches!(
+            new(3, 1),
+            Err(MultisigAddressError::InvalidThreshold { m: 1, n: 3 })
+        ));
+        assert!(matches!(
+            new(1, 1),
+            Err(MultisigAddressError::InvalidParticipantCount { n: 1 })
+        ));
+
+        // The decoder reads the same bounds: a 2-of-3 with its threshold
+        // byte edited to 1 is refused, not decoded.
+        let mut bytes = make_test_payload(3, 2).to_canonical_bytes();
+        bytes[5] = 1;
+        assert!(matches!(
+            MultisigAddressPayload::from_canonical_bytes(&bytes),
+            Err(MultisigAddressError::InvalidThreshold { m: 1, n: 3 })
+        ));
     }
 
     #[test]
@@ -1059,8 +1108,8 @@ mod tests {
     fn canonical_length_kat() {
         // E′ payload = HEADER_LEN(6) + 2·GROUP_POINT_LEN(64)
         //            + (1 + N)·HYBRID_KEM_PUBKEY_LEN(1216) = 70 + (N + 1)·1216.
-        for (n, expected) in [(1u8, 2502usize), (2, 3718), (3, 4934), (5, 7366)] {
-            let bytes = make_test_payload(n, 1).to_canonical_bytes();
+        for (n, expected) in [(2u8, 3718usize), (3, 4934), (5, 7366)] {
+            let bytes = make_test_payload(n, 2).to_canonical_bytes();
             assert_eq!(bytes.len(), expected, "canonical length for n={n}");
             assert_eq!(bytes.len(), 70 + (n as usize + 1) * 1216);
         }

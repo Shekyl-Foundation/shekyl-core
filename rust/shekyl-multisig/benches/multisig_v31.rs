@@ -13,10 +13,9 @@ fn bench_intent_hash(c: &mut Criterion) {
         intent_id: [0x42; 32],
         address_fingerprint: [0xBB; 32],
         proposer_index: 0,
-        proposer_sig: vec![0xAA; 64],
+        signers: vec![0, 2],
+        responder_index: 2,
         created_at: 1000000,
-        expires_at: 1086400,
-        tx_counter: 1,
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
@@ -42,10 +41,9 @@ fn bench_intent_serialization(c: &mut Criterion) {
         intent_id: [0x42; 32],
         address_fingerprint: [0xBB; 32],
         proposer_index: 0,
-        proposer_sig: vec![0xAA; 64],
+        signers: vec![0, 2],
+        responder_index: 2,
         created_at: 1000000,
-        expires_at: 1086400,
-        tx_counter: 1,
         reference_block_height: 999900,
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
@@ -60,29 +58,6 @@ fn bench_intent_serialization(c: &mut Criterion) {
 
     c.bench_function("intent_to_canonical_bytes", |b| {
         b.iter(|| black_box(intent.to_canonical_bytes().unwrap()))
-    });
-}
-
-fn bench_envelope_roundtrip(c: &mut Criterion) {
-    use shekyl_multisig::messages::{MultisigEnvelope, ENVELOPE_VERSION};
-
-    let envelope = MultisigEnvelope {
-        version: ENVELOPE_VERSION,
-        address_fingerprint: [0xAA; 32],
-        intent_hash: [0xBB; 32],
-        sender_index: 0,
-        sender_sig: vec![0; 64],
-        encrypted_payload: vec![0xCC; 512],
-    };
-
-    let bytes = envelope.to_bytes().unwrap();
-
-    c.bench_function("envelope_serialize", |b| {
-        b.iter(|| black_box(envelope.to_bytes().unwrap()))
-    });
-
-    c.bench_function("envelope_deserialize", |b| {
-        b.iter(|| black_box(MultisigEnvelope::from_bytes(&bytes).unwrap()))
     });
 }
 
@@ -105,7 +80,6 @@ criterion_group!(
     benches,
     bench_intent_hash,
     bench_intent_serialization,
-    bench_envelope_roundtrip,
     bench_chain_state_fingerprint,
 );
 criterion_main!(benches);
