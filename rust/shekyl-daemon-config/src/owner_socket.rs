@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 
 use shekyl_options::{Code, Diagnostic, Source};
-use shekyl_rpc_channel::{rendezvous, rendezvous_name, Instance};
+use shekyl_rpc_rendezvous::{rendezvous_name, Instance};
 
 use crate::marker::NetworkId;
 use crate::platform::{Platform, RunMode};
@@ -111,7 +111,7 @@ pub fn plan(
     #[cfg(unix)]
     {
         let owner = assert_dir(&dir).map_err(unusable)?;
-        let path = dir.join(rendezvous::file_name(&name));
+        let path = dir.join(shekyl_rpc_rendezvous::file_name(&name));
         let length = path.as_os_str().len();
         if length + 1 > SUN_PATH_MAX {
             return Err(refuse(Code::SocketPathLong)
@@ -135,11 +135,11 @@ pub fn plan(
                 .map_err(|e| unusable(e.to_string()))?;
         }
         let data_home = match (&config.rpc.socket_dir, &platform.home) {
-            (None, Some(home)) => Some(rendezvous::data_home(home)),
+            (None, Some(home)) => Some(shekyl_rpc_rendezvous::data_home(home)),
             _ => None,
         };
         Ok(Some(OwnerSocketPlan {
-            path: dir.join(rendezvous::file_name(&name)),
+            path: dir.join(shekyl_rpc_rendezvous::file_name(&name)),
             dir,
             data_home,
             instance: config.rpc.instance.clone(),
@@ -156,7 +156,7 @@ fn default_dir(platform: &Platform) -> Option<PathBuf> {
     } else {
         platform.session_dir.as_deref()
     };
-    root.map(rendezvous::account_dir)
+    root.map(shekyl_rpc_rendezvous::account_dir)
 }
 
 /// A service's rendezvous directory, checked (`RPC_CHANNEL.md` §7.1; Rick,

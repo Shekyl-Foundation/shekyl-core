@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_daemon_config::Platform;
 use shekyl_network::Network;
-use shekyl_rpc_channel::Instance;
+use shekyl_rpc_rendezvous::Instance;
 use shekyl_rpc_transport::local::{LocalFault, LocalTarget};
 use shekyl_spawn::owning::read_ready;
 use shekyl_spawn::pair::{keep_in_child, End, EndPair, WindowError};

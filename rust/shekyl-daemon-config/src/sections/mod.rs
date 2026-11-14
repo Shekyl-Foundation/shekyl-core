@@ -171,7 +171,7 @@ pub struct Rpc {
     pub connections_max: NonZeroU32,
     /// Which node this is on the machine (`RPC_CHANNEL.md` §7.1): the
     /// default instance, or one the operator named.
-    pub instance: shekyl_rpc_channel::Instance,
+    pub instance: shekyl_rpc_rendezvous::Instance,
     /// The operator-named directory for the owner's socket, for an account
     /// with no session directory. Never set in service mode.
     pub socket_dir: Option<PathBuf>,
@@ -583,7 +583,7 @@ struct RpcRead {
     view_listen: Vec<SocketAddr>,
     cors_origins: Vec<String>,
     connections_max: Option<NonZeroU32>,
-    instance: shekyl_rpc_channel::Instance,
+    instance: shekyl_rpc_rendezvous::Instance,
     socket_dir: Option<PathBuf>,
 }
 
@@ -594,7 +594,7 @@ struct RpcRead {
 /// (IG-Q105) rather than ignored.
 fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
     let instance = match r.name("instance") {
-        Read::Present(text) => match shekyl_rpc_channel::InstanceName::parse(&text) {
+        Read::Present(text) => match shekyl_rpc_rendezvous::InstanceName::parse(&text) {
             Ok(name) => {
                 if !r.given("data-dir") {
                     r.requires(
@@ -602,12 +602,12 @@ fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
                         "an explicit `data-dir`: a named instance is a second node and keeps its own state",
                     );
                 }
-                shekyl_rpc_channel::Instance::Named(name)
+                shekyl_rpc_rendezvous::Instance::Named(name)
             }
             // The kind's rule already refused it at parse.
-            Err(_) => shekyl_rpc_channel::Instance::Default,
+            Err(_) => shekyl_rpc_rendezvous::Instance::Default,
         },
-        Read::Absent | Read::Unreadable => shekyl_rpc_channel::Instance::Default,
+        Read::Absent | Read::Unreadable => shekyl_rpc_rendezvous::Instance::Default,
     };
     let socket_dir = r.optional_path("rpc-socket-dir").present();
     if socket_dir.is_some() && run_mode == RunMode::Service {

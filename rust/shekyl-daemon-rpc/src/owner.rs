@@ -98,7 +98,7 @@ mod windows {
     use rand_core::{OsRng, RngCore};
     use shekyl_daemon_config::OwnerSocketPlan;
     use shekyl_options::{Code, Diagnostic, Source};
-    use shekyl_rpc_channel::rendezvous::{Record, PIPE_PREFIX};
+    use shekyl_rpc_rendezvous::{Record, PIPE_PREFIX};
     use shekyl_win_sec::rendezvous::{
         create_rendezvous_file, ensure_data_home, ensure_rendezvous_dir,
     };
@@ -370,7 +370,7 @@ mod windows {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use shekyl_rpc_channel::Instance;
+        use shekyl_rpc_rendezvous::Instance;
 
         /// A plan in a fresh directory the bind creates, labelled.
         fn plan(base: &Path) -> OwnerSocketPlan {
@@ -693,7 +693,7 @@ mod unix {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use shekyl_rpc_channel::Instance;
+        use shekyl_rpc_rendezvous::Instance;
 
         /// A listener the runtime cannot take is refused by `serve_ready`,
         /// the one fallible step between the bind and the accept loop, which

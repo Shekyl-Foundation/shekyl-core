@@ -4185,8 +4185,8 @@ dependencies = [
  "shekyl-options",
  "shekyl-p2p",
  "shekyl-process",
- "shekyl-rpc-channel",
  "shekyl-rpc-client",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -4217,7 +4217,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-options",
- "shekyl-rpc-channel",
+ "shekyl-rpc-rendezvous",
  "shekyl-win-sec",
  "tempfile",
  "toml 0.8.23",
@@ -4258,7 +4258,7 @@ dependencies = [
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
- "shekyl-rpc-channel",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -5211,6 +5211,16 @@ name = "shekyl-rpc-grants"
 version = "3.1.0"
 
 [[package]]
+name = "shekyl-rpc-rendezvous"
+version = "3.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "shekyl-crypto-hash",
+ "shekyl-network",
+]
+
+[[package]]
 name = "shekyl-rpc-stream"
 version = "3.1.0"
 dependencies = [
@@ -5242,8 +5252,8 @@ dependencies = [
  "shekyl-address",
  "shekyl-network",
  "shekyl-os-account",
- "shekyl-rpc-channel",
  "shekyl-rpc-client",
+ "shekyl-rpc-rendezvous",
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",

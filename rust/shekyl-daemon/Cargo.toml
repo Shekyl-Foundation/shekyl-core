@@ -60,7 +60,7 @@ tempfile = "3"
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the
 # rendezvous naming it resolves with, and the methods' table.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
-shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-network = { path = "../shekyl-network" }

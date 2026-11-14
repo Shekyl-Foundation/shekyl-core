@@ -14,7 +14,7 @@ Three things, because they must not disagree:
    RT-1, RT-2). The refusals themselves stay with each listener.
 3. **"This computer".** `local` (`LocalTarget`) dials a run-as-me daemon's
    owner's leg, found by the daemon's own rendezvous naming
-   (`shekyl-rpc-channel`'s `rendezvous`): the socket on Unix, the pipe a
+   (`shekyl-rpc-rendezvous`): the socket on Unix, the pipe a
    rendezvous record names on Windows, one connection per call. "Not
    running" and a failed peer check are distinct failures (`LocalFault`);
    the peer check's is a security failure and is never retried

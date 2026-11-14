@@ -758,13 +758,13 @@ fn a_named_instance_needs_its_own_data_directory() {
     .unwrap();
     assert_eq!(
         c.rpc.instance,
-        shekyl_rpc_channel::Instance::Named(
-            shekyl_rpc_channel::InstanceName::parse("bench").unwrap()
+        shekyl_rpc_rendezvous::Instance::Named(
+            shekyl_rpc_rendezvous::InstanceName::parse("bench").unwrap()
         )
     );
     assert_eq!(
         build_from(&[], "").unwrap().rpc.instance,
-        shekyl_rpc_channel::Instance::Default
+        shekyl_rpc_rendezvous::Instance::Default
     );
 }
 

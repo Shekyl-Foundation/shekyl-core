@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_daemon_config::Platform;
 use shekyl_network::Network;
-use shekyl_rpc_channel::Instance;
+use shekyl_rpc_rendezvous::Instance;
 use shekyl_rpc_transport::local::LocalTarget;
 use shekyl_rpc_types::endpoint::JSON_RPC_ROUTE;
 

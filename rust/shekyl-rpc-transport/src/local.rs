@@ -7,8 +7,8 @@
 //! on the owner's leg (`docs/design/RPC_CHANNEL.md` RT-15, §7.1).
 //!
 //! The target resolves through the daemon's own naming
-//! ([`shekyl_rpc_channel::rendezvous_name`] over the network id and the
-//! instance, and [`shekyl_rpc_channel::rendezvous`] for the file and the
+//! ([`shekyl_rpc_rendezvous::rendezvous_name`] over the network id and the
+//! instance, and [`shekyl_rpc_rendezvous`]'s layout for the file and the
 //! directory), never a second copy of it. On Unix it dials the socket; on
 //! Windows it reads the rendezvous record and opens the pipe it names through
 //! the peer check (`shekyl_win_sec::open_verified`). Each call is one
@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use shekyl_network::Network;
-use shekyl_rpc_channel::{rendezvous, rendezvous_name, Instance};
+use shekyl_rpc_rendezvous::{rendezvous_name, Instance};
 use zeroize::Zeroizing;
 
 use crate::JsonRpcError;
@@ -174,14 +174,14 @@ impl LocalTarget {
         let dir = match dir {
             Some(dir) => dir.to_path_buf(),
             None => match shekyl_os_account::account_root() {
-                Some(root) => rendezvous::account_dir(&root),
+                Some(root) => shekyl_rpc_rendezvous::account_dir(&root),
                 None => return Err(LocalFault::NoPlace { node }),
             },
         };
         let name = rendezvous_name(&network.network_id(), instance);
         Ok(Self {
             node,
-            path: dir.join(rendezvous::file_name(&name)),
+            path: dir.join(shekyl_rpc_rendezvous::file_name(&name)),
         })
     }
 
@@ -351,7 +351,7 @@ fn dial(node: &str, path: &Path, deadline: Option<Instant>) -> Result<LocalStrea
             )))
         }
     };
-    let Some(record) = rendezvous::Record::parse(&bytes) else {
+    let Some(record) = shekyl_rpc_rendezvous::Record::parse(&bytes) else {
         return Err(LocalFault::PeerCheck(format!(
             "{} is not a rendezvous record",
             path.display()
@@ -644,7 +644,10 @@ mod tests {
         let dir = Path::new("dir");
         let target = LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir)).unwrap();
         let name = rendezvous_name(&Network::Regtest.network_id(), &Instance::Default);
-        assert_eq!(target.path(), dir.join(rendezvous::file_name(&name)));
+        assert_eq!(
+            target.path(),
+            dir.join(shekyl_rpc_rendezvous::file_name(&name))
+        );
     }
 
     /// No daemon gives "not running", and an empty directory is not a
@@ -782,13 +785,13 @@ mod tests {
             LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
         let pipe = format!(
             "{}{:032x}",
-            rendezvous::PIPE_PREFIX,
+            shekyl_rpc_rendezvous::PIPE_PREFIX,
             (u128::from(std::process::id()) << 16) | 0xb0d
         );
         let session = shekyl_win_sec::current_logon_sid().unwrap();
         std::fs::write(
             target.path(),
-            rendezvous::Record {
+            shekyl_rpc_rendezvous::Record {
                 pipe: pipe.clone(),
                 session: session.as_str().to_owned(),
             }

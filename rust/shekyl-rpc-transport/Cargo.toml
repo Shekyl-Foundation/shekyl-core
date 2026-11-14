@@ -49,8 +49,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # "This computer" (`local`): the daemon's own rendezvous naming and record
-# (RPC_CHANNEL.md RT-15, §7.1), and the network whose id the name hashes.
-shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+# (RPC_CHANNEL.md RT-15, §7.1), without the channel's handshake, and the
+# network whose id the name hashes.
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 shekyl-network = { path = "../shekyl-network" }
 
 # The account's root and, on Unix, the peer's account for the owner's leg's

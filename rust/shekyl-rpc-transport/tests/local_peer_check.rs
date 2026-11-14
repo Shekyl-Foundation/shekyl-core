@@ -21,8 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_network::Network;
-use shekyl_rpc_channel::rendezvous::{Record, PIPE_PREFIX};
-use shekyl_rpc_channel::Instance;
+use shekyl_rpc_rendezvous::{Instance, Record, PIPE_PREFIX};
 use shekyl_rpc_transport::local::{LocalFault, LocalTarget};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::LocalFree;

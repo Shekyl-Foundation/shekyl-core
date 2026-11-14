@@ -434,6 +434,11 @@ members = [
     # of a local socket. A leaf with no network stack (libc; shekyl-win-sec on
     # Windows): the daemon's process crate and the transport share it.
     "shekyl-os-account",
+    # A daemon's local rendezvous: its derived name (network and instance),
+    # the instance rule, the rendezvous file and the Windows record. One
+    # dependency, shekyl-crypto-hash: the daemon, its configuration and the
+    # clients that find it read the names without the channel's handshake.
+    "shekyl-rpc-rendezvous",
     "shekyl-tor-control-daemon",
     # The Tor status as it crosses the wire, and the one renderer that
     # turns it into words (`docs/design/TOR_STATUS_CRATE.md`). No I/O;

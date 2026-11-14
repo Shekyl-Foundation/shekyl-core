@@ -55,9 +55,9 @@ const PEER: Kind = Kind::PeerEndpoint(PeerRule::Any);
 const INSTANCE: Kind = Kind::Name(NameRule {
     describe: "an instance name",
     check: |name| {
-        shekyl_rpc_channel::InstanceName::parse(name)
+        shekyl_rpc_rendezvous::InstanceName::parse(name)
             .map(drop)
-            .map_err(shekyl_rpc_channel::InstanceNameError::rule)
+            .map_err(shekyl_rpc_rendezvous::InstanceNameError::rule)
     },
 });
 const ORIGIN: Kind = Kind::Origin;
