@@ -397,8 +397,8 @@ impl fmt::Display for ConcurrentError {
                 "RSS bound exceeded (T8): baseline={baseline_bytes} bytes, \
                  max_steady_state={max_steady_state_bytes} bytes, delta={delta_bytes} \
                  bytes > ceiling_with_tolerance={ceiling_with_tolerance_bytes} bytes \
-                 ((workers + 1) × 256 MiB + 128 MiB, × 1.10 tolerance, per the \
-                 R1-D9 F4 Round-3 amendment)"
+                 ((CAP - 1) × 256 MiB + 128 MiB, × 1.10 tolerance: the \
+                 hasher's cap, less the cache resident at the baseline)"
             ),
         }
     }
@@ -925,7 +925,7 @@ mod tests {
     #[test]
     fn evaluate_rss_within_bound() {
         let baseline = 100_000_000;
-        // delta = 50 MiB; well under the 1664 MiB default ceiling
+        // delta = 50 MiB; well under the 640 MiB ceiling
         let max_ss = baseline + 50 * 1024 * 1024;
         let samples = Arc::new(Mutex::new(vec![
             (Duration::from_secs(1), baseline),
@@ -944,8 +944,7 @@ mod tests {
     #[test]
     fn evaluate_rss_exceeds_bound() {
         let baseline = 100_000_000;
-        // delta = 2048 MiB; over the 1830 MiB ceiling-with-tolerance
-        // at the default worker count
+        // delta = 2048 MiB; over the 704 MiB ceiling-with-tolerance.
         let max_ss = baseline + 2048 * 1024 * 1024;
         let samples = Arc::new(Mutex::new(vec![(Duration::from_secs(6), max_ss)]));
         let err = evaluate_rss(Some(baseline), &samples, rss_ceiling_bytes())
@@ -960,7 +959,7 @@ mod tests {
                 assert_eq!(baseline_bytes, baseline);
                 assert_eq!(max_steady_state_bytes, max_ss);
                 assert_eq!(delta_bytes, 2048 * 1024 * 1024);
-                assert_eq!(ceiling_with_tolerance_bytes, 1_919_313_510);
+                assert_eq!(ceiling_with_tolerance_bytes, 738_197_504);
             }
             other => panic!("expected RssBoundExceeded, got {other:?}"),
         }
