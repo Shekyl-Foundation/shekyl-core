@@ -23,9 +23,10 @@
 //! Its form: `shekyl-service-rendezvous 1`, then `channel <address:port>`,
 //! then `bundle <hex>`, one per line.
 
-use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+
+use super::stage::{self, Access};
 
 /// The record's first line: its format and version.
 pub const RECORD_FORMAT: &str = "shekyl-service-rendezvous 1";
@@ -70,19 +71,8 @@ impl ServiceRendezvous {
             hex::encode(bundle)
         )
         .into_bytes();
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(format!(".{}.new", std::process::id()));
-        let fresh = path.with_file_name(name);
-        match std::fs::remove_file(&fresh) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-        let mut file = create_readable(&fresh)?;
-        file.write_all(&record)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&fresh, path)?;
+        let journal = stage::StagedWrite::create(path, &record, Access::WorldReadable)?;
+        journal.commit()?;
         Ok(Self {
             path: path.to_path_buf(),
             record,
@@ -120,28 +110,6 @@ pub fn local_address(bound: &[SocketAddr]) -> Option<SocketAddr> {
         _ => None,
     });
     reached.or_else(|| bound.first().copied())
-}
-
-/// A new file every account can read and only this one can write: the
-/// record is how other users' clients find the service.
-#[cfg(unix)]
-fn create_readable(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(path)
-}
-
-/// On Windows `service` is refused before the walk until RT-W14 builds its
-/// dispatcher; the record's ACL is that slice's.
-#[cfg(not(unix))]
-fn create_readable(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
 }
 
 #[cfg(test)]

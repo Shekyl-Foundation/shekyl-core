@@ -1282,8 +1282,14 @@ R0 RT-7 stands: generated material only, never typed from memory.
   So it cannot run beside a daemon, and a service that starts while it is
   running waits or fails on the lock rather than reading a half-replaced
   enrolment. Checking that the service is stopped and then writing would
-  leave exactly that gap. It touches no other enrolment and is logged at
-  the next start. This is a command that changes daemon
+  leave exactly that gap. The replacement is one change: the new private
+  half is written to the key file's journal, the console fingerprint and
+  the reset note are committed in one store transaction, and the journal
+  is then renamed over the key file. A later start renames a journal whose
+  fingerprint is already the record, discards a journal that was never
+  committed when the live file already matches, and refuses a key file
+  that matches neither. It does not adopt a file the record does not name.
+  It touches no other enrolment and is logged at the next start. This is a command that changes daemon
   state, not a file edited by hand, so the rule above stands. Who may run
   it is who may write the service's data home — an OS permission the
   operator already manages.

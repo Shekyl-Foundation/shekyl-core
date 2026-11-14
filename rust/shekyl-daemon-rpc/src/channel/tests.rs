@@ -466,7 +466,7 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
 /// else** (IG-Q88, §5), run offline as the switch runs it: the old console
 /// key is no longer admitted, the new one is, an enrolled client is
 /// untouched, and the next start reads the note it left. Red edit: skip
-/// `set_console` in `write_console_key`, and the old console key is still
+/// the store commit in `console::install`, and the old console key is still
 /// admitted.
 #[test]
 fn the_console_key_reset_replaces_the_console_and_nothing_else() {

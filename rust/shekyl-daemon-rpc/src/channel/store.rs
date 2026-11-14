@@ -24,8 +24,12 @@ pub const STORE_FILE: &str = "rpc-enrolments.redb";
 /// Fingerprint → [`Enrolment::to_bytes`].
 const ENROLMENTS: TableDefinition<'static, &[u8; 32], &[u8]> = TableDefinition::new("enrolments");
 
+/// The width of a cell in [`SINGLES`]. The console fingerprint fills it;
+/// the reset note uses the first [`RESET_NOTE_LEN`] bytes.
+const SINGLE_CELL: usize = 32;
+
 /// The console key's fingerprint, under [`CONSOLE`].
-const SINGLES: TableDefinition<'static, &str, &[u8; 32]> = TableDefinition::new("singles");
+const SINGLES: TableDefinition<'static, &str, &[u8; SINGLE_CELL]> = TableDefinition::new("singles");
 const CONSOLE: &str = "console";
 /// Set by the console key's reset, read and cleared by the next start,
 /// which logs it (§5): the first 8 bytes are when, in seconds since the
@@ -227,12 +231,41 @@ impl Store {
     ///
     /// [`StoreError`].
     pub fn note_console_reset(&self, at: u64) -> Result<(), StoreError> {
-        let mut cell = [0u8; 32];
-        cell[..8].copy_from_slice(&at.to_le_bytes());
+        self.write_singles(None, Some(at))
+    }
+
+    /// Record `fingerprint` as the console key and, when `reset_at` is set,
+    /// the reset note, in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn commit_console(
+        &self,
+        fingerprint: &[u8; 32],
+        reset_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        self.write_singles(Some(fingerprint), reset_at)
+    }
+
+    /// One write of the single cells. `console` replaces the console
+    /// fingerprint; `reset_at` writes the reset note. Either may be absent.
+    fn write_singles(
+        &self,
+        console: Option<&[u8; 32]>,
+        reset_at: Option<u64>,
+    ) -> Result<(), StoreError> {
         let txn = self.db.begin_write().map_err(db_err)?;
         {
             let mut table = txn.open_table(SINGLES).map_err(db_err)?;
-            table.insert(CONSOLE_RESET, &cell).map_err(db_err)?;
+            if let Some(fingerprint) = console {
+                table.insert(CONSOLE, fingerprint).map_err(db_err)?;
+            }
+            if let Some(at) = reset_at {
+                table
+                    .insert(CONSOLE_RESET, &reset_note(at))
+                    .map_err(db_err)?;
+            }
         }
         txn.commit().map_err(db_err)
     }
@@ -249,8 +282,8 @@ impl Store {
             let mut table = txn.open_table(SINGLES).map_err(db_err)?;
             let at = table.remove(CONSOLE_RESET).map_err(db_err)?.map(|cell| {
                 let cell = cell.value();
-                let mut at = [0u8; 8];
-                at.copy_from_slice(&cell[..8]);
+                let mut at = [0u8; RESET_NOTE_LEN];
+                at.copy_from_slice(&cell[..RESET_NOTE_LEN]);
                 u64::from_le_bytes(at)
             });
             at
@@ -265,13 +298,18 @@ impl Store {
     ///
     /// [`StoreError`].
     pub fn set_console(&self, fingerprint: &[u8; 32]) -> Result<(), StoreError> {
-        let txn = self.db.begin_write().map_err(db_err)?;
-        {
-            let mut table = txn.open_table(SINGLES).map_err(db_err)?;
-            table.insert(CONSOLE, fingerprint).map_err(db_err)?;
-        }
-        txn.commit().map_err(db_err)
+        self.write_singles(Some(fingerprint), None)
     }
+}
+
+/// The reset note's width: when, in seconds since the Unix epoch. The rest
+/// of the cell stays zero.
+const RESET_NOTE_LEN: usize = std::mem::size_of::<u64>();
+
+fn reset_note(at: u64) -> [u8; SINGLE_CELL] {
+    let mut cell = [0u8; SINGLE_CELL];
+    cell[..RESET_NOTE_LEN].copy_from_slice(&at.to_le_bytes());
+    cell
 }
 
 #[cfg(test)]

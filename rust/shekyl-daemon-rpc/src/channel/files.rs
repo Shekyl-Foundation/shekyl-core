@@ -13,11 +13,12 @@
 //! finding), never tightened afterwards. A key file anyone else can read is
 //! refused at start, never repaired: whoever can read it is the daemon.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use shekyl_rpc_channel::handshake::{KeyFileError, StaticKeypair};
 use zeroize::Zeroizing;
+
+use super::stage::{self, Access};
 
 /// The daemon's static key (`StaticKeypair::to_key_file`).
 pub const KEY_FILE: &str = "rpc-channel.key";
@@ -81,47 +82,23 @@ pub fn read_key(path: &Path) -> Result<Option<StaticKeypair>, FileRefused> {
 ///
 /// [`FileRefused::Io`] when the create or the write fails.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
-    let io = |e| FileRefused::Io(path.to_path_buf(), e);
-    let mut file = create_private(path).map_err(io)?;
-    file.write_all(bytes).map_err(io)?;
-    file.sync_all().map_err(io)
+    stage::write_new(path, bytes, Access::OwnerOnly)
+        .map_err(|error| FileRefused::Io(path.to_path_buf(), error))
 }
 
-/// Replace the file at `path` with `bytes`, readable by this account alone:
-/// written to a fresh private file beside it and renamed over it, so a
-/// reader sees the old key or the new one.
+/// Replace the file at `path` with `bytes`, readable by this account alone.
+/// The bytes are the file's journal until the rename, so a reader sees the
+/// old key or the new one.
 ///
 /// # Errors
 ///
 /// [`FileRefused::Io`] when a step fails.
 pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), FileRefused> {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.new", std::process::id()));
-    let fresh = path.with_file_name(name);
-    match std::fs::remove_file(&fresh) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(FileRefused::Io(fresh, e)),
-    }
-    write_private(&fresh, bytes)?;
-    std::fs::rename(&fresh, path).map_err(|e| FileRefused::Io(path.to_path_buf(), e))
-}
-
-#[cfg(unix)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(windows)]
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    // The rendezvous file's descriptor is RT-O34's for a key: owner-only,
-    // protected, and the no-read-up label in the creating call.
-    shekyl_win_sec::rendezvous::create_rendezvous_file(path).map_err(std::io::Error::other)
+    let journal = stage::StagedWrite::create(path, bytes, Access::OwnerOnly)
+        .map_err(|error| FileRefused::Io(stage::staged_path(path), error))?;
+    journal
+        .commit()
+        .map_err(|error| FileRefused::Io(path.to_path_buf(), error))
 }
 
 /// Whether only this account can read `path`.

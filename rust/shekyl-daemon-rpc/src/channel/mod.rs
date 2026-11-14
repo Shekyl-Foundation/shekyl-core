@@ -20,10 +20,12 @@
 //!   ceiling (RT-O30, RT-O31), and the record stream into the router, each
 //!   request stamped with the connection's effective grant (RT-O32).
 
+mod console;
 pub mod files;
 pub mod listener;
 pub mod rendezvous;
 pub mod sessions;
+mod stage;
 pub mod store;
 
 #[cfg(test)]
@@ -170,20 +172,35 @@ impl Channel {
         files::replace_private(&dir.join(files::BUNDLE_FILE), &bundle(&key))
             .map_err(|e| e.to_string())?;
         let store = Store::open(dir).map_err(|e| e.to_string())?;
-        // The console key's reset is logged at the next start (§5).
+        // The console key's file and its cell are one change. A start
+        // finishes a commit the last process did not rename, and only then
+        // makes a key when the service has none (§5).
+        if setup.service {
+            match console::reconcile(dir, &store).map_err(|e| e.to_string())? {
+                console::Reconcile::Consistent => {}
+                console::Reconcile::Placed => tracing::info!(
+                    target: "global",
+                    "the service's console key is at {}",
+                    dir.join(files::CONSOLE_KEY_FILE).display()
+                ),
+                console::Reconcile::Absent => {
+                    let path = console::install(dir, &store, None).map_err(|e| e.to_string())?;
+                    tracing::info!(
+                        target: "global",
+                        "the service's console key was made at {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        // The console key's reset is logged at the next start (§5). The
+        // note is committed with the fingerprint, so it is read after the
+        // file is in place.
         if let Some(at) = store.take_console_reset().map_err(|e| e.to_string())? {
             tracing::warn!(
                 target: "global",
                 "the service's console key was replaced offline (at {at}, seconds since the \
                  Unix epoch); the previous console key no longer reaches this node"
-            );
-        }
-        if setup.service && store.console().map_err(|e| e.to_string())?.is_none() {
-            let path = write_console_key(dir, &store, files::write_private)?;
-            tracing::info!(
-                target: "global",
-                "the service's console key was made at {}",
-                path.display()
             );
         }
         Ok(Arc::new(Self {
@@ -356,34 +373,18 @@ pub fn unpadded_submission() -> RpcError {
     )
 }
 
-/// Replace a service's console key: a new key, recorded as the console
-/// enrolment, its private half written under the account's own access. The
-/// caller holds the data directory's lock (IG-Q88, §5); no other enrolment
-/// is touched. Returns where the private half was written.
+/// Replace a service's console key. The new private half, the fingerprint
+/// and the reset note are one change ([`console::install`]): a crash leaves
+/// a journal the next start finishes, or the previous key. The caller holds
+/// the data directory's lock (IG-Q88, §5); no other enrolment is touched.
+/// Returns where the private half was written.
 ///
 /// # Errors
 ///
 /// The refusal, in the operator's words.
 pub fn reset_console_key(data_dir: &Path) -> Result<PathBuf, String> {
     let store = Store::open(data_dir).map_err(|e| e.to_string())?;
-    let path = write_console_key(data_dir, &store, files::replace_private)?;
-    store.note_console_reset(now()).map_err(|e| e.to_string())?;
-    Ok(path)
-}
-
-fn write_console_key(
-    dir: &Path,
-    store: &Store,
-    write: impl FnOnce(&Path, &[u8]) -> Result<(), files::FileRefused>,
-) -> Result<PathBuf, String> {
-    let console =
-        StaticKeypair::generate().map_err(|e| format!("the console key could not be made: {e}"))?;
-    let path = dir.join(files::CONSOLE_KEY_FILE);
-    write(&path, &console.to_key_file()).map_err(|e| e.to_string())?;
-    store
-        .set_console(console.public().fingerprint().as_bytes())
-        .map_err(|e| e.to_string())?;
-    Ok(path)
+    console::install(data_dir, &store, Some(now())).map_err(|e| e.to_string())
 }
 
 /// The public bundle as it travels: the X25519 key, then the ML-KEM-768
