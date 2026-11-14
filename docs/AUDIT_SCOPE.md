@@ -298,7 +298,7 @@ For the protocol specification of these properties, see
    - ~~Cost to grind a favorable assignment exceeds feasibility threshold~~
    - ~~Output-index binding prevents per-output grinding~~
 
-5. **SpendIntent validation pipeline** (14 checks, SS9.2–SS9.4)
+5. **SpendIntent validation pipeline** (13 checks, `PQC_MULTISIG.md` §9.2–§9.6)
    - Structural, temporal, chain-state, and balance validation
    - No bypass via malformed fields or edge-case timing
 
@@ -306,15 +306,13 @@ For the protocol specification of these properties, see
    - All 7 invariants correctly enforced at their specified points
    - Assembly consensus (I6) rejects mixed commitments
 
-7. **Ceremony blob AEAD** (`shekyl-crypto-pq/src/multisig_blob.rs`)
-   - XChaCha20-Poly1305 under an HKDF-SHA-512 key per (intent, message
-     type, sender), from the group transport secret
-   - A random 24-byte nonce per blob, so a restored wallet cannot repeat one
-   - The blob key and the plaintext working buffer zeroize on drop, including a seal the cipher refuses
+7. **Ceremony files** (`shekyl-crypto-pq/src/multisig_blob.rs`, `multisig_envelope.rs`; `shekyl-multisig/src/envelope.rs`)
+   - XChaCha20-Poly1305 under one HKDF-SHA-512 key per group, from the group transport secret; only the format version is in the clear (R-10)
+   - A random 24-byte nonce per file, so a restored wallet cannot repeat one
+   - The sender signature under the member's envelope key (R-6), and the import check order: version and length before any key, then parse, fingerprint, sender index, signature, type
+   - The group key, the plaintext working buffer and the signing frame's input zeroize on drop, including a seal the cipher refuses
 
-8. **CounterProof verification** (SS13.4)
-   - 8-rule verification pipeline prevents forged advancement
-   - Rescan-required state prevents advancement on stale local state
+8. **CounterProof verification** — **OUT OF SCOPE (deleted with the intent's `tx_counter`, ruled 2026-11-13):** replay is the reference block's age, the held nonce bound to one intent hash, and consensus key images; a member commits to at most one live intent per input (`PQC_MULTISIG.md` §9.2)
 
 9. **Griefing defense** (`GriefingTracker`)
    - Per-output cost is bounded
@@ -323,7 +321,7 @@ For the protocol specification of these properties, see
 ### Out-of-Scope
 
 - GUI components (presentation layer, no crypto)
-- Relay transport (network layer, no crypto)
+- Moving ceremony files between members (the wallet moves no bytes; the files themselves are item 7)
 
 ### Deliverables
 

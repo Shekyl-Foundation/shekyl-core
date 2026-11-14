@@ -14,6 +14,10 @@ license.workspace = true
 [dependencies]
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 serde = { workspace = true, optional = true }
+# The frame's working buffer holds every field's bytes, and some fields are
+# secret-bearing (a multisig ceremony file's body); it is wiped on drop
+# (rule 35).
+zeroize = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true

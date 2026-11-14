@@ -1,12 +1,10 @@
-//! Generate the FCMP reference-block age bounds and CT type from the JSON
-//! authority at `config/consensus_constants.json` — the same source
-//! `cmake/generate_consensus_constants.py` (C++ header) and
-//! `rust/shekyl-engine-core/build.rs` read, so the languages cannot drift.
+//! Generate the FCMP++ CT type from the JSON authority at
+//! `config/consensus_constants.json`, the same source
+//! `rust/shekyl-engine-core/build.rs` reads.
 //!
-//! `src/intent.rs` `include!`s the emitted file; const-evaluated `assert!`
-//! blocks at the consumption sites pin meaning across changes. Only the three
-//! constants `intent.rs` consumes are emitted here (engine-core's build.rs also
-//! emits `ARCHIVAL_BOND_FLOOR_ATOMIC`, which this crate has no use for).
+//! `src/intent.rs` `include!`s the emitted file and pins it, and the wire's
+//! `CT_TYPE_FCMP`, to the genesis value. The reference-block window is not
+//! emitted here: `shekyl-curve-tree::reference` owns it (R-13).
 
 use std::collections::BTreeMap;
 use std::env;
@@ -44,8 +42,6 @@ fn main() {
     let map: BTreeMap<String, serde_json::Value> = serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", config_path.display()));
 
-    let min_age = get_u64(&map, "fcmp_reference_block_min_age", &config_path);
-    let max_age = get_u64(&map, "fcmp_reference_block_max_age", &config_path);
     // Convert to the destination type at the boundary so a JSON value > 255
     // fails the build here with a clear message rather than emitting an
     // out-of-range literal the consumer would reject.
@@ -66,8 +62,6 @@ fn main() {
          // Single source of truth: `config/consensus_constants.json`. The C++\n\
          // header at `shekyl/consensus_constants_generated.h` is emitted from\n\
          // the same JSON by `cmake/generate_consensus_constants.py`.\n\
-         pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = {min_age};\n\
-         pub const FCMP_REFERENCE_BLOCK_MAX_AGE: u64 = {max_age};\n\
          pub const CT_TYPE_FCMP_PLUS_PLUS_PQC: u8 = {ct_type};\n",
     );
 

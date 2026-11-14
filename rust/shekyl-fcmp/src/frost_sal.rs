@@ -62,7 +62,7 @@ use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
 use shekyl_fcmp_proofs::Output;
 use shekyl_types::TxSignableHash;
 
-use shekyl_crypto_pq::multisig::MAX_MULTISIG_PARTICIPANTS;
+use shekyl_crypto_pq::multisig::{MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD};
 
 /// The SAL algorithm every signer of one input runs.
 pub type FrostSal = SalAlgorithm<ChaCha20Rng, RecommendedTranscript>;
@@ -83,7 +83,9 @@ pub type SalShare = SignatureShare<Ed25519T>;
 /// indices are 0-based, as the member file and the address number them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FrostKeyError {
-    /// `n` is 0 or above [`MAX_MULTISIG_PARTICIPANTS`], or `m` is 0 or above `n`.
+    /// `n` is above [`MAX_MULTISIG_PARTICIPANTS`], or `m` is below
+    /// [`MIN_MULTISIG_THRESHOLD`] (R-11: a 1-of-N group is a shared key) or
+    /// above `n`.
     #[error("no {m}-of-{n} multisig group exists")]
     GroupShape {
         /// The member count.
@@ -280,7 +282,7 @@ fn participant(member_index: u8) -> Participant {
 }
 
 fn check_group_shape(n: u8, m: u8) -> Result<(), FrostKeyError> {
-    if n == 0 || n > MAX_MULTISIG_PARTICIPANTS || m == 0 || m > n {
+    if n > MAX_MULTISIG_PARTICIPANTS || m < MIN_MULTISIG_THRESHOLD || m > n {
         return Err(FrostKeyError::GroupShape { n, m });
     }
     Ok(())

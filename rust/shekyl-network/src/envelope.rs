@@ -33,6 +33,7 @@
 //! signature keeps 64 (`shekyl_crypto_hash::cshake256_64`'s reason).
 
 use shekyl_crypto_hash::{cshake256_32, cshake256_64};
+use zeroize::Zeroizing;
 
 use crate::{NameId, NetworkId};
 
@@ -230,22 +231,32 @@ impl<const N: usize> NameDomain<N, W64> {
 /// No binding. The field half of [`input`].
 #[must_use]
 pub fn framed_fields(fields: &[&[u8]]) -> Vec<u8> {
-    let len = fields.iter().map(|f| 8 + f.len()).sum::<usize>();
-    let mut out = Vec::with_capacity(len);
+    let mut out = Vec::with_capacity(framed_len(fields));
+    push_framed(&mut out, fields);
+    out
+}
+
+fn framed_len(fields: &[&[u8]]) -> usize {
+    fields.iter().map(|f| 8 + f.len()).sum()
+}
+
+fn push_framed(out: &mut Vec<u8>, fields: &[&[u8]]) {
     for field in fields {
         let len = u64::try_from(field.len()).expect("a field is shorter than 2^64 bytes");
         out.extend_from_slice(&len.to_le_bytes());
         out.extend_from_slice(field);
     }
-    out
 }
 
-/// `X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)`.
-fn input(binding: &[u8; BINDING_LEN], fields: &[&[u8]]) -> Vec<u8> {
-    let framed = framed_fields(fields);
-    let mut x = Vec::with_capacity(BINDING_LEN + framed.len());
+/// `X = binding ‖ framed(f_1) ‖ … ‖ framed(f_n)`, in one buffer wiped on
+/// drop: a field may be secret-bearing (a multisig ceremony file's body), and
+/// this is the only copy the frame makes. The capacity is exact, so the
+/// buffer never reallocates and leaves no unwiped copy behind.
+fn input(binding: &[u8; BINDING_LEN], fields: &[&[u8]]) -> Zeroizing<Vec<u8>> {
+    let mut x = Zeroizing::new(Vec::with_capacity(BINDING_LEN + framed_len(fields)));
     x.extend_from_slice(binding);
-    x.extend_from_slice(&framed);
+    push_framed(&mut x, fields);
+    debug_assert_eq!(x.len(), x.capacity());
     x
 }
 
