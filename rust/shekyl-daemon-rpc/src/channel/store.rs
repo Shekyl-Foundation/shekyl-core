@@ -27,6 +27,10 @@ const ENROLMENTS: TableDefinition<'static, &[u8; 32], &[u8]> = TableDefinition::
 /// The console key's fingerprint, under [`CONSOLE`].
 const SINGLES: TableDefinition<'static, &str, &[u8; 32]> = TableDefinition::new("singles");
 const CONSOLE: &str = "console";
+/// Set by the console key's reset, read and cleared by the next start,
+/// which logs it (§5): the first 8 bytes are when, in seconds since the
+/// Unix epoch, little-endian.
+const CONSOLE_RESET: &str = "console-reset";
 
 /// A record's first byte: its version (rule 42's discipline for persisted
 /// state: a change of shape is a new version, refused by an older reader).
@@ -214,6 +218,45 @@ impl Store {
         let txn = self.db.begin_read().map_err(db_err)?;
         let table = txn.open_table(SINGLES).map_err(db_err)?;
         Ok(table.get(CONSOLE).map_err(db_err)?.map(|v| *v.value()))
+    }
+
+    /// Note that the console key was replaced now, for the next start to
+    /// log.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn note_console_reset(&self, at: u64) -> Result<(), StoreError> {
+        let mut cell = [0u8; 32];
+        cell[..8].copy_from_slice(&at.to_le_bytes());
+        let txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut table = txn.open_table(SINGLES).map_err(db_err)?;
+            table.insert(CONSOLE_RESET, &cell).map_err(db_err)?;
+        }
+        txn.commit().map_err(db_err)
+    }
+
+    /// When the console key was last replaced, if no start has logged it
+    /// yet; clears the note.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn take_console_reset(&self) -> Result<Option<u64>, StoreError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        let at = {
+            let mut table = txn.open_table(SINGLES).map_err(db_err)?;
+            let at = table.remove(CONSOLE_RESET).map_err(db_err)?.map(|cell| {
+                let cell = cell.value();
+                let mut at = [0u8; 8];
+                at.copy_from_slice(&cell[..8]);
+                u64::from_le_bytes(at)
+            });
+            at
+        };
+        txn.commit().map_err(db_err)?;
+        Ok(at)
     }
 
     /// Record `fingerprint` as the console key, replacing the old one.

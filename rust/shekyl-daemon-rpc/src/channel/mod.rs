@@ -160,6 +160,14 @@ impl Channel {
         files::replace_private(&dir.join(files::BUNDLE_FILE), &bundle(&key))
             .map_err(|e| e.to_string())?;
         let store = Store::open(dir).map_err(|e| e.to_string())?;
+        // The console key's reset is logged at the next start (§5).
+        if let Some(at) = store.take_console_reset().map_err(|e| e.to_string())? {
+            tracing::warn!(
+                target: "global",
+                "the service's console key was replaced offline (at {at}, seconds since the \
+                 Unix epoch); the previous console key no longer reaches this node"
+            );
+        }
         if setup.service && store.console().map_err(|e| e.to_string())?.is_none() {
             let path = write_console_key(dir, &store, files::write_private)?;
             tracing::info!(
@@ -344,7 +352,9 @@ pub fn unpadded_submission() -> RpcError {
 /// The refusal, in the operator's words.
 pub fn reset_console_key(data_dir: &Path) -> Result<PathBuf, String> {
     let store = Store::open(data_dir).map_err(|e| e.to_string())?;
-    write_console_key(data_dir, &store, files::replace_private)
+    let path = write_console_key(data_dir, &store, files::replace_private)?;
+    store.note_console_reset(now()).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 fn write_console_key(

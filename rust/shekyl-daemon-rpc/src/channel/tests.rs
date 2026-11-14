@@ -459,3 +459,68 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
         "{waited:?}"
     );
 }
+
+/// **The console key's reset replaces the console enrolment and nothing
+/// else** (IG-Q88, §5), run offline as the switch runs it: the old console
+/// key is no longer admitted, the new one is, an enrolled client is
+/// untouched, and the next start reads the note it left. Red edit: skip
+/// `set_console` in `write_console_key`, and the old console key is still
+/// admitted.
+#[test]
+fn the_console_key_reset_replaces_the_console_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let setup = ChannelSetup {
+        data_dir: dir.path().to_path_buf(),
+        network_id: NETWORK,
+        service: true,
+    };
+    let path = dir.path().join(super::files::CONSOLE_KEY_FILE);
+    let client = StaticKeypair::generate().unwrap();
+    let client_fp = *client.public().fingerprint().as_bytes();
+    let old = {
+        let channel = Channel::open(&setup).expect("opens");
+        channel
+            .client_add(HOST, Enroller::Host, client_fp, &[CeilingWord::View])
+            .unwrap();
+        super::files::read_key(&path)
+            .unwrap()
+            .expect("the console key")
+    };
+
+    let written = super::reset_console_key(dir.path()).expect("reset, offline");
+    assert_eq!(written, path);
+    let new = super::files::read_key(&path)
+        .unwrap()
+        .expect("the new console key");
+    assert_ne!(new.public().fingerprint(), old.public().fingerprint());
+    {
+        let store = super::store::Store::open(dir.path()).unwrap();
+        assert!(
+            store.take_console_reset().unwrap().is_some(),
+            "the note is left"
+        );
+        store.note_console_reset(1).unwrap();
+    }
+
+    let channel = Channel::open(&setup).expect("the next start");
+    assert!(
+        channel.store.take_console_reset().unwrap().is_none(),
+        "the start read the note"
+    );
+    assert_eq!(
+        channel
+            .admitted(old.public().fingerprint().as_bytes())
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        channel
+            .admitted(new.public().fingerprint().as_bytes())
+            .unwrap(),
+        Some(super::Admitted::Console)
+    );
+    assert_eq!(
+        channel.admitted(&client_fp).unwrap(),
+        Some(super::Admitted::Client(Preset::View.grants()))
+    );
+}
