@@ -944,9 +944,10 @@ impl Drop for SignalDone {
 /// The found-block sink. It ends when the inbox closes or the last sender
 /// drops, and the queue is empty. Each block enters through the door's
 /// local-arrival entry ([`Door::offer_local`]) on the runtime it was
-/// spawned from. Called from inside that runtime.
+/// spawned from, and is marked answered once the door has replied
+/// ([`FoundInbox::answered`]). Called from inside that runtime.
 pub(crate) fn spawn_sink(
-    found: FoundInbox,
+    inbox: FoundInbox,
     door: Door,
     postings: Postings,
     done: tokio::sync::oneshot::Sender<()>,
@@ -956,7 +957,7 @@ pub(crate) fn spawn_sink(
         .name(FOUND_SINK_THREAD.to_owned())
         .spawn(move || {
             let _done = SignalDone(Some(done));
-            while let Some(found) = found.recv() {
+            while let Some(found) = inbox.recv() {
                 let bodies = {
                     let kept = postings.lock().unwrap_or_else(PoisonError::into_inner);
                     match kept.get(&found.generation) {
@@ -991,6 +992,10 @@ pub(crate) fn spawn_sink(
                         "a block this node mined was not accepted at the door: {refused:?}"
                     ),
                 }
+                // The door has replied, whatever the reply: the chain now
+                // shows what this block came to, which is what a caller of
+                // `FoundBlocks::answered` waits to read.
+                inbox.answered();
             }
         })
         .expect("the found-block sink starts")

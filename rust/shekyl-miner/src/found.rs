@@ -11,6 +11,13 @@
 //! The last sender dropping ends the receive too, which is a miner stopping
 //! on its own and disconnecting the sink. The last inbox dropping closes
 //! the mailbox, so a later deliver refuses and nothing queued is kept.
+//!
+//! The mailbox counts what was delivered and what the receiver has
+//! answered ([`FoundInbox::answered`]): the service calls it once the door
+//! has replied to a block, connected or refused. [`FoundBlocks::answered`]
+//! waits for every block delivered so far to be answered. A caller that
+//! stopped the miner reads the chain after that wait, and not while a
+//! block the miner found is still on its way through the door.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -48,11 +55,18 @@ struct Mail {
     /// Live [`FoundInbox`] clones. Zero closes the mailbox. Nothing can
     /// receive, so the queue is dropped and a later deliver refuses.
     receivers: usize,
+    /// Blocks [`FoundBlocks::deliver`] accepted.
+    delivered: u64,
+    /// Blocks the receiver has answered ([`FoundInbox::answered`]). Never
+    /// above `delivered`.
+    answered: u64,
 }
 
 struct Shared {
     mail: Mutex<Mail>,
     arrived: Condvar,
+    /// Woken when `answered` moves, and when the last receiver drops.
+    settled: Condvar,
 }
 
 fn lock(shared: &Shared) -> MutexGuard<'_, Mail> {
@@ -108,8 +122,29 @@ impl FoundBlocks {
             return false;
         }
         mail.queue.push_back(found);
+        mail.delivered += 1;
         self.shared.arrived.notify_one();
         true
+    }
+
+    /// Wait until every block delivered before this call has its answer
+    /// from the receiver ([`FoundInbox::answered`]). Returns at once when
+    /// nothing is owed. Returns too when the last inbox has dropped:
+    /// nothing will answer what was queued, and nothing will connect it.
+    ///
+    /// Blocking. A block delivered while this waits is not waited for: the
+    /// caller that wants none stops the miner first, and a stopped miner
+    /// delivers nothing ([`JobBoard`](crate::JobBoard)'s claim).
+    pub fn answered(&self) {
+        let mut mail = lock(&self.shared);
+        let owed = mail.delivered;
+        while mail.answered < owed && mail.receivers > 0 {
+            mail = self
+                .shared
+                .settled
+                .wait(mail)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
     }
 }
 
@@ -140,6 +175,7 @@ impl Drop for FoundInbox {
             mail.closed = true;
             mail.queue.clear();
             self.shared.arrived.notify_all();
+            self.shared.settled.notify_all();
         }
     }
 }
@@ -213,6 +249,25 @@ impl FoundInbox {
         }
     }
 
+    /// One received block has its answer: the door replied to it,
+    /// connected or refused. The receiver calls this once per block it
+    /// took, after the reply, so [`FoundBlocks::answered`] returns only
+    /// when the chain shows what that block came to.
+    ///
+    /// # Panics
+    ///
+    /// When more blocks are answered than were delivered: a receiver
+    /// answered a block it did not take.
+    pub fn answered(&self) {
+        let mut mail = lock(&self.shared);
+        assert!(
+            mail.answered < mail.delivered,
+            "a found block is answered once, after it is received"
+        );
+        mail.answered += 1;
+        self.shared.settled.notify_all();
+    }
+
     /// End the inbox. Receivers drain the queue and then see [`recv`](Self::recv)
     /// return `None`, whether or not a sender still lives. A deliver after
     /// this returns `false`.
@@ -233,8 +288,11 @@ pub fn found_blocks() -> (FoundBlocks, FoundInbox) {
             closed: false,
             senders: 1,
             receivers: 1,
+            delivered: 0,
+            answered: 0,
         }),
         arrived: Condvar::new(),
+        settled: Condvar::new(),
     });
     (
         FoundBlocks {
@@ -314,6 +372,71 @@ mod tests {
         assert_eq!(kept.recv(), Some(found));
         drop(kept);
         assert!(!sender.deliver(found_at(2)));
+    }
+
+    /// [`FoundBlocks::answered`] returns only once every block delivered
+    /// before it has been answered: received is not answered. With nothing
+    /// delivered it returns at once.
+    ///
+    /// Red edit: count a block as answered in `recv` instead of in
+    /// [`FoundInbox::answered`]: the wait returns while the receiver still
+    /// holds the block, before the flag below is set.
+    #[test]
+    fn the_wait_ends_when_each_delivered_block_is_answered_not_when_it_is_received() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let (sender, inbox) = found_blocks();
+        sender.answered();
+        assert!(sender.deliver(found_at(5)));
+        assert!(sender.deliver(found_at(6)));
+        let replied = Arc::new(AtomicBool::new(false));
+        let (received_tx, received) = std::sync::mpsc::channel();
+        let (reply, reply_rx) = std::sync::mpsc::channel::<()>();
+        let receiver = {
+            let replied = Arc::clone(&replied);
+            std::thread::spawn(move || {
+                let first = inbox.recv().expect("the first block");
+                inbox.answered();
+                let second = inbox.recv().expect("the second block");
+                // Both are received. The second has no answer until the
+                // test says the door replied.
+                received_tx.send(()).expect("the test waits");
+                reply_rx.recv().expect("the test replies");
+                replied.store(true, Ordering::Release);
+                inbox.answered();
+                (first, second)
+            })
+        };
+        let waiter = {
+            let replied = Arc::clone(&replied);
+            std::thread::spawn(move || {
+                sender.answered();
+                replied.load(Ordering::Acquire)
+            })
+        };
+        received.recv().expect("both blocks are received");
+        reply.send(()).expect("the receiver waits for the reply");
+        assert!(
+            waiter.join().expect("the wait returns"),
+            "the wait returned before the second block was answered"
+        );
+        let (first, second) = receiver.join().expect("the receiver returns");
+        assert_eq!((first, second), (found_at(5), found_at(6)));
+    }
+
+    /// The last inbox dropping ends the wait: nothing will answer what was
+    /// delivered.
+    ///
+    /// Red edit: drop the `settled` wake from `FoundInbox`'s `Drop`: the
+    /// wait never returns.
+    #[test]
+    fn the_wait_ends_when_the_last_inbox_drops_with_a_block_unanswered() {
+        let (sender, inbox) = found_blocks();
+        assert!(sender.deliver(found_at(7)));
+        let waiter = std::thread::spawn(move || sender.answered());
+        drop(inbox);
+        waiter.join().expect("the wait returns");
     }
 
     #[test]
