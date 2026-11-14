@@ -96,6 +96,7 @@ fn state_with(tag: &str, shard_view: ShardViewHandle) -> (Scratch, Arc<AppState>
         tor: Arc::new(crate::tor_facts::TorAbsent),
         hash_budget: Arc::new(HashBudget::new(Instant::now())),
         coinbase_reads: Arc::new(Semaphore::new(1)),
+        channel: None,
     });
     (scratch, state)
 }
@@ -110,7 +111,8 @@ fn call(method: &str, params: Value) -> Value {
 /// The reply to `body`, as JSON. Every reply is a result or an error,
 /// never both and never neither: a refusal is never a result.
 async fn reply_to(state: &Arc<AppState>, authority: Authority, body: &[u8]) -> Value {
-    let reply = serde_json::to_value(answer(state, authority, body).await).expect("serializes");
+    let reply =
+        serde_json::to_value(answer(state, authority, None, body).await).expect("serializes");
     assert_eq!(reply["jsonrpc"], "2.0", "{reply}");
     assert!(
         reply.get("result").is_some() != reply.get("error").is_some(),

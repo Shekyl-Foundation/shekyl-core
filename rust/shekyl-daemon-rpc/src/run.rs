@@ -61,6 +61,7 @@ pub struct Running {
 pub struct Prepared {
     rt: Pool,
     owner: Option<crate::owner::OwnerSocket>,
+    channel: Option<std::sync::Arc<crate::channel::Channel>>,
 }
 
 /// Why [`prepare`] refused.
@@ -70,6 +71,9 @@ pub enum PrepareError {
     Runtime(String),
     /// The owner's leg refused, as a typed refusal.
     Owner(shekyl_options::Diagnostic),
+    /// The RPC channel's key or enrolled set could not be used, in the
+    /// operator's words.
+    Channel(String),
 }
 
 /// Start the server's runtime and bind the owner's leg on it: the start-up
@@ -77,13 +81,17 @@ pub enum PrepareError {
 /// ([`crate::owner::OwnerSocket::bind`]). Called before the node opens, so a
 /// second daemon of this account, network and instance refuses with nothing
 /// opened (`RPC_CHANNEL.md` §7.1). `owner` is the walk's plan and the
-/// network's name; `None` for a service.
+/// network's name; `None` for a service. `channel` opens the RPC channel's
+/// state under the data directory's lock, the daemon's key made on the
+/// first start (RT-O34); `None` composes no channel.
 ///
 /// # Errors
 ///
-/// The runtime could not start, or the owner's leg refused.
+/// The runtime could not start, the owner's leg refused, or the channel's
+/// files could not be used.
 pub fn prepare(
     owner: Option<(&shekyl_daemon_config::OwnerSocketPlan, &str)>,
+    channel: Option<&crate::channel::ChannelSetup>,
 ) -> Result<Prepared, PrepareError> {
     let name = ThreadName::new("daemon-rpc")
         .map_err(|e| PrepareError::Runtime(format!("thread name refused: {e}")))?;
@@ -96,7 +104,11 @@ pub fn prepare(
         }
         None => None,
     };
-    Ok(Prepared { rt, owner })
+    let channel = channel
+        .map(crate::channel::Channel::open)
+        .transpose()
+        .map_err(PrepareError::Channel)?;
+    Ok(Prepared { rt, owner, channel })
 }
 
 impl Prepared {
@@ -140,7 +152,7 @@ pub fn start(
     prepared: Prepared,
     gone: OnRendezvousGone,
 ) -> Result<Running, String> {
-    let Prepared { rt, owner } = prepared;
+    let Prepared { rt, owner, channel } = prepared;
     // The section's one cap; the listeners are loopback only, so the
     // per-address caps the C++ options carried had no population.
     let conn_limits = ConnLimits::checked(u64::from(section.connections_max.get()), 0, 0)?;
@@ -156,6 +168,14 @@ pub fn start(
     };
     let admin = bind(&section.admin_listen)?;
     let view = bind(&section.view_listen)?;
+    // The channel's listeners bind any address (RT-14).
+    let mut channel_listen = Vec::with_capacity(section.channel_listen.len());
+    for addr in &section.channel_listen {
+        channel_listen.push(
+            rt.block_on(crate::bind::bind_channel_listener(*addr))
+                .map_err(|e| format!("bind failed on {addr}: {e}"))?,
+        );
+    }
     crate::handles::publish_live(&handles);
     let config = ServerConfig {
         cors_origins: section.cors_origins.clone(),
@@ -164,6 +184,7 @@ pub fn start(
         handles,
         tor,
         armed,
+        channel,
         ..Default::default()
     };
     let Some(shim) = crate::submit::production() else {
@@ -199,6 +220,7 @@ pub fn start(
             admin,
             view,
             owner_listener,
+            channel_listen,
             shutdown_rx,
         )
         .await

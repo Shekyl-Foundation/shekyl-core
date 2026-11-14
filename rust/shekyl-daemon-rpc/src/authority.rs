@@ -87,6 +87,20 @@ impl Authority {
         }
     }
 
+    /// A channel connection (`RPC_CHANNEL.md` §6.2): its effective grant,
+    /// the request clamped to the ceiling, fixed for the connection's life.
+    /// The console key is the host's administrator (§5); an enrolled key
+    /// never is, whatever its ceiling. The armed levers stay with the
+    /// owner's leg and the admin listener.
+    #[must_use]
+    pub const fn channel(effective: GrantSet, console: bool) -> Self {
+        Self {
+            grants: effective,
+            host: console,
+            armed: false,
+        }
+    }
+
     /// The plaintext view listener (RT-O33).
     pub const VIEW_LISTENER: Self = Self {
         grants: VIEW_LISTENER_GRANTS,
@@ -229,6 +243,19 @@ pub(crate) fn note_admitted(authority: Authority, row: &Method) {
 /// of its own (RW-Q1).
 pub async fn stamp(authority: Authority, mut request: Request, next: Next) -> Response {
     request.extensions_mut().insert(authority);
+    next.run(request).await
+}
+
+/// The layer that stamps a channel connection's `authority` and its
+/// [`crate::channel::ChannelCall`] on every request.
+pub async fn stamp_channel(
+    authority: Authority,
+    call: crate::channel::ChannelCall,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    request.extensions_mut().insert(authority);
+    request.extensions_mut().insert(call);
     next.run(request).await
 }
 

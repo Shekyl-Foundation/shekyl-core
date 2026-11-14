@@ -73,6 +73,10 @@ pub struct AppState {
     /// Bounded `chain_coinbase_sum` reads, one at a time. Cold reads wait
     /// on disk; the permit is taken before the blocking-pool task.
     pub coinbase_reads: Arc<Semaphore>,
+    /// The RPC channel's state: its key, the enrolled set and the live
+    /// sessions (`crate::channel`). `None` serves the enrolment methods as
+    /// not ready.
+    pub channel: Option<Arc<crate::channel::Channel>>,
 }
 
 pub struct ServerConfig {
@@ -90,6 +94,8 @@ pub struct ServerConfig {
     /// The node's armed-lever switch (`dev-rpc`, `RPC_CHANNEL.md` §6.1): the
     /// admin listener serves the armed test levers only while it is on.
     pub armed: bool,
+    /// The RPC channel's state, opened under the data directory's lock.
+    pub channel: Option<Arc<crate::channel::Channel>>,
 }
 
 impl Default for ServerConfig {
@@ -102,6 +108,7 @@ impl Default for ServerConfig {
             handles: Handles::absent(),
             tor: Arc::new(crate::tor_facts::TorAbsent),
             armed: false,
+            channel: None,
         }
     }
 }
@@ -183,6 +190,16 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String], authority: Au
         .with_state(state)
 }
 
+/// The channel listener's router: the same routes and layers, not stamped.
+/// Each channel connection stamps its own authority and caller
+/// (`crate::channel::listener`).
+fn channel_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
+    assemble(post(rpc::handle))
+        .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
+        .layer(cors_layer(cors_origins))
+        .with_state(state)
+}
+
 /// `router` with the request layer that stamps `authority` and admits each
 /// path. One function, so the gate tests apply exactly what ships.
 fn gate<S>(router: Router<S>, authority: Authority) -> Router<S>
@@ -213,13 +230,14 @@ pub async fn serve_listeners(
     admin: Vec<BoundListener>,
     view: Vec<BoundListener>,
     owner: Option<crate::owner::OwnerListener>,
+    channel_listen: Vec<BoundListener>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn_tracker = ConnTracker::new(config.conn_limits);
     let hash_budget = Arc::new(HashBudget::new(Instant::now()));
     let coinbase_reads = Arc::new(Semaphore::new(1));
-    let router_at = |authority: Authority| {
-        let state = Arc::new(AppState {
+    let state_for = || {
+        Arc::new(AppState {
             submit_engine: submit_engine.clone(),
             conn_tracker: conn_tracker.clone(),
             shard_view: Arc::clone(&config.handles.shard_view),
@@ -228,9 +246,11 @@ pub async fn serve_listeners(
             tor: Arc::clone(&config.tor),
             hash_budget: Arc::clone(&hash_budget),
             coinbase_reads: Arc::clone(&coinbase_reads),
-        });
-        build_router(state, &config.cors_origins, authority)
+            channel: config.channel.clone(),
+        })
     };
+    let router_at =
+        |authority: Authority| build_router(state_for(), &config.cors_origins, authority);
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
     // from the old permissive reflection, so make it observable rather than a
@@ -265,6 +285,17 @@ pub async fn serve_listeners(
     }
 
     let owner = owner.map(|listener| (router_at(Authority::owner(config.armed)), listener));
+    let channel = match (&config.channel, channel_listen.is_empty()) {
+        (Some(channel), false) => Some((
+            channel_router(state_for(), &config.cors_origins),
+            Arc::clone(channel),
+            channel_listen,
+        )),
+        (None, false) => {
+            return Err("the RPC channel's listeners were bound with no channel state".into());
+        }
+        (_, true) => None,
+    };
     serve_bound(
         vec![
             (
@@ -275,6 +306,7 @@ pub async fn serve_listeners(
             (Listener::View, router_at(Authority::VIEW_LISTENER), view),
         ],
         owner,
+        channel,
         conn_tracker,
         shutdown,
     )
@@ -313,6 +345,7 @@ impl Listener {
 pub(crate) async fn serve_bound(
     sets: Vec<(Listener, Router, Vec<BoundListener>)>,
     owner: Option<(Router, crate::owner::OwnerListener)>,
+    channel: Option<(Router, Arc<crate::channel::Channel>, Vec<BoundListener>)>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -335,6 +368,22 @@ pub(crate) async fn serve_bound(
             app,
             stop_on(shutdown.clone(), fail_rx.clone()),
         ));
+    }
+    if let Some((app, channel, bound)) = channel {
+        for bound in bound {
+            info!(
+                target: "global",
+                "shekyl-daemon-rpc listening on {} (channel listener)",
+                bound.local_addr()
+            );
+            let (_, listener) = bound.into_parts();
+            serves.spawn(crate::channel::listener::serve(
+                LimitedListener::new(listener, conn_tracker.clone()),
+                Arc::clone(&channel),
+                app.clone(),
+                stop_on(shutdown.clone(), fail_rx.clone()),
+            ));
+        }
     }
     for (role, app, bound) in sets.into_iter().flat_map(|(role, app, listeners)| {
         listeners
@@ -633,6 +682,7 @@ mod lifecycle_tests {
                 (Listener::View, router(), vec![view_listener]),
             ],
             None,
+            None,
             ConnTracker::new(ConnLimits::default()),
             rx,
         ));
@@ -681,6 +731,7 @@ mod lifecycle_tests {
         let serving = tokio::spawn(serve_bound(
             vec![(Listener::Admin, router(), two_loopback_listeners().await)],
             Some((owner_app, listener)),
+            None,
             tracker.clone(),
             rx,
         ));
@@ -727,6 +778,7 @@ mod lifecycle_tests {
             Duration::from_secs(5),
             serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
                 None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,
@@ -776,6 +828,7 @@ mod lifecycle_tests {
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
                 None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,

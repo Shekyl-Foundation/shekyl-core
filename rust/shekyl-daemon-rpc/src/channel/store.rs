@@ -1,0 +1,282 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The enrolled set (RT-O34; `RPC_CHANNEL.md` §5): a redb store of its own
+//! in the network's data directory, owned by the RPC channel, changed only
+//! through the enrolment methods and the console key's reset. There is no
+//! file to edit behind the daemon's back.
+//!
+//! One record per client fingerprint: its ceiling as expanded grants (never
+//! a preset's name, IG-Q87), when it was enrolled, and by whom. The console
+//! key, a service's, is not an enrolment: it sits in a cell of its own and
+//! is never listed, set or removed through the enrolment methods.
+
+use std::path::Path;
+
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use shekyl_rpc_grants::GrantSet;
+
+/// The store's file in the data directory.
+pub const STORE_FILE: &str = "rpc-enrolments.redb";
+
+/// Fingerprint → [`Enrolment::to_bytes`].
+const ENROLMENTS: TableDefinition<'static, &[u8; 32], &[u8]> = TableDefinition::new("enrolments");
+
+/// The console key's fingerprint, under [`CONSOLE`].
+const SINGLES: TableDefinition<'static, &str, &[u8; 32]> = TableDefinition::new("singles");
+const CONSOLE: &str = "console";
+
+/// A record's first byte: its version (rule 42's discipline for persisted
+/// state: a change of shape is a new version, refused by an older reader).
+pub const RECORD_VERSION: u8 = 1;
+
+/// Who enrolled a client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Enroller {
+    /// The daemon's owner, on the owner's socket or pipe, or a plaintext
+    /// listener at the host's authority.
+    Host,
+    /// The console key.
+    Console,
+    /// An enrolled client, by its fingerprint.
+    Client([u8; 32]),
+}
+
+/// One enrolment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Enrolment {
+    /// The ceiling, expanded.
+    pub ceiling: GrantSet,
+    /// When, in seconds since the Unix epoch.
+    pub enrolled_at: u64,
+    /// By whom.
+    pub by: Enroller,
+}
+
+impl Enrolment {
+    const LEN: usize = 1 + 2 + 8 + 1 + 32;
+
+    fn to_bytes(self) -> [u8; Self::LEN] {
+        let mut out = [0u8; Self::LEN];
+        out[0] = RECORD_VERSION;
+        out[1..3].copy_from_slice(&self.ceiling.bits().to_le_bytes());
+        out[3..11].copy_from_slice(&self.enrolled_at.to_le_bytes());
+        let (kind, who) = match self.by {
+            Enroller::Host => (0, [0u8; 32]),
+            Enroller::Console => (1, [0u8; 32]),
+            Enroller::Client(fingerprint) => (2, fingerprint),
+        };
+        out[11] = kind;
+        out[12..].copy_from_slice(&who);
+        out
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, StoreError> {
+        let corrupt = || StoreError::Corrupt;
+        if bytes.len() != Self::LEN || bytes[0] != RECORD_VERSION {
+            return Err(corrupt());
+        }
+        let ceiling =
+            GrantSet::from_bits(u16::from_le_bytes([bytes[1], bytes[2]])).map_err(|_| corrupt())?;
+        let enrolled_at = u64::from_le_bytes(bytes[3..11].try_into().map_err(|_| corrupt())?);
+        let who: [u8; 32] = bytes[12..].try_into().map_err(|_| corrupt())?;
+        let by = match bytes[11] {
+            0 => Enroller::Host,
+            1 => Enroller::Console,
+            2 => Enroller::Client(who),
+            _ => return Err(corrupt()),
+        };
+        Ok(Self {
+            ceiling,
+            enrolled_at,
+            by,
+        })
+    }
+}
+
+/// Why the store could not answer.
+#[derive(Debug)]
+pub enum StoreError {
+    /// redb refused.
+    Db(String),
+    /// A record this build does not read.
+    Corrupt,
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(e) => write!(f, "the enrolment store: {e}"),
+            Self::Corrupt => {
+                f.write_str("the enrolment store holds a record this build does not read")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+fn db_err(e: impl std::fmt::Display) -> StoreError {
+    StoreError::Db(e.to_string())
+}
+
+/// The enrolled set.
+pub struct Store {
+    db: Database,
+}
+
+impl Store {
+    /// Open the store in `data_dir`, creating it on a first start.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Db`] when redb cannot open or create it.
+    pub fn open(data_dir: &Path) -> Result<Self, StoreError> {
+        let db = Database::create(data_dir.join(STORE_FILE)).map_err(db_err)?;
+        let txn = db.begin_write().map_err(db_err)?;
+        txn.open_table(ENROLMENTS).map_err(db_err)?;
+        txn.open_table(SINGLES).map_err(db_err)?;
+        txn.commit().map_err(db_err)?;
+        Ok(Self { db })
+    }
+
+    /// The enrolment of `fingerprint`, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn get(&self, fingerprint: &[u8; 32]) -> Result<Option<Enrolment>, StoreError> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+        table
+            .get(fingerprint)
+            .map_err(db_err)?
+            .map(|value| Enrolment::from_bytes(value.value()))
+            .transpose()
+    }
+
+    /// Every enrolment, by fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn list(&self) -> Result<Vec<([u8; 32], Enrolment)>, StoreError> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+        let mut out = Vec::new();
+        for entry in table.iter().map_err(db_err)? {
+            let (key, value) = entry.map_err(db_err)?;
+            out.push((*key.value(), Enrolment::from_bytes(value.value())?));
+        }
+        Ok(out)
+    }
+
+    /// Write `enrolment` for `fingerprint`, replacing any.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn put(&self, fingerprint: &[u8; 32], enrolment: Enrolment) -> Result<(), StoreError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+            table
+                .insert(fingerprint, enrolment.to_bytes().as_slice())
+                .map_err(db_err)?;
+        }
+        txn.commit().map_err(db_err)
+    }
+
+    /// Remove `fingerprint`'s enrolment; whether there was one.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn remove(&self, fingerprint: &[u8; 32]) -> Result<bool, StoreError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        let removed = {
+            let mut table = txn.open_table(ENROLMENTS).map_err(db_err)?;
+            let removed = table.remove(fingerprint).map_err(db_err)?.is_some();
+            removed
+        };
+        txn.commit().map_err(db_err)?;
+        Ok(removed)
+    }
+
+    /// The console key's fingerprint, when this daemon has one.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn console(&self) -> Result<Option<[u8; 32]>, StoreError> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let table = txn.open_table(SINGLES).map_err(db_err)?;
+        Ok(table.get(CONSOLE).map_err(db_err)?.map(|v| *v.value()))
+    }
+
+    /// Record `fingerprint` as the console key, replacing the old one.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`].
+    pub fn set_console(&self, fingerprint: &[u8; 32]) -> Result<(), StoreError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut table = txn.open_table(SINGLES).map_err(db_err)?;
+            table.insert(CONSOLE, fingerprint).map_err(db_err)?;
+        }
+        txn.commit().map_err(db_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_rpc_grants::Preset;
+
+    /// An enrolment is stored as its expanded grants and reads back whole,
+    /// across a reopen; the console cell is separate from the enrolments.
+    /// Red edit: write the ceiling's bits big-endian, and a reopened
+    /// `wallet` ceiling reads as another set.
+    #[test]
+    fn an_enrolment_survives_a_reopen_as_expanded_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let fp = [7u8; 32];
+        let enrolment = Enrolment {
+            ceiling: Preset::Wallet.grants(),
+            enrolled_at: 1_789_000_000,
+            by: Enroller::Client([9u8; 32]),
+        };
+        {
+            let store = Store::open(dir.path()).unwrap();
+            store.put(&fp, enrolment).unwrap();
+            store.set_console(&[1u8; 32]).unwrap();
+        }
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get(&fp).unwrap(), Some(enrolment));
+        assert_eq!(store.list().unwrap(), vec![(fp, enrolment)]);
+        assert_eq!(store.console().unwrap(), Some([1u8; 32]));
+        assert!(store.remove(&fp).unwrap());
+        assert!(!store.remove(&fp).unwrap());
+        assert!(store.list().unwrap().is_empty());
+        assert_eq!(store.console().unwrap(), Some([1u8; 32]));
+    }
+
+    /// A record of another version is refused, never read as this one.
+    #[test]
+    fn a_record_of_another_version_is_refused() {
+        let mut bytes = Enrolment {
+            ceiling: GrantSet::ALL,
+            enrolled_at: 0,
+            by: Enroller::Host,
+        }
+        .to_bytes();
+        bytes[0] = 2;
+        assert!(matches!(
+            Enrolment::from_bytes(&bytes),
+            Err(StoreError::Corrupt)
+        ));
+    }
+}

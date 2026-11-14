@@ -4229,6 +4229,8 @@ dependencies = [
  "hyper-util",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "redb",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-archival-bond-builder",
@@ -4249,10 +4251,13 @@ dependencies = [
  "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-network",
+ "shekyl-noise",
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-pow-randomx",
  "shekyl-rpc-channel",
+ "shekyl-rpc-grants",
+ "shekyl-rpc-stream",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
  "shekyl-runtime",
@@ -4268,6 +4273,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

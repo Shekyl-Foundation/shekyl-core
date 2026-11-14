@@ -129,6 +129,32 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     if let Err(d) = marker::check_or_write(&lock, network, network_id) {
         return refuse(&[d]);
     }
+    // The console key's reset (IG-Q88): under the lock just taken, held
+    // through the whole replacement, so it cannot run beside a daemon and a
+    // start waits on it (`RPC_CHANNEL.md` §5). It touches no other
+    // enrolment, and exits without starting the node.
+    if config.session.console_key_reset {
+        return match shekyl_daemon_rpc::channel::reset_console_key(&config.data_dir) {
+            Ok(path) => {
+                tell(
+                    &mut std::io::stdout(),
+                    &format!(
+                        "the console key was replaced; its private half is {}",
+                        path.display()
+                    ),
+                );
+                drop(lock);
+                0
+            }
+            Err(e) => {
+                tell(
+                    &mut std::io::stderr(),
+                    &format!("shekyld: the console key was not replaced: {e}"),
+                );
+                EXIT_FAILED
+            }
+        };
+    }
     if let Err(d) = log_location_writable(&config.logging.file) {
         return refuse(&[d]);
     }
@@ -172,16 +198,31 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
     // node opens: a second daemon of this account, network and instance
     // refuses here, with nothing opened (`RPC_CHANNEL.md` §7.1). The RPC
     // serves it once the node is up.
+    // The RPC channel's state too, under the lock: its key made on the
+    // first start, its enrolled set, a service's console key (RT-O34).
+    let channel = shekyl_daemon_rpc::channel::ChannelSetup {
+        data_dir: config.data_dir.clone(),
+        network_id,
+        service: config.run_mode == shekyl_daemon_config::RunMode::Service,
+    };
     let prepared = match shekyl_daemon_rpc::run::prepare(
         walked
             .owner_socket
             .as_ref()
             .map(|plan| (plan, network.name())),
+        Some(&channel),
     ) {
         Ok(prepared) => prepared,
         Err(shekyl_daemon_rpc::run::PrepareError::Owner(d)) => return refuse(&[d]),
         Err(shekyl_daemon_rpc::run::PrepareError::Runtime(e)) => {
             tell(&mut std::io::stderr(), &format!("shekyld: the RPC's {e}"));
+            return EXIT_FAILED;
+        }
+        Err(shekyl_daemon_rpc::run::PrepareError::Channel(e)) => {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the RPC channel cannot start: {e}"),
+            );
             return EXIT_FAILED;
         }
     };
@@ -699,7 +740,7 @@ mod tests {
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
             node,
             crate::tor::prepare().0,
-            shekyl_daemon_rpc::run::prepare(None).expect("the RPC's runtime"),
+            shekyl_daemon_rpc::run::prepare(None, None).expect("the RPC's runtime"),
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "a requested stop is the exit status 0");
