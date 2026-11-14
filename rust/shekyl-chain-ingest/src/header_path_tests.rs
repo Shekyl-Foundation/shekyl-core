@@ -520,6 +520,96 @@ fn coinbase_rows_are_not_on_the_header_path() {
     );
 }
 
+/// Input tag `0x02` was the serve-credit arm until the switch (`SO-D12`
+/// 4b) deleted it. No arm reads it, so a body that carries it is not a
+/// transaction, and the pairing refuses it (CEN-G2). The parser's own
+/// refusal is `emission_input_arm.rs`; this is the header path's.
+#[test]
+fn an_input_tagged_0x02_is_refused_at_the_tag_and_under_cen_g2() {
+    let substrate = mock_with_the_real_clock();
+    let (dir, manifest) = captured_chains()
+        .into_iter()
+        .find(|(_, manifest)| manifest.shape == "spend-1in-2out")
+        .expect("the spend chain");
+    let chain = load(&dir, &manifest.shape);
+    let rules = rules_for(&manifest);
+    let trust = rules.trust();
+    let path = tmp("header-path-input-tag");
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+    let mut pinned = false;
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            for candidate in &chain {
+                let view = batch.chain_view();
+                let height = connecting(&view);
+                let rule_set = rules.in_force(height);
+                let seed = seed_of(&view, height);
+                let target = target_of(&view, height, &rule_set);
+                if let Some(tx) = candidate.transactions.first() {
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    let mut retired = body_of(candidate);
+                    let TxBody::Full(bytes) = &mut retired.txs[0] else {
+                        panic!("body_of writes a full transaction");
+                    };
+                    let mut first = Vec::new();
+                    tx.prefix.inputs[0]
+                        .write(&mut first)
+                        .expect("write an input");
+                    let at = bytes
+                        .windows(first.len())
+                        .position(|window| window == first.as_slice())
+                        .expect("the first input is in its transaction");
+                    bytes[at] = 0x02;
+                    let refused = shekyl_wire::Transaction::from_bytes(bytes)
+                        .expect_err("an input tagged 0x02 parses");
+                    assert!(
+                        refused.to_string().contains("unsupported input tag 0x02"),
+                        "an input tagged 0x02 is refused for another reason: {refused}"
+                    );
+                    assert_eq!(
+                        bind_body(&header, &retired).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "an input tagged 0x02"
+                    );
+                    pinned = true;
+                    break;
+                }
+                let references =
+                    ReferenceClaims::from_headers(&view, height, candidate).expect("references");
+                let formed = form(
+                    candidate.clone(),
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
+                    substrate.as_ref(),
+                    FormAttempt::FIRST,
+                )
+                .expect("mock")
+                .expect("form");
+                let valid = validate(formed, &view, &rule_set, &rules.trust())
+                    .expect("view")
+                    .expect("validate");
+                drop(view);
+                batch.connect(valid, rule_set)?;
+            }
+            Ok(())
+        })
+        .expect("write");
+    assert!(pinned, "the chain listed no transaction");
+}
+
 fn body_of(candidate: &Candidate) -> BlockBody {
     let mut block = Vec::new();
     candidate.block.write(&mut block).expect("write");
@@ -824,38 +914,6 @@ fn appended_bytes_are_not_the_transaction() {
                     assert!(
                         shekyl_wire::Transaction::from_bytes(&trailing).is_err(),
                         "validate's parser accepts a trailing byte"
-                    );
-                    // The serve-credit input's tag, unassigned since the
-                    // switch (`SO-D12` 4b): no arm reads it, so a body whose
-                    // input carries it is not a transaction, and the pairing
-                    // refuses it (CEN-G2).
-                    let mut retired = body_of(candidate);
-                    {
-                        let TxBody::Full(bytes) = &mut retired.txs[0] else {
-                            panic!("body_of writes a full transaction");
-                        };
-                        let mut first = Vec::new();
-                        tx.prefix.inputs[0]
-                            .write(&mut first)
-                            .expect("write an input");
-                        let at = bytes
-                            .windows(first.len())
-                            .position(|w| w == first.as_slice())
-                            .expect("the first input is in its transaction");
-                        bytes[at] = 0x02;
-                        // Refused at the tag, not by bytes the splice
-                        // misaligned further on.
-                        let refused = shekyl_wire::Transaction::from_bytes(bytes)
-                            .expect_err("an input tagged 0x02 parses");
-                        assert!(
-                            refused.to_string().contains("unsupported input tag 0x02"),
-                            "an input tagged 0x02 is refused for another reason: {refused}"
-                        );
-                    }
-                    assert_eq!(
-                        bind_body(&header, &retired).map_err(|e| e.rule),
-                        Err(CenRow::G2),
-                        "an input tagged 0x02"
                     );
                     let segments = tx.write_segments().expect("segments");
                     let archival_len = segments.archival_len();

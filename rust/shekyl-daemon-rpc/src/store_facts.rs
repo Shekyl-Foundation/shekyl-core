@@ -239,9 +239,6 @@ fn claim_fault(fault: Fault<StoreError>) -> FactsFault {
     }
 }
 
-/// The snapshot's tip: its height and identity. An empty store is a daemon
-/// that has not connected genesis yet — the flip connects it before the
-/// RPC serves (DX-Q6) — so there is no tip to describe: not ready.
 /// `count(h)` of the main-chain block at `height`, while this node holds
 /// its row: at or above the draw rows' floor in force for the next block
 /// (`BlockDrawsFloor::in_force`; a read below it is SI-34, and the row is
@@ -263,6 +260,9 @@ fn held_draws(
         .map(|row| row.count))
 }
 
+/// The snapshot's tip: its height and identity. An empty store is a daemon
+/// that has not connected genesis yet — the flip connects it before the
+/// RPC serves (DX-Q6) — so there is no tip to describe: not ready.
 fn tip_of(snap: &ReadSnapshot<'_>) -> Result<(BlockHeight, BlockHash), FactsFault> {
     match snap.tip().map_err(store_fault)?.recorded {
         Some(tip) => Ok((tip.height, tip.hash)),

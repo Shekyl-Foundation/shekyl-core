@@ -4404,6 +4404,7 @@ dependencies = [
  "shekyl-p-transport",
  "shekyl-p2p-transport",
  "shekyl-proofs",
+ "shekyl-relay",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",

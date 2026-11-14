@@ -173,11 +173,11 @@ pub(super) struct RegtestDaemon {
     /// Whether this daemon was started offline (both connectors off). Its
     /// `daemon_status` must then report that state, not a count of zero.
     offline: bool,
-    /// Whether this daemon posts a template at open: an offline daemon is
-    /// synced from open on any network (`Declaration::Offline`, CS-Q2 step
-    /// 8) and posts once its follower has looped. Readiness then includes
-    /// that post: a `dev_block_generate` sent before it is honestly refused by
-    /// a daemon whose RPC is already up.
+    /// Whether readiness includes the first posted job.
+    /// [`Peering::posts_at_open`]: offline, a listening closed peer, and
+    /// onion peers are synced at open and post once the follower has
+    /// looped. A `dev_block_generate` sent before that post is honestly
+    /// refused by a daemon whose RPC is already up.
     posts_at_open: bool,
     /// When true, `Drop` leaves `data_dir` in place. Set only by
     /// `start_keeping_data`. Every other spawn deletes the directory.
@@ -190,16 +190,10 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
-    /// How long [`Self::wait_shown_pool_in_template`] waits:
-    /// [`SHOWN_POOL_LIMIT`], or [`TOR_SHOWN_POOL_LIMIT`] for a daemon on a
-    /// Tor, which also waits for the transactions it originated to come back
-    /// as a fluff before it reads the job.
-    shown_pool_limit: Duration,
-    /// Whether the wait also covers this daemon's unbroadcast entries: the
-    /// Tor trio's miner, whose relays return each origin as a fluff
-    /// ([`Self::start_tor_trio`]). A linked daemon that holds a stem through
-    /// its embargo does not wait for it (the origin rig).
-    waits_for_stems: bool,
+    /// How [`Self::wait_shown_pool_in_template`] reads the pool. Every
+    /// spawn starts at [`ShownPool::broadcast_only`]; the Tor trio's miner
+    /// switches to [`ShownPool::covering_origins`].
+    shown_pool: ShownPool,
     /// The draws [`Self::generate_blocks`] gives a read window to: the walk
     /// that reads over Tor sets it over the epoch whose draws its persona
     /// must serve ([`Self::watch_draws`]).
@@ -209,88 +203,13 @@ pub(super) struct RegtestDaemon {
     /// so the closed-peer address in that recipe is still this socket.
     /// `None` for every other peering.
     unanswered: Option<UnansweredPort>,
-    /// The Tor trio's relays, on the miner only ([`Self::start_tor_trio`]):
-    /// what [`Self::wait_shown_pool_in_template`] reads when an origin has
-    /// not come back, to tell a relay that kept it from a path that was
-    /// not there.
-    relays: Option<TrioRelays>,
-}
-
-/// The Tor trio's two relays, as the miner's harness reads them: each
-/// relay's own `daemon_status` and `peer_connections`, the operator's
-/// reads, over its admin listener.
-struct TrioRelays {
-    b: HttpRpc,
-    b_onion: OnionPeer,
-    c: HttpRpc,
-    c_onion: OnionPeer,
-}
-
-/// One reading of the trio's sessions and tips. A stem the miner
-/// originates comes back as a fluff only over this whole mesh
-/// ([`RegtestDaemon::start_tor_trio`]); with a session missing it
-/// dead-ends, and the miner's own embargo shows it ([`ORIGIN_RETRY`]).
-#[derive(Debug)]
-struct MeshReading {
-    a_to_b: bool,
-    a_to_c: bool,
-    b_to_c: bool,
-    a_height: u64,
-    b_height: u64,
-    c_height: u64,
-}
-
-impl MeshReading {
-    /// Every session up, and both relays at the miner's tip as it was read
-    /// first: a relay behind the miner cannot admit a spend of an output it
-    /// has not seen.
-    fn whole(&self) -> bool {
-        self.a_to_b
-            && self.a_to_c
-            && self.b_to_c
-            && self.b_height >= self.a_height
-            && self.c_height >= self.a_height
-    }
-}
-
-impl std::fmt::Display for MeshReading {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let up = |held: bool| if held { "up" } else { "down" };
-        write!(
-            f,
-            "A→B {}, A→C {}, B→C {}; tips A {}, B {}, C {}",
-            up(self.a_to_b),
-            up(self.a_to_c),
-            up(self.b_to_c),
-            self.a_height,
-            self.b_height,
-            self.c_height,
-        )
-    }
-}
-
-/// Whether `rpc`'s node holds an outbound Tor session to `onion`
-/// (`peer_connections`: an outbound Tor session names the onion it
-/// dialed; an inbound one names no host).
-async fn holds_outbound_to(rpc: &HttpRpc, onion: OnionPeer) -> bool {
-    rpc.call::<wire::PeerConnections>(NoParams)
-        .await
-        .expect("peer_connections")
-        .iter()
-        .any(|session| {
-            !session.inbound
-                && session.connector == wire::p2p::Connector::Tor
-                && OnionPeer::parse(&session.endpoint.0).is_some_and(|peer| peer.host == onion.host)
-        })
-}
-
-/// `rpc`'s node's tip height (`daemon_status`).
-async fn tip_height(rpc: &HttpRpc) -> u64 {
-    rpc.call::<wire::DaemonStatus>(NoParams)
-        .await
-        .expect("daemon_status")
-        .height
-        .0
+    /// The Tor trio's relays, on the miner only ([`Self::start_tor_trio`]).
+    /// The pool wait names the mesh when an origin has not come back.
+    relays: Option<tor::TrioRelays>,
+    /// Blocks connected while `SHEKYL_CAPTURE_CHAIN_VECTORS` is set, read
+    /// at the block that connected them. A later fetch meets the archival
+    /// horizon and the undo retention; the corpus is this record.
+    capture: std::sync::Mutex<Option<Vec<CapturedBlock>>>,
 }
 
 /// How many times a port probe may draw `:0` before the reserved set is
@@ -389,74 +308,24 @@ enum Peering {
     /// (`DAEMON_RELAY_PRIVACY.md` §98.5). The emission walk's miner and its
     /// first relay ([`RegtestDaemon::start_tor_trio`]).
     TorPeers {
-        first: OnionPeer,
-        second: Option<OnionPeer>,
+        first: tor::OnionPeer,
+        second: Option<tor::OnionPeer>,
     },
 }
 
-/// A v3 onion endpoint, `<56 base32 characters>.onion:<port>`, held by
-/// value so [`Peering`] stays `Copy`.
-#[derive(Clone, Copy, Debug)]
-struct OnionPeer {
-    host: [u8; 56],
-    port: u16,
-}
-
-impl OnionPeer {
-    /// The endpoint in `text`, the `<host>.onion:<port>` a managed Tor
-    /// logs when its inbound is published.
-    fn parse(text: &str) -> Option<Self> {
-        let (host, port) = text
-            .strip_suffix('.')
-            .unwrap_or(text)
-            .split_once(".onion:")?;
-        let host: [u8; 56] = host.as_bytes().try_into().ok()?;
-        host.iter()
-            .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(b))
-            .then_some(())?;
-        Some(Self {
-            host,
-            port: port.parse().ok()?,
-        })
-    }
-}
-
-#[test]
-fn a_published_onion_line_parses_and_prints_back() {
-    // The line a managed Tor logged in a walk run (2026-11-14).
-    let line = " Tor is up: overlay inbound is published at \
-                gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion:14021, \
-                forwarded from 127.0.0.1:35287";
-    let (_, rest) = line
-        .split_once("overlay inbound is published at ")
-        .expect("the marker");
-    let onion = OnionPeer::parse(
-        rest.split_whitespace()
-            .next()
-            .expect("a word")
-            .trim_end_matches(','),
-    )
-    .expect("a v3 onion endpoint");
-    assert_eq!(
-        onion.to_string(),
-        "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion:14021"
-    );
-    // A host that is not 56 base32 characters, or no port, is not one.
-    assert!(OnionPeer::parse(
-        "gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiy1.onion:14021"
-    )
-    .is_none());
-    assert!(OnionPeer::parse("short.onion:14021").is_none());
-    assert!(
-        OnionPeer::parse("gj56z5xbxm7mi6iucpe3apa3raxkkiwub4vbc2who5sm6slpzikuqiyd.onion")
-            .is_none()
-    );
-}
-
-impl std::fmt::Display for OnionPeer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let host = std::str::from_utf8(&self.host).expect("base32 is ASCII");
-        write!(f, "{host}.onion:{}", self.port)
+impl Peering {
+    /// Whether readiness includes the first posted job.
+    ///
+    /// Offline, a listening closed peer, and onion closed peers are synced
+    /// at open (`Declaration::state_at_open`) and post once the follower
+    /// has looped. Linked and the two-peer closed rig dial a partner the
+    /// test starts beside them; their template follows that session, and
+    /// readiness stays the RPC.
+    fn posts_at_open(self) -> bool {
+        matches!(
+            self,
+            Self::Offline | Self::Listening { .. } | Self::TorPeers { .. }
+        )
     }
 }
 
@@ -625,63 +494,123 @@ impl RegtestSpawn {
 /// the relay fluffs at once, and the follower rebuilds on the wake.
 const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
 
-/// The same wait on a daemon with a Tor: on the three-daemon rig
-/// ([`RegtestDaemon::start_tor_trio`]) a transaction the miner originates is
-/// unbroadcast until a fluff of it comes back, and the wait covers that. The longest path is A → C (stem), C → B (fluff), B → A
-/// (fluff), or A → B → C (stems) and C → A (fluff): at most two stem hops,
-/// each waiting at most one carrier slot (`NOISE_MIN_DELAY_MS` +
-/// `NOISE_DELAY_JITTER_MS`, 6.67 s), and at most two fluff flushes toward an
-/// inbound peer, each a Poisson draw over quarter-seconds with λ = 20
+/// The miner's wait on the Tor trio ([`RegtestDaemon::start_tor_trio`]).
+/// A transaction it originates is unbroadcast until a fluff comes back.
+/// The longest path is A → C (stem), C → B (fluff), B → A (fluff), or
+/// A → B → C (stems) and C → A (fluff): at most two stem hops, each waiting
+/// at most one carrier slot (`NOISE_MIN_DELAY_MS` + `NOISE_DELAY_JITTER_MS`,
+/// 6.67 s), and at most two fluff flushes toward an inbound peer, each a
+/// Poisson draw over quarter-seconds with λ = 20
 /// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile, plus
 /// three onion circuits at 5 s each: 13.3 + 17.5 + 15 ≈ 46 s, so 60 s.
 ///
-/// The derivation assumes the whole mesh. A Tor session can close on the
-/// public network mid-walk; an origin found unbroadcast at this limit with
-/// a session down is waited for once more, to the miner's embargo fire
-/// ([`ORIGIN_RETRY`]), and the walk's log names it. With the mesh whole,
-/// the limit is the verdict.
+/// The derivation assumes the whole mesh. A session down at this limit
+/// fails the wait, and the walk is rerun.
 const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
 
-/// How long a managed Tor may take to bootstrap and publish its inbound
-/// onion.
-const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
+/// How [`RegtestDaemon::wait_shown_pool_in_template`] reads the pool.
+struct ShownPool {
+    limit: Duration,
+    /// Cover entries this node originated and has not broadcast. The Tor
+    /// trio's miner only: a fluff has to come back before the job lists
+    /// the spend.
+    covers_origins: bool,
+}
 
-/// How long a published onion may take to read `reachable`, its own probe
-/// arriving (`TOR_SUPERVISOR.md` §4.5): one judgment's worst case, 300 s
-/// (`TSR-M14`: the round's wait, the probe's delay and bound, then the
-/// refetch's probe, its delay and bound), and one republish judged the
-/// same way, 300 s. The live tests allow at most one republish; needing
-/// more is a finding (`TSR-M3`).
-///
-/// A trio daemon is spawned only once the onions it dials read
-/// `reachable`. A dial made before the descriptor is fetchable waits out
-/// Tor's whole window and fails (run 3, 2026-11-14: "waiting for
-/// rendezvous desc", 105 s), and the address then goes off the dialer's
-/// draw ("cooling after a failed dial").
-const ONION_REACHABLE_LIMIT: Duration = Duration::from_secs(600);
+impl ShownPool {
+    /// Broadcast entries only, at [`SHOWN_POOL_LIMIT`].
+    fn broadcast_only() -> Self {
+        Self {
+            limit: SHOWN_POOL_LIMIT,
+            covers_origins: false,
+        }
+    }
 
-/// How long the trio's sessions may take to form once every onion reads
-/// `reachable` ([`RegtestDaemon::await_trio_mesh`]): Tor's re-query gap,
-/// then one Tor test of the address (Rick, 2026-11-14).
-///
-/// A lookup that reaches directories without the descriptor fails, and the
-/// client's Tor does not ask those directories again for 15 minutes
-/// (`REND_HID_SERV_DIR_REQUERY_PERIOD`), so a dial inside that gap waits on
-/// the same failed lookup; run 4 (2026-11-14) failed three dials to one
-/// fresh onion inside 400 s while its owner read it reachable. After the
-/// gap, one Tor test is three attempts each up to the 120 s dial deadline,
-/// with the longest retry waits between them, 10 s and 30 s
-/// (`shekyl-transport-layer` `dial_profile(Tor)`, `RETRY_WAITS`): 400 s.
-/// 900 + 400 = 1,300 s.
-const TRIO_MESH_LIMIT: Duration = Duration::from_secs(1_300);
+    /// The trio's miner, at [`TOR_SHOWN_POOL_LIMIT`].
+    fn covering_origins() -> Self {
+        Self {
+            limit: TOR_SHOWN_POOL_LIMIT,
+            covers_origins: true,
+        }
+    }
+}
 
-/// The origin's shipped retry, spelled here for the harness only: at its
-/// first fire an origin with no alternate fluffs as the last resort (W3b).
-///
-/// The relay crate owns the derivation. The submit watchdog does not
-/// read this duration: overdue is the daemon's judgment, and this
-/// harness waits out the same interval the origin's embargo fires on.
-const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
+/// The origin's first embargo fire. The relay owns the derivation
+/// ([`shekyl_relay::origin_retry_secs`]); the embargo walks wait that
+/// interval out. The submit watchdog does not read it: overdue is the
+/// daemon's judgment.
+fn origin_retry() -> Duration {
+    Duration::from_secs(u64::from(shekyl_relay::origin_retry_secs()))
+}
+
+/// One connected block, kept whole for a chain-vector capture: the block
+/// blob, each listed transaction's body, and the bundle section with each
+/// reference's body in section order.
+#[derive(Clone)]
+struct CapturedBlock {
+    blob: Vec<u8>,
+    txs: Vec<Vec<u8>>,
+    references: Vec<Vec<u8>>,
+    bodies: Vec<Vec<u8>>,
+}
+
+/// `block` as a corpus record. A discarded transaction body or a bundle
+/// body the node has already released is a capture that read too late.
+fn captured_block(height: u64, block: wire::block::Block) -> CapturedBlock {
+    use shekyl_rpc_types::wire::shared::OrArchived;
+    let txs = block
+        .tx
+        .into_iter()
+        .map(|slot| match slot {
+            OrArchived::Item(tx) => tx.body.0,
+            OrArchived::Archived(state) => {
+                panic!("block {height} discarded a body before the capture read it: {state:?}")
+            }
+        })
+        .collect();
+    let references: Vec<Vec<u8>> = block
+        .section
+        .into_iter()
+        .map(shekyl_rpc_types::kinds::Bytes::into_vec)
+        .collect();
+    let carried: Vec<Vec<u8>> = block
+        .section_body
+        .into_iter()
+        .map(shekyl_rpc_types::kinds::Bytes::into_vec)
+        .collect();
+    let bodies = section_bodies_for_capture(height, &references, &carried);
+    CapturedBlock {
+        blob: block.body.0,
+        txs,
+        references,
+        bodies,
+    }
+}
+
+/// Each reference's body, in section order, matched the way
+/// `shekyl-chain-ingest`'s fetch matches them.
+fn section_bodies_for_capture(
+    height: u64,
+    references: &[Vec<u8>],
+    carried: &[Vec<u8>],
+) -> Vec<Vec<u8>> {
+    let by_hash =
+        shekyl_archival_retention::CarriedBodies::index(carried.iter().map(Vec::as_slice));
+    references
+        .iter()
+        .map(|bytes| {
+            let reference = shekyl_archival_retention::BundleRef::decode(bytes)
+                .unwrap_or_else(|error| panic!("block {height}'s section decodes: {error:?}"));
+            by_hash
+                .named_by(&reference)
+                .filter(|named| reference.accept_body(named).is_ok())
+                .map(<[u8]>::to_vec)
+                .unwrap_or_else(|| {
+                    panic!("block {height} released a bundle body before the capture read it")
+                })
+        })
+        .collect()
+}
 
 /// The draws [`RegtestDaemon::generate_blocks`] waits on, as a peer sees
 /// them: a block's `draws` (`count(h)`, 4.4) and the references its
@@ -797,22 +726,6 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
 }
 
 impl RegtestDaemon {
-    /// The pinned Tor binary a walk that reads over Tor runs, from
-    /// `SHEKYL_TEST_TOR_BINARY`: the variable the live-Tor lane sets
-    /// (`tor-pin-verify.yml`) to the bundle it fetched, checked against the
-    /// pin and staged. Panics naming how to stage one when it is unset.
-    fn live_tor_binary() -> PathBuf {
-        match std::env::var_os("SHEKYL_TEST_TOR_BINARY") {
-            Some(path) => PathBuf::from(path),
-            None => panic!(
-                "SHEKYL_TEST_TOR_BINARY not set: stage the pinned Tor bundle \
-                 (scripts/release/tor_bundle.py fetch --host <triple> --sources <dir>; \
-                 tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor) \
-                 and set it to <stage>/tor/tor"
-            ),
-        }
-    }
-
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
     /// if unset — these tests are `#[ignore]`d and only run when explicitly
     /// invoked, so requiring the env var is the contract, not a surprise.
@@ -896,185 +809,6 @@ impl RegtestDaemon {
         .await
     }
 
-    /// The emission walk's three daemons, all on a managed Tor running the
-    /// pinned binary `tor_file` (Rick, 2026-11-14). A, returned first, is
-    /// the miner: it pays `seed`'s address, seats its bundle producer (a
-    /// mining address and a Tor, `shekyl-node` `producer::seat`), and is the
-    /// daemon the wallet uses. B and C are relays. **A dials B and C; B
-    /// dials C; C dials nobody.**
-    ///
-    /// **Why three.** A daemon with a Tor holds a transaction it originates
-    /// until an outbound session hides its address
-    /// (`DAEMON_RELAY_PRIVACY.md` §98.5), so A needs an outbound peer. With
-    /// two daemons the stem dead-ends: the relay's only session is A's, the
-    /// one the stem arrived on, a stem goes out on an outbound session
-    /// other than its source and a fluff to every peer but its source, so
-    /// the relay sends it nowhere, and A's transaction waits out A's own
-    /// embargo (a draw, mean about 190 s, no lever) before it is shown. That
-    /// is the origin rig's hold (`origin::StemSinkPair`), and a walk that
-    /// mines hundreds of transactions cannot wait it out each time. With
-    /// three, every stem A originates ends at a node that fluffs back to A:
-    /// stemmed to B, it goes on to C, which has no outbound session and
-    /// fluffs to every peer but B, A among them; stemmed to C, C fluffs to
-    /// B, and B relays the fluff to A.
-    ///
-    /// C names one unanswered loopback port as its whole network, so it is
-    /// synced from open and dials nobody; B's one closed peer is C's onion.
-    /// Neither mines; both follow A over the sessions A opens.
-    ///
-    /// **When it is ready.** A daemon is spawned only once the onions it
-    /// dials read `reachable` ([`ONION_REACHABLE_LIMIT`]), and the trio is
-    /// returned only once its mesh is whole: A holds sessions to B and C, B
-    /// to C, and both relays are at A's tip ([`Self::await_trio_mesh`]).
-    /// Run 3 (2026-11-14) spawned A while C's descriptor was not yet
-    /// fetchable: A's dial to C failed, so a stem A sent B went on to C,
-    /// whose one other peer was the source, and A's first transaction was
-    /// still unbroadcast at the limit. Each daemon logs `p2p` and `tor` at
-    /// `debug`, so a session that closes says why.
-    pub(super) async fn start_tor_trio(
-        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
-        schedule: Option<RegtestSchedule>,
-        tor_file: PathBuf,
-    ) -> (RegtestDaemon, RegtestDaemon, RegtestDaemon) {
-        let serial = serial_lock().lock_owned().await;
-        let c = Self::spawn(
-            RegtestSpawn::new(None)
-                .with_schedule(schedule)
-                .with_peering(Peering::Listening {
-                    p2p_port: Self::free_port(),
-                    requests: true,
-                })
-                .with_managed_tor(tor_file.clone()),
-        )
-        .await;
-        let c_onion = c.published_onion(TOR_PUBLISH_LIMIT).await;
-        c.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
-        let b = Self::spawn(
-            RegtestSpawn::new(None)
-                .with_schedule(schedule)
-                .with_peering(Peering::TorPeers {
-                    first: c_onion,
-                    second: None,
-                })
-                .with_managed_tor(tor_file.clone())
-                .with_ports_taken([c.rpc_port]),
-        )
-        .await;
-        let b_onion = b.published_onion(TOR_PUBLISH_LIMIT).await;
-        b.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
-        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let mut a = Self::spawn(
-            RegtestSpawn::new(Some(serial))
-                .with_schedule(schedule)
-                .with_mine_address(mine_address)
-                .with_peering(Peering::TorPeers {
-                    first: b_onion,
-                    second: Some(c_onion),
-                })
-                .with_managed_tor(tor_file)
-                .with_ports_taken([b.rpc_port, c.rpc_port]),
-        )
-        .await;
-        a.relays = Some(TrioRelays {
-            b: b.rpc.clone(),
-            b_onion,
-            c: c.rpc.clone(),
-            c_onion,
-        });
-        a.await_trio_mesh(TRIO_MESH_LIMIT).await;
-        (a, b, c)
-    }
-
-    /// The trio's mesh as it reads now, from A (this daemon); `None` on a
-    /// daemon that is not the trio's miner. A's tip is read first, so a
-    /// relay at or past it has every block A had then.
-    async fn read_mesh(&self) -> Option<MeshReading> {
-        let relays = self.relays.as_ref()?;
-        let a_height = tip_height(&self.rpc).await;
-        Some(MeshReading {
-            a_to_b: holds_outbound_to(&self.rpc, relays.b_onion).await,
-            a_to_c: holds_outbound_to(&self.rpc, relays.c_onion).await,
-            b_to_c: holds_outbound_to(&relays.b, relays.c_onion).await,
-            a_height,
-            b_height: tip_height(&relays.b).await,
-            c_height: tip_height(&relays.c).await,
-        })
-    }
-
-    /// Wait until the trio's mesh is whole ([`MeshReading::whole`]), within
-    /// `limit`; at once on a daemon that is not the trio's miner.
-    async fn await_trio_mesh(&self, limit: Duration) {
-        let deadline = Instant::now() + limit;
-        loop {
-            let Some(reading) = self.read_mesh().await else {
-                return;
-            };
-            if reading.whole() {
-                eprintln!("tor trio: the mesh is whole ({reading})");
-                return;
-            }
-            if Instant::now() >= deadline {
-                self.panic_with_log(
-                    "the Tor trio's mesh did not form",
-                    format!("within {limit:?}: {reading}"),
-                );
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-
-    /// Wait until this daemon's own onion reads `reachable`, its probe
-    /// having arrived (`TOR_SUPERVISOR.md` §4.5), within `limit`.
-    async fn await_onion_reachable(&self, limit: Duration) {
-        let deadline = Instant::now() + limit;
-        loop {
-            let onion = self
-                .status()
-                .await
-                .tor_status()
-                .and_then(|status| status.tor)
-                .and_then(|managed| managed.onion);
-            if onion
-                .as_ref()
-                .is_some_and(|onion| onion.state.keyword() == "reachable")
-            {
-                return;
-            }
-            if Instant::now() >= deadline {
-                self.panic_with_log(
-                    "the managed Tor's onion did not read reachable",
-                    format!("after {limit:?}: {onion:?}"),
-                );
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-
-    /// The onion this daemon's managed Tor published its inbound at, read
-    /// from the line the daemon logs when it does (`shekyl-p2p`,
-    /// `Network::note_own_onion`), within `limit`.
-    async fn published_onion(&self, limit: Duration) -> OnionPeer {
-        const LINE: &str = "overlay inbound is published at ";
-        let deadline = Instant::now() + limit;
-        let log_path = self.data_dir.join("daemon.log");
-        loop {
-            let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-            if let Some(onion) = log.lines().find_map(|line| {
-                let (_, rest) = line.split_once(LINE)?;
-                OnionPeer::parse(rest.split_whitespace().next()?.trim_end_matches(','))
-            }) {
-                return onion;
-            }
-            if Instant::now() >= deadline {
-                self.panic_with_log(
-                    "the managed Tor published no inbound onion",
-                    format!("within {limit:?}"),
-                );
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-
     /// Spawn a daemon whose data directory survives [`Drop`].
     ///
     /// The DX-Q8 column (`scripts/bench/capture_kept_chain.py`) reads the
@@ -1154,7 +888,6 @@ impl RegtestDaemon {
         let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
-        let tor_on = tor_file.is_some();
         let p2p_ports: Vec<u16> = match &peering {
             // Neither binds a loopback port: no listener, or Tor's alone.
             Peering::Offline | Peering::TorPeers { .. } => Vec::new(),
@@ -1362,23 +1095,20 @@ impl RegtestDaemon {
             },
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
-            // Synced from open: offline, or the Tor spawn's closed network
-            // of one unanswered port or of onions (`start_tor_trio`).
-            posts_at_open: offline || tor_on,
+            posts_at_open: peering.posts_at_open(),
             keep_data,
             _serial: serial,
             recipe,
             unanswered,
             watch: std::sync::Mutex::new(None),
-            shown_pool_limit: if tor_on {
-                TOR_SHOWN_POOL_LIMIT
-            } else {
-                SHOWN_POOL_LIMIT
-            },
-            waits_for_stems: tor_on,
+            shown_pool: ShownPool::broadcast_only(),
             relays: None,
+            capture: std::sync::Mutex::new(
+                std::env::var_os("SHEKYL_CAPTURE_CHAIN_VECTORS").map(|_| Vec::new()),
+            ),
         };
         daemon.await_ready().await;
+        daemon.record_connected().await;
         daemon
     }
 
@@ -1588,32 +1318,6 @@ impl RegtestDaemon {
             .collect()
     }
 
-    /// Wait until the managed Tor reports `usable` (`TOR_SUPERVISOR.md`
-    /// §4.3), within `limit`: the bundle producer reads through it.
-    pub(super) async fn await_tor_usable(&self, limit: Duration) {
-        let deadline = Instant::now() + limit;
-        loop {
-            let tor = self
-                .status()
-                .await
-                .tor_status()
-                .and_then(|status| status.tor);
-            if tor
-                .as_ref()
-                .is_some_and(|managed| managed.state.keyword() == "usable")
-            {
-                return;
-            }
-            if Instant::now() >= deadline {
-                self.panic_with_log(
-                    "the managed Tor did not become usable",
-                    format!("after {limit:?}: {tor:?}"),
-                );
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-
     /// The block named by `hash`, whole.
     async fn block_by_hash(&self, hash: &str) -> wire::block::Block {
         self.rpc
@@ -1760,12 +1464,15 @@ impl RegtestDaemon {
         self.wait_shown_pool_in_template().await;
         let mut mined = 0u64;
         let mut blocks = Vec::new();
+        // A capture reads each block before the next one can pass the undo
+        // horizon (the reorg cap can be shorter than [`Self::MINE_CHUNK`]).
+        let capturing = self.capture.lock().expect("the capture lock").is_some();
         loop {
             let watch = self.watch.lock().expect("the watch lock").clone();
             // Under a watch, a block whose draws or admissions it reads is
             // mined alone; the chain's block count is the height the next
             // block connects at.
-            let (chunk, watched) = match watch {
+            let (mut chunk, watched) = match watch {
                 None => ((n - mined).min(Self::MINE_CHUNK), false),
                 Some(watch) => {
                     let next = self.height().await;
@@ -1781,11 +1488,15 @@ impl RegtestDaemon {
                     }
                 }
             };
+            if capturing {
+                chunk = 1;
+            }
             let resp = try_generate_blocks(&self.rpc, chunk)
                 .await
                 .expect("dev_block_generate");
             blocks.extend(resp.blocks);
             mined += chunk;
+            self.record_connected().await;
             if watched {
                 if let Some(wait) = self.after_watched_block(resp.height - 1).await {
                     tokio::time::sleep(wait).await;
@@ -1881,12 +1592,8 @@ impl RegtestDaemon {
     /// block's transaction ids); the shown pool and each entry's weight are
     /// `txpool_list`'s (IG-Q46).
     async fn wait_shown_pool_in_template(&self) {
-        let limit = self.shown_pool_limit;
-        let mut deadline = Instant::now() + limit;
-        // On the Tor trio: the reading taken when the origin had not come
-        // back at the limit with a session down, after which the wait runs
-        // to the miner's own embargo fire.
-        let mut short: Option<MeshReading> = None;
+        let limit = self.shown_pool.limit;
+        let deadline = Instant::now() + limit;
         loop {
             // The host is told both counts: the entries this node has
             // broadcast, and those it holds and has not (`daemon_status`,
@@ -1907,51 +1614,28 @@ impl RegtestDaemon {
                 .0
                 .expect("the harness's pool is live")
                 .0;
-            let returned = !self.waits_for_stems || unbroadcast == 0;
+            let returned = !self.shown_pool.covers_origins || unbroadcast == 0;
             if returned && broadcast == 0 {
                 return;
             }
             if Instant::now() >= deadline {
-                // The trio's derived limit holds over a whole mesh. With a
-                // session down the stem can dead-end, and the origin is
-                // shown at its own embargo fire instead: a Tor session that
-                // closed is the public network's, not the relay's fault.
-                // That wait is taken once, and the run reports it.
-                let reading = if returned {
-                    None
+                // A short mesh fails here. The emission walk reruns; the
+                // origin's embargo is not a second deadline.
+                let mesh = if returned {
+                    String::new()
                 } else {
-                    self.read_mesh().await
-                };
-                let reading = match reading {
-                    Some(found) if short.is_none() && !found.whole() => {
-                        eprintln!(
-                            "tor trio: an origin was unbroadcast at {limit:?} with the mesh \
-                             short ({found}); waiting for the miner's embargo fire \
-                             ({ORIGIN_RETRY:?})"
-                        );
-                        deadline = Instant::now() + ORIGIN_RETRY + limit;
-                        short = Some(found);
-                        continue;
-                    }
-                    reading => reading,
+                    self.mesh_at_failure().await
                 };
                 panic!(
                     "the posted job did not list the shown pool within {limit:?} \
                      ({broadcast} shown, {unbroadcast} unbroadcast); the relay's fluff \
                      event must mark the entry shown and wake the tip follower \
-                     (DRS_X_STORE_FLIP.md Q9){}{}",
+                     (DRS_X_STORE_FLIP.md Q9){}{mesh}",
                     if returned {
                         String::new()
                     } else {
                         "; on the Tor trio an origin is shown when its fluff comes back".to_owned()
                     },
-                    match (&reading, &short) {
-                        (Some(now), None) => format!(" (mesh: {now})"),
-                        (Some(now), Some(then)) => format!(
-                            " (mesh at the limit: {then}; and after the embargo wait: {now})"
-                        ),
-                        _ => String::new(),
-                    }
                 );
             }
             if returned {
@@ -2054,6 +1738,47 @@ impl RegtestDaemon {
             .call::<wire::DevChainPop>(wire::block::PopCount { count: Count(n) })
             .await
             .expect("dev_chain_pop");
+        self.truncate_capture().await;
+    }
+
+    /// Append every block connected since the capture's last record.
+    /// Returns at once when capture is off.
+    async fn record_connected(&self) {
+        let start = {
+            let guard = self.capture.lock().expect("the capture lock");
+            let Some(blocks) = guard.as_ref() else {
+                return;
+            };
+            u64::try_from(blocks.len()).expect("capture length")
+        };
+        let count = self.height().await;
+        assert!(
+            count >= start,
+            "the capture holds {start} blocks and the chain has {count}"
+        );
+        for height in start..count {
+            let shown = self.block_at(height).await;
+            let recorded = captured_block(height, shown);
+            let mut guard = self.capture.lock().expect("the capture lock");
+            let blocks = guard.as_mut().expect("the capture is armed");
+            assert_eq!(blocks.len() as u64, height, "the capture skipped a block");
+            blocks.push(recorded);
+        }
+    }
+
+    /// Drop captured blocks above the chain the pop left.
+    async fn truncate_capture(&self) {
+        let count = usize::try_from(self.height().await).expect("chain count");
+        let mut guard = self.capture.lock().expect("the capture lock");
+        let Some(blocks) = guard.as_mut() else {
+            return;
+        };
+        assert!(
+            count <= blocks.len(),
+            "a pop left the chain longer than the capture ({count} > {})",
+            blocks.len()
+        );
+        blocks.truncate(count);
     }
 
     /// Whole-chain emission and fee legs of `chain_coinbase_sum`, in
@@ -4996,23 +4721,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// **Conservation (A6, `§9.5 item 8`).** The claim's reward vout must equal
 /// `budget_atomic(1)` byte-exactly — the daemon's per-block accrual
 /// `staker_emission + staker_pool_amount` (blockchain.cpp) summed over the
-/// epoch, i.e. the staker-inflow identity over real RPC. At regtest e2e
-/// activity the fee-pool half is **genuinely zero by the law**, and the
-/// test pins that executably. Since FL-R24 the volume operand is the exact
-/// window `tx_count_sum : blocks` (no longer floored to whole tx/block), so
-/// a handful of e2e txs gives a small but NONZERO `sqrt(V/B)` — the arm that
-/// used to zero the burn is gone. What zeroes `burn_pct` here is the supply
-/// ratio: `calc_burn_pct` forms `circulating · 10⁶ / asymptote` in SCALE
-/// fixed point, which is 0 until ~4.3e15 has been emitted (≈ 2 600+ blocks
-/// of the young curve). The `total_burned == 0` pin below was written for
-/// an `SEB` of 128, which closed `J + 1` at ~770 blocks; at `SEB` 2,000
-/// `J + 1` closes past 6,000 blocks, past that supply, with the walk's
-/// spends paying fees, so the pin may not hold at its first run. Its
-/// disposition is re-derived from that run's figures. The positive-pool split coverage is the B5 unit
-/// KAT family. The claim
-/// itself still carries real `ToKey` fee inputs (`fee_gindexes`
-/// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
-/// runs live.
+/// epoch, i.e. the staker-inflow identity over real RPC. The walk pins
+/// that identity: the claim's loud vout equals `budget_atomic`, which
+/// already includes whatever pool half the fee law yielded. It does not
+/// pin `total_burned` to zero. Since FL-R24 the volume operand is the
+/// exact window `tx_count_sum : blocks`, so fees make a nonzero
+/// `sqrt(V/B)`, and `calc_burn_pct` leaves zero only until ~4.3e15 has
+/// been emitted (≈ 2 600 blocks of the young curve). At `SEB` 2,000,
+/// `J + 1` closes past 6,000 blocks, past that supply. The pool-half
+/// split itself is the B5 unit KAT family. The claim still carries real
+/// `ToKey` fee inputs (`fee_gindexes` non-empty), not the Q11 zero-fee
+/// form, so the fee-subset battery leg runs live.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about six hours: three daemons on the pinned managed Tor over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun (docs/FOLLOWUPS.md, the emission walk); needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
 async fn e2e_emission_claim_accepted_and_applied() {
@@ -5376,18 +5095,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
         epoch_row.claimant_bond_idx.is_some(),
         "the fixture's bond must be a claimant in the closed epoch"
     );
-    // A6 pool-half disposition (module docs): at e2e activity the integer
-    // per-block volume mean floors to 0, a zero volume operand zeroes
-    // `burn_pct`, and `compute_burn_split` then yields a zero pool half AND
-    // a zero destroyed half from the same `burned` product — `total_burned`
-    // is the tied observable, pinned here so an operand-law change
-    // re-surfaces this disposition instead of silently shifting the budget.
-    assert_eq!(
-        total_burned_at_close,
-        shekyl_units::AtomicUnits::ZERO,
-        "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
-         (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
-    );
+    // `total_burned` is logged above and not pinned. At this epoch length
+    // the close is past the supply where `burn_pct` stays 0, and the
+    // walk's fees are real. Conservation is the claim equalling
+    // `budget_atomic` below; the split is the B5 KATs.
     // The no-staker epoch: `J` (the join epoch) closed zero-work — its
     // budget row exists but Σwork is 0, so nothing of it is claimable and
     // its accrual never mints (never enters supply).
@@ -5616,11 +5327,20 @@ async fn e2e_emission_claim_accepted_and_applied() {
 
     // ── (A5b) Settlement-straddling pop: undo the pass that settled `J + 1` ──
     // `J + 1`'s settlement rows are written while connecting the last block
-    // of `J + 2` (`settle_height`), and the claim is admitted only against
-    // them. Popping that block and the ones after it must withdraw the
-    // settlement and the claimed-set row together; re-mining must settle
-    // `J + 1` again from the same passes byte-identically, then re-apply
-    // the claim. No block of `J + 1` is popped, so no draw is made again.
+    // of `J + 2` (`settle_height`). The claim is admitted only against them
+    // (CEN-J23). Popping that block withdraws Σwork, so the pool drops the
+    // returned claim (CEN-K10: a refused return is not kept). The reference
+    // block is below the pop, and no block of `J + 1` is popped, so the
+    // same claim bytes are valid again once the pass is re-mined. Re-mining
+    // settles `J + 1` from the same passes with the claimed-set empty; the
+    // walk then resubmits those bytes through `tx_submit` and mines them.
+    let claim_bytes = receipt.claim.bound_tx.bytes().to_vec();
+    let claim_id = HashHex::from_bytes(
+        *shekyl_wire::Transaction::from_bytes(&claim_bytes)
+            .expect("the saved claim")
+            .hash()
+            .as_bytes(),
+    );
     let tip = daemon.height().await;
     let straddle_depth = tip - settle_height;
     daemon.pop_blocks(straddle_depth).await;
@@ -5640,7 +5360,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
             "the straddling pop must clear the claimed-set row"
         );
     }
-    mine_until_pool_drains(&daemon, "re-applied emission claim (A5b)", 1).await;
+    let pooled = daemon
+        .rpc
+        .call::<wire::TxpoolList>(NoParams)
+        .await
+        .expect("txpool_list");
+    assert!(
+        pooled.iter().all(|entry| entry.id != claim_id),
+        "the pool drops a claim whose settlement the pop withdrew (CEN-J23, CEN-K10)"
+    );
+    daemon.generate_blocks(straddle_depth).await;
     let src_resettled = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
         .await
         .expect("claim-source after re-settlement");
@@ -5656,17 +5385,51 @@ async fn e2e_emission_claim_accepted_and_applied() {
          was popped)"
     );
     assert!(
-        src_resettled
+        !src_resettled
             .bond
             .as_ref()
             .expect("bond context after re-settlement")
             .claimed_settlement_epochs
             .contains(&target_epoch),
-        "the claim must re-apply after the re-settlement (A5b)"
+        "re-mining the settlement must not re-apply the dropped claim"
+    );
+    let verdict = daemon
+        .rpc
+        .call::<wire::TxSubmit>(wire::tx::TxBody {
+            body: shekyl_rpc_types::kinds::Bytes(claim_bytes),
+        })
+        .await
+        .unwrap_or_else(|error| daemon.panic_with_log("resubmit the claim", format!("{error:?}")));
+    match verdict {
+        wire::tx::Verdict::Accepted | wire::tx::Verdict::AlreadyInPool { .. } => {}
+        other => daemon.panic_with_log("resubmit the claim", format!("{other:?}")),
+    }
+    mine_until_pool_drains(&daemon, "resubmitted emission claim (A5b)", 1).await;
+    let src_reapplied = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after the resubmitted claim");
+    assert!(
+        src_reapplied
+            .bond
+            .as_ref()
+            .expect("bond context after the resubmitted claim")
+            .claimed_settlement_epochs
+            .contains(&target_epoch),
+        "the same claim bytes must apply once the settlement is back (A5b)"
+    );
+    let row_reapplied = src_reapplied
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        .expect("budget row after the resubmitted claim");
+    assert_eq!(
+        (row_reapplied.budget_atomic, row_reapplied.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "resubmitting the claim must not move the settlement"
     );
     eprintln!(
         "A5b straddling pop (depth {straddle_depth}, floor {settle_height}): settlement \
-         withdrawn and made again byte-identically, claim re-applied"
+         withdrawn and made again byte-identically, the dropped claim resubmitted"
     );
 
     daemon.generate_blocks(PSCAN_TEST_REORG_DEPTH + 2).await;
@@ -6875,12 +6638,11 @@ fn a_version_line_names_its_last_nine_hex_digits() {
 /// `SHEKYL_CAPTURE_CHAIN_VECTORS`; a no-op otherwise, so the generators run
 /// unchanged in CI's live-daemon step.
 ///
-/// The artifacts are the production replay driver's own, produced by its
-/// own tools rather than a layout minted here (RD-Q1: nothing lives only in
-/// a binary; RD-F15: the corpus writer verifies every body against its
-/// header). `shekyl-chain-replay fetch` builds the corpus from the live
-/// daemon over `block_list` — every block and every listed
-/// transaction's **full** bytes. `shekyl-chain-replay baseline` replays
+/// The corpus is the production writer's ([`shekyl_chain_ingest::corpus::CorpusWriter`],
+/// RD-F15), filled from blocks this daemon read at connect
+/// ([`RegtestDaemon::record_connected`]). A fetch at the end of a walk that
+/// crosses the archival horizon, or the undo retention, is refused: the
+/// node no longer holds those bodies. `shekyl-chain-replay baseline` replays
 /// that corpus against a fresh store and writes the trace from the rows
 /// the store recorded (`DAEMON_REDB_STORE.md` §12.1). The binary is located
 /// by env var, like the daemon itself, and its `--version` must name the
@@ -6951,47 +6713,51 @@ async fn maybe_capture_chain_vector(
     }
     std::fs::create_dir_all(&root).expect("create capture dir");
     let corpus = root.join("corpus.e2");
-
-    let mut fetch = Command::new(&replay_bin);
-    fetch
-        .args(["fetch", "--daemon"])
-        .arg(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .args(["--chain", "regtest", "--from", "0", "--to"])
-        .arg(count.to_string())
-        .arg("--out")
-        .arg(&corpus);
-    let fetch = shekyl_tor_control_client::spawn_lock::output(&mut fetch)
-        .expect("spawn shekyl-chain-replay fetch");
-    assert!(
-        fetch.status.success(),
-        "shekyl-chain-replay fetch failed: {}\n{}",
-        String::from_utf8_lossy(&fetch.stdout),
-        String::from_utf8_lossy(&fetch.stderr)
+    let recorded = daemon
+        .capture
+        .lock()
+        .expect("the capture lock")
+        .clone()
+        .unwrap_or_else(|| {
+            panic!("SHEKYL_CAPTURE_CHAIN_VECTORS is set and this daemon recorded no blocks")
+        });
+    assert_eq!(
+        recorded.len() as u64,
+        count,
+        "the capture holds {} blocks and the chain has {count}",
+        recorded.len()
     );
+    let file = std::fs::File::create(&corpus).expect("create the corpus");
+    let mut writer = shekyl_chain_ingest::corpus::CorpusWriter::create(
+        file,
+        shekyl_network::Network::Regtest,
+        shekyl_types::BlockHeight::ZERO,
+    )
+    .expect("the corpus header");
+    for block in &recorded {
+        writer
+            .append_carrying(&block.blob, &block.txs, &block.references, &block.bodies)
+            .unwrap_or_else(|error| panic!("a corpus record was refused: {error}"));
+    }
+    writer.finish().expect("finish the corpus");
 
     // Every listed transaction's full bytes as
     // `txs/<txid>.tx`, for the validator crate's per-rule fixtures. That
     // crate may not reach the ingest crate (G1), so it cannot read the
     // corpus; it reads a real transaction's bytes and mutates ONE field —
     // the same shape its fixtures have always had, now over a spend a
-    // daemon accepted rather than a hand-built skeleton.
+    // daemon accepted rather than a hand-built skeleton. The bytes are the
+    // ones read at connect, which the node may since have archived.
     let txs_dir = root.join("txs");
     std::fs::create_dir_all(&txs_dir).expect("create txs dir");
     let mut tx_count = 0usize;
-    for height in 0..=tip {
-        let shown = daemon.block_at(height).await;
-        for slot in shown.tx {
-            let bytes = match slot {
-                wire::shared::OrArchived::Item(tx) => tx.body.0,
-                wire::shared::OrArchived::Archived(state) => {
-                    panic!("a capture chain discards no body: {state:?}")
-                }
-            };
-            let tx = shekyl_wire::Transaction::from_bytes(&bytes)
-                .expect("a daemon-served full tx parses");
+    for block in &recorded {
+        for bytes in &block.txs {
+            let tx =
+                shekyl_wire::Transaction::from_bytes(bytes).expect("a captured full tx parses");
             std::fs::write(
-                txs_dir.join(format!("{}.tx", hex::encode(tx.hash()))),
-                &bytes,
+                txs_dir.join(format!("{}.tx", hex::encode(tx.hash().as_bytes()))),
+                bytes,
             )
             .expect("write tx blob");
             tx_count += 1;
@@ -7065,8 +6831,8 @@ async fn maybe_capture_chain_vector(
         "description":
             "A regtest chain captured whole as the DRS-E2 replay pair. \
              corpus.e2: every block 0..=tip_height with the FULL bytes of \
-             every listed transaction (shekyl-chain-replay fetch, \
-             RD-F15-verified). trace.e2: the Rust baseline \
+             every listed transaction, read at connect and verified by \
+             CorpusWriter (RD-F15). trace.e2: the Rust baseline \
              (shekyl-chain-replay baseline): the corpus replayed against a \
              fresh store, then each height's facts and the tip's digest and \
              archival rows read off it, pinned at built_at_dev_sha. A \
@@ -7429,3 +7195,6 @@ mod shard;
 
 #[path = "regtest_e2e_sync.rs"]
 mod sync;
+
+#[path = "regtest_e2e_tor.rs"]
+mod tor;
