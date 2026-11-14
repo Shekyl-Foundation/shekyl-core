@@ -12,15 +12,13 @@
 //! file. They share the owner's close subscriber and the spend corpus.
 //! A file under `tests/chain_sync/` is not its own test crate.
 
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use shekyl_chain_sync::SyncState;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_hash_budget::Budget;
 use shekyl_levin::CoreSyncData;
-use shekyl_p2p_harness::sync::{substrate, Chain, Corpus, Node, Step};
+use shekyl_p2p_harness::sync::{own_hasher, Chain, Corpus, Node, Step};
 use shekyl_types::BlockHash;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id};
@@ -251,13 +249,7 @@ pub(crate) fn claim_of(chain: &Chain) -> CoreSyncData {
 
 /// A store holding `steps`, connected from its own node.
 pub(crate) async fn source(tag: &str, corpus: &Corpus, steps: &[Step]) -> Chain {
-    let (substrate, _) = substrate();
-    let chain = Chain::empty(
-        tag,
-        corpus.rules(),
-        Arc::new(substrate),
-        Budget::new(NonZeroUsize::new(4).expect("four")),
-    );
+    let chain = Chain::empty(tag, corpus.rules(), own_hasher(4));
     chain.apply(steps).await;
     chain
 }

@@ -42,19 +42,14 @@ use shekyl_types::{BlockHash, PowHash, Timestamp};
 
 /// The environment a block is judged in: a wall clock and a PoW verifier.
 ///
-/// Implemented by the daemon over its clock and its RandomX cache /
-/// precompute table (`m_blocks_longhash_table` is this trait with a C++
-/// type); by the crate's test harness over fixture values. Never by the
-/// store: the store knows the chain, not the world.
+/// Implemented by the daemon over its clock and the RandomX cache one
+/// hashing job borrowed; by the crate's test harness over fixture values.
+/// Never by the store: the store knows the chain, not the world. `form`
+/// takes it unsized, so a job may hand one over as `&dyn Substrate`.
 pub trait Substrate {
     /// What this substrate can fail with — the verifier's error, the
     /// clock's. Opaque to every rule (no bound). A fault is not a verdict.
     type Fault;
-
-    /// A cache this substrate built for one seed and handed to the caller
-    /// ([`prepare_seed`](Self::prepare_seed)). `()` for a substrate that
-    /// caches nothing.
-    type Held: Default + Send + Sync;
 
     /// The local wall clock, Unix seconds (CEN-C1's operand). Read once per
     /// [`form`](crate::form) and carried on the verdict, so the FTL leg is
@@ -62,75 +57,10 @@ pub trait Substrate {
     fn local_clock(&self) -> Result<Timestamp, Self::Fault>;
 
     /// RandomX v2 over `pow_blob` under `seed` (CEN-D2). The rule chooses
-    /// `seed` (CEN-D3: the block id at `seedheight(h)`); the implementor
-    /// may cache by it. An `Err` is the fail-closed gate: the block cannot
-    /// be proven, and `form` returns the fault instead of a verdict.
+    /// `seed` (CEN-D3: the block id at `seedheight(h)`). An `Err` is the
+    /// fail-closed gate: the block cannot be proven, and `form` returns the
+    /// fault instead of a verdict. An implementor that hashes under one
+    /// seed only, the one its caller borrowed a cache for, faults on any
+    /// other: it never builds a cache here.
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault>;
-
-    /// `seed` is about to serve a run of blocks (CEN-D3's epoch). An
-    /// implementor that caches by seed prepares and pins it now, under the
-    /// caller's hasher permit, so the first block of the epoch does not pay
-    /// the cache fill inside [`longhash`](Self::longhash) and two live seeds
-    /// of a lag window do not evict each other.
-    ///
-    /// A production implementor may refuse [`longhash`](Self::longhash) for
-    /// a seed it was not asked to pin. That refusal is a fault
-    /// ([`cache_absent`](Self::cache_absent)), not a verdict, and it does
-    /// not build the cache. The default pin does nothing.
-    fn pin_seed(&self, _seed: &BlockHash) {}
-
-    /// `seed` left the seed window: release its cache if the implementor
-    /// keeps it beside the canonical one, so it is not held until the next
-    /// epoch's pin displaces it (A2). Never the canonical cache, and
-    /// nothing when `seed` is not the one kept beside it. Called after
-    /// [`pin_seed`](Self::pin_seed) under the same lock. A cache a caller
-    /// already holds ([`prepare_seed`](Self::prepare_seed)) stays valid
-    /// for that caller. The default keeps nothing, so it releases nothing.
-    fn release_seed(&self, _seed: &BlockHash) {}
-
-    /// The seeds whose caches the implementor holds now: the canonical
-    /// one, then the one kept beside it. Read from the cache itself, never
-    /// from a record of what was pinned, so a caller that publishes what is
-    /// resident publishes what is (A2). The default keeps no cache, so it
-    /// holds none.
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        (None, None)
-    }
-
-    /// Whether `fault` is a missing cache: the seed was not pinned, so
-    /// [`longhash`](Self::longhash) refused rather than deriving one.
-    ///
-    /// The default is `false`. A wrapper forwards to the substrate it
-    /// delegates the longhash to, so a generic caller can tell a miss from
-    /// a clock fault without downcasting.
-    fn cache_absent(&self, _fault: &Self::Fault) -> bool {
-        false
-    }
-
-    /// Build `seed`'s cache for the caller to hold, in the transient slot
-    /// and never the canonical one, and hand it over. The caller has judged
-    /// the seed earned: the seed block of the arrival's own in-cap branch,
-    /// stored with its proof of work passed (`DRS_X_STORE_FLIP.md` DX-Q2
-    /// item 1, B2). The caller holds a hasher permit across it. The default
-    /// builds nothing.
-    fn prepare_seed(&self, _seed: &BlockHash) -> Self::Held {
-        Self::Held::default()
-    }
-
-    /// [`longhash`](Self::longhash) under `held`, the cache
-    /// [`prepare_seed`](Self::prepare_seed) returned for `seed`. There is
-    /// no second lookup, so a slot evicted since the preparation does not
-    /// fail it. The default is `longhash`.
-    ///
-    /// # Errors
-    ///
-    /// As [`longhash`](Self::longhash).
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        _held: &Self::Held,
-    ) -> Result<PowHash, Self::Fault> {
-        self.longhash(pow_blob, seed)
-    }
 }

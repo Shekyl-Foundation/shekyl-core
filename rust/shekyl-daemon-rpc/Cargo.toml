@@ -91,13 +91,14 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 # the flip; the adjusted time is projected over the difficulty crate's MTP
 # window and target.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
-# calc_pow's hash, under a cache the daemon's one CacheStore already holds:
-# the RPC calls `lookup` and `compute_hash`, never a derivation (ruled
-# 2026-10-17). In the graph already through the ingest.
+# calc_pow's hash: a warm loan from the node's one hasher
+# (RANDOMX_CACHE_ACTOR.md), which builds nothing (ruled 2026-10-17) and
+# takes one permit in calc_pow's class, below the chain's and above the
+# miner's (PR2-Q3). The RPC holds no cache and no budget.
+shekyl-hasher = { path = "../shekyl-hasher" }
+# `Seedhash`: how the hasher names a seed. In the graph already through
+# the ingest.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-# The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
-# in its class, below the chain's and above the miner's.
-shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 # Plaintext listeners set hyper's header-read timer. Axum's `serve` does not
 # expose it. The listener is hyper's HTTP/1 builder: that timer is HTTP/1's,
 # and HTTP/2 is not a feature of this crate. Its preface has no such timer,

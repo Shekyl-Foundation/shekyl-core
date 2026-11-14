@@ -41,9 +41,10 @@
 //!   the store a run left; the `shekyl-chain-replay` binary calls it. The
 //!   pipeline stages, the trace writer among them, sit behind the
 //!   `pipeline` feature.
-//! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
-//!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
-//!   system clock. The only hasher any Shekyl validator runs (§1.3).
+//! - [`substrate`] — the faults a hashing job's substrate returns, and the
+//!   recalled-hash substrate a switch re-judges through. The production
+//!   longhash lives inside the job that borrowed the cache
+//!   (`RANDOMX_CACHE_ACTOR.md` §5.3), not on a cache the caller holds.
 //! - [`metrics`] — the RandomX measurement sink (RD-F11), shared by the
 //!   substrate and the pipeline.
 //! - [`mutation`] — one deliberate invalidation of one `Extend`, naming
@@ -192,8 +193,12 @@ mod pool_submit_tests;
 /// The E2 corpus re-baselined from Rust: a store's chain written as the
 /// trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
 #[cfg(feature = "pipeline")]
+pub mod pow;
+#[cfg(feature = "pipeline")]
 pub mod rebaseline;
 /// Seats in the arrival window.
+#[cfg(all(test, feature = "pipeline"))]
+mod resident_tests;
 #[cfg(feature = "pipeline")]
 mod room;
 #[cfg(feature = "pipeline")]
@@ -284,12 +289,14 @@ pub use connector::{
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
-pub use metrics::{Concurrency, Metrics, MetricsArtifact};
+pub use metrics::{Concurrency, Derives, Metrics, MetricsArtifact};
 pub use mutation::{Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Pow, Unmutable};
 #[cfg(feature = "pipeline")]
 pub use pipeline::{
     run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
 };
+#[cfg(feature = "pipeline")]
+pub use pow::ProductionPow;
 #[cfg(feature = "pipeline")]
 pub use schedule::{ChainRules, LeverRefused};
 #[cfg(feature = "pipeline")]
@@ -297,5 +304,5 @@ pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-pub use substrate::{ProductionSubstrate, SubstrateFault};
+pub use substrate::SubstrateFault;
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

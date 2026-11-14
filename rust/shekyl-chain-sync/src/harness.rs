@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The CS-2 harness (brief §5). Scripted peers over synthetic forks,
-//! an in-process executor (`ProductionSubstrate`), and a fake entry.
+//! an in-process executor (`proof::prove_item`, over the tests' own
+//! hasher), and a fake entry.
 //! Each test names the property it pins. The captured-chain agreement
 //! between the two `form` entries lives in `shekyl-chain-ingest`.
 

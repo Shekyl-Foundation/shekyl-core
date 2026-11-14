@@ -91,6 +91,13 @@ pub fn scenario_3_sustained_growth(params: &SimParams) -> ScenarioConfig {
     }
 }
 
+/// The stuffing attack's length, blocks: 30 days at the 120 s target, from
+/// genesis. EI-3's step response and EI-7's stuff-then-stop blips read it.
+pub(crate) const STUFFING_ATTACK_BLOCKS: u64 = 21_600;
+
+/// The stuffing attack's demand, as a multiple of the baseline's.
+pub(crate) const STUFFING_ATTACK_MULTIPLE: u64 = 5;
+
 pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
     let baseline = params.economic().tx_volume_baseline;
     ScenarioConfig {
@@ -99,9 +106,8 @@ pub fn scenario_4_stuffing_attack(params: &SimParams) -> ScenarioConfig {
         sim_years: 2,
         volume: VolumeSchedule {
             get_volume: Box::new(move |block, _bpy| {
-                let attack_blocks = 21_600;
-                if block < attack_blocks {
-                    baseline * 5
+                if block < STUFFING_ATTACK_BLOCKS {
+                    baseline * STUFFING_ATTACK_MULTIPLE
                 } else {
                     baseline
                 }

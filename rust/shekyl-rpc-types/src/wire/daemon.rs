@@ -135,6 +135,14 @@ crate::wire_parted! {
             started: Time,
             disk_free: Size,
             data_size: Size,
+            /// The places the node's hasher has in use for RandomX caches
+            /// when the call is made, at most three: the quantity HA-R2
+            /// caps, an upper bound on the RandomX cache memory at 256 MiB
+            /// a place, never a reading of it
+            /// (`RANDOMX_CACHE_ACTOR.md` §5.6). A place reserved for a
+            /// build counts, and so does a derive still filling its pages,
+            /// and a cache whose 256 MiB is still being returned.
+            randomx_cache_places: Count,
             revision: Text,
             /// `null` while P2P is off.
             peer_outbound_count: Nullable<Count>,
