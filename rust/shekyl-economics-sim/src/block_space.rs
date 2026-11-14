@@ -143,18 +143,39 @@ pub(crate) struct Filled {
     pub(crate) block_weight: u64,
     /// The listed bodies' weight.
     pub(crate) bodies_weight: u64,
+    /// The producer's own bodies, listed after the pool's
+    /// ([`OwnBodies`]). Zero unless the fold offers some.
+    pub(crate) own: OwnListing,
 }
 
 impl Filled {
-    /// Transactions the block lists, every rung.
+    /// Transactions the block lists: every rung's, and the producer's own.
     pub(crate) fn carried_txs(&self) -> u64 {
-        self.rungs.sum(|rung| rung.carried_txs)
+        self.rungs.sum(|rung| rung.carried_txs) + self.own.txs
     }
 
-    /// The listed bodies' fees, every rung.
+    /// The listed bodies' fees: every rung's, and the producer's own.
     pub(crate) fn fees_atomic(&self) -> u64 {
-        self.rungs.sum(|rung| rung.fees_atomic)
+        self.rungs.sum(|rung| rung.fees_atomic) + self.own.fees_atomic
     }
+}
+
+/// Bodies a block's producer lists of its own, after the pool's: each one
+/// `tx`, as many as fit inside the penalty-free weight that the pool's
+/// listing leaves, so the producer takes no penalty. They are not in the
+/// pool and no rung's traffic: they enter the block's weight, its fees,
+/// the medians and the volume window. The window-edge stuffer
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.32, EI-3) is their one user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OwnBodies {
+    pub(crate) tx: OrdinaryTx,
+}
+
+/// The producer's own bodies one block listed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OwnListing {
+    pub(crate) txs: u64,
+    pub(crate) fees_atomic: u64,
 }
 
 /// One rung's demand at a block: `count` transactions, each `tx`.
@@ -558,12 +579,26 @@ impl BlockSpace {
     /// returned for it — from the pool and the block's `arrivals`, each
     /// rung's ordinary transaction priced at `at`, admitted in the order
     /// given ([`Rung::ADMISSION`]), then record it.
+    #[cfg(test)]
     pub(crate) fn fill(
         &mut self,
         height: u64,
         medians: EffectiveMedian,
         arrivals: &[Arrival],
         at: &FeePoint<'_>,
+    ) -> Filled {
+        self.fill_with_own(height, medians, arrivals, at, None)
+    }
+
+    /// [`Self::fill`], then the producer's `own` bodies, when it lists any,
+    /// in the penalty-free room the pool's listing leaves.
+    pub(crate) fn fill_with_own(
+        &mut self,
+        height: u64,
+        medians: EffectiveMedian,
+        arrivals: &[Arrival],
+        at: &FeePoint<'_>,
+        own: Option<OwnBodies>,
     ) -> Filled {
         let limit = Limits::of_block_limit(medians.limit(at.params).to_raw()).max_weight;
         let expired = self.expire(height);
@@ -594,6 +629,14 @@ impl BlockSpace {
         self.offer(&mut fill, height, &mut rungs);
         self.trim(limit, &mut evicted);
         self.drop_empty();
+        let own = own.map_or_else(OwnListing::default, |own| {
+            let room = fill.penalty_free_body_room() / own.tx.weight.max(1);
+            let txs = fill.admit_up_to(own.tx.weight, own.tx.fee_atomic, room);
+            OwnListing {
+                txs,
+                fees_atomic: txs * own.tx.fee_atomic,
+            }
+        });
         for rung in Rung::ALL {
             rungs[rung].expired_txs = expired[rung];
             rungs[rung].evicted_txs = evicted[rung];
@@ -607,6 +650,7 @@ impl BlockSpace {
             paid_reward: fill.reward(),
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),
+            own,
         };
         assert_eq!(
             filled.fees_atomic(),

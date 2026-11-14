@@ -107,6 +107,9 @@ impl<T: AddAssign<U>, U> AddAssign<PerRung<U>> for PerRung<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RungMix {
     milli: PerRung<u64>,
+    /// Priority's share is a ceiling that falls as Priority's fee rises
+    /// ([`Self::priority_at`]): a declared behaviour arm (EI-6).
+    priority_elastic: bool,
 }
 
 impl RungMix {
@@ -134,7 +137,58 @@ impl RungMix {
         );
         Self {
             milli: PerRung([economy, standard, priority]),
+            priority_elastic: false,
         }
+    }
+
+    /// The defaulted mix with Priority at `priority` thousandths, the share
+    /// it gives up moved to Standard (as [`Self::ZERO_PRIORITY`]).
+    #[must_use]
+    pub const fn defaulted_with_priority(priority: u64) -> Self {
+        assert!(
+            priority <= Self::DEFAULTED.milli.0[2],
+            "Priority sheds share; it never takes more"
+        );
+        Self::of(
+            Self::DEFAULTED.milli.0[0],
+            Self::DEFAULTED.milli.0[1] + Self::DEFAULTED.milli.0[2] - priority,
+            priority,
+        )
+    }
+
+    /// This mix with Priority's demand at unit elasticity to its own fee
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.32, EI-6): a declared
+    /// behaviour, since demand in the sim is otherwise a schedule.
+    #[must_use]
+    pub const fn priority_elastic(self) -> Self {
+        Self {
+            priority_elastic: true,
+            ..self
+        }
+    }
+
+    /// Whether Priority's share responds to its fee.
+    #[must_use]
+    pub const fn is_priority_elastic(self) -> bool {
+        self.priority_elastic
+    }
+
+    /// The mix at a block whose Priority fee is `fee`, against `reference`,
+    /// Priority's fee at the fold's first block. At unit elasticity
+    /// Priority keeps `share · min(1, reference / fee)`, floored to a
+    /// thousandth, and Standard takes what it sheds.
+    #[must_use]
+    pub fn priority_at(self, reference: u64, fee: u64) -> Self {
+        let share = self.milli[Rung::Priority];
+        if fee <= reference {
+            return self;
+        }
+        let kept = u64::try_from(u128::from(share) * u128::from(reference) / u128::from(fee))
+            .expect("at most the share");
+        let mut milli = self.milli;
+        milli[Rung::Standard] += share - kept;
+        milli[Rung::Priority] = kept;
+        Self { milli, ..self }
     }
 
     /// The rung's share, in thousandths.
@@ -165,10 +219,15 @@ impl fmt::Display for RungMix {
         };
         write!(
             f,
-            "{}/{}/{}",
+            "{}/{}/{}{}",
             percent(self.milli[Rung::Economy]),
             percent(self.milli[Rung::Standard]),
             percent(self.milli[Rung::Priority]),
+            if self.priority_elastic {
+                " elastic"
+            } else {
+                ""
+            },
         )
     }
 }
@@ -271,6 +330,44 @@ impl AddAssign<RungTraffic<u64>> for RungTraffic<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EI-6's cells (§5.32): Priority sheds share to Standard, and the
+    /// elastic arm keeps `share · reference / fee`, floored, once its fee
+    /// rises, and all of it while the fee is at or under the reference.
+    #[test]
+    fn priority_sheds_its_share_to_standard() {
+        assert_eq!(RungMix::defaulted_with_priority(50), RungMix::DEFAULTED);
+        assert_eq!(RungMix::defaulted_with_priority(0), RungMix::ZERO_PRIORITY);
+        let half = RungMix::defaulted_with_priority(25);
+        assert_eq!(
+            (
+                half.milli(Rung::Economy),
+                half.milli(Rung::Standard),
+                half.milli(Rung::Priority)
+            ),
+            (150, 825, 25)
+        );
+        assert_eq!(half.to_string(), "15/82.5/2.5");
+        let elastic = RungMix::DEFAULTED.priority_elastic();
+        assert_eq!(elastic.to_string(), "15/80/5 elastic");
+        assert_eq!(
+            elastic.priority_at(1_000, 900),
+            elastic,
+            "a fall sheds nothing"
+        );
+        let doubled = elastic.priority_at(1_000, 2_000);
+        assert_eq!(
+            doubled.milli(Rung::Priority),
+            25,
+            "half the demand at twice the fee"
+        );
+        assert_eq!(doubled.milli(Rung::Standard), 825);
+        assert_eq!(
+            elastic.priority_at(1_000, 3_000).milli(Rung::Priority),
+            16,
+            "floored"
+        );
+    }
 
     #[test]
     fn a_mix_prints_its_percentages() {
