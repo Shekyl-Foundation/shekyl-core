@@ -28,7 +28,7 @@
 //! is not substituted and called this anchor.
 
 #[path = "../../shekyl-rpc-channel-xcheck/tests/support/mod.rs"]
-mod seeded;
+pub(super) mod seeded;
 
 use serde_json::Value;
 use shekyl_noise::KeyEpoch;

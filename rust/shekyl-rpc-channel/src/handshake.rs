@@ -97,7 +97,7 @@ mod identity;
 use identity::{dh, Ephemeral};
 
 pub use crate::static_public::{InvalidStaticPublic, StaticPublic};
-pub use identity::StaticKeypair;
+pub use identity::{KeyFileError, StaticKeypair, KEY_FILE_LEN, KEY_FILE_MAGIC, KEY_FILE_VERSION};
 
 /// The Noise protocol name. It is hashed into the transcript, so it is part
 /// of the wire format.
@@ -1183,3 +1183,7 @@ mod admission;
 #[cfg(test)]
 #[path = "pinned_handshake.rs"]
 mod pinned;
+
+#[cfg(test)]
+#[path = "key_file_tests.rs"]
+mod key_file;
