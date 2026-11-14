@@ -37,12 +37,29 @@
 //! Each span is worked by its own task, so two sessions' spans race to the
 //! one writer, and the router places on snapshots the other span's commits
 //! can move (`router` module docs). Within a span, a run of blocks each
-//! extending the one before it from the tip is formed in parallel, under
-//! the hasher permits, and connected in order; an alternative arrival goes
+//! extending the one before it from the tip is formed in parallel, each
+//! block as a hashing job, and connected in order; an alternative arrival goes
 //! through `OfferAlt` and, if it makes a switch due, the switch. A stale
 //! placement — the connector's `HeightClaim`, a `Stale` claim, or an
 //! `OfferAlt` whose parent became the tip — sends the arrival back to be
 //! placed again, never to a verdict.
+//!
+//! # The ranked list
+//!
+//! The service holds no RandomX cache. Every hash is a job on the node's
+//! one hasher, through the [`Pow`] boundary, and a job always gets its
+//! cache (`RANDOMX_CACHE_ACTOR.md` HA-R1). What the hasher keeps warm
+//! between jobs is the ranked list, and the service is what computes it:
+//! one task, the ranker (`window::rank`), reads a fresh store snapshot and
+//! chain sync's header frontier ([`Follow::frontier`]) and sends the list
+//! whole ([`ranked_on`]). The connector wakes it after every write that
+//! can change the list, and a change of the frontier wakes it too. Wakes
+//! coalesce, so the last list sent is from the newest snapshot.
+//!
+//! The tip follower asks for a ranking of its own before it builds a
+//! template and waits for it: the miner's warm loan is granted only on a
+//! listed seed, so the list names the new tip's seed before a job on it
+//! is posted.
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};

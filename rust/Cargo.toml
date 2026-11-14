@@ -758,7 +758,7 @@ shekyl-economics = { opt-level = 3 }
 shekyl-block-template = { opt-level = 3 }
 shekyl-tx-weight = { opt-level = 3 }
 # RandomX is hash-bound the same way: every real-RandomX test (the scenario
-# chains under the production substrate, the miner loop) derives a 256 MiB
+# chains under the production proof-of-work boundary, the miner loop) derives a 256 MiB
 # cache and hashes in light mode, and an unoptimised verifier made the
 # miner's one default-lane test take 158 s of every debug `cargo test` run.
 # Optimisation does not change the hash: the crate is spec-vector tested

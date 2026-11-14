@@ -292,7 +292,7 @@ fn prepare(flags: &RunFlags) -> Result<Prepared, Failure> {
     })
 }
 
-/// Connect the corpus under the production substrate and `trace`.
+/// Connect the corpus under the production proof-of-work boundary and `trace`.
 ///
 /// The measurement is printed and, when asked, written whether or not the
 /// run finished: hours of hashing are the measurement whether or not the

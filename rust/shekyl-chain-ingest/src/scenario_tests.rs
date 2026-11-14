@@ -174,7 +174,7 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
 /// for the live lane — the cache derivation is seconds, not milliseconds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "real RandomX; seconds; run by nightly.yml's chain-ingest-ignored job"]
-async fn a_chain_mines_under_the_production_substrate() {
+async fn a_chain_mines_under_the_production_pow() {
     let own = crate::test_support::own_hasher();
     let mut scenario = Scenario::open_with("scenario-randomx", own.pow.clone());
     let mined = scenario.mine(3).await;

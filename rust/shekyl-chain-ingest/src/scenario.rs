@@ -34,8 +34,8 @@
 //! # What is real and what is placeholder
 //!
 //! Real: the template, the coinbase and its hybrid-KEM output, the
-//! validator, the store, the burn fold. Under a [`ProductionSubstrate`]
-//! the PoW is real RandomX at the fixed regtest difficulty; the default
+//! validator, the store, the burn fold. Under a
+//! [`ProductionPow`](crate::pow::ProductionPow) the PoW is real RandomX at the fixed regtest difficulty; the default
 //! [`Clocked`] over the harness longhash keeps the clock deterministic and
 //! the hash free. Nothing is a placeholder any more: the curve-tree root
 //! stopped being one with DRS-E3, the two medians with slice 7 commit 4,
