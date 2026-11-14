@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use shekyl_engine_core::engine::error::{
     FeeEstimatorError, FinalityBreach, FinalityStop, RetryableRejectCause, TerminalErrorKind,
 };
-use shekyl_engine_core::engine::SubmitError;
+use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
     ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
     PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
@@ -226,6 +226,13 @@ wallet_rpc_error_codes! {
     DaemonFeeResponseInvalid = -29118 => "DAEMON_FEE_RESPONSE_INVALID",
     /// Build: the signer tried and a downstream failure stopped it.
     SignerFailed = -29119 => "SIGNER_FAILED",
+    /// Submit: the send's record could not be saved, so nothing was sent;
+    /// the reservation is kept (A19).
+    SendNotSaved = -29120 => "SEND_NOT_SAVED",
+    /// `tx_resend`: no held send has this id.
+    TxNotHeld = -29121 => "TX_NOT_HELD",
+    /// `tx_resend`: the held send has no saved bytes to resend.
+    TxBytesMissing = -29122 => "TX_BYTES_MISSING",
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -724,6 +731,25 @@ pub enum WalletRpcError {
         /// Compile-time-fixed description of the failure.
         reason: &'static str,
     },
+    /// `-29120`: the send's record (with its signed bytes and tx secret)
+    /// could not be saved, so the wallet sent nothing (A19). The
+    /// reservation is kept: fix the cause and submit it again, or discard
+    /// it. The cause is in the wallet's log.
+    #[error(
+        "the send was not saved, so it was not sent — make the wallet directory writable \
+         (or free disk space) and submit again, or discard it"
+    )]
+    SendNotSaved,
+    /// `-29121`: `tx_resend` named a transaction that is not a held send:
+    /// it confirmed, was released, or was never this wallet's.
+    #[error("no held send with this id — tx_alarm lists the held sends")]
+    TxNotHeld,
+    /// `-29122`: the held send's record holds no bytes to resend.
+    #[error(
+        "this held send has no saved bytes to resend — abandon it, or wait for refresh to \
+         settle it"
+    )]
+    TxBytesMissing,
     /// Submit: unknown / expired reservation handle.
     #[error("reservation not found")]
     ReservationNotFound,
@@ -1204,6 +1230,9 @@ impl WalletRpcError {
             Self::ReselectionRequired => WalletRpcErrorCode::ReselectionRequired,
             Self::DaemonFeeResponseInvalid => WalletRpcErrorCode::DaemonFeeResponseInvalid,
             Self::SignerFailed { .. } => WalletRpcErrorCode::SignerFailed,
+            Self::SendNotSaved => WalletRpcErrorCode::SendNotSaved,
+            Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
+            Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
             Self::SnapshotInvalidated => WalletRpcErrorCode::SnapshotInvalidated,
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
@@ -1977,6 +2006,16 @@ impl From<PersistenceError> for WalletRpcError {
         match err {
             PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
             PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
+            // A dispatch whose rename landed but whose parent-directory
+            // fsync did not confirm. Nothing was sent. The submit path
+            // reports this as `DispatchNotSaved`; this arm is the same
+            // answer if the error reaches the boundary on its own.
+            PersistenceError::DurabilityUnconfirmed => {
+                tracing::error!(
+                    "a wallet write was applied but its crash-durability was not confirmed"
+                );
+                WalletRpcError::SendNotSaved
+            }
         }
     }
 }
@@ -2243,9 +2282,36 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
             SubmitError::ReanchorUnavailable { .. } => Self::ReanchorUnavailable,
             SubmitError::ReselectionRequired { .. } => Self::ReselectionRequired,
+            SubmitError::DispatchNotSaved { source, .. } => {
+                tracing::error!(error = %source, "submit: the send could not be saved; nothing was sent");
+                Self::SendNotSaved
+            }
             // `SubmitError` is `#[non_exhaustive]` (Phase 0a); every variant is
             // named above, so inside one workspace build this is unreachable.
             other => internal_detail("submit variant unmapped at the RPC boundary", other),
+        }
+    }
+}
+
+impl From<ResendError> for WalletRpcError {
+    /// A resend's refusals speak the submit's vocabulary: a daemon refusal
+    /// is `-29106` with the same `data` (`verdict`, `cause`, and `row` for
+    /// a consensus refusal), and no verdict is `-29107`.
+    fn from(err: ResendError) -> Self {
+        match err {
+            ResendError::NotHeld => Self::TxNotHeld,
+            ResendError::BytesMissing => Self::TxBytesMissing,
+            ResendError::RejectedTerminal { kind, .. } => Self::submit_rejected(
+                terminal_to_reject_cause(kind),
+                match kind {
+                    TerminalErrorKind::ConsensusRule { row } => Some(row.as_str().to_owned()),
+                    _ => None,
+                },
+            ),
+            ResendError::RejectedRetryable { cause } => {
+                Self::submit_rejected(retryable_to_reject_cause(cause), None)
+            }
+            ResendError::Ambiguous { .. } => Self::SubmitAmbiguous,
         }
     }
 }

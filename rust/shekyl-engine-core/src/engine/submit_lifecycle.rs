@@ -57,12 +57,18 @@
 //!
 //! Two conditions live here, not in the kernel:
 //!
-//! - **Probe bytes gone.** The rung-1 probe needs the network-exposed
-//!   bytes; the ephemeral held-bytes store (§5.3 decision 2) loses them
-//!   across a wallet restart. When the kernel calls for the probe and
-//!   the bytes are absent, the probe rung degrades to the operator-alarm
-//!   rung ([`WatchdogAlarmReason::ProbeBytesUnavailable`]) — preserving
-//!   §2.6's "every exit is verdict, confirmation, or operator alarm."
+//! - **Dispatched before this session.** The rung-1 probe re-offers the
+//!   network-exposed bytes, saved on the send's journal row at dispatch
+//!   (A19), so they survive a restart. Re-offering them on its own is
+//!   the watchdog's to do only for a send this session dispatched; after
+//!   a restart — perhaps to a different daemon — resending is the user's
+//!   decision. So when the kernel calls for the probe on a send
+//!   dispatched before this session, the probe rung becomes the
+//!   operator-alarm rung
+//!   ([`WatchdogAlarmReason::DispatchedBeforeThisSession`]) — preserving
+//!   §2.6's "every exit is verdict, confirmation, or operator alarm." A
+//!   held row with no bytes to re-offer alarms
+//!   [`WatchdogAlarmReason::HeldBytesMissing`].
 //! - **Retryable probe rejection.** The daemon can reject the resubmit
 //!   with a *retryable* cause (stale root / reference too recent /
 //!   reference not found). The bytes are neither admitted nor terminally
@@ -77,6 +83,8 @@ use shekyl_rpc_client::Rejection;
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use super::diagnostics::{PendingTxDiagnostic, WatchdogAlarmReason, WatchdogProbeOutcome};
+use super::dispatch_durability::LedgerCommit;
+pub(crate) use super::dispatch_durability::ReleasePersistence;
 use super::local_pending_tx::RescanRequest;
 use super::submit_watchdog::{
     apply_probe_outcome, escape_ladder_step, AlarmReason, HeldSubmit, ProbeDisposition,
@@ -84,15 +92,69 @@ use super::submit_watchdog::{
 };
 use super::traits::{DaemonEngine, DaemonHealth, TxSubmitOutcome};
 
+/// One held send, read once for the user-facing list.
+///
+/// The session set and the alarm latch are copied, then the journal is
+/// read. The two locks are not held together: a build holds the pending-tx
+/// state lock across a ledger read, so taking the state lock under the
+/// ledger lock can deadlock behind a waiting writer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HeldSendFact {
+    /// The send's canonical transaction id.
+    pub tx_hash: TxHash,
+    /// The wallet's synced height when the send left.
+    pub sent_height: BlockHeight,
+    /// The journal row still holds the signed bytes.
+    pub has_bytes: bool,
+    /// This session dispatched the send, or the user resent it.
+    pub dispatched_this_session: bool,
+    /// The alarm the watchdog has latched for it this session.
+    pub latched: Option<WatchdogAlarmReason>,
+}
+
+/// Whether the watchdog may re-offer a held send, and what the user is shown.
+///
+/// One order, shared by the probe and by [`HeldSends::list`](super::held_sends::HeldSends::list):
+/// a row with no bytes asks for those bytes, even when the send is also
+/// from an earlier session; an earlier-session row that has bytes asks the
+/// user; a row this session owns is the watchdog's, and the user sees it
+/// only once an alarm is latched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeldSendAttention {
+    /// This session may re-offer the bytes.
+    Automatic {
+        /// The latched alarm, when the watchdog has raised one.
+        latched: Option<WatchdogAlarmReason>,
+    },
+    /// The probe must not run. The user is asked.
+    Ask(WatchdogAlarmReason),
+}
+
+/// Classify one held send. See [`HeldSendAttention`].
+pub(crate) fn held_send_attention(
+    has_bytes: bool,
+    dispatched_this_session: bool,
+    latched: Option<WatchdogAlarmReason>,
+) -> HeldSendAttention {
+    if !has_bytes {
+        HeldSendAttention::Ask(WatchdogAlarmReason::HeldBytesMissing)
+    } else if !dispatched_this_session {
+        HeldSendAttention::Ask(WatchdogAlarmReason::DispatchedBeforeThisSession)
+    } else {
+        HeldSendAttention::Automatic { latched }
+    }
+}
+
 /// The wallet-side operations the §5.3 watchdog driver performs, behind
 /// an object-safe surface so the driver reaches the wallet through a
 /// narrow, named contract (not the six-parameter
 /// [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx) generic).
 ///
 /// Every method is a narrow, named capability: the driver can project
-/// the held set, read / prune the retained probe bytes, drain the F40
-/// rescan queue, read the ledger's sync position and stored block
-/// hashes, release the confirmed-absent F14 locks, and emit
+/// the held set, read / prune the saved probe bytes, ask whether a send
+/// was dispatched this session, latch and release the per-send operator
+/// alarm, drain the F40 rescan queue, read the ledger's sync position and
+/// stored block hashes, release the confirmed-absent F14 locks, and emit
 /// observability events — and nothing else. The production implementor
 /// is `LocalPendingTx`; the contract is small enough to stub in tests.
 pub(crate) trait WatchdogHost: Send + Sync {
@@ -110,24 +172,58 @@ pub(crate) trait WatchdogHost: Send + Sync {
     /// cheap hash-compare (decision 1).
     fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash>;
 
-    /// The retained network-exposed bytes for `tx_hash` (§5.3 decision
-    /// 2), cloned for the resubmit-same-bytes probe. `None` means the
-    /// bytes are gone (restart crossed the await, or the tx already left
-    /// the held projection).
+    /// The saved network-exposed bytes of the held send `tx_hash`, cloned
+    /// for the resubmit-same-bytes probe (they live on its journal row,
+    /// saved at dispatch). `None` when the row holds none.
     fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>>;
 
-    /// Prune retained probe bytes down to the `live` held-projection set
-    /// (decision 2: prune when the hash leaves the projection).
-    fn prune_held_bytes(&self, live: &HashSet<TxHash>);
+    /// Drop the saved bytes of every send that has settled. The rule
+    /// reads each row's state, never the held projection: a send awaiting
+    /// its verdict is outside the projection and still needs its bytes.
+    fn prune_settled_send_bytes(&self);
+
+    /// Whether this session dispatched `tx_hash` (or the user resent it):
+    /// only then may the watchdog re-offer its bytes on its own.
+    fn dispatched_this_session(&self, tx_hash: &TxHash) -> bool;
+
+    /// Latch the operator alarm for `tx_hash` with `reason`, returning
+    /// `true` the first time (the edge trigger: one alarm per held send
+    /// until it leaves the projection or the user resends it). The latch
+    /// lives with the wallet, not the driver, so the held-sends read sees
+    /// it and a resend clears it.
+    fn latch_alarm(&self, tx_hash: TxHash, reason: WatchdogAlarmReason) -> bool;
+
+    /// Clear the alarm latch of every send not in `live` (it left the
+    /// held projection: confirmed, or released).
+    fn release_alarms(&self, live: &HashSet<TxHash>);
+
+    /// Clear the alarm latch of `tx_hash` (its wait ended by verdict).
+    fn clear_alarm(&self, tx_hash: &TxHash);
 
     /// Drain the F40 targeted re-scan queue (decision 3), returning this
     /// tick's requests and leaving the queue empty.
     fn drain_rescan_queue(&self) -> Vec<RescanRequest>;
 
     /// Release the F14 awaiting-confirmation locks under every txid in
-    /// `tx_hashes` (the §2.6 confirmed-absent leg), returning the number
-    /// of locks released. **Release is not rebuild authorization.**
-    fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize;
+    /// `tx_hashes` (the §2.6 confirmed-absent leg) and save the release
+    /// through `commit` under the same ledger guard. The release frees
+    /// inputs a new send can select, so it reaches disk before anything
+    /// else can act on it. A save that fails before the rename puts the
+    /// locks back. A rename whose parent-directory fsync did not confirm
+    /// leaves the applied rows. **Release is not rebuild authorization.**
+    fn release_awaiting_confirmation(
+        &self,
+        tx_hashes: &HashSet<TxHash>,
+        commit: &dyn LedgerCommit,
+    ) -> ReleasePersistence;
+
+    /// Every held send, read once: the journal row, whether this session
+    /// owns it, and the alarm latched for it. See [`HeldSendFact`].
+    fn held_send_facts(&self) -> Vec<HeldSendFact>;
+
+    /// The user resent the held send `tx_hash`: this session owns it from
+    /// here (the watchdog's rung 1 applies again) and its alarm clears.
+    fn adopt_into_session(&self, tx_hash: TxHash);
 
     /// Emit one diagnostic event onto the wallet's sink (observability
     /// only; control flow never rides the sink).
@@ -147,16 +243,18 @@ pub(crate) trait WatchdogHost: Send + Sync {
 ///   advances when a resubmit or an in-chain observation moves the
 ///   baseline. Fresh projections seed missing entries;
 ///   confirmed / released txids are reaped.
-/// - `alarmed`: the edge-trigger latch. Each held tx emits its **first**
+/// - The edge-trigger alarm latch is the host's
+///   ([`WatchdogHost::latch_alarm`]): each held tx emits its **first**
 ///   alarm; subsequent ticks suppress re-emission (alarm-fatigue bound,
-///   §5.3). Cleared when the tx leaves the held projection.
+///   §5.3). Cleared when the tx leaves the held projection or the user
+///   resends it.
 /// - `rescan_targets`: the F40 targeted-re-scan verification state — one
 ///   entry per unverified `AlreadyInChain` claim, persisted across ticks
 ///   so the R2 breaker can count *consecutive* fruitless re-scans. Seeded
 ///   from the host's rescan queue; reaped when the tx leaves the held
 ///   projection (confirmation observed by refresh).
 /// - `breaker_tripped`: the F40-R2 breaker edge-trigger latch, distinct
-///   from `alarmed` so the two operator signals (watchdog vs. lying-daemon
+///   from the host's watchdog alarm latch so the two operator signals (watchdog vs. lying-daemon
 ///   confirmation) are independent. Emits `FruitlessRescanBreakerTripped`
 ///   once per trip.
 pub(crate) struct SubmitLifecycleDriver {
@@ -164,8 +262,6 @@ pub(crate) struct SubmitLifecycleDriver {
     config: WatchdogConfig,
     /// Per-txid tracking overlaid across ticks (see struct docs).
     overlay: HashMap<TxHash, HeldSubmit>,
-    /// Edge-trigger alarm latch (see struct docs).
-    alarmed: HashSet<TxHash>,
     /// F40 targeted-re-scan verification state (see struct docs).
     rescan_targets: HashMap<TxHash, RescanTarget>,
     /// F40-R2 breaker edge-trigger latch (see struct docs).
@@ -222,7 +318,6 @@ impl SubmitLifecycleDriver {
         Self {
             config: WatchdogConfig::production(),
             overlay: HashMap::new(),
-            alarmed: HashSet::new(),
             rescan_targets: HashMap::new(),
             breaker_tripped: HashSet::new(),
         }
@@ -237,7 +332,12 @@ impl SubmitLifecycleDriver {
     /// guard is held across an `.await` — every host read is a discrete
     /// call — so the driver cannot deadlock the wallet state lock across
     /// a daemon round-trip.
-    pub(crate) async fn tick<D: DaemonEngine>(&mut self, host: &dyn WatchdogHost, daemon: &D) {
+    pub(crate) async fn tick<D: DaemonEngine>(
+        &mut self,
+        host: &dyn WatchdogHost,
+        daemon: &D,
+        commit: &dyn LedgerCommit,
+    ) {
         // Seed rescan targets from the host queue before reconciling, so
         // the just-enqueued targets survive the live-set prune (their
         // F14 locks are placed, so they are in the held projection).
@@ -255,11 +355,16 @@ impl SubmitLifecycleDriver {
         self.reconcile_overlays(host, &live, &projected);
 
         self.execute_rescans(host, daemon).await;
-        self.run_escape_ladder(host, daemon).await;
+        self.run_escape_ladder(host, daemon, commit).await;
     }
 
     /// Fetch health once and step the escape ladder per held tx.
-    async fn run_escape_ladder<D: DaemonEngine>(&mut self, host: &dyn WatchdogHost, daemon: &D) {
+    async fn run_escape_ladder<D: DaemonEngine>(
+        &mut self,
+        host: &dyn WatchdogHost,
+        daemon: &D,
+        commit: &dyn LedgerCommit,
+    ) {
         // Nothing awaiting → skip the health RPC entirely.
         if self.overlay.is_empty() {
             return;
@@ -277,14 +382,15 @@ impl SubmitLifecycleDriver {
         // per-tx `.await`.
         let entries: Vec<HeldSubmit> = self.overlay.values().copied().collect();
         for held in entries {
-            self.step_held(host, daemon, held, synced, health).await;
+            self.step_held(host, daemon, commit, held, synced, health)
+                .await;
         }
     }
 
     /// Drop overlay / alarm / rescan state for txids that left the
-    /// projection (confirmed via refresh, or released), prune the
-    /// retained bytes to the live set, and seed overlay entries for
-    /// newly-held txids.
+    /// projection (confirmed via refresh, or released), prune the saved
+    /// bytes of settled sends, and seed overlay entries for newly-held
+    /// txids.
     ///
     /// `entry(..).or_insert(..)` preserves an existing overlay entry: a
     /// resubmit or an in-chain observation may have advanced its baseline
@@ -303,10 +409,10 @@ impl SubmitLifecycleDriver {
         projected: &[HeldSubmit],
     ) {
         self.overlay.retain(|tx, _| live.contains(tx));
-        self.alarmed.retain(|tx| live.contains(tx));
+        host.release_alarms(live);
         self.rescan_targets.retain(|tx, _| live.contains(tx));
         self.breaker_tripped.retain(|tx| live.contains(tx));
-        host.prune_held_bytes(live);
+        host.prune_settled_send_bytes();
         for h in projected {
             self.overlay.entry(h.tx_hash).or_insert(*h);
         }
@@ -396,7 +502,7 @@ impl SubmitLifecycleDriver {
     /// placed (F40-R1 is structural — no path here releases it), so the
     /// tx's outputs remain reserved and the operator adjudicates the
     /// lying daemon. Edge-triggered via `breaker_tripped` (emit once per
-    /// trip), independent of the watchdog `alarmed` latch.
+    /// trip), independent of the host's watchdog alarm latch.
     fn record_fruitless(&mut self, host: &dyn WatchdogHost, tx_hash: TxHash) {
         let attempts = {
             let target = self
@@ -416,6 +522,7 @@ impl SubmitLifecycleDriver {
         &mut self,
         host: &dyn WatchdogHost,
         daemon: &D,
+        commit: &dyn LedgerCommit,
         held: HeldSubmit,
         synced: u64,
         health: DaemonHealth,
@@ -423,10 +530,10 @@ impl SubmitLifecycleDriver {
         match escape_ladder_step(&held, synced, health, self.config) {
             WatchdogStep::Wait(_) => {}
             WatchdogStep::OperatorAlarm(reason) => {
-                self.raise_alarm(host, held.tx_hash, project_alarm(reason));
+                raise_alarm(host, held.tx_hash, project_alarm(reason));
             }
             WatchdogStep::ProbeResubmitSameBytes => {
-                self.probe(host, daemon, held, synced, health).await
+                self.probe(host, daemon, commit, held, synced, health).await;
             }
         }
     }
@@ -438,20 +545,27 @@ impl SubmitLifecycleDriver {
         &mut self,
         host: &dyn WatchdogHost,
         daemon: &D,
+        commit: &dyn LedgerCommit,
         held: HeldSubmit,
         synced: u64,
         health: DaemonHealth,
     ) {
-        let Some(bytes) = host.held_bytes_for(&held.tx_hash) else {
-            // Bytes gone (restart crossed the await, decision 2): the
-            // probe rung degrades to the alarm rung.
-            self.raise_alarm(
-                host,
-                held.tx_hash,
-                WatchdogAlarmReason::ProbeBytesUnavailable,
-            );
-            return;
-        };
+        let bytes = host.held_bytes_for(&held.tx_hash);
+        match held_send_attention(
+            bytes.is_some(),
+            host.dispatched_this_session(&held.tx_hash),
+            None,
+        ) {
+            // No bytes, or dispatched before a restart: re-offering is not
+            // this watchdog's to do (A19). The same order the user-facing
+            // list uses.
+            HeldSendAttention::Ask(reason) => {
+                raise_alarm(host, held.tx_hash, reason);
+                return;
+            }
+            HeldSendAttention::Automatic { .. } => {}
+        }
+        let bytes = bytes.expect("a held send the watchdog may probe holds its bytes");
 
         host.emit(PendingTxDiagnostic::WatchdogProbeDispatched {
             tx_hash: held.tx_hash,
@@ -475,14 +589,14 @@ impl SubmitLifecycleDriver {
 
         match verdict {
             ProbeVerdict::ReferenceStale => {
-                self.raise_alarm(
+                raise_alarm(
                     host,
                     held.tx_hash,
                     WatchdogAlarmReason::ReferenceStaleNeedsRebuild,
                 );
             }
             ProbeVerdict::Kernel(kernel_outcome) => {
-                self.apply_kernel_outcome(host, held, kernel_outcome, synced, health);
+                self.apply_kernel_outcome(host, commit, held, kernel_outcome, synced, health);
             }
         }
     }
@@ -494,45 +608,113 @@ impl SubmitLifecycleDriver {
     fn apply_kernel_outcome(
         &mut self,
         host: &dyn WatchdogHost,
+        commit: &dyn LedgerCommit,
         held: HeldSubmit,
         outcome: ProbeOutcome,
         probe_height: u64,
         health: DaemonHealth,
     ) {
+        let RecordedVerdict::Continued(next) =
+            self.record_verdict(host, commit, held, outcome, probe_height)
+        else {
+            return;
+        };
+        if let WatchdogStep::OperatorAlarm(reason) =
+            escape_ladder_step(&next, probe_height, health, self.config)
+        {
+            raise_alarm(host, next.tx_hash, project_alarm(reason));
+        }
+    }
+
+    /// Write a probe outcome into the overlay, or release on a definite
+    /// terminal verdict. Shared by the probe and by the user's resend, so
+    /// the two cannot record different sights for one answer.
+    fn record_verdict(
+        &mut self,
+        host: &dyn WatchdogHost,
+        commit: &dyn LedgerCommit,
+        held: HeldSubmit,
+        outcome: ProbeOutcome,
+        probe_height: u64,
+    ) -> RecordedVerdict {
         match apply_probe_outcome(&held, outcome, probe_height) {
             ProbeDisposition::ReleaseConfirmedAbsent => {
                 // §2.6 release path 2: the definite terminal verdict
                 // proves the tx never confirmed; release the F14 locks.
                 let released: HashSet<TxHash> = std::iter::once(held.tx_hash).collect();
-                host.release_awaiting_confirmation(&released);
-                self.overlay.remove(&held.tx_hash);
-                self.alarmed.remove(&held.tx_hash);
+                let persistence = host.release_awaiting_confirmation(&released, commit);
+                if persistence.inputs_confirmed_free() {
+                    self.overlay.remove(&held.tx_hash);
+                    host.clear_alarm(&held.tx_hash);
+                }
+                RecordedVerdict::Released(persistence)
             }
             ProbeDisposition::Continue(next) => {
-                let tx_hash = next.tx_hash;
-                self.overlay.insert(tx_hash, next);
-                if let WatchdogStep::OperatorAlarm(reason) =
-                    escape_ladder_step(&next, probe_height, health, self.config)
-                {
-                    self.raise_alarm(host, tx_hash, project_alarm(reason));
-                }
+                self.overlay.insert(next.tx_hash, next);
+                RecordedVerdict::Continued(next)
             }
         }
     }
 
-    /// Emit a watchdog alarm for `tx_hash`, edge-triggered: the first
-    /// alarm for a held tx fires; subsequent ticks suppress re-emission
-    /// (alarm-fatigue bound, §5.3). The latch clears when the tx leaves
-    /// the held projection ([`reconcile_overlays`](Self::reconcile_overlays)).
-    fn raise_alarm(
+    /// Record a verdict learned outside a tick — the user's resend.
+    /// The sight lands in this overlay. The next tick judges it against
+    /// the daemon's health; this call does not invent that health.
+    pub(crate) fn apply_reported_verdict(
         &mut self,
         host: &dyn WatchdogHost,
-        tx_hash: TxHash,
-        reason: WatchdogAlarmReason,
-    ) {
-        if self.alarmed.insert(tx_hash) {
-            host.emit(PendingTxDiagnostic::WatchdogAlarm { tx_hash, reason });
+        commit: &dyn LedgerCommit,
+        held: HeldSubmit,
+        outcome: TxSubmitOutcome,
+    ) -> ReportedVerdict {
+        let synced = host.synced_height().to_raw();
+        match classify_probe(outcome) {
+            ProbeVerdict::ReferenceStale => {
+                raise_alarm(
+                    host,
+                    held.tx_hash,
+                    WatchdogAlarmReason::ReferenceStaleNeedsRebuild,
+                );
+                ReportedVerdict::ReferenceStale
+            }
+            ProbeVerdict::Kernel(kernel_outcome) => {
+                match self.record_verdict(host, commit, held, kernel_outcome, synced) {
+                    RecordedVerdict::Continued(_) => ReportedVerdict::Continued,
+                    RecordedVerdict::Released(persistence) => {
+                        ReportedVerdict::Released(persistence)
+                    }
+                }
+            }
         }
+    }
+}
+
+/// A verdict written into the driver.
+enum RecordedVerdict {
+    /// The sight is in the overlay. The ladder judges it.
+    Continued(HeldSubmit),
+    /// A terminal refusal released, or tried to release, the inputs.
+    Released(ReleasePersistence),
+}
+
+/// A verdict the user's resend asked the driver to record.
+pub(crate) enum ReportedVerdict {
+    /// The sight is recorded. The ledger did not need a release.
+    Continued,
+    /// A terminal refusal. The persistence says whether the inputs are
+    /// confirmed free.
+    Released(ReleasePersistence),
+    /// The bytes need a fresh reference. The alarm is latched.
+    ReferenceStale,
+}
+
+/// Emit a watchdog alarm for `tx_hash`, edge-triggered on the host's latch:
+/// the first alarm for a held tx fires; subsequent ticks suppress
+/// re-emission (alarm-fatigue bound, §5.3). The latch clears when the tx
+/// leaves the held projection
+/// ([`SubmitLifecycleDriver::reconcile_overlays`]) or the user resends it.
+fn raise_alarm(host: &dyn WatchdogHost, tx_hash: TxHash, reason: WatchdogAlarmReason) {
+    if host.latch_alarm(tx_hash, reason) {
+        host.emit(PendingTxDiagnostic::WatchdogAlarm { tx_hash, reason });
     }
 }
 

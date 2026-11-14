@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -459,6 +460,229 @@ class ScopedCaptureTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             compare.compare(base, pr)
+
+
+def _import_compare():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import compare  # noqa: PLC0415
+
+    return compare
+
+
+class DriftLogTest(unittest.TestCase):
+    """The log names the row that makes the run red.
+
+    A deleted bench is not an entry. A renderer that walks `entries`
+    alone stays green on this test the moment the missing id leaves
+    the log.
+    """
+
+    def test_format_delta_pct_is_a_signed_percentage(self) -> None:
+        compare = _import_compare()
+        self.assertEqual(compare.format_delta_pct(0.051), "+5.10%")
+        self.assertEqual(compare.format_delta_pct(-0.051), "-5.10%")
+        self.assertEqual(compare.format_delta_pct(0), "+0.00%")
+        self.assertEqual(compare.format_delta_pct(1 / 3), "+33.33%")
+
+    def test_the_pull_request_comment_uses_that_percentage(self) -> None:
+        compare = _import_compare()
+        import post_comment  # noqa: PLC0415
+
+        self.assertIs(post_comment.format_delta_pct, compare.format_delta_pct)
+
+    def test_the_log_names_a_missing_row_ahead_of_an_ok_row(self) -> None:
+        compare = _import_compare()
+        base = _envelope(
+            [
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000),
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_quiet", "r", 1000),
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_gone", "r", 1000),
+            ]
+        )
+        pr = _envelope(
+            [
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1200),
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_quiet", "r", 1000),
+            ]
+        )
+        report = compare.compare(base, pr)
+        log = compare.render_log(report)
+        gone = report["summary"]["missing_in_pr"][0]
+        by_verdict = {entry["verdict"]: entry["full_id"] for entry in report["entries"]}
+        self.assertLess(log.index(gone), log.index(by_verdict["fail"]))
+        self.assertLess(log.index(by_verdict["fail"]), log.index(by_verdict["ok"]))
+        self.assertIn("+20.00%", log)
+        annotation = compare.alarm_annotation(report, "dev baseline", "the earlier capture")
+        self.assertIsNotNone(annotation)
+        assert annotation is not None
+        self.assertIn(gone, annotation)
+        self.assertIn(by_verdict["fail"], annotation)
+        self.assertNotIn(by_verdict["ok"], annotation)
+        self.assertIn("dev baseline", annotation)
+        self.assertIn("the earlier capture", annotation)
+
+    def test_a_warn_names_no_error(self) -> None:
+        compare = _import_compare()
+        base = _envelope(
+            [_iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000)]
+        )
+        pr = _envelope(
+            [_iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1060)]
+        )
+        report = compare.compare(base, pr)
+        self.assertEqual(report["entries"][0]["verdict"], "warn")
+        self.assertIsNone(
+            compare.alarm_annotation(report, "dev baseline", "the earlier capture")
+        )
+
+    def test_a_fail_that_names_nothing_is_an_error(self) -> None:
+        compare = _import_compare()
+        report = {
+            "summary": {
+                "has_fail": True,
+                "missing_in_pr": [],
+                "added_in_pr": [],
+                "baseline_zero": [],
+            },
+            "entries": [],
+        }
+        with self.assertRaises(SystemExit):
+            compare.alarm_annotation(report, "dev baseline", "the earlier capture")
+
+
+class DriftReportScriptTest(unittest.TestCase):
+    def _run(self, baseline: dict[str, Any], pr: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+        script = pathlib.Path(__file__).resolve().parent / "drift_report.sh"
+        self.assertTrue(os.access(script, os.X_OK), f"{script} is not executable")
+        with tempfile.TemporaryDirectory() as d:
+            directory = pathlib.Path(d)
+            earlier = directory / "earlier.json"
+            later = directory / "later.json"
+            earlier.write_text(json.dumps(baseline), encoding="utf-8")
+            later.write_text(json.dumps(pr), encoding="utf-8")
+            return subprocess.run(
+                [str(script), "dev baseline", str(earlier), str(later), "the earlier capture"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+    def test_a_removed_row_is_named_and_red(self) -> None:
+        base = _envelope(
+            [
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000),
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_gone", "r", 1000),
+            ]
+        )
+        pr = _envelope(
+            [_iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000)]
+        )
+        proc = self._run(base, pr)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("crypto_bench_gone", proc.stdout)
+        self.assertIn("::error::dev baseline:", proc.stdout)
+        self.assertIn("missing ", proc.stdout)
+        self.assertIn("the earlier capture", proc.stdout)
+
+    def test_an_added_row_is_clean(self) -> None:
+        base = _envelope(
+            [_iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000)]
+        )
+        pr = _envelope(
+            [
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_keep", "r", 1000),
+                _iai("shekyl-crypto-pq", "t", "g", "crypto_bench_new", "r", 1000),
+            ]
+        )
+        proc = self._run(base, pr)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn("::error::", proc.stdout)
+        self.assertIn("crypto_bench_new", proc.stdout)
+
+    def test_a_missing_envelope_is_an_input_error(self) -> None:
+        script = pathlib.Path(__file__).resolve().parent / "drift_report.sh"
+        proc = subprocess.run(
+            [str(script), "dev baseline", "/tmp/does-not-exist-drift.json", "/tmp/neither-does-this.json", "earlier"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("::error::", proc.stdout)
+
+
+class OriginBranchTest(unittest.TestCase):
+    """Exit 2 from ls-remote is absence. Any other failure is not."""
+
+    def _script(self) -> pathlib.Path:
+        script = pathlib.Path(__file__).resolve().parent / "origin_branch.sh"
+        self.assertTrue(os.access(script, os.X_OK), f"{script} is not executable")
+        return script
+
+    def test_no_branch_is_absent_and_a_branch_is_present(self) -> None:
+        script = self._script()
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            bare = root / "origin.git"
+            work = root / "work"
+            subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
+            subprocess.run(
+                ["git", "-C", str(work), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(work), "config", "user.name", "origin-branch test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(work), "remote", "add", "origin", str(bare)],
+                check=True,
+            )
+            absent = subprocess.run(
+                [str(script), str(work), "bench-baseline"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(absent.returncode, 0, absent.stderr)
+            self.assertEqual(absent.stdout, "absent\n")
+
+            subprocess.run(
+                ["git", "-C", str(work), "commit", "--allow-empty", "-m", "seed"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(work), "push", "origin", "HEAD:bench-baseline"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            present = subprocess.run(
+                [str(script), str(work), "bench-baseline"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(present.returncode, 0, present.stderr)
+            self.assertEqual(present.stdout, "present\n")
+
+    def test_a_failed_lookup_is_not_absent(self) -> None:
+        script = self._script()
+        with tempfile.TemporaryDirectory() as d:
+            work = pathlib.Path(d) / "work"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
+            proc = subprocess.run(
+                [str(script), str(work), "bench-baseline"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertNotIn("absent", proc.stdout)
+            self.assertIn("::error::", proc.stderr)
 
 
 if __name__ == "__main__":

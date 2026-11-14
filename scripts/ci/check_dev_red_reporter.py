@@ -5,15 +5,15 @@
 # BSD-3-Clause
 """A red push run on `dev` reaches the dev-red reporter from every job.
 
-`dev` has no merge queue, so the push runs of `build.yml` and
-`rust-audit-test.yml` on `dev` are the first to test what the merges made
-(06-branching.mdc). Each ends in a job that calls
-`report-dev-red.yml`, which opens or threads an issue. That job reads
-only the results of the jobs it `needs`: a job added to the workflow and
-left out of that list could go red on `dev` with no issue. This holds the
-list, and the condition, to the file.
+`dev` has no merge queue, so the push runs of `build.yml`,
+`rust-audit-test.yml`, and `benchmarks.yml` on `dev` are the first to
+test what the merges made (06-branching.mdc). Each ends in a job that
+calls `report-dev-red.yml`, which opens or threads an issue. That job
+reads only the results of the jobs it `needs`: a job added to the
+workflow and left out of that list could go red on `dev` with no issue.
+This holds the list, and the condition, to the file.
 
-What passes, in each of the two workflows:
+What passes, in each of these workflows:
 
 * exactly one job calls `./.github/workflows/report-dev-red.yml`;
 * its `needs` is every other job in the file, no more and no fewer;
@@ -24,9 +24,9 @@ What passes, in each of the two workflows:
   cancelled as a whole and reports nothing. An exact match, because a
   check for the parts would pass the same parts joined by `||`.
 
-Rule 47: the two workflows are named here, so a renamed or deleted one,
-or a reporter removed from either, fails by name rather than leaving
-nothing to grade.
+Rule 47: the workflows are named here, so a renamed or deleted one,
+or a reporter removed from one of them, fails by name rather than
+leaving nothing to grade.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from check_workflows_parse import StrictLoader
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 REPORTER = "./.github/workflows/report-dev-red.yml"
-SUBJECTS = ("build.yml", "rust-audit-test.yml")
+SUBJECTS = ("build.yml", "rust-audit-test.yml", "benchmarks.yml")
 CONDITION = (
     "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && "
     "(contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}"
@@ -146,7 +146,7 @@ def main(argv: list[str]) -> int:
             print(f"FAIL: {p}")
         return 1
     print(
-        f"dev-red reporter: {' and '.join(SUBJECTS)} each end in one reporter "
+        f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
         "that needs every other job and reports a failed or timed-out job of a "
         "push run on dev"
     )
