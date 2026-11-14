@@ -322,6 +322,16 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "instruction counts hold still; forwards shekyl-fcmp/seeded-rng. Enabled by "
     "the crate's own dev edge for its benches and pins; without it the library "
     "is empty, and nothing that ships depends on this crate",
+    (
+        "shekyl-tx-builder",
+        "seeded-rng",
+    ): "exposes the signers' seeded forms (sign_transaction_with_terms_seeded, "
+    "sign_pqc_auths_seeded, open_spend_seeded, prove_backing_membership_seeded), "
+    "which draw the range proof, the pseudo-out blinds, the membership proof and "
+    "the ML-DSA nonces from a caller's seed (CHAIN_FORGE.md §5.3, seam T2). "
+    "Forwards shekyl-fcmp's and shekyl-crypto-pq's seeded-rng; the production "
+    "signers draw from the OS, and no build that ships has one that takes its "
+    "caller's randomness (CF-R9)",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -506,6 +516,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "randomx-v2-sys",
         "shekyl-fcmp",
         "shekyl-crypto-pq",
+        "shekyl-tx-builder",
     }
 )
 

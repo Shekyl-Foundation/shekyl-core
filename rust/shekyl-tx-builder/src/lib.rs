@@ -87,11 +87,17 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "seeded-rng")]
+pub use assemble::open_spend_seeded;
 pub use assemble::{open_spend, AuthSlots, OpenSpend, SpendLayout};
 pub use error::TxBuilderError;
 pub use sign::{
     prove_backing_membership, sign_pqc_auths, sign_transaction, sign_transaction_with_terms,
     tx_signable_for, MembershipOnlyProof,
+};
+#[cfg(feature = "seeded-rng")]
+pub use sign::{
+    prove_backing_membership_seeded, sign_pqc_auths_seeded, sign_transaction_with_terms_seeded,
 };
 pub use types::{
     LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
