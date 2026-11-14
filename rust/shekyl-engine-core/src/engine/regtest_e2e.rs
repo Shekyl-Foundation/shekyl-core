@@ -209,6 +209,88 @@ pub(super) struct RegtestDaemon {
     /// so the closed-peer address in that recipe is still this socket.
     /// `None` for every other peering.
     unanswered: Option<UnansweredPort>,
+    /// The Tor trio's relays, on the miner only ([`Self::start_tor_trio`]):
+    /// what [`Self::wait_shown_pool_in_template`] reads when an origin has
+    /// not come back, to tell a relay that kept it from a path that was
+    /// not there.
+    relays: Option<TrioRelays>,
+}
+
+/// The Tor trio's two relays, as the miner's harness reads them: each
+/// relay's own `daemon_status` and `peer_connections`, the operator's
+/// reads, over its admin listener.
+struct TrioRelays {
+    b: HttpRpc,
+    b_onion: OnionPeer,
+    c: HttpRpc,
+    c_onion: OnionPeer,
+}
+
+/// One reading of the trio's sessions and tips. A stem the miner
+/// originates comes back as a fluff only over this whole mesh
+/// ([`RegtestDaemon::start_tor_trio`]); with a session missing it
+/// dead-ends, and the miner's own embargo shows it ([`ORIGIN_RETRY`]).
+#[derive(Debug)]
+struct MeshReading {
+    a_to_b: bool,
+    a_to_c: bool,
+    b_to_c: bool,
+    a_height: u64,
+    b_height: u64,
+    c_height: u64,
+}
+
+impl MeshReading {
+    /// Every session up, and both relays at the miner's tip as it was read
+    /// first: a relay behind the miner cannot admit a spend of an output it
+    /// has not seen.
+    fn whole(&self) -> bool {
+        self.a_to_b
+            && self.a_to_c
+            && self.b_to_c
+            && self.b_height >= self.a_height
+            && self.c_height >= self.a_height
+    }
+}
+
+impl std::fmt::Display for MeshReading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let up = |held: bool| if held { "up" } else { "down" };
+        write!(
+            f,
+            "A→B {}, A→C {}, B→C {}; tips A {}, B {}, C {}",
+            up(self.a_to_b),
+            up(self.a_to_c),
+            up(self.b_to_c),
+            self.a_height,
+            self.b_height,
+            self.c_height,
+        )
+    }
+}
+
+/// Whether `rpc`'s node holds an outbound Tor session to `onion`
+/// (`peer_connections`: an outbound Tor session names the onion it
+/// dialed; an inbound one names no host).
+async fn holds_outbound_to(rpc: &HttpRpc, onion: OnionPeer) -> bool {
+    rpc.call::<wire::PeerConnections>(NoParams)
+        .await
+        .expect("peer_connections")
+        .iter()
+        .any(|session| {
+            !session.inbound
+                && session.connector == wire::p2p::Connector::Tor
+                && OnionPeer::parse(&session.endpoint.0).is_some_and(|peer| peer.host == onion.host)
+        })
+}
+
+/// `rpc`'s node's tip height (`daemon_status`).
+async fn tip_height(rpc: &HttpRpc) -> u64 {
+    rpc.call::<wire::DaemonStatus>(NoParams)
+        .await
+        .expect("daemon_status")
+        .height
+        .0
 }
 
 /// How many times a port probe may draw `:0` before the reserved set is
@@ -552,11 +634,46 @@ const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
 /// inbound peer, each a Poisson draw over quarter-seconds with λ = 20
 /// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile, plus
 /// three onion circuits at 5 s each: 13.3 + 17.5 + 15 ≈ 46 s, so 60 s.
+///
+/// The derivation assumes the whole mesh. A Tor session can close on the
+/// public network mid-walk; an origin found unbroadcast at this limit with
+/// a session down is waited for once more, to the miner's embargo fire
+/// ([`ORIGIN_RETRY`]), and the walk's log names it. With the mesh whole,
+/// the limit is the verdict.
 const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
 
 /// How long a managed Tor may take to bootstrap and publish its inbound
 /// onion.
 const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
+
+/// How long a published onion may take to read `reachable`, its own probe
+/// arriving (`TOR_SUPERVISOR.md` §4.5): one judgment's worst case, 300 s
+/// (`TSR-M14`: the round's wait, the probe's delay and bound, then the
+/// refetch's probe, its delay and bound), and one republish judged the
+/// same way, 300 s. The live tests allow at most one republish; needing
+/// more is a finding (`TSR-M3`).
+///
+/// A trio daemon is spawned only once the onions it dials read
+/// `reachable`. A dial made before the descriptor is fetchable waits out
+/// Tor's whole window and fails (run 3, 2026-11-14: "waiting for
+/// rendezvous desc", 105 s), and the address then goes off the dialer's
+/// draw ("cooling after a failed dial").
+const ONION_REACHABLE_LIMIT: Duration = Duration::from_secs(600);
+
+/// How long the trio's sessions may take to form once every onion reads
+/// `reachable` ([`RegtestDaemon::await_trio_mesh`]): one Tor test of an
+/// address, its three attempts each up to the 120 s dial deadline, with
+/// the longest retry waits between them, 10 s and 30 s (`shekyl-transport-
+/// layer` `dial_profile(Tor)`, `RETRY_WAITS`): 3 × 120 + 10 + 30 = 400 s.
+const TRIO_MESH_LIMIT: Duration = Duration::from_secs(400);
+
+/// The origin's shipped retry, spelled here for the harness only: at its
+/// first fire an origin with no alternate fluffs as the last resort (W3b).
+///
+/// The relay crate owns the derivation. The submit watchdog does not
+/// read this duration: overdue is the daemon's judgment, and this
+/// harness waits out the same interval the origin's embargo fires on.
+const ORIGIN_RETRY: Duration = Duration::from_secs(1_148);
 
 /// The draws [`RegtestDaemon::generate_blocks`] waits on, as a peer sees
 /// them: a block's `draws` (`count(h)`, 4.4) and the references its
@@ -796,6 +913,16 @@ impl RegtestDaemon {
     /// C names one unanswered loopback port as its whole network, so it is
     /// synced from open and dials nobody; B's one closed peer is C's onion.
     /// Neither mines; both follow A over the sessions A opens.
+    ///
+    /// **When it is ready.** A daemon is spawned only once the onions it
+    /// dials read `reachable` ([`ONION_REACHABLE_LIMIT`]), and the trio is
+    /// returned only once its mesh is whole: A holds sessions to B and C, B
+    /// to C, and both relays are at A's tip ([`Self::await_trio_mesh`]).
+    /// Run 3 (2026-11-14) spawned A while C's descriptor was not yet
+    /// fetchable: A's dial to C failed, so a stem A sent B went on to C,
+    /// whose one other peer was the source, and A's first transaction was
+    /// still unbroadcast at the limit. Each daemon logs `p2p` and `tor` at
+    /// `debug`, so a session that closes says why.
     pub(super) async fn start_tor_trio(
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
@@ -813,6 +940,7 @@ impl RegtestDaemon {
         )
         .await;
         let c_onion = c.published_onion(TOR_PUBLISH_LIMIT).await;
+        c.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
         let b = Self::spawn(
             RegtestSpawn::new(None)
                 .with_schedule(schedule)
@@ -825,8 +953,9 @@ impl RegtestDaemon {
         )
         .await;
         let b_onion = b.published_onion(TOR_PUBLISH_LIMIT).await;
+        b.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let a = Self::spawn(
+        let mut a = Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
                 .with_mine_address(mine_address)
@@ -838,7 +967,79 @@ impl RegtestDaemon {
                 .with_ports_taken([b.rpc_port, c.rpc_port]),
         )
         .await;
+        a.relays = Some(TrioRelays {
+            b: b.rpc.clone(),
+            b_onion,
+            c: c.rpc.clone(),
+            c_onion,
+        });
+        a.await_trio_mesh(TRIO_MESH_LIMIT).await;
         (a, b, c)
+    }
+
+    /// The trio's mesh as it reads now, from A (this daemon); `None` on a
+    /// daemon that is not the trio's miner. A's tip is read first, so a
+    /// relay at or past it has every block A had then.
+    async fn read_mesh(&self) -> Option<MeshReading> {
+        let relays = self.relays.as_ref()?;
+        let a_height = tip_height(&self.rpc).await;
+        Some(MeshReading {
+            a_to_b: holds_outbound_to(&self.rpc, relays.b_onion).await,
+            a_to_c: holds_outbound_to(&self.rpc, relays.c_onion).await,
+            b_to_c: holds_outbound_to(&relays.b, relays.c_onion).await,
+            a_height,
+            b_height: tip_height(&relays.b).await,
+            c_height: tip_height(&relays.c).await,
+        })
+    }
+
+    /// Wait until the trio's mesh is whole ([`MeshReading::whole`]), within
+    /// `limit`; at once on a daemon that is not the trio's miner.
+    async fn await_trio_mesh(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        loop {
+            let Some(reading) = self.read_mesh().await else {
+                return;
+            };
+            if reading.whole() {
+                eprintln!("tor trio: the mesh is whole ({reading})");
+                return;
+            }
+            if Instant::now() >= deadline {
+                self.panic_with_log(
+                    "the Tor trio's mesh did not form",
+                    format!("within {limit:?}: {reading}"),
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    /// Wait until this daemon's own onion reads `reachable`, its probe
+    /// having arrived (`TOR_SUPERVISOR.md` §4.5), within `limit`.
+    async fn await_onion_reachable(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        loop {
+            let onion = self
+                .status()
+                .await
+                .tor_status()
+                .and_then(|status| status.tor)
+                .and_then(|managed| managed.onion);
+            if onion
+                .as_ref()
+                .is_some_and(|onion| onion.state.keyword() == "reachable")
+            {
+                return;
+            }
+            if Instant::now() >= deadline {
+                self.panic_with_log(
+                    "the managed Tor's onion did not read reachable",
+                    format!("after {limit:?}: {onion:?}"),
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
 
     /// The onion this daemon's managed Tor published its inbound at, read
@@ -1010,12 +1211,19 @@ impl RegtestDaemon {
             }
             SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
         };
+        // A daemon on the live Tor also logs `p2p` and `tor` at `debug`: its
+        // sessions cross the public Tor network, and a session that closes
+        // mid-walk is logged with its cause only there.
         match &tor_file {
             Some(tor) => cmd.args([
                 "--tor",
                 "managed",
                 "--tor-file",
                 tor.to_str().expect("utf8 tor path"),
+                "--log-category",
+                "p2p=debug",
+                "--log-category",
+                "tor=debug",
             ]),
             None => cmd.args(["--tor", "off"]),
         };
@@ -1160,6 +1368,7 @@ impl RegtestDaemon {
                 SHOWN_POOL_LIMIT
             },
             waits_for_stems: tor_on,
+            relays: None,
         };
         daemon.await_ready().await;
         daemon
@@ -1665,7 +1874,11 @@ impl RegtestDaemon {
     /// `txpool_list`'s (IG-Q46).
     async fn wait_shown_pool_in_template(&self) {
         let limit = self.shown_pool_limit;
-        let deadline = Instant::now() + limit;
+        let mut deadline = Instant::now() + limit;
+        // On the Tor trio: the reading taken when the origin had not come
+        // back at the limit with a session down, after which the wait runs
+        // to the miner's own embargo fire.
+        let mut short: Option<MeshReading> = None;
         loop {
             // The host is told both counts: the entries this node has
             // broadcast, and those it holds and has not (`daemon_status`,
@@ -1691,15 +1904,45 @@ impl RegtestDaemon {
                 return;
             }
             if Instant::now() >= deadline {
+                // The trio's derived limit holds over a whole mesh. With a
+                // session down the stem can dead-end, and the origin is
+                // shown at its own embargo fire instead: a Tor session that
+                // closed is the public network's, not the relay's fault.
+                // That wait is taken once, and the run reports it.
+                let reading = if returned {
+                    None
+                } else {
+                    self.read_mesh().await
+                };
+                let reading = match reading {
+                    Some(found) if short.is_none() && !found.whole() => {
+                        eprintln!(
+                            "tor trio: an origin was unbroadcast at {limit:?} with the mesh \
+                             short ({found}); waiting for the miner's embargo fire \
+                             ({ORIGIN_RETRY:?})"
+                        );
+                        deadline = Instant::now() + ORIGIN_RETRY + limit;
+                        short = Some(found);
+                        continue;
+                    }
+                    reading => reading,
+                };
                 panic!(
                     "the posted job did not list the shown pool within {limit:?} \
                      ({broadcast} shown, {unbroadcast} unbroadcast); the relay's fluff \
                      event must mark the entry shown and wake the tip follower \
-                     (DRS_X_STORE_FLIP.md Q9){}",
+                     (DRS_X_STORE_FLIP.md Q9){}{}",
                     if returned {
-                        ""
+                        String::new()
                     } else {
-                        "; on the Tor trio an origin is shown when its fluff comes back"
+                        "; on the Tor trio an origin is shown when its fluff comes back".to_owned()
+                    },
+                    match (&reading, &short) {
+                        (Some(now), None) => format!(" (mesh: {now})"),
+                        (Some(now), Some(then)) => format!(
+                            " (mesh at the limit: {then}; and after the embargo wait: {now})"
+                        ),
+                        _ => String::new(),
                     }
                 );
             }
