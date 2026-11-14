@@ -41,27 +41,14 @@ crate::wire_keywords! {
 }
 
 impl CeilingWord {
-    /// The grants this word stands for.
+    /// The grants this word stands for. A preset's name is that preset; any
+    /// other word is the grant of the same name ([`Grant::name`]).
     #[must_use]
-    pub const fn grants(self) -> GrantSet {
-        let grant = match self {
-            Self::View => return Preset::View.grants(),
-            Self::Wallet => return Preset::Wallet.grants(),
-            Self::Miner => return Preset::Miner.grants(),
-            Self::Admin => return Preset::Admin.grants(),
-            Self::Health => Grant::Health,
-            Self::Status => Grant::Status,
-            Self::Chain => Grant::Chain,
-            Self::Pool => Grant::Pool,
-            Self::Peers => Grant::Peers,
-            Self::Submit => Grant::Submit,
-            Self::MiningWork => Grant::MiningWork,
-            Self::MiningControl => Grant::MiningControl,
-            Self::Bans => Grant::Bans,
-            Self::Node => Grant::Node,
-            Self::Config => Grant::Config,
-            Self::Enrol => Grant::Enrol,
-        };
+    pub fn grants(self) -> GrantSet {
+        if let Some(preset) = Preset::from_name(self.as_str()) {
+            return preset.grants();
+        }
+        let grant = Grant::from_name(self.as_str()).expect("a ceiling word is a grant or a preset");
         GrantSet::of(&[grant])
     }
 
@@ -143,6 +130,38 @@ mod tests {
             Preset::Miner.grants()
         );
         assert_eq!(CeilingWord::expand(&[]), GrantSet::EMPTY);
+        // Every grant and every preset is a ceiling word, and every ceiling
+        // word is one of those. Red edit: drop a grant from `CeilingWord`,
+        // and its name fails here.
+        for grant in Grant::ALL {
+            assert!(
+                Preset::from_name(grant.name()).is_none(),
+                "{} is a grant and a preset",
+                grant.name()
+            );
+            let word = CeilingWord::ALL
+                .iter()
+                .copied()
+                .find(|word| word.as_str() == grant.name())
+                .unwrap_or_else(|| panic!("{} has no ceiling word", grant.name()));
+            assert_eq!(word.grants(), GrantSet::of(&[grant]));
+        }
+        for preset in Preset::ALL {
+            let word = CeilingWord::ALL
+                .iter()
+                .copied()
+                .find(|word| word.as_str() == preset.name())
+                .unwrap_or_else(|| panic!("{} has no ceiling word", preset.name()));
+            assert_eq!(word.grants(), preset.grants());
+        }
+        for word in CeilingWord::ALL {
+            assert!(
+                Grant::from_name(word.as_str()).is_some()
+                    || Preset::from_name(word.as_str()).is_some(),
+                "{}",
+                word.as_str()
+            );
+        }
         // Listed in the grant table's order, never as the preset's name.
         assert_eq!(
             grant_names(Preset::View.grants()),

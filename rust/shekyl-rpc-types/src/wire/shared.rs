@@ -57,6 +57,19 @@ macro_rules! wire_keywords {
             }
         }
 
+        impl $name {
+            /// The keyword, as it is written on the wire.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $word,)+
+                }
+            }
+
+            /// Every keyword, in declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
+        }
+
         const _: () = { $($crate::wire::shared::assert_keyword($word);)+ };
     };
 }

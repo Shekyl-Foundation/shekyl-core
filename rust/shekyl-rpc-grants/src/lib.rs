@@ -328,6 +328,26 @@ pub enum Preset {
 }
 
 impl Preset {
+    /// Every preset, in the order an operator meets them.
+    pub const ALL: [Self; 4] = [Self::View, Self::Wallet, Self::Miner, Self::Admin];
+
+    /// The preset's name, as an operator writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Wallet => "wallet",
+            Self::Miner => "miner",
+            Self::Admin => "admin",
+        }
+    }
+
+    /// The preset an operator's name names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.name() == name)
+    }
+
     /// The preset's grants.
     #[must_use]
     pub const fn grants(self) -> GrantSet {
