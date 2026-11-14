@@ -190,6 +190,10 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
+    /// The heights [`Self::generate_blocks`] mines one at a time, each
+    /// followed by a wait: the walk that reads over Tor sets it over the
+    /// epoch whose draws must be served ([`Self::pace_heights`]).
+    pace: std::sync::Mutex<Option<Pace>>,
     /// The unanswered loopback port a [`Peering::Listening`] daemon dials.
     /// Held for the daemon's life, including a restart on the same recipe,
     /// so the closed-peer address in that recipe is still this socket.
@@ -357,6 +361,11 @@ struct RegtestSpawn {
     /// log off it, so the line that says the disk filled has somewhere to
     /// be written.
     chain_dir: Option<PathBuf>,
+    /// The pinned Tor binary a managed Tor runs (`tor-file`), or `None` for
+    /// `--tor off`. The emission walk is the caller: its mining daemon's
+    /// bundle producer reads through this node's Tor, and a node with Tor
+    /// off seats no producer.
+    tor_file: Option<PathBuf>,
 }
 
 impl RegtestSpawn {
@@ -373,6 +382,7 @@ impl RegtestSpawn {
             binary: None,
             taken: Vec::new(),
             chain_dir: None,
+            tor_file: None,
         }
     }
 
@@ -426,6 +436,14 @@ impl RegtestSpawn {
         self
     }
 
+    /// Run a managed Tor from `tor_file`, the pinned binary
+    /// ([`live_tor_binary`]), in place of `--tor off`. The daemon verifies
+    /// the file against the pin as it would any `tor-file` row.
+    fn with_managed_tor(mut self, tor_file: PathBuf) -> Self {
+        self.tor_file = Some(tor_file);
+        self
+    }
+
     /// Keep the data directory when the daemon is dropped.
     ///
     /// [`RegtestDaemon::start_keeping_data`] is the caller. Every other
@@ -434,6 +452,14 @@ impl RegtestSpawn {
         self.keep_data = true;
         self
     }
+}
+
+/// Heights [`RegtestDaemon::generate_blocks`] mines one at a time, and the
+/// wait after each ([`RegtestDaemon::pace_heights`]).
+#[derive(Clone)]
+struct Pace {
+    heights: std::ops::Range<u64>,
+    per_block: Duration,
 }
 
 /// A directory only this account can enter, holding one daemon's empty
@@ -533,6 +559,22 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
 }
 
 impl RegtestDaemon {
+    /// The pinned Tor binary a walk that reads over Tor runs, from
+    /// `SHEKYL_TEST_TOR_BINARY`: the variable the live-Tor lane sets
+    /// (`tor-pin-verify.yml`) to the bundle it fetched, checked against the
+    /// pin and staged. Panics naming how to stage one when it is unset.
+    fn live_tor_binary() -> PathBuf {
+        match std::env::var_os("SHEKYL_TEST_TOR_BINARY") {
+            Some(path) => PathBuf::from(path),
+            None => panic!(
+                "SHEKYL_TEST_TOR_BINARY not set: stage the pinned Tor bundle \
+                 (scripts/release/tor_bundle.py fetch --host <triple> --sources <dir>; \
+                 tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor) \
+                 and set it to <stage>/tor/tor"
+            ),
+        }
+    }
+
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
     /// if unset — these tests are `#[ignore]`d and only run when explicitly
     /// invoked, so requiring the env var is the contract, not a surprise.
@@ -616,6 +658,26 @@ impl RegtestDaemon {
         .await
     }
 
+    /// [`Self::start_for_seed_with_schedule`] with a managed Tor running the
+    /// pinned binary `tor_file`, so the mining daemon seats its bundle
+    /// producer (`shekyl-node` `producer::seat`: a mining address and a
+    /// Tor).
+    pub(super) async fn start_for_seed_with_schedule_on_tor(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+        schedule: Option<RegtestSchedule>,
+        tor_file: PathBuf,
+    ) -> RegtestDaemon {
+        let serial = serial_lock().lock_owned().await;
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
+        Self::spawn(
+            RegtestSpawn::new(Some(serial))
+                .with_schedule(schedule)
+                .with_mine_address(mine_address)
+                .with_managed_tor(tor_file),
+        )
+        .await
+    }
+
     /// Spawn a daemon whose data directory survives [`Drop`].
     ///
     /// The DX-Q8 column (`scripts/bench/capture_kept_chain.py`) reads the
@@ -686,6 +748,7 @@ impl RegtestDaemon {
             binary,
             taken,
             chain_dir,
+            tor_file,
         } = spec;
         install_wallet_tracing();
 
@@ -742,9 +805,9 @@ impl RegtestDaemon {
         let chain_dir = chain_dir.unwrap_or_else(|| data_dir.clone());
         std::fs::create_dir_all(&chain_dir).expect("create the chain's directory");
         let mut cmd = Command::new(&bin);
-        // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off on
-        // every spawn: regtest's default is the managed Tor, and a test
-        // daemon has no business launching one.
+        // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off unless
+        // the spawn names the pinned binary: regtest's default is the
+        // managed Tor, and only the walk that reads over Tor launches one.
         //
         // The armed test levers (`dev_block_generate`, `dev_chain_pop`) are
         // served only with `--dev-rpc` set (`RPC_CHANNEL.md` §6.1), and only
@@ -757,9 +820,16 @@ impl RegtestDaemon {
             }
             SpawnNetwork::Testnet => cmd.args(["--network", "testnet"]),
         };
+        match &tor_file {
+            Some(tor) => cmd.args([
+                "--tor",
+                "managed",
+                "--tor-file",
+                tor.to_str().expect("utf8 tor path"),
+            ]),
+            None => cmd.args(["--tor", "off"]),
+        };
         cmd.args([
-            "--tor",
-            "off",
             "--rpc-admin-listen",
             &format!("127.0.0.1:{rpc_port}"),
             "--data-dir",
@@ -885,6 +955,7 @@ impl RegtestDaemon {
             _serial: serial,
             recipe,
             unanswered,
+            pace: std::sync::Mutex::new(None),
         };
         daemon.await_ready().await;
         daemon
@@ -1077,6 +1148,51 @@ impl RegtestDaemon {
             .unwrap_or_else(|e| panic!("block_show {height}: {e:?}"))
     }
 
+    /// The bundle references the block at `height` admitted (its
+    /// section), decoded: each names its `h`, its draw count and its pass
+    /// bitmap (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). Empty for a block that
+    /// admitted none.
+    pub(super) async fn section_at(
+        &self,
+        height: u64,
+    ) -> Vec<shekyl_archival_retention::BundleRef> {
+        self.block_at(height)
+            .await
+            .section
+            .into_iter()
+            .map(|reference| {
+                shekyl_archival_retention::BundleRef::decode(&reference.into_vec())
+                    .unwrap_or_else(|e| panic!("block {height}'s section decodes: {e:?}"))
+            })
+            .collect()
+    }
+
+    /// Wait until the managed Tor reports `usable` (`TOR_SUPERVISOR.md`
+    /// §4.3), within `limit`: the bundle producer reads through it.
+    pub(super) async fn await_tor_usable(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        loop {
+            let tor = self
+                .status()
+                .await
+                .tor_status()
+                .and_then(|status| status.tor);
+            if tor
+                .as_ref()
+                .is_some_and(|managed| managed.state.keyword() == "usable")
+            {
+                return;
+            }
+            if Instant::now() >= deadline {
+                self.panic_with_log(
+                    "the managed Tor did not become usable",
+                    format!("after {limit:?}: {tor:?}"),
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
     /// The block named by `hash`, whole.
     async fn block_by_hash(&self, hash: &str) -> wire::block::Block {
         self.rpc
@@ -1224,12 +1340,34 @@ impl RegtestDaemon {
         let mut mined = 0u64;
         let mut blocks = Vec::new();
         loop {
-            let chunk = (n - mined).min(Self::MINE_CHUNK);
+            let pace = self.pace.lock().expect("the pace lock").clone();
+            // Under a pace, the height the next block connects at decides
+            // whether it is mined alone: the chain's block count is that
+            // height.
+            let (chunk, wait) = match pace {
+                None => ((n - mined).min(Self::MINE_CHUNK), None),
+                Some(pace) => {
+                    let next = self.height().await;
+                    if pace.heights.contains(&next) {
+                        (1, Some(pace.per_block))
+                    } else {
+                        let before = if next < pace.heights.start {
+                            pace.heights.start - next
+                        } else {
+                            u64::MAX
+                        };
+                        ((n - mined).min(Self::MINE_CHUNK).min(before), None)
+                    }
+                }
+            };
             let resp = try_generate_blocks(&self.rpc, chunk)
                 .await
                 .expect("dev_block_generate");
             blocks.extend(resp.blocks);
             mined += chunk;
+            if let Some(wait) = wait {
+                tokio::time::sleep(wait).await;
+            }
             if mined >= n {
                 return GenerateBlocksResp {
                     height: resp.height,
@@ -1237,6 +1375,15 @@ impl RegtestDaemon {
                 };
             }
         }
+    }
+
+    /// Mine every block whose height is in `heights` alone, and wait
+    /// `per_block` after it, wherever [`Self::generate_blocks`] is called
+    /// from: a helper that mines a confirmation, the close loop or a pop
+    /// leg's re-mine. The walk that reads over Tor sets it over the epoch
+    /// whose draws its persona must serve (module docs of that walk).
+    pub(super) fn pace_heights(&self, heights: std::ops::Range<u64>, per_block: Duration) {
+        *self.pace.lock().expect("the pace lock") = Some(Pace { heights, per_block });
     }
 
     /// Blocks per `dev_block_generate` call in [`Self::generate_blocks`].
@@ -4322,12 +4469,41 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "DECIDED_DARK: serve credit comes only from admitted bundles (SO-D12 4b); the leg that serves the persona's shard over Tor for the mining daemon's producer is the switch's live-Tor emission walk; green on the flip through the daemon-closed shard, the market-bond join and the join-epoch read"]
+#[ignore = "live Tor, about two hours: needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY (the pinned bundle); the persona serves its shard on an onion and the mining daemon's producer reads it over the daemon's managed Tor"]
 async fn e2e_emission_claim_accepted_and_applied() {
+    use super::bond_assembly::SpentRecordsDurablyPruned;
+    use super::claim_dispatch::EmissionClaimRequestError;
+    use super::claim_orchestrator::ClaimOrchestrationError;
     use super::emission_source::fetch_emission_claim_source;
+    use super::prpc::LocalNodeRpc;
     use super::stake_engine::PSlot;
+    use super::traits::DaemonEngine;
+    use shekyl_curve_tree::reference::REF_ANCHOR_AGE;
+    use shekyl_engine_state::pscan_state::MintLineageOutput;
+    use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
+    /// The wait after each block of the served epoch (`RegtestDaemon::pace_heights`).
+    /// A draw at `h` is read from `h + 1`: `W₂ = SEB / 20` is shorter than
+    /// the producer's filing margin, so its plan is one read at `h + 1`, and
+    /// the bundle is filed with whatever that read returned once the tip
+    /// reaches `h + W₂ − 1` (`shekyl-bundle-producer` `plan.rs`, the
+    /// producer's deadline docs). The read waits a start delay drawn below
+    /// `READ_START_SPREAD`, one target block interval (120 s), then dials
+    /// the persona's onion. Four blocks at this pace give it 160 s: the
+    /// spread and an honest read over Tor. The read's ceiling (the spread
+    /// and three fetches at their timeouts, about 38 minutes) is not paced
+    /// for: a read slower than this is a miss, which the settled row shows.
+    const SERVING_PACE: Duration = Duration::from_secs(40);
+    /// Blocks the bond needs to confirm before its epoch ends, so the
+    /// serving host is up before the epoch it serves begins.
+    const BOND_ROOM: u64 = 48;
+    /// How long the daemon's managed Tor may take to become usable, and the
+    /// persona's serving host to pin its serve set.
+    const TOR_READY: Duration = Duration::from_secs(300);
+    /// Wall-clock time for the persona's onion descriptor to reach the
+    /// directories before the first read of the served epoch.
+    const DESCRIPTOR_SETTLE: Duration = Duration::from_secs(60);
     /// Settlement-epoch size under the lever. The join epoch is no longer
     /// pinned (module docs: it is read back from the record), so the
     /// epoch only has to hold the credit and the claim after a join that
@@ -4371,7 +4547,12 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
     let seed = [0x55u8; shekyl_crypto_pq::account::SEED_BYTES];
-    let daemon = RegtestDaemon::start_for_seed_with_schedule(&seed, Some(SCHEDULE)).await;
+    // The mining daemon runs the pinned Tor, so it seats its bundle
+    // producer, which reads each drawn pair's shard over this node's Tor.
+    let tor = RegtestDaemon::live_tor_binary();
+    let daemon =
+        RegtestDaemon::start_for_seed_with_schedule_on_tor(&seed, Some(SCHEDULE), tor.clone())
+            .await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
     // irreversible, so leaving the variable set keeps the process's two
@@ -4415,6 +4596,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // this e2e's first close. A chain this walk captures now carries the
     // fill, the close and the pricing pass before the join, so the Rust
     // validator admits it whole.
+    // The epoch after the bond's is the one the persona serves (`J + 1`).
+    // Its blocks are paced from here, before `J` is known: the bond lands in
+    // the tip's epoch, given room to confirm in it. Every block mined at
+    // one of those heights, by any helper, is mined alone and waited after.
+    let into_epoch = daemon.height().await % SEB;
+    if SEB - into_epoch < BOND_ROOM {
+        daemon.generate_blocks(SEB - into_epoch).await;
+    }
+    let bond_epoch = daemon.height().await / SEB;
+    daemon.pace_heights((bond_epoch + 1) * SEB..u64::MAX, SERVING_PACE);
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
@@ -4429,6 +4620,30 @@ async fn e2e_emission_claim_accepted_and_applied() {
         Some(wallet),
     )
     .await;
+    // The persona serves its shard on its onion, through the same pinned
+    // Tor, from the bond on: its endpoint is the bond record's.
+    fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
+    let serving = super::Engine::start_serving_if_staker(
+        fixture.arc.clone(),
+        &format!("http://127.0.0.1:{}", daemon.rpc_port),
+    )
+    .await
+    .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
+    .expect("a staker with a confirmed bond starts a serving host");
+    let serving_up = Instant::now() + TOR_READY;
+    while serving.posture().is_none() {
+        assert!(
+            Instant::now() < serving_up,
+            "the persona's serving host did not pin its serve set within {TOR_READY:?}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    daemon.await_tor_usable(TOR_READY).await;
+    tokio::time::sleep(DESCRIPTOR_SETTLE).await;
+    eprintln!(
+        "serving: {:?}; the daemon's managed Tor is usable",
+        serving.posture()
+    );
     // The join epoch, from the daemon's own record: `J`. The claim targets
     // `J + 1`, the first epoch the onset stagger lets the bond serve.
     let p_id_bytes = fixture.persona_id.to_bytes();
@@ -4439,6 +4654,18 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .expect("the confirmed bond has a daemon-side record")
         .join_settlement_epoch;
     let target_epoch = join_epoch + 1;
+    // `J + 1`'s blocks, and the `W₂` after it in which its last draws are
+    // admitted, are the paced heights; the pop legs' re-mines below fall
+    // inside them.
+    let w2 = SEB / shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+    assert!(
+        join_epoch >= bond_epoch,
+        "the bond joined in epoch {join_epoch}, before the tip's epoch {bond_epoch} when it was posted"
+    );
+    daemon.pace_heights(
+        target_epoch * SEB..(target_epoch + 1) * SEB + w2,
+        SERVING_PACE,
+    );
     // The pass of epoch `w` is the last block of `w + 1` (the grace
     // epoch), so a join J15 admits sits two epochs past the pricing
     // epoch at the earliest; and the fixture's confirmation must have
@@ -4510,17 +4737,469 @@ async fn e2e_emission_claim_accepted_and_applied() {
             .count()
     );
 
-    // (A2) DARK from here (Rick, 2026-10-29: no inject lever; test the
-    // production path). The daemon has no `inject_archival_serve_credit`:
-    // DX-Q3 deleted it with the C++ chain, and RPC 4.0 deleted the
-    // harness's helper with it. Serve credit's production path is SO-D12's
-    // bundles, live at 4b (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 4),
-    // and 4b re-subjects this leg to it: the persona's wallet serves its
-    // shard on an onion service, the mining daemon's producer reads it over
-    // operator Tor and files the bundle, the bundle is admitted and the
-    // epoch credited, then the claim. Everything above this line ran green
-    // on the flip binary: the shard filled and priced, the market bond
-    // admitted and confirmed, the join epoch read. The leg ends here.
+    // (A1 close) Mine until the daemon reports `J + 1` closed (budget row
+    // written), in 3-block steps so the tip overshoots the close by less
+    // than `REF_ANCHOR_AGE` — the pinned `referenceBlock < epoch_close`
+    // ordering depends on claiming inside that window.
+    let epoch_row = loop {
+        let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+            .await
+            .expect("claim-source fetch");
+        if let Some(row) = src
+            .epochs
+            .iter()
+            .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        {
+            break row.clone();
+        }
+        let h = daemon.height().await;
+        assert!(
+            h < (target_epoch + 1) * SEB + 64,
+            "epoch {target_epoch} never closed with a budget row by height {h} (SEB {SEB})"
+        );
+        daemon.generate_blocks(3).await;
+    };
+    let total_burned_at_close = daemon.total_burned().await;
+    eprintln!(
+        "epoch {target_epoch} closed at {}: budget {} atomic, sigma-work {} milli, \
+         {} credit pair(s); total_burned {}",
+        epoch_row.close_block_height,
+        epoch_row.budget_atomic,
+        epoch_row.sigma_work_milli,
+        epoch_row.credit_pairs.len(),
+        total_burned_at_close.to_raw(),
+    );
+    // What the persona's serving earned: each bundle for a block of
+    // `J + 1`, as the block that admitted it recorded it.
+    let mut drawn = 0u32;
+    let mut passed = 0u32;
+    let mut first_pass_height = None;
+    for height in target_epoch * SEB..daemon.height().await {
+        for reference in daemon.section_at(height).await {
+            if reference.h().to_raw() / SEB != target_epoch {
+                continue;
+            }
+            drawn += reference.count();
+            passed += reference.passes().popcount();
+            if reference.passes().popcount() > 0 && first_pass_height.is_none() {
+                first_pass_height = Some(height);
+            }
+        }
+    }
+    eprintln!(
+        "epoch {target_epoch}: {drawn} draw(s) admitted, {passed} passed; the first pass \
+         admitted at {first_pass_height:?}"
+    );
+    let first_pass_height = first_pass_height.unwrap_or_else(|| {
+        daemon.panic_with_log(
+            "no draw of the served epoch passed",
+            format!("{drawn} draw(s) admitted in epoch {target_epoch}"),
+        )
+    });
+    assert!(
+        !epoch_row.credit_pairs.is_empty(),
+        "the served pair must surface in the closed epoch's credit pairs"
+    );
+    assert!(
+        epoch_row.sigma_work_milli > 0,
+        "the closed epoch must carry the served work (membership from join+1)"
+    );
+    assert!(
+        epoch_row.budget_atomic > 0,
+        "the closed epoch must have accrued a positive budget"
+    );
+    assert!(
+        epoch_row.claimant_bond_idx.is_some(),
+        "the fixture's bond must be a claimant in the closed epoch"
+    );
+    // A6 pool-half disposition (module docs): at e2e activity the integer
+    // per-block volume mean floors to 0, a zero volume operand zeroes
+    // `burn_pct`, and `compute_burn_split` then yields a zero pool half AND
+    // a zero destroyed half from the same `burned` product — `total_burned`
+    // is the tied observable, pinned here so an operand-law change
+    // re-surfaces this disposition instead of silently shifting the budget.
+    assert_eq!(
+        total_burned_at_close,
+        shekyl_units::AtomicUnits::ZERO,
+        "regtest e2e activity must floor the volume mean to 0 ⇒ zero fee burn \
+         (pool-half disposition, §9.5 item 8; positive-pool coverage is the B5 KATs)"
+    );
+    // The no-staker epoch: `J` (the join epoch) closed zero-work — its
+    // budget row exists but Σwork is 0, so nothing of it is claimable and
+    // its accrual never mints (never enters supply).
+    let src_now = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source fetch");
+    let join_epoch_row = src_now
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == join_epoch && e.has_budget_row)
+        .expect("the join epoch must have closed with a budget row");
+    assert_eq!(
+        join_epoch_row.sigma_work_milli, 0,
+        "the join epoch must close zero-work (onset stagger: no membership in the join epoch)"
+    );
+
+    // (A3) Build and dispatch the claim through the production CB-3 path.
+    // The fee rides swept `ToKey` inputs; derive it from the daemon's live
+    // estimate over the claim's own production envelope — the ~48 KiB
+    // `EMISSION_NON_CLAIMS_RESERVE_BYTES` (two fee-side FCMP++ proofs +
+    // hybrid PQC auths + 16-vout worst case + Bp+ clawback) plus a small
+    // vin allowance for the single claim row. The bond's 32 KiB ceiling is
+    // too small here — a claim carries TWO input proofs where the bond
+    // carries one (live run 4's daemon-side `FeeTooLow`); overpaying is a
+    // miner transfer, never a conservation term.
+    use super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES;
+    refresh(&fixture.arc).await;
+    let claim_fee = {
+        let estimates = fixture
+            .arc
+            .read()
+            .await
+            .daemon()
+            .get_fee_estimates()
+            .await
+            .expect("daemon fee estimates");
+        estimates
+            .economy
+            .calculate_fee_from_weight(EMISSION_NON_CLAIMS_RESERVE_BYTES + 2048)
+    };
+    let claim_rpc = LocalNodeRpc::new(
+        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("loopback claim transport");
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    let mut tip_before_claim = 0;
+    for attempt in 0..4 {
+        tip_before_claim = daemon.height().await;
+        match super::Engine::submit_emission_claim(
+            fixture.arc.clone(),
+            &claim_rpc,
+            slot,
+            AtomicUnits::from_raw(claim_fee),
+            &pruning_landed,
+        )
+        .await
+        {
+            Ok(r) => {
+                receipt = Some(r);
+                break;
+            }
+            // Resync-and-retry arms (the wallet's own docs): the tree or
+            // header window lags the tip. Mine ONE block per retry — the
+            // pinned ordering needs the successful attempt's reference to
+            // stay below the close.
+            Err(EmissionClaimRequestError::Claim(
+                e @ (ClaimOrchestrationError::ReferenceUnanchorable { .. }
+                | ClaimOrchestrationError::MissingBlockHash { .. }),
+            )) => {
+                eprintln!("claim attempt {attempt}: {e}; resyncing");
+                daemon.generate_blocks(1).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => daemon.panic_with_log("submit_emission_claim", e),
+        }
+    }
+    let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
+    eprintln!(
+        "emission claim accepted: epochs {:?}, reward {}, {} fee input(s)",
+        receipt.claim.claimed_epochs,
+        receipt.claim.total_reward,
+        receipt.claim.fee_gindexes.len(),
+    );
+
+    // (A4/A6) The dispatched claim's shape: `J + 1` claimed, real ToKey fee
+    // inputs (not the Q11 zero-fee form), and the loud vout equal to the
+    // epoch's whole budget byte-exactly (single claimant holding all Σwork
+    // ⇒ `floor(budget·capped/Σwork) = budget`) — the staker-inflow
+    // conservation identity `inflow = staker_emission + staker_pool_amount`
+    // over real RPC.
+    assert_eq!(
+        receipt.claim.claimed_epochs,
+        vec![target_epoch],
+        "the claim must claim exactly the work-bearing epoch — the zero-work join epoch \
+         is EXCLUDED (the no-staker leg: unclaimable accrual never mints)"
+    );
+    assert!(
+        !receipt.claim.fee_gindexes.is_empty(),
+        "the claim must carry real ToKey fee inputs (A6)"
+    );
+    assert_eq!(
+        receipt.claim.total_reward, epoch_row.budget_atomic,
+        "single-claimant reward must equal the epoch's accrued budget byte-exactly \
+         (conservation, both inflow halves)"
+    );
+    // Pinned geography: first pass < referenceBlock < epoch_close < claim tip.
+    // The wallet anchors at `synced_tip − REF_ANCHOR_AGE`; `tip_before_claim`
+    // is the daemon height the successful attempt saw.
+    let reference_est =
+        (shekyl_types::BlockHeight::from_raw(tip_before_claim) - REF_ANCHOR_AGE).to_raw();
+    assert!(
+        first_pass_height < reference_est,
+        "the first pass ({first_pass_height}) must precede the claim reference (~{reference_est})"
+    );
+    assert!(
+        reference_est < epoch_row.close_block_height,
+        "the claim reference (~{reference_est}) must precede the epoch close ({}) — \
+         the A5c pop-through-reference geometry",
+        epoch_row.close_block_height
+    );
+
+    // Applied: mine the claim in, then past the scan horizon; the daemon's
+    // claimed-set row must land and the production P-scan must re-discover
+    // the reward as the persona's rung-1 EmissionReward funding, amount
+    // equal to the loud vout.
+    mine_until_pool_drains(&daemon, "accepted emission claim", 1).await;
+    // Capture HERE, with the claim connected and before the A5 pops below —
+    // the chain the validator's fixtures need is the one that carries the
+    // claim, not the one that stranded it.
+    maybe_capture_chain_vector(
+        &daemon,
+        "emission-claim",
+        "e2e_emission_claim_accepted_and_applied",
+        None,
+    )
+    .await;
+    let claim_mined_by_height = daemon.height().await;
+    assert!(
+        epoch_row.close_block_height < claim_mined_by_height,
+        "claim mined ({claim_mined_by_height}) after the close ({})",
+        epoch_row.close_block_height
+    );
+    let src = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source refetch");
+    let claimed = src
+        .bond
+        .as_ref()
+        .expect("bond context after claim")
+        .claimed_settlement_epochs
+        .clone();
+    assert!(
+        claimed.contains(&target_epoch),
+        "the daemon's claimed-set row for epoch {target_epoch} must land (got {claimed:?})"
+    );
+
+    // ── (A5a) Depth-1 pop: undo exactly the claim block ──
+    // The batch-1 drain left the claim block as the tip. Popping it must
+    // clear the daemon's claimed-set row and return the claim tx to the
+    // pool (`pop_block_from_blockchain` is tx-conserving), with the budget
+    // row untouched (the pop stays above the close); re-mining must
+    // re-include the identical bytes (popped txs re-enter at
+    // `relay_method::block`, broadcast-visible — no embargo) and re-apply
+    // the claimed-set row, the conservation operands byte-identical.
+    let tip_with_claim = daemon.height().await;
+    daemon.pop_blocks(1).await;
+    let src_popped = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 pop");
+    let claimed_after_pop = &src_popped
+        .bond
+        .as_ref()
+        .expect("bond context after depth-1 pop")
+        .claimed_settlement_epochs;
+    assert!(
+        !claimed_after_pop.contains(&target_epoch),
+        "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
+    );
+    let row_popped = src_popped
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        .expect("the budget row must survive a pop above the close");
+    assert_eq!(
+        row_popped.budget_atomic, epoch_row.budget_atomic,
+        "the budget row must be untouched by a pop above the close"
+    );
+    let pool_after_pop = daemon.tx_pool_size().await;
+    assert_eq!(
+        pool_after_pop, 1,
+        "the popped claim tx must return to the pool"
+    );
+    daemon.generate_blocks(1).await;
+    let pool_after_remine = daemon.tx_pool_size().await;
+    assert_eq!(
+        pool_after_remine, 0,
+        "the re-mined block must re-include the claim"
+    );
+    assert_eq!(daemon.height().await, tip_with_claim);
+    let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after depth-1 re-mine");
+    assert!(
+        src_remined
+            .bond
+            .as_ref()
+            .expect("bond context after re-mine")
+            .claimed_settlement_epochs
+            .contains(&target_epoch),
+        "re-mining the identical claim must re-apply the claimed-set row"
+    );
+    let row_remined = src_remined
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        .expect("budget row after re-mine");
+    assert_eq!(
+        (row_remined.budget_atomic, row_remined.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "conservation operands must hold byte-identically across pop + re-mine (A5a)"
+    );
+    eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
+
+    // ── (A5b) Epoch-straddling pop: undo the close itself ──
+    // Depth reaches the close block: the pop removes `J + 1`'s last block
+    // and the blocks after it. Each re-mined block is paced, so a draw the
+    // new last block makes is read and admitted as the first one's was; a
+    // popped admission returns its bundle to the queue and the re-mine at
+    // its height takes it again. Undoing the close must delete the
+    // budget row and the claimed-set row together; re-mining must re-close
+    // `J + 1` from the pop-surviving credit bits byte-identically, then
+    // re-apply the claim (the drain loop tolerates the claim being
+    // template-skipped until the re-close lands).
+    let tip = daemon.height().await;
+    // Convention: `close_block_height` is the close OPERAND `(E+1)·SEB`;
+    // the close itself fires while CONNECTING the epoch's last block,
+    // index `close_block_height − 1` (blockchain_db.cpp: the accrual
+    // comment — "the close of epoch E fires while connecting E's last
+    // block (operand prev_height + 1)"), and `height()` is the chain
+    // LENGTH — so undoing the close means popping down to length
+    // `close_block_height − 1`.
+    let straddle_depth = tip - (epoch_row.close_block_height - 1);
+    daemon.pop_blocks(straddle_depth).await;
+    let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after straddling pop");
+    assert!(
+        !src_straddle
+            .epochs
+            .iter()
+            .any(|e| e.settlement_epoch == target_epoch && e.has_budget_row),
+        "the straddling pop must undo the close (budget row deleted)"
+    );
+    if let Some(bond) = src_straddle.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&target_epoch),
+            "the straddling pop must clear the claimed-set row"
+        );
+    }
+    mine_until_pool_drains(&daemon, "re-applied emission claim (A5b)", 1).await;
+    let src_reclosed = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after re-close");
+    let row_reclosed = src_reclosed
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        .expect("the epoch must re-close from the pop-surviving credit bits");
+    assert_eq!(
+        (row_reclosed.budget_atomic, row_reclosed.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "the re-closed epoch must be byte-identical (accrual blocks below the floor \
+         untouched; credit bits pop-surviving)"
+    );
+    assert!(
+        src_reclosed
+            .bond
+            .as_ref()
+            .expect("bond context after re-close")
+            .claimed_settlement_epochs
+            .contains(&target_epoch),
+        "the claim must re-apply after the re-close (A5b)"
+    );
+    eprintln!(
+        "A5b straddling pop (depth {straddle_depth}, floor {}): close undone and \
+         re-closed byte-identically, claim re-applied",
+        epoch_row.close_block_height
+    );
+
+    daemon.generate_blocks(PSCAN_TEST_REORG_DEPTH + 2).await;
+    refresh(&fixture.arc).await;
+    let expected_reward = receipt.claim.total_reward;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the EmissionReward funding output",
+        |s| {
+            s.funding_outputs().iter().any(|r| {
+                r.p_slot == slot
+                    && r.lineage == MintLineageOutput::EmissionReward
+                    && r.amount.to_raw() == expected_reward
+            })
+        },
+    )
+    .await;
+    let rewards = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot && r.lineage == MintLineageOutput::EmissionReward)
+        .count();
+    eprintln!(
+        "emission claim accepted-and-applied: claimed-set {claimed:?}; {rewards} \
+         EmissionReward output(s) of {expected_reward} atomic re-discovered by the \
+         production P-scan (first pass {first_pass_height} < ref ~{reference_est} < close {} < \
+         claim ≤ {claim_mined_by_height})",
+        epoch_row.close_block_height,
+    );
+
+    // ── (A5c) Deep pop through the claim's reference block ──
+    // The pop floor sits just below the claim's reference anchor, inside
+    // `J + 1`'s paced blocks, so the pop undoes the claim, both epoch closes,
+    // and the block the claim's FCMP++ membership proof anchors to.
+    // Re-mined blocks carry new hashes, so the popped claim tx is
+    // structurally stranded — its proof binds a reference root that no
+    // longer exists on the rebuilt chain. The correct terminal state: the
+    // chain re-converges to the same height (the stranded tx must never
+    // re-apply or wedge the miner), the claimed epoch re-closes
+    // byte-identically from the pop-surviving credit bits, and the
+    // claimed-set stays EMPTY. Building the replacement claim against the
+    // rebuilt root is the retire/resubmit slice (the named B2 follow-on,
+    // matching the bond precedent): the wallet's one-live-claim-per-persona
+    // rule holds the pending record until that slice retires it.
+    let tip_c = daemon.height().await;
+    let pop_floor_c = reference_est - 1;
+    assert!(
+        pop_floor_c >= target_epoch * SEB,
+        "the A5c floor ({pop_floor_c}) must stay inside the served epoch's paced blocks \
+         (from {})",
+        target_epoch * SEB
+    );
+    let depth_c = tip_c - pop_floor_c;
+    daemon.pop_blocks(depth_c).await;
+    daemon.generate_blocks(depth_c).await;
+    assert_eq!(
+        daemon.height().await,
+        tip_c,
+        "the chain must re-converge past the stranded claim (no miner wedge)"
+    );
+    let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
+        .await
+        .expect("claim-source after deep-pop re-mine");
+    let row_c = src_c
+        .epochs
+        .iter()
+        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
+        .expect("the claimed epoch must re-close on the rebuilt chain");
+    assert_eq!(
+        (row_c.budget_atomic, row_c.sigma_work_milli),
+        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
+        "the rebuilt close must be byte-identical (bits survive; accrual below the floor)"
+    );
+    if let Some(bond) = src_c.bond.as_ref() {
+        assert!(
+            !bond.claimed_settlement_epochs.contains(&target_epoch),
+            "the stranded claim must NOT re-apply against the rebuilt root (its proof \
+             binds a popped reference)"
+        );
+    }
+    eprintln!(
+        "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
+         epoch re-closed byte-identically, claimed-set empty (stranded claim inert) — \
+         replacement claim is the B2 retire/resubmit slice"
+    );
 }
 
 /// DS-PR-2 **T-DS-6 ∧ T-DS-7 composite wire-shape arm — the full
