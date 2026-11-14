@@ -40,12 +40,17 @@
 #           walks since the DRS-X flip, two of which close and price an
 #           archival shard with real spends before they stake).
 #   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
-#           USAGE.md claim (Rick, 2026-11-14): the emission walk over live
-#           Tor, about six hours. Run now to close the switch's evidence,
-#           before each release cut, and whenever the recapture check says
-#           the emission-claim vector is stale. Per PR its coverage is that
-#           vector's replay in the Rust job. Needs SHEKYL_TEST_TOR_BINARY,
-#           the pinned bundle's tor (scripts/release/tor_bundle.py stage).
+#           USAGE.md claim (Rick, 2026-11-14): the emission walk over Tor,
+#           about six hours. Its evidence run is on the Tor lane's private
+#           Tor network with operator Tor, and WAITS on that network and on
+#           the wallet's operator mode (docs/FOLLOWUPS.md, the emission
+#           walk); it then runs before each release cut and whenever the
+#           recapture check says the emission-claim vector is stale. Today's
+#           configuration, the pinned managed Tor on the public network, is
+#           the Tor lane's public-network verification gate, not that
+#           evidence. Per PR its coverage is the vector's replay in the Rust
+#           job. Needs SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
+#           (scripts/release/tor_bundle.py stage).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -338,7 +343,7 @@ DECIDED_DARK=(
 # The acceptance lane's walks: over live Tor, hours long, run by hand (the
 # lane note above).
 #   e2e_emission_claim_accepted_and_applied — the emission walk (SO-D12 4b):
-#     two daemons on the pinned managed Tor, the persona's wallet serving
+#     three daemons on the pinned managed Tor, the persona's wallet serving
 #     its shard on an onion, the mining daemon's producer reading it, the
 #     served epoch's bundles admitted and settled, the claim accepted and
 #     paid. Its green run captures the emission-claim vector. Prior reds:

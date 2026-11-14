@@ -895,6 +895,11 @@ impl RegtestDaemon {
     /// daemon the wallet uses. B and C are relays. **A dials B and C; B
     /// dials C; C dials nobody.**
     ///
+    /// This is the walk's public-network configuration, the Tor lane's
+    /// verification gate (Rick, 2026-11-14). The evidence run is on the Tor
+    /// lane's private network with operator Tor, a second configuration
+    /// beside this one (`docs/FOLLOWUPS.md`, the emission walk).
+    ///
     /// **Why three.** A daemon with a Tor holds a transaction it originates
     /// until an outbound session hides its address
     /// (`DAEMON_RELAY_PRIVACY.md` §98.5), so A needs an outbound peer. With
@@ -4977,15 +4982,13 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// minted (claims are wallet-timed mints; an unclaimable epoch's accrual
 /// simply never enters supply) — and the claim builder must EXCLUDE it
 /// and every epoch before it (`claimed_epochs == [J + 1]`), which is the
-/// no-staker leg's e2e observable. The epoch is `SEB = 128` so that the
-/// credit and the claim fit between the join and `J + 1`'s close wherever
-/// in `J` the join lands (the claim needs `REF_ANCHOR_AGE` of room before
-/// the close). The pinned ordering
-/// `referenceBlock < epoch_close < claim ≤ tip` follows from
-/// claiming within `REF_ANCHOR_AGE` blocks of the close (the close-detect
-/// loop mines in 3-block steps so the overshoot stays inside that
-/// window). Blocks between the close and the claim carry no `J + 2`
-/// serve credit — the zero-staker stretch the A5b pop leg straddles.
+/// no-staker leg's e2e observable. The epoch is `SEB` = 2,000 (the
+/// constant's own doc: three reads a draw). `J + 1` is claimable once it
+/// is settled, at the slash pass in the last block of `J + 2`, so the walk
+/// mines up to that block one at a time and claims within
+/// `REF_ANCHOR_AGE` of it. The pinned ordering
+/// `epoch_close < referenceBlock < settle ≤ claim tip` follows. The A5b pop
+/// leg straddles that pass.
 ///
 /// **Conservation (A6, `§9.5 item 8`).** The claim's reward vout must equal
 /// `budget_atomic(1)` byte-exactly — the daemon's per-block accrual
@@ -4998,17 +5001,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// used to zero the burn is gone. What zeroes `burn_pct` here is the supply
 /// ratio: `calc_burn_pct` forms `circulating · 10⁶ / asymptote` in SCALE
 /// fixed point, which is 0 until ~4.3e15 has been emitted (≈ 2 600+ blocks
-/// of the young curve), and this e2e closes `J + 1` at ~770 blocks. So
-/// `compute_burn_split` legitimately yields `staker_pool_amount = 0`
-/// (asserted via `total_burned == 0`, the tied observable) — and the
-/// assertion is the falsifier: a longer chain or a fatter curve moves it.
-/// Driving the pool half positive needs supply an e2e cannot reach;
-/// the positive-pool split coverage is the B5 unit KAT family. The claim
+/// of the young curve). The `total_burned == 0` pin below was written for
+/// an `SEB` of 128, which closed `J + 1` at ~770 blocks; at `SEB` 2,000
+/// `J + 1` closes past 6,000 blocks, past that supply, with the walk's
+/// spends paying fees, so the pin may not hold at its first run. Its
+/// disposition is re-derived from that run's figures (#1373's successor). The positive-pool split coverage is the B5 unit
+/// KAT family. The claim
 /// itself still carries real `ToKey` fee inputs (`fee_gindexes`
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live Tor, about two hours: needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY (the pinned bundle); the persona serves its shard on an onion and the mining daemon's producer reads it over the daemon's managed Tor"]
+#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about six hours: its evidence run waits on the Tor lane's private Tor network and the wallet's operator mode (docs/FOLLOWUPS.md, the emission walk); today it runs three daemons on the pinned managed Tor, the public-network verification gate; needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
