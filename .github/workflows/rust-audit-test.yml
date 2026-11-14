@@ -905,7 +905,7 @@ jobs:
     # still runs them, with the tests too long for a pull request.
     if: needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.sim_narrations == 'run'
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # one run, 13.9 min (#1369: release build 4.9, pins 8.6); about twice it
+    timeout-minutes: 35  # one run, 17.2 min (#1375: release build 3.7, four pins 13.2); about twice it
     steps:
       - uses: actions/checkout@v5
         with:
