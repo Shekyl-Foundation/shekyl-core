@@ -49,7 +49,6 @@ use shekyl_types::PCanonicalId;
 use super::pscan::reconcile::{PReconcileSet, ReconcileVerdict};
 
 use super::error::PersistenceError;
-use super::lifecycle::drive_persistence;
 use super::stake_engine::PSlot;
 use super::traits::PersistenceEngine;
 use super::{Engine, EngineSignerKind, LocalLedger};
@@ -124,43 +123,59 @@ impl<
     /// cursor never sits at or below a bonded slot — the privacy guard against
     /// re-activating a rotated-past persona.
     ///
-    /// The mutation commits to the in-memory ledger under a write guard, which
-    /// is dropped before the read-guarded `save_state` (the two guards are on
-    /// the same `RwLock`; holding the write guard across the save would
-    /// deadlock). On `Ok`, the record is durably on disk (`atomic_write_file`),
-    /// so the returned ticket witnesses a crash-atomic commit.
+    /// The mutation and the save run under one write guard
+    /// ([`Engine::save_or_rollback`]: `save_state` borrows the guarded
+    /// `WalletLedger`, so no second lock is taken). On `Ok`, the record is
+    /// durably on disk (`atomic_write_file`), so the returned ticket
+    /// witnesses a crash-atomic commit.
     ///
     /// # Errors
     ///
     /// [`PersistenceError`] if the durable `save_state` fails; in that case **no
-    /// ticket is produced**, so the caller cannot proceed to sign — persist
-    /// failure fails the operation closed, never open.
+    /// ticket is produced**, so the caller cannot proceed to sign, and the
+    /// in-memory record is restored under the same guard, so no later save
+    /// writes it — persist failure fails the operation closed, never open.
     pub(crate) fn persist_bond_record(
         &self,
         slot: PSlot,
     ) -> Result<PersistedBondTicket, PersistenceError> {
-        // Mutate the staking block under a scoped write guard, then drop it
-        // before saving (same lock; write-then-read would deadlock).
-        {
-            let mut guard = self.ledger.write();
-            let staking: &mut StakingBlock = &mut guard.ledger.staking;
-            staking.staking_enabled = true;
-            let index = slot.index();
-            if !staking.bonded_slots.contains(&index) {
-                staking.bonded_slots.push(index);
-            }
-            // Monotone-forward: cursor never at/below an observed bonded slot.
-            staking.p_slot = staking.monotone_current_slot_from_record();
+        // Mutate the staking block and save under one write guard
+        // (`save_or_rollback`, the `abandon_tx` shape): `save_state` takes
+        // `&WalletLedger`, so no second lock is taken, and no refresh merge
+        // can interleave between the record and its save.
+        let mut guard = self.ledger.write();
+        let staking: &mut StakingBlock = &mut guard.ledger.staking;
+        let before = (
+            staking.staking_enabled,
+            staking.bonded_slots.clone(),
+            staking.p_slot,
+        );
+        staking.staking_enabled = true;
+        let index = slot.index();
+        if !staking.bonded_slots.contains(&index) {
+            staking.bonded_slots.push(index);
         }
+        // Monotone-forward: cursor never at/below an observed bonded slot.
+        staking.p_slot = staking.monotone_current_slot_from_record();
 
         // Durable, crash-atomic write — the property the ticket witnesses.
-        let ledger_guard = self.ledger.read();
-        drive_persistence(
-            self.persistence
-                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
-        )
-        .map_err(Into::into)?;
-        drop(ledger_guard);
+        // A failed save restores the record under the same guard (A19
+        // audit): without the undo the unsaved slot stayed in memory and
+        // the next unrelated save wrote a bond record no bond was signed
+        // for.
+        let durability = self.save_or_rollback(&mut guard, |state| {
+            let staking = &mut state.ledger.staking;
+            (
+                staking.staking_enabled,
+                staking.bonded_slots,
+                staking.p_slot,
+            ) = before;
+        })?;
+        drop(guard);
+        // The ticket authorizes signing, and the signed post is broadcast.
+        // An unconfirmed parent fsync keeps the applied record and mints
+        // nothing; a retry saves again.
+        super::dispatch_durability::require_confirmed(durability)?;
 
         Ok(PersistedBondTicket { p_slot: slot })
     }

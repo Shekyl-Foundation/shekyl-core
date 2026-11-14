@@ -77,9 +77,6 @@
 //! surface; the reply carries only the persona-bound [`PBoundBytes`] and the
 //! spent funding gindexes (the reservation set).
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::Scalar;
-use rand_core::{OsRng, RngCore as _};
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::label::sentinel_plaintext;
@@ -90,7 +87,6 @@ use shekyl_tx_builder::{
 };
 use shekyl_types::GlobalOutputIndex;
 use shekyl_units::AtomicUnits;
-use zeroize::Zeroizing;
 
 use super::bond_assembly::{finalize_bond_tx, FundingInputContext, PBoundBytes};
 use super::sign_bridge::{assemble_transfer_wire, build_output};
@@ -358,9 +354,7 @@ pub(super) async fn assemble_drain_tx(
 
     // Both outputs built by the transfer path's `build_output` primitive, so a
     // drain vout is bit-for-bit an ordinary transfer vout.
-    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(tx_key_secret.as_mut());
-    let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let (tx_key_secret, tx_pubkey) = shekyl_crypto_pq::output::generate_tx_key();
 
     let vout0 = build_output(
         &tx_key_secret,

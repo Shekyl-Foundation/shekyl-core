@@ -194,7 +194,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed; it starts on Rick's authorization (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
+- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed, and Rick authorized it on 2026-11-13 (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
   - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
   - Target: pre-genesis
 
@@ -578,7 +578,8 @@ Default. Lands before genesis if it should exist at launch.
 - **`AlreadyInChain` submit verdict: distinct lock-lifecycle disposition — DESIGN DECIDED 2026-07-04 (F40, `AlreadyInChain { height }`); interim implementation landed #252; F40 conformance LANDED 2026-07-05 (#254); targeted re-scan executor + F40-R2 breaker LANDED 2026-07-05 (`feat/submit-lifecycle-driver`) — RESOLVED.**
   - Target: pre-genesis
 
-- **Watchdog probe bytes: ephemeral in-memory held-bytes store — reversion clause (rule 21), two independent axes, only one reopens.**
+- **Watchdog probe bytes — the durability axis REOPENED by A19 (alpha.11 bug hunt) and built (#1362): the bytes are saved on the send record at dispatch. The auto-versus-confirm axis stays CLOSED: after a restart a resend is the user's (`tx_resend`), never the watchdog's; it reopens only on a ruling that a cross-restart re-offer is privacy-neutral (provably the same daemon the bytes went to).**
+  - Owner: the submit lifecycle — [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) §5.3
   - Target: pre-genesis
 
 - **Submit-error reservation-id placeholder: split submitter error from orchestrator error (PR-4 / #248 review, deferred to 2c) — RESOLVED 2026-07-04 (2c pre-wiring).**

@@ -479,6 +479,37 @@ fn fixed_seed() -> [u8; SEED_BYTES] {
 /// advanced monotonically past the bonded slot. Also covers idempotency (a
 /// repeat persist of the same slot neither duplicates the slot nor moves the
 /// cursor).
+/// A19 audit: a bond record whose save fails mints no ticket **and** is
+/// restored in memory, so no later unrelated save writes a bond record no
+/// bond was signed for. The save is made to fail for real, for any user
+/// ([`BlockedStateSave`](crate::engine::test_support::BlockedStateSave)).
+#[tokio::test(flavor = "multi_thread")]
+async fn persist_bond_record_save_failure_restores_the_record() {
+    let tmp = tempdir().expect("tempdir");
+    let base_path = tmp.path().join("wallet");
+    let password: &[u8] = b"correct horse battery staple";
+    let creds = Credentials::password_only(password);
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+
+    let blocked = crate::engine::test_support::BlockedStateSave::block(&base_path);
+    let result = engine.persist_bond_record(PSlot::from_raw(7));
+    drop(blocked);
+
+    assert!(result.is_err(), "a failed save mints no ticket");
+    let g = engine.ledger.read();
+    assert!(
+        !g.ledger.staking.staking_enabled,
+        "staking_enabled restored"
+    );
+    assert!(
+        g.ledger.staking.bonded_slots.is_empty(),
+        "bonded_slots restored"
+    );
+    assert_eq!(g.ledger.staking.p_slot, 0, "cursor restored");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn persist_bond_record_commits_durably_and_survives_reopen() {
     let tmp = tempdir().expect("tempdir");

@@ -446,6 +446,7 @@ mod tests {
                     inputs: vec![],
                     lock_baseline: None,
                     state,
+                    tx_bytes: None,
                 },
             );
         }

@@ -160,8 +160,9 @@ async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         kdf: KdfParams::default(),
     };
 
-    // `run_server` blocks until its listener fails or the process is
-    // killed. Ctrl-C cancels the future (Phase 4a); a later sub-PR can
-    // wire `AppState::shutdown` to signal handlers for drain.
+    // `run_server` serves until a stop signal (SIGTERM, SIGINT, SIGHUP; on
+    // Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
+    // events), then closes the open wallet and returns. A second signal
+    // exits at once.
     run_server(server).await
 }

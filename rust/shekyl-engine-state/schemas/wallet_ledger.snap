@@ -3369,6 +3369,23 @@
                                   ]
                                 }
                               }
+                            },
+                            {
+                              "name": "tx_bytes",
+                              "ty": {
+                                "name": "Option<T>",
+                                "ty": {
+                                  "Option": {
+                                    "name": "Vec<T>",
+                                    "ty": {
+                                      "Seq": {
+                                        "name": "u8",
+                                        "ty": "U8"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
                             }
                           ]
                         }

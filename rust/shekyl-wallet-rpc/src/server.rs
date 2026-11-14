@@ -186,6 +186,10 @@ pub struct AppState {
     pub kdf: KdfParams,
     /// Signalled to request graceful shutdown.
     pub shutdown: Arc<Notify>,
+    /// Notified once the server has stopped and closed the open wallet
+    /// ([`serve_then_close`]); a stop-signal watcher that must end the
+    /// process waits for it.
+    pub closed: Arc<Notify>,
 }
 
 // `AppState` fields are public so integration tests can construct a
@@ -208,6 +212,7 @@ impl AppState {
             auth: Arc::new(config.auth),
             kdf: config.kdf,
             shutdown: Arc::new(Notify::new()),
+            closed: Arc::new(Notify::new()),
         })
     }
 }
@@ -525,8 +530,15 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     }
 }
 
-/// Run the server until shutdown (SIGINT / SIGTERM via the Notify, or
-/// process exit). Blocks the calling task.
+/// Run the server until a stop signal, then close the open wallet and
+/// return. Blocks the calling task.
+///
+/// The stop signals are SIGTERM, SIGINT and SIGHUP on Unix, and on
+/// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
+/// events ([`crate::stop_signals`]). The first stops the listener, lets
+/// in-flight requests finish, and closes the wallet through the
+/// `close_wallet` choreography with the shutdown save; a second exits at
+/// once.
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
@@ -539,11 +551,26 @@ pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     let bound = BoundListener::bind(&config.listen).await?;
     let state = AppState::new(config);
     let app = build_router(state.clone());
-    let shutdown = state.shutdown.clone();
 
+    crate::stop_signals::watch(Arc::clone(&state), crate::stop_signals::AfterClose::Return)?;
     bound.log_ready("shekyl-wallet-rpc listening")?;
-    bound.serve(app, shutdown).await?;
+    serve_then_close(bound, app, state).await?;
     Ok(())
+}
+
+/// Serve until shutdown is requested, then close the open wallet — the one
+/// stopping path both hosts share ([`run_server`], and the in-process
+/// server behind [`InProcessHandle::shutdown`]). The wallet is closed even
+/// when the serve loop failed, and [`AppState::closed`] is notified last.
+async fn serve_then_close(
+    bound: BoundListener,
+    app: Router,
+    state: Arc<AppState>,
+) -> std::io::Result<()> {
+    let served = bound.serve(app, Arc::clone(&state.shutdown)).await;
+    crate::lifecycle::close_for_shutdown(&state.tenants).await;
+    state.closed.notify_one();
+    served
 }
 
 /// A listener bound to its address, per platform — **the** `cfg` seam.
@@ -812,7 +839,25 @@ pub struct InProcessHandle {
 }
 
 impl InProcessHandle {
-    /// Request graceful shutdown and wait for the serve task to finish.
+    /// Make the process's stop signals (SIGTERM, SIGINT, SIGHUP; on
+    /// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and
+    /// shutdown events) stop this server, close the open wallet, and then
+    /// end the process with status 130; a second signal ends it at once.
+    /// For a host whose main thread is not waiting on the server
+    /// (`shekyl-cli`). Call from inside the host's runtime.
+    ///
+    /// # Errors
+    ///
+    /// The signal handlers could not be registered.
+    pub fn exit_on_stop_signal(&self) -> std::io::Result<()> {
+        crate::stop_signals::watch(
+            Arc::clone(&self.state),
+            crate::stop_signals::AfterClose::Exit,
+        )
+    }
+
+    /// Request graceful shutdown and wait for the serve task to finish; the
+    /// serve task closes the open wallet before it ends.
     pub async fn shutdown(self) -> Result<(), BoxErr> {
         self.state.shutdown.notify_one();
         self.join.await??;
@@ -934,11 +979,10 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
     let bound = BoundListener::bind(&config.listen).await?;
     let state = AppState::new(config);
     let app = build_router(state.clone());
-    let shutdown = state.shutdown.clone();
 
     let listen = bound.endpoint()?;
     bound.log_ready("shekyl-wallet-rpc in-process server started")?;
-    let join = tokio::spawn(bound.serve(app, shutdown));
+    let join = tokio::spawn(serve_then_close(bound, app, Arc::clone(&state)));
     Ok(InProcessHandle {
         state,
         join,
