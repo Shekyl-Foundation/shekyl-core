@@ -190,10 +190,10 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
-    /// The heights [`Self::generate_blocks`] mines one at a time, each
-    /// followed by a wait: the walk that reads over Tor sets it over the
-    /// epoch whose draws must be served ([`Self::pace_heights`]).
-    pace: std::sync::Mutex<Option<Pace>>,
+    /// The draws [`Self::generate_blocks`] gives a read window to: the walk
+    /// that reads over Tor sets it over the epoch whose draws its persona
+    /// must serve ([`Self::watch_draws`]).
+    watch: std::sync::Mutex<Option<DrawWatch>>,
     /// The unanswered loopback port a [`Peering::Listening`] daemon dials.
     /// Held for the daemon's life, including a restart on the same recipe,
     /// so the closed-peer address in that recipe is still this socket.
@@ -530,12 +530,21 @@ impl RegtestSpawn {
 /// onion.
 const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
 
-/// Heights [`RegtestDaemon::generate_blocks`] mines one at a time, and the
-/// wait after each ([`RegtestDaemon::pace_heights`]).
+/// The draws [`RegtestDaemon::generate_blocks`] waits on, as a peer sees
+/// them: a block's `draws` (`count(h)`, 4.4) and the references its
+/// section admits ([`RegtestDaemon::watch_draws`]).
 #[derive(Clone)]
-struct Pace {
-    heights: std::ops::Range<u64>,
+struct DrawWatch {
+    /// The heights whose draws are given a read window.
+    drawn_in: std::ops::Range<u64>,
+    /// `W₂`: a drawn block's bundle is admitted by `h + W₂ − 1` or not at
+    /// all.
+    w2: u64,
+    /// The wait after each block while a window is open.
     per_block: Duration,
+    /// The drawn heights whose bundle has not been admitted, each with the
+    /// last height that can admit it.
+    open: Vec<(u64, u64)>,
 }
 
 /// A directory only this account can enter, holding one daemon's empty
@@ -1085,7 +1094,7 @@ impl RegtestDaemon {
             _serial: serial,
             recipe,
             unanswered,
-            pace: std::sync::Mutex::new(None),
+            watch: std::sync::Mutex::new(None),
         };
         daemon.await_ready().await;
         daemon
@@ -1470,23 +1479,23 @@ impl RegtestDaemon {
         let mut mined = 0u64;
         let mut blocks = Vec::new();
         loop {
-            let pace = self.pace.lock().expect("the pace lock").clone();
-            // Under a pace, the height the next block connects at decides
-            // whether it is mined alone: the chain's block count is that
-            // height.
-            let (chunk, wait) = match pace {
-                None => ((n - mined).min(Self::MINE_CHUNK), None),
-                Some(pace) => {
+            let watch = self.watch.lock().expect("the watch lock").clone();
+            // Under a watch, a block whose draws or admissions it reads is
+            // mined alone; the chain's block count is the height the next
+            // block connects at.
+            let (chunk, watched) = match watch {
+                None => ((n - mined).min(Self::MINE_CHUNK), false),
+                Some(watch) => {
                     let next = self.height().await;
-                    if pace.heights.contains(&next) {
-                        (1, Some(pace.per_block))
+                    if !watch.open.is_empty() || watch.drawn_in.contains(&next) {
+                        (1, true)
                     } else {
-                        let before = if next < pace.heights.start {
-                            pace.heights.start - next
+                        let before = if next < watch.drawn_in.start {
+                            watch.drawn_in.start - next
                         } else {
                             u64::MAX
                         };
-                        ((n - mined).min(Self::MINE_CHUNK).min(before), None)
+                        ((n - mined).min(Self::MINE_CHUNK).min(before), false)
                     }
                 }
             };
@@ -1495,8 +1504,10 @@ impl RegtestDaemon {
                 .expect("dev_block_generate");
             blocks.extend(resp.blocks);
             mined += chunk;
-            if let Some(wait) = wait {
-                tokio::time::sleep(wait).await;
+            if watched {
+                if let Some(wait) = self.after_watched_block(resp.height - 1).await {
+                    tokio::time::sleep(wait).await;
+                }
             }
             if mined >= n {
                 return GenerateBlocksResp {
@@ -1507,13 +1518,67 @@ impl RegtestDaemon {
         }
     }
 
-    /// Mine every block whose height is in `heights` alone, and wait
-    /// `per_block` after it, wherever [`Self::generate_blocks`] is called
-    /// from: a helper that mines a confirmation, the close loop or a pop
-    /// leg's re-mine. The walk that reads over Tor sets it over the epoch
-    /// whose draws its persona must serve (module docs of that walk).
-    pub(super) fn pace_heights(&self, heights: std::ops::Range<u64>, per_block: Duration) {
-        *self.pace.lock().expect("the pace lock") = Some(Pace { heights, per_block });
+    /// Give each block in `drawn_in` that drew a read window, wherever
+    /// [`Self::generate_blocks`] is called from: a helper that mines a
+    /// confirmation, the settlement loop or a pop leg's re-mine (Rick,
+    /// 2026-11-14). The window runs from the block until its bundle is
+    /// admitted, or until `h + W₂ − 1`, the last block that can admit it;
+    /// while one is open each block is mined alone and followed by
+    /// `per_block`. The producer's reads come due at heights it alone
+    /// knows, so the chain has to reach them: mining stops for none of
+    /// them. A window already open stays open.
+    pub(super) fn watch_draws(&self, drawn_in: std::ops::Range<u64>, w2: u64, per_block: Duration) {
+        let mut slot = self.watch.lock().expect("the watch lock");
+        let open = slot.take().map(|watch| watch.open).unwrap_or_default();
+        *slot = Some(DrawWatch {
+            drawn_in,
+            w2,
+            per_block,
+            open,
+        });
+    }
+
+    /// Read the block at `height` as a peer would: open a window when it
+    /// drew inside the watched range, and close each window its section
+    /// admits a bundle for or whose last admitting height it is. The wait
+    /// before the next block, while a window is open.
+    async fn after_watched_block(&self, height: u64) -> Option<Duration> {
+        let mut watch = self.watch.lock().expect("the watch lock").clone()?;
+        let block = self.block_at(height).await;
+        let drew = block.draws.0.map_or(0, |count| count.0);
+        if watch.drawn_in.contains(&height) && drew > 0 {
+            eprintln!(
+                "block {height} drew {drew}: its read window runs to {}",
+                height + watch.w2 - 1
+            );
+            watch.open.push((height, height + watch.w2 - 1));
+        }
+        if !watch.open.is_empty() {
+            let admitted: Vec<u64> = block
+                .section
+                .into_iter()
+                .map(|reference| {
+                    shekyl_archival_retention::BundleRef::decode(&reference.into_vec())
+                        .unwrap_or_else(|e| panic!("block {height}'s section decodes: {e:?}"))
+                        .h()
+                        .to_raw()
+                })
+                .collect();
+            watch.open.retain(|&(h, last)| {
+                if admitted.contains(&h) {
+                    eprintln!("the bundle for block {h} was admitted at {height}");
+                    false
+                } else if height >= last {
+                    eprintln!("block {h}'s read window closed at {height} with no bundle admitted");
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let wait = (!watch.open.is_empty()).then_some(watch.per_block);
+        *self.watch.lock().expect("the watch lock") = Some(watch);
+        wait
     }
 
     /// Blocks per `dev_block_generate` call in [`Self::generate_blocks`].
@@ -4622,18 +4687,17 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
-    /// The wait after each block of the served epoch (`RegtestDaemon::pace_heights`).
-    /// A draw at `h` is read from `h + 1`: `W₂ = SEB / 20` is shorter than
-    /// the producer's filing margin, so its plan is one read at `h + 1`, and
-    /// the bundle is filed with whatever that read returned once the tip
-    /// reaches `h + W₂ − 1` (`shekyl-bundle-producer` `plan.rs`, the
-    /// producer's deadline docs). The read waits a start delay drawn below
-    /// `READ_START_SPREAD`, one target block interval (120 s), then dials
-    /// the persona's onion. Four blocks at this pace give it 160 s: the
-    /// spread and an honest read over Tor. The read's ceiling (the spread
-    /// and three fetches at their timeouts, about 38 minutes) is not paced
-    /// for: a read slower than this is a miss, which the settled row shows.
-    const SERVING_PACE: Duration = Duration::from_secs(40);
+    /// The wait after each block while a drawn block's read window is open
+    /// (`RegtestDaemon::watch_draws`; Rick, 2026-11-14). The producer
+    /// plans up to three reads of a draw, at least `READ_SPACING` (30)
+    /// blocks apart, and each waits a start delay drawn below
+    /// `READ_START_SPREAD` (one target block interval, 120 s) before it
+    /// dials (`shekyl-bundle-producer`). 120 s and an honest read of about
+    /// 30 s over the 30 blocks between reads is 5 s a block. The read's
+    /// ceiling (three fetches at their timeouts, about 38 minutes) is not
+    /// paced for: a read slower than this is a miss, which the settled row
+    /// shows.
+    const READ_WINDOW_PACE: Duration = Duration::from_secs(5);
     /// Blocks the bond needs to confirm before its epoch ends, so the
     /// serving host is up before the epoch it serves begins.
     const BOND_ROOM: u64 = 48;
@@ -4738,15 +4802,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // fill, the close and the pricing pass before the join, so the Rust
     // validator admits it whole.
     // The epoch after the bond's is the one the persona serves (`J + 1`).
-    // Its blocks are paced from here, before `J` is known: the bond lands in
-    // the tip's epoch, given room to confirm in it. Every block mined at
-    // one of those heights, by any helper, is mined alone and waited after.
+    // Its draws are watched from here, before `J` is known: the bond lands
+    // in the tip's epoch, given room to confirm in it. A block at one of
+    // those heights that drew gets a read window, whichever helper mines it.
     let into_epoch = daemon.height().await % SEB;
     if SEB - into_epoch < BOND_ROOM {
         daemon.generate_blocks(SEB - into_epoch).await;
     }
     let bond_epoch = daemon.height().await / SEB;
-    daemon.pace_heights((bond_epoch + 1) * SEB..u64::MAX, SERVING_PACE);
+    let w2 = SEB / shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+    daemon.watch_draws((bond_epoch + 1) * SEB..u64::MAX, w2, READ_WINDOW_PACE);
     let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
         kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
         shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
@@ -4795,17 +4860,22 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .expect("the confirmed bond has a daemon-side record")
         .join_settlement_epoch;
     let target_epoch = join_epoch + 1;
-    // `J + 1`'s blocks, and the `W₂` after it in which its last draws are
-    // admitted, are the paced heights; the pop legs' re-mines below fall
-    // inside them.
-    let w2 = SEB / shekyl_archival_retention::constants::W2_EPOCH_DIVISOR;
+    // `J + 1`'s draws are the ones its claim is priced on: the watch
+    // narrows to its blocks. A window opened at its last blocks runs on into
+    // `J + 2` until that bundle is admitted.
     assert!(
         join_epoch >= bond_epoch,
         "the bond joined in epoch {join_epoch}, before the tip's epoch {bond_epoch} when it was posted"
     );
-    daemon.pace_heights(
-        target_epoch * SEB..(target_epoch + 1) * SEB + w2,
-        SERVING_PACE,
+    assert!(
+        daemon.height().await <= target_epoch * SEB,
+        "the serving host must be up before epoch {target_epoch} begins at {}",
+        target_epoch * SEB
+    );
+    daemon.watch_draws(
+        target_epoch * SEB..(target_epoch + 1) * SEB,
+        w2,
+        READ_WINDOW_PACE,
     );
     // The pass of epoch `w` is the last block of `w + 1` (the grace
     // epoch), so a join J15 admits sits two epochs past the pricing
@@ -5287,8 +5357,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     );
 
     // ── (A5c) Deep pop through the claim's reference block ──
-    // The pop floor sits just below the claim's reference anchor, inside
-    // `J + 1`'s paced blocks, so the pop undoes the claim, the settlement pass,
+    // The pop floor sits just below the claim's reference anchor, above
+    // `J + 1`'s blocks, so the pop undoes the claim, the settlement pass,
     // and the block the claim's FCMP++ membership proof anchors to.
     // Re-mined blocks carry new hashes, so the popped claim tx is
     // structurally stranded — its proof binds a reference root that no
