@@ -596,6 +596,11 @@ fn a_member_public_key_is_the_key_it_signs_with() {
             .unwrap();
         let signed = member_sign(&g, &out, i, &msg).unwrap();
         assert_eq!(key, signed.public_key.to_canonical_bytes().unwrap());
+        assert!(verify_multisig_member_auth(&signed.public_key, &msg, &signed.signature).is_ok());
+        let other = SigningPayloadHash::from_bytes([0x32; 64]);
+        assert!(
+            verify_multisig_member_auth(&signed.public_key, &other, &signed.signature).is_err()
+        );
     }
     let mine = multisig_member_public_key(&member_view(&g, 0), &own_ciphertext(&out, 0, n));
     let theirs = multisig_member_public_key(&member_view(&g, 1), &own_ciphertext(&out, 1, n));

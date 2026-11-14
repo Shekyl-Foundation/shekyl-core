@@ -95,8 +95,8 @@ each one before producing a signature.
 | I2 | Chain state fingerprint matches signer's local view | Pre-signing verification | §9.3 |
 | I3 | The FCMP++ proof, SALs included, verifies against the signer's own transaction | Before the hybrid signature | §11.2 |
 | I4 | The range proof verifies against the output commitments of the signer's own transaction | Before the hybrid signature | §11.2 |
-| I5 | **RETIRED** (slice 3 PR-C): matched an output key to an assigned prover; E′ has no prover | — | — |
-| I6 | **RETIRED** (slice 3 PR-C): compared tx-hash commitments across shares; each signer builds the transaction it signs (§11.2), and the proposer verifies every hybrid signature and runs `verify_multisig` before release | — | — |
+| I5 | **RETIRED** (#1380): matched an output key to an assigned prover; E′ has no prover | — | — |
+| I6 | **RETIRED** (#1380): compared tx-hash commitments across shares; each signer builds the transaction it signs (§11.2), and the proposer verifies every hybrid signature and runs `verify_multisig` before release | — | — |
 
 **Implementation requirements:**
 

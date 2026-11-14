@@ -526,6 +526,29 @@ pub fn sign_multisig_member_auth(
     })
 }
 
+/// Verify one member's signature on input `i` of a spend: `signature`
+/// over `message` (the input's `signed_hash(i)`) under `public`, the
+/// member's per-output key, in [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`]. The
+/// check [`sign_multisig_member_auth`] answers; the ceremony's proposer
+/// runs it on each cosigner's signature before [`crate::multisig::verify_multisig`]
+/// runs on the assembled blobs.
+///
+/// # Errors
+///
+/// [`CryptoError`] when the signature does not verify.
+pub fn verify_multisig_member_auth(
+    public: &HybridPublicKey,
+    message: &SigningPayloadHash,
+    signature: &HybridSignature,
+) -> Result<(), CryptoError> {
+    HybridEd25519MlDsa.verify(
+        public,
+        SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+        message.as_bytes(),
+        signature,
+    )
+}
+
 #[cfg(test)]
 #[path = "multisig_output_tests.rs"]
 mod tests;

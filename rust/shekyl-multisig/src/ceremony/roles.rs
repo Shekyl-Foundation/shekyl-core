@@ -23,12 +23,10 @@ use shekyl_crypto_pq::multisig::{
     verify_multisig, MultisigSigContainer, HYBRID_SCHEME_ID_MULTISIG,
 };
 use shekyl_crypto_pq::multisig_output::{
-    multisig_member_public_key, MemberOwnCiphertext, MultisigMemberView,
+    multisig_member_public_key, verify_multisig_member_auth, MemberOwnCiphertext,
+    MultisigMemberView,
 };
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
-    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
-};
+use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_curve_primitives::Commitment as PedersenCommitment;
 use shekyl_fcmp::frost_sal::{
     complete, hold, participant, preprocess, preprocess_bytes, read_preprocess, read_share,
@@ -739,17 +737,12 @@ impl<'a> Proposer<'a, AwaitingSignatures> {
             .zip(self.state.signable.hashes())
             .enumerate()
         {
-            HybridEd25519MlDsa
-                .verify(
-                    &self.state.keys[input][position],
-                    SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
-                    hash.as_bytes(),
-                    sig,
-                )
-                .map_err(|_| CeremonyError::HybridSignature {
+            verify_multisig_member_auth(&self.state.keys[input][position], hash, sig).map_err(
+                |_| CeremonyError::HybridSignature {
                     member: sender,
                     input,
-                })?;
+                },
+            )?;
         }
         if self
             .state
