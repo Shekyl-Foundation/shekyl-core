@@ -1,0 +1,152 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Enrolment over the channel (`INPUT_GRAMMAR.md` IG-Q87;
+//! `RPC_CHANNEL.md` §5): a client's fingerprint and its ceiling, and this
+//! daemon's public bundle.
+//!
+//! A request names a ceiling as grant and preset keywords ([`CeilingWord`]);
+//! the daemon stores and lists it as its expanded grants ([`GrantName`]),
+//! never as a preset's name, so a later change to a preset widens no
+//! enrolment made under it.
+
+use shekyl_rpc_grants::{Grant, GrantSet, Preset};
+
+use super::daemon::GrantName;
+use crate::hash::HashHex;
+use crate::kinds::Bytes;
+
+crate::wire_keywords! {
+    /// A grant or a preset, as a ceiling names them (`RPC_CHANNEL.md` §6.1).
+    pub enum CeilingWord {
+        Health = "health",
+        Status = "status",
+        Chain = "chain",
+        Pool = "pool",
+        Peers = "peers",
+        Submit = "submit",
+        MiningWork = "mining-work",
+        MiningControl = "mining-control",
+        Bans = "bans",
+        Node = "node",
+        Config = "config",
+        Enrol = "enrol",
+        View = "view",
+        Wallet = "wallet",
+        Miner = "miner",
+        Admin = "admin",
+    }
+}
+
+impl CeilingWord {
+    /// The grants this word stands for.
+    #[must_use]
+    pub const fn grants(self) -> GrantSet {
+        let grant = match self {
+            Self::View => return Preset::View.grants(),
+            Self::Wallet => return Preset::Wallet.grants(),
+            Self::Miner => return Preset::Miner.grants(),
+            Self::Admin => return Preset::Admin.grants(),
+            Self::Health => Grant::Health,
+            Self::Status => Grant::Status,
+            Self::Chain => Grant::Chain,
+            Self::Pool => Grant::Pool,
+            Self::Peers => Grant::Peers,
+            Self::Submit => Grant::Submit,
+            Self::MiningWork => Grant::MiningWork,
+            Self::MiningControl => Grant::MiningControl,
+            Self::Bans => Grant::Bans,
+            Self::Node => Grant::Node,
+            Self::Config => Grant::Config,
+            Self::Enrol => Grant::Enrol,
+        };
+        GrantSet::of(&[grant])
+    }
+
+    /// The grants a list of words stands for, expanded.
+    #[must_use]
+    pub fn expand(words: &[Self]) -> GrantSet {
+        words
+            .iter()
+            .fold(GrantSet::EMPTY, |set, word| set.union(word.grants()))
+    }
+}
+
+/// A grant set as a reply lists it: its grants, in the table's order.
+#[must_use]
+pub fn grant_names(set: GrantSet) -> Vec<GrantName> {
+    set.iter().map(GrantName::from).collect()
+}
+
+crate::wire_object! {
+    /// `rpc_client_add`'s and `rpc_client_set`'s argument: a client and the
+    /// ceiling it is enrolled under.
+    ["rpc client"]
+    pub struct ClientCeiling {
+        /// The client's static-key fingerprint (RT-O14).
+        pub fingerprint: HashHex,
+        /// Grants and presets; stored expanded.
+        pub ceiling: Vec<CeilingWord>,
+    }
+}
+
+crate::wire_object! {
+    /// `rpc_client_remove`'s argument.
+    ["rpc client"]
+    pub struct ClientFingerprint {
+        /// The client's static-key fingerprint.
+        pub fingerprint: HashHex,
+    }
+}
+
+crate::wire_object! {
+    /// One enrolment, as `rpc_client_list` shows it.
+    ["rpc client"]
+    pub struct Client {
+        /// The client's static-key fingerprint.
+        pub fingerprint: HashHex,
+        /// Its ceiling's grants, expanded.
+        pub ceiling: Vec<GrantName>,
+    }
+}
+
+crate::wire_object! {
+    /// `rpc_bundle_show`'s reply: this daemon's static public keys, the
+    /// X25519 key then the ML-KEM-768 encapsulation key, the order the
+    /// handshake sends them in. Give it only to a device that will be
+    /// enrolled (§5).
+    ["rpc"]
+    pub struct Bundle {
+        /// The public bundle.
+        pub bundle: Bytes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A preset expands to its grants and a grant to itself; a list is
+    /// their union. Red edit: map `Wallet` to `View`, and the wallet
+    /// assertion fails.
+    #[test]
+    fn a_ceiling_expands_to_its_grants() {
+        assert_eq!(CeilingWord::expand(&[CeilingWord::Admin]), GrantSet::ALL);
+        assert_eq!(
+            CeilingWord::expand(&[CeilingWord::Wallet]),
+            Preset::Wallet.grants()
+        );
+        assert_eq!(
+            CeilingWord::expand(&[CeilingWord::View, CeilingWord::MiningWork]),
+            Preset::Miner.grants()
+        );
+        assert_eq!(CeilingWord::expand(&[]), GrantSet::EMPTY);
+        // Listed in the grant table's order, never as the preset's name.
+        assert_eq!(
+            grant_names(Preset::View.grants()),
+            [GrantName::Chain, GrantName::Pool, GrantName::Health]
+        );
+    }
+}
