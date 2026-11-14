@@ -16,14 +16,23 @@ good. And nothing new may come to depend on it: a new test that wants a
 chain at that scale waits for the forge.
 
   1. **Frozen.** The file exists and its SHA-256 is `PINNED_SHA256`.
-  2. **No new consumer.** Outside comments, only the files in `READERS`
-     name one of the chain's access points (`ACCESS`): the type's loader,
-     its path, its reserved-coinbase count, and the ingest's and the
-     store's prefix helpers built on it.
-  3. **The list only shrinks.** Every file in `READERS` exists and still
-     names an access point. A consumer that moved to the forge's chains
-     is taken off the list in the change that moves it, so `READERS` is
+  2. **No new consumer.** Outside comments, a line that names one of the
+     chain's access points (`ACCESS`: the type's loader, its path, its
+     reserved-coinbase count, and the ingest's and the store's prefix
+     helpers built on it) is counted under the function it sits in
+     (`<module>` before the file's first `fn`). Every (file, function)
+     pair with a count must be in `READERS`, at no more than its pinned
+     count. So a new test that calls a helper fails, whether it is in a
+     new file or in a file already listed, and so does an extra access
+     added to a listed function.
+  3. **The list only shrinks.** Every pinned pair still has exactly its
+     pinned count. One that dropped is lowered, or taken off when it
+     reaches zero, in the change that moves the consumer, so `READERS` is
      also `CF-5`'s migration list (`CHAIN_FORGE.md` §12.1, `CF-5`).
+
+What this does not see: an access moved from one line to another inside
+the same function, at the same count, or a helper renamed so that no
+`ACCESS` pattern names it. Review covers those; the gate covers growth.
 
 # A consensus change that would invalidate the chain
 
@@ -77,54 +86,107 @@ ACCESS = (
     r"\bshard_fill::",
 )
 ACCESS_RE = re.compile("|".join(ACCESS))
+FN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+(\w+)")
+MODULE = "<module>"
 
 # The chain's owner, its two readers, and their consumers at the freeze
-# (`bfdc84a30` plus #1370). Removing an entry is how a consumer leaves;
+# (`bfdc84a30` plus #1370): file -> function -> access lines. Lowering a
+# count, or removing an entry, is how a consumer leaves; raising one or
 # adding one needs a ruling that reopens `CF-R17`.
-READERS = (
+READERS: dict[str, dict[str, int]] = {
     # The owner: the format, the loader and the path.
-    "rust/shekyl-harness-spender/src/captured.rs",
+    "rust/shekyl-harness-spender/src/captured.rs": {
+        MODULE: 1,
+        "shard_fill_path": 2,
+        "shard_fill": 1,
+    },
     # The ingest's reader (`load_shard_fill`, `close_shards`) and its users.
-    "rust/shekyl-chain-ingest/src/scenario_shard.rs",
-    "rust/shekyl-chain-ingest/src/archival_pop_roundtrip_tests.rs",
-    "rust/shekyl-chain-ingest/src/archival_slash_tests.rs",
-    "rust/shekyl-chain-ingest/src/bundle_producer_gate_tests.rs",
-    "rust/shekyl-chain-ingest/src/pool_submit_tests.rs",
-    "rust/shekyl-chain-ingest/src/rpc_store_facts_tests/below_horizon.rs",
-    "rust/shekyl-chain-ingest/src/scenario_emission_tests.rs",
-    "rust/shekyl-chain-ingest/src/scenario_join_tests.rs",
+    "rust/shekyl-chain-ingest/src/scenario_shard.rs": {
+        "settled_schedule": 1,
+        "load_shard_fill": 2,
+        "close_shards": 1,
+    },
+    "rust/shekyl-chain-ingest/src/archival_pop_roundtrip_tests.rs": {
+        MODULE: 1,
+        "a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on": 1,
+        "a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused": 1,
+    },
+    "rust/shekyl-chain-ingest/src/archival_slash_tests.rs": {
+        MODULE: 1,
+        "open": 1,
+    },
+    "rust/shekyl-chain-ingest/src/bundle_producer_gate_tests.rs": {
+        MODULE: 1,
+        "a_produced_bundle_is_admitted_and_connects_through_the_staged_door": 1,
+        "a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door": 1,
+    },
+    "rust/shekyl-chain-ingest/src/pool_submit_tests.rs": {
+        "closed_shards_lane": 2,
+    },
+    "rust/shekyl-chain-ingest/src/rpc_store_facts_tests/below_horizon.rs": {
+        MODULE: 1,
+        "the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded": 1,
+    },
+    "rust/shekyl-chain-ingest/src/scenario_emission_tests.rs": {
+        MODULE: 1,
+        "the_drivers_emission_claim_connects_and_pays_the_persona": 1,
+        "a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed": 1,
+    },
+    "rust/shekyl-chain-ingest/src/scenario_join_tests.rs": {
+        MODULE: 1,
+        "a_join_is_written_and_the_blocks_after_it_read_the_record": 1,
+    },
     # The store's reader (`store_with_prefix`, the capture writer) and its
     # users.
-    "rust/shekyl-chain-store/src/store/shard_fill.rs",
-    "rust/shekyl-chain-store/src/store/prune_tests.rs",
-    "rust/shekyl-chain-store/src/store/slash_scan_bench_tests.rs",
-)
+    "rust/shekyl-chain-store/src/store/shard_fill.rs": {
+        MODULE: 1,
+        "shard_fill": 1,
+        "write_capture": 2,
+        "store_with_prefix": 1,
+    },
+    "rust/shekyl-chain-store/src/store/prune_tests.rs": {
+        MODULE: 1,
+        "captured": 1,
+        "chain_to_400": 1,
+        "the_boundary_batch_discards_closed_shards_on_real_spends": 4,
+        "short_captured": 1,
+        "the_predicate_survives_a_prune_on_the_stored_rows": 1,
+    },
+    "rust/shekyl-chain-store/src/store/slash_scan_bench_tests.rs": {
+        "prefix": 1,
+        "build_under": 1,
+    },
+}
 OWNER = "rust/shekyl-harness-spender/src/captured.rs"
 
 
-def code_hits(text: str) -> list[int]:
-    """Line numbers (1-based) whose code names an access point."""
-    hits = []
-    for number, line in enumerate(text.splitlines(), start=1):
+def access_counts(text: str) -> dict[str, int]:
+    """Access lines outside comments, by the function they sit in."""
+    counts: dict[str, int] = {}
+    current = MODULE
+    for line in text.splitlines():
+        found = FN_RE.match(line)
+        if found:
+            current = found.group(1)
         if line.lstrip().startswith("//"):
             continue
         if ACCESS_RE.search(line):
-            hits.append(number)
-    return hits
+            counts[current] = counts.get(current, 0) + 1
+    return counts
 
 
 def rust_sources(root: Path) -> list[Path]:
     return sorted(p for p in (root / "rust").rglob("*.rs") if "/target/" not in p.as_posix())
 
 
-def check(root: Path, pinned: str, readers: tuple[str, ...]) -> list[str]:
+def check(root: Path, pinned: str, readers: dict[str, dict[str, int]]) -> list[str]:
     errors: list[str] = []
     if not PIN_REASON.strip():
         errors.append("PIN_REASON is empty: a pin names why it is this hash (CF-R20)")
 
     chain = root / CHAIN
     if not chain.is_file():
-        return [f"{CHAIN} is missing: the freeze has no subject (CF-R17 ends only in CF-5)"]
+        return errors + [f"{CHAIN} is missing: the freeze has no subject (CF-R17 ends only in CF-5)"]
     digest = hashlib.sha256(chain.read_bytes()).hexdigest()
     if digest != pinned:
         errors.append(
@@ -140,32 +202,42 @@ def check(root: Path, pinned: str, readers: tuple[str, ...]) -> list[str]:
     if not sources:
         return errors + ["no Rust source under rust/: the scan has no subject"]
 
-    allowed = set(readers)
-    seen: set[str] = set()
+    found: dict[str, dict[str, int]] = {}
     for path in sources:
-        rel = path.relative_to(root).as_posix()
-        hits = code_hits(path.read_text(encoding="utf-8", errors="replace"))
-        if not hits:
-            continue
-        seen.add(rel)
-        if rel not in allowed:
-            lines = ", ".join(str(n) for n in hits[:5])
-            errors.append(
-                f"{rel}:{lines}: a new consumer of the frozen shard-fill chain. Nothing new "
-                "depends on it (CHAIN_FORGE.md CF-R17); a chain at that scale waits for the forge."
-            )
+        counts = access_counts(path.read_text(encoding="utf-8", errors="replace"))
+        if counts:
+            found[path.relative_to(root).as_posix()] = counts
 
-    if OWNER not in seen:
+    if OWNER not in found:
         errors.append(f"{OWNER} names none of the access points: the scan matches nothing")
 
-    for rel in readers:
+    new = (
+        "a new consumer of the frozen shard-fill chain. Nothing new depends on it "
+        "(CHAIN_FORGE.md CF-R17); a chain at that scale waits for the forge."
+    )
+    for rel, counts in sorted(found.items()):
+        pins = readers.get(rel)
+        for function, count in sorted(counts.items()):
+            pin = None if pins is None else pins.get(function)
+            if pin is None:
+                errors.append(f"{rel}: `{function}` reads the chain ({count} access line(s)): {new}")
+            elif count > pin:
+                errors.append(
+                    f"{rel}: `{function}` has {count} access lines, pinned at {pin}: {new}"
+                )
+
+    for rel, pins in readers.items():
+        counts = found.get(rel, {})
         if not (root / rel).is_file():
-            errors.append(f"{rel} is listed in READERS and does not exist: take it off the list")
-        elif rel not in seen:
-            errors.append(
-                f"{rel} is listed in READERS and no longer reads the chain: take it off the list "
-                "(CF-5's migration list shrinks as consumers move)"
-            )
+            errors.append(f"{rel} is in READERS and does not exist: take it off the list")
+            continue
+        for function, pin in pins.items():
+            count = counts.get(function, 0)
+            if count < pin:
+                errors.append(
+                    f"{rel}: `{function}` is pinned at {pin} access lines and has {count}: "
+                    "lower the pin, or take it off at zero (CF-5's list only shrinks)"
+                )
     return errors
 
 
@@ -173,17 +245,19 @@ def selftest() -> int:
     good = b"frozen chain bytes"
     pinned = hashlib.sha256(good).hexdigest()
     owner = "pub fn shard_fill_path() -> PathBuf { todo!() }\n"
-    user = "fn t() { let x = close_shards(&mut s, &mut m, 1, 1); }\n"
-    readers = (OWNER, "rust/a/src/user.rs")
+    user = "use x::close_shards;\n\nfn listed_test() {\n    let x = close_shards(&mut s, 1);\n}\n"
+    readers = {
+        OWNER: {"shard_fill_path": 1},
+        "rust/a/src/user.rs": {MODULE: 1, "listed_test": 1},
+    }
 
-    def tree(tmp: Path, *, chain: bytes | None = good, extra: dict[str, str] | None = None,
-             drop_user: bool = False) -> Path:
-        files = {OWNER: owner, "rust/a/src/user.rs": user if not drop_user else "fn t() {}\n"}
-        files.update(extra or {})
-        for rel, body in files.items():
+    def tree(tmp: Path, *, chain: bytes | None = good, files: dict[str, str] | None = None) -> Path:
+        body = {OWNER: owner, "rust/a/src/user.rs": user}
+        body.update(files or {})
+        for rel, text in body.items():
             p = tmp / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(body, encoding="utf-8")
+            p.write_text(text, encoding="utf-8")
         if chain is not None:
             c = tmp / CHAIN
             c.parent.mkdir(parents=True, exist_ok=True)
@@ -194,9 +268,27 @@ def selftest() -> int:
         ("clean", {}, False),
         ("changed chain", {"chain": b"recaptured"}, True),
         ("missing chain", {"chain": None}, True),
-        ("new consumer", {"extra": {"rust/b/src/new_tests.rs": "use x::{store_with_prefix};\n"}}, True),
-        ("comment is not a consumer", {"extra": {"rust/b/src/doc.rs": "/// see `close_shards`\n"}}, False),
-        ("stale reader", {"drop_user": True}, True),
+        ("new consumer in a new file", {"files": {"rust/b/src/new_tests.rs": "fn t() { store_with_prefix(p); }\n"}}, True),
+        (
+            "new consumer in a listed file",
+            {"files": {"rust/a/src/user.rs": user + "\nfn another_test() {\n    load_shard_fill(&mut s, 1);\n}\n"}},
+            True,
+        ),
+        (
+            "an extra access in a listed function",
+            {"files": {"rust/a/src/user.rs": user.replace("close_shards(&mut s, 1);", "close_shards(&mut s, 1);\n    close_shards(&mut s, 2);")}},
+            True,
+        ),
+        (
+            "a comment is not a consumer",
+            {"files": {"rust/b/src/doc.rs": "/// see `close_shards`\nfn f() {}\n"}},
+            False,
+        ),
+        (
+            "an access that left keeps its pin",
+            {"files": {"rust/a/src/user.rs": "use x::close_shards;\n\nfn listed_test() {}\n"}},
+            True,
+        ),
     ]
     failed = 0
     for name, kwargs, want_errors in cases:
@@ -219,7 +311,11 @@ def main() -> int:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
-    print(f"PASS: {CHAIN} is frozen at its pinned hash ({PIN_REASON}), and {len(READERS)} listed files read it")
+    sites = sum(len(pins) for pins in READERS.values())
+    print(
+        f"PASS: {CHAIN} is frozen at its pinned hash ({PIN_REASON}); "
+        f"{len(READERS)} files, {sites} (file, function) sites read it, none beyond its pin"
+    )
     return 0
 
 
