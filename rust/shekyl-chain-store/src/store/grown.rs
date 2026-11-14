@@ -342,7 +342,8 @@ impl Grown {
             .iter()
             .map(|key| self.spender.owned_input(&owner, *key, connecting))
             .collect();
-        Spender::spend_owned(sourced, connecting, fee, wallet.recipient())
+        self.spender
+            .spend_owned(sourced, connecting, fee, wallet.recipient())
     }
 
     /// [`Self::spend_of`] with a bond post riding the spend

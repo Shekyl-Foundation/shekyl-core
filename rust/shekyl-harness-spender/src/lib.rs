@@ -65,6 +65,7 @@
 
 pub mod bond;
 pub mod captured;
+mod draw;
 pub mod persona;
 mod spender;
 

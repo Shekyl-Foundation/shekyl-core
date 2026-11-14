@@ -123,6 +123,57 @@ async fn two_spends_connect_and_the_per_slot_rows_record() {
     scenario.close().await;
 }
 
+/// Seams T1–T4 (`CHAIN_FORGE.md` §5.3) through the full signing stack on
+/// a real chain: two spenders seeded alike build the same spends, in order,
+/// byte for byte (the range proof, the pseudo-out blinds, the membership
+/// proof and the ML-DSA nonces all drawn from the seed); another seed, or
+/// the OS, builds another body of the same spend; and the seeded spends
+/// connect, judged like any other.
+#[tokio::test]
+async fn seeded_spenders_build_byte_identical_spends_that_connect() {
+    let mut scenario = Scenario::open("spend-seeded");
+    let mined = scenario.mine(AT).await;
+    let network = scenario.network_id();
+    let wallet = scenario.wallet();
+    let fee = Family::Main.fee();
+    let build = |seed: &[u8; 32]| {
+        let spender = Spender::seeded(network, &mined, seed);
+        (
+            spender.spend_coinbase(wallet, h(0), h(AT), fee),
+            spender.spend_coinbase(wallet, h(1), h(AT), fee),
+        )
+    };
+    let (a, b) = build(&[7u8; 32]);
+    let (a_again, b_again) = build(&[7u8; 32]);
+    assert_eq!(
+        a.serialize(),
+        a_again.serialize(),
+        "one seed, one first spend"
+    );
+    assert_eq!(
+        b.serialize(),
+        b_again.serialize(),
+        "one seed, one second spend"
+    );
+    let (other, _) = build(&[8u8; 32]);
+    assert_ne!(
+        a.serialize(),
+        other.serialize(),
+        "another seed, another body"
+    );
+    let drawn = Spender::on(network, &mined).spend_coinbase(wallet, h(0), h(AT), fee);
+    assert_ne!(
+        a.serialize(),
+        drawn.serialize(),
+        "the OS draws another body"
+    );
+    scenario
+        .mine_listing(vec![a, b])
+        .await
+        .unwrap_or_else(|outcome| panic!("seeded spends connect: {outcome}"));
+    scenario.close().await;
+}
+
 /// CEN-L1 across slots: a twin of the first spend at another fee is a
 /// different body over the same key image, admissible alone, and refused
 /// behind the first at `Listed(1)`, input 0 — the second occurrence, as

@@ -332,6 +332,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "Forwards shekyl-fcmp's and shekyl-crypto-pq's seeded-rng; the production "
     "signers draw from the OS, and no build that ships has one that takes its "
     "caller's randomness (CF-R9)",
+    (
+        "shekyl-harness-spender",
+        "seeded-rng",
+    ): "exposes seeded building (Spender::seeded, Persona::with_signing_seed): each "
+    "spend's proofs and signatures, and a persona's ML-DSA randomness, drawn from "
+    "a seed so a chain built twice comes out byte for byte the same "
+    "(CHAIN_FORGE.md §5.3, seam T4). Forwards shekyl-tx-builder's and "
+    "shekyl-crypto-pq's seeded-rng. The crate is test support reached through dev "
+    "edges only; this row keeps the seeded surface there too",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -517,6 +526,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-fcmp",
         "shekyl-crypto-pq",
         "shekyl-tx-builder",
+        "shekyl-harness-spender",
     }
 )
 

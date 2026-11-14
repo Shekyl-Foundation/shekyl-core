@@ -281,7 +281,10 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # the spender's with its fixture migration), which is why the spender is
 # a crate and not this crate's module.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
-shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+# `seeded-rng` (TEST_ONLY): the seeded spender's determinism test
+# (`scenario_spend_tests`), the full signing stack's seams T1–T4 through one
+# real chain (CHAIN_FORGE.md §5.3).
+shekyl-harness-spender = { path = "../shekyl-harness-spender", features = ["seeded-rng"] }
 # The genesis block assembly the node connects (`genesis_block`): a scenario
 # chain that carries a network's identity connects that network's table
 # genesis as block 0, assembled the node's way (`scenario_genesis.rs`,

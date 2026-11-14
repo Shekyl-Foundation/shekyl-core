@@ -40,7 +40,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme, SCHEME_DOMAIN_PQC_AUTH_TX};
+use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::archival::{BondRecord, Holdings, ReceiptSignPk};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
@@ -48,6 +48,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::BondPost;
 use shekyl_wire::Input;
 
+use crate::draw::MlDsaDraw;
 use crate::PostedBond;
 
 /// The harness's persona master seed. Any 64 bytes; fixed so the personas
@@ -58,6 +59,9 @@ const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
 /// An archival persona: the keys a wallet derives for slot `p_slot`.
 pub struct Persona {
     keys: ArchivalPKeys,
+    /// Where this persona's signatures draw ML-DSA's randomness: the OS, or
+    /// a signing seed ([`Self::with_signing_seed`], `seeded-rng`).
+    draw: MlDsaDraw,
 }
 
 impl Persona {
@@ -78,7 +82,21 @@ impl Persona {
     pub fn on(network: Network, p_slot: u32) -> Self {
         let keys = derive_archival_p_keys(&MASTER, network, p_slot)
             .expect("the harness's seed derives a persona");
-        Self { keys }
+        Self {
+            keys,
+            draw: MlDsaDraw::default(),
+        }
+    }
+
+    /// This persona with every signature it makes (its identity signature,
+    /// the bond slots its posts sign) drawing ML-DSA's randomness from
+    /// `seed`, so a chain built twice from one seed carries the same
+    /// signatures (`CHAIN_FORGE.md` §5.3, seam T4). `seeded-rng` only.
+    #[cfg(feature = "seeded-rng")]
+    #[must_use]
+    pub fn with_signing_seed(mut self, seed: &[u8; 32]) -> Self {
+        self.draw = MlDsaDraw::seeded(seed);
+        self
     }
 
     /// The whole bundle, owned: for a test that hands the persona's keys to
@@ -140,15 +158,11 @@ impl Persona {
     /// `signed_claiming`).
     #[must_use]
     pub fn identity_signature(&self, payload: &SigningPayloadHash) -> Vec<u8> {
-        HybridEd25519MlDsa
-            .sign(
-                &self.keys.hybrid_sign_sk,
-                SCHEME_DOMAIN_PQC_AUTH_TX,
-                payload.as_bytes(),
-            )
-            .expect("the persona's identity key signs")
-            .to_canonical_bytes()
-            .expect("a hybrid signature encodes")
+        self.draw.sign(
+            &self.keys.hybrid_sign_sk,
+            SCHEME_DOMAIN_PQC_AUTH_TX,
+            payload.as_bytes(),
+        )
     }
 
     /// A JoinMarket over `holdings` at `endpoint`, through the production
@@ -166,6 +180,7 @@ impl Persona {
             built.vin().hybrid_public_key.clone(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A Release of `record_bonded_total`, through the production
@@ -182,6 +197,7 @@ impl Persona {
             self.bond_spend(),
             &self.keys.bond_spend_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// The Reinstate vin for `record` — the shape
@@ -226,6 +242,7 @@ impl Persona {
             self.identity(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A Release `BondPost` with the production constructor's fields, for
@@ -264,6 +281,7 @@ impl Persona {
             self.identity(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A JoinMarket `BondPost` with the production constructor's fields,
