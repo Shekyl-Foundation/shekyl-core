@@ -253,6 +253,13 @@ jobs:
             python3 scripts/ci/check_bundle_producer_secrets.py --selftest
           run_one "The bundle producer's secrets reach no log" \
             python3 scripts/ci/check_bundle_producer_secrets.py
+          # CHAIN_FORGE.md CF-R17: the shard-fill chain is frozen until
+          # CF-4a (its bytes do not regenerate; a re-capture is 11.5 MB of
+          # history for good), and nothing new consumes it. Selftest first.
+          run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
+            python3 scripts/ci/check_shard_fill_frozen.py --selftest
+          run_one "The shard-fill chain is frozen, with no new consumer" \
+            python3 scripts/ci/check_shard_fill_frozen.py
           run_one "RandomX symbol-isolation negatives (rule 50)" \
             scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "§94: transit provenance marker outlives its constant" \

@@ -6,6 +6,15 @@
 //! A chain of real spends, built once and checked in: the shard fill
 //! (Rick's shard-fill ruling, option A, 2026-11-11).
 //!
+//! **Frozen until `CF-4a`, and closed to new consumers** (`CHAIN_FORGE.md`
+//! `CF-R17`). The checked-in file is never regenerated or re-committed:
+//! its bytes do not reproduce, so each re-capture would add its full size
+//! to the repository's history for good. Nothing new depends on it; a test
+//! that wants a chain at this scale waits for the chain forge. `CF-4a`
+//! replaces it with a forged chain that covers every current consumer's
+//! test, then deletes it. `scripts/ci/check_shard_fill_frozen.py` holds
+//! the file to its pinned hash and its readers to a list that only shrinks.
+//!
 //! The store's prune tests and the ingest's long scenarios need shards
 //! closed by bytes every landed rule verifies. Proving those spends costs
 //! minutes; verifying them costs seconds. So the chain is built once by the

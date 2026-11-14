@@ -7086,6 +7086,121 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge: CF-7 before CF-6; PB-D1 names both limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R25`).
+
+- After `CF-4b`, `CF-7` (the max-bundle chain) runs in parallel with the
+  rest of `CF-5`, then `CF-6`. `CF-7`'s surge-ceiling timing is an input
+  to the block-size decision; `CF-6` (Chain P) depends on that decision
+  and is redone after it.
+- `DAEMON_REDB_STORE.md`'s `PB-D1` row names both limits (`CF-R24`): the
+  design-load limit, gated and derived when the plan is built; the surge
+  ceiling, required and reported, a miss over 10 s a finding for the
+  simulation and not a change to the budget. #1370 carries the edit; the
+  `PB-` rows stay the DRS line's. #1373 edits row 8 of the same file, and
+  whichever of the two merges second rebases.
+
+## 2026-11-13 — Chain forge: the shard-fill replacement moves ahead of Chain L; the max-bundle block at two limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R23`, `CF-R24`).
+
+- The order is `CF-1b`, `CF-1c`, `CF-4a`, `CF-3`, `CF-4b`, then the rest
+  of `CF-5`. `CF-4` splits: `CF-4a` is the hosting with the forge-built
+  replacement for `shard-fill.bin` as its first artifact, covering every
+  listed reader function by function before the file and its gate are
+  deleted; `CF-4b` is Chain L v1 and its pilot consumers. The freeze
+  blocks every consensus change until the replacement exists, and a
+  consensus change before Chain L is likely (the block-size change after
+  alpha.12 is certain), while `CF-3` and Chain L block no one by waiting.
+  It cannot precede `CF-1b` and `CF-1c`: without the RNG gate and the
+  determinism check it would be a second non-reproducible file. Its
+  re-forge when `CF-3` changes the corpus layout is expected and cheap.
+- The max-bundle block is measured at two limits, and `PB-D1` is read
+  the same way. Gated: the design-load limit, derived from the
+  validator's median functions when the plan is built. Required, not
+  gated: the surge ceiling `2 × S × LTEM`, with its floor-device
+  verification time reported; over the 10 s floor budget it is a finding
+  for the economics simulation's zone and `S` derivation, and the budget
+  is not changed to make it pass.
+
+## 2026-11-13 — Chain forge: the max-bundle block (PB-D1 shape 8) is the forge's to build
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R22`; `DAEMON_REDB_STORE.md`
+§1.3a.7 row 8 on #1373).
+
+- `CF-E35` max-bundle is built by the chain forge, no longer waiting on
+  SO-D12. SO-D12 owns the definition and checks the forge's chain
+  against it; it does not build chains of its own.
+- The definition: the worst of shapes 1–7 filled to the weight limit,
+  plus a bundle section at its full budget, `c · (⌊9·D/SEB⌋ + 1)` draws;
+  the budget counts draws, not weight, so the two add. Pass/fail at the
+  `D` = 324,000 equivalent (292 records a bundle, 584 a section), mined
+  under the real validator on a short regtest epoch with the same record
+  count (`SEB` 100, about 3,240 drawable pairs), every block admitted,
+  with real receipt-key signatures.
+- The report: cost per record and per bundle, and the largest `D` at
+  which `PB-D1` holds on the floor device.
+
+## 2026-11-13 — Chain forge: the design load stays 30 spends for now; the shard-fill freeze against consensus changes
+
+**Decision** (Rick, on `69e366391`; `CHAIN_FORGE.md` §1, `CF-R20`, `CF-R21`).
+
+- The design load is 30 two-in/two-out spends a block for now, because
+  the `PB-` budgets are stated against it. The block size is re-derived
+  through the economics simulation later (likely about 90 spends, not
+  before alpha.12); Chain P, the `PB-` rows and the fixtures are then
+  redone, an accepted cost.
+- Chain P's weight ramp is derived when its plan is built, from the
+  validator's own `medians_over` and `long_term_weight`, with every block
+  asserted under the limit in force at its height; a vanished margin
+  makes the derivation insert the extra 51-block step itself. Changing
+  the target re-plans the chain.
+- The shard-fill chain's replacement for its twelve consumers lands
+  before any consensus change that would invalidate it, the block-size
+  re-derivation included, brought forward if needed. If such a change
+  must land first, Rick approves one re-capture explicitly, the reason
+  cited in the freeze gate's pin update, into the hosted store if live
+  or into git once. The tests are never turned off: the gate blocking
+  the consensus PR is how the case is decided.
+
+## 2026-11-13 — Chain forge after the 4b switch: CF-2 retired, the shard-fill chain frozen, Chain B's criteria, Chain P's ramp
+
+**Decision** (Rick, on #1370 after #1327 merged; `CHAIN_FORGE.md` §1,
+`CF-R16`…`CF-R19`).
+
+- `CF-2` is retired as an increment, its number not reused: #1327
+  deleted the serve-credit input it was to sign. The driver's receipt
+  stand-in (`signed_record`) stays, gated test-only and listed on
+  `CF-1b`'s seedable-RNG gate; where it is defined, a comment says no
+  rule checks a delivery digest, so the production signer would change
+  no verdict. `CF-1c` adds the connect-path tamper test: each signed
+  field in turn, refused at CEN-J34 or J37 by name, beside an untampered
+  positive control. `CF-E34` is marked RETIRED with its reason, never
+  deleted: catalogue IDs are not reused.
+- The shard-fill chain (`shard-fill.bin`, 11.5 MB) is frozen until
+  `CF-5`: never regenerated or re-committed, because its bytes do not
+  reproduce and each regeneration would add its size to history for
+  good. It takes no new consumers (a gate holds both). `CF-5`'s forged
+  replacement covers every current consumer's test before the file is
+  deleted, and `CF-5`'s plan lists them.
+- Chain B's state comparison is accepted, with four criteria for `CF-1c`:
+  recorded inputs replay through the producer's production seams behind
+  the test-only flag, with no separate replay path; the projection is
+  defined by exclusion, each excluded field with its reason and each row
+  category with a negative control; `CF-1c` shows the settlement outcome
+  is timing-independent under the cross-check's conditions, and if not,
+  the answer is tighter conditions or another check, never wider
+  tolerances; an input that cannot be recorded makes B's artifact the
+  only copy, an immutable digest-pinned release held in more than one
+  place.
+- Chain P's design-load segment cannot start at genesis (limit 600,000
+  against about 635,520 for 30 spends, from the CI lane's #1365). P
+  grows the medians under the real rule, its miners taking the penalty,
+  before the segment, and again before the 4x segment; the plan says
+  whether that fits P's length (it does: two 51-block ramps). Pending
+  the design-load ruling.
+
 ## 2026-11-13 — Chain forge: the harness identity ends in CF-5, and the harness seed is public and regtest-only
 
 **Decision** (Rick, on `CF-1a`; `CHAIN_FORGE.md` §1, `CF-R15`).
@@ -7104,9 +7219,11 @@ consensus PR's own diff.
   coinbases can be spent by anyone who restores it, which is intended.
   Its addresses are refused on mainnet and testnet because their prefixes
   do not match, and a test holds that refusal.
-- The emission claim's network id and proof reference travel as one
-  argument (`ClaimAnchor`): grouping them fixes the design, where an
-  `#[allow]` would have hidden the lint.
+- The emission claim takes the chain's network id and the proof
+  reference as two arguments (revised in review before #1370 merged).
+  Pairing them in one struct held no invariant the parameters do not
+  name. The two public wrappers carry the same scoped
+  `too_many_arguments` allow the private assembler already has.
 
 **Why.** An identity kept for convenience is the one that quietly comes
 back; a dated deletion with a gate behind it does not. A public seed is
