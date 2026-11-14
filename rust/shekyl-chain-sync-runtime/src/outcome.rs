@@ -15,7 +15,6 @@ pub(crate) fn proved_kind(proved: &Proved) -> &'static str {
     match proved {
         Proved::Formed(_) => "formed",
         Proved::Refused(_) => "refused",
-        Proved::NotHeld => "not held",
     }
 }
 

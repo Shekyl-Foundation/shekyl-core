@@ -26,7 +26,9 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-chain-sync = { path = "../shekyl-chain-sync" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
-shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The node's one hasher: `Class`, and the jobs the executor runs through
+# the ingest's boundary over it. The executor holds no budget.
+shekyl-hasher = { path = "../shekyl-hasher" }
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-session = { path = "../shekyl-p2p-session" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
@@ -41,6 +43,9 @@ tracing = "0.1"
 
 [dev-dependencies]
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The budget a test starts its own hasher over, and holds a permit of to
+# watch which class a job waits in.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 
 [lints]
 workspace = true

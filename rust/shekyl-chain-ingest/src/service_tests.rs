@@ -2773,6 +2773,75 @@ async fn a_run_from_genesis_is_a_job_on_a_seed_the_window_does_not_name() {
     y.close().await;
 }
 
+/// Chain sync's frontier is the list's third while its sender lives, and
+/// when the sender closes (the sync owner ended or stopped) the ingest
+/// ranks without a frontier and keeps serving: a closed sender is not a
+/// fault here (`RANDOMX_CACHE_ACTOR.md` §5.1).
+///
+/// Red edit: in `window::rank`, return when the frontier's sender closes:
+/// the last list keeps the dead frontier's seed, and the next
+/// `ranked_now` never returns.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_frontier_ranks_without_it_and_the_service_keeps_serving() {
+    use crate::cache_window::Frontier;
+    let mut y = Scenario::open("service-frontier-y");
+    let blocks = y.mine(3).await;
+    let genesis = blocks[0].hash;
+    let ahead = BlockHash::from_bytes([0xfa; 32]);
+    let (frontier, listening) = tokio::sync::watch::channel(None);
+    let gate = Arc::new(Gated::new());
+    let path = tmp("service-frontier");
+    let service = Service::start(
+        Arc::new(open_store(&path)),
+        RULES,
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+        super::Follow {
+            frontier: Some(listening),
+            ..Default::default()
+        },
+    );
+    offer_all(&service, 1, &blocks[..2]).await;
+    frontier.send_replace(Some(Frontier {
+        seed: ahead,
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(u128::MAX),
+    }));
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(
+        gate.ranked(),
+        Some(
+            Ranked::new(
+                as_seed(genesis),
+                None,
+                Some((as_seed(ahead), Class::HeaderPow))
+            )
+            .expect("two seeds")
+        ),
+        "the frontier's seed is the third, at the header-proof class"
+    );
+    drop(frontier);
+    // The ranker hears the close on its own; ask once more to be behind it.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            assert!(service.shared.ranked_now().await, "the service is running");
+            if gate.ranked() == Some(Ranked::new(as_seed(genesis), None, None).expect("one")) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the list drops the closed frontier's seed");
+    let replies = offer_all(&service, 1, &blocks[2..]).await;
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "the service keeps serving: {replies:?}"
+    );
+    assert!(service.ended().borrow().is_none(), "and has not ended");
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
 /// A span sends its next form once the previous one's job was granted, so
 /// one span has at most one ungranted form waiting on a blocking thread
 /// (`span` module docs; the node sizes its blocking pool from it).

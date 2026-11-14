@@ -22,7 +22,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
 
 use crate::branch::{BranchView, Pending};
 use crate::model::{CloseCause, Command, HashClass, Job, ProveItem, Proved, Spent, Sync};
-use crate::peer::{cache_for, HeaderRequest, Run};
+use crate::peer::{seed_for, HeaderRequest, Run};
 
 pub(crate) mod awaiting;
 mod bodies;
@@ -134,10 +134,6 @@ where
             match result {
                 Proved::Refused(refused) => {
                     self.close(session, CloseCause::HeaderRefused(refused.rule), out);
-                    return Ok(());
-                }
-                Proved::NotHeld => {
-                    self.seed_not_held(session, out);
                     return Ok(());
                 }
                 Proved::Formed(formed) => {
@@ -269,13 +265,15 @@ where
         } else {
             class
         };
-        let Some(cache) = cache_for(run, run.chain.proven) else {
+        let Some(seed) = seed_for(run, run.chain.proven) else {
             return;
         };
         let attempt = run.chain.attempt;
         let mut items = Vec::new();
         for (offset, checked) in run.chain.checked[run.chain.proven..].iter().enumerate() {
-            if cache_for(run, run.chain.proven + offset) != Some(cache) {
+            // One job borrows one seed's cache: the batch ends where the
+            // seed changes, or where the next one is not earned yet.
+            if seed_for(run, run.chain.proven + offset) != Some(seed) {
                 break;
             }
             items.push(ProveItem {
@@ -299,7 +297,7 @@ where
         out.push(Command::Prove {
             job: Job::from_raw(id),
             class,
-            cache,
+            seed,
             items,
         });
     }
@@ -418,35 +416,6 @@ where
             state.draw.spend();
         }
         out.push(Command::HeadersSpent { session, cause });
-    }
-
-    /// The run's next header could not be proven because the slots did
-    /// not hold its seed: the run is dropped and the session is closed to
-    /// header draws until the slots change (`Event::Seeds`). Not a spend:
-    /// the same request would be answered once the window holds the seed,
-    /// with the claim and `H*` unchanged.
-    fn seed_not_held(&mut self, session: K, out: &mut Vec<Command<K>>) {
-        let Some(state) = self.peers.get_mut(&session) else {
-            return;
-        };
-        let Some(run) = state.run.take() else {
-            return;
-        };
-        state.draw.miss_seed();
-        let seed = run
-            .chain
-            .checked
-            .get(run.chain.proven)
-            .map_or(BlockHash::NULL, |checked| checked.seed);
-        out.push(Command::SeedNotHeld { session, seed });
-    }
-
-    /// The ingest window's slots changed: every session closed for a seed
-    /// they did not hold is open to header draws again.
-    pub(crate) fn seeds_changed(&mut self) {
-        for peer in self.peers.values_mut() {
-            peer.draw.on_seeds();
-        }
     }
 
     fn session_for_job(&self, job: u64) -> Option<K> {

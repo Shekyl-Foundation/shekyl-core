@@ -20,7 +20,7 @@ use shekyl_levin::PortableMap;
 use shekyl_types::{BlockHeight, Timestamp};
 use shekyl_wire::PowBlob;
 
-use crate::model::{CachePlan, Event, Proved, Sync};
+use crate::model::{Event, Proved, Sync};
 use crate::proof::{fixed, open_claim};
 use crate::Command;
 
@@ -74,6 +74,9 @@ fn every_header_under_an_earned_seed_is_proven_in_one_job() {
             previous = PowBlob::read(&pow).expect("preimage").identity();
             pows.push(pow);
         }
+        // The branch's own seed: the run's header at height 2048, which is
+        // the seed block of every height from 2113 on.
+        let branch_seed = PowBlob::read(&pows[2048 - 8]).expect("preimage").identity();
         let bytes = shekyl_levin::ResponseHeaders {
             blobs: pows,
             tip_work: u128::MAX,
@@ -82,14 +85,19 @@ fn every_header_under_an_earned_seed_is_proven_in_one_job() {
         .store()
         .expect("the headers encode");
         let mut out = drive(&mut sync, Event::Headers { session: 1, bytes });
+        assert_eq!(
+            sync.frontier(),
+            None,
+            "a run with nothing proven offers the ranked list nothing"
+        );
         let mut branch_jobs = Vec::new();
-        while let Some((job, cache, items)) = out.iter().find_map(|command| match command {
+        while let Some((job, seed, items)) = out.iter().find_map(|command| match command {
             Command::Prove {
-                job, cache, items, ..
-            } => Some((*job, *cache, items.clone())),
+                job, seed, items, ..
+            } => Some((*job, *seed, items.clone())),
             _ => None,
         }) {
-            if matches!(cache, CachePlan::Branch(_)) {
+            if seed == branch_seed {
                 branch_jobs.push(items.len());
             }
             let results = items
@@ -112,6 +120,16 @@ fn every_header_under_an_earned_seed_is_proven_in_one_job() {
                 .collect();
             out = drive(&mut sync, Event::Proven { job, results });
         }
+        // The frontier the ranked list is fed (`RANDOMX_CACHE_ACTOR.md`
+        // §5.1): with every header proven, the run offers the seed its
+        // last header named, the branch's own, so that cache stays warm
+        // for the next response's headers. Red edit: have
+        // `peer::frontier_of` answer `None` once nothing is left to prove.
+        assert_eq!(
+            sync.frontier().map(|(seed, _)| seed),
+            Some(branch_seed),
+            "a proven run offers its last seed"
+        );
         // Heights 8 ..= 2307; the branch seed names 2113 onward.
         let first_named = (8..8 + COUNT as u64)
             .find(|height| {

@@ -60,7 +60,6 @@ use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
-use crate::cache_window::Frontier;
 use crate::connector::{
     BundleOffered, Connector, ConnectorArgs, FiledBundle, OfferBundle, OfferFault,
     PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
@@ -1671,6 +1670,7 @@ mod window;
 
 pub use window::Reservation;
 
+pub use crate::cache_window::Frontier;
 pub(crate) use window::{divide_pool_faults, record_store_read, with_pool, PoolDivision};
 
 #[cfg(test)]

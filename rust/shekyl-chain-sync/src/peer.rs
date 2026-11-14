@@ -30,7 +30,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, PowBlob};
 
 use crate::claim::PeerClaim;
-use crate::model::{body_deadline, header_deadline, CachePlan};
+use crate::model::{body_deadline, header_deadline};
 
 /// What this peer has said about bodies, apart from any one run.
 #[derive(Default)]
@@ -59,8 +59,6 @@ pub(crate) struct HeaderDraw {
     past_cap: bool,
     /// The last request from this `H*` yielded nothing.
     spent: bool,
-    /// The last response hashed under a seed the window did not hold.
-    seed_absent: bool,
 }
 
 impl HeaderDraw {
@@ -69,19 +67,15 @@ impl HeaderDraw {
             quiet: false,
             past_cap: false,
             spent: false,
-            seed_absent: false,
         }
     }
 
     /// Drawn for headers from the current `H*`.
     pub(crate) const fn eligible(self) -> bool {
-        !self.quiet && !self.past_cap && !self.spent && !self.seed_absent
+        !self.quiet && !self.past_cap && !self.spent
     }
 
     /// Header work from this `H*` is finished, for body planning.
-    ///
-    /// A missing seed is the window's fact, so the session may still serve
-    /// bodies.
     pub(crate) const fn headers_finished(self) -> bool {
         self.quiet || self.past_cap || self.spent
     }
@@ -97,11 +91,6 @@ impl HeaderDraw {
 
     pub(crate) fn on_star(&mut self) {
         self.spent = false;
-        self.seed_absent = false;
-    }
-
-    pub(crate) fn on_seeds(&mut self) {
-        self.seed_absent = false;
     }
 
     /// Ask for headers again after an unlinked body or one past the cap.
@@ -120,10 +109,6 @@ impl HeaderDraw {
 
     pub(crate) fn spend(&mut self) {
         self.spent = true;
-    }
-
-    pub(crate) fn miss_seed(&mut self) {
-        self.seed_absent = true;
     }
 }
 
@@ -627,12 +612,17 @@ impl Run {
     }
 }
 
-/// `None` is an unearned seed. It is not hashed and not charged to the peer.
-pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
+/// The seed the header at `index` is proven under. `None` is an unearned
+/// seed: it is not hashed and not charged to the peer.
+///
+/// Whether a seed is earned is this model's rule. What holds its cache is
+/// not: the executor asks the node's hasher for a job on the seed, and the
+/// hasher builds it inside its cap (`RANDOMX_CACHE_ACTOR.md` §5.3).
+pub(crate) fn seed_for(run: &Run, index: usize) -> Option<BlockHash> {
     let checked = &run.chain.checked[index];
-    // The evidence check's first seed is unearned: it is a block on our
-    // chain, below the fork. Every header that still names it uses the
-    // evidence cache. A later seed is earned on the branch.
+    // The evidence check's first seed is a block on our chain, below the
+    // fork. Every header that still names it is hashed under it. A later
+    // seed is earned on the branch.
     if run.is_evidence()
         && run
             .chain
@@ -640,19 +630,19 @@ pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
             .first()
             .is_some_and(|first| first.seed == checked.seed)
     {
-        return Some(CachePlan::Evidence(checked.seed));
+        return Some(checked.seed);
     }
     let on_main = match seed_height(checked.height) {
         None => true,
         Some(seed_at) => seed_at.to_raw() <= run.chain.parent_height.to_raw(),
     };
     if on_main {
-        return Some(CachePlan::Main(checked.seed));
+        return Some(checked.seed);
     }
     // A branch seed is earned once (CS-Q2 step 3): when the seed header
     // and the lag after it are proven, which is every header before the
-    // first one that names the seed. The cache may then be built, and every
-    // later header under that seed is hashed in the same job.
+    // first one that names the seed. Every later header under that seed
+    // is hashed in the same job.
     let seed_at = seed_height(checked.height)?;
     let first_named = BlockHeight::from_raw(
         seed_at
@@ -661,7 +651,27 @@ pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
             .saturating_add(1),
     );
     let first_named = run.chain.index_at(first_named)?;
-    (first_named <= run.chain.proven).then_some(CachePlan::Branch(checked.seed))
+    (first_named <= run.chain.proven).then_some(checked.seed)
+}
+
+/// What a run offers the node's ranked list (`RANDOMX_CACHE_ACTOR.md`
+/// §5.1): the seed its next header proof hashes under, and its proven
+/// cumulative work. `None` for a run with nothing proven, for an evidence
+/// run (the evidence check is a job, not residency, HA-R3), and where the
+/// next seed is not earned.
+///
+/// A run with every header proven has no next proof yet. Its next headers
+/// most likely hash under the seed its last proven header named, so that
+/// seed is offered: without it the cache would be freed between one
+/// response's headers and the next's, and built again.
+pub(crate) fn frontier_of(run: &Run) -> Option<(BlockHash, CumulativeDifficulty)> {
+    if run.is_evidence() {
+        return None;
+    }
+    let proven = run.chain.proven;
+    let last = run.chain.checked.get(proven.checked_sub(1)?)?;
+    let next = proven.min(run.chain.checked.len() - 1);
+    Some((seed_for(run, next)?, last.work))
 }
 
 /// One open peer.
