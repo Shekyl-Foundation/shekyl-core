@@ -123,9 +123,8 @@ async fn a_pipe_failing_the_peer_check_is_a_security_failure_dialled_once() {
     let dialled = tokio::task::spawn_blocking(move || target.dial())
         .await
         .expect("the dial's task");
-    let fault = match dialled {
-        Ok(_) => panic!("the client accepted a pipe below Medium integrity"),
-        Err(fault) => fault,
+    let Err(fault) = dialled else {
+        panic!("the client accepted a pipe below Medium integrity")
     };
     assert!(
         matches!(fault, LocalFault::PeerCheck(_)),

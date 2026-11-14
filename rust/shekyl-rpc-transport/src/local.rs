@@ -675,7 +675,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target =
             LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(dir.path())).unwrap();
-        let fault = target.dial().unwrap_err();
+        let Err(fault) = target.dial() else {
+            panic!("a dial with nothing there connected")
+        };
         assert!(
             matches!(fault, LocalFault::NotRunning { ref node } if node == "regtest"),
             "{fault:?}"

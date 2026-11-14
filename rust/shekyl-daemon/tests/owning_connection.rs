@@ -559,11 +559,19 @@ fn bad_owning_connections_refuse_with_their_diagnostics() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("config.value.range"), "{err}");
 
-    // A valid end, so the refusal is the pair's and not the adoption's.
-    let (mut child, _ours) = launch(NAME, dir.path(), "service", &["--service"]);
+    // A valid end, so the refusal is the pair's and not the adoption's. On
+    // Windows `service` is refused before the session is read (RT-W14).
+    #[cfg(unix)]
+    service_refuses_the_owning_connection(NAME, dir.path());
+}
+
+/// Test 6's last case: the option with `service`, given a valid end.
+#[cfg(unix)]
+fn service_refuses_the_owning_connection(test: &str, dir: &Path) {
+    let (mut child, _ours) = launch(test, dir, "service", &["--service"]);
     let exit = ended_within(&mut child, STOP_ARRIVES);
     reap(&mut child);
-    let err = stderr(dir.path(), "service");
+    let err = stderr(dir, "service");
     assert_eq!(exit.and_then(|s| s.code()), Some(2), "{err}");
     assert!(err.contains("config.value.conflict"), "{err}");
     assert!(err.contains("owning-connection"), "{err}");
