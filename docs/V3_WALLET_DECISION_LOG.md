@@ -7086,6 +7086,28 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge: the design load stays 30 spends for now; the shard-fill freeze against consensus changes
+
+**Decision** (Rick, on `69e366391`; `CHAIN_FORGE.md` §1, `CF-R20`, `CF-R21`).
+
+- The design load is 30 two-in/two-out spends a block for now, because
+  the `PB-` budgets are stated against it. The block size is re-derived
+  through the economics simulation later (likely about 90 spends, not
+  before alpha.12); Chain P, the `PB-` rows and the fixtures are then
+  redone, an accepted cost.
+- Chain P's weight ramp is derived when its plan is built, from the
+  validator's own `medians_over` and `long_term_weight`, with every block
+  asserted under the limit in force at its height; a vanished margin
+  makes the derivation insert the extra 51-block step itself. Changing
+  the target re-plans the chain.
+- The shard-fill chain's replacement for its twelve consumers lands
+  before any consensus change that would invalidate it, the block-size
+  re-derivation included, brought forward if needed. If such a change
+  must land first, Rick approves one re-capture explicitly, the reason
+  cited in the freeze gate's pin update, into the hosted store if live
+  or into git once. The tests are never turned off: the gate blocking
+  the consensus PR is how the case is decided.
+
 ## 2026-11-13 — Chain forge after the 4b switch: CF-2 retired, the shard-fill chain frozen, Chain B's criteria, Chain P's ramp
 
 **Decision** (Rick, on #1370 after #1327 merged; `CHAIN_FORGE.md` §1,

@@ -25,6 +25,14 @@ chain at that scale waits for the forge.
      is taken off the list in the change that moves it, so `READERS` is
      also `CF-5`'s migration list (`CHAIN_FORGE.md` §12.1, `CF-5`).
 
+# A consensus change that would invalidate the chain
+
+`CF-R20`: the normal path is that `CF-5`'s replacement lands first. If such
+a change has to land before it, Rick approves one re-capture explicitly,
+and the pin update changes `PINNED_SHA256` and `PIN_REASON` together,
+citing that approval. The tests are never turned off; this gate blocking
+the consensus PR is how the case is decided.
+
 Comments are not consumers: a line whose code starts with `//` is skipped,
 so prose may name the helpers.
 
@@ -49,6 +57,12 @@ REPO = Path(__file__).resolve().parents[2]
 
 CHAIN = "rust/shekyl-harness-spender/vectors/shard-fill.bin"
 PINNED_SHA256 = "ed40b30181d3295ace07824ea23d7bae8a4967a69cc72ff6ad9269b94d79514b"
+# Why the pin is this hash. A re-capture under `CF-R20`'s exception
+# replaces both, and cites Rick's approval here.
+PIN_REASON = (
+    "24ec78897: the first capture (Rick's shard-fill ruling, option A, 2026-11-11); "
+    "frozen at it by CF-R17"
+)
 
 # What reaches the chain's bytes. Whole tokens, matched outside comments.
 ACCESS = (
@@ -105,6 +119,8 @@ def rust_sources(root: Path) -> list[Path]:
 
 def check(root: Path, pinned: str, readers: tuple[str, ...]) -> list[str]:
     errors: list[str] = []
+    if not PIN_REASON.strip():
+        errors.append("PIN_REASON is empty: a pin names why it is this hash (CF-R20)")
 
     chain = root / CHAIN
     if not chain.is_file():
@@ -114,7 +130,10 @@ def check(root: Path, pinned: str, readers: tuple[str, ...]) -> list[str]:
         errors.append(
             f"{CHAIN} changed (sha256 {digest}, pinned {pinned}). The chain is frozen until "
             "CF-5 (CHAIN_FORGE.md CF-R17): its bytes do not regenerate, so a re-capture adds "
-            "11.5 MB to history for good. Restore the file."
+            "11.5 MB to history for good. Restore the file. If a consensus change must land "
+            "before CF-5's replacement, Rick approves one re-capture explicitly, and the pin "
+            "update changes PINNED_SHA256 and PIN_REASON together, citing it (CF-R20). The "
+            "tests are never turned off."
         )
 
     sources = rust_sources(root)
@@ -200,7 +219,7 @@ def main() -> int:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
-    print(f"PASS: {CHAIN} is frozen at its pinned hash, and {len(READERS)} listed files read it")
+    print(f"PASS: {CHAIN} is frozen at its pinned hash ({PIN_REASON}), and {len(READERS)} listed files read it")
     return 0
 
 
