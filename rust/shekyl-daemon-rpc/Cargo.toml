@@ -127,6 +127,10 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
+# The channel's tests drive the real handshake and HTTP over the record
+# stream from the client's side (src/channel/tests.rs).
+hyper = { version = "1", default-features = false, features = ["http1", "client"] }
+http-body-util = "0.1"
 # Real consensus-valid spend fixture for the production-verifier oracle test
 # (tests/submit_verifier.rs) — the same dev-only construction stack as
 # shekyl-wire's fcmp_spend_e2e.rs (tree build, path assembly, signing).

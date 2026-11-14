@@ -4225,6 +4225,7 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "http",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "rand_chacha 0.3.1",

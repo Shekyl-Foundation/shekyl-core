@@ -193,7 +193,7 @@ pub fn build_router(state: Arc<AppState>, cors_origins: &[String], authority: Au
 /// The channel listener's router: the same routes and layers, not stamped.
 /// Each channel connection stamps its own authority and caller
 /// (`crate::channel::listener`).
-fn channel_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
+pub(crate) fn channel_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
     assemble(post(rpc::handle))
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         .layer(cors_layer(cors_origins))

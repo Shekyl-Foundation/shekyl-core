@@ -25,6 +25,9 @@ pub mod listener;
 pub mod sessions;
 pub mod store;
 
+#[cfg(test)]
+mod tests;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};

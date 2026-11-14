@@ -108,10 +108,16 @@ async fn connection<S>(
     } = handshaken;
     let fingerprint = *session.client.fingerprint().as_bytes();
     // Registered under the index's lock, admitted again there: a removal
-    // since message 4 is seen (§5).
+    // or a lowered ceiling since message 4 is seen, and the session closed
+    // as it would have been (§5). A raised ceiling keeps it: the grant it
+    // holds still lies within.
     let registering = Arc::clone(&channel);
     let Some(mut registered) = channel.sessions.register(fingerprint, move || {
-        registering.admitted(&fingerprint).ok().flatten() == Some(admitted)
+        registering
+            .admitted(&fingerprint)
+            .ok()
+            .flatten()
+            .is_some_and(|now| still_admitted(admitted, now))
     }) else {
         return;
     };
@@ -150,6 +156,17 @@ async fn connection<S>(
                 served.as_mut().graceful_shutdown();
             }
         }
+    }
+}
+
+/// Whether a session admitted as `then` is still admitted as `now`: the
+/// same kind of key, with a ceiling that still holds the one message 4
+/// carried.
+fn still_admitted(then: Admitted, now: Admitted) -> bool {
+    match (then, now) {
+        (Admitted::Console, Admitted::Console) => true,
+        (Admitted::Client(then), Admitted::Client(now)) => then.within(now),
+        _ => false,
     }
 }
 
