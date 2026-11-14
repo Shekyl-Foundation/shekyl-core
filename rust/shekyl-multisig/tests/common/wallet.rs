@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use rand_core::{OsRng, RngCore};
 use zeroize::Zeroizing;
 
-use super::{random_scalar, GroupOutputs, NET};
+use super::{random_scalar, GroupOutputs, AMOUNTS, NET};
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::signature::verify_pqc_auth;
@@ -179,7 +179,7 @@ pub fn chain_fingerprint() -> [u8; 32] {
         reference_block_hash: REFERENCE_HASH,
         input_global_indices: GLOBAL_INDICES.to_vec(),
         input_eligible_heights: vec![900, 900],
-        input_amounts: vec![AtomicUnits::from_raw(500), AtomicUnits::from_raw(700)],
+        input_amounts: AMOUNTS.map(AtomicUnits::from_raw).to_vec(),
     }
     .compute()
 }
@@ -227,7 +227,7 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
             chain_tip_height: TIP,
             local_ref_block_hash: &REFERENCE_HASH,
             local_chain_state_fingerprint: &chain_fingerprint(),
-            input_amounts: &[AtomicUnits::from_raw(500), AtomicUnits::from_raw(700)],
+            input_amounts: &AMOUNTS.map(AtomicUnits::from_raw),
             seen_kem_seeds: &HashSet::new(),
         },
     )

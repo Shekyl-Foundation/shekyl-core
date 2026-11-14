@@ -160,7 +160,7 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
 
     // Each pseudo-out opens to the blind the assembler chose and the input's
     // amount (`C~ = a·G + amount·H`), so the last one can be balanced.
-    for ((pseudo_out, a), amount) in proved.pseudo_outs.iter().zip(&blinds).zip([500u64, 700]) {
+    for ((pseudo_out, a), amount) in proved.pseudo_outs.iter().zip(&blinds).zip(common::AMOUNTS) {
         let a = DalekScalar::from_canonical_bytes(**a).unwrap();
         let expected =
             ED25519_BASEPOINT_POINT * a + *shekyl_curve_generators::H * DalekScalar::from(amount);

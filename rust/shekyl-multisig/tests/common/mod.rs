@@ -211,12 +211,19 @@ pub struct GroupOutputs {
     pub chunks: Vec<ProveInputLeafChunk>,
 }
 
-/// The sender pays the group twice (500 and 700), in two transactions;
+/// The amounts [`pay_group_twice`] pays, in output order.
+pub const AMOUNTS: [u64; 2] = [500, 700];
+
+/// Each paid output's index in its transaction.
+const OUTPUT_INDICES: [u64; 2] = [0, 3];
+
+/// The sender pays the group twice ([`AMOUNTS`]), in two transactions;
 /// every member scans both alone and recovers the same values; the tree
 /// holds both outputs in one leaf chunk, as the daemon builds it.
 pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -> GroupOutputs {
-    let outputs: Vec<(MultisigOutputData, u64, u64)> = [(500u64, 0u64), (700, 3)]
+    let outputs: Vec<(MultisigOutputData, u64, u64)> = AMOUNTS
         .into_iter()
+        .zip(OUTPUT_INDICES)
         .map(|(amount, index)| {
             let tx_key = random_scalar().to_bytes();
             (
