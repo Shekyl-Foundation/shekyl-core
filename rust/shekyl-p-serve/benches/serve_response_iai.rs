@@ -21,10 +21,9 @@
 //!   either show. The signer on this path answers with a pinned envelope
 //!   (see *Seeded, end to end*); the signature's own cost is the next
 //!   function's.
-//! * **`crypto_bench_serve_sign`** — the countersignature alone: the
-//!   seeded persona key signing one pinned transcript. This is where a
-//!   change to the hybrid sign shows, on a trajectory nothing on the wire
-//!   can move.
+//! * **`crypto_bench_serve_sign`** — the receipt alone: the seeded
+//!   receipt key signing one pinned transcript. This is where a change to
+//!   the hybrid sign shows, on a trajectory nothing on the wire can move.
 //! * **`crypto_bench_serve_prehead`** — the same request up to the point
 //!   where the 200 head is ready to write. This is the abuse number: work
 //!   `P` does before the requester has received anything. It must not
@@ -70,19 +69,17 @@
 //! that stops *calling* the signer is `serve_bench_seam_tests.rs`'s to
 //! catch (it counts signatures per served response), not this gate's.
 //!
-//! **Seeded, end to end.** The shard bytes, the persona key and the ML-DSA
-//! signing nonce all come from one fixed seed. ML-DSA signs by rejection
-//! sampling: it loops until a candidate passes its norm checks, each round
-//! about two million instructions, and the number of rounds is a function
-//! of the key, the nonce and the message. A fresh key or a hedged
-//! signature moves the count by tens of millions between runs of one input
-//! (measured: 14 M against 45 M for one leaf). Pinning the key and the
-//! nonce is not enough: the message the serve signs is the pass transcript,
-//! which carries the delivery digest of the body, so any change to the
-//! bytes on the wire re-rolls the trajectory. The `SF-D8` amendment that
-//! removed the frame header did exactly that — 10.75 M → 7.31 M for one
-//! leaf and 31.4 M → 9.0 M for a full segment, with the serve's own work
-//! within 0.7 % — and the gate read it as a −27.9 % serve regression.
+//! **Seeded, end to end.** The shard bytes, the receipt key and the
+//! FN-DSA signing stream all come from fixed seeds. The hybrid sign's
+//! post-quantum half samples until a candidate passes its checks, and the
+//! number of rounds is a function of the key, the stream and the message,
+//! so a fresh key or a hedged signature moves the count between runs of
+//! one input. Pinning the key and the stream is not enough: the message
+//! the serve signs is the pass transcript, which carries the delivery
+//! digest of the body, so any change to the bytes on the wire re-rolls the
+//! trajectory. (The `SF-D8` amendment that removed the frame header did
+//! exactly that under the identity scheme the serve signed with then, and
+//! the gate read it as a −27.9 % serve regression.)
 //!
 //! So the serve cells sign with a **pinned envelope**: the seeded key signs
 //! one fixed transcript in `setup`, and the signer the serve is handed
@@ -103,23 +100,21 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH};
-use fips204::ml_dsa_65;
-use fips204::traits::SerDes as _;
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
 use shekyl_archival_retention::pass_delivery_digest;
-use shekyl_crypto_pq::signature::{
-    HybridEd25519MlDsa, HybridSecretKey, HybridSignature, SCHEME_DOMAIN_ATTESTATION,
+use shekyl_crypto_pq::fn_dsa_hybrid::{
+    FnDsaHybridSecretKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
+use shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT;
 use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use shekyl_p_serve::{
     prehead_in_memory, read_and_fold_in_memory, serve_one_in_memory, InMemoryServe, PassKey,
-    PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused, IDENTITY_ENVELOPE_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, REQUEST_HEADER_NAME,
+    PassSigner, ProviderError, ShardBody, ShardProvider, SignRefused,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, RECEIPT_ENVELOPE_LEN, REQUEST_HEADER_NAME,
 };
 use shekyl_types::BlockHeight;
 
@@ -133,65 +128,69 @@ const BENCH_SEED: [u8; 32] = [
     0x19, 0xe3, 0x7f, 0x50, 0xa2, 0x0b, 0xd8, 0x6c, 0x34, 0xf9, 0x81, 0x1d, 0xe6, 0x45, 0x9a,
     0x28, //
 ];
-const ML_DSA_SEED: [u8; 32] = [0xa5; 32];
+/// Seeds the FN-DSA half of the receipt key.
+const FN_DSA_KEY_SEED: [u8; 32] = [0x3d; 32];
+/// Seeds the stream FN-DSA's signer draws from.
+const FN_DSA_SIGN_SEED: [u8; 32] = [0xa5; 32];
 
-/// A persona signer whose key and ML-DSA nonce are fixed by [`BENCH_SEED`].
-///
-/// Same byte layout as `generate_ephemeral_keypair_for_tests` emits, built
-/// the way `shekyl-tx-builder`'s seeded signing state is. Bench only: a
-/// deterministic signature never reaches a wallet or a persona.
+/// A receipt signer whose key and FN-DSA signing stream are fixed by
+/// [`BENCH_SEED`], [`FN_DSA_KEY_SEED`] and [`FN_DSA_SIGN_SEED`]. Bench
+/// only: a deterministic signature never reaches a wallet or a persona.
 struct SeededSigner {
-    secret: HybridSecretKey,
+    secret: FnDsaHybridSecretKey,
 }
 
 impl SeededSigner {
     fn new() -> Self {
-        let mut rng = StdRng::from_seed(BENCH_SEED);
-        let mut ed25519 = [0u8; ED25519_SECRET_KEY_LENGTH];
-        rng.fill_bytes(&mut ed25519);
-        debug_assert_eq!(SigningKey::from_bytes(&ed25519).to_bytes(), ed25519);
-        let (_public, ml_dsa) = ml_dsa_65::try_keygen_with_rng(&mut rng).expect("seeded keygen");
-        Self {
-            secret: HybridSecretKey {
-                ed25519: ed25519.to_vec(),
-                ml_dsa: ml_dsa.into_bytes().to_vec(),
-            },
-        }
+        let (_public, secret) =
+            HybridEd25519FnDsa::keypair_from_seeds(&BENCH_SEED, &FN_DSA_KEY_SEED)
+                .expect("seeded keygen");
+        Self { secret }
+    }
+
+    /// One seeded receipt over `message`. The cells sign
+    /// [`PINNED_TRANSCRIPT`] through this, so the trajectory is the pinned
+    /// bytes' and not a typed transcript's: the pinned bytes start with
+    /// `0x3c`, which is no stream byte, so no [`PassTranscript`] makes them.
+    ///
+    /// [`PassTranscript`]: shekyl_p_serve::PassTranscript
+    fn sign_bytes(
+        &self,
+        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
+        HybridEd25519FnDsa
+            .sign_with_rng_seed(
+                &self.secret,
+                SCHEME_DOMAIN_RECEIPT,
+                message,
+                &FN_DSA_SIGN_SEED,
+            )
+            .map_err(|e| SignRefused::new(e.to_string()))
     }
 }
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for SeededSigner {
+impl PassKey for SeededSigner {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
 
     fn sign_pass(
         &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
-        HybridEd25519MlDsa
-            .sign_with_ml_dsa_seed(
-                &self.secret,
-                SCHEME_DOMAIN_ATTESTATION,
-                message,
-                &ML_DSA_SEED,
-            )
-            .map_err(|e| SignRefused::new(e.to_string()))
+        transcript: &shekyl_p_serve::PassTranscript,
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
+        self.sign_bytes(&transcript.message())
     }
 }
 
-impl PassSigner<IDENTITY_ENVELOPE_LEN> for SeededSigner {
+impl PassSigner for SeededSigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
 }
 
-/// Prefix of the transcript the rolling baseline measured: 112 bytes of
-/// this value, the length before the stream byte.
+/// Fill of the pinned transcript.
 const SIGN_TRAJECTORY_PREFIX: u8 = 0x3c;
-/// Last byte of the pinned transcript. Repeating [`SIGN_TRAJECTORY_PREFIX`]
-/// out to 113 bytes drops one ML-DSA rejection round under the bench key
-/// and nonce (7.16 M → 5.43 M instructions). This tail keeps that round count.
+/// Last byte of the pinned transcript.
 const SIGN_TRAJECTORY_TAIL: u8 = 0x0a;
 /// Length those bytes were chosen for. It is the pass transcript's length;
 /// a longer transcript does not compile until this constant and the tail
@@ -215,33 +214,33 @@ const _: [(); SIGN_TRAJECTORY_LEN] = [(); PASS_COUNTERSIGNATURE_MESSAGE_LEN];
 /// seam tests, not this bench, are what hold the serve to signing the
 /// transcript it actually produced.
 struct PinnedEnvelopeSigner {
-    envelope: HybridSignature,
+    envelope: FnDsaHybridSignature,
 }
 
 impl PinnedEnvelopeSigner {
     fn new(key: &SeededSigner) -> Self {
         Self {
             envelope: key
-                .sign_pass(&PINNED_TRANSCRIPT)
+                .sign_bytes(&PINNED_TRANSCRIPT)
                 .expect("the seeded key signs the pinned transcript"),
         }
     }
 }
 
-impl PassKey<IDENTITY_ENVELOPE_LEN> for PinnedEnvelopeSigner {
+impl PassKey for PinnedEnvelopeSigner {
     fn ready(&self, _shard_id: u64, _anchor_height: BlockHeight) -> Result<(), SignRefused> {
         Ok(())
     }
 
     fn sign_pass(
         &self,
-        _message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
+        _message: &shekyl_p_serve::PassTranscript,
+    ) -> Result<FnDsaHybridSignature, SignRefused> {
         Ok(self.envelope.clone())
     }
 }
 
-impl PassSigner<IDENTITY_ENVELOPE_LEN> for PinnedEnvelopeSigner {
+impl PassSigner for PinnedEnvelopeSigner {
     fn own_height(&self) -> Option<BlockHeight> {
         Some(BlockHeight::from_raw(OWN_HEIGHT))
     }
@@ -267,7 +266,7 @@ impl ShardProvider for OneShard {
 struct Fixture {
     provider: Arc<dyn ShardProvider>,
     /// The pinned-envelope signer the serve cells are handed.
-    signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>>,
+    signer: Arc<dyn PassSigner>,
     /// The seeded key itself, for `crypto_bench_serve_sign`.
     key: SeededSigner,
     head: Vec<u8>,
@@ -287,8 +286,7 @@ fn fixture(leaf_count: usize) -> Fixture {
         bytes: Arc::from(body.into_boxed_slice()),
     });
     let key = SeededSigner::new();
-    let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
-        Arc::new(PinnedEnvelopeSigner::new(&key));
+    let signer: Arc<dyn PassSigner> = Arc::new(PinnedEnvelopeSigner::new(&key));
     let anchor = BlockHeight::from_raw(OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw());
     let header = pass_request_header_bytes(
         shekyl_archival_retention::PassStream::Economy,
@@ -323,8 +321,8 @@ fn fixture(leaf_count: usize) -> Fixture {
     );
     assert_eq!(pinned.len(), witness.len(), "one envelope length");
     assert_eq!(
-        pinned[..pinned.len() - IDENTITY_ENVELOPE_LEN],
-        witness[..witness.len() - IDENTITY_ENVELOPE_LEN],
+        pinned[..pinned.len() - RECEIPT_ENVELOPE_LEN],
+        witness[..witness.len() - RECEIPT_ENVELOPE_LEN],
         "the pinned signer changes the envelope and nothing before it"
     );
     let body_at = witness
@@ -334,10 +332,10 @@ fn fixture(leaf_count: usize) -> Fixture {
         + 4;
     assert!(
         witness.starts_with(b"HTTP/1.1 200 OK\r\n")
-            && witness.len() == body_at + leaf_count * LEAF_BYTES + IDENTITY_ENVELOPE_LEN,
+            && witness.len() == body_at + leaf_count * LEAF_BYTES + RECEIPT_ENVELOPE_LEN,
         "a served response is a 200 carrying the body and the envelope, nothing else"
     );
-    let body = witness[body_at..witness.len() - IDENTITY_ENVELOPE_LEN].to_vec();
+    let body = witness[body_at..witness.len() - RECEIPT_ENVELOPE_LEN].to_vec();
     // The three digest paths agree before any of them is measured, so the
     // cells compare the cost of one result and not of three.
     let digest = pass_delivery_digest(&NONCE, &body);
@@ -400,14 +398,11 @@ fn crypto_bench_serve_response(mut fx: Fixture) -> Fixture {
 fn crypto_bench_serve_sign(fx: Fixture) -> Fixture {
     let envelope = fx
         .key
-        .sign_pass(black_box(&PINNED_TRANSCRIPT))
+        .sign_bytes(black_box(&PINNED_TRANSCRIPT))
         .expect("the seeded key signs the pinned transcript");
     assert_eq!(
-        black_box(envelope)
-            .to_canonical_bytes()
-            .expect("canonical envelope")
-            .len(),
-        IDENTITY_ENVELOPE_LEN
+        black_box(envelope).to_canonical_bytes().len(),
+        RECEIPT_ENVELOPE_LEN
     );
     fx
 }
@@ -424,7 +419,7 @@ fn crypto_bench_serve_prehead(mut fx: Fixture) -> Fixture {
     );
     assert!(black_box(ready), "the request must be admitted");
     assert!(
-        fx.out.len() == fx.expected_len - fx.body.len() - IDENTITY_ENVELOPE_LEN,
+        fx.out.len() == fx.expected_len - fx.body.len() - RECEIPT_ENVELOPE_LEN,
         "only the head is rendered"
     );
     fx

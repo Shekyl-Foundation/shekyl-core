@@ -29,8 +29,8 @@
 //! body is 4-part when it carries the `pqc_auths` component (prefix, base,
 //! `pqc_auths`, prunable) and 3-part when it does not. The length is one more
 //! word after the digests of an FCMP++ body, so the preimages are three words
-//! for a coinbase, four for a 3-part FCMP++ body (the serve-credit form) and
-//! five for a spend. The three word counts are distinct, so no body of one
+//! for a coinbase, four for a 3-part FCMP++ body (no `pqc_auths`) and five
+//! for a spend. The three word counts are distinct, so no body of one
 //! shape shares a preimage with a body of another.
 
 use shekyl_crypto_hash::keccak256;
@@ -239,7 +239,7 @@ impl Transaction {
     /// item 2).
     ///
     /// `None` means **this body** hashes 3-part: the coinbase (`Null` ct),
-    /// the serve-credit form (empty `pqc_auths`), the malformed gen-first and
+    /// a body with empty `pqc_auths`, the malformed gen-first and
     /// no-input shapes, **and** a skeleton whose auths have been cleared.
     /// That last case is not "the accepted txid is 3-part" — the accepted
     /// identity of a discarded-auths spend is reconstructed with
@@ -428,7 +428,7 @@ enum Discardable {
 /// words:
 ///
 /// - coinbase: `H(prefix) · H(base) · null`;
-/// - FCMP++ without a `pqc_auths` component (the serve-credit form):
+/// - FCMP++ without a `pqc_auths` component:
 ///   `H(prefix) · H(base) · H(prunable) · len`;
 /// - FCMP++ with one: `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · len`.
 ///

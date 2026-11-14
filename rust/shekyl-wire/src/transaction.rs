@@ -13,7 +13,6 @@
 //! TxPrefix    := V(unlock_time) vec(Input) vec(Output) V(extra_len) extra[extra_len]
 //! Input(gen)       := 0x00 V(height)
 //! Input(spend)     := 0x01 V(amount) vec(V key_offset) key_image[32]   # txin_to_key / fcmp
-//! Input(serve_cr.) := 0x02 ...                                         # archival serve_credit
 //! Input(bond_post) := 0x03 ...                                         # archival bond_post
 //! Input(emission)  := 0x04 V(blob_len) canonical_bytes[blob_len]       # archival reward_emission (opaque)
 //! Output      := V(amount) 0x00 key[32] view_tag(1)                  # tagged_key (sole genesis output)
@@ -72,8 +71,9 @@ pub const MIN_PRUNED_SEGMENT: usize = VARINT_BELOW_128 // version
     + VARINT_BELOW_128 // extra length
     + 1; // null ct type; the base contributes nothing
 
-// Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
-// numbered dense from 0x00; matches the renumbered C++ oracle VARIANT_TAGs and ct enum.
+// Genesis tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
+// numbered from 0x00. Input tag 0x02 is unassigned: no arm reads it, so an
+// input carrying it does not parse.
 /// `txin_gen` tag — coinbase generation input.
 pub const TAG_INPUT_GEN: u8 = 0x00;
 /// `txin_to_key`/`txin_fcmp` tag — the FCMP++ spend input (the `key_offsets`-drop
@@ -85,8 +85,6 @@ pub const TAG_OUTPUT_TAGGED_KEY: u8 = 0x00;
 pub const CT_TYPE_NULL: u8 = 0x00;
 /// `FcmpPlusPlusPqc` confidential-transaction type — the spend ct.
 pub const CT_TYPE_FCMP: u8 = 0x01;
-/// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
-pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
 /// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Release
 /// (debit) are the wallet-constructible archival kinds; Reinstate has a verify
 /// arm and no producer yet. Discriminant 3 (HoldingsUpdate) is REJECTED.
@@ -105,46 +103,14 @@ pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 /// persona's receipt key and the serving endpoint, present on the wire iff
 /// `post_kind == JOINMARKET` (§9.11, `EU-D3`, `FN_DSA_HYBRID.md` §8).
 ///
-/// The byte is `5` because `0`, `3` and `4` are refused names, not free
-/// ones (rule 23): `0` was the keyless JoinMarket
-/// ([`BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET`]); `3` was `HoldingsUpdate`
-/// (REJECTED 2026-09-20, immutable-bond); `4` was `EndpointUpdate` (REJECTED
-/// 2026-09-13, `ARCHIVAL_ENDPOINT_UPDATE.md`: a bonded persona's endpoint
-/// never changes). None is reused.
+/// The byte is `5` because `3` and `4` are refused names, not free ones
+/// (rule 23): `3` was `HoldingsUpdate` (REJECTED 2026-09-20,
+/// immutable-bond); `4` was `EndpointUpdate` (REJECTED 2026-09-13,
+/// `ARCHIVAL_ENDPOINT_UPDATE.md`: a bonded persona's endpoint never
+/// changes). Neither is reused. `0` is unassigned: a kind byte of `0`
+/// reads as [`BondPostKind::Other`] and is refused where every unknown kind
+/// is, by the bond post's decoder (`InvalidPostKind`).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 5;
-/// `post_kind` `0`: the JoinMarket that committed no receipt key. **RETIRED
-/// 2026-10-12** (ruling on PR #1046): the receipt key is mandatory, and a
-/// keyless join would put a pair in the drawable set that the `h_open(E)`
-/// snapshot cannot build, blocking every bundle for that epoch. The byte is
-/// refused at parse — its coupled fields would otherwise be read as holdings
-/// — and is never reassigned.
-pub const BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET: u8 = 0;
-
-/// `post_kind` 0, refused at parse (`FN_DSA_HYBRID.md` §8, `FND-19`).
-///
-/// [`BondPost::read`] returns this inside an [`io::Error`]. A caller that
-/// has to tell this refusal from every other malformed transaction matches
-/// [`Self::downcast_is`] on [`io::Error::get_ref`]; the sentence is what a
-/// human and the conformance table's read-face row see.
-#[derive(Debug)]
-pub struct RetiredKeylessJoinMarket;
-
-impl RetiredKeylessJoinMarket {
-    /// Whether `cause` — the inner error of an [`io::Error`] — is this refusal.
-    #[must_use]
-    pub fn downcast_is(cause: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
-        cause.is::<Self>()
-    }
-}
-
-impl std::fmt::Display for RetiredKeylessJoinMarket {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("shekyl-wire: bond_post post_kind 0 is the retired keyless JoinMarket")
-    }
-}
-
-impl std::error::Error for RetiredKeylessJoinMarket {}
-
 /// Whether `post_kind` is a JoinMarket. The one predicate every byte-level
 /// "is this a JoinMarket?" reads, so a consumer that records the wire byte
 /// asks the definition that produced it.
@@ -153,13 +119,6 @@ pub const fn is_join_market_post_kind(post_kind: u8) -> bool {
     post_kind == BOND_POST_KIND_JOINMARKET
 }
 
-/// Whether `post_kind` is a byte [`BondPostKind::Other`] may not carry: the
-/// JoinMarket's own tag, or the retired keyless JoinMarket's. Either would
-/// serialize as a blob with no coupled fields that `read` does not read
-/// back as the value written.
-const fn is_join_market_tag_live_or_retired(post_kind: u8) -> bool {
-    is_join_market_post_kind(post_kind) || post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET
-}
 /// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
 /// persona's v3 onion service. Present iff JoinMarket (`EU-D3`).
 pub const BOND_POST_ENDPOINT_LEN: usize = 32;
@@ -176,10 +135,8 @@ pub const HOLDINGS_COMPLETE_TREE: u8 = 1;
 /// the oversized *transaction* independently.
 pub const ARCHIVAL_EMISSION_VIN_MAX_BYTES: usize = 1024 * 1024;
 
-/// Consensus bound: max branch scalars per path layer (`wire.rs`).
+/// The largest point vector a legitimate read allocates up front.
 const MAX_BRANCH_SCALARS: usize = 256;
-/// Consensus bound: max path layers per curve (`wire.rs`).
-const MAX_PATH_LAYERS: usize = 64;
 
 // §10 resource bounds (structural; the chain-context rules of §13 — double-spend,
 // CT balance, referenceBlock window, per-arm pqc_auths semantics — are the
@@ -298,31 +255,6 @@ pub const PQC_HYBRID_SINGLE_KEY_LEN: usize = 1996;
 /// Single hybrid signature length — twin of `SINGLE_SIG_CANONICAL_LEN`.
 pub const PQC_HYBRID_SINGLE_SIG_LEN: usize = 3385;
 
-// The attestation-witness cap in `shekyl-types` factors this length in.
-// A signature-size change has to move the pin in the same edit.
-const _: () =
-    assert!(PQC_HYBRID_SINGLE_SIG_LEN == shekyl_types::archival::ATTESTATION_WITNESS_SIGNATURE_LEN);
-
-/// Transport bound on a serve-credit vin's opaque `canonical_bytes` (kept
-/// half, `RF-D1`): `tag(1) + p_id(32) + shard varint(≤10) + epoch varint(≤10)
-/// + Ed25519(64)`. The Rust codec (`shekyl-archival-retention::wire`) is the
-/// only parser of the interior; this is the C++-twin allocation ceiling
-/// (`ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES` in `cryptonote_config.h`).
-pub const ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES: usize = 1 + 32 + 10 + 10 + 64;
-
-/// Transport bound on one pruned pass record (`RF-D1`): two branch-layer
-/// kinds of at most `MAX_PATH_LAYERS` layers × `MAX_BRANCH_SCALARS` scalars
-/// (each layer carries a varint width, each kind a varint count), plus the
-/// ML-DSA-65 leg. A DoS ceiling for the opaque blob, not a layout claim — the
-/// interior is the retention codec's.
-pub const ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES: usize =
-    2 * (10 + MAX_PATH_LAYERS * (10 + MAX_BRANCH_SCALARS * 32)) + 3309;
-
-// Twins of `cryptonote_config.h`'s `ARCHIVAL_SERVE_CREDIT_{VIN,PRUNED}_MAX_BYTES`,
-// pinned to the same literals on both sides: a change to either formula fails
-// one side's assertion until the other is moved with it.
-const _: () = assert!(ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES == 117);
-const _: () = assert!(ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES == 1_053_185);
 /// Max tx-level `pqc_auths` public-key / signature blob — the DoS ceilings.
 /// Round, generous, DECOUPLED from MAX (correctness is the exact-length
 /// container parse in crypto-pq / verify_multisig, not these bounds). Twins of
@@ -440,16 +372,10 @@ impl Write for CountingWriter {
     }
 }
 
-// The branch-layer codec that used to live here moved with the opening into
-// the pruned record's opaque blob; `shekyl-archival-retention::wire` is its
-// only home now (rule 15). `MAX_PATH_LAYERS` / `MAX_BRANCH_SCALARS` survive
-// solely to size `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES`.
-
 /// A transaction input.
 ///
 /// Genesis arms modelled here: the coinbase `gen` input, the FCMP++ spend
-/// (`txin_to_key`), and the archival arms (`serve_credit`, `bond_post`,
-/// `reward_emission`).
+/// (`txin_to_key`), and the archival arms (`bond_post`, `reward_emission`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Input {
     /// Coinbase generation input: the block height.
@@ -465,14 +391,6 @@ pub enum Input {
         key_offsets: Vec<u64>,
         /// Key image (linking tag / nullifier).
         key_image: [u8; 32],
-    },
-    /// Archival serve-credit response (dense tag `0x02`) — the KEPT half of a
-    /// pass record as an opaque blob, `RF-D1`. `canonical_bytes` is
-    /// the complete retention-codec encoding, leading tag byte included, the
-    /// same shape as [`Input::ArchivalRewardEmission`].
-    ServeCredit {
-        /// Complete Rust canonical encoding of the kept half (tag included).
-        canonical_bytes: Vec<u8>,
     },
     /// Archival bond-post (dense tag `0x03`, gate-4). JoinMarket and Release
     /// are wallet-constructible; the kind byte is `BondPostKind`.
@@ -524,13 +442,6 @@ impl Input {
         matches!(self, Input::ToKey { .. })
     }
 
-    /// Serve-credit vin (kept half of a pass record). Twin of C++
-    /// `txin_archival_serve_credit_response`.
-    #[must_use]
-    pub fn is_serve_credit(&self) -> bool {
-        matches!(self, Input::ServeCredit { .. })
-    }
-
     /// Write the input.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
@@ -550,12 +461,6 @@ impl Input {
                     write_varint(*offset, w)?;
                 }
                 w.write_all(key_image)
-            }
-            Input::ServeCredit { canonical_bytes } => {
-                // C++ `FIELD(canonical_bytes)` encoding, as for the emission arm.
-                w.write_all(&[TAG_INPUT_SERVE_CREDIT])?;
-                write_varint(canonical_bytes.len(), w)?;
-                w.write_all(canonical_bytes)
             }
             Input::BondPost(bp) => {
                 w.write_all(&[TAG_INPUT_BOND_POST])?;
@@ -594,15 +499,6 @@ impl Input {
                     key_offsets,
                     key_image: read_array(r)?,
                 })
-            }
-            TAG_INPUT_SERVE_CREDIT => {
-                let canonical_bytes = read_len_prefixed_bounded(
-                    r,
-                    "serve_credit canonical_bytes",
-                    ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES,
-                )?;
-                check_serve_credit_blob(&canonical_bytes)?;
-                Ok(Input::ServeCredit { canonical_bytes })
             }
             TAG_INPUT_BOND_POST => Ok(Input::BondPost(Box::new(BondPost::read(r)?))),
             TAG_INPUT_ARCHIVAL_REWARD_EMISSION => {
@@ -687,46 +583,6 @@ impl Holdings {
     }
 }
 
-/// Shape check on a serve-credit vin's opaque `canonical_bytes` — the kept half
-/// of a pass record (`RF-D1`). Mirrors [`check_emission_blob`]: length ceiling
-/// and the leading tag byte, nothing about the interior. The interior has ONE
-/// parser, `shekyl-archival-retention::wire`; C++ indexes the vin through the
-/// `shekyl_archival_serve_credit_extract` FFI (tagged blob, whole) and reads
-/// nothing else.
-///
-/// This is why the typed `ServeCredit` struct this crate briefly carried is
-/// gone: it was a second codec of one layout, and two codecs of one layout
-/// drift (rule 15). `shekyl-wire` models the C++ *transport* of the blob;
-/// the bytes inside are someone else's to define.
-fn check_serve_credit_blob(canonical_bytes: &[u8]) -> io::Result<()> {
-    if canonical_bytes.len() < 2 || canonical_bytes.len() > ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES {
-        return Err(io::Error::other(format!(
-            "shekyl-wire: serve_credit canonical_bytes length {} outside 2..={ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES}",
-            canonical_bytes.len()
-        )));
-    }
-    if canonical_bytes[0] != TAG_INPUT_SERVE_CREDIT {
-        return Err(io::Error::other(format!(
-            "shekyl-wire: serve_credit canonical_bytes leading byte {:#04x} != wire tag \
-             {TAG_INPUT_SERVE_CREDIT:#04x}",
-            canonical_bytes[0]
-        )));
-    }
-    Ok(())
-}
-
-/// Shape check on one pruned pass record (`RF-D1`), the opaque per-vin blob in
-/// the prunable region. Bounded, non-empty; interior is the retention codec's.
-fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
-    if bytes.is_empty() || bytes.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES {
-        return Err(io::Error::other(format!(
-            "shekyl-wire: serve_credit pruned record length {} outside 1..={ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES}",
-            bytes.len()
-        )));
-    }
-    Ok(())
-}
-
 /// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
 ///
 /// Only the JoinMarket post carries `bond_spend_pk` and the serving endpoint on
@@ -756,8 +612,8 @@ pub enum BondPostKind {
     },
     /// Any non-JoinMarket post kind — no `bond_spend_pk`, no receipt key and
     /// no endpoint on the wire. The byte must not be the JoinMarket tag
-    /// (`0x05`) nor the retired keyless one (`0x00`): `write` and `validate`
-    /// reject both, and `read` yields neither.
+    /// (`0x05`): `write` and `validate` reject it, and `read` never yields
+    /// it as `Other`.
     Other(u8),
 }
 
@@ -805,10 +661,10 @@ impl BondPost {
                 // `Other` is non-JoinMarket by contract; carrying the JoinMarket
                 // tag (`0x05`) would make `write` emit a key-less, endpoint-less
                 // blob that `read` would then try to parse as JoinMarket
-                // (consuming the holdings bytes as the key), and carrying the
-                // retired keyless tag (`0x00`) one that `read` refuses. Reject
-                // the misconstruction rather than emit it.
-                if is_join_market_tag_live_or_retired(*post_kind) {
+                // (consuming the holdings bytes as the key). Reject the
+                // misconstruction rather than emit it. Every other byte is
+                // written as given.
+                if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
                          (use BondPostKind::JoinMarket)",
@@ -828,9 +684,9 @@ impl BondPost {
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = PCanonicalId::from_bytes(read_array(r)?);
         let post_kind = read_byte(r)?;
-        // `read` never yields `Other(JOINMARKET)` nor `Other(0)`: the JoinMarket
-        // tag always takes the first arm and the retired keyless tag is
-        // refused, so the `write` guard above only fires on a hand-built value.
+        // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always
+        // takes the first arm, so the `write` guard above only fires on a
+        // hand-built value.
         let kind = if is_join_market_post_kind(post_kind) {
             let bond_spend_pk =
                 read_len_prefixed_exact(r, "bond_spend_pk", PQC_HYBRID_SINGLE_KEY_LEN)?;
@@ -841,11 +697,6 @@ impl BondPost {
                 receipt_sign_pk,
                 endpoint: read_array(r)?,
             }
-        } else if post_kind == BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET {
-            // A keyless JoinMarket's coupled fields follow this byte on the
-            // wire; read as `Other` they would be taken for the holdings.
-            // The type, not the sentence, is what a caller matches.
-            return Err(io::Error::other(RetiredKeylessJoinMarket));
         } else {
             BondPostKind::Other(post_kind)
         };
@@ -883,10 +734,10 @@ impl BondPost {
             }
             // `Other` must not carry the JoinMarket tag (`0x05`) — `write` would
             // emit a key-less, endpoint-less blob that re-parses as JoinMarket (a
-            // mis-parse) — nor the retired keyless one (`0x00`), which `read`
-            // refuses.
+            // mis-parse). Every other byte is a kind the parser reads as `Other`;
+            // whether a rule admits it is retention's (§9.11).
             BondPostKind::Other(post_kind) => {
-                if is_join_market_tag_live_or_retired(*post_kind) {
+                if is_join_market_post_kind(*post_kind) {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag",
                     ));
@@ -1219,18 +1070,6 @@ pub struct Prunable {
     /// rides the CT balance directly (blockchain.cpp bond-post arm pins
     /// `pseudoOuts.size() == num_spend`).
     pub pseudo_outs: Vec<[u8; 32]>,
-    /// The pruned half of each pass record as an opaque blob, in
-    /// **serve-credit-vin order, one per serve-credit vin** (`RF-D1`). No
-    /// record COUNT on the wire — it is the vin count — but each record
-    /// carries its own byte length, because C++ transports these bytes without
-    /// parsing them and must still hand each vin's slice to the verifier.
-    ///
-    /// Empty for every shape but the serve-credit one, and for that shape it is
-    /// the *only* populated member — `bulletproofs`, `fcmp_proof` and
-    /// `pseudo_outs` are all empty there by consensus mandate
-    /// (`tx_verification_utils.cpp:117-124`), because a non-spending tx has no
-    /// outputs to range-prove and no membership to prove.
-    pub serve_credit_pruned: Vec<Vec<u8>>,
 }
 
 impl Prunable {
@@ -1245,20 +1084,10 @@ impl Prunable {
         for pseudo_out in &self.pseudo_outs {
             w.write_all(pseudo_out)?;
         }
-        // Last, keyed by position to the serve-credit vins; each blob
-        // length-prefixed (C++ `FIELD(std::vector<uint8_t>)` encoding).
-        for record in &self.serve_credit_pruned {
-            write_varint(record.len(), w)?;
-            w.write_all(record)?;
-        }
         Ok(())
     }
 
-    fn read<R: Read>(
-        spend_inputs: usize,
-        serve_credit_inputs: usize,
-        r: &mut R,
-    ) -> io::Result<Prunable> {
+    fn read<R: Read>(spend_inputs: usize, r: &mut R) -> io::Result<Prunable> {
         let nbp: usize = read_varint(r)?;
         if nbp > READ_LEN_CAP {
             return Err(io::Error::other(format!(
@@ -1274,24 +1103,11 @@ impl Prunable {
         // pseudoOuts: one per ToKey (spend) input, no length prefix. A bond-post
         // input contributes no pseudo-out (module header / blockchain.cpp pin).
         let pseudo_outs = read_points(r, spend_inputs)?;
-        // One per serve-credit vin, no length prefix — the count comes from the
-        // prefix, which is already parsed.
-        let mut serve_credit_pruned = Vec::with_capacity(serve_credit_inputs);
-        for _ in 0..serve_credit_inputs {
-            let record = read_len_prefixed_bounded(
-                r,
-                "serve_credit pruned record",
-                ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES,
-            )?;
-            check_serve_credit_pruned_blob(&record)?;
-            serve_credit_pruned.push(record);
-        }
         Ok(Prunable {
             bulletproofs,
             tree_depth,
             fcmp_proof,
             pseudo_outs,
-            serve_credit_pruned,
         })
     }
 }
@@ -1320,15 +1136,11 @@ pub enum Ct {
         reference_block: BlockHash,
         /// Committed base arrays (per output).
         base: CtBase,
-        /// Per-input PQC authentication (count == `nvin`, no length prefix; empty
-        /// in the serve-credit form, whose hybrid countersignature is over the
-        /// pass record instead — Ed25519 leg on the vin, ML-DSA leg in the
-        /// pruned record; CEN-J10).
+        /// Per-input PQC authentication (count == `nvin`, no length prefix).
         pqc_auths: Vec<PqcAuth>,
         /// Prunable region. `None` only for a *spend* body parsed from a
         /// skeleton's bytes (daemon `tx_list prune:true`, `SB-Q2`)
-        /// or from the `serialize_base` framing. Serve-credit carries
-        /// [`Some`] with only `serve_credit_pruned` populated.
+        /// or from the `serialize_base` framing.
         prunable: Option<Prunable>,
     },
 }
@@ -1427,27 +1239,17 @@ impl Ct {
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
     /// per-input/per-output arrays that carry no length prefix; `spend_inputs`
     /// (the `ToKey` subset of vin) sizes `pseudoOuts`, which a bond-post input
-    /// does not contribute to (module header). `serve_credit_only` is the vin
-    /// shape ([`TxPrefix::is_serve_credit_only`]), not a stream-position fact.
+    /// does not contribute to (module header).
     /// Takes a [`BufRead`] so the EOF-tolerant tail (§9.8) can be detected
     /// without consuming bytes.
     pub fn read<R: BufRead>(
         inputs: usize,
         spend_inputs: usize,
-        serve_credit_inputs: usize,
-        serve_credit_only: bool,
         outputs: usize,
         r: &mut R,
     ) -> io::Result<Ct> {
         let base = Self::read_base(outputs, r)?;
-        Self::read_remainder(
-            base,
-            inputs,
-            spend_inputs,
-            serve_credit_inputs,
-            serve_credit_only,
-            r,
-        )
+        Self::read_remainder(base, inputs, spend_inputs, r)
     }
 
     /// Authentications and the prunable region, on top of [`Self::read_base`].
@@ -1457,8 +1259,6 @@ impl Ct {
         base: Ct,
         inputs: usize,
         spend_inputs: usize,
-        serve_credit_inputs: usize,
-        serve_credit_only: bool,
         r: &mut R,
     ) -> io::Result<Ct> {
         let Ct::Fcmp {
@@ -1476,8 +1276,7 @@ impl Ct {
         // discardable regions gone and their digests carried beside
         // the bytes (`SkeletonTx`). Its identity is not `hash()` but
         // `hash_with_supplied_components`, which `SkeletonTx::bind`
-        // computes. Serve-credit is **not** this case: after RF-D1 it
-        // has a prunable region, so bytes remain after the base.
+        // computes.
         if r.fill_buf()?.is_empty() {
             return Ok(Ct::Fcmp {
                 fee,
@@ -1487,27 +1286,18 @@ impl Ct {
                 prunable: None,
             });
         }
-        // Typed off the vin, exactly as the C++ oracle does
-        // (`cryptonote_basic.h`, `RF-D9`). Deciding a transaction's
-        // shape from how far a stream has been consumed is what made
-        // that side unwritable; the same heuristic would make this
-        // side unreadable.
         let mut pqc_auths = Vec::new();
-        if !serve_credit_only {
-            for _ in 0..inputs {
-                pqc_auths.push(PqcAuth::read(r)?);
-            }
+        for _ in 0..inputs {
+            pqc_auths.push(PqcAuth::read(r)?);
         }
         // EOF after pqc_auths ⇒ the `serialize_base` framing (prunable
         // dropped, `pqc_auths` kept): the C++ serializer's boundary,
         // which `pruned_tx_hash_parity` pins. No daemon serves it
         // (`SB-Q2`: the pruned form on the wire is the skeleton above).
-        // Serve-credit never takes this arm: it skipped pqc_auths
-        // and still has pruned-record bytes to read.
         let prunable = if r.fill_buf()?.is_empty() {
             None
         } else {
-            Some(Prunable::read(spend_inputs, serve_credit_inputs, r)?)
+            Some(Prunable::read(spend_inputs, r)?)
         };
         Ok(Ct::Fcmp {
             fee,
@@ -1610,20 +1400,6 @@ impl TxPrefix {
     #[must_use]
     pub fn spend_input_count(&self) -> usize {
         self.inputs.iter().filter(|i| i.is_spend()).count()
-    }
-
-    /// Twin of C++ `count_serve_credit_inputs`.
-    #[must_use]
-    pub fn serve_credit_input_count(&self) -> usize {
-        self.inputs.iter().filter(|i| i.is_serve_credit()).count()
-    }
-
-    /// Twin of C++ `classify_archival_tx(vin).kind == serve_credit_only`:
-    /// non-empty vin, every input a serve-credit. The shape is a property of
-    /// the prefix, not of what is absent from the confidential section.
-    #[must_use]
-    pub fn is_serve_credit_only(&self) -> bool {
-        !self.inputs.is_empty() && self.inputs.iter().all(Input::is_serve_credit)
     }
 }
 
@@ -1801,15 +1577,8 @@ impl Transaction {
     pub fn read<R: BufRead>(r: &mut R) -> io::Result<Transaction> {
         let (prefix, base) = Self::read_up_to_base(r)?;
         // Counts taken from the prefix, never carried on the wire: spend vins
-        // size pseudoOuts, serve-credit vins size the pruned pass-record array.
-        let ct = Ct::read_remainder(
-            base,
-            prefix.inputs.len(),
-            prefix.spend_input_count(),
-            prefix.serve_credit_input_count(),
-            prefix.is_serve_credit_only(),
-            r,
-        )?;
+        // size pseudoOuts.
+        let ct = Ct::read_remainder(base, prefix.inputs.len(), prefix.spend_input_count(), r)?;
         Ok(Transaction { prefix, ct })
     }
 
@@ -1967,8 +1736,8 @@ impl Transaction {
     /// It mirrors the **context-free** rejects of the C++ oracle's
     /// `core::check_tx_semantic` + `Blockchain::check_tx_inputs` +
     /// `check_inputs_types_supported` (verified by a differential read, 2026-06-21):
-    /// resource bounds (§10), the arm-mixing matrix (gen sole / coinbase, serve_credit
-    /// all-or-none + fee-only, ≤1 bond_post, ≤1 emission not mixing with bond_post),
+    /// resource bounds (§10), the arm-mixing matrix (gen sole / coinbase,
+    /// ≤1 bond_post, ≤1 emission not mixing with bond_post),
     /// `Null` ct iff coinbase, empty
     /// `key_offsets`, strictly-descending key images (rejecting in-tx duplicates),
     /// per-arm archival bounds, the committed-base arity, and the `unlock_time`
@@ -2034,7 +1803,6 @@ impl Transaction {
         let is_coinbase = gen_count == 1;
         // §2.5 / C++ `check_inputs_types_supported` — the (context-free) arm-mixing
         // matrix. Mirror the oracle's rejects exactly, no stricter:
-        let serve_credit_count = self.prefix.serve_credit_input_count();
         let bond_post_count = self
             .prefix
             .inputs
@@ -2047,62 +1815,8 @@ impl Transaction {
             .iter()
             .filter(|i| matches!(i, Input::ArchivalRewardEmission { .. }))
             .count();
-        // serve_credit is non-spending — it must not mix with any spend/bond/gen arm.
-        // The oracle allows **multiple** serve_credits, only rejecting the *mixing*
-        // (check_inputs_types_supported:720), so the rule is "all-or-none", not
-        // "exactly one".
-        if serve_credit_count > 0 {
-            if !self.prefix.is_serve_credit_only() {
-                return Err(io::Error::other(
-                    "shekyl-wire: serve_credit must not mix with other input arms (§2.5)",
-                ));
-            }
-            // The shape check, INVERTED by `RF-D1`: a serve-credit tx now
-            // carries a prunable region. It used to be identified by the
-            // absence of one.
-            //
-            // What stayed true: no outputs, empty `pqc_auths`, and none of the
-            // spend-proof material (`bulletproofs`, `fcmp_proof`,
-            // `pseudo_outs`), all of which consensus requires empty
-            // (`tx_verification_utils.cpp:117-124`) because a non-spending tx
-            // has nothing to range-prove and no membership to prove.
-            //
-            // What changed: the region is now `Some`, holding exactly one
-            // pruned pass record per serve-credit vin.
-            let shape_ok = self.prefix.outputs.is_empty()
-                && match &self.ct {
-                    Ct::Fcmp {
-                        pqc_auths,
-                        prunable: Some(p),
-                        ..
-                    } => {
-                        pqc_auths.is_empty()
-                            && p.bulletproofs.is_empty()
-                            && p.fcmp_proof.is_empty()
-                            && p.pseudo_outs.is_empty()
-                            && p.serve_credit_pruned.len() == serve_credit_count
-                    }
-                    _ => false,
-                };
-            if !shape_ok {
-                return Err(io::Error::other(
-                    "shekyl-wire: serve_credit tx must be fee-only — no outputs, empty \
-                     pqc_auths, no spend-proof material, and exactly one pruned pass \
-                     record per serve-credit vin (§2.5, RF-D1)",
-                ));
-            }
-            if let Ct::Fcmp {
-                prunable: Some(p), ..
-            } = &self.ct
-            {
-                for record in &p.serve_credit_pruned {
-                    check_serve_credit_pruned_blob(record)?;
-                }
-            }
-        }
         // At most one bond_post per tx (check_inputs_types_supported:726). bond_post may
-        // share a tx with fcmp spends (the bond-post shape) but not serve_credit — the
-        // latter is already rejected by the all-serve_credit rule above.
+        // share a tx with fcmp spends (the bond-post shape).
         if bond_post_count > 1 {
             return Err(io::Error::other(
                 "shekyl-wire: at most one bond_post input per tx (§2.5)",
@@ -2111,8 +1825,7 @@ impl Transaction {
         // Emission mixing (C-1, Q3 arity 1 / Q11): at most one emission vin
         // (check_inputs_types_supported:731), and it must not mix with a bond_post
         // (:737) — key-imaged `ToKey` fee spends are the only permitted
-        // co-residents. serve_credit co-residency is already rejected by the
-        // all-serve_credit rule above; gen co-residency by the sole-gen rule.
+        // co-residents. Gen co-residency is rejected by the sole-gen rule.
         if emission_count > 1 {
             return Err(io::Error::other(
                 "shekyl-wire: at most one emission input per tx (§2.5)",
@@ -2183,7 +1896,7 @@ impl Transaction {
         //  - key-image-bearing inputs strictly **descending** by key image:
         //    `memcmp(ki, last) >= 0 → reject` (blockchain.cpp:3656). One rule, two
         //    guarantees — rejects unsorted AND in-tx duplicate key images. No-key-image
-        //    arms (`gen`/`serve_credit`/`bond_post`/`emission`) are exempt.
+        //    arms (`gen`/`bond_post`/`emission`) are exempt.
         let mut key_images: Vec<&[u8; 32]> = Vec::new();
         for input in &self.prefix.inputs {
             if let Input::ToKey {
@@ -2218,12 +1931,10 @@ impl Transaction {
                 Input::ArchivalRewardEmission { canonical_bytes } => {
                     check_emission_blob(canonical_bytes)?
                 }
-                Input::ServeCredit { canonical_bytes } => check_serve_credit_blob(canonical_bytes)?,
                 _ => {}
             }
         }
-        // Committed-base arity is shape-aware per §2.5 (full spend / bond-post /
-        // fee-only-serve-credit); the prunable-coupled length couplings (pqc_auths /
+        // Committed-base arity is shape-aware per §2.5 (full spend / bond-post); the prunable-coupled length couplings (pqc_auths /
         // pseudoOuts per input) move to `validate`, which has the complete tx.
         let base = match &self.ct {
             Ct::Null(base) => {
@@ -2340,13 +2051,9 @@ impl Transaction {
             let n_in = self.prefix.inputs.len();
             let n_out = self.prefix.outputs.len();
             let n_ki = self.prefix.spend_input_count();
-            // Serve-credit also carries a prunable region (`RF-D1`), so
-            // "a prunable proof is present" no longer identifies a spend.
-            // Typed off the vin, same predicate as parse.
             match prunable {
-                // Spend / bond-post: a prunable proof is present AND the tx is
-                // not the non-spending serve-credit shape.
-                Some(prunable) if !self.prefix.is_serve_credit_only() => {
+                // Spend / bond-post: a prunable proof is present.
+                Some(prunable) => {
                     // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
                     // Spends are already gated in `validate_context_free_pruned` (keyed
                     // on key-image inputs, pruned-safe); this guards a bond_post, whose
@@ -2409,17 +2116,9 @@ impl Transaction {
                         )));
                     }
                 }
-                // Fee-only / serve-credit: no SPEND-proof material, no outputs,
-                // pqc_auths empty (the classical countersignature rides the
-                // vin, §9.10).
-                //
-                // Reached two ways after `RF-D1`: a genuinely absent prunable
-                // region, or the serve-credit shape — whose region exists but
-                // holds only pruned pass records, never a spend proof. The
-                // arm's checks are the same for both, because what it asserts
-                // is the absence of *spend* material, not the absence of a
-                // region.
-                _ => {
+                // No prunable region: no spend-proof material, no outputs,
+                // pqc_auths empty.
+                None => {
                     if n_out != 0 {
                         return Err(io::Error::other(format!(
                             "shekyl-wire: fee-only ct (no prunable) must have no \
@@ -2460,9 +2159,7 @@ impl Transaction {
     /// Typed-view conversion (`GENESIS_TX_WIRE_FORMAT.md` §4): succeed only if this tx
     /// carries prunable **spend-proof** data, yielding a [`FullTransaction`] whose
     /// `prunable` is *guaranteed* present. Returns [`PrunedError`] for a coinbase
-    /// `Null` ct, a storage-pruned spend, or a serve-credit tx — the last of those
-    /// *has* a prunable region after `RF-D1`, but it holds pass records, not an
-    /// FCMP++ proof. Typed off the vin, not off `prunable.is_some()`.
+    /// `Null` ct or a storage-pruned spend.
     ///
     /// This is the **one boundary** where "pruned tx where full required" is made
     /// unrepresentable — consensus code that requires a full spend takes a
@@ -2470,9 +2167,6 @@ impl Transaction {
     /// consumer (the honest parse result keeps `prunable` as an `Option<Prunable>` on the
     /// `Ct::Fcmp` confidential section).
     pub fn into_full(self) -> Result<FullTransaction, PrunedError> {
-        if self.prefix.is_serve_credit_only() {
-            return Err(PrunedError);
-        }
         match &self.ct {
             Ct::Fcmp {
                 prunable: Some(_), ..

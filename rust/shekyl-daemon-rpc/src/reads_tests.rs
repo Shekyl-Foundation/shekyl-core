@@ -843,6 +843,8 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
             BlockRead {
                 block: vec![1],
                 txs: Vec::new(),
+                bundle_references: vec![vec![0xaa, 0x01], vec![0xaa, 0x02]],
+                bundle_bodies: vec![vec![0xbb]],
             },
             BlockRead {
                 block: vec![2],
@@ -850,6 +852,8 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
                     hash: TxHash::from_bytes([9; 32]),
                     body: stored_coinbase(),
                 }],
+                bundle_references: Vec::new(),
+                bundle_bodies: Vec::new(),
             },
         ],
         output_indices: Some(vec![7]),
@@ -870,10 +874,18 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
         panic!("height 0 is held")
     };
     assert_eq!(first.body.0, vec![1]);
+    // The block's section rides with it, references in section order and
+    // the held bodies as read; a block that admits none carries empty lists.
+    assert_eq!(
+        first.section,
+        vec![Bytes(vec![0xaa, 0x01]), Bytes(vec![0xaa, 0x02])]
+    );
+    assert_eq!(first.section_body, vec![Bytes(vec![0xbb])]);
     let shared::Slot::Item(second) = &out[1] else {
         panic!("height 2 is held")
     };
     assert_eq!(second.tx.len(), 1);
+    assert!(second.section.is_empty() && second.section_body.is_empty());
     assert_eq!(second.output_index, Integer(7));
     assert_eq!(
         out[2],

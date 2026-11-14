@@ -263,8 +263,8 @@ enum BondPostKind {
   Reinstate  = 1,
   Release    = 2,
   JoinMarket = 5, // commits bond_spend_pk, the receipt key and the endpoint (FN_DSA_HYBRID.md §8)
-  // 0 = the keyless JoinMarket: RETIRED 2026-10-12 — the receipt key is mandatory. Not a variant;
-  //     `from_u8(0)` is `InvalidPostKind`.
+  // 0 = unassigned (the keyless JoinMarket, deleted in the switch's C7, 2026-11-11):
+  //     `from_u8(0)` is `InvalidPostKind`, as for every unknown kind.
   // 3 = HoldingsUpdate: REJECTED 2026-09-20 — not a variant; `from_u8(3)` is `InvalidPostKind`
   //     (PR #808).
   // 4 = EndpointUpdate: REJECTED 2026-09-13 (ARCHIVAL_ENDPOINT_UPDATE.md) — not a variant either.
@@ -899,6 +899,16 @@ Foundation `CompleteTree` is **excluded from `Market`** but posts **one** floor 
 
 **Asymmetry (load-bearing):** `RELEASE_COOLDOWN_EPOCHS < W`. Collateral return and reward
 backlog are independent value flows (§3.5).
+
+**The cooldown's bounds against the slash grace:** `SLASH_GRACE_EPOCHS <
+RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, held by the archival parameter set's
+validation (`CooldownNotPastGrace`, `CooldownPastReadableWindow`,
+`rust/shekyl-archival-retention/src/params.rs`), so an override is held to them too. The
+lower bound keeps a Release behind every slash its last pass can still draw. The upper
+bound is the store's reach: J16 reads the issued-draw indexes over the cooldown window,
+`current − (RELEASE_COOLDOWN_EPOCHS − 1)` through `current`, and the store keeps those
+indexes back to `current − SLASH_GRACE_EPOCHS` (`EpochFloor<Settling>`), so the window
+can start no earlier. The shipped values are 2 and 1.
 
 ---
 

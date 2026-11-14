@@ -16,7 +16,7 @@ path = "src/main.rs"
 # Wire format: the genesis tx/block serializer, tx_extra grammar, varint.
 shekyl-wire = { path = "../shekyl-wire" }
 # The genesis block header and coinbase txid leave `shekyl-wire` typed
-# (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`, `TxHash`; RTN-7).
+# (`BlockHash`, `CurveTreeRoot`, `SectionRoot`, `TxHash`; RTN-7).
 shekyl-types = { path = "../shekyl-types" }
 # Output construction (deterministic KEM), account derivation (gen-wallets),
 # BIP-39 helpers, Edwards→Montgomery map for the recipient X25519 key.
@@ -28,7 +28,7 @@ shekyl-network = { path = "../shekyl-network" }
 shekyl-address = { path = "../shekyl-address" }
 # Empty curve-tree root for the genesis header (`selene_hash_init`).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-# Empty attestation root for the v9 genesis header (`attestation_root(&[])`).
+# Empty section root for the genesis header (`empty_section_root`).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Single source for the coinbase maturity window (`COINBASE_LOCK_WINDOW`),
 # the genesis tx unlock_time.

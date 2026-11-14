@@ -175,7 +175,7 @@ pub fn header(facts: &BlockHeaderFacts, pow: bool) -> Result<block::BlockHeader,
         pow,
         coinbase: hash(facts.miner_tx_hash.to_bytes()),
         curve_root: hash(facts.curve_tree_root.to_bytes()),
-        attestation_root: hash(facts.attestation_root.to_bytes()),
+        section_root: hash(facts.section_root.to_bytes()),
     })
 }
 
@@ -441,6 +441,8 @@ pub fn block_show(
         header: header(&found.header, select.pow)?,
         body: Bytes(found.blob),
         tx,
+        section: found.bundle_references.into_iter().map(Bytes).collect(),
+        section_body: found.bundle_bodies.into_iter().map(Bytes).collect(),
     })
 }
 
@@ -495,6 +497,8 @@ pub fn block_list(
                     .iter()
                     .map(|listed| block_tx(listed.hash, &listed.body, request.prune))
                     .collect(),
+                section: body.bundle_references.into_iter().map(Bytes).collect(),
+                section_body: body.bundle_bodies.into_iter().map(Bytes).collect(),
             }))
         })
         .collect()
@@ -835,7 +839,6 @@ fn claim_epoch(epoch: EmissionEpochFacts) -> archival::Epoch {
                 .into_iter()
                 .map(|bond| archival::ClaimBond {
                     joined_epoch: Integer(bond.join_settlement_epoch),
-                    complete_tree: bond.is_support_complete_tree,
                     // Inclusive on the wire; the record's end is exclusive.
                     failure: bond
                         .bad_intervals

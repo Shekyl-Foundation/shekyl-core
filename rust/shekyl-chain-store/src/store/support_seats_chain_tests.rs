@@ -4,27 +4,33 @@
 //! The support schedule on a store chain (`SO-D12` 4b §5.1 item 3; S1).
 //!
 //! The chain is the slash witness's: its four joins are complete trees, and
-//! shard 0 closes in epoch 0, so the trees are support members of every
-//! epoch whose open sees the shard closed and final. The seats are the
-//! transition's, written by the store's connect, and read back through the
-//! store's own view.
+//! shard 0 closes before they join (height 131, the captured shard fill),
+//! so the trees are support members of every epoch whose open sees the
+//! shard closed and final. The seats are the transition's, written by the
+//! store's connect, and read back through the store's own view.
+//!
+//! Every epoch numbered in this file's prose is counted from the personas'
+//! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
+//! loads the captured shard-fill prefix first and the personas join after it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
-    bundle_root, draw_commit, DrawableEpoch, PassBitmap, SUPPORT_DRAWS_PER_EPOCH,
+    draw_commit, section_root, DrawableEpoch, PassBitmap, SUPPORT_DRAWS_PER_EPOCH,
 };
 use shekyl_chain_rules::harness::bundle::BundleWorld;
 use shekyl_chain_rules::{
     draw_targets, judge_bundles, BlockDrawsFloor, BundleView as _, DrawOrigin, DrawableMemo,
 };
-use shekyl_types::archival::{BlockDraws, DrawCommitment, SupportSeats};
+use shekyl_types::archival::{
+    BlockDraws, DrawCommitment, SupportCarryAfter, SupportCount, SupportRow, SupportSeats,
+};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId};
 
 use crate::codec::Canonical;
 
 use super::super::super::StoreBundleView;
-use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
+use super::super::{shifted, SlashedChain, TestErr, Under, RULES, WITNESS_PERSONAS};
 use super::admission_chain_tests::{connect_committed, connect_plain};
 use super::block_draws_chain_tests::{compose, pop_back};
 use super::{h_open, no_draws};
@@ -59,11 +65,12 @@ fn seat_row(chain: &SlashedChain, h: u64) -> Option<SupportSeats> {
         .store
         .begin_read()
         .expect("read")
-        .support_block_seats(BlockHeight::from_raw(h), BlockDrawsFloor::NONE)
+        .support_row(BlockHeight::from_raw(h), BlockDrawsFloor::NONE)
         .expect("read")
+        .map(|row| row.seats)
 }
 
-/// A chain connected from `h_open(1)` through `through` with one memo,
+/// A chain connected from `h_open(shifted(1))` through `through` with one memo,
 /// and each epoch's snapshot as its open filed it.
 struct Seated {
     chain: SlashedChain,
@@ -74,16 +81,49 @@ struct Seated {
     rows: BTreeMap<u64, SupportSeats>,
     /// Every connected height's count row, as its connect wrote it.
     draws: BTreeMap<u64, BlockDraws>,
+    /// Every connected height's carry, as its row holds it, read right
+    /// after it connected.
+    carried: BTreeMap<u64, Carried>,
+}
+
+/// A block's `carry_after`, as counts.
+type Carried = BTreeMap<PCanonicalId, u32>;
+
+fn carried_at(chain: &SlashedChain, h: u64) -> Carried {
+    chain
+        .store
+        .begin_read()
+        .expect("read")
+        .support_row(BlockHeight::from_raw(h), BlockDrawsFloor::NONE)
+        .expect("read")
+        .expect("a connected height has its row")
+        .carry_after
+        .as_slice()
+        .iter()
+        .map(|(persona, count)| (*persona, count.get()))
+        .collect()
 }
 
 fn seated(label: &str, through: u64) -> Seated {
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(1) - 1, no_draws);
+    seated_under(label, through, Under::BENCH)
+}
+
+/// [`seated`] on a chain built and connected under `under`.
+fn seated_under(label: &str, through: u64, under: Under) -> Seated {
+    let mut chain = SlashedChain::build_under(
+        label,
+        WITNESS_PERSONAS,
+        h_open(shifted(1)) - 1,
+        no_draws,
+        under,
+    );
     let mut memo = DrawableMemo::new();
     let mut snapshots = BTreeMap::new();
     let mut rows = BTreeMap::new();
     let mut draws = BTreeMap::new();
+    let mut carried = BTreeMap::new();
     let schedule = RULES.settlement_schedule();
-    for h in h_open(1)..=through {
+    for h in h_open(shifted(1))..=through {
         let linked = connect_plain(&mut chain, Some(&mut memo));
         rows.insert(
             h,
@@ -91,6 +131,7 @@ fn seated(label: &str, through: u64) -> Seated {
         );
         draws.insert(h, linked.draws);
         let epoch = schedule.epoch_at(BlockHeight::from_raw(h));
+        carried.insert(h, carried_at(&chain, h));
         if h == h_open(epoch.to_raw()) {
             let snapshot = memo
                 .get(epoch, &linked.hash)
@@ -105,28 +146,76 @@ fn seated(label: &str, through: u64) -> Seated {
         snapshots,
         rows,
         draws,
+        carried,
     }
 }
 
-/// A tree's seats over an epoch are its `c` slots, at every archive width
-/// the chain passes through: none while the archive at the open is empty
-/// (a complete tree of an empty archive holds nothing to draw), and the
-/// specified slots once it is not. And the economy is unchanged by them:
-/// a complete tree is not in `D`, so every count row is the production
+/// A tree's seats over an epoch when no seat is ever filed, written from
+/// the specification's carry passage and not from the rules crate
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §2): the epoch-relative heights it sits at,
+/// and what it is owed after each one. The spec states that a seat at `h`
+/// is first seen unfiled at `h + W₂ + 1`, that it is owed again, capped at
+/// `c`, and that an owed tree takes one seat on each later block below
+/// `SEB − W₂` that its schedule does not seat. The spec does not say
+/// whether the block at `h + W₂ + 1` can itself carry it. This oracle
+/// follows the connect, which notes the close before that block seats, so
+/// it can.
+fn unfiled_seats(persona: &PCanonicalId) -> (BTreeSet<u64>, Vec<u32>) {
+    let scheduled = specified_seats(persona);
+    let span = seb() - window();
+    let c = SUPPORT_DRAWS_PER_EPOCH;
+    let mut seated = BTreeSet::new();
+    let mut owed_after = Vec::new();
+    let mut owed = 0u32;
+    for relative in 0..seb() {
+        if let Some(closed) = relative.checked_sub(window() + 1) {
+            if seated.contains(&closed) {
+                owed = (owed + 1).min(c);
+            }
+        }
+        if scheduled.contains(&relative) {
+            seated.insert(relative);
+        } else if relative < span && owed > 0 {
+            owed -= 1;
+            seated.insert(relative);
+        }
+        owed_after.push(owed);
+    }
+    (seated, owed_after)
+}
+
+/// A tree's seats over an epoch are its `c` slots and the carry of every
+/// one of them that went unfiled, at every archive width the chain passes
+/// through: none while the archive at the open is empty (a complete tree
+/// of an empty archive holds nothing to draw). No bundle is admitted on
+/// this chain, so no seat is filed and the carry runs to its cap. Each
+/// row's `carry_after` is what each tree is owed after that block, and the
+/// next epoch's open steps from nothing. And the economy is unchanged by
+/// any of it: a
+/// complete tree is not in `D`, so every count row is the production
 /// composition for an empty `D`. Red edits: spread the slots over
-/// `0..SEB` in `support_slot` (the rows leave the specified slots);
-/// build a roster at width zero in `emit` (it does not compile:
-/// `SupportRoster`'s width is a `NonZeroU64`); put a tree's pair into
-/// `D` (`D` is not empty, and the count moves).
+/// `0..SEB` in `support_slot` (the rows leave the specified slots); drop
+/// the carry from the connect (the rows are the schedule alone); step an
+/// open from the row before it (the epoch before's carry crosses); build a
+/// roster at
+/// width zero in `emit` (it does not compile: `SupportRoster`'s width is a
+/// `NonZeroU64`); put a tree's pair into `D` (`D` is not empty, and the
+/// count moves).
 #[test]
-fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
-    let through = h_open(4) - 1;
-    let seated = seated("support-seats-epochs", through);
+fn a_trees_seats_over_an_epoch_are_its_c_slots_and_their_carry_at_each_width() {
+    // Under the bench pair shard 0 (closed at height 131) is final at 181,
+    // before the members' first open (height 200), so every epoch with
+    // members has a closed shard. The late-final pair puts that open before
+    // shard 0 is final (221): members at width 0, then width 1 at 300.
+    let through = h_open(shifted(4)) - 1;
+    let seated = seated_under("support-seats-epochs", through, Under::LATE_FINAL);
     let trees: BTreeSet<PCanonicalId> = (0..WITNESS_PERSONAS)
         .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
         .collect();
     let mut widths = BTreeSet::new();
     let mut with_members = 0;
+    let mut carried_seats = 0;
+    let mut lapses = 0;
     for (&epoch, snapshot) in &seated.snapshots {
         // No roster is the archive with no closed shard at the open; the
         // test reads it as width 0.
@@ -156,23 +245,55 @@ fn a_trees_seats_over_an_epoch_are_its_c_slots_at_each_width() {
             compose(0, open, last),
             "epoch {epoch}: the count is an empty D's"
         );
+        // The epoch before ended owing: its last row holds the carry, and
+        // this open steps from nothing (`SO-D12r`). The per-tree check
+        // below holds the open's row to the oracle started empty.
+        if let Some(ended) = seated.carried.get(&(open - 1)) {
+            lapses += usize::from(!ended.is_empty());
+        }
         if roster.is_none() {
             assert!(seated_at.is_empty(), "epoch {epoch}: no roster, no seat");
+            for relative in 0..seb() {
+                let rows = &seated.carried[&(open + relative)];
+                assert!(rows.is_empty(), "epoch {epoch}: no roster, no carry");
+            }
             continue;
         }
         with_members += 1;
         assert_eq!(members, trees, "epoch {epoch}: the joins are the members");
         for tree in &trees {
+            let (expected, owed_after) = unfiled_seats(tree);
+            assert!(
+                specified_seats(tree).is_subset(&expected),
+                "the oracle seats every scheduled slot"
+            );
+            carried_seats += expected.len() - specified_seats(tree).len();
             assert_eq!(
                 seated_at.get(tree),
-                Some(&specified_seats(tree)),
-                "epoch {epoch}, width {width}: {tree:?} at its specified slots"
+                Some(&expected),
+                "epoch {epoch}, width {width}: {tree:?} at its slots and their carry"
             );
+            for (relative, owed) in (0u64..).zip(&owed_after) {
+                let rows = &seated.carried[&(open + relative)];
+                assert_eq!(
+                    rows.get(tree).copied().unwrap_or(0),
+                    *owed,
+                    "epoch {epoch}, relative {relative}: {tree:?}'s carry row"
+                );
+            }
         }
     }
     assert!(
         with_members > 0,
         "the subject exists: an epoch with members"
+    );
+    assert!(
+        carried_seats > 0,
+        "the subject exists: a seat the carry added"
+    );
+    assert!(
+        lapses > 0,
+        "the subject exists: an epoch that ended owing, then opened empty"
     );
     assert!(
         widths.len() >= 2,
@@ -199,9 +320,9 @@ fn a_past_blocks_roster_reads_as_written_at_connect() {
         mut memo,
         snapshots,
         ..
-    } = seated("support-seats-roster", h_open(2));
-    let snapshot = snapshots[&2].clone();
-    let h = first_scheduled_after_open(&snapshot, 2);
+    } = seated("support-seats-roster", h_open(shifted(2)));
+    let snapshot = snapshots[&shifted(2)].clone();
+    let h = first_scheduled_after_open(&snapshot, shifted(2));
     // Connect up to the end of `h`'s window, so the view's `h_incl` is
     // the last height that can still admit `h`'s bundle.
     while chain.grown.height().to_raw() < h + window() {
@@ -259,54 +380,102 @@ fn first_scheduled_after_open(snapshot: &DrawableEpoch, epoch: u64) -> u64 {
         .expect("the epoch seats a tree after its open")
 }
 
-/// SI-43: a seat row that is not the schedule halts the read. The three
-/// plants are the three ways two strictly increasing lists differ: a
-/// stranger, a member the schedule does not seat, and a scheduled member
-/// the row drops. Red edit: replace the equality with the two inclusions
-/// (a member the schedule does not seat reads as a roster).
+/// SI-43: a support row that is not one step of the carry from the row
+/// before it halts the read. Five plants, each the row as written with one
+/// half changed. In the seats: a stranger, a member the step does not
+/// seat, a seated member the row drops (the three ways two strictly
+/// increasing lists differ). In `carry_after`: a carried tree owed one
+/// more than the step leaves, and a stranger carried. Red edits, each
+/// reading as a roster: compare the seats only (the carry plants pass);
+/// replace the seat equality with the two inclusions (the extra member
+/// passes).
 #[test]
-fn a_seat_row_that_is_not_the_schedule_is_si_43() {
+fn a_support_row_that_is_not_one_step_of_the_carry_is_si_43() {
     /// What a case plants, and the persona the refusal must name.
-    type Plant = dyn Fn(&SupportSeats) -> (SupportSeats, PCanonicalId);
+    type Plant = dyn Fn(&SupportRow) -> (SupportRow, PCanonicalId);
     let stranger = PCanonicalId::from_bytes([0xEE; 32]);
     let members: Vec<PCanonicalId> = (0..WITNESS_PERSONAS)
         .map(|slot| shekyl_harness_spender::Persona::at(u32::try_from(slot).expect("small")).id())
         .collect();
-    let plant_stranger = move |row: &SupportSeats| {
-        let mut seats = row.as_slice().to_vec();
+    let with_seats = |row: &SupportRow, seats: Vec<PCanonicalId>| SupportRow {
+        seats: SupportSeats::new(seats).expect("ascending"),
+        carry_after: row.carry_after.clone(),
+    };
+    let with_carry = |row: &SupportRow, carry: Vec<(PCanonicalId, SupportCount)>| SupportRow {
+        seats: row.seats.clone(),
+        carry_after: SupportCarryAfter::new(carry).expect("ascending, each owed"),
+    };
+    let plant_stranger = move |row: &SupportRow| {
+        let mut seats = row.seats.as_slice().to_vec();
         seats.push(stranger);
         seats.sort_unstable();
-        (SupportSeats::new(seats).expect("ascending"), stranger)
+        (with_seats(row, seats), stranger)
     };
-    let plant_extra = move |row: &SupportSeats| {
+    let plant_extra = move |row: &SupportRow| {
         let extra = members
             .iter()
             .copied()
-            .find(|persona| row.as_slice().binary_search(persona).is_err())
+            .find(|persona| row.seats.as_slice().binary_search(persona).is_err())
             .expect("the first seated height does not seat every member");
-        let mut seats = row.as_slice().to_vec();
+        let mut seats = row.seats.as_slice().to_vec();
         seats.push(extra);
         seats.sort_unstable();
-        (SupportSeats::new(seats).expect("ascending"), extra)
+        (with_seats(row, seats), extra)
     };
-    let plant_dropped = |row: &SupportSeats| {
-        let missing = *row.as_slice().first().expect("the subject seats someone");
-        (SupportSeats::EMPTY, missing)
+    let plant_dropped = move |row: &SupportRow| {
+        let missing = *row
+            .seats
+            .as_slice()
+            .first()
+            .expect("the subject seats someone");
+        (with_seats(row, Vec::new()), missing)
     };
-    let cases: [(&str, &Plant); 3] = [
+    let plant_owed_more = move |row: &SupportRow| {
+        let mut carry = row.carry_after.as_slice().to_vec();
+        let persona = match carry.first_mut() {
+            Some((persona, owed)) => {
+                *owed = SupportCount::new(owed.get() + 1);
+                *persona
+            }
+            None => {
+                let persona = *row
+                    .seats
+                    .as_slice()
+                    .first()
+                    .expect("the subject seats someone");
+                carry.push((persona, SupportCount::new(1)));
+                persona
+            }
+        };
+        (with_carry(row, carry), persona)
+    };
+    let plant_carried_stranger = move |row: &SupportRow| {
+        let mut carry = row.carry_after.as_slice().to_vec();
+        carry.push((stranger, SupportCount::new(1)));
+        carry.sort_unstable_by_key(|(persona, _)| *persona);
+        (with_carry(row, carry), stranger)
+    };
+    let cases: [(&str, &Plant); 5] = [
         ("stranger", &plant_stranger),
         ("extra member", &plant_extra),
         ("dropped", &plant_dropped),
+        ("owed more", &plant_owed_more),
+        ("carried stranger", &plant_carried_stranger),
     ];
-    for (label, plant) in cases {
+    for (n, (label, plant)) in cases.into_iter().enumerate() {
         // An SI-43 halts the writer, so each case has its chain.
-        let Seated { chain, memo, .. } = seated(
-            &format!("support-seats-si43-{}", label.len()),
-            h_open(2) + 10,
-        );
-        let h = first_seated(&chain, 2);
+        let Seated { chain, memo, .. } =
+            seated(&format!("support-seats-si43-{n}"), h_open(shifted(2)) + 10);
+        let h = first_seated(&chain, shifted(2));
         let at = BlockHeight::from_raw(h);
-        let (planted, persona) = plant(&seat_row(&chain, h).expect("the row"));
+        let row = chain
+            .store
+            .begin_read()
+            .expect("read")
+            .support_row(at, BlockDrawsFloor::NONE)
+            .expect("read")
+            .expect("the row");
+        let (planted, persona) = plant(&row);
         let out: Result<(), TestErr> = chain.store.write(|batch| {
             batch
                 .open_upsert_table(crate::schema::ARCHIVAL_SUPPORT_BLOCK)?
@@ -322,7 +491,7 @@ fn a_seat_row_that_is_not_the_schedule_is_si_43() {
         };
         assert!(refused.contains("SI-43"), "{label}: {refused}");
         assert!(
-            refused.contains("is not the schedule"),
+            refused.contains("is not one step of the carry"),
             "{label}: {refused}"
         );
         assert!(
@@ -330,6 +499,45 @@ fn a_seat_row_that_is_not_the_schedule_is_si_43() {
             "{label}: {refused}"
         );
     }
+}
+
+/// The step reads the carry `h − 1` left, not an earlier one. The read is
+/// at a block that seated someone (so admission asks for its roster) and
+/// whose carry before it differs from the carry two blocks back: the honest
+/// row reads as a roster, every seat with its key. Red edit: read the carry
+/// of `h − 2` in `one_step`. The step then differs from the row, and the
+/// read halts on SI-43.
+#[test]
+fn a_roster_steps_from_the_carry_of_the_row_before_it() {
+    let Seated {
+        chain,
+        memo,
+        carried,
+        ..
+    } = seated("support-seats-step-from-h-1", h_open(shifted(3)) - 1);
+    let tip = chain.grown.height().to_raw() - 1;
+    let h = (h_open(shifted(2)) + 2..=tip)
+        .find(|&h| {
+            seat_row(&chain, h).is_some_and(|row| !row.is_empty())
+                && carried[&(h - 1)] != carried[&(h - 2)]
+        })
+        .expect("the subject exists: a seated block whose carry before it moved");
+    let at = BlockHeight::from_raw(h);
+    let seats = seat_row(&chain, h).expect("the row");
+    let out: Result<usize, TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let h_incl = chain.grown.height();
+        let bundle_view = StoreBundleView::new(&view, &memo, h_incl, RULES.settlement_schedule());
+        Ok(bundle_view
+            .support_roster(at)?
+            .expect("a connected block has a roster")
+            .len())
+    });
+    assert_eq!(
+        out.expect("the honest row is the step"),
+        seats.len(),
+        "every seat of block {h} has its key"
+    );
 }
 
 /// A pop removes the block's seat row through the journal, and the
@@ -342,8 +550,8 @@ fn a_pop_removes_the_seat_row_and_the_reconnect_restores_it() {
         mut chain,
         mut memo,
         ..
-    } = seated("support-seats-pop", h_open(2) + 40);
-    let h = first_seated(&chain, 2);
+    } = seated("support-seats-pop", h_open(shifted(2)) + 40);
+    let h = first_seated(&chain, shifted(2));
     let tip = chain.grown.height().to_raw() - 1;
     let rows: Vec<Option<SupportSeats>> = (h..=tip).map(|at| seat_row(&chain, at)).collect();
     pop_back(&mut chain, tip - h + 1);
@@ -372,11 +580,12 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         mut memo,
         snapshots,
         ..
-    } = seated("support-seats-twin", h_open(2));
-    let first = first_scheduled_after_open(&snapshots[&2], 2) - h_open(2);
+    } = seated("support-seats-twin", h_open(shifted(2)));
+    let first =
+        first_scheduled_after_open(&snapshots[&shifted(2)], shifted(2)) - h_open(shifted(2));
     // Connect to the block before the seated one, then the seated block
     // with a commitment the fixture producer holds the seed of.
-    let h = BlockHeight::from_raw(h_open(2) + first);
+    let h = BlockHeight::from_raw(h_open(shifted(2)) + first);
     while chain.grown.height() < h {
         connect_plain(&mut chain, Some(&mut memo));
     }
@@ -419,7 +628,7 @@ fn the_producers_support_draws_are_the_verifiers_observations() {
         );
         let refs = [reference];
         let bodies = [body];
-        let root = bundle_root(&refs).expect("one reference");
+        let root = section_root(&refs).expect("one reference");
         let admitted = judge_bundles(
             &refs,
             &bodies,

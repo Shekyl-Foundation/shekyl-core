@@ -95,7 +95,7 @@ fn an_unmanaged_status_never_carries_an_install_cause() {
                     needed: 2,
                 }),
             },
-            Input::PinAccepted,
+            Input::accepted(),
             Input::Spawned,
             Input::SpawnFailed,
         ] {

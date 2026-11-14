@@ -6,7 +6,7 @@
 //! The spend self-differential (`DRS_E5_POOL_ALT_PRUNE.md` §2.3, `E5-Q9`):
 //! a chain that switches onto a heavier branch, and back, equals the chain
 //! that connected the winner directly. A corrupted undo pre-image and a
-//! tampered alt witness show that equality is not vacuous.
+//! tampered alt row's references show that equality is not vacuous.
 
 use shekyl_types::{BlockHash, BlockHeight};
 
@@ -210,10 +210,14 @@ async fn a_corrupted_undo_row_makes_the_differential_fail() {
     y.close().await;
 }
 
-/// Rewrite the alt row of `hash` to carry `witness` — a row AL1 never
-/// writes (the tier stores the witness the block arrived with), planted
+/// Rewrite the alt row of `hash` to carry `references` — a row AL1 never
+/// writes (the tier stores the references the block arrived with), planted
 /// under the store's back.
-fn plant_alt_witness(path: &std::path::Path, hash: BlockHash, witness: Vec<u8>) {
+fn plant_alt_references(
+    path: &std::path::Path,
+    hash: BlockHash,
+    references: shekyl_types::archival::BundleReferences,
+) {
     use redb::ReadableTable;
     use shekyl_chain_store::codec::{AltBlock, Canonical};
     let db = redb::Database::open(path).expect("open raw");
@@ -231,7 +235,7 @@ fn plant_alt_witness(path: &std::path::Path, hash: BlockHash, witness: Vec<u8>) 
             })
             .find(|(_, row): &(_, AltBlock)| row.block().hash() == hash)
             .expect("the alt row is held");
-        let tampered = AltBlock::checked(row.facts(), &row.block().serialize(), Some(witness))
+        let tampered = AltBlock::checked(row.facts(), &row.block().serialize(), Some(references))
             .expect("well formed");
         table
             .insert(key, tampered.encoded().as_encoded())
@@ -241,13 +245,13 @@ fn plant_alt_witness(path: &std::path::Path, hash: BlockHash, witness: Vec<u8>) 
 }
 
 #[tokio::test]
-async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
-    // CEN-K5b: the witness a promoted block is judged with is the one its
-    // alt row carries. The scenario mints no attestation records, so every
-    // honest row's witness is `None`; plant a witness on B's second row and
-    // CEN-B4, run by promotion's `validate`, refuses it against the
-    // header's empty attestation root. The switch rolls back and the
-    // suffix from that block leaves.
+async fn tampered_references_on_an_alt_row_fail_promotion_k5b() {
+    // CEN-K5b: the references a promoted block is judged with are the ones
+    // its alt row carries. The scenario's blocks admit no bundle, so every
+    // honest row's references are `None`; plant a section on B's second row
+    // and CEN-J29, run by promotion's `validate`, refuses it: the
+    // reference does not parse. The switch rolls back and the suffix from
+    // that block leaves.
     let mut x = with_prefix("switch-k5b-x", PREFIX).await;
     let mut y = with_prefix("switch-k5b-y", PREFIX).await;
     x.mine(3).await;
@@ -260,15 +264,21 @@ async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
         ));
     }
     let target = b[1].hash;
-    x.reopen(|path| plant_alt_witness(path, target, vec![0xA7; 16]))
-        .await;
+    x.reopen(|path| {
+        plant_alt_references(
+            path,
+            target,
+            shekyl_types::archival::BundleReferences::new(vec![vec![0xA7; 80]]).expect("a section"),
+        );
+    })
+    .await;
     let before = x.digest().await.expect("d");
     let Offered::SwitchDue(plan) = x.offer(&b[3]).await.expect("offer") else {
         panic!("the heavier tip did not name a switch");
     };
     assert!(
-        plan.promoted[1].witness.is_some(),
-        "the plan carries the row's witness"
+        plan.promoted[1].references.is_some(),
+        "the plan carries the row's references"
     );
     match x.reorganize(&plan).await.expect("switch") {
         Switched::Refused {
@@ -278,10 +288,10 @@ async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
             ..
         } => {
             assert_eq!(hash, target);
-            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::B4);
+            assert_eq!(refused.rule, shekyl_chain_rules::CenRow::J29);
             assert_eq!(removed, vec![b[1].hash, b[2].hash, b[3].hash]);
         }
-        other => panic!("a tampered witness was promoted: {other:?}"),
+        other => panic!("tampered references were promoted: {other:?}"),
     }
     assert_eq!(x.digest().await.expect("d"), before);
     x.close().await;

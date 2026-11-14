@@ -316,7 +316,7 @@ def is_test_path(rel: str) -> bool:
 
     A path component is `tests` or ends in `_tests`. A file is `tests.rs`,
     `*_tests.rs`, `*_test.rs`, or `test_support.rs`. A substring match is
-    not a test: `attestation_wire.rs` is production.
+    not a test: `tx_show_regtest.rs` is production.
     """
     parts = rel.split(os.sep)
     name = parts[-1]
@@ -590,7 +590,7 @@ def selftest() -> int:
         print("selftest: a cfg(test) default() survived", file=sys.stderr)
         return 1
     checks = {
-        os.path.join("shekyl-archival-retention", "src", "attestation_wire.rs"): False,
+        os.path.join("shekyl-cli", "src", "tx_show_regtest.rs"): False,
         os.path.join("shekyl-chain-ingest", "src", "test_support.rs"): True,
         os.path.join("foo", "vectors_tests", "bar.rs"): True,
         os.path.join("shekyl-foo", "tests", "bar.rs"): True,

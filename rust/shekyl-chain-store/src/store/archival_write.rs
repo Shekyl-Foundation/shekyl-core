@@ -7,16 +7,15 @@
 //! `DRS_E4_ARCHIVAL_WRITER.md` §3.2; `ARW-Q1` RULED: the verdict derives
 //! the transition, the store records it). The bodies of the `[E4 hook]`s
 //! in `connect`'s phase list: the bond records and serve credits after the
-//! transactions (phase 2), the attestation witness (phase 5), the slash
+//! transactions (phase 2), the bundle references (phase 5), the slash
 //! burn folded into `total_burned` (phase 8), and the accrual, the slashes
 //! and the epoch close (phase 9).
 //!
 //! **The store persists; it does not compute** (C2-R8 principle 3). Every
 //! row written here is a part of the verdict's [`ArchivalDelta`] — the
-//! record post-images, the credit keys, the slash entries and what each
-//! burned, the accruing total, the close's frozen facts. What the store
-//! adds is the belts: SI-15 (a credit names a persona with a record),
-//! SI-19 (a join inserts once), SI-20 (an update replaces a present
+//! record post-images, the slash entries and what each burned, the
+//! accruing total, the close's frozen facts. What the store adds is the
+//! belts: SI-19 (a join inserts once), SI-20 (an update replaces a present
 //! persona), SI-21 (an epoch closes whole, once), SI-22 (the slash log is
 //! dense per height, and an applied key is written once), SI-23 (the
 //! accruing table holds the open epoch's row and no other), and SI-8 for
@@ -25,8 +24,7 @@
 //!
 //! ```text
 //!  2.  records   archival_bond[p] = post-image — Insert (SI-19) / Replace (SI-20)
-//!      credits   archival_serve_credit[(p, s, E, h)] = Present      (SI-15)
-//!  5.  witness   archival_attestation_witness[h] = bytes, non-empty only
+//!  5.  refs      archival_bundle_references[h] = section, non-empty only
 //!  8.  burn      total_burned += emission burn + Σ slash burns       (SI-8)
 //!  9a. accrual   archival_budget_accruing[E] = total — or, at E's close,
 //!                the row is removed                                 (SI-23)
@@ -35,7 +33,6 @@
 //!                archival_last_slash_epoch = watermark, when it moves
 //!  9c. close     archival_r_market[(s, E)], archival_sigma_work[E],
 //!                archival_budget[E] — each insert-once on E          (SI-21)
-//!                archival_complete_trees[E], beside Σwork(E)        (SI-31)
 //! ```
 //!
 //! The C++'s order is kept where the C++ had one (`blockchain_db.cpp:680–
@@ -60,14 +57,7 @@
 //! provenance says which family it is missing. The one Rust-only table,
 //! `archival_budget_accruing`, has no C++ family of its own and is
 //! governed by the family whose per-height rows it replaced,
-//! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`). The belts that read across
-//! families — SI-15 reads `archival_bond` for a credit — run only when
-//! both families apply: a stubbed `Bond` leaves no records, and a credit
-//! written against that absence is the stub, not a fault. Since E6 slice
-//! 8 row 3 that arm is a belt with nothing above it to let through: CEN-J4
-//! reads the record off the view before the block, so a `Bond`-stubbed
-//! session's credits are refused at `validate` and never reach this
-//! writer (`archival_write_tests`, ARW-9).
+//! `ArchivalFamily::BudgetAccrual` (`ARW-Q3`).
 //!
 //! # What the slash burns into (`ARW-6`)
 //!
@@ -87,52 +77,31 @@
 //! index against its digest, and the fold's own count — and arrive through
 //! `refuse_corrupt` as the same row. The issued-draw index and its digest
 //! are written by [`WriteBatch::write_admissions`](super::write::WriteBatch::write_admissions) from the
-//! rules' admission plan. The regtest door below plants rows no block
-//! admitted, and folds a digest the caller already computed.
-//!
-//! # The regtest injector (§3.8 item 3)
-//!
-//! [`ChainStore::regtest_inject_serve_credit`](super::ChainStore::regtest_inject_serve_credit)
-//! is the writer's own test hook — the door the C++'s
-//! `regtest_inject_archival_serve_credit` (`blockchain.cpp:4708`) opened,
-//! writing a serve-credit bit the rules did not admit, attributed to the
-//! tip's height, refused off regtest. It lives beside the phase bodies
-//! because it writes their table and nothing else may. It is **not
-//! journaled**: it runs in its own transaction outside any block's
-//! recording, so no `undo_log` row names it, and a pop below its height
-//! leaves the bit — the C++'s behaviour, and the corpus's `Inject` event
-//! (commit 7) is a pipeline barrier for the same reason.
+//! rules' admission plan. No write outside a block's connect reaches these
+//! tables.
 
 use shekyl_chain_rules::{ArchivalDelta, ChainValid, ChainView, RecordWriteKind};
-use shekyl_network::{Lever, Permit};
-use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::archival::BundleReferences;
+use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{
-    ArchivalLastSlashEpochCell, AttestationWitnessBytes, Canonical, Present, PropertyCell, Raw,
+    ArchivalLastSlashEpochCell, BundleReferencesBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{
-    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
-};
+use crate::ids::{ReleaseJournalKey, SettlementKey, SlashAppliedKey, SlashLogKey};
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
-    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_RELEASE_JOURNAL,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
     ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
-    BLOCK_INFO,
 };
 
-use super::archival_reads;
 use super::error::{
-    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreCannot,
-    StoreError, StoreInvariant,
+    AccrualFault, DigestFault, EngineError, SettlementFault, SlashFault, StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
-use super::ChainStore;
 
 impl<'id> WriteBatch<'_, 'id> {
     /// Phase 2's archival half: the block's bond records and serve credits.
@@ -145,13 +114,9 @@ impl<'id> WriteBatch<'_, 'id> {
         valid: &ChainValid<'id, V>,
     ) -> Result<(), StoreError> {
         let delta = valid.block().archival();
-        let bonds_apply = self.apply_policy().applies(ArchivalFamily::Bond);
-        if bonds_apply {
+        if self.apply_policy().applies(ArchivalFamily::Bond) {
             self.write_bond_records(delta)?;
             self.write_release_journal(BlockHeight::from_raw(height), delta)?;
-        }
-        if self.apply_policy().applies(ArchivalFamily::ServeCredit) {
-            self.write_serve_credits(height, delta, bonds_apply)?;
         }
         Ok(())
     }
@@ -198,8 +163,8 @@ impl<'id> WriteBatch<'_, 'id> {
     /// `archival_release_journal[(h, p)] = pre-image` for every Release the
     /// block connects: the record as it stood before the Release, beside
     /// the post-image [`Self::write_bond_records`] wrote (`SO-D12`
-    /// increment 2). Insert-once on the tip's height, as the attestation
-    /// witness is (SI-2): a row already under `(h, p)` is a connect at the
+    /// increment 2). Insert-once on the tip's height, as the bundle
+    /// references are (SI-2): a row already under `(h, p)` is a connect at the
     /// wrong height, since a persona releases once. Governed with the
     /// records it is the pre-image of, by `ArchivalFamily::Bond`; `pop`
     /// removes it through the journal.
@@ -223,63 +188,29 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// `archival_serve_credit[(p, s, E, h)] = Present` for every credit the
-    /// block earns. Upserted: the bit is a set membership, and the C++
-    /// `set_archival_serve_credit_bit` is idempotent on it. `check_bonds`
-    /// arms SI-15's write side — a credit for a persona with no record.
-    fn write_serve_credits(
+    /// Phase 5: `archival_bundle_references[h] = references` when the
+    /// verdict carries any. No references is no row — the type cannot hold
+    /// an empty section ([`BundleReferences::new`]), so the absence is
+    /// `None` here. Insert-once per height on the tip's row (SI-2): a row
+    /// already at `h` is a connect at the wrong height.
+    pub(super) fn record_bundle_references(
         &self,
         height: u64,
-        delta: &ArchivalDelta,
-        check_bonds: bool,
+        references: Option<&BundleReferences>,
     ) -> Result<(), StoreError> {
-        let credits = delta.serve_credits();
-        if credits.is_empty() {
-            return Ok(());
-        }
-        if check_bonds {
-            for credit in credits {
-                let record = archival_reads::bond_record(self.txn(), &credit.persona)
-                    .map_err(|f| self.arm_read_fault(f))?;
-                if record.is_none() {
-                    return Err(self.poison().arm(StoreInvariant::ServeCreditWithoutBond {
-                        persona: credit.persona,
-                    }));
-                }
-            }
-        }
-        let mut table = self.open_upsert_table(ARCHIVAL_SERVE_CREDIT)?;
-        let height = BlockHeight::from_raw(height);
-        for credit in credits {
-            let key = ServeCreditKey::new(credit.persona, credit.shard, credit.epoch, height);
-            table.upsert(key.key(), Present)?;
-        }
-        Ok(())
-    }
-
-    /// Phase 5: `archival_attestation_witness[h] = witness` when the
-    /// verdict carries one. An empty set is no row — the type cannot hold
-    /// one ([`AttestationWitness::new`]), so the absence is `None` here.
-    /// Insert-once per height on the tip's row (SI-2): a row already at
-    /// `h` is a connect at the wrong height.
-    pub(super) fn record_attestation_witness(
-        &self,
-        height: u64,
-        witness: Option<&AttestationWitness>,
-    ) -> Result<(), StoreError> {
-        let Some(witness) = witness else {
+        let Some(references) = references else {
             return Ok(());
         };
         if !self
             .apply_policy()
-            .applies(ArchivalFamily::AttestationWitness)
+            .applies(ArchivalFamily::BundleReferences)
         {
             return Ok(());
         }
-        self.open_insert_table(ARCHIVAL_ATTESTATION_WITNESS, StoreInvariant::TipMismatch)?
+        self.open_insert_table(ARCHIVAL_BUNDLE_REFERENCES, StoreInvariant::TipMismatch)?
             .insert(
                 height,
-                Raw::<AttestationWitnessBytes>::new(witness.as_bytes()),
+                Raw::<BundleReferencesBytes>::new(&references.encode()),
             )?;
         Ok(())
     }
@@ -337,8 +268,7 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-21's two write sets are here. The close freezes the budget:
     /// `archival_budget[E]`, insert-once. The slash pass settles whole:
     /// `archival_sigma_work[E]` and every `(shard, E)` row of
-    /// `archival_r_market` its snapshot named, each insert-once on `E`,
-    /// and with them `archival_complete_trees[E]` (SI-31).
+    /// `archival_r_market` its snapshot named, each insert-once on `E`.
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
@@ -372,22 +302,6 @@ impl<'id> WriteBatch<'_, 'id> {
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
                 .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
-                // SI-31: the complete trees the gather excluded, frozen
-                // with the `Σwork` they were excluded from. Governed by the
-                // family whose reader needs it — a claim reads both or
-                // neither — as `archival_budget_accruing` is by the family
-                // it serves (`ARW-Q3`).
-                self.open_insert_table(
-                    ARCHIVAL_COMPLETE_TREES,
-                    StoreInvariant::CompleteTreesNotFrozen {
-                        epoch,
-                        observed: FrozenFault::Rewritten,
-                    },
-                )?
-                .insert(
-                    epoch.to_raw(),
-                    gather.complete_trees().encoded().as_encoded(),
-                )?;
             }
         }
         if let Some(close) = delta.close() {
@@ -453,15 +367,17 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// 9e. `archival_support_block[h] = seats` at every connecting height,
-    /// insert-once: a block records its support seats once, and a row
-    /// already there is SI-40 before any journal entry. The seats are the
-    /// transition's: the epoch's support members its schedule puts on this
-    /// height, in persona order (`SO-D12` S1). A block that seated nobody
-    /// writes [`shekyl_types::archival::SupportSeats::EMPTY`]. A missing row
-    /// is the hole, and that empty row is not the hole. No archival family governs it, for
-    /// [`Self::write_block_draws`]'s reason. `pop` removes it through the
-    /// journal, and the boundary retires it on the draw rows' floor.
+    /// 9e. `archival_support_block[h] = row` at every connecting height,
+    /// insert-once: a block records its support row once, and a row
+    /// already there is SI-40 before any journal entry. The row is the
+    /// transition's step of the carry (`support_step`): the seats, in
+    /// persona order (`SO-D12` S1), and the carry the block leaves, which
+    /// the next block steps from. A block that seated nobody and left
+    /// nothing owed writes [`shekyl_types::archival::SupportRow::EMPTY`]. A
+    /// missing row is the hole, and that empty row is not the hole. No
+    /// archival family governs it, for [`Self::write_block_draws`]'s reason.
+    /// `pop` removes it through the journal, and the carry with it; the
+    /// boundary retires it on the draw rows' floor.
     fn write_support_block(
         &self,
         connecting: BlockHeight,
@@ -473,7 +389,7 @@ impl<'id> WriteBatch<'_, 'id> {
         )?
         .insert(
             connecting.to_raw(),
-            delta.support_seats().encoded().as_encoded(),
+            delta.support_row().encoded().as_encoded(),
         )?;
         Ok(())
     }
@@ -511,13 +427,10 @@ impl<'id> WriteBatch<'_, 'id> {
     ///
     /// The block's support count is [`Self::write_support_block`]: every
     /// connect records how many support draws the block issued.
-    /// `archival_support_issued` and `archival_support_unissued` still wait
-    /// on admission. [`shekyl_archival_retention::support_slot`] schedules
-    /// a draw, and the slash pass settles the issued rows it is shown.
-    /// Admission is not on the connect path, so this pass reads an empty
-    /// index and writes no settlement row. Filing unanswered draws before
-    /// a bundle can mark a pass would settle misses the stream has not yet
-    /// been able to serve.
+    /// Admission writes `archival_support_issued` (`admission_write.rs`),
+    /// and the count phase the support row with the carry it leaves
+    /// ([`Self::write_support_block`]); the slash pass settles the issued
+    /// rows it is shown.
     fn write_support_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
         let rows = delta.support_settlements();
         if rows.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {
@@ -673,136 +586,5 @@ impl<'id> WriteBatch<'_, 'id> {
             }
         }
         Ok(())
-    }
-}
-
-/// A replay write runs on its own lever's permit and no other.
-fn require(permit: Permit, wanted: Lever) -> Result<(), StoreError> {
-    if permit.lever() == wanted {
-        Ok(())
-    } else {
-        Err(StoreCannot::PermitForAnotherLever {
-            given: permit.lever(),
-            wanted,
-        }
-        .into())
-    }
-}
-
-impl ChainStore {
-    /// The regtest injector: `archival_serve_credit[(persona, shard, epoch,
-    /// tip)] = Present`, a bit no block earned, attributed to the tip's
-    /// height — the Gate-6 stand-in that lets a regtest reach a closed
-    /// epoch with a credit in it. It runs only on the network row's
-    /// `permit` for [`Lever::InjectServeCredit`] (`NETWORK_IDENTITY.md`
-    /// NI-R6), which only regtest's row grants: the store holds the
-    /// permit, never the network (rule 71).
-    ///
-    /// Its own transaction, **not journaled** (module doc): a pop below the
-    /// returned height leaves the bit, as the C++'s does. Returns the
-    /// height the bit was attributed to.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
-    /// write; [`StoreCannot::ChainEmpty`] with no block recorded (no tip
-    /// to attribute the bit to); [`StoreCannot::InjectionForUnbondedPersona`]
-    /// if `persona` has no bond record — every serve-credit read arms
-    /// SI-15, so a bit for a stranger would be a file the reads refuse
-    /// (the C++ does not check because the C++ has no such read belt);
-    /// [`StoreCannot::FamilyStubbed`] if this session stubs `ServeCredit`
-    /// — the door writes one family and does not skip; the admission and
-    /// engine errors of [`write`](Self::write).
-    pub fn regtest_inject_serve_credit(
-        &self,
-        permit: Permit,
-        persona: PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<BlockHeight, StoreError> {
-        require(permit, Lever::InjectServeCredit)?;
-        self.write(|batch| {
-            let tip = {
-                let info = batch.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
-                let tip = info.last()?.map(|(h, _)| h.value());
-                tip
-            };
-            let Some(tip) = tip else {
-                return Err(StoreCannot::ChainEmpty.into());
-            };
-            let height = BlockHeight::from_raw(tip);
-            // The stub refusal first: the door's own contract before the
-            // file's state.
-            let mut credits = batch.open_upsert_table(ARCHIVAL_SERVE_CREDIT)?;
-            let record = archival_reads::bond_record(batch.txn(), &persona)
-                .map_err(|f| batch.arm_read_fault(f))?;
-            if record.is_none() {
-                return Err(StoreCannot::InjectionForUnbondedPersona { persona }.into());
-            }
-            credits.upsert(
-                ServeCreditKey::new(persona, shard, epoch, height).key(),
-                Present,
-            )?;
-            Ok::<_, StoreError>(height)
-        })
-    }
-
-    /// The regtest draw issue: write `draws` into `epoch`'s issued-draw
-    /// index and set the epoch's running digest to `digest`
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`). The stand-in for
-    /// admission until admission exists: it lets a regtest chain reach a
-    /// slash pass with draws to settle, each already marked passed or not.
-    /// It runs only on the row's permit for [`Lever::IssueDraws`], as
-    /// [`regtest_inject_serve_credit`](Self::regtest_inject_serve_credit)
-    /// does on its own.
-    ///
-    /// **The caller folds the digest.** The store computes none of the
-    /// archival state it holds (`ARW-Q1`): `digest` is the cell's
-    /// post-image, the value read through
-    /// [`ReadSnapshot::issued_digest`](super::ReadSnapshot::issued_digest)
-    /// with each new draw's term added. A caller that hands a digest its
-    /// draws do not fold to has built the store SI-25 refuses at the slash
-    /// pass, which is how the tests of that refusal are driven.
-    ///
-    /// Its own transaction, **not journaled**: a pop leaves the draws, as
-    /// it leaves an injected credit.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreCannot::PermitForAnotherLever`] if `permit` is not for this
-    /// write; [`StoreCannot::InjectionForUnbondedPersona`] if a draw names
-    /// a persona with no bond record; [`StoreCannot::DrawAlreadyIssued`]
-    /// if the index holds one of the draws; the admission and engine
-    /// errors of [`write`](Self::write).
-    pub fn regtest_issue_draws(
-        &self,
-        permit: Permit,
-        epoch: SettlementEpoch,
-        draws: &[IndexedDraw],
-        digest: IssuedDigest,
-    ) -> Result<(), StoreError> {
-        require(permit, Lever::IssueDraws)?;
-        self.write(|batch| {
-            let mut index = batch.open_upsert_table(ARCHIVAL_ISSUED_DRAW)?;
-            for draw in draws {
-                let persona = draw.persona;
-                if archival_reads::bond_record(batch.txn(), &persona)
-                    .map_err(|f| batch.arm_read_fault(f))?
-                    .is_none()
-                {
-                    return Err(StoreCannot::InjectionForUnbondedPersona { persona }.into());
-                }
-                let key =
-                    IssuedDrawKey::new(epoch, persona, draw.shard, draw.issuing_height, draw.draw);
-                if index.get(key.key())?.is_some() {
-                    return Err(StoreCannot::DrawAlreadyIssued { persona }.into());
-                }
-                index.upsert(key.key(), draw.state.encoded().as_encoded())?;
-            }
-            batch
-                .open_upsert_table(ARCHIVAL_ISSUED_DIGEST)?
-                .upsert(epoch.to_raw(), digest.encoded().as_encoded())?;
-            Ok::<_, StoreError>(())
-        })
     }
 }

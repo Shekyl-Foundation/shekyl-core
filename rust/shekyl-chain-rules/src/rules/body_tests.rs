@@ -10,9 +10,9 @@
 //! place in `form`. CEN-G1 — a re-listed and a doubled transaction, both at
 //! the slot; and **the ordering pin**: a re-listed *spend* is refused on G1,
 //! not I7 — the assertion is the row, so a G1 moved after the slot loop
-//! goes red here rather than passing on the wrong refusal. CEN-G7/G9/G10 —
+//! goes red here rather than passing on the wrong refusal. CEN-G9/G10 —
 //! the second occurrence named, the admitted pair (G9) and the mixed kinds
-//! (G10) as controls, an unparseable vin left to its own row.
+//! (G10) as controls.
 
 use super::*;
 use crate::block::Candidate;
@@ -274,20 +274,7 @@ fn cen_g1_refuses_a_doubled_spend_before_l1_can() {
     );
 }
 
-// --- CEN-G7 / G9 / G10 ---------------------------------------------------
-
-/// A parseable serve-credit vin (the kept half, `RF-D1`) for `(P, shard, E)`.
-fn serve_credit_vin(p: [u8; 32], shard_id: u64, settlement_epoch: u64) -> Input {
-    let kept = ArchivalServeCreditResponse {
-        p_canonical_id: p,
-        shard_id,
-        settlement_epoch,
-        ed25519_countersignature: [0x5c; 64],
-    };
-    Input::ServeCredit {
-        canonical_bytes: kept.serialize().expect("a kept half serializes"),
-    }
-}
+// --- CEN-G9 / G10 --------------------------------------------------------
 
 /// A parseable emission vin for `p_pubkey` claiming `epochs` — the
 /// `emission_wire` round-trip shape, one work claim and one amount per
@@ -356,57 +343,6 @@ fn body_with(inputs: Vec<Input>) -> Transaction {
 
 const P1: [u8; 32] = [0xa1; 32];
 const P2: [u8; 32] = [0xa2; 32];
-
-#[test]
-fn cen_g7_a_repeated_serve_credit_key_is_refused_at_the_second_vin() {
-    let chain = spendable_chain();
-    // Two bodies; the second's second vin repeats (P1, 7, 11).
-    let block = candidate_on(
-        &chain,
-        vec![
-            body_with(vec![serve_credit_vin(P1, 7, 11)]),
-            body_with(vec![
-                serve_credit_vin(P1, 8, 11),
-                serve_credit_vin(P1, 7, 11),
-            ]),
-        ],
-    );
-    assert_refused(
-        check_alone_on::<G7>(&chain, &block),
-        CenRow::G7,
-        Locus::Input {
-            slot: TxSlot::Listed(1),
-            input: 1,
-        },
-    );
-    // Distinct keys — another shard, another epoch, another P — pass.
-    let block = candidate_on(
-        &chain,
-        vec![
-            body_with(vec![serve_credit_vin(P1, 7, 11)]),
-            body_with(vec![
-                serve_credit_vin(P1, 8, 11),
-                serve_credit_vin(P1, 7, 12),
-                serve_credit_vin(P2, 7, 11),
-            ]),
-        ],
-    );
-    check_alone_on::<G7>(&chain, &block).expect("distinct (P, shard, E) keys pass G7");
-}
-
-#[test]
-fn cen_g7_an_unparseable_vin_has_no_key_and_is_another_rows_refusal() {
-    let chain = spendable_chain();
-    let opaque = || Input::ServeCredit {
-        canonical_bytes: vec![shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT, 0x52, 0x52],
-    };
-    // Two identical unparseable vins: not a G7 collision (CEN-J1's, pending).
-    let block = candidate_on(
-        &chain,
-        vec![body_with(vec![opaque()]), body_with(vec![opaque()])],
-    );
-    check_alone_on::<G7>(&chain, &block).expect("no key, no collision");
-}
 
 #[test]
 fn cen_g9_a_repeated_claim_pair_is_refused_and_the_admitted_pair_passes() {
@@ -492,8 +428,8 @@ fn first_refused_added(bodies: &[Transaction]) -> Option<(usize, CenRow)> {
         .find_map(|(n, tx)| keys.add(tx).err().map(|row| (n, row)))
 }
 
-/// The accumulator a block filler asks is the three rows asked one body at
-/// a time: on the G7, G9 and G10 blocks above it refuses the body the row
+/// The accumulator a block filler asks is the two rows asked one body at
+/// a time: on the G9 and G10 blocks above it refuses the body the row
 /// refuses, on the row's name, and admits each control block whole. A
 /// refused body adds nothing, so a body after it that collides only with
 /// the refused one is admitted.
@@ -507,16 +443,6 @@ fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
         endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
     };
     let refused = [
-        (
-            vec![
-                body_with(vec![serve_credit_vin(P1, 7, 11)]),
-                body_with(vec![
-                    serve_credit_vin(P1, 8, 11),
-                    serve_credit_vin(P1, 7, 11),
-                ]),
-            ],
-            CenRow::G7,
-        ),
         (
             vec![
                 body_with(vec![emission_vin(0xa1, &[11, 12])]),
@@ -539,7 +465,6 @@ fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
     for (bodies, row) in refused {
         let block = candidate_on(&chain, bodies.clone());
         let by_row = match row {
-            CenRow::G7 => check_alone_on::<G7>(&chain, &block),
             CenRow::G9 => check_alone_on::<G9>(&chain, &block),
             _ => check_alone_on::<G10>(&chain, &block),
         };
@@ -555,14 +480,6 @@ fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
         assert_eq!(first_refused_added(&bodies), Some((1, row)), "{row:?}");
     }
     let admitted = [
-        vec![
-            body_with(vec![serve_credit_vin(P1, 7, 11)]),
-            body_with(vec![
-                serve_credit_vin(P1, 8, 11),
-                serve_credit_vin(P1, 7, 12),
-                serve_credit_vin(P2, 7, 11),
-            ]),
-        ],
         vec![
             body_with(vec![emission_vin(0xa1, &[11])]),
             body_with(vec![emission_vin(0xa1, &[12])]),
@@ -594,11 +511,10 @@ fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
 
 #[test]
 fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
-    // The corpus's common case: no archival vin, three rows record and pass.
+    // The corpus's common case: no archival vin, two rows record and pass.
     let chain = spendable_chain();
     let block = candidate_on(&chain, vec![listed_on(&chain, point_at(60))]);
     for verdict in [
-        check_alone_on::<G7>(&chain, &block),
         check_alone_on::<G9>(&chain, &block),
         check_alone_on::<G10>(&chain, &block),
     ] {

@@ -62,10 +62,10 @@
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
-    BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
-    HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
-    ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, SupportCount, SupportIssued, SupportSeats, BLOCK_DRAWS_LEN,
+    BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, ReceiptSignPk, SettlementRow,
+    SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCarryAfter,
+    SupportCarryError, SupportCount, SupportIssued, SupportRow, SupportSeats, BLOCK_DRAWS_LEN,
     DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
     MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
     SETTLEMENT_ROW_LEN,
@@ -259,45 +259,6 @@ impl Canonical for SigmaWorkMilli {
     }
 }
 
-/// `archival_complete_trees`'s row (`SO-D12h`): the personas an epoch's
-/// slash pass excluded from its market as complete trees. Layout:
-///
-/// ```text
-/// n         u32 LE
-/// persona   [u8; 32] × n, strictly increasing
-/// ```
-///
-/// `n = 0` is the empty set, a written value. An order the type refuses,
-/// a count the bytes do not back, or trailing bytes is refused. No cap
-/// beyond the bytes: the set is a subset of the bond records, which have
-/// none.
-impl Canonical for CompleteTreeSet {
-    const NAME: &'static str = "complete_tree_set";
-    const FIXED_WIDTH: Option<usize> = None;
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        put_count(out, self.as_slice().len());
-        for persona in self.as_slice() {
-            out.extend_from_slice(persona.as_bytes());
-        }
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let mut r = Reader::new(Self::NAME, bytes);
-        let n = r.count_bounded(32, usize::MAX, "unreachable: usize::MAX cap")?;
-        let mut ids = Vec::with_capacity(n);
-        for _ in 0..n {
-            ids.push(PCanonicalId::from_bytes(
-                r.array::<32>("buffer ends inside a persona")?,
-            ));
-        }
-        if !r.is_empty() {
-            return Err(r.invalid("trailing bytes after the complete-tree set"));
-        }
-        CompleteTreeSet::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
-    }
-}
-
 /// `archival_slash_log`'s row (DRS-E4 `ARW-Q2`). Layout, all little-endian:
 ///
 /// ```text
@@ -445,21 +406,6 @@ impl Canonical for IssuedDigest {
     }
 }
 
-/// `archival_block_draws`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
-/// Layout:
-///
-/// ```text
-/// count         u32 LE   draws this block's producer made
-/// carry         u32 LE   the fraction carried to the next block's count
-/// shortfall     u64 LE   the visible shortfall the count was computed from
-/// issued_short  u32 LE   what this block's admissions took off the shortfall
-/// revealed      u8       0 = seed not revealed, 1 = revealed
-/// ```
-///
-/// A third value of the flag, or trailing bytes, is refused.
-/// `support_count`: one `u32` LE. The unissued counter of one tree in one
-/// epoch, and the support draws one block issued. The same width, two
-/// tables (`ARCHIVAL_SUPPORT_DRAW.md` §5).
 /// `archival_support_issued`'s row (`ARCHIVAL_SUPPORT_DRAW.md` §3).
 /// Layout:
 ///
@@ -493,36 +439,29 @@ impl Canonical for SupportIssued {
     }
 }
 
-impl Canonical for SupportCount {
-    const NAME: &'static str = "support_count";
-    const FIXED_WIDTH: Option<usize> = Some(SupportCount::LEN);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.get().to_le_bytes());
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let mut r = Reader::new(Self::NAME, bytes);
-        let n = r.u32()?;
-        if !r.is_empty() {
-            return Err(r.invalid("trailing bytes after the support count"));
-        }
-        Ok(Self::new(n))
-    }
-}
-
 /// `archival_support_block`'s row: the seats a block's support stream
-/// issued. Layout: `count_le4 ‖ count × persona[32]`, the personas strictly
-/// increasing. A repeated or out-of-order persona, a short buffer, or
-/// trailing bytes are refused.
-impl Canonical for SupportSeats {
-    const NAME: &'static str = "support_seats";
+/// issued and the carry it leaves. Layout:
+///
+/// ```text
+/// seats    count_le4 ‖ count × persona[32]               strictly increasing
+/// carry    count_le4 ‖ count × (persona[32] ‖ owed_le4)  strictly increasing, owed > 0
+/// ```
+///
+/// A repeated or out-of-order persona in either list, a carried tree owed
+/// nothing, a short buffer, or trailing bytes are refused.
+impl Canonical for SupportRow {
+    const NAME: &'static str = "support_row";
     const FIXED_WIDTH: Option<usize> = None;
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        put_count(out, self.len());
-        for persona in self.as_slice() {
+        put_count(out, self.seats.len());
+        for persona in self.seats.as_slice() {
             out.extend_from_slice(persona.as_bytes());
+        }
+        put_count(out, self.carry_after.len());
+        for (persona, owed) in self.carry_after.as_slice() {
+            out.extend_from_slice(persona.as_bytes());
+            out.extend_from_slice(&owed.get().to_le_bytes());
         }
     }
 
@@ -532,16 +471,43 @@ impl Canonical for SupportSeats {
         let mut ids = Vec::with_capacity(n);
         for _ in 0..n {
             ids.push(PCanonicalId::from_bytes(
-                r.array::<32>("buffer ends inside a persona")?,
+                r.array::<32>("buffer ends inside a seated persona")?,
             ));
         }
-        if !r.is_empty() {
-            return Err(r.invalid("trailing bytes after the support seats"));
+        let seats =
+            SupportSeats::new(ids).map_err(|_| r.invalid("seats are not strictly increasing"))?;
+        let n = r.count_bounded(36, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut entries = Vec::with_capacity(n);
+        for _ in 0..n {
+            let persona =
+                PCanonicalId::from_bytes(r.array::<32>("buffer ends inside a carried persona")?);
+            entries.push((persona, SupportCount::new(r.u32()?)));
         }
-        SupportSeats::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support row"));
+        }
+        let carry_after = SupportCarryAfter::new(entries).map_err(|why| match why {
+            SupportCarryError::NotIncreasing { .. } => {
+                r.invalid("carried personas are not strictly increasing")
+            }
+            SupportCarryError::OwesNothing { .. } => r.invalid("a carried persona owes nothing"),
+        })?;
+        Ok(Self { seats, carry_after })
     }
 }
 
+/// `archival_block_draws`'s row (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §10).
+/// Layout:
+///
+/// ```text
+/// count         u32 LE   draws this block's producer made
+/// carry         u32 LE   the fraction carried to the next block's count
+/// shortfall     u64 LE   the visible shortfall the count was computed from
+/// issued_short  u32 LE   what this block's admissions took off the shortfall
+/// revealed      u8       0 = seed not revealed, 1 = revealed
+/// ```
+///
+/// A third value of the flag, or trailing bytes, is refused.
 impl Canonical for BlockDraws {
     const NAME: &'static str = "block_draws";
     const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);

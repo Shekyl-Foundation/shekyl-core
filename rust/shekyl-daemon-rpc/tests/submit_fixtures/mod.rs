@@ -22,7 +22,7 @@ use shekyl_daemon_rpc::submit::{
     VerifyReject,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
-use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
+use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
@@ -120,7 +120,6 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
             base,
             pqc_auths: key_images.iter().map(|_| pqc_auth()).collect(),
             prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -133,48 +132,6 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
 /// The default 2-input spend fixture.
 pub fn spend_tx(fee: u64) -> Transaction {
     spend_tx_with_kis(&valid_key_images(2), fee)
-}
-
-/// A fee-only serve-credit tx (all-serve-credit vin, no outputs, empty
-/// pqc_auths, no prunable) — `fee` is parameterized so the zero-fee
-/// consensus static can be exercised from both sides.
-pub fn serve_credit_tx(fee: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ServeCredit {
-                // Opaque kept half (RF-D1): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
-                canonical_bytes: {
-                    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
-                    b.extend_from_slice(&[0x11; 32]);
-                    b.extend_from_slice(&[7, 42]);
-                    b.extend_from_slice(&[0x66; 64]);
-                    b
-                },
-            }],
-            outputs: vec![],
-            extra: vec![],
-        },
-        ct: Ct::Fcmp {
-            fee,
-            reference_block: BlockHash::NULL,
-            base: CtBase {
-                enc_amounts: vec![],
-                enc_labels: vec![],
-                commitments: vec![],
-            },
-            pqc_auths: vec![],
-            // RF-D1: the pruned half of the record, one per serve-credit vin.
-            prunable: Some(Prunable {
-                bulletproofs: vec![],
-                tree_depth: 0,
-                fcmp_proof: vec![],
-                pseudo_outs: vec![],
-                // One opaque pruned record per serve-credit vin.
-                serve_credit_pruned: vec![vec![0x77; 64]],
-            }),
-        },
-    }
 }
 
 /// A synthetic-but-decodable emission vin (the retention `emission_wire`
@@ -252,7 +209,6 @@ pub fn emission_tx(fee: u64) -> Transaction {
             pqc_auths: vec![pqc_auth(), pqc_auth()],
             prunable: Some(Prunable {
                 // Spend fixture: no pass records (RF-D1).
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],

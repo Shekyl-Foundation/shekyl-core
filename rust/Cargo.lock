@@ -3910,6 +3910,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
@@ -3929,6 +3930,7 @@ name = "shekyl-chain-sync"
 version = "3.1.0"
 dependencies = [
  "proptest",
+ "shekyl-archival-retention",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-difficulty",
@@ -3943,6 +3945,7 @@ dependencies = [
 name = "shekyl-chain-sync-runtime"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-retention",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
@@ -4870,8 +4873,6 @@ dependencies = [
 name = "shekyl-p-serve"
 version = "3.1.0"
 dependencies = [
- "ed25519-dalek",
- "fips204",
  "gungraun",
  "rand 0.8.6",
  "shekyl-archival-retention",
@@ -4940,6 +4941,7 @@ name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
  "serde_json",
+ "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-bundle-producer",
  "shekyl-capped-stream",
@@ -4949,8 +4951,10 @@ dependencies = [
  "shekyl-chain-sync",
  "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
+ "shekyl-crypto-pq",
  "shekyl-difficulty",
  "shekyl-draw-rng",
+ "shekyl-economics",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",
  "shekyl-levin",
@@ -4969,6 +4973,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

@@ -52,7 +52,7 @@ use super::undo::Replayed;
 use super::write::WriteBatch;
 
 /// What `pop` removed. The block itself is read through the view **before**
-/// popping, as the reorg already does for the witness (audit R-5); the
+/// popping, as the reorg already does for the references (audit R-5); the
 /// store hands nothing consensus-visible back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Popped {
@@ -133,14 +133,32 @@ impl WriteBatch<'_, '_> {
             }
             Some(_) => {}
         }
+        // The bundles the tip admitted go back to the queue after the undo
+        // (`bundle_holders.rs`): the section is read before the undo
+        // removes its row.
+        let returned = self.popped_section(tip)?;
         // The tip's row was seen above; the only way replay finds no row is
         // a journal that lost the tip between the check and here —
         // impossible inside one transaction, and named rather than assumed.
         match self.replay_undo(tip)? {
-            Replayed::Entries(reversed) => Ok(Popped {
-                height: BlockHeight::from_raw(tip),
-                reversed,
-            }),
+            Replayed::Entries(reversed) => {
+                // §7.5: an entry leaves when its block is popped. Upkeep
+                // used to keep an entry at or above the tip until the
+                // window closed, so a rewind of blocks that each admitted
+                // the previous block's bundle held one entry per popped
+                // height and could pass the queue's `W₂` bound. The entry
+                // goes before the section returns: a returned bundle names
+                // an `h` the pop left on the chain.
+                self.unqueue_bundle(BlockHeight::from_raw(tip))?;
+                if !returned.is_empty() {
+                    let (parent_height, parent_hash) = self.parent_of(tip)?;
+                    self.return_section(&returned, parent_height, parent_hash)?;
+                }
+                Ok(Popped {
+                    height: BlockHeight::from_raw(tip),
+                    reversed,
+                })
+            }
             Replayed::NoRow => Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
                 height: tip,
                 fault: UndoFault::NoRowForTip,

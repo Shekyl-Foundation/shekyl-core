@@ -76,7 +76,8 @@ fn carried(block: Vec<u8>) -> BlockBody {
     BlockBody {
         block,
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -167,7 +168,8 @@ fn response_bodies_bytes_are_pinned_and_debug_redacts_blobs() {
                     archival_len: ArchivalLength::from_raw(7),
                 }),
             ],
-            attestation_witness: vec![0x0d],
+            bundle_references: vec![vec![0x0d]],
+            bundle_bodies: Vec::new(),
         }],
         deferred: vec![[0x55; HASH_SIZE]],
         missed_ids: vec![[0x66; HASH_SIZE]],
@@ -178,7 +180,7 @@ fn response_bodies_bytes_are_pinned_and_debug_redacts_blobs() {
         "{rendered}"
     );
     assert!(rendered.contains("Full"), "{rendered}");
-    pin(&msg, "0111010101010201010c06626f646965738c040c136174746573746174696f6e5f7769746e6573730a040d05626c6f636b0a15030100000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000100000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037478738c080804626c6f620a080a0b04666f726d0801140c617263686976616c5f6c656e05070000000000000004666f726d08020d7071635f617574685f686173680a8044444444444444444444444444444444444444444444444444444444444444440d7072756e61626c655f686173680a8033333333333333333333333333333333333333333333333333333333333333330a756e7072756e61626c650a040c0864656665727265640a8055555555555555555555555555555555555555555555555555555555555555550a6d69737365645f6964730a806666666666666666666666666666666666666666666666666666666666666666");
+    pin(&msg, "0111010101010201010c06626f646965738c040c05626c6f636b0a150301000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030001000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001162756e646c655f7265666572656e6365738a04040d037478738c080804626c6f620a080a0b04666f726d0801140c617263686976616c5f6c656e05070000000000000004666f726d08020d7071635f617574685f686173680a8044444444444444444444444444444444444444444444444444444444444444440d7072756e61626c655f686173680a8033333333333333333333333333333333333333333333333333333333333333330a756e7072756e61626c650a040c0864656665727265640a8055555555555555555555555555555555555555555555555555555555555555550a6d69737365645f6964730a806666666666666666666666666666666666666666666666666666666666666666");
 }
 
 /// Each decoder refuses one byte over its encoded cap before the codec
@@ -282,7 +284,8 @@ fn many_small_skeletons_round_trip() {
     let body = BlockBody {
         block: vec![0x11],
         txs: vec![tx; 90],
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let msg = ResponseBodies {
         bodies: vec![body; 100],
@@ -524,7 +527,8 @@ fn sized_body(block_len: usize) -> BlockBody {
     BlockBody {
         block: vec![0; block_len],
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -602,7 +606,8 @@ fn body_of_total(id: &[u8; HASH_SIZE], total: usize) -> BlockBody {
         } else {
             vec![TxBody::Full(vec![0; extra])]
         },
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -870,7 +875,8 @@ fn a_budget_of_minimum_skeletons_decodes() {
     let one = BlockBody {
         block: vec![0x11],
         txs: vec![skeleton.clone()],
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let each = body_budget_bytes(&one) - one.block.len();
     let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
@@ -888,7 +894,8 @@ fn a_budget_of_minimum_skeletons_decodes() {
             BlockBody {
                 block: vec![0x11],
                 txs: vec![skeleton.clone(); n],
-                attestation_witness: Vec::new(),
+                bundle_references: Vec::new(),
+                bundle_bodies: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -922,4 +929,53 @@ fn the_four_sync_commands_carry_their_decoders_caps() {
         assert_eq!(command.wire_id(), id);
         assert_eq!(command.payload_cap(), cap, "{id}");
     }
+}
+
+/// A body response carries the bundle bodies its server holds beside the
+/// references (the switch's C3), and they round-trip. No more bodies than a
+/// section has references: one over is refused on encode and on decode.
+/// Red edit: drop `check_bundle_bodies` from the decoder — the over-full
+/// response decodes.
+#[test]
+fn bundle_bodies_ride_a_body_response_up_to_the_section_bound() {
+    use shekyl_levin::MAX_BUNDLE_REFERENCES;
+    let (block, _) = coined(3);
+    let mut body = carried(block);
+    body.bundle_references = vec![vec![0x0d], vec![0x0e]];
+    body.bundle_bodies = vec![vec![0xb0; 40], vec![0xb1; 41]];
+    let msg = ResponseBodies {
+        bodies: vec![body.clone()],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    let bytes = msg.store().expect("encodes");
+    let back = ResponseBodies::decode(&bytes).expect("decodes");
+    assert_eq!(back.bodies[0].bundle_bodies, body.bundle_bodies);
+    assert_eq!(
+        body_budget_bytes(&back.bodies[0]),
+        back.bodies[0].block.len() + 2 + 81,
+        "the bodies count toward the response budget"
+    );
+
+    let mut over = body;
+    over.bundle_bodies = vec![vec![0xb2; 4]; MAX_BUNDLE_REFERENCES + 1];
+    let over = ResponseBodies {
+        bodies: vec![over],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    assert!(matches!(
+        over.store(),
+        Err(PayloadError::TooManyBundleBodies { .. })
+    ));
+    let mut section = Section::new();
+    section.insert("block", Value::Bytes(coined(4).0));
+    section.insert(
+        "bundle_bodies",
+        Value::Array(Array::Bytes(vec![vec![0xb2; 4]; MAX_BUNDLE_REFERENCES + 1])),
+    );
+    let mut root = Section::new();
+    root.insert("bodies", Value::Array(Array::Object(vec![section])));
+    let bytes = store_to_binary(&root).expect("stores");
+    assert!(ResponseBodies::decode(&bytes).is_err());
 }

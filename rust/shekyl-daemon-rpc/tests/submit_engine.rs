@@ -22,8 +22,7 @@ use shekyl_rpc_types::kinds::{Height, Text};
 use shekyl_rpc_types::wire::tx::{Publication, Rejection, Verdict};
 use shekyl_types::{BlockHeight, ChainCount};
 use submit_fixtures::{
-    admitting_facts, emission_tx, serve_credit_tx, spend_tx, tx_bytes, MockShim, MockVerifier,
-    FIXTURE_ROOT,
+    admitting_facts, emission_tx, spend_tx, tx_bytes, MockShim, MockVerifier, FIXTURE_ROOT,
 };
 
 type MockEngine = SubmitEngine<Arc<MockShim>, Arc<MockVerifier>>;
@@ -268,24 +267,6 @@ fn a_fee_short_of_the_tip_floor_is_refused_before_the_commit() {
         0,
         "a short fee never reaches the commit"
     );
-}
-
-#[test]
-fn serve_credit_terminates_at_the_fee_floor() {
-    // SP-T4a parity: consensus pins serve-credit fee to 0; the pool floor
-    // is never 0; the non-spending arm therefore terminates FeeTooLow —
-    // and its (unconsulted) reference must NOT surface ReferenceNotFound
-    // (the C++ oracle never checks referenceBlock on this arm).
-    let blob = tx_bytes(&serve_credit_tx(0));
-    let parsed = parse_submission(&blob).expect("serve-credit parses");
-    let mut facts = admitting_facts(&parsed);
-    facts.reference = None; // would be ReferenceNotFound on a spending arm
-    let (engine, _shim, verifier) = engine(facts, CommitOutcome::Committed);
-    assert_eq!(
-        engine.submit(&blob, SubmitCaller::Owner).unwrap(),
-        rejected(Rejection::FeeTooLow)
-    );
-    assert_eq!(verifier.call_count(), 0);
 }
 
 #[test]

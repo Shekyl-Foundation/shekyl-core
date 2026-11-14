@@ -148,17 +148,40 @@ pub fn cmd_wallet(rpc: &RpcSession) -> CommandResult {
     }
 }
 
+/// The wallet's three block lines. `wallet_height` and `daemon_height` are
+/// the contract's counts: each line names the block the count reaches, so a
+/// synced wallet shows its daemon's block. `restore_height` is a block's own
+/// number (`HEIGHT_SEMANTICS.md` §1).
+///
+/// A missing field is a malformed response, shown as `?`, not a zero: 0 is
+/// a real value, and reading it for an absent field would report an
+/// unsynced wallet to a person whose wallet may be synced.
+fn block_lines(val: &Value) -> [String; 3] {
+    let count = |name: &str| val.get(name).and_then(serde_json::Value::as_u64);
+    [
+        match count("wallet_height") {
+            Some(n) => format!(
+                "  Synced to block: {}",
+                crate::display::block_of_count_text(n, "nothing scanned yet")
+            ),
+            None => "  Synced to block: ?".to_owned(),
+        },
+        match count("daemon_height") {
+            Some(n) => format!(
+                "  Daemon block:    {}",
+                crate::display::block_of_count_text(n, "nothing yet")
+            ),
+            None => "  Daemon block:    unavailable".to_owned(),
+        },
+        format!(
+            "  Restore from block: {}",
+            count("restore_height").map_or_else(|| "?".to_owned(), |b| b.to_string())
+        ),
+    ]
+}
+
 pub(crate) fn show_wallet(val: &Value) {
     let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-    // A missing required field is a malformed response, not a zero.
-    // Height 0 is a real, plausible value — rendering it for an
-    // absent field would report a fully unsynced wallet to a user
-    // whose wallet may be fully synced.
-    let i = |name: &str| {
-        val.get(name)
-            .and_then(serde_json::Value::as_i64)
-            .map_or_else(|| "?".to_owned(), |h| h.to_string())
-    };
     println!("Wallet: {}", s("name"));
     println!("  Network:         {}", s("network"));
     println!("  Capability:      {}", s("capability"));
@@ -168,12 +191,9 @@ pub(crate) fn show_wallet(val: &Value) {
     if shown != addr {
         println!("                   (display only; \"address --full\" prints it all)");
     }
-    println!("  Wallet height:   {}", i("wallet_height"));
-    match val.get("daemon_height").and_then(serde_json::Value::as_i64) {
-        Some(h) => println!("  Daemon height:   {h}"),
-        None => println!("  Daemon height:   unavailable"),
+    for line in block_lines(val) {
+        println!("{line}");
     }
-    println!("  Restore height:  {}", i("restore_height"));
     if let Some(bal) = val.get("balance") {
         let field = |name: &str| {
             bal.get(name)
@@ -199,5 +219,44 @@ pub(crate) fn show_wallet(val: &Value) {
         None => {
             println!("  Staking:          unavailable (staking state could not be read)");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::block_lines;
+    use serde_json::json;
+
+    /// A wallet that has scanned nothing names no block; the daemon's count
+    /// of 100 is block 99. Red edit: print the counts as they arrive.
+    #[test]
+    fn an_unscanned_wallet_names_no_block() {
+        let lines = block_lines(&json!({
+            "wallet_height": 0, "daemon_height": 100, "restore_height": 0,
+        }));
+        assert_eq!(lines[0], "  Synced to block: nothing scanned yet");
+        assert_eq!(lines[1], "  Daemon block:    99");
+        assert_eq!(lines[2], "  Restore from block: 0");
+    }
+
+    /// A synced wallet's block is its daemon's: both counts are 100, and
+    /// both lines name block 99.
+    #[test]
+    fn a_synced_wallet_names_its_daemon_s_block() {
+        let lines = block_lines(&json!({
+            "wallet_height": 100, "daemon_height": 100, "restore_height": 40,
+        }));
+        assert_eq!(lines[0], "  Synced to block: 99");
+        assert_eq!(lines[1], "  Daemon block:    99");
+        assert_eq!(lines[2], "  Restore from block: 40");
+    }
+
+    /// An unreachable daemon is `null`: unavailable, not a block.
+    #[test]
+    fn an_unreachable_daemon_is_unavailable() {
+        let lines = block_lines(&json!({
+            "wallet_height": 100, "daemon_height": null, "restore_height": 0,
+        }));
+        assert_eq!(lines[1], "  Daemon block:    unavailable");
     }
 }

@@ -234,7 +234,7 @@ fn i20_every_departure_from_the_grammar_is_refused_at_miner() {
             commitment(),
             kem(),
             leaf(),
-            TxExtraField::ArchivalAttestation(vec![1]),
+            TxExtraField::AdditionalPubKeys(vec![[0x22; 32]]),
         ]),
         // Pubkey and nonce out of order.
         ser(&[nonce(), pubkey(), commitment(), kem(), leaf()]),

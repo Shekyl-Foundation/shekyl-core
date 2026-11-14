@@ -5,9 +5,9 @@
 
 //! Section first, then each body, on one view (`SO-D12` increment 4a).
 //!
-//! [`judge_bundles`] is the queue's admission and the staged connect. It
-//! computes nothing the section checker and [`super::verify_bundle`] do
-//! not already compute.
+//! [`judge_bundles`] is the queue's admission and `validate`'s (through
+//! `rules::bundle_admission::admit`). It computes nothing the section
+//! checker and [`super::verify_bundle`] do not already compute.
 
 use shekyl_archival_retention::{BundleBody, BundleRef};
 use shekyl_network::NetworkId;
@@ -59,9 +59,9 @@ impl<F> AdmissionFault<F> {
 /// Section first, then each body in section order, stopping at the first
 /// refusal (`SO-D12` increment 4a).
 ///
-/// The block wire does not carry a section yet (4b), so the staged entry
-/// takes the references and bodies the section will hold. Tests call this.
-/// `form` and `validate` do not.
+/// `validate` passes a block's opened references and the bodies the
+/// candidate carries; the bundle queue passes one reference and its body
+/// against the tip.
 ///
 /// # Errors
 ///

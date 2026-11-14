@@ -38,8 +38,8 @@
 #           gates — too heavy per-PR, still consensus gates; four bonded
 #           walks since the DRS-X flip, two of which close and price an
 #           archival shard with real spends before they stake). The
-#           emission-claim walk is DECIDED_DARK: its serve-credit lever
-#           went with the C++ chain.
+#           emission-claim walk is DECIDED_DARK: its credit comes only
+#           from an admitted bundle, read over Tor (the live-Tor lane).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
 # PR #660 ruled against a cost tier on the grounds that a nightly tier
@@ -304,15 +304,14 @@ ARMED_SLOW=(
 #     run by hand when the registration says. The parser they rely on is
 #     covered by ordinary unit tests in the same module.
 #   e2e_emission_claim_accepted_and_applied — the third market-bond walk.
-#     Dark because serve credit's production path goes live at SO-D12 4b
-#     (Rick, 2026-10-29: no inject lever; test the production path). Its
-#     CEN-J15 darkness is gone: on the flip binary it fills and prices
-#     shard 0, the market bond is admitted and confirmed, and the join
-#     epoch is read back (SEB 128, cap 16), green; its A2 leg calls the
-#     `inject_archival_serve_credit` lever DX-Q3 deleted with the C++
-#     chain. 4b re-subjects A2 to the bundle path and arms it, in the
-#     live-Tor lane (FOLLOWUPS: the emission regtest walk). Prior reds:
-#     sabotage 2026-09-08 (was ARMED_SLOW).
+#     Dark because its credit comes only from an admitted bundle (SO-D12
+#     4b): the persona serves shard 0 over Tor for the mining daemon's
+#     producer. On the flip binary it fills and prices shard 0, the
+#     market bond is admitted and confirmed, and the join epoch is read
+#     back (SEB 128, cap 16), green. Its A2 leg, the serving step, is the
+#     switch's live-Tor emission walk (FOLLOWUPS: the emission regtest
+#     walk), which arms it. Prior reds: sabotage 2026-09-08 (was
+#     ARMED_SLOW).
 #   capture_chain_keeps_its_datadir — the DX-Q8 chain generator. One
 #     regtest daemon, data directory kept on drop, the directory asserted
 #     still present. Run by hand with SHEKYLD_BIN before

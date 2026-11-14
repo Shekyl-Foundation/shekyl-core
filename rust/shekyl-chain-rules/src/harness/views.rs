@@ -7,22 +7,13 @@
 //!
 //! [`FaultingView`] fails every read. [`WithholdingView`] answers `AboveTip`
 //! for one per-height read while the tip still says the chain is dense.
-//! [`NonCanonicalBondView`] serves one persona a bond record whose hybrid
-//! key is not canonical. When a mock is the right instrument at all is
+//! When a mock is the right instrument at all is
 //! [`MockChain`](super::MockChain)'s charter.
 
 use core::convert::Infallible;
-use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
-use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, Holdings, IndexedDraw, IssuedDigest,
-    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SupportSeats,
-};
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
-    SettlementEpoch, ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -32,7 +23,81 @@ use crate::view::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
     Tip,
 };
-use crate::{BlockDrawsFloor, Claimable, EpochFloor, Pricing, Settling};
+
+/// The bundle view of a test view that holds no bundle rows.
+///
+/// Every read is unanswered: no count, no commitment, no hash, no drawable
+/// epoch, no roster. A section that is not empty therefore stops at the
+/// budget's read of `D` as awaiting, which `validate` faults as
+/// [`Corrupt::BundleUnanswered`](crate::Corrupt::BundleUnanswered). It
+/// never refuses a block, so a view with no rows cannot turn its missing
+/// rows into a verdict. `revealed` and `visibly_short` are read only after
+/// `D` is answered, so their `false` is never reached. An empty section
+/// reads nothing.
+pub struct NoBundleRows<F>(core::marker::PhantomData<F>);
+
+impl<F> NoBundleRows<F> {
+    /// The view.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(core::marker::PhantomData)
+    }
+}
+
+impl<F> Default for NoBundleRows<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<F> crate::archival::BundleView for NoBundleRows<F> {
+    type Fault = F;
+
+    fn draw_count(&self, _: BlockHeight) -> Result<Option<u32>, F> {
+        Ok(None)
+    }
+
+    fn draw_commitment(
+        &self,
+        _: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, F> {
+        Ok(None)
+    }
+
+    fn block_hash(&self, _: BlockHeight) -> Result<Option<BlockHash>, F> {
+        Ok(None)
+    }
+
+    fn visibly_short(&self, _: BlockHeight, _: u64) -> Result<bool, F> {
+        Ok(false)
+    }
+
+    fn revealed(&self, _: BlockHeight) -> Result<bool, F> {
+        Ok(false)
+    }
+
+    fn drawable_epoch(
+        &self,
+        _: shekyl_types::SettlementEpoch,
+    ) -> Result<Option<&shekyl_archival_retention::DrawableEpoch>, F> {
+        Ok(None)
+    }
+
+    fn support_count(&self, _: BlockHeight) -> Result<Option<u32>, F> {
+        Ok(None)
+    }
+
+    fn support_roster(
+        &self,
+        _: BlockHeight,
+    ) -> Result<Option<Vec<crate::archival::SupportSeat>>, F> {
+        Ok(None)
+    }
+
+    fn archive_width(&self, _: BlockHeight) -> Result<Option<core::num::NonZeroU64>, F> {
+        Ok(None)
+    }
+}
 
 /// The fault a [`FaultingView`] raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +120,20 @@ impl<'id> HeaderView<'id> for FaultingView<'id> {
 }
 
 impl<'id> ChainView<'id> for FaultingView<'id> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Faulted>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Faulted> {
         Err(Faulted)
     }
@@ -179,6 +258,20 @@ impl<'id> HeaderView<'id> for WithholdingView<'_, 'id> {
 }
 
 impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Infallible>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
         self.inner.has_key_image(key_image)
     }
@@ -255,316 +348,4 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
     }
 
     crate::archival_reads!(delegate inner);
-}
-
-/// Hybrid-key bytes [`HybridPublicKey::from_canonical_bytes`] rejects.
-///
-/// The constructor is that rejection, so a [`NonCanonicalBondView`] cannot
-/// serve a key the admission grammar accepts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NonCanonicalHybridKey(Vec<u8>);
-
-impl NonCanonicalHybridKey {
-    /// `Some` when `bytes` are not a canonical hybrid public key.
-    #[must_use]
-    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Option<Self> {
-        let bytes = bytes.into();
-        if HybridPublicKey::from_canonical_bytes(&bytes).is_ok() {
-            None
-        } else {
-            Some(Self(bytes))
-        }
-    }
-}
-
-/// A [`MockView`] that serves one persona a bond record whose hybrid key
-/// is not canonical.
-///
-/// Job 3 of the mock's charter, beside [`WithholdingView`]. `bond_records`
-/// is the inner list with this persona's record planted, so the two bond
-/// reads agree and every other persona stays the inner mock's. A chain
-/// that posts a real bond is the writer's to witness, not this view's:
-/// the constructor will not accept a canonical key.
-pub struct NonCanonicalBondView<'a, 'id> {
-    inner: MockView<'a, 'id>,
-    persona: PCanonicalId,
-    record: BondRecord,
-}
-
-impl<'a, 'id> MockView<'a, 'id> {
-    /// Serve `persona` the record whose hybrid key is `key`. The record's
-    /// other fields are empty: this instrument exists so a rule can observe
-    /// the key, and it folds nothing.
-    #[must_use]
-    pub fn with_non_canonical_bond(
-        self,
-        persona: PCanonicalId,
-        key: NonCanonicalHybridKey,
-    ) -> NonCanonicalBondView<'a, 'id> {
-        NonCanonicalBondView {
-            inner: self,
-            persona,
-            record: BondRecord {
-                hybrid_pubkey: key.0,
-                bond_spend_pk: Vec::new(),
-                receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
-                    [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
-                ),
-                endpoint: [0; 32],
-                join_settlement_epoch: SettlementEpoch::ZERO,
-                bonded_total: AtomicUnits::ZERO,
-                holdings: Holdings::shard_set(Vec::new())
-                    .expect("an empty shard set is a holdings value"),
-                bad_intervals: Vec::new(),
-                claimed_settlement_epochs: Vec::new(),
-                first_paying_emission_height: None,
-            },
-        }
-    }
-}
-
-impl<'id> HeaderView<'id> for NonCanonicalBondView<'_, 'id> {
-    type Fault = Infallible;
-
-    fn tip(&self) -> Result<Option<Tip>, Infallible> {
-        self.inner.tip()
-    }
-
-    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
-        self.inner.header_at(height)
-    }
-}
-
-impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
-    fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
-        self.inner.has_key_image(key_image)
-    }
-
-    fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
-        self.inner.total_burned()
-    }
-
-    fn long_term_effective_median_at(
-        &self,
-        height: BlockHeight,
-    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
-        self.inner.long_term_effective_median_at(height)
-    }
-
-    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
-        self.inner.burned_through(height)
-    }
-
-    fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-        self.inner.block_at(height)
-    }
-
-    fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
-        self.inner.height_of(hash)
-    }
-
-    fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        self.inner.root_at(height)
-    }
-
-    fn weights_window(
-        &self,
-        end: BlockHeight,
-        at_most: BlockCount,
-    ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
-        self.inner.weights_window(end, at_most)
-    }
-
-    fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
-        self.inner.has_transaction(hash)
-    }
-
-    fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
-        self.inner.tree_frontier()
-    }
-
-    fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
-        self.inner.leaf_count_at(height)
-    }
-
-    fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
-        self.inner.outputs_at(height)
-    }
-
-    fn bond_record(&self, persona: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
-        if persona == &self.persona {
-            Ok(Some(self.record.clone()))
-        } else {
-            self.inner.bond_record(persona)
-        }
-    }
-
-    fn slash_log_after(
-        &self,
-        persona: &PCanonicalId,
-        height: BlockHeight,
-        floor: crate::SlashLogFloor,
-    ) -> Result<Vec<SlashLogEntry>, Infallible> {
-        self.inner.slash_log_after(persona, height, floor)
-    }
-
-    fn last_served_epoch(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-    ) -> Result<Option<SettlementEpoch>, Infallible> {
-        self.inner.last_served_epoch(persona, shard)
-    }
-
-    fn served_shards(&self, persona: &PCanonicalId) -> Result<Vec<ServedShard>, Infallible> {
-        self.inner.served_shards(persona)
-    }
-
-    fn pass_count(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-    ) -> Result<PassCount, Infallible> {
-        self.inner.pass_count(persona, shard, epoch)
-    }
-
-    fn r_market(
-        &self,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Pricing>,
-    ) -> Result<Option<RMarket>, Infallible> {
-        self.inner.r_market(shard, epoch, floor)
-    }
-
-    fn sigma_work(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<SigmaWorkMilli>, Infallible> {
-        self.inner.sigma_work(epoch, floor)
-    }
-
-    fn budget(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<AtomicUnits>, Infallible> {
-        self.inner.budget(epoch, floor)
-    }
-
-    fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
-        self.inner.last_settled_slash_epoch()
-    }
-
-    fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Infallible> {
-        let mut records = self.inner.bond_records()?;
-        if let Some((_, record)) = records
-            .iter_mut()
-            .find(|(persona, _)| *persona == self.persona)
-        {
-            *record = self.record.clone();
-        } else {
-            records.push((self.persona, self.record.clone()));
-        }
-        Ok(records)
-    }
-
-    fn slash_applied(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Settling>,
-    ) -> Result<bool, Infallible> {
-        self.inner.slash_applied(persona, shard, epoch, floor)
-    }
-
-    fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        self.inner.budget_accruing(epoch)
-    }
-
-    fn settlement_row(
-        &self,
-        persona: &PCanonicalId,
-        shard: ShardId,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<SettlementRow>, Infallible> {
-        self.inner.settlement_row(persona, shard, epoch, floor)
-    }
-
-    fn issued_draws(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Settling>,
-    ) -> Result<Vec<IndexedDraw>, Infallible> {
-        self.inner.issued_draws(epoch, floor)
-    }
-
-    fn issued_digest(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Settling>,
-    ) -> Result<IssuedDigest, Infallible> {
-        self.inner.issued_digest(epoch, floor)
-    }
-
-    fn served_at(
-        &self,
-        persona: &PCanonicalId,
-        epochs: &BTreeSet<SettlementEpoch>,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
-        self.inner.served_at(persona, epochs, floor)
-    }
-
-    fn block_draws(
-        &self,
-        height: BlockHeight,
-        floor: BlockDrawsFloor,
-    ) -> Result<Option<BlockDraws>, Infallible> {
-        self.inner.block_draws(height, floor)
-    }
-
-    fn support_block_seats(
-        &self,
-        height: BlockHeight,
-        floor: BlockDrawsFloor,
-    ) -> Result<Option<SupportSeats>, Infallible> {
-        self.inner.support_block_seats(height, floor)
-    }
-
-    fn drawable_digest(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Settling>,
-    ) -> Result<Option<DrawableDigest>, Infallible> {
-        self.inner.drawable_digest(epoch, floor)
-    }
-
-    fn complete_trees(
-        &self,
-        epoch: SettlementEpoch,
-        floor: EpochFloor<Claimable>,
-    ) -> Result<Option<CompleteTreeSet>, Infallible> {
-        self.inner.complete_trees(epoch, floor)
-    }
-
-    fn release_journal_after(
-        &self,
-        height: BlockHeight,
-        floor: crate::ReleaseJournalFloor,
-    ) -> Result<Vec<ReleasedRecord>, Infallible> {
-        self.inner.release_journal_after(height, floor)
-    }
-
-    fn slash_log_rows_after(
-        &self,
-        height: BlockHeight,
-        floor: crate::SlashLogFloor,
-    ) -> Result<Vec<LoggedSlash>, Infallible> {
-        self.inner.slash_log_rows_after(height, floor)
-    }
 }

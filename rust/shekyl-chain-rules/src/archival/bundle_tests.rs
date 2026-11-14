@@ -6,7 +6,7 @@
 //! `verify_bundle` against the fixture view (`harness::bundle`).
 //!
 //! The section check lives in `bundle_section_tests`. The census rows and
-//! the staging falsifier live in `bundle_staging_tests`. Each admission
+//! the staging falsifier live in `bundle_rows_tests`. Each admission
 //! row, through `judge_bundles`, lives in `bundle_admission_tests`.
 //!
 //! # What these tests bite against, and what they do not cover
@@ -26,7 +26,7 @@
 //! Every test names the edit that turns it red.
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
+    section_budget, section_root, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
     PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN, CHALLENGE_READS,
     PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
@@ -43,10 +43,10 @@ use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 
 type Judged = Result<Admitted, BundleRefused<BundleReadFaulted>>;
 
-/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// [`section_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
 fn root_of(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// Judge at `h + 1` under the genesis rule set.

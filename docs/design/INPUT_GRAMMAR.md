@@ -833,11 +833,11 @@ Each shape's fields today, and their names under this Part. The names the types 
 | `pow_hash` | `pow` | hash; absent unless asked for (IG-Q56) |
 | `miner_tx_hash` | `coinbase` | hash, the coinbase transaction's id |
 | `curve_tree_root` | `curve_root` | hash |
-| `attestation_root` | `attestation_root` | hash |
+| `attestation_root` | `section_root` | hash, the root of the block's section (IG-Q102) |
 
 `get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order, and a slot that does not hold the item is `{"missing": null}` (IG-Q53, IG-Q73).
 
-**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
+**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's; `writer`, the chain store's writer, `{"live": null}` or `{"halted": {"height": h, "invariant": n}}` (IG-Q92).
 
@@ -853,9 +853,9 @@ Each shape's fields today, and their names under this Part. The names the types 
 
 **Curve tree** (`curve_show`): `root` (free-length hex today) → `root` (hash); `depth` → `layers`; `leaf_count` → `leaf_count`; `height` (`chain_height - 1` in one method) and `block_height` (the other) → `height`, ordinal.
 
-**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); — → `hash`, the hash of the block at `height`, read in the same snapshot (IG-Q84); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claimed` (a list of epochs); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `failure_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch` (`null`: never served); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
+**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); — → `hash`, the hash of the block at `height`, read in the same snapshot (IG-Q84); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claimed` (a list of epochs); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `failure_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch`, the last epoch the record passed a draw inside the release cooldown's window (`null`: no pass in the window; 4.3); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
 - Its epoch element: `settlement_epoch` → `id`; `close_block_height` → `closing_height`; `sigma_work_milli` → `work` (milli, IG-Q54); `budget_atomic`, `has_budget_row` → `budget` (amount, `null`: no budget row); `bonds` → `bond`; `shards` → `shard`; `credit_pairs` → `credit`; `claimant_bond_idx` (`u64::MAX` for none) → `claimant` (an index into `bond`, `null` for none).
-- Its bond element: `join_settlement_epoch` → `joined_epoch`; `is_support_complete_tree` → `complete_tree` (switch); `bad_intervals_flat` (flattened pairs) → `failure`, a list of `{from, to}`, inclusive: the intervals the bond failed.
+- Its bond element: `join_settlement_epoch` → `joined_epoch`; `bad_intervals_flat` (flattened pairs) → `failure`, a list of `{from, to}`, inclusive: the intervals the bond failed.
 - Its shard element: `shard_id` → `id`; `freeze_height` → `freeze_height`; `has_segment` → `segment` (switch). Its credit element: `bond_idx`, `shard_idx` → `bond`, `shard` (indices).
 
 **Shard coverage** (`shard_coverage`): `as_of_height` → `height`; `leaf_count` → `leaf_count`; `frozen_count` → `frozen_count`; `settled_epoch` → `settled_epoch`; `budget_atomic` → `budget` (amount); `sigma_work_milli` → `work` (milli); `profit_estimate_available` goes (`null` in `profit`); `shards` → `shard`, whose element is `shard_id` → `id`, `bonded_count` → `bonded_count`, `served_count` → `served_count`, `freeze_height` → `freeze_height`, `join_scarcity_micro` → `scarcity` (micro, IG-Q54), `expected_profit_atomic` → `profit` (amount, `null` when not estimated).
@@ -931,7 +931,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | template | block | *view* — a block to mine on, built for an address | block:view |
 | submit | block, tx | *verb* — hand to the daemon for acceptance | block:verb, tx:verb |
 | curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) | |
-| root | curve, attestation | a tree's root hash | |
+| root | curve, section | a tree's or a section's root hash | |
 | leaf | curve, coverage | a leaf of the curve tree | |
 | layers | curve | the tree's depth, in layers | |
 | claim | archival | an emission claim's source record | |
@@ -959,7 +959,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | longterm | weight | the long-term weight | |
 | median | weight, size | the median | |
 | total | fee, weight, burn, bond | a sum | |
-| attestation | header | the attestation tree | |
+| section | header, block | a block's bundle section: the references to the serve-credit bundles it admits, in section order (IG-Q102) | |
 | index | output | a global output index | |
 | time | block, header, daemon, mined | a point in time (IG-Q54) | |
 | adjusted | time | the network-adjusted time | |
@@ -1091,7 +1091,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | set | client | *verb* — §11's `set`: assign an enrolled client's ceiling | client:verb |
 | remove | client | *verb* — §11's `remove`: revoke an enrolment | client:verb |
 | offset | nonce | where its bytes start | |
-| body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` | |
+| body | block, template, tx, section | a block's, transaction's or bundle's serialized bytes, kind `bytes` | |
 | complete | bond | the whole corpus | |
 | count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, speed, tx, txpool, white, respawn | how many | |
 | depth | header | a depth in blocks | |
@@ -1386,7 +1386,7 @@ Every key added, changed or removed between Part C's last re-take and the ground
 | 3.70 | `get_info` | the six flat socket and list-size keys | gone | §18's `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count` and `peer_gray_count` rows on `daemon_status` go |
 | `8494ffe88` | `/get_stem_tallies` | the connector value `unnamed`; `peer`, 32 hexadecimal characters | `T/p2p.rs:468-475`, `:494-495` | IG-Q83 |
 | — | `get_archival_emission_claim_source` | no hash of the gather's tip | `T/archival_reads.rs:85-110` | IG-Q84 |
-| 3.60 | `get_archival_emission_claim_source` | `is_support_complete_tree` | `T/archival_reads.rs:37` | `complete_tree`, as ruled |
+| 3.60 | `get_archival_emission_claim_source` | `is_support_complete_tree` | gone | goes at 4.3 (the 4b switch): a complete tree is never in an epoch's market, so it was always `false` |
 
 Keywords whose spelling IG-Q86 rules: the sync modes `past_cap` and `evidence_candidate` and the sync state `no_view` (`T/p2p.rs:147-193`); the relay state `held_overdue`; the verdicts and causes of `/submit_transaction` (`T/lib.rs:193-312`); and the dotted diagnostic codes (`D/mining_methods.rs:39-92`, `D/ban_methods.rs:24-26`, `D/authority.rs:45-47`, `T/methods.rs:106`, `T/endpoint.rs:31`).
 
@@ -1517,6 +1517,12 @@ The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coi
 - **The walk changes.** `tip` was a value keyword (§19, "a header, block or curve selector"). Under this form it is a parameter, so it leaves the value-keyword list and is a term under `block` and `curve`, "the chain's last block, as a selector; its value is `null`"; §18.1's selector rows gain `tip`; §17's three cells read `height`, `hash` or `tip` (exactly one). All three are recorded in place.
 - **The alternatives are worse.** A parameter `block` holding the selector repeats the method's own subject and adds a name. `"tip"` inside `height` gives one field two encodings, which RW-Q4 refuses.
 - **Built by hand.** serde's `flatten` turns `deny_unknown_fields` off, so the request type has its own `Deserialize` and its own schema shape (one of several keys, flattened), and `conforms` refuses a call with no selector and one with two.
+
+**IG-Q102 — a block's bundle section on the wire — RULED 2026-11-12 (Rick), as recommended, and the header uses it too.** The 4b switch (`SO-D12`) replaces the header's attestation root with the root of the block's bundle section (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5), and a block now carries that section: the references to the serve-credit bundles it admits, and the bodies a node holds for them. A client that captures or replays a chain needs both. The 4.0 wire names the root `attestation_root`, under the term `attestation` ("the attestation tree"), which names a structure that no longer exists. *Question:* what are the root, the references and the bodies called? *Recommended:* a new term `section` under `header` and `block`, "a block's bundle section", so the header's field is `section_root`, a block's references are `section` (a list of bytes, in section order) and the bodies are `section_body` (a list of bytes, in no set order). `root` and `body` gain `section` as a parent; `attestation` leaves the glossary.
+- **Not `bundle`.** `bundle` is already a term, under `rpc`: this daemon's static public keys (IG-Q87). A term has one meaning, so a serve-credit bundle cannot take it.
+- **`section`, not `reference`.** The section *is* the list of references, in the order the header's root commits; a second term for each element would add a name for no reader.
+- **The bodies ride beside the references.** A reader matches each body to its reference by hash, as P2P 2014 carries them; a body this node no longer holds is simply absent from the list.
+- **The header field and its type take the term too.** The root commits the section, one reference per admitted bundle, so the block header's field is `section_root` and its type `SectionRoot` across the wire, types, rules, store and RPC. No wire byte changes; the domain label stays `shekyl/archival-bundle-root-v1`.
 
 ---
 

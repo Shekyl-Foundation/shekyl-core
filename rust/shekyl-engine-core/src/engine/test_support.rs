@@ -74,7 +74,7 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{AttestationRoot, BlockHash, ChainCount};
+use shekyl_types::{BlockHash, ChainCount, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -936,9 +936,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
         ),
         // Same lesson as curve_tree_root: the valid empty is the empty-set
         // root (ARCHIVAL_CREDIT_WIRE.md §3), never `[0u8; 32]` (null_hash).
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose

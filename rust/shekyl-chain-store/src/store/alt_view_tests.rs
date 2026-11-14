@@ -18,7 +18,9 @@
 use shekyl_chain_rules::{AtHeight, Candidate, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_types::{BlockHash, BlockHeight};
 
-use super::alt_tests::{admitted, alt, h, plant, side_block, side_candidate, with_witness};
+use super::alt_tests::{
+    admitted, alt, h, plant, references, side_block, side_candidate, with_references,
+};
 use super::connect_fixtures::connect_chain;
 use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
@@ -178,14 +180,14 @@ fn the_alt_view_is_the_recorded_chain_below_the_fork_and_the_entries_above() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &[vec![], vec![], vec![], vec![]]).hashes;
     let a = admit(&store, side_candidate(h(2), main[1], 3));
-    let b = admit(&store, with_witness(side_candidate(h(3), a, 4), &[0xA5; 8]));
+    let b = admit(&store, with_references(side_candidate(h(3), a, 4), 0xA5));
 
     let snap = store.begin_read().expect("read");
     // The rows as the tier wrote them: what the stitched view must answer
     // above the fork point.
     let a_row = snap.alt_block(&a).expect("get").expect("held");
     let b_row = snap.alt_block(&b).expect("get").expect("held");
-    assert_eq!(b_row.attestation_witness(), Some(&[0xA5; 8][..]));
+    assert_eq!(b_row.bundle_references(), Some(&references(0xA5)));
     let chain = AltChain::build(&snap, &b).expect("links");
     let view = AltView::new(&snap, chain);
 

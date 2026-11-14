@@ -38,7 +38,7 @@ use shekyl_p2p::{
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass};
 use shekyl_tor_control_client::binary::{
-    discover_and_verify, discover_and_verify_at, TorBinaryError, VerifiedTorBinary,
+    discover_and_verify, discover_and_verify_at, TorBinaryError,
 };
 use shekyl_tor_control_client::control::{
     parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
@@ -283,12 +283,23 @@ fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
     format!("warning: {} {consequence}", pin_refusal_line(error))
 }
 
-/// A running re-check's refusal, logged in full (Rick, 2026-11-12). The
-/// first pin's refusal is the start's announcement ([`pin_warning`]), so it
-/// is not said again here; every re-check after it is.
-fn say_pin_refusal(first: bool, error: &TorBinaryError) {
-    if !first {
-        tracing::warn!(target: "global", "{}", pin_refusal_line(error));
+/// Which check of the Tor binary a pin is. The start's refusal is the
+/// start's announcement ([`pin_warning`]); a running re-check's refusal is
+/// said only here, in full: the file and the reason (Rick, 2026-11-12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PinCheck {
+    /// The first pin, which the start announces.
+    Start,
+    /// A pin while the daemon runs.
+    Recheck,
+}
+
+impl PinCheck {
+    /// Log a refusal this check's caller does not announce elsewhere.
+    fn say_refusal(self, error: &TorBinaryError) {
+        if self == Self::Recheck {
+            tracing::warn!(target: "global", "{}", pin_refusal_line(error));
+        }
     }
 }
 
@@ -454,7 +465,7 @@ enum PinSource {
     Discover(Option<PathBuf>),
     /// A binary a test names, not checked (`unpinned-tor-for-tests`).
     #[cfg(all(test, unix))]
-    Unchecked(VerifiedTorBinary),
+    Unchecked(shekyl_tor_control_client::binary::VerifiedTorBinary),
 }
 
 async fn drive(
@@ -548,8 +559,7 @@ impl Drive {
             network_view: NetworkView::default(),
             control: None,
             kept: None,
-            pinned: None,
-            pin_checked: false,
+            next_pin: PinCheck::Start,
             incarnation: None,
             generation: 0,
             held: None,
@@ -610,10 +620,8 @@ struct Drive {
     network_view: NetworkView,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
-    pinned: Option<VerifiedTorBinary>,
-    /// A pin has run. The first is the start's; a refusal after it is a
-    /// running re-check's, and is logged in full.
-    pin_checked: bool,
+    /// Which check of the Tor binary the next pin is.
+    next_pin: PinCheck,
     incarnation: Option<u64>,
     /// The incarnation a death or a bootstrap transition must name to be
     /// folded. It moves at each spawn and each reap, so the stop's own
@@ -707,7 +715,7 @@ impl Drive {
         let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
         let mut halt = false;
         while let Some(action) = queue.pop_front() {
-            let inputs = self.act(&action, &mut halt);
+            let inputs = self.act(action, &mut halt);
             let mut produced = Vec::new();
             for input in inputs {
                 self.fold(input);
@@ -758,8 +766,8 @@ impl Drive {
         (matches!(action, Action::Probe) && !self.core.action_stands(action)).then(Vec::new)
     }
 
-    fn act(&mut self, action: &Action, halt: &mut bool) -> Vec<Input> {
-        if let Some(instead) = self.withheld(action) {
+    fn act(&mut self, action: Action, halt: &mut bool) -> Vec<Input> {
+        if let Some(instead) = self.withheld(&action) {
             return instead;
         }
         match action {
@@ -780,9 +788,10 @@ impl Drive {
                 Vec::new()
             }
             Action::CheckPin => vec![self.pin()],
-            // A request: sent off the loop, answered as an arrival.
-            Action::Reap
-            | Action::Spawn { .. }
+            // A request: sent off the loop, answered as an arrival. The
+            // action moves: a launch's binary is the driver's to spawn.
+            action @ (Action::Reap
+            | Action::Spawn(_)
             | Action::SubscribeEvents
             | Action::Sample
             | Action::SetConfAvoidDiskWrites
@@ -790,9 +799,9 @@ impl Drive {
             | Action::AddOnion
             | Action::RefetchDescriptor
             | Action::CheckDirectories
-            | Action::FetchFromDirectory { .. } => self.send(action),
+            | Action::FetchFromDirectory { .. }) => self.send(action),
             Action::WatchState => self.watch_state().into_iter().collect(),
-            Action::Publish(route) => vec![self.publish_route(*route)],
+            Action::Publish(route) => vec![self.publish_route(route)],
             Action::Probe => vec![self.probe()],
             Action::CancelProbe => {
                 self.cancel_probe();
@@ -827,7 +836,7 @@ impl Drive {
                 Vec::new()
             }
             Action::PublishInbound(inbound) => {
-                self.publish_inbound(*inbound);
+                self.publish_inbound(inbound);
                 Vec::new()
             }
             Action::TakeDown => {
@@ -997,16 +1006,13 @@ impl Drive {
             PinSource::Unchecked(binary) => Ok(binary.clone()),
         };
         let input = match verified {
-            Ok(binary) => {
-                self.pinned = Some(binary);
-                Input::PinAccepted
-            }
+            Ok(binary) => Input::PinAccepted { binary },
             Err(error) => {
-                say_pin_refusal(!self.pin_checked, &error);
+                self.next_pin.say_refusal(&error);
                 classify_pin(&error).input
             }
         };
-        self.pin_checked = true;
+        self.next_pin = PinCheck::Recheck;
         input
     }
 
@@ -1132,10 +1138,11 @@ fn observed_death(death: TorDeath) -> Option<Input> {
 }
 
 /// The data directory's free space against what a launch needs, read after
-/// any replacement (§5, "Data directory unusable"). An unreadable figure
-/// starts Tor anyway.
-fn space_short(data_dir: &Path, fresh: bool) -> Option<Input> {
-    let needed = space_needed(data_dir, fresh);
+/// any replacement (§5, "Data directory unusable"). `new_directory` counts
+/// the cache a created directory is seeded from; a reused one already holds
+/// it. An unreadable figure starts Tor anyway.
+fn space_short(data_dir: &Path, new_directory: bool) -> Option<Input> {
+    let needed = space_needed(data_dir, new_directory);
     match shekyl_node::free_bytes(data_dir) {
         Ok(available) if available < needed => Some(Input::DirectoryUnusable {
             space: Some(Space { available, needed }),
@@ -1383,9 +1390,9 @@ mod tests {
     #[test]
     fn a_re_checks_refusal_names_the_file_and_the_reason() {
         let refused = TorBinaryError::NotExecutable(PathBuf::from("/srv/tor/tor"));
-        let first = logged(|| say_pin_refusal(true, &refused));
+        let first = logged(|| PinCheck::Start.say_refusal(&refused));
         assert!(first.is_empty(), "{first}");
-        let again = logged(|| say_pin_refusal(false, &refused));
+        let again = logged(|| PinCheck::Recheck.say_refusal(&refused));
         assert_eq!(again.lines().count(), 1, "{again}");
         assert!(again.contains("WARN"), "{again}");
         assert!(again.contains("/srv/tor/tor"), "{again}");

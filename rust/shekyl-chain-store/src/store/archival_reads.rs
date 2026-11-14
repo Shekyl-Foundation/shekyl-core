@@ -14,18 +14,13 @@
 //! - **A2** [`slash_log_after`] — every slash logged against `p` at a height
 //!   strictly above `h`: the history half of the as-of-height holdings
 //!   question, whose fold is `shekyl-archival-retention::holds_shard_at`.
-//! - **A3** [`last_served_epoch`] — the latest epoch with a pass bit for
-//!   `(p, shard)`, one reverse seek.
-//! - **A4** [`served_shards`] — every shard `p` ever served, each with its
-//!   latest epoch: the persona-prefix hop scan.
-//! - **A5** [`pass_count`] — rows under the pair-epoch prefix (`PC-D5`).
 //! - **A6–A8** [`r_market`], [`sigma_work`], [`budget`] — the three
 //!   close-row scalars, `Option` where the C++ returned `0` for "no row"
 //!   (SAR-8).
 //! - **A9** [`last_settled_slash_epoch`] — the `properties` cell, `Option`
 //!   where the C++ returned `u64::MAX`.
-//! - **A10** [`attestation_witness_at`] — a recorded block's witness bytes,
-//!   with the two absences the C++ collapsed into one empty blob told apart.
+//! - **A10** [`bundle_references_at`] — a recorded block's bundle
+//!   references, with "no references" and "above the tip" told apart.
 //!
 //! The transition's own reads (DRS-E4 commit 4; `DRS_E4_ARCHIVAL_WRITER.md`
 //! §3.2 phase 9) — over every record, or over a table only the scan reads:
@@ -51,24 +46,19 @@
 //!   (`SO-D11`).
 //! - **A18** [`block_draws`] — what the draw's count rule recorded for one
 //!   block (`SO-D12`). `None` until a block writes it.
-//! - **A23** [`support_block_seats`] — the complete trees that block
-//!   seated (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1). `None` until a
-//!   block writes it. [`SupportSeats::EMPTY`] is a block that seated nobody.
+//! - **A23** [`support_row`] — the complete trees that block seated and
+//!   the carry it left (`ARCHIVAL_SUPPORT_DRAW.md` §5; `SO-D12` S1). `None`
+//!   until a block writes it. [`SupportRow::EMPTY`] is a block that seated
+//!   nobody and left nothing owed.
 //! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
 //!   written at its open (`SO-D10g`). `None` is no recorded set; an
 //!   all-zero digest is a digest.
-//! - **A22** [`complete_trees`] — the complete trees a settled epoch's
-//!   slash pass excluded from its market, frozen beside `Σwork(E)`
-//!   (`SO-D12h`). `None` is an epoch not settled; an empty set is a value.
 //!
 //! # Absence, stated once (`DRS_E1_SARCH.md` §3.3)
 //!
 //! - **"No bond record" is a case**, not a `false`: every caller branches
 //!   on it (a bond post that finds a record is an update; one that finds
 //!   none is a join). [`Option`].
-//! - **"Never served" is a case** (A3 `None`, A4 empty): the release
-//!   cooldown's vacuous arm. The C++ marshal *omitted* never-served shards
-//!   from a positional vector (SAR-3); here the absence is typed per shard.
 //! - **"No close row" is a case the C++ conflated with zero** (A6, A7): a
 //!   closed epoch with zero co-holders is a written `RMarket(0)`; an epoch
 //!   that never closed is `None`. The read stops erasing the distinction;
@@ -76,9 +66,9 @@
 //!   place the C++ kept them apart (`has_budget_row`) and is unchanged in
 //!   meaning.
 //! - **`u64::MAX` as "none"** (A9) — gone by the type.
-//! - **An empty witness and an unrecorded height** (A10) — the writer stores
-//!   no row for an empty attestation set, so a recorded block with no row
-//!   is `Recorded(None)`; a height past the tip is `AboveTip`. What a
+//! - **No references and an unrecorded height** (A10) — the writer stores
+//!   no row for a block that admits no bundle, so a recorded block with no
+//!   row is `Recorded(None)`; a height past the tip is `AboveTip`. What a
 //!   *pruned* height reads as is S-PRUNE's to say when it deletes anything
 //!   here; until a prune exists the two states are exhaustive.
 //!
@@ -102,16 +92,6 @@
 //! as A2 does for the slash log. The store compares; the floor is the
 //! consensus side's expression.
 //!
-//! # SI-15 is armed here
-//!
-//! Every serve-credit row names a persona with a bond record (the connect
-//! hook refuses a pass bit for an unknown persona, CEN-L7). A3–A5 have the
-//! persona in hand and walk its rows; a walk that finds rows for a persona
-//! with no record is [`StoreInvariant::ServeCreditWithoutBond`]. The check
-//! runs only when rows were found — an empty walk asserts nothing, so a
-//! never-served persona with no record (a query about a stranger) is an
-//! answer, not a fault.
-//!
 //! # What is not here
 //!
 //! No fold. `good_through` and `holds_shard_at` are
@@ -119,7 +99,7 @@
 //! takes A2's rows beside A1's record (CEN-L16: the as-of-height holdings
 //! question is a fold over recorded state, not a read the store composes).
 //! No composed "emission source" read (`SAR-Q4`): the rule that needs
-//! A1 + A5 + A7 + A8 composes them at its call site.
+//! A1, A7 and A8 composes them at its call site.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,28 +109,25 @@ use shekyl_chain_rules::{
     Settling, SlashLogFloor,
 };
 use shekyl_store_codec::{BlobKind, CodecError};
-use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued,
-    SupportSeats,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, LoggedSlash, ReleasedRecord,
+    SettlementRow, SupportIssued, SupportRow,
 };
+use shekyl_types::archival::{BundleReferences, SettlementOutcome};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
-use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
+use crate::codec::{BondRecord, BundleReferencesBytes, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{
-    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
-    SupportIssuedKey,
+    IssuedDrawKey, ReleaseJournalKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
 };
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
-    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
-    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED,
-    ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
+    ARCHIVAL_BUNDLE_REFERENCES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK,
+    ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -187,8 +164,6 @@ const BLOCK_DRAWS: &str = "archival_block_draws";
 const SUPPORT_BLOCK: &str = "archival_support_block";
 /// The `archival_drawable_digest` cell as faults name it.
 const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
-/// The `archival_complete_trees` cell as faults name it.
-const COMPLETE_TREES: &str = "archival_complete_trees";
 
 /// SI-32: `epoch` is at or above its family's `floor`, or the read is
 /// refused before the table is opened — a row below the floor may have
@@ -207,8 +182,8 @@ fn kept<F: EpochFamily>(
         None => Ok(()),
     }
 }
-/// The `archival_attestation_witness` cell as faults name it.
-const WITNESS: &str = "archival_attestation_witness";
+/// The `archival_bundle_references` cell as faults name it.
+const REFERENCES: &str = "archival_bundle_references";
 /// The `archival_release_journal` cell as faults name it.
 const RELEASE_JOURNAL: &str = "archival_release_journal";
 
@@ -342,121 +317,6 @@ pub(super) fn release_journal_after<T: ReadTables>(
     Ok(out)
 }
 
-/// Whether `persona` has a bond record — SI-15's precondition, read without
-/// decoding the row.
-fn has_bond<T: ReadTables>(txn: &T, persona: &PCanonicalId) -> Result<bool, ReadFault> {
-    Ok(txn
-        .table(ARCHIVAL_BOND)?
-        .get(*persona.as_bytes())?
-        .is_some())
-}
-
-/// SI-15: rows were found under `persona`'s prefix; the persona must have a
-/// record. Called only after a walk found at least one row.
-fn serve_credit_rows_have_a_bond<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-) -> Result<(), ReadFault> {
-    if has_bond(txn, persona)? {
-        Ok(())
-    } else {
-        Err(ReadFault::Invariant(
-            StoreInvariant::ServeCreditWithoutBond { persona: *persona },
-        ))
-    }
-}
-
-/// **A3.** The latest settlement epoch with a pass bit for `(persona,
-/// shard)` — the last key of the `(P, s)` prefix, one reverse seek
-/// (`db_lmdb.cpp:6464`'s ceiling probe as a range's last element). `None`
-/// is never-served, the cooldown's vacuous arm.
-pub(super) fn last_served_epoch<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-    shard: ShardId,
-) -> Result<Option<SettlementEpoch>, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let mut range = table.range(ServeCreditKey::shard_range(*persona, shard))?;
-    let Some(last) = range.next_back() else {
-        return Ok(None);
-    };
-    let (key, _present) = last?;
-    serve_credit_rows_have_a_bond(txn, persona)?;
-    Ok(Some(ServeCreditKey::from_key(key.value()).epoch()))
-}
-
-/// **A4.** Every shard `persona` ever earned a pass bit for, each with its
-/// latest epoch — the `P`-prefix hop scan (`db_lmdb.cpp:6546`): seek to the
-/// persona's first row, take its shard, jump to that shard's last row, step
-/// past it; one reverse seek per served shard, never a walk of every row.
-/// Empty for a persona that never served. The complete-tree form of the
-/// last-served marshal: such a record stores no shard list, so the served
-/// set is the only list there is.
-pub(super) fn served_shards<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-) -> Result<Vec<ServedShard>, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let persona_hi = *ServeCreditKey::persona_range(*persona).end();
-    let mut out = Vec::new();
-    // Seek to the persona's first row; then, per shard found, take that
-    // shard's last row and seek to the first key of the next shard. A gap
-    // between shard ids is one `range.next()`, not a walk of the gap.
-    let mut from = *ServeCreditKey::persona_range(*persona).start();
-    loop {
-        let Some(row) = table.range(from..=persona_hi)?.next() else {
-            break;
-        };
-        let shard = ServeCreditKey::from_key(row?.0.value()).shard();
-        let last = table
-            .range(ServeCreditKey::shard_range(*persona, shard))?
-            .next_back()
-            .expect("the shard's first row is inside its own range")?;
-        out.push(ServedShard {
-            shard,
-            last_served: ServeCreditKey::from_key(last.0.value()).epoch(),
-        });
-        // No successor shard id: this shard is the persona's last possible.
-        let Some(next_shard) = shard.to_raw().checked_add(1) else {
-            break;
-        };
-        from = ServeCreditKey::new(
-            *persona,
-            ShardId::from_raw(next_shard),
-            SettlementEpoch::ZERO,
-            BlockHeight::ZERO,
-        )
-        .key();
-    }
-    if !out.is_empty() {
-        serve_credit_rows_have_a_bond(txn, persona)?;
-    }
-    Ok(out)
-}
-
-/// **A5.** Pass bits recorded for `(persona, shard, epoch)` — the rows under
-/// the pair-epoch prefix, counted (`db_lmdb.cpp:4695`). [`PassCount::ZERO`]
-/// when none.
-pub(super) fn pass_count<T: ReadTables>(
-    txn: &T,
-    persona: &PCanonicalId,
-    shard: ShardId,
-    epoch: SettlementEpoch,
-) -> Result<PassCount, ReadFault> {
-    let table = txn.table(ARCHIVAL_SERVE_CREDIT)?;
-    let mut count: u32 = 0;
-    for row in table.range(ServeCreditKey::pair_epoch_range(*persona, shard, epoch))? {
-        row?;
-        count = count
-            .checked_add(1)
-            .expect("PC-D5 bounds pass bits per pair-epoch far below u32::MAX");
-    }
-    if count > 0 {
-        serve_credit_rows_have_a_bond(txn, persona)?;
-    }
-    Ok(PassCount::from_raw(count))
-}
-
 /// **A6.** `archival_r_market[(shard, epoch)]`. `None` is an epoch that never
 /// closed for this shard; a written `RMarket(0)` is a closed epoch with no
 /// co-holders (SAR-8 — the C++ returned `0` for both).
@@ -498,40 +358,37 @@ pub(super) fn budget<T: ReadTables>(
     chain_reads::cell(txn, ARCHIVAL_BUDGET, epoch.to_raw(), BUDGET)
 }
 
-/// **A10.** A recorded block's attestation witness bytes. `AboveTip` for a
-/// height the chain has not reached; `Recorded(None)` for a recorded block
-/// whose attestation set was empty (the writer stores no row for it);
-/// `Recorded(Some(bytes))` for a row [`AttestationWitnessBytes`] accepts
-/// (non-empty, within [`MAX_ATTESTATION_WITNESS_BYTES`](shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES)).
-/// An empty or over-cap row is SI-7. The store does not parse the witness
-/// (`shekyl-archival-retention::attestation_wire` does).
-pub(super) fn attestation_witness_at<T: ReadTables>(
+/// **A10.** A recorded block's bundle references. `AboveTip` for a height
+/// the chain has not reached; `Recorded(None)` for a recorded block that
+/// admitted no bundle (the writer stores no row for it);
+/// `Recorded(Some(references))` for a row that decodes as a section
+/// ([`BundleReferences::decode`]). Any other row is SI-7. The references
+/// themselves are not opened here (`shekyl-chain-rules` does).
+pub(super) fn bundle_references_at<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
-) -> Result<AtHeight<Option<Vec<u8>>>, ReadFault> {
+) -> Result<AtHeight<Option<BundleReferences>>, ReadFault> {
     let h = height.to_raw();
     match chain_reads::tip_of(txn)? {
         Some((tip, _)) if h <= tip => {}
         _ => return Ok(AtHeight::AboveTip),
     }
-    let table = txn.table(ARCHIVAL_ATTESTATION_WITNESS)?;
+    let table = txn.table(ARCHIVAL_BUNDLE_REFERENCES)?;
     let Some(guard) = table.get(h)? else {
         return Ok(AtHeight::Recorded(None));
     };
-    let bytes = guard.value().bytes();
-    // `Blob::bytes` does not run the kind's check. An empty row is the
-    // absence this read already spells as `Recorded(None)`; a present empty
-    // or over-cap row is a value the writer is not allowed to store.
-    AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+    // `Blob::bytes` does not run the kind's check: the decode is it. A row
+    // that is not a section is a value the writer is not allowed to store.
+    let references = BundleReferences::decode(guard.value().bytes()).map_err(|_| {
         undecodable(
-            WITNESS,
+            REFERENCES,
             CodecError::Invalid {
-                codec: AttestationWitnessBytes::NAME,
-                reason,
+                codec: BundleReferencesBytes::NAME,
+                reason: "not a stored section of bundle references",
             },
         )
     })?;
-    Ok(AtHeight::Recorded(Some(bytes.to_vec())))
+    Ok(AtHeight::Recorded(Some(references)))
 }
 
 /// **A11.** Every `archival_bond` row, decoded, in key order — the redb
@@ -702,9 +559,9 @@ pub(super) fn issued_digest<T: ReadTables>(
 /// of `epochs`, ascending per epoch.
 ///
 /// The table is keyed `(P, shard, E)` (`SO-D2`), so one pair's epochs are
-/// adjacent and `(P, E)` is not a range. This hops the persona's shards the
-/// way [`served_shards`] hops serve-credit — seek to the next shard, never
-/// walk the shard ids between — and point-reads each requested epoch. An
+/// adjacent and `(P, E)` is not a range. This hops the persona's shards —
+/// seek to the next shard, never walk the shard ids between — and
+/// point-reads each requested epoch. An
 /// epoch with no Served shard is absent from the map. Empty `epochs` reads
 /// nothing. The set names each epoch once ([`ChainView::served_at`]). Only
 /// a requested epoch is decoded; a row that does not decode is SI-7.
@@ -784,16 +641,17 @@ pub(super) fn block_draws<T: ReadTables>(
     chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
 }
 
-/// **A23.** `archival_support_block[height]` — the complete trees the
-/// block seated, in persona order. `None` is a block no row was written
-/// for. [`SupportSeats::EMPTY`] is a block that seated nobody. A row that does not
+/// **A23.** `archival_support_block[height]` — the block's support row:
+/// the complete trees it seated, in persona order, and the carry it left.
+/// `None` is a block no row was written for. [`SupportRow::EMPTY`] is a
+/// block that seated nobody and left nothing owed. A row that does not
 /// decode is SI-7. A height below `floor` is SI-34, the same window as
 /// [`block_draws`].
-pub(super) fn support_block_seats<T: ReadTables>(
+pub(super) fn support_row<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
     floor: BlockDrawsFloor,
-) -> Result<Option<SupportSeats>, ReadFault> {
+) -> Result<Option<SupportRow>, ReadFault> {
     above_draws_floor(height, floor)?;
     chain_reads::cell(txn, ARCHIVAL_SUPPORT_BLOCK, height.to_raw(), SUPPORT_BLOCK)
 }
@@ -815,19 +673,6 @@ pub(super) fn drawable_digest<T: ReadTables>(
     )
 }
 
-/// **A22.** `archival_complete_trees[epoch]` — the complete trees the
-/// epoch's slash pass excluded from its market, frozen beside `Σwork(E)`
-/// (`SO-D12h`). `None` is an epoch not settled; a written empty set is a
-/// value.
-pub(super) fn complete_trees<T: ReadTables>(
-    txn: &T,
-    epoch: SettlementEpoch,
-    floor: EpochFloor<Claimable>,
-) -> Result<Option<CompleteTreeSet>, ReadFault> {
-    kept(COMPLETE_TREES, epoch, floor)?;
-    chain_reads::cell(txn, ARCHIVAL_COMPLETE_TREES, epoch.to_raw(), COMPLETE_TREES)
-}
-
 /// The nine table-backed families of the archival snapshot
 /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1), walked whole and re-encoded
 /// through [`ArchivalSnapshot`]'s typed constructors — the same encoding the
@@ -839,8 +684,8 @@ pub(super) fn complete_trees<T: ReadTables>(
 ///
 /// Two of the constructors' refusals are reachable from a store and are
 /// invariants, not snapshot faults: a second `archival_budget_accruing` row
-/// is SI-23 ([`StoreInvariant::AccruingNotSingular`]); an empty or over-cap
-/// witness row is SI-7, as in A10. The others (a duplicate key, a key of
+/// is SI-23 ([`StoreInvariant::AccruingNotSingular`]); a references row
+/// that is not a section is SI-7, as in A10. The others (a duplicate key, a key of
 /// the wrong width, a slash-log epoch marker) cannot arise from typed
 /// tables with unique keys and a log the writer never marks; they are
 /// mapped to SI-7 against the family so a reader is never left without a
@@ -856,13 +701,6 @@ pub(super) fn snapshot_rows<T: ReadTables>(txn: &T) -> Result<ArchivalSnapshot, 
             .map_err(|cause| undecodable(BOND, cause))?;
         snapshot
             .push_bond(&PCanonicalId::from_bytes(key.value()), &record)
-            .map_err(|f| refused(&f))?;
-    }
-    for row in txn.table(ARCHIVAL_SERVE_CREDIT)?.iter()? {
-        let (key, _present) = row?;
-        let key = ServeCreditKey::from_key(key.value());
-        snapshot
-            .push_serve_credit(key.persona(), key.shard(), key.epoch(), key.height())
             .map_err(|f| refused(&f))?;
     }
     for row in txn.table(ARCHIVAL_R_MARKET)?.iter()? {
@@ -902,20 +740,20 @@ pub(super) fn snapshot_rows<T: ReadTables>(txn: &T) -> Result<ArchivalSnapshot, 
             .push_budget(SettlementEpoch::from_raw(key.value()), budget)
             .map_err(|f| refused(&f))?;
     }
-    for row in txn.table(ARCHIVAL_ATTESTATION_WITNESS)?.iter()? {
+    for row in txn.table(ARCHIVAL_BUNDLE_REFERENCES)?.iter()? {
         let (key, value) = row?;
         let bytes = value.value().bytes();
-        AttestationWitnessBytes::well_formed(bytes).map_err(|reason| {
+        BundleReferencesBytes::well_formed(bytes).map_err(|reason| {
             undecodable(
-                WITNESS,
+                REFERENCES,
                 CodecError::Invalid {
-                    codec: AttestationWitnessBytes::NAME,
+                    codec: BundleReferencesBytes::NAME,
                     reason,
                 },
             )
         })?;
         snapshot
-            .push_attestation_witness(BlockHeight::from_raw(key.value()), bytes)
+            .push_bundle_references(BlockHeight::from_raw(key.value()), bytes)
             .map_err(|f| refused(&f))?;
     }
     for row in txn.table(ARCHIVAL_SLASH_LOG)?.iter()? {
@@ -969,7 +807,7 @@ fn refused(fault: &SnapshotFault) -> ReadFault {
         | SnapshotFault::RowTooLong { family, .. }
         | SnapshotFault::RowTooShort { family, .. } => family.name(),
         SnapshotFault::EpochMarkerSeq { .. } => SnapshotFamily::SlashLog.name(),
-        SnapshotFault::WitnessShape { .. } => SnapshotFamily::AttestationWitness.name(),
+        SnapshotFault::ReferencesShape { .. } => SnapshotFamily::BundleReferences.name(),
         SnapshotFault::Truncated | SnapshotFault::Io(_) => "archival_snapshot",
     };
     undecodable(

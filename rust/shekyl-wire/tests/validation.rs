@@ -12,7 +12,6 @@ mod common;
 use common::conforming_pqc_extra;
 
 use shekyl_types::{ArchivalLength, BlockHash, PCanonicalId, PqcAuthHash, PrunableHash};
-use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
     Transaction, TxPrefix,
@@ -40,21 +39,6 @@ fn fee_only_with(input: Input) -> Transaction {
             prunable: None,
         },
     }
-}
-
-/// An opaque kept-half blob of the retention codec's shape (this crate checks
-/// only tag and ceiling).
-fn kept_blob() -> Vec<u8> {
-    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
-    b.extend_from_slice(&[0u8; 32]);
-    b.extend_from_slice(&[0, 0]);
-    b.extend_from_slice(&[0u8; 64]);
-    b
-}
-
-/// The pruned half of a pass record as an opaque blob, minimal but in bounds.
-fn pruned_record() -> Vec<u8> {
-    vec![0u8; 16]
 }
 
 fn out() -> Output {
@@ -118,7 +102,6 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
                 })
                 .collect(),
             prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: (0..nbp).map(|_| bp(n_out)).collect(),
                 tree_depth: 1,
                 fcmp_proof: vec![],
@@ -278,7 +261,7 @@ fn bp_lr_out_of_range_rejected_on_parse() {
 
 #[test]
 fn spend_requires_at_least_two_outputs() {
-    // The C++ oracle rejects a non-coinbase, non-serve_credit tx with < 2 outputs
+    // The C++ oracle rejects a non-coinbase tx with < 2 outputs
     // (blockchain.cpp:3601, the RingCT anti-deanonymization rule).
     let err = spend(vec![ki(1)], vec![out()], 0, 1)
         .validate()
@@ -357,93 +340,6 @@ fn pqc_auth_oversized_blob_rejected() {
     assert!(err.to_string().contains("public key"), "{err}");
 }
 
-// `serve_credit_oversized_signature_rejected` was DELETED by RF-D2, and the
-// deletion is the point rather than a coverage loss.
-//
-// It asserted that an over-long `hybrid_signature: Vec<u8>` is refused by
-// `validate`. After the split the kept side carries
-// `ed25519_countersignature: [u8; 64]`, so an over-long value is not a case the
-// checker rejects -- it is **not a representable value of the type**. The test
-// cannot be written any more, because its subject does not exist.
-//
-// Rewriting it to construct an oversized array would have been the wrong
-// instinct: it would test the compiler, not the wire. The property it used to
-// guard -- that the encoded width cannot drift -- is now pinned directly in
-// `archival_arms_roundtrip.rs::serve_credit_kept_side_is_the_pinned_width`.
-
-#[test]
-fn serve_credit_must_not_mix_with_a_spend() {
-    // §2.5: serve_credit is the entire tx. Mixed with a key-image spend it would
-    // otherwise pass the spend branch's lenient pseudoOuts coupling — reject the shape.
-    let sc = kept_blob();
-    let tx = Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![
-                Input::ServeCredit {
-                    canonical_bytes: sc,
-                },
-                ki(1),
-            ],
-            outputs: vec![out()],
-            extra: vec![],
-        },
-        // Counts here are irrelevant: the shape check rejects before the ct coupling.
-        ct: Ct::Fcmp {
-            fee: 0,
-            reference_block: BlockHash::NULL,
-            base: CtBase {
-                enc_amounts: vec![[0u8; 9]],
-                enc_labels: vec![[0u8; 9]],
-                commitments: vec![[0u8; 32]],
-            },
-            pqc_auths: vec![],
-            prunable: None,
-        },
-    };
-    let err = tx.validate().unwrap_err();
-    assert!(err.to_string().contains("must not mix"), "{err}");
-}
-
-#[test]
-fn multiple_serve_credits_allowed() {
-    // The oracle allows *multiple* serve_credit inputs (it only rejects mixing with
-    // other arms; check_inputs_types_supported). A 2-serve_credit fee-only tx validates.
-    let sc = || Input::ServeCredit {
-        canonical_bytes: kept_blob(),
-    };
-    let tx = Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![sc(), sc()],
-            outputs: vec![],
-            extra: vec![],
-        },
-        ct: Ct::Fcmp {
-            fee: 0,
-            reference_block: BlockHash::NULL,
-            base: CtBase {
-                enc_amounts: vec![],
-                enc_labels: vec![],
-                commitments: vec![],
-            },
-            pqc_auths: vec![],
-            // RF-D1: one pruned pass record per serve-credit vin. Two vins,
-            // two records -- which is also what makes this test the coupling's
-            // positive control, the negative one being
-            // `a_record_count_disagreeing_with_the_vin_count_is_refused`.
-            prunable: Some(Prunable {
-                bulletproofs: vec![],
-                tree_depth: 0,
-                fcmp_proof: vec![],
-                pseudo_outs: vec![],
-                serve_credit_pruned: vec![pruned_record(), pruned_record()],
-            }),
-        },
-    };
-    tx.validate().expect("multiple serve_credits must validate");
-}
-
 #[test]
 fn two_bond_posts_rejected() {
     // At most one bond_post per tx (check_inputs_types_supported:726).
@@ -499,19 +395,16 @@ fn bond_post_spend_with_kind(kind: BondPostKind) -> Transaction {
     tx
 }
 
-/// `Other` carrying the JoinMarket tag (5) or the retired keyless one (0)
-/// is a misconstruction that never validates. Today the size bound's
-/// counting write reaches the writer's guard first and panics on it
-/// (`serialized_len` `.expect`s the write; the conformance registry's note
-/// on the `Other` invariant), before `BondPost::validate`'s own guard
-/// returns its error. Either is a refusal, so this asserts the one thing
-/// both give — never `Ok` — and that the two tags get the same.
-/// `Other(2)` (Release) is the control: the guard is the tag, not `Other`.
+/// `Other` carrying the JoinMarket tag (5) is a misconstruction that never
+/// validates. Today the size bound's counting write reaches the writer's
+/// guard first and panics on it (`serialized_len` `.expect`s the write; the
+/// conformance registry's note on the `Other` invariant), before
+/// `BondPost::validate`'s own guard returns its error. Either is a refusal,
+/// so this asserts the one thing both give — never `Ok`. `Other(2)`
+/// (Release) is the control: the guard is the tag, not `Other`.
 #[test]
 fn bond_post_other_with_a_joinmarket_tag_never_validates() {
-    use shekyl_wire::transaction::{
-        BOND_POST_KIND_JOINMARKET, BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET,
-    };
+    use shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
     // `Err(message)` for a returned refusal, `Err(panic message)` for the
     // writer's guard reached through the counting write.
     let outcome = |tag: u8| -> Result<(), String> {
@@ -527,10 +420,7 @@ fn bond_post_other_with_a_joinmarket_tag_never_validates() {
         }
     };
     let live = outcome(BOND_POST_KIND_JOINMARKET).expect_err("Other(5) never validates");
-    let retired =
-        outcome(BOND_POST_KIND_RETIRED_KEYLESS_JOINMARKET).expect_err("Other(0) never validates");
     assert!(live.contains("must not use the JoinMarket tag"), "{live}");
-    assert_eq!(retired, live);
     assert_eq!(outcome(2), Ok(()), "Other(Release) is not a JoinMarket tag");
 }
 
@@ -776,22 +666,6 @@ fn validator_rejects_an_unparseable_extra() {
     assert!(err.to_string().contains("tx_extra"), "{err}");
 }
 
-/// The positive limb of the flip: an attestation field is now in the grammar,
-/// so a coinbase-shaped `extra` carrying one still validates rather than being
-/// refused by the newly unconditional parse.
-#[test]
-fn validator_accepts_an_attestation_alongside_the_pqc_fields() {
-    use shekyl_wire::tx_extra::{serialize, TxExtraField};
-    let mut extra = conforming_pqc_extra(2);
-    extra.extend_from_slice(
-        &serialize(&[TxExtraField::ArchivalAttestation(vec![0xA7; 16])])
-            .expect("attestation field serializes"),
-    );
-    spend_with_extra(extra)
-        .validate_context_free_pruned()
-        .expect("an attestation field must not make a valid spend invalid");
-}
-
 #[test]
 fn validator_rejects_a_kem_field_of_the_wrong_length() {
     let err = spend_with_extra(pqc_fields(1120, 32 * 2))
@@ -800,14 +674,8 @@ fn validator_rejects_a_kem_field_of_the_wrong_length() {
     assert!(err.to_string().contains("0x06"), "{err}");
 }
 
-// The zero-output arm of the rule is NOT exercised here on purpose. Every
-// zero-output shape this validator accepts is a serve-credit fee-only
-// transaction, and that arm's own shape check ("serve_credit tx must be
-// fee-only …") refuses a mutated fixture before the field-shape rule is
-// reached — a test asserting rejection here would pass without the CEN-I19
-// wiring at all. The arm is covered where it is reachable: at C++ admission
-// (`tx_extra_pqc_field_shape.cpp`, which drives the real serve-credit parity
-// transaction) and by the rule's own KAT in `shekyl-wire::tx_extra`.
+// The zero-output arm of the rule is not exercised here. It is covered by the
+// rule's own KAT in `shekyl-wire::tx_extra`.
 
 /// A coinbase with `n` outputs in the grammar's one layout, built from the
 /// real genesis coinbase so everything but the outputs and the extra is a

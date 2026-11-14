@@ -100,7 +100,7 @@ use shekyl_crypto_pq::{
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Prunable, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash};
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -360,9 +360,7 @@ fn assemble_scannable_block(
         previous: BlockHash::NULL,
         nonce: 0,
         curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
     };
 
     // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),
@@ -412,7 +410,6 @@ pub fn fixture_prunable(spend_inputs: usize) -> Prunable {
         tree_depth: 0,
         fcmp_proof: vec![],
         pseudo_outs: vec![[0u8; 32]; spend_inputs],
-        serve_credit_pruned: vec![],
     }
 }
 

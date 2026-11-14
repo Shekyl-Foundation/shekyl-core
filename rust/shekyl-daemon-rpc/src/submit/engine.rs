@@ -477,42 +477,34 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             return Ok(Err(Rejection::Malformed));
         }
 
-        // Reference checks — spending shapes only: the C++ oracle never
-        // consults referenceBlock for a serve-credit-only tx
-        // (blockchain.cpp:3565-3609), and neither does the engine.
-        let reference = match parsed.kind {
-            SubmitTxKind::Spend | SubmitTxKind::BondPost | SubmitTxKind::Emission => {
-                let Some(reference) = facts.reference else {
-                    // Defect 0.6's named verdict: unknown-by-hash at
-                    // snapshot time is a sync-gated retry, not a flagless
-                    // failure.
-                    return Ok(Err(Rejection::ReferenceUnknown));
-                };
-                // Age-window arithmetic over the snapshot height.
-                match ref_age_window(facts.chain_height, reference.height) {
-                    RefAgeWindow::TooRecent => return Ok(Err(Rejection::ReferenceTooRecent)),
-                    RefAgeWindow::TooOld => return Ok(Err(Rejection::StaleRoot)),
-                    RefAgeWindow::InWindow => {}
-                }
-                // Tree-depth range (row K10 / §8.7.2 row E4): cheap
-                // arithmetic the engine owns; the crypto seam re-consumes
-                // the depth for the proofs. One tx-declared depth serves
-                // both emission proofs (the backing proof's wire depth is
-                // pinned equal by `verify_membership_only`).
-                let tx_depth = match &parsed.tx.ct {
-                    shekyl_wire::transaction::Ct::Fcmp {
-                        prunable: Some(prunable),
-                        ..
-                    } => prunable.tree_depth,
-                    _ => 0,
-                };
-                if tx_depth == 0 || tx_depth > u64::from(reference.tree_depth) {
-                    return Ok(Err(Rejection::StaleRoot));
-                }
-                Some(reference)
-            }
-            SubmitTxKind::ServeCreditOnly => None,
+        // Reference checks: every admissible shape spends against one.
+        let Some(reference) = facts.reference else {
+            // Defect 0.6's named verdict: unknown-by-hash at
+            // snapshot time is a sync-gated retry, not a flagless
+            // failure.
+            return Ok(Err(Rejection::ReferenceUnknown));
         };
+        // Age-window arithmetic over the snapshot height.
+        match ref_age_window(facts.chain_height, reference.height) {
+            RefAgeWindow::TooRecent => return Ok(Err(Rejection::ReferenceTooRecent)),
+            RefAgeWindow::TooOld => return Ok(Err(Rejection::StaleRoot)),
+            RefAgeWindow::InWindow => {}
+        }
+        // Tree-depth range (row K10 / §8.7.2 row E4): cheap
+        // arithmetic the engine owns; the crypto seam re-consumes
+        // the depth for the proofs. One tx-declared depth serves
+        // both emission proofs (the backing proof's wire depth is
+        // pinned equal by `verify_membership_only`).
+        let tx_depth = match &parsed.tx.ct {
+            shekyl_wire::transaction::Ct::Fcmp {
+                prunable: Some(prunable),
+                ..
+            } => prunable.tree_depth,
+            _ => 0,
+        };
+        if tx_depth == 0 || tx_depth > u64::from(reference.tree_depth) {
+            return Ok(Err(Rejection::StaleRoot));
+        }
 
         // The §8.7.1 BP3 fact contract: a bond-post's snapshot must carry
         // the record probe (the engine asked for it above). A missing fact
@@ -539,10 +531,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         }
 
         // Fee floor against the snapshot params (row P2; re-gated at D
-        // against fresh params, F34). Serve-credit txs carry fee 0 by
-        // consensus and the floor is never 0, so the non-spending arm
-        // terminates here today — the SP-T4a contradiction, recorded in
-        // FOLLOWUPS, reproduced for parity rather than resolved.
+        // against fresh params, F34).
         if !fee_clears(parsed.weight, parsed.fee, facts) {
             return Ok(Err(Rejection::FeeTooLow));
         }
@@ -566,25 +555,12 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // Mint the witness (§3.3) — the only construction site in the
         // crate, so "grep certificate construction = grep Phase C
         // completion" holds.
-        match reference {
-            Some(reference) => Ok(Ok(VerificationCertificate::new(
-                parsed.txid,
-                parsed.reference_block,
-                reference.height,
-                reference.root,
-            ))),
-            None => {
-                // Unreachable while the fee floor refuses a zero fee.
-                // Reaching here means the shim supplied a window that
-                // admitted the submission with no reference block, and
-                // minting a root-anchored certificate without a verified
-                // root would forge the §3.3 witness meaning.
-                Err(EngineFault::ShimContract(
-                    "serve-credit submission cleared the fee floor with no reference block; \
-                     no root-anchored certificate can attest a non-spending arm (SP-T4a)",
-                ))
-            }
-        }
+        Ok(Ok(VerificationCertificate::new(
+            parsed.txid,
+            parsed.reference_block,
+            reference.height,
+            reference.root,
+        )))
     }
 
     /// The Phase-D race classifier: fresh facts in, **most-terminal-first**

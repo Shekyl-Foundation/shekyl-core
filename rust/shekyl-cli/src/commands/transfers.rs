@@ -232,7 +232,7 @@ pub(crate) fn show_transfers(val: &Value) {
     };
     println!(
         "{:<10} {:<12} {:>16} {:>12} {:>8}  Id",
-        "Direction", "State", "Amount", "Fee", "Height"
+        "Direction", "State", "Amount", "Fee", "Block"
     );
     for t in transfers {
         print_transfer_row(t);
@@ -251,7 +251,7 @@ pub(crate) fn show_submit(val: &Value) {
                 ),
                 SubmitVerdictView::AlreadyInChain => match result.confirmed_height {
                     Some(h) => println!(
-                        "Transaction already confirmed on chain (reported height {h}): \
+                        "Transaction already confirmed on chain (at block {h}): \
                          {tx_hash}"
                     ),
                     None => println!("Transaction already confirmed on chain: {tx_hash}"),

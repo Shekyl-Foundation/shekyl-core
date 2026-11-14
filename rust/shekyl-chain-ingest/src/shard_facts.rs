@@ -22,7 +22,7 @@ use shekyl_archival_fetch_sched::{
 };
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, ErrorClass, ReadSnapshot, ShardFold, StoreError};
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::Holdings;
 use shekyl_types::{BlockHash, BlockHeight, ShardId};
 
@@ -92,7 +92,7 @@ impl HolderSource for StoreHolderSource {
             if !holds_drawn(&record.holdings, shard_id) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,
@@ -112,7 +112,7 @@ impl HolderSource for StoreHolderSource {
             if !matches!(record.holdings, Holdings::CompleteTree) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,

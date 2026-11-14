@@ -52,7 +52,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    Substrate, Target,
+    StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -60,8 +60,7 @@ use shekyl_economics::EconomicParams;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
-    Timestamp,
+    BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SectionRoot, SettlementEpoch, Timestamp,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
@@ -188,6 +187,7 @@ where
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules,
+            bundle_queued: None,
         });
         Self {
             connector,
@@ -267,6 +267,12 @@ where
 
     /// Build the next block listing `listed`, form it, and apply it.
     /// A refusal is returned, not panicked: some scenarios ask for one.
+    /// The settlement schedule this chain runs: its rules' at genesis, which
+    /// a regtest schedule keeps at every height.
+    pub fn settlement_schedule(&self) -> shekyl_chain_rules::SettlementSchedule {
+        self.rules.in_force(BlockHeight::ZERO).settlement_schedule()
+    }
+
     pub async fn mine_listing(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
         let next = self.next_template(listed).await?;
         self.connect_template(next).await
@@ -308,21 +314,40 @@ where
         self.mined(height, applied, kept)
     }
 
-    /// Mine the next block listing `listed`, admitting every queued bundle
-    /// inside its window through the store's staged door
-    /// (`connector_bundles::ApplyAdmitting`): what 4b's connect does with a
-    /// block's references, for the bundle producer's gate test. The
-    /// verifier's verdicts come back with the block.
+    /// Mine the next block listing `listed`, carrying every queued bundle
+    /// inside its window as its section: the references under the root
+    /// they make, and their bodies. `validate` admits them (CEN-J29
+    /// through J37) and the verdict's admissions come back with the block,
+    /// through `connector_bundles::ApplyAdmitting`, which reports them and
+    /// takes the admitted entries out of the queue. The block template
+    /// builds the same section with `fill_section` at C4.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If the queue's bundles do not admit: the gate's failure.
+    /// A refused block, as [`Self::mine_listing`]'s.
     pub async fn mine_admitting(
         &mut self,
         listed: Vec<Transaction>,
     ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
         let next = self.next_template(listed).await?;
-        let (height, formed, kept) = self.form_next(next)?;
+        self.connect_next_admitting(next).await
+    }
+
+    /// [`Self::connect_template`] carrying every queued bundle inside the
+    /// block's window as its section, as [`Self::mine_admitting`] does. A
+    /// block re-formed from a popped block's template carries the same
+    /// section when the pop returned its bundles to the queue, so it hashes
+    /// the same.
+    ///
+    /// # Errors
+    ///
+    /// A refused block, as [`Self::mine_listing`]'s.
+    pub async fn connect_next_admitting(
+        &mut self,
+        next: NextBlock,
+    ) -> Result<(Mined, Vec<shekyl_chain_rules::Admitted>), StepOutcome> {
+        let section = self.queued_section(next.height);
+        let (height, formed, kept) = self.form_next_carrying(next, section)?;
         let out = self
             .connector
             .ask(crate::connector::ApplyAdmitting {
@@ -332,29 +357,82 @@ where
             .await
             .map_err(handler_error)
             .map_err(StepOutcome::Connector)?;
-        let admitted = out
-            .admitted
-            .unwrap_or_else(|why| panic!("the queue's bundles admit at {height}: {why}"));
-        Ok((self.mined(height, out.applied, kept)?, admitted))
+        Ok((self.mined(height, out.applied, kept)?, out.admitted))
+    }
+
+    /// The section the node's template would carry at `height`: the
+    /// production [`crate::template::section`], `fill_section` over the
+    /// queue on one snapshot. `None` when it packs nothing.
+    fn queued_section(
+        &self,
+        height: BlockHeight,
+    ) -> Option<(
+        Vec<shekyl_archival_retention::BundleRef>,
+        Vec<shekyl_archival_retention::BundleBody>,
+    )> {
+        let store = self.store();
+        let snap = store.begin_read().expect("the scenario's store reads");
+        let section = crate::template::section(&snap, height, &self.rules.in_force(height))
+            .unwrap_or_else(|stop| panic!("the template's section reads: {stop:?}"))?;
+        let refs = section
+            .references
+            .as_slice()
+            .iter()
+            .map(|bytes| {
+                shekyl_archival_retention::BundleRef::decode(bytes).expect("a packed reference")
+            })
+            .collect();
+        Some((refs, section.bodies))
     }
 
     /// Form `next`'s block. What the caller applies it through is its own.
     fn form_next(
         &mut self,
         next: NextBlock,
-    ) -> Result<(BlockHeight, shekyl_chain_rules::StructurallyValid, Formed), StepOutcome> {
+    ) -> Result<(BlockHeight, StructurallyValid, Formed), StepOutcome> {
+        self.form_next_carrying(next, None)
+    }
+
+    /// [`Self::form_next`] for a block carrying `section`: its references
+    /// and bodies, with the header's root set to the root they make before
+    /// the block is hashed.
+    fn form_next_carrying(
+        &mut self,
+        next: NextBlock,
+        section: Option<(
+            Vec<shekyl_archival_retention::BundleRef>,
+            Vec<shekyl_archival_retention::BundleBody>,
+        )>,
+    ) -> Result<(BlockHeight, StructurallyValid, Formed), StepOutcome> {
         let NextBlock {
             height,
-            template,
+            mut template,
             seed,
             target,
         } = next;
+        let (bundle_references, bundle_bodies) = match section {
+            None => (None, Vec::new()),
+            Some((refs, bodies)) => {
+                let root = shekyl_archival_retention::section_root(&refs)
+                    .expect("a queue's section is countable");
+                template.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
+                let references = shekyl_types::archival::BundleReferences::new(
+                    refs.iter()
+                        .map(shekyl_archival_retention::BundleRef::encode)
+                        .collect(),
+                )
+                .expect("a non-empty section");
+                (Some(references), bodies)
+            }
+        };
         // Nothing the producer priced is handed to `connect`: the reward it
         // priced is judged by F14b/F18, the burn by F17, and both are
         // recorded from the verdict (the ledger that carried the burn left
         // with wave B).
         let rule_set = self.rules.in_force(height);
-        let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        let candidate = Candidate::new(template.block.clone(), template.transactions.clone())
+            .with_bundle_references(bundle_references.clone())
+            .with_bundle_bodies(bundle_bodies.clone());
         // The third claim, off the same ledger (its window covers CEN-I11's).
         let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
             Ok(references) => references,
@@ -384,6 +462,8 @@ where
                 template,
                 seed,
                 target,
+                bundle_references,
+                bundle_bodies,
             },
         ))
     }
@@ -399,6 +479,8 @@ where
             template,
             seed,
             target,
+            bundle_references,
+            bundle_bodies,
         } = kept;
         if let Some((_, refused)) = applied.refused {
             return Err(StepOutcome::Refused(refused));
@@ -433,6 +515,8 @@ where
             archival,
             seed,
             target,
+            bundle_references,
+            bundle_bodies,
         })
     }
 
@@ -738,6 +822,7 @@ where
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules: self.rules,
+            bundle_queued: None,
         });
         self.task = Some(task);
         self.connector = connector;
@@ -857,6 +942,8 @@ struct Formed {
     template: Template,
     seed: BlockHash,
     target: Target,
+    bundle_references: Option<shekyl_types::archival::BundleReferences>,
+    bundle_bodies: Vec<shekyl_archival_retention::BundleBody>,
 }
 
 /// The scenario's template for `facts`, listing `listed`, at clock `now`:
@@ -892,13 +979,11 @@ pub(crate) fn build_template(
         height: facts.connecting,
         previous: facts.previous,
         curve_tree_root: facts.curve_tree_root,
-        // The driver mints no attestation records (CEN-I20 admits no
-        // 0x0B field on the coinbase), so every template commits the
-        // empty set's root — the arm CEN-B4 judges a witness-less block
-        // against (slice 8 row 10).
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        // The driver's blocks admit no bundle until the template fills a
+        // section (the switch's C4), so every template commits the empty
+        // section's root, the root CEN-J29 compares a block with no
+        // references against.
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         major_version: rule_set.header_major_version(),
         now,
         median_timestamp: facts.median_timestamp,

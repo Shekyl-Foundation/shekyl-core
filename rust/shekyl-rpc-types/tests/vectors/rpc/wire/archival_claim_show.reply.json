@@ -25,7 +25,6 @@
       "bond": [
         {
           "joined_epoch": 3,
-          "complete_tree": false,
           "failure": [
             {
               "from": 900,

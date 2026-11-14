@@ -10,7 +10,7 @@ specs in `docs/design/`, **not** the C++/Rust code, which is known-incomplete fo
 Shekyl-native elements) corrected the earlier code-derived draft; §15 catalogs the
 gaps with cites. **Settled Shekyl-native arms are specced here from the design
 docs** — `bond_post` incl. **`bond_spend_pk`** (gate-4 §3.4.1, §9.11),
-`serve_credit` (gate-2 §5.1.1, §9.10), `tagged_key` output + **`tx_extra` 0x06/0x07**
+`tagged_key` output + **`tx_extra` 0x06/0x07**
 (FA-6, §9.6a), corrected **`view_tag`** (ml_kem_ss/HKDF, §2.2). The **reward-emission
 + membership-only** arms are a **deferred sub-freeze** — tag + rule-interactions
 pinned here, internal layout owned by their PRs (`REWARD_EMISSION_VIN_PLAN.md` /
@@ -36,7 +36,7 @@ only for inherited.
    Q13) is landed and drift-validated, closing that gap.
 2. **Arm taxonomy + generalized §12/§13 (F1).** The frozen ki-ordering and
    `pqc_auths` rules were written for key-image-bearing fcmp spends; the no-ki arms
-   (serve_credit, bond_post, and the deferred emission/membership-only) don't fit
+   (bond_post and the deferred emission/membership-only) don't fit
    them. §2.5 states the genesis tx shapes + mixing; §12/§13 are generalized across
    the arm taxonomy so landing a deferred arm doesn't silently move a frozen rule.
 3. **Deferred sub-freezes (F3), not "frozen by reference."** `reward_emission` +
@@ -57,9 +57,9 @@ match where we deliberately diverge. **It is not yet ratified** (the four
 obligations above). §9–§14 — byte tables, bounds (per-tx + block-level), hashing
 (preimage + RandomX seed), the recursive canonical-encoding invariant + reject
 rules, domain constraints — **stand for the inherited surface** (C++-oracle-validated)
-and are spec-grounded for the Shekyl-native additions (§9.6a/§9.10/§9.11), pending
+and are spec-grounded for the Shekyl-native additions (§9.6a/§9.11), pending
 the obligations above. Scope (single wave, **no separate Wave 2**):
-`gen`+`fcmp`+`serve_credit`+`bond_post` inputs (+ deferred `reward_emission` and
+`gen`+`fcmp`+`bond_post` inputs (+ deferred `reward_emission` and
 membership-only, §2.1), `tagged_key` output, ct, header, pow-blob, tx `version=3`.
 **rule-21 reopen** (a testnet-revealed change) stays free pre-genesis. **Process:**
 multi-round design ([`26-sub-pr-design-discipline`]) — consensus + FFI surface.
@@ -211,8 +211,9 @@ Source cites are `src/cryptonote_basic/cryptonote_basic.h` unless noted.
 ### 2.0 Genesis tag scheme (Q7 resolved — clean renumber)
 
 **Decision:** Monero is a proven *pattern*, not a *basis*. We will never meet the
-old chain on-wire, so we number tags as Shekyl needs them — dense from `0x00`,
-not the inherited values. The renumber **landed** via PR #168 (§1.1): the C++
+old chain on-wire, so we number tags as Shekyl needs them — from `0x00`, not the
+inherited values. Input tag `0x02` is unassigned (§9.10): it is refused as any
+unknown input tag, and `0x03`/`0x04` keep their values. The renumber **landed** via PR #168 (§1.1): the C++
 `VARIANT_TAG`s + ct type enum now emit these dense values atomically with Rust and a
 3-net `GENESIS_TX` re-pin (§5 item 2 / §7). The `§2.1`/`§2.2` "Tag" columns below are
 therefore the **pre-renumber C++ source** values — historical, kept for the
@@ -223,7 +224,7 @@ Genesis tags (single-wave freeze):
   Input arm                    Output arm         ct type
   0x00  gen                    0x00  tagged_key   0x00  Null (coinbase)
   0x01  fcmp                                      0x01  Fcmp (spend)
-  0x02  archival_serve_credit  (gate-2 serve-credit; non-spending)
+  0x02  (unassigned)
   0x03  archival_bond_post     (gate-4 join-Market/bond; carries P; JoinMarket-only at genesis)
 
 Shed entirely (no genesis producer — removed from the tag space):
@@ -284,18 +285,17 @@ appear on the consensus blob (confirmed: no wire usage) — not a genesis surfac
 | `0x01` | `txin_to_scripthash` (:148,852) | **Shed** | idem. |
 | `0x02` | `txin_to_key` + `key_offsets` (:163,166) | **Reshape → `txin_fcmp`** (Q1 resolved) | Genesis `txin_fcmp` = `k_image[32]` **only**. `key_offsets` is consensus-**required empty** for FCMP++ inputs (`blockchain.cpp:3715`); `amount` is `0` and unused — FCMP++ membership is `shekyl_fcmp_verify` against the curve-tree root, not the legacy ring path (`scan_outputkeys_for_indexes`/`get_output_key` by amount+offsets). Both vestigial → dropped. |
 | `0x03` | `txin_stake_claim` (:176) | **Shed (Q11 resolved)** | The cleartext claim wire is **deleted for genesis**. Staking is the `P` model: transfer-shaped admission, reward emission membership-only with **no published nullifier/tag** (`PHASE_2B_FSM_RETOOL.md:87-94`). No `txin_stake_claim` on the genesis wire. |
-| `0x04` | `txin_archival_serve_credit_response` (:290) | **Spec + ratify** (gate-2 §5.1.1; non-spending) | Full layout + sig-preimage in **§9.10** (`leaf_bytes[128]`; c1/c2 branch scalars ≤256; preimage le64/le32). |
+| `0x04` | `txin_archival_serve_credit_response` (:290) | **Shed** (ruled 2026-11-10, `SO-D12` 4b) | A pass is credited only from an admitted bundle (`ARCHIVAL_SERVE_CREDIT_SPEC.md`, CEN-J29–J37). No genesis input carries one; genesis tag `0x02` is unassigned (§9.10). |
 | `0x05` | `txin_archival_bond_post` (:264) | **Spec + ratify + UNIFY** (gate-4 §3.4.1; JoinMarket-only) | Full layout in **§9.11** — the JoinMarket (`post_kind` `5`) carries **`bond_spend_pk`** (GF-1 debit authorizer; authorized via the surface-A `pqc_auths` slot, SA-2b), **`receipt_sign_pk[1837]`** (the persona's receipt key, mandatory since 2026-10-12 — `FN_DSA_HYBRID.md` §8, CEN-J28) and **`endpoint[32]`**, on the wire in both Rust encoders (`shekyl-wire` `BondPost`, `shekyl-archival-retention` `ArchivalBondPostVin`); the C++ `txin_archival_bond_post` decoder has no kind `5` (§9.11). *(This cell had read "incl. `bond_spend_pk`" alone; brought to §9.11's grammar 2026-10-13.)* |
 | `0x04` (dense) | `txin_archival_reward_emission` | **Deferred sub-freeze** — layout owned by `REWARD_EMISSION_VIN_PLAN.md` | Staker reward-emission vin (loud reward, Form-C `reward_P(E)`; **ML-DSA-65 auth** — single-vs-dual still open, plan §2:231; membership-only backing; per-epoch dedup on the bond record `claimed_settlement_epochs`, **not** a key image). Genesis tag **pinned `0x04` dense / `0x06` C++** (plan:118 "next free binary tag 0x06"). **Not in code yet** → a forward promise, not a freeze (**≠ Q6**, which references *existing* vendored crypto). Rule-interactions pinned §2.5/§12/§13; landing its PR may refine them. |
 | (no own vin tag) | membership-only spend / backing | **Deferred sub-freeze** — owned by `FCMP_MEMBERSHIP_ONLY.md` | An fcmp-class spend input **with no key_image**; authority = the `R_O` Schnorr leg (`R_O`/`s_α`/`s_y`) **inside the SAL proof** (:52,80-82), not a separate vin field or `pqc_auths` slot. Backs emission; anti-replay = the emission per-epoch dedup (the proof does **not** reject duplicate tuples, :397). Likely an fcmp **proof variant**, not a new vin tag (plan:118 reserves only `0x06`); its wire signalling of "no key image" is **owned by its PR** — the genesis format must accommodate a no-ki spend (§9.5/§12 refined on landing). |
 
-The archival arms (`serve_credit` 0x04, `bond_post` 0x05) **are** the genesis
-staking-archival mechanism (the `P` model): `bond_post` is the gate-4 join-Market
-event carrying `P`'s `hybrid_public_key` + `p_canonical_id`
-(`ARCHIVAL_BOND_GATE4.md`, `PHASE_2B_FSM_RETOOL.md` §9); `serve_credit` is the
-gate-2 serve-credit response. Shekyl-native, no spec outside
-C++/`shekyl-archival-*` — this table is their only human-readable definition and
-the highest load-bearing corpus cells. They are **frozen with the rest** (single
+The archival arm (`bond_post` 0x05) **is** the genesis staking-archival
+input (the `P` model): the gate-4 join-Market event carrying `P`'s
+`hybrid_public_key` + `p_canonical_id` (`ARCHIVAL_BOND_GATE4.md`,
+`PHASE_2B_FSM_RETOOL.md` §9). Shekyl-native, no spec outside
+C++/`shekyl-archival-*` — this table is its only human-readable definition and
+the highest load-bearing corpus cell. They are **frozen with the rest** (single
 wave, §6 Q4); fields final per gate-4 §3 + certify_draw (#165). Rule-21 reopen = a
 testnet-revealed change (pre-genesis free). Genesis constraint: `bond_post ⇒
 JoinMarket` (§13). (Q11 has no separate wire surface — staking rides these arms.)
@@ -469,11 +469,10 @@ the arm taxonomy** (not "one arm class per tx"), plus state the shapes:
 | **Coinbase** | `[gen]` exactly | `Null` | **none** | none | settled |
 | **Spend** (the transfer) | `fcmp×(1..8)`, **≥2 outputs** | `Fcmp` | one slot per input | each input, strictly descending (§12) | settled |
 | **Bond-post** | `fcmp×(funding)` + **one `bond_post`** + cover output | `Fcmp` | fcmp slots **+ the bond_post slot** (identity-key credit / `bond_spend_pk` debit, gate-4 §3.4.1:278) | the fcmp inputs only; bond_post has none | settled |
-| **Serve-credit** | **one-or-more** `serve_credit` (non-spending), no other arm, no outputs | n/a | **empty** — sig is **on the vin** (§9.10) | none | settled |
 | **Emission** | `reward_emission` + membership-only backing (no ki) [± fcmp] | per plan | ML-DSA-65 (emission) + `R_O` legs in-proof (backing); **count rule refined by its PR** | fcmp inputs only; no-ki arms exempt — anti-replay = per-epoch dedup | **deferred sub-freeze** |
 
 **Mixing rule (binding for the settled shapes):** within one tx, key-image-bearing
-inputs (`fcmp`) and no-key-image inputs (`gen`/`serve_credit`/`bond_post`/emission/
+inputs (`fcmp`) and no-key-image inputs (`gen`/`bond_post`/emission/
 membership-only) may coexist only as the table allows; §12 (ki ordering+dedup)
 ranges over the **ki-bearing** subset, and §13 (auth) is **per-arm**. The
 **emission** row is a deferred sub-freeze: its exact input multiset, the emission
@@ -488,10 +487,10 @@ raw bytes; `vec(f)` = `V(len)` then `len ×` f.
 
 ```
 Block            := BlockHeader  Transaction(miner)  V(n_tx)  n_tx×Hash[32]
-BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
+BlockHeader      := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] section_root[32]
 Transaction      := V(version=3)  TxPrefix  Ct        # genesis version=3 (Q12: deliberate keep; V4 = future lattice-only)
 TxPrefix         := V(unlock_time)  vec(Input)  vec(Output)  V(extra_len) extra[extra_len]
-Input            := tag(1) ...        # 00 gen | 01 fcmp | 02 serve_credit | 03 bond_post  (+ deferred 04 reward_emission, membership-only — §2.5; stake_claim shed; bond_post = JoinMarket-only)
+Input            := tag(1) ...        # 00 gen | 01 fcmp | 03 bond_post  (02 unassigned; + deferred 04 reward_emission, membership-only — §2.5; stake_claim shed; bond_post = JoinMarket-only)
 Output           := V(amount) tag(1) ...   # 00 tagged_key — sole genesis output (staked_key + plain key shed; view_tag mandatory)
 Ct               := ct_type(1) ...          # 00 Null (coinbase) | 01 Fcmp (spend)
   if Null  (coinbase, exactly one output):  enc_amounts[1×9]  enc_labels[1×9]  outPk[1×32]
@@ -516,7 +515,7 @@ bodies are in §2; full byte tables land in Round 1 once the OPEN items resolve.
   produces the canonical hashing blob; `shekyl-pow-randomx` consumes it and
   computes the hash (the RandomX computation stays put).
 - **One unified `Input` / `Output` enum** — Shekyl arms only; the archival arms
-  (`bond_post`, `serve_credit_response`) are folded in here, not split across
+  (`bond_post`) are folded in here, not split across
   `shekyl-archival-retention` (which keeps the *semantic* types; the **wire**
   encoding is owned here). This closes the bond-post parse gap.
 - **No `Pruned`/`NotPruned` generic, but no `Option<prunable>` footgun either.**
@@ -549,7 +548,7 @@ Items 1, 3, 4 remain, each its own atomic-flip cut.
    `txin_to_script`/`txin_to_scripthash`/`txout_to_script`/`txout_to_scripthash`
    (CryptoNote), plain `txout_to_key` (Q3), and **`txout_to_staked_key` +
    `txin_stake_claim`** (Q11 — cleartext staking retired; genesis uses the `P`
-   model). The archival arms (`serve_credit`/`bond_post`) stay (frozen, single wave).
+   model). The archival arm (`bond_post`) stays (frozen, single wave).
 2. **✅ LANDED (PR #168) — Renumber the surviving tags to the §2.0 dense scheme** —
    input/output variant tags + the ct type enum (`Null=0x00`, `Fcmp=0x01`). One
    pervasive atomic flip (C++ `VARIANT_TAG` values + Rust + the 3-net genesis
@@ -582,7 +581,9 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `txout_to_key` site is legacy `wallet2.cpp:13220` (synthetic-local, retiring).
   **`view_tag` becomes mandatory** (§2.2).
 - **Q4 — archival arm finality.** *(RESOLVED → single-wave freeze)* The archival
-  arms (`serve_credit` 0x02, `bond_post` 0x03) are **frozen with the rest** — their
+  arms (`serve_credit` 0x02, `bond_post` 0x03) are **frozen with the rest**
+  (**reopened 2026-11-10 under rule 21:** `serve_credit` is deleted, `SO-D12` 4b,
+  and `0x02` is unassigned, §9.10) — their
   wire fields are final per gate-4 §3 + the certify_draw work (#165), no WIP
   markers in the wire source. **Reopen clause (rule-21):** if testnet reveals a
   needed change it lands then (pre-genesis = free). `bond_post` is
@@ -798,7 +799,7 @@ Genesis tags per §2.0. *(The C++ oracle still emits pre-renumber tag values unt
 the gate-(c) flip lands, §5; the captured corpus in `src/tests/vectors/` reflects
 pre-renumber tags until recapture.)*
 
-**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · attestation_root[32]`; genesis `major=1, minor=0` (§13). (`attestation_root` added by the credit-wire cutover, `ARCHIVAL_CREDIT_WIRE.md` §3; the empty-set root is `attestation_root(&[])` / C++ `empty_attestation_root()` — **not** `null_hash` — and is the constructor default until a block has pass records.)
+**9.1 BlockHeader** — `V(major) · V(minor) · V(timestamp) · prev[32] · nonce(u32 LE) · curve_tree_root[32] · section_root[32]`; genesis `major=1, minor=0` (§13). (`section_root` is the root over the block's bundle section, `ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3, `SCS-P34`; a block that admits no bundle, genesis included, commits to `empty_section_root()`, the root of the empty section — **not** `null_hash`.)
 **9.2 Block** — `BlockHeader · Transaction(miner) · V(n_tx) · n_tx×Hash[32]`.
 **9.3 Transaction** — `V(version=3) · TxPrefix · Ct`.
 **9.4 TxPrefix** — `V(unlock_time) · vec(Input) · vec(Output) · V(extra_len) · extra[extra_len]`.
@@ -807,8 +808,8 @@ pre-renumber tags until recapture.)*
 **9.6a `tx_extra` PQC fields** (inside `extra` of §9.4 — genesis-pinned internal structure, not opaque; FA-6 / POST_QUANTUM_CRYPTOGRAPHY / CT2 §3.1):
 - **`0x06` KEM ciphertext** — ~~**per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded — the struck sentence stays as the record of what the spec claimed): both implementations emit and read **one field per transaction** — C++ `construct_miner_tx` / `construct_tx_with_tx_key` build a single `tx_extra_pqc_kem_ciphertext` reserving `n_outputs · HYBRID_KEM_CT_BYTES` (`cryptonote_tx_utils.cpp:197`, `:498` at the 2026-09-05 era; the C++ builders were deleted with the C++ chain in DRS-X); Rust reads one blob (`rust/shekyl-wire/src/tx_extra/mod.rs:220`, `read_blob`) that `pqc_kem_per_output` splits. **Corrected — per tx:** `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs` in vout order, self-describing on the wire, and **consensus requires** `len == 1120·n_outputs` (n from `vout`): exactly one field when `n > 0`, none when `n == 0` (CEN-I19; a short or missing field leaves the recipient unable to ever see or spend the payment, which a relay-only rule would still let a miner commit).
 - **`0x07` PQC leaf entries** — **per tx**: `(CM[32] ‖ record[32]) × n_outputs` concatenated in vout order (`CM = H_ℓ(hybrid_pk)·G_k + r·J`, the leaf commitment whose x-coordinate is the leaf's 4th scalar; `record = cSHAKE256(hybrid_pk ‖ r_h)` — `PL-D3` / `PL-D3a`, 2026-09-14, superseding the former 32-byte `h_pqc = Blake2b(hybrid_pk)` entry; every `CM` must be a canonical prime-order non-identity point at admission); ~~**not self-describing** — consensus parses `32·n_outputs` (n from `vout`)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded): both serializers length-prefix the field — C++ `FIELD(blob)` on `std::string` writes `varint(size)` then the bytes and reads under a `remaining_bytes()` bound (`src/serialization/string.h` at `ac3836de90` (lines 36–40)); Rust `read_blob_bounded` (`rust/shekyl-wire/src/tx_extra/mod.rs:227-236`). **Corrected:** `varint(len) · h_pqc[32] × n_outputs`, self-describing on the wire, and **consensus requires** `len == 32·n_outputs`: exactly one field when `n > 0`, none when `n == 0` (CEN-I19; the field is the fourth scalar of every leaf these outputs become, so a short or missing field used to be zero-filled into the tree). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
-- **Genesis tag set** (2026-09-07; `0x05` REJECTED and `0x08` RESERVED 2026-09-22, PR #825) — `extra` admits exactly `0x00` padding, `0x01` tx pubkey, `0x02` nonce, `0x04` additional pubkeys, `0x06`/`0x07` above, `0x0B` archival attestation, `0x0C` the coinbase's draw commitment, `0x0D` the multisig entries (`PQC_MULTISIG.md` §7.4; at most one field, under CEN-I19's multisig clause). **One codec** (2026-09-23, `TX_EXTRA_RUST_CUTOVER.md`): `shekyl-wire`'s `tx_extra` parses and builds every `extra`; the C++ daemon calls it over the FFI and never parses one itself, which is what lets `validate_context_free_pruned` and admission refuse an unparseable `extra` with the same verdict. The inherited `0x03` merge-mining and `0xDE` minergate tags are **deleted** (rule 60); their byte values, `0x05`'s, `0x08`'s and those of the never-produced `0x09` (view-tag hints) and `0x0A` (spend-auth pubkeys) stay retired so a future tag cannot reuse a meaning older software would parse differently. An unknown tag makes the whole blob unparseable — `tx_extra` has no generic skip.
-- **9.6b Coinbase extra grammar** (consensus, `TXE-Q6′` ruled 2026-09-23; census `CEN-I20`) — a coinbase's `extra` is **exactly** `0x01 · pubkey[32]` · `0x02 · V(8) · nonce[8]` · `0x0C · commitment[32]` · `0x06 · V(1120·n) · kem` · `0x07 · V(64·n) · leaf` in that order for `n = |vout| > 0` outputs, and exactly the first three fields when `n == 0`; any other tag (padding, `0x04`, the staged `0x09`/`0x0A`, `0x0B`), any other count, length or order is refused at connect and at DB add (`shekyl_wire::tx_extra::check_coinbase_extra_shape`). Off the coinbase, `0x02` is refused outright (the nonce exists for template search, which only the coinbase does; FA-10's `enc_label` is the tagging channel). **The whitelist is the consensus rule, so adding a tag to it — the `0x0B` attestation producer, when it lands — is a consensus amendment ruled here, not an implementation detail of the producer's PR.** The nonce is fixed at 8 bytes because the 32-bit header nonce exhausts a template at `2^32 / 120 s ≈ 36 MH/s`, each extra byte multiplies that by 256, 8 never binds and matches the pool convention (`reserve_size: 8`), and a fixed width carries no length signal; genesis carries eight zero bytes (it was not nonce-searched). Consequence for CEN-M4: the largest grammar-valid coinbase extra is `19 027` bytes (`|vout| = 16`), below the 24 576 relay cap, so the coinbase extra is bounded by consensus for the first time. **Amended 2026-10-10 (`SO-D12i`):** the third field is the secret draw's commitment, in every coinbase, genesis included, with no height gate; its bytes are not judged, and genesis carries 32 zero bytes ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16.8).
+- **Genesis tag set** (2026-09-07; `0x05` REJECTED and `0x08` RESERVED 2026-09-22, PR #825) — `extra` admits exactly `0x00` padding, `0x01` tx pubkey, `0x02` nonce, `0x04` additional pubkeys, `0x06`/`0x07` above, `0x0C` the coinbase's draw commitment, `0x0D` the multisig entries (`PQC_MULTISIG.md` §7.4; at most one field, under CEN-I19's multisig clause). **One codec** (2026-09-23, `TX_EXTRA_RUST_CUTOVER.md`): `shekyl-wire`'s `tx_extra` parses and builds every `extra`; the C++ daemon calls it over the FFI and never parses one itself, which is what lets `validate_context_free_pruned` and admission refuse an unparseable `extra` with the same verdict. The inherited `0x03` merge-mining and `0xDE` minergate tags are **deleted** (rule 60); their byte values, `0x05`'s, `0x08`'s and those of the never-produced `0x09` (view-tag hints) and `0x0A` (spend-auth pubkeys) stay retired so a future tag cannot reuse a meaning older software would parse differently. An unknown tag makes the whole blob unparseable — `tx_extra` has no generic skip.
+- **9.6b Coinbase extra grammar** (consensus, `TXE-Q6′` ruled 2026-09-23; census `CEN-I20`) — a coinbase's `extra` is **exactly** `0x01 · pubkey[32]` · `0x02 · V(8) · nonce[8]` · `0x0C · commitment[32]` · `0x06 · V(1120·n) · kem` · `0x07 · V(64·n) · leaf` in that order for `n = |vout| > 0` outputs, and exactly the first three fields when `n == 0`; any other tag (padding, `0x04`, `0x0D`), any other count, length or order is refused at connect and at DB add (`shekyl_wire::tx_extra::check_coinbase_extra_shape`). Off the coinbase, `0x02` is refused outright (the nonce exists for template search, which only the coinbase does; FA-10's `enc_label` is the tagging channel). **The whitelist is the consensus rule, so adding a tag to it is a consensus amendment ruled here, not an implementation detail of a producer's PR.** The nonce is fixed at 8 bytes because the 32-bit header nonce exhausts a template at `2^32 / 120 s ≈ 36 MH/s`, each extra byte multiplies that by 256, 8 never binds and matches the pool convention (`reserve_size: 8`), and a fixed width carries no length signal; genesis carries eight zero bytes (it was not nonce-searched). Consequence for CEN-M4: the largest grammar-valid coinbase extra is `19 027` bytes (`|vout| = 16`), below the 24 576 relay cap, so the coinbase extra is bounded by consensus for the first time. **Amended 2026-10-10 (`SO-D12i`):** the third field is the secret draw's commitment, in every coinbase, genesis included, with no height gate; its bytes are not judged, and genesis carries 32 zero bytes ([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §16.8).
 **9.7 Ct** — `ct_type(1)` then:
 - `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
 - `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
@@ -817,8 +818,8 @@ pre-renumber tags until recapture.)*
   the `enc_label` indistinguishability invariant (§2.3) is binding.
 **9.8 PqcAuths** (spend only; count = `nvin`, **no length prefix**; EOF-tolerant on read — the empty/pruned form parses, but a spend then fails verify, §13) — per input: `auth_version(1) · scheme_id(1) · flags(u16 LE) · V(pk_len)·pk · V(sig_len)·sig`.
 **9.9 Prunable** (Fcmp) — `V(nbp=1) · BpPlus · V(curve_trees_tree_depth) · V(proof_len) · fcmp_proof[proof_len] · pseudoOuts[n_spend×32]`. `BpPlus` + `fcmp_proof` interiors frozen by reference (§6 Q6); `proof_len == proof_size(n_spend, tree_depth)` and Bp+ length is exact by `nout` (§10, canonical-form). `n_spend` = the `txin_to_key` subset of vin: a bond_post vin occupies a pqc_auths slot but carries **no** pseudo-out (its cleartext `bond_credit` rides the CT balance — §2.0); for a pure spend `n_spend == nvin`. Coupling pinned both sides 2026-07-05 (§1.1).
-**9.10 `archival_serve_credit` (0x02)** (gate-2 §5.1.1) — `p_canonical_id[32] · V(shard_id) · V(settlement_epoch) · segment_subroot_rk[32] · leaf_index_in_segment(u32 LE) · leaf_bytes[128] · path{ V(c1_layers) · per-layer[ V(branch_scalars ≤256) · scalar[32]… ], V(c2_layers) · same } · V(sig_len)·hybrid_signature`. Non-spending; carries **empty** pqc_auths. **Sig-preimage** (gate-2 §5.2) uses fixed-width `le64`/`le32` (NOT the wire varints), customization `"shekyl/archival-serve-credit-response-v1"`, over the c1+c2 branch sections only.
-**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · coupled(post_kind) · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`, where `coupled` is, by kind: **`5` (JoinMarket)** `V(bspk_len)·bond_spend_pk · V(rspk_len)·receipt_sign_pk[1837] · endpoint[32]`; **`1` (Reinstate) and `2` (Release)** nothing. `post_kind` `0` (the keyless JoinMarket, RETIRED 2026-10-12: the receipt key is mandatory, `FN_DSA_HYBRID.md` `FND-17`), `3` (`HoldingsUpdate`) and `4` (`EndpointUpdate`) are refused at parse and unassigned. *(Grammar rewritten 2026-10-12 against both encoders' write order — `shekyl-wire` `BondPost::write` and `shekyl-archival-retention` `ArchivalBondPostVin::write`, held byte-equal by `shekyl-wire/tests/archival_arms_roundtrip.rs`. It had shown one optional `bond_spend_pk`, no endpoint and no receipt key.)* For a JoinMarket `bonded_total == bond_credit == bond_floor` and `bond_debit == 0`; a Release debits the record's whole balance and a Reinstate moves no money (gate-4 §3.5). **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** (`post_kind == 5`) AND — because the vin rides inside the signed `TxPrefix` — bound by the **surface-A `pqc_auths` slot** over the whole-tx payload hash (SA-2b retired the separate on-vin cSHAKE256 sig-preimage; `SIGNATURE_ALIGNMENT.md` §2.2) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. Both decoders require `pk_len == bspk_len == 1996` (the canonical single hybrid key) and `rspk_len == 1837`; any other length is refused at the prefix. **`receipt_sign_pk` (2026-10-12, `FN_DSA_HYBRID.md` §8)** is the persona's receipt key, the canonical Ed25519 + FN-DSA-1024 hybrid public key, mandatory on every JoinMarket: it rides the signed prefix, so the identity slot binds it; CEN-J28 requires it to parse as a key; the connect copies it into the bond record. The C++ decoder has no kind `5`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(Both Rust encoders above are live and carry every field of this grammar. An earlier note here called `bond_wire.rs` "retired, not patched" while the GF-1 key's wire surfacing was open; that surfacing landed in it, and FN-DSA increment 3 added the receipt key to it and retired the keyless kind — records-was.)*
+**9.10 Input tag `0x02`** — unassigned. An input carrying it does not parse, so its transaction is refused as an unparseable listed transaction (CEN-G2). No input credits a pass: a pass is credited from an admitted bundle (`ARCHIVAL_SERVE_CREDIT_SPEC.md`, CEN-J29–J37).
+**9.11 `archival_bond_post` (0x03)** (gate-4 §3.4.1) — `V(pk_len)·hybrid_public_key · p_canonical_id[32] · post_kind(1) · coupled(post_kind) · holdings{ kind(1), [V(shard_count ≤4096)·shard_id(V)… if ShardSetCompact] } · V(bonded_total_atomic) · V(bond_credit) · V(bond_debit)`, where `coupled` is, by kind: **`5` (JoinMarket)** `V(bspk_len)·bond_spend_pk · V(rspk_len)·receipt_sign_pk[1837] · endpoint[32]`; **`1` (Reinstate) and `2` (Release)** nothing. `post_kind` `0`, `3` (`HoldingsUpdate`) and `4` (`EndpointUpdate`) are not kinds: `shekyl-wire` reads each as an unknown kind (`BondPostKind::Other`), and the bond-post decoder refuses it (`InvalidPostKind`), as every unknown kind is. *(Grammar rewritten 2026-10-12 against both encoders' write order — `shekyl-wire` `BondPost::write` and `shekyl-archival-retention` `ArchivalBondPostVin::write`, held byte-equal by `shekyl-wire/tests/archival_arms_roundtrip.rs`. It had shown one optional `bond_spend_pk`, no endpoint and no receipt key.)* For a JoinMarket `bonded_total == bond_credit == bond_floor` and `bond_debit == 0`; a Release debits the record's whole balance and a Reinstate moves no money (gate-4 §3.5). **`bond_spend_pk`** is the **GF-1 debit authorizer** (gate-6 §9.6, 2026-06-16): on the wire **iff JoinMarket** (`post_kind == 5`) AND — because the vin rides inside the signed `TxPrefix` — bound by the **surface-A `pqc_auths` slot** over the whole-tx payload hash (SA-2b retired the separate on-vin cSHAKE256 sig-preimage; `SIGNATURE_ALIGNMENT.md` §2.2) — keeps `P_pubkey` identity-only so the identity key never authorizes a value-out. Both decoders require `pk_len == bspk_len == 1996` (the canonical single hybrid key) and `rspk_len == 1837`; any other length is refused at the prefix. **`receipt_sign_pk` (2026-10-12, `FN_DSA_HYBRID.md` §8)** is the persona's receipt key, the canonical Ed25519 + FN-DSA-1024 hybrid public key, mandatory on every JoinMarket: it rides the signed prefix, so the identity slot binds it; CEN-J28 requires it to parse as a key; the connect copies it into the bond record. The C++ decoder has no kind `5`. **Auth placement (F5):** the bond_post **vin body carries no signature** — authorization is the **tx-level `pqc_auths` slot aligned with this vin** (§13; gate-4 §3.4.1:278), identity key on a credit, `bond_spend_pk` on a debit. *(Both Rust encoders above are live and carry every field of this grammar.)*
 
 ## 10. Resource bounds (frozen limits — reject on exceed)
 
@@ -868,7 +869,7 @@ over-cap block, must be rejected by both impls).
   Three arities, by what the body carries:
   - coinbase (`Null`): **3 words** `H(prefix) · H(base) · null_hash`. A coinbase
     carries no archival good, so no length;
-  - FCMP++ with no `pqc_auths` component (the serve-credit form, RF-D9):
+  - FCMP++ with no `pqc_auths` component:
     **4 words** `H(prefix) · H(base) · H(prunable) · L`;
   - FCMP++ spend: **5 words** `H(prefix) · H(base) · H(pqc_auths) · H(prunable) · L`,
     used iff the first input exists and is not `gen` and `pqc_auths` is non-empty.
@@ -944,7 +945,7 @@ state it once, the rest follow. Instances:
   guarantees: rejects **unsorted** AND **in-tx duplicate** key images. (Earlier drafts
   of this line said "ascending" — a prose error; the cited `memcmp >= 0 → reject` rule
   is and always was descending.) **Scoped to key-image-bearing inputs** (`fcmp`
-  spends). The **no-key-image arms** (`gen`, `serve_credit`, `bond_post`, and the
+  spends). The **no-key-image arms** (`gen`, `bond_post`, and the
   deferred `reward_emission` / membership-only backing) carry no key image and are
   **exempt** from this ordering; their anti-replay is **arm-specific** — coinbase by
   height; bond_post by the consensus bond record; **emission + membership-only by
@@ -984,8 +985,6 @@ Gate = **identical accept/reject** (§7), not round-trip.
   - **bond_post** — occupies a **tx-level `pqc_auths` slot aligned with its vin
     index** (gate-4 §3.4.1:278), **not** a sig on the vin body: identity key
     authorizes credit, `bond_spend_pk` authorizes debit (gate-6 §9.6).
-  - **serve_credit** — carries **empty** `pqc_auths`; its `hybrid_signature` is
-    **on the vin** (§9.10) — the exception to a per-vin slot.
   - **coinbase (`gen`)** — **no** `pqc_auths`.
   - **reward_emission** (deferred) — **ML-DSA-65** over a domain-separated vin
     context (single-vs-dual open, `REWARD_EMISSION_VIN_PLAN.md §2:231`).
@@ -994,8 +993,8 @@ Gate = **identical accept/reject** (§7), not round-trip.
 
   So the rule is **per-arm**, not a flat `count == vin.size()`. For the common
   all-`fcmp` spend, `count == vin.size()` holds (blockchain.cpp:3752); a bond-post
-  tx's count includes its bond_post slot; serve_credit/coinbase are the empty/none
-  exceptions. **Parse vs verify (precise):** the EOF-tolerant parse (§9.8) *accepts*
+  tx's count includes its bond_post slot; the coinbase is the none
+  exception. **Parse vs verify (precise):** the EOF-tolerant parse (§9.8) *accepts*
   the empty (pruned) form, but a spend with empty or partial `pqc_auths` **fails
   verification** (`tx_pqc_verify.cpp:159`: `size != vin.size() || empty → reject`) —
   *pruned form parses, full form required to verify*, not "empty invalid
@@ -1016,8 +1015,7 @@ Gate = **identical accept/reject** (§7), not round-trip.
   JoinMarket `bonded_total == bond_credit == bond_floor(holdings)` and
   `bond_debit==0` (`bond_post.rs`); its **identity signature rides a tx-level
   `pqc_auths` slot aligned with the vin** (gate-4 §3.4.1:278; F5), not the vin body.
-  `serve_credit` is **non-spending** (empty pqc_auths; `hybrid_signature` **on the
-  vin**; gate-2 retention proof). **Reopen (rule-21):** testnet may force a wire
+  **Reopen (rule-21):** testnet may force a wire
   change pre-genesis (free).
 - **Versions:** block `major=1, minor=0`; tx `version=3` (Q12). The format is
   version-frozen — a later format is a hard fork (V4 = lattice-only).
