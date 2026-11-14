@@ -181,9 +181,8 @@ virtual twin with its own callers. Both dissolve the same way.
   (`tx_pool.cpp:2362–2425`, SPL-9). The store offers enumeration (P7) and
   nothing index-shaped; a fee-ordered secondary table would be a second
   source of truth for a derived order.
-- **`LockedTXN`** (the pool's transactional wrapper; audit §4, FOLLOWUPS
-  "`tx_pool` / `blockchain_db` LMDB transactional wrapper — typed
-  commit-or-abort") — the C++ wrapper stays with the C++ pool, and **none
+- **`LockedTXN`** (the pool's transactional wrapper; audit §4) — the C++
+  wrapper stayed with the C++ pool, and **none
   of its semantics travel** (SPL-16): not the batch-nesting (lost with the
   second file, SPL-7) and not the abort-on-drop (the mechanism of the
   relay-timestamp bug). Its Rust successor is `PoolStore::write(|batch| …)`,

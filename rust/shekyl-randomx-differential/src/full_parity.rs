@@ -93,17 +93,9 @@ fn pattern(n: usize) -> Vec<u8> {
 ///
 /// The table's genesis does not decode, assemble, or hash to its pin.
 pub fn genesis_corpus() -> Result<Corpus, String> {
-    let genesis = shekyl_network::Network::Mainnet.genesis();
-    let bytes = hex::decode(genesis.tx_hex().trim())
-        .map_err(|e| format!("mainnet's genesis transaction is not hex: {e}"))?;
-    let tx = shekyl_wire::Transaction::from_bytes(&bytes)
-        .map_err(|e| format!("mainnet's genesis transaction did not decode: {e}"))?;
-    let block = shekyl_genesis_tool::builder::genesis_block(tx)
-        .map_err(|e| format!("the genesis block did not assemble: {e}"))?;
+    let block = shekyl_genesis_tool::builder::pinned_genesis(shekyl_network::Network::Mainnet)
+        .map_err(|error| error.to_string())?;
     let seed = block.hash().to_bytes();
-    if seed != genesis.hash() {
-        return Err("the assembled genesis block does not hash to the table's pin".into());
-    }
     Ok(Corpus {
         seed,
         cases: vec![
