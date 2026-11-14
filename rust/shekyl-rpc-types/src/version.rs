@@ -58,7 +58,15 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
 /// and `served_epoch` names the last pass only inside the release
 /// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
 /// version read reports the daemon newer.
-pub const CORE_RPC_VERSION_MINOR: u32 = 3;
+///
+/// 4.4: a block carries `draws`, the draws the count rule issued at it,
+/// `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3; Rick, 2026-11-14):
+/// public consensus state every node writes at connect, which a filed
+/// bundle's reference carries too (`SCS-P39`). Which pairs were drawn stays
+/// secret until the reveal. `null` where the node holds no row: an
+/// alternative block, or a height below the draw rows' floor. A 4.3 reader
+/// refuses a 4.4 block after the version read reports the daemon newer.
+pub const CORE_RPC_VERSION_MINOR: u32 = 4;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -72,15 +80,15 @@ pub fn core_rpc_version_string(packed: u32) -> String {
 mod tests {
     use super::*;
 
-    /// `MAKE_CORE_RPC_VERSION(4, 3)` is `(4 << 16) | 3` = 262147. Each bump
+    /// `MAKE_CORE_RPC_VERSION(4, 4)` is `(4 << 16) | 4` = 262148. Each bump
     /// moves this pin; the packing does not change (RK-D25).
     #[test]
     fn core_rpc_version_packs_major_over_minor() {
-        assert_eq!(CORE_RPC_VERSION, 262_147);
-        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 3);
+        assert_eq!(CORE_RPC_VERSION, 262_148);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 4);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 3);
-        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.3");
+        assert_eq!(CORE_RPC_VERSION_MINOR, 4);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.4");
         assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
     }
 }

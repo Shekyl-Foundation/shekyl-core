@@ -222,6 +222,9 @@ pub struct BlockRead {
     pub bundle_references: Vec<Vec<u8>>,
     /// The bodies of those references this node holds.
     pub bundle_bodies: Vec<Vec<u8>>,
+    /// `count(h)`, while this node holds the row (as
+    /// [`crate::chain_facts::BlockFacts::draws`]).
+    pub draws: Option<u32>,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the

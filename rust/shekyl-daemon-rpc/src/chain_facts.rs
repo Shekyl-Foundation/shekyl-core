@@ -304,6 +304,13 @@ pub struct BlockFacts {
     pub bundle_references: Vec<Vec<u8>>,
     /// The bodies of those references this node holds.
     pub bundle_bodies: Vec<Vec<u8>>,
+    /// The draws the count rule issued at this block, `count(h)`
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3): consensus state every node
+    /// writes at connect. `None` where this node holds no row for the
+    /// block: an alternative block, a height below the draw rows' floor
+    /// (SI-34), or one the rule has not run for. A bundle filed for the
+    /// block carries the same count in its reference (`SCS-P39`).
+    pub draws: Option<u32>,
 }
 
 /// The facts the p2p handlers consume (`sync_status`, `p2p_stats`,
