@@ -7086,6 +7086,29 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge: the shard-fill replacement moves ahead of Chain L; the max-bundle block at two limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R23`, `CF-R24`).
+
+- The order is `CF-1b`, `CF-1c`, `CF-4a`, `CF-3`, `CF-4b`, then the rest
+  of `CF-5`. `CF-4` splits: `CF-4a` is the hosting with the forge-built
+  replacement for `shard-fill.bin` as its first artifact, covering every
+  listed reader function by function before the file and its gate are
+  deleted; `CF-4b` is Chain L v1 and its pilot consumers. The freeze
+  blocks every consensus change until the replacement exists, and a
+  consensus change before Chain L is likely (the block-size change after
+  alpha.12 is certain), while `CF-3` and Chain L block no one by waiting.
+  It cannot precede `CF-1b` and `CF-1c`: without the RNG gate and the
+  determinism check it would be a second non-reproducible file. Its
+  re-forge when `CF-3` changes the corpus layout is expected and cheap.
+- The max-bundle block is measured at two limits, and `PB-D1` is read
+  the same way. Gated: the design-load limit, derived from the
+  validator's median functions when the plan is built. Required, not
+  gated: the surge ceiling `2 × S × LTEM`, with its floor-device
+  verification time reported; over the 10 s floor budget it is a finding
+  for the economics simulation's zone and `S` derivation, and the budget
+  is not changed to make it pass.
+
 ## 2026-11-13 — Chain forge: the max-bundle block (PB-D1 shape 8) is the forge's to build
 
 **Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R22`; `DAEMON_REDB_STORE.md`

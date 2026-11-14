@@ -254,7 +254,7 @@ jobs:
           run_one "The bundle producer's secrets reach no log" \
             python3 scripts/ci/check_bundle_producer_secrets.py
           # CHAIN_FORGE.md CF-R17: the shard-fill chain is frozen until
-          # CF-5 (its bytes do not regenerate; a re-capture is 11.5 MB of
+          # CF-4a (its bytes do not regenerate; a re-capture is 11.5 MB of
           # history for good), and nothing new consumes it. Selftest first.
           run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
             python3 scripts/ci/check_shard_fill_frozen.py --selftest

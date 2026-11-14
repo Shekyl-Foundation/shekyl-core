@@ -9,7 +9,7 @@
 
 `CHAIN_FORGE.md` `CF-R17` (Rick, 2026-11-13): the checked-in shard-fill
 chain (`rust/shekyl-harness-spender/vectors/shard-fill.bin`) stays exactly
-as it is until `CF-5` replaces it with a forged chain and deletes it. Its
+as it is until `CF-4a` (`CF-R23`) replaces it with a forged chain and deletes it. Its
 bytes do not regenerate (proving draws fresh randomness), so every
 re-capture would add another 11.5 MB to the repository's history for
 good. And nothing new may come to depend on it: a new test that wants a
@@ -28,7 +28,7 @@ chain at that scale waits for the forge.
   3. **The list only shrinks.** Every pinned pair still has exactly its
      pinned count. One that dropped is lowered, or taken off when it
      reaches zero, in the change that moves the consumer, so `READERS` is
-     also `CF-5`'s migration list (`CHAIN_FORGE.md` §12.1, `CF-5`).
+     also `CF-4a`'s migration list (`CHAIN_FORGE.md` §12.1, `CF-4a`).
 
 What this does not see: an access moved from one line to another inside
 the same function, at the same count, or a helper renamed so that no
@@ -36,7 +36,7 @@ the same function, at the same count, or a helper renamed so that no
 
 # A consensus change that would invalidate the chain
 
-`CF-R20`: the normal path is that `CF-5`'s replacement lands first. If such
+`CF-R20`: the normal path is that `CF-4a`'s replacement lands first. If such
 a change has to land before it, Rick approves one re-capture explicitly,
 and the pin update changes `PINNED_SHA256` and `PIN_REASON` together,
 citing that approval. The tests are never turned off; this gate blocking
@@ -186,14 +186,14 @@ def check(root: Path, pinned: str, readers: dict[str, dict[str, int]]) -> list[s
 
     chain = root / CHAIN
     if not chain.is_file():
-        return errors + [f"{CHAIN} is missing: the freeze has no subject (CF-R17 ends only in CF-5)"]
+        return errors + [f"{CHAIN} is missing: the freeze has no subject (CF-R17 ends only in CF-4a)"]
     digest = hashlib.sha256(chain.read_bytes()).hexdigest()
     if digest != pinned:
         errors.append(
             f"{CHAIN} changed (sha256 {digest}, pinned {pinned}). The chain is frozen until "
-            "CF-5 (CHAIN_FORGE.md CF-R17): its bytes do not regenerate, so a re-capture adds "
+            "CF-4a (CHAIN_FORGE.md CF-R17, CF-R23): its bytes do not regenerate, so a re-capture adds "
             "11.5 MB to history for good. Restore the file. If a consensus change must land "
-            "before CF-5's replacement, Rick approves one re-capture explicitly, and the pin "
+            "before CF-4a's replacement, Rick approves one re-capture explicitly, and the pin "
             "update changes PINNED_SHA256 and PIN_REASON together, citing it (CF-R20). The "
             "tests are never turned off."
         )
@@ -236,7 +236,7 @@ def check(root: Path, pinned: str, readers: dict[str, dict[str, int]]) -> list[s
             if count < pin:
                 errors.append(
                     f"{rel}: `{function}` is pinned at {pin} access lines and has {count}: "
-                    "lower the pin, or take it off at zero (CF-5's list only shrinks)"
+                    "lower the pin, or take it off at zero (CF-4a's list only shrinks)"
                 )
     return errors
 
