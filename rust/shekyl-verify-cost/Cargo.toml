@@ -35,7 +35,21 @@ helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 multiexp = "0.4"
 rand_core = { version = "0.6", features = ["std"] }
 
+[features]
+# The fixtures (`relay`, `door`, `connect`): every one builds its proof
+# through `shekyl-fcmp`'s seeded prover, so a run gives byte-identical
+# fixtures and stable instruction counts. TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`, CHAIN_FORGE.md CF-R9): the seeded
+# prover exists only under `shekyl-fcmp/seeded-rng`, which this forwards, and
+# only this crate's own benches and tests turn it on (the self edge below).
+# Without it the library is empty; nothing in a shipped graph depends on
+# this crate.
+seeded-rng = ["shekyl-fcmp/seeded-rng"]
+
 [dev-dependencies]
+# This crate's benches and pins build the fixtures: `seeded-rng` on its own
+# dev edge, so it is on only for them.
+shekyl-verify-cost = { path = ".", features = ["seeded-rng"] }
 # Wall clock is criterion. The drift gate is gungraun. The connect bench's
 # one RandomX hash is the shipped verifier. All three are already in the
 # lockfile.

@@ -305,6 +305,23 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "instruction-count benches and the chain forge's byte-identical chains "
     "(CHAIN_FORGE.md §5.3, seam T3); no build that ships has these symbols, so "
     "no production signer can be handed a seed (CF-R9)",
+    (
+        "shekyl-fcmp",
+        "seeded-rng",
+    ): "exposes the provers' seeded forms, proof::prove_with_rng and "
+    "proof::prove_membership_only_with_rng, which take their randomness from a "
+    "caller's generator (CHAIN_FORGE.md §5.3, seam T1). The production entry "
+    "points, prove and prove_membership_only, draw from the OS; no build that "
+    "ships has a prover that takes its caller's randomness (CF-R9, CF-F12). "
+    "Reached through shekyl-verify-cost's TEST_ONLY seeded-rng forward",
+    (
+        "shekyl-verify-cost",
+        "seeded-rng",
+    ): "compiles the crate's fixtures (relay, door, connect), each proving through "
+    "shekyl-fcmp's seeded prover so a run is byte-identical and the drift gate's "
+    "instruction counts hold still; forwards shekyl-fcmp/seeded-rng. Enabled by "
+    "the crate's own dev edge for its benches and pins; without it the library "
+    "is empty, and nothing that ships depends on this crate",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -705,6 +722,8 @@ def check_test_only(
     itself a row of `registry`. That row's own limbs keep the forwarding
     feature on dev edges only, so the forward is on only in the builds the
     row allows. A forward from any other feature over a normal edge is red.
+    Such a forward also answers the subject check below: the chain it
+    starts ends in a dev edge, because the forwarding row needs one.
     """
     packages = {p["name"]: p for p in meta["packages"]}
     if all_enablements is None:
@@ -751,6 +770,7 @@ def check_test_only(
                 dev_enablers.append(consumer)
                 continue
             if via.startswith("feature:") and (consumer, via[len("feature:"):]) in registry:
+                dev_enablers.append(consumer)
                 continue
             how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
             failures.append(
@@ -763,7 +783,8 @@ def check_test_only(
 
         if not dev_enablers:
             failures.append(
-                f"{owner}/{feature}: no dev-dependency edge enables it. Either the "
+                f"{owner}/{feature}: no dev-dependency edge enables it, directly or "
+                f"through a TEST_ONLY feature's forward. Either the "
                 f"consumer stopped needing it (delete the feature and this row) or "
                 f"the edge was renamed — until one is true, the non-dev check above "
                 f"passes without a subject."
@@ -1201,6 +1222,17 @@ def selftest() -> int:
         (
             "dual-edge forward from a TEST_ONLY feature: green",
             _synthetic_dual_edge_forward(),
+            {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
+            [],
+        ),
+        (
+            "only a TEST_ONLY feature's normal-edge forward enables it: green",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+                {"name": "fwd", "features": {"x": ["owner/cfeat"]}, "dependencies": [
+                    {"name": "owner", "features": [], "kind": None}]},
+                {"name": "tester", "features": {}, "dependencies": [
+                    {"name": "fwd", "features": ["x"], "kind": "dev"}]}]},
             {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
             [],
         ),

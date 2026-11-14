@@ -5598,6 +5598,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-verify-cost",
  "shekyl-wire",
 ]
 
