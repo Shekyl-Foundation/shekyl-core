@@ -190,6 +190,10 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
+    /// How long [`Self::wait_shown_pool_in_template`] waits for the posted
+    /// job to list the shown pool: [`SHOWN_POOL_LIMIT`], or
+    /// [`TOR_SHOWN_POOL_LIMIT`] for a daemon on a Tor.
+    shown_pool_limit: Duration,
     /// The draws [`Self::generate_blocks`] gives a read window to: the walk
     /// that reads over Tor sets it over the epoch whose draws its persona
     /// must serve ([`Self::watch_draws`]).
@@ -291,12 +295,15 @@ enum Peering {
         p2p_port: u16,
         peers: [std::net::SocketAddrV4; 2],
     },
-    /// Clearnet off, and one closed peer named by its onion: the daemon's
-    /// managed Tor dials it, so the node has an outbound session that hides
-    /// its address and its relay originates its own transactions
-    /// (`DAEMON_RELAY_PRIVACY.md` §98.5). The emission walk's miner
-    /// ([`RegtestDaemon::start_tor_pair`]).
-    TorPeer { onion: OnionPeer },
+    /// Clearnet off, and the closed peers named by their onions: the
+    /// daemon's managed Tor dials each, so the node has outbound sessions
+    /// that hide its address and its relay originates its own transactions
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.5). The emission walk's miner and its
+    /// first relay ([`RegtestDaemon::start_tor_trio`]).
+    TorPeers {
+        first: OnionPeer,
+        second: Option<OnionPeer>,
+    },
 }
 
 /// A v3 onion endpoint, `<56 base32 characters>.onion:<port>`, held by
@@ -526,6 +533,21 @@ impl RegtestSpawn {
     }
 }
 
+/// How long an offline daemon's posted job may take to list its shown pool:
+/// the relay fluffs at once, and the follower rebuilds on the wake.
+const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
+
+/// The same wait on the three-daemon Tor rig ([`RegtestDaemon::start_tor_trio`]),
+/// where a transaction the miner originates is shown only when a fluff of it
+/// comes back. The longest path is A → C (stem), C → B (fluff), B → A
+/// (fluff), or A → B → C (stems) and C → A (fluff): at most two stem hops,
+/// each waiting at most one carrier slot (`NOISE_MIN_DELAY_MS` +
+/// `NOISE_DELAY_JITTER_MS`, 6.67 s), and at most two fluff flushes toward an
+/// inbound peer, each a Poisson draw over quarter-seconds with λ = 20
+/// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile, plus
+/// three onion circuits at 5 s each: 13.3 + 17.5 + 15 ≈ 46 s, so 60 s.
+const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
+
 /// How long a managed Tor may take to bootstrap and publish its inbound
 /// onion.
 const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
@@ -743,25 +765,38 @@ impl RegtestDaemon {
         .await
     }
 
-    /// The emission walk's two daemons, both on a managed Tor running the
-    /// pinned binary `tor_file` (Rick, 2026-11-14). The first is the miner:
-    /// it pays `seed`'s address, seats its bundle producer (a mining
-    /// address and a Tor, `shekyl-node` `producer::seat`), and is the
-    /// daemon the wallet uses. The second is its relay peer: a daemon with
-    /// a Tor holds a transaction it originates until an outbound session
-    /// hides its address (`DAEMON_RELAY_PRIVACY.md` §98.5), so the miner's
-    /// one closed peer is the relay's onion, which its Tor dials.
+    /// The emission walk's three daemons, all on a managed Tor running the
+    /// pinned binary `tor_file` (Rick, 2026-11-14). A, returned first, is
+    /// the miner: it pays `seed`'s address, seats its bundle producer (a
+    /// mining address and a Tor, `shekyl-node` `producer::seat`), and is the
+    /// daemon the wallet uses. B and C are relays. **A dials B and C; B
+    /// dials C; C dials nobody.**
     ///
-    /// The relay names one unanswered loopback port as its whole network,
-    /// so it is synced from open and dials nobody; it follows the miner
-    /// over the session the miner opens. It mines nothing.
-    pub(super) async fn start_tor_pair(
+    /// **Why three.** A daemon with a Tor holds a transaction it originates
+    /// until an outbound session hides its address
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.5), so A needs an outbound peer. With
+    /// two daemons the stem dead-ends: the relay's only session is A's, the
+    /// one the stem arrived on, a stem goes out on an outbound session
+    /// other than its source and a fluff to every peer but its source, so
+    /// the relay sends it nowhere, and A's transaction waits out A's own
+    /// embargo (a draw, mean about 190 s, no lever) before it is shown. That
+    /// is the origin rig's hold (`origin::StemSinkPair`), and a walk that
+    /// mines hundreds of transactions cannot wait it out each time. With
+    /// three, every stem A originates ends at a node that fluffs back to A:
+    /// stemmed to B, it goes on to C, which has no outbound session and
+    /// fluffs to every peer but B, A among them; stemmed to C, C fluffs to
+    /// B, and B relays the fluff to A.
+    ///
+    /// C names one unanswered loopback port as its whole network, so it is
+    /// synced from open and dials nobody; B's one closed peer is C's onion.
+    /// Neither mines; both follow A over the sessions A opens.
+    pub(super) async fn start_tor_trio(
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
         tor_file: PathBuf,
-    ) -> (RegtestDaemon, RegtestDaemon) {
+    ) -> (RegtestDaemon, RegtestDaemon, RegtestDaemon) {
         let serial = serial_lock().lock_owned().await;
-        let relay = Self::spawn(
+        let c = Self::spawn(
             RegtestSpawn::new(None)
                 .with_schedule(schedule)
                 .with_peering(Peering::Listening {
@@ -771,18 +806,33 @@ impl RegtestDaemon {
                 .with_managed_tor(tor_file.clone()),
         )
         .await;
-        let onion = relay.published_onion(TOR_PUBLISH_LIMIT).await;
+        let c_onion = c.published_onion(TOR_PUBLISH_LIMIT).await;
+        let b = Self::spawn(
+            RegtestSpawn::new(None)
+                .with_schedule(schedule)
+                .with_peering(Peering::TorPeers {
+                    first: c_onion,
+                    second: None,
+                })
+                .with_managed_tor(tor_file.clone())
+                .with_ports_taken([c.rpc_port]),
+        )
+        .await;
+        let b_onion = b.published_onion(TOR_PUBLISH_LIMIT).await;
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
-        let miner = Self::spawn(
+        let a = Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
                 .with_mine_address(mine_address)
-                .with_peering(Peering::TorPeer { onion })
+                .with_peering(Peering::TorPeers {
+                    first: b_onion,
+                    second: Some(c_onion),
+                })
                 .with_managed_tor(tor_file)
-                .with_ports_taken([relay.rpc_port]),
+                .with_ports_taken([b.rpc_port, c.rpc_port]),
         )
         .await;
-        (miner, relay)
+        (a, b, c)
     }
 
     /// The onion this daemon's managed Tor published its inbound at, read
@@ -892,7 +942,7 @@ impl RegtestDaemon {
         let tor_on = tor_file.is_some();
         let p2p_ports: Vec<u16> = match &peering {
             // Neither binds a loopback port: no listener, or Tor's alone.
-            Peering::Offline | Peering::TorPeer { .. } => Vec::new(),
+            Peering::Offline | Peering::TorPeers { .. } => Vec::new(),
             Peering::Linked {
                 p2p_port,
                 peer_p2p_port,
@@ -1027,8 +1077,11 @@ impl RegtestDaemon {
                     cmd.args(["--p2p-closed-peer", &peer.to_string()]);
                 }
             }
-            Peering::TorPeer { onion } => {
-                cmd.args(["--clearnet", "off", "--p2p-closed-peer", &onion.to_string()]);
+            Peering::TorPeers { first, second } => {
+                cmd.args(["--clearnet", "off"]);
+                for onion in std::iter::once(first).chain(second) {
+                    cmd.args(["--p2p-closed-peer", &onion.to_string()]);
+                }
             }
         }
         let restricted_port = restricted_listener.then(|| {
@@ -1088,13 +1141,18 @@ impl RegtestDaemon {
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
             // Synced from open: offline, or the Tor spawn's closed network
-            // of one unanswered port or of one onion (`start_tor_pair`).
+            // of one unanswered port or of onions (`start_tor_trio`).
             posts_at_open: offline || tor_on,
             keep_data,
             _serial: serial,
             recipe,
             unanswered,
             watch: std::sync::Mutex::new(None),
+            shown_pool_limit: if tor_on {
+                TOR_SHOWN_POOL_LIMIT
+            } else {
+                SHOWN_POOL_LIMIT
+            },
         };
         daemon.await_ready().await;
         daemon
@@ -1599,8 +1657,8 @@ impl RegtestDaemon {
     /// block's transaction ids); the shown pool and each entry's weight are
     /// `txpool_list`'s (IG-Q46).
     async fn wait_shown_pool_in_template(&self) {
-        const LIMIT: Duration = Duration::from_secs(30);
-        let deadline = Instant::now() + LIMIT;
+        let limit = self.shown_pool_limit;
+        let deadline = Instant::now() + limit;
         loop {
             let shown = self
                 .rpc
@@ -1612,7 +1670,7 @@ impl RegtestDaemon {
             }
             if Instant::now() >= deadline {
                 panic!(
-                    "the posted job did not list the shown pool within {LIMIT:?} \
+                    "the posted job did not list the shown pool within {limit:?} \
                      (shown={}); the relay's fluff event must mark the entry shown and \
                      wake the tip follower (DRS_X_STORE_FLIP.md Q9)",
                     shown.len()
@@ -4751,13 +4809,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
     let seed = [0x55u8; shekyl_crypto_pq::account::SEED_BYTES];
-    // Two daemons on the pinned Tor (`RegtestDaemon::start_tor_pair`): the
-    // miner, which the wallet uses and whose producer reads each drawn
-    // pair's shard over its Tor, and its relay peer, whose onion the
-    // miner dials so its own transactions have an address-hiding session
-    // to leave on.
+    // Three daemons on the pinned Tor (`RegtestDaemon::start_tor_trio`):
+    // the miner, which the wallet uses and whose producer reads each drawn
+    // pair's shard over its Tor, and two relays, so a transaction the miner
+    // originates leaves on an address-hiding session and comes back as a
+    // fluff in seconds.
     let tor = RegtestDaemon::live_tor_binary();
-    let (daemon, _relay) = RegtestDaemon::start_tor_pair(&seed, Some(SCHEDULE), tor.clone()).await;
+    let (daemon, _relay_b, _relay_c) =
+        RegtestDaemon::start_tor_trio(&seed, Some(SCHEDULE), tor.clone()).await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
     // irreversible, so leaving the variable set keeps the process's two
