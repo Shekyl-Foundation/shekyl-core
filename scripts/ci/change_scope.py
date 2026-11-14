@@ -989,6 +989,22 @@ BENCH_SELFTEST = [
     ("rust/shekyl-curve-io/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
     ("rust/shekyl-chain-ingest/src/target.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
     ("rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # The network and sync rows. A path set names packages. The runtime
+    # and the RPC server are dev-dependencies of the bench crate, so a
+    # change there reaches only the rows that name that package. Naming
+    # `shekyl-chain-ingest` selects every row that names it, which is why
+    # a template change also runs the block path, the body exchange and
+    # the wallet read.
+    ("rust/shekyl-chain-sync-runtime/src/serve.rs", {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai"}),
+    ("rust/shekyl-daemon-rpc/src/reads.rs", {"shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-levin/src/reader.rs", {"shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/shekyl-block-template/src/lib.rs", {"shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    # Noise reaches the transport, and through it the runtime and the RPC
+    # server. It does not reach `shekyl-chain-ingest`, so the block path
+    # and the template stay out. The body exchange and the wallet read run.
+    ("rust/shekyl-noise/src/direction.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-p2p-transport/src/channel.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-engine-core/src/lib.rs", set(), {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-p2p-transport::c5_iai"}),
     ("rust/Cargo.lock", "all", None),
     ("scripts/bench/compare.py", "all", None),
     (BENCH_WORKFLOW, "all", None),
