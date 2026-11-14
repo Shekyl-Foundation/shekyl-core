@@ -142,5 +142,9 @@ fn every_header_under_an_earned_seed_is_proven_in_one_job() {
             vec![under_branch],
             "the headers under the branch seed were not proven in one job"
         );
+        // The run ends with its session, and so does what it offered. Red
+        // edit: have `Sync::frontier` keep the last answer it gave.
+        drive(&mut sync, Event::SessionClosed { session: 1 });
+        assert_eq!(sync.frontier(), None, "an ended run offers nothing");
     });
 }

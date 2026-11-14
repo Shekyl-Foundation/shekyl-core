@@ -205,6 +205,61 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     held.stop().await;
 }
 
+/// The sync owner publishes its header frontier for the ingest's ranked
+/// list while a run stands, and takes it back when the run ends
+/// (`RANDOMX_CACHE_ACTOR.md` §5.1, HA-F1). A peer that serves every header
+/// and withholds every body leaves a proven run standing: the frontier
+/// names the seed the run's headers hash under, block 0's id on this
+/// corpus, and the hasher keeps that one cache. Closing the session ends
+/// the run, and the frontier is withdrawn.
+///
+/// Red edits: in the owner, drop the `publish_frontier` call after a
+/// batch of commands: the watch never names a seed. Have
+/// `publish_frontier` send only a frontier that is `Some`: the seed is
+/// still published after the session closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owner_publishes_a_standing_runs_frontier_and_withdraws_it_when_the_run_ends() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("frontier-src", &corpus, &steps).await;
+    let mut node = Node::start(
+        "frontier",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (_, _, genesis) = node.chain.tip().expect("genesis is connected");
+    let frontier = node.chain.frontier.subscribe();
+    assert_eq!(*frontier.borrow(), None, "no run, no frontier");
+    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
+    let id = node.connect(Box::new(peer), Some(claim_of(&held))).await;
+    assert!(
+        node.wait(LIMIT, |_| seen.bodies() >= 1).await,
+        "no body was asked for"
+    );
+    // A body is asked for once the run's headers are proven, and the
+    // frontier is published in the batch that proved them.
+    assert!(
+        node.wait(LIMIT, |_| frontier.borrow().is_some()).await,
+        "a standing run published no frontier"
+    );
+    assert_eq!(
+        frontier.borrow().map(|frontier| frontier.seed),
+        Some(genesis),
+        "every height on this corpus hashes under block 0's id"
+    );
+    node.close(id);
+    assert!(
+        node.wait(LIMIT, |_| frontier.borrow().is_none()).await,
+        "the frontier outlived its run"
+    );
+    node.stop().await;
+    held.stop().await;
+}
+
 /// A peer slower than the body deadline is excluded as a body source and
 /// not closed; its late answer closes nothing; an honest peer that never
 /// served a header, and names our tip, finishes the sync (CS-F8).

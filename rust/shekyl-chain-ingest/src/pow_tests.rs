@@ -150,6 +150,9 @@ fn a_ranked_seed_is_built_once() {
 /// A stop set before a job is asked for grants nothing, and a stop that
 /// reaches a lent hash's permit wait is the `Stopped` fault, which the
 /// boundary reads as a stop.
+///
+/// Red edit: in `ProductionPow::run`, hand the hasher a stop that is never
+/// set: the job is granted and a cache is built.
 #[test]
 fn a_stop_grants_no_job_and_is_not_a_fault() {
     let own = own_hasher();
@@ -320,6 +323,9 @@ async fn a_form_on_a_job_for_another_seed_ends_the_service_and_refuses_nothing()
 /// Kept so an unused import is a compile error here, not a silent drift:
 /// the lend job's substrate is `Sync`, which the switch's scoped threads
 /// and chain sync's lanes rely on.
+///
+/// Red edit: drop the `Sync` bound from `LendJob`: this test does not
+/// build.
 #[test]
 fn a_lend_job_hashes_from_scoped_threads() {
     let own = own_hasher();
