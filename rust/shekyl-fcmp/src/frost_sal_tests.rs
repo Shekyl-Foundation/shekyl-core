@@ -43,24 +43,60 @@ fn group(n: u8, m: u8) -> SplitGroup {
     SplitGroup { split, keys }
 }
 
-/// An output to `g` with random `x` and `y_kem`:
-/// `O = x·G + Y_group + y_kem·T`.
+/// An output to a group, as every member knows it from its own scan, with
+/// the input's pseudo-out blind and rerandomization seed: everything
+/// [`SalSigningParams::new`] reads.
+struct SpendFixture {
+    output_key: [u8; 32],
+    commitment: [u8; 32],
+    x: [u8; 32],
+    y_kem: [u8; 32],
+    z: [u8; 32],
+    a: [u8; 32],
+    seed: [u8; RERANDOMIZATION_SEED_LEN],
+}
+
+impl SpendFixture {
+    /// An output to `g` with random `x` and `y_kem`:
+    /// `O = x·G + Y_group + y_kem·T`.
+    fn new(g: &SplitGroup) -> Self {
+        let x = Scalar::random(&mut OsRng);
+        let y_kem = Scalar::random(&mut OsRng);
+        let y_group = decode_point(&g.split.y_group).unwrap();
+        let O = EdwardsPoint::generator() * x + y_group + EdwardsPoint(*T) * y_kem;
+        let mut seed = [0u8; RERANDOMIZATION_SEED_LEN];
+        OsRng.fill_bytes(&mut seed);
+        Self {
+            output_key: O.to_bytes(),
+            commitment: EdwardsPoint::random(&mut OsRng).to_bytes(),
+            x: x.to_repr(),
+            y_kem: y_kem.to_repr(),
+            z: Scalar::random(&mut OsRng).to_repr(),
+            a: Scalar::random(&mut OsRng).to_repr(),
+            seed,
+        }
+    }
+
+    /// The parameters one member builds from this fixture, under `seed`.
+    fn params_with_seed(&self, seed: &[u8; RERANDOMIZATION_SEED_LEN]) -> SalSigningParams {
+        let spent = SpentOutput {
+            output_key: &self.output_key,
+            commitment: &self.commitment,
+            spend_scalar: &self.x,
+            y_kem: &self.y_kem,
+            commitment_mask: &self.z,
+        };
+        SalSigningParams::new(seed, &spent, &self.a, SIGNABLE).unwrap()
+    }
+
+    fn params(&self) -> SalSigningParams {
+        self.params_with_seed(&self.seed)
+    }
+}
+
+/// One member's parameters for a new output to `g`.
 fn params_for(g: &SplitGroup) -> SalSigningParams {
-    let x = Scalar::random(&mut OsRng);
-    let y_kem = Scalar::random(&mut OsRng);
-    let y_group = decode_point(&g.split.y_group).unwrap();
-    let O = EdwardsPoint::generator() * x + y_group + EdwardsPoint(*T) * y_kem;
-    let C = EdwardsPoint::random(&mut OsRng);
-    let z = Scalar::random(&mut OsRng).to_repr();
-    let a = Scalar::random(&mut OsRng).to_repr();
-    let spent = SpentOutput {
-        output_key: &O.to_bytes(),
-        commitment: &C.to_bytes(),
-        spend_scalar: &x.to_repr(),
-        y_kem: &y_kem.to_repr(),
-        commitment_mask: &z,
-    };
-    SalSigningParams::propose(&mut OsRng, &spent, &a, SIGNABLE).unwrap()
+    SpendFixture::new(g).params()
 }
 
 /// `params` with another rerandomization, `x` or `y_kem` (the type is not
@@ -287,14 +323,15 @@ fn any_m_members_sign_a_sal_that_verifies() {
 }
 
 #[test]
-fn a_cached_preprocess_resumes_the_same_session() {
+fn a_held_session_resumes_the_same_session() {
     let g = group(3, 2);
-    let params = params_for(&g);
+    let fixture = SpendFixture::new(&g);
+    let params = fixture.params();
     let [a, b] = [participant(0), participant(1)];
-    let (machine_a, pre_a) = preprocess(&params, g.keys[&a].clone(), &mut OsRng).unwrap();
+    let (held_a, pre_a) = hold(fixture.params(), g.keys[&a].clone(), &mut OsRng).unwrap();
     let (machine_b, pre_b) = preprocess(&params, g.keys[&b].clone(), &mut OsRng).unwrap();
 
-    let (resumed_a, again_a) = from_cache(&params, g.keys[&a].clone(), cache(machine_a)).unwrap();
+    let (resumed_a, again_a) = held_a.resume().unwrap();
     assert!(again_a == pre_a, "the seed rebuilds the preprocess it sent");
 
     let machines = HashMap::from([(a, resumed_a), (b, machine_b)]);
@@ -304,22 +341,26 @@ fn a_cached_preprocess_resumes_the_same_session() {
     }
 }
 
-/// The nonces are a function of the seed and the share (hedged): the same
-/// seed with the same keys replays; another seed, or the same seed with
-/// another member's share, does not.
+/// The nonces are a function of the seed and the share, not of the
+/// parameters: `modular_frost` would rebuild the same preprocess for a seed
+/// under any parameters. That is why [`HeldSession`] owns its parameters.
 #[test]
-fn a_preprocess_depends_on_its_seed_and_its_share() {
+fn a_preprocess_depends_on_its_seed_and_share_but_not_its_params() {
     let g = group(3, 2);
-    let params = params_for(&g);
-    let seeded = |p: u8, seed: u8| {
+    let one = params_for(&g);
+    let other = params_for(&g);
+    let seeded = |params: &SalSigningParams, p: u8, seed: u8| {
+        let keys = params.offset_keys(g.keys[&participant(p)].clone()).unwrap();
         let cached = CachedPreprocess(Zeroizing::new([seed; 32]));
-        from_cache(&params, g.keys[&participant(p)].clone(), cached)
-            .unwrap()
-            .1
+        SalSignMachine::from_cache(params.algorithm(), keys, cached).1
     };
-    assert!(seeded(0, 1) == seeded(0, 1));
-    assert!(seeded(0, 1) != seeded(0, 2));
-    assert!(seeded(0, 1) != seeded(1, 1));
+    assert!(seeded(&one, 0, 1) == seeded(&one, 0, 1));
+    assert!(seeded(&one, 0, 1) != seeded(&one, 0, 2));
+    assert!(seeded(&one, 0, 1) != seeded(&one, 1, 1));
+    assert!(
+        seeded(&one, 0, 1) == seeded(&other, 0, 1),
+        "the seed's nonces do not depend on the parameters"
+    );
 }
 
 #[test]
@@ -338,11 +379,7 @@ fn keys_for_another_output_cannot_preprocess() {
         (&params, other_group),
     ] {
         assert_eq!(
-            preprocess(params, keys.clone(), &mut OsRng).err(),
-            Some(FrostSalError::KeysDoNotOpenOutput)
-        );
-        assert_eq!(
-            from_cache(params, keys, CachedPreprocess(Zeroizing::new([7; 32]))).err(),
+            preprocess(params, keys, &mut OsRng).err(),
             Some(FrostSalError::KeysDoNotOpenOutput)
         );
     }
@@ -462,7 +499,7 @@ fn the_proposal_refuses_each_bad_value_by_name() {
                 y_kem: y,
                 commitment_mask: z,
             };
-            SalSigningParams::propose(&mut OsRng, &spent, a, SIGNABLE).err()
+            SalSigningParams::new(&[0x5E; RERANDOMIZATION_SEED_LEN], &spent, a, SIGNABLE).err()
         };
     let s = &scalar;
     assert_eq!(
@@ -490,3 +527,95 @@ fn the_proposal_refuses_each_bad_value_by_name() {
         Some(FrostSalError::PseudoOutBlind)
     );
 }
+
+/// R-7: no member sends the signing parameters. Each signer builds its own
+/// from the intent, and the same seed gives the same rerandomized input,
+/// so independently built parameters run one transcript and complete one
+/// SAL, which verifies.
+#[test]
+fn members_building_their_own_params_complete_one_sal() {
+    let g = group(5, 3);
+    let fixture = SpendFixture::new(&g);
+    let signers = ps(&[0, 2, 4]);
+    let own: HashMap<Participant, SalSigningParams> =
+        signers.iter().map(|&p| (p, fixture.params())).collect();
+    let results = run(&g, &signers, |p| &own[&p]);
+    let sals: Vec<SpendAuthAndLinkability> = results.into_values().map(Result::unwrap).collect();
+    assert!(sals.windows(2).all(|w| w[0] == w[1]));
+    assert!(sal_verifies(&sals[0], &own[&signers[0]]));
+}
+
+/// A signer whose seed differs builds another rerandomized input: the
+/// signing session does not complete for it, and the others name it.
+#[test]
+fn a_signer_with_another_seed_does_not_complete_one_sal() {
+    let g = group(3, 2);
+    let fixture = SpendFixture::new(&g);
+    let signers = ps(&[0, 1]);
+    let honest = fixture.params();
+    let other = fixture.params_with_seed(&[0xEE; RERANDOMIZATION_SEED_LEN]);
+    assert_ne!(honest.rerandomized().input(), other.rerandomized().input());
+    let results = run(
+        &g,
+        &signers,
+        |p| {
+            if p == signers[0] {
+                &honest
+            } else {
+                &other
+            }
+        },
+    );
+    assert!(results.values().all(Result::is_err));
+}
+
+/// The seed's expansion is protocol: every member must derive the same
+/// three blinds from it. The rerandomized input for fixed values is pinned,
+/// so a change to the stream, the order the blinds are drawn in, or the
+/// constructor moves it. Recorded from this construction (a regression pin,
+/// not an independent vector: the inputs are curve points).
+#[test]
+fn the_rerandomization_is_pinned() {
+    let x = Scalar::from(7u64);
+    let y_kem = Scalar::from(11u64);
+    let O = EdwardsPoint::generator() * Scalar::from(5u64);
+    let C = EdwardsPoint::generator() * Scalar::from(13u64);
+    let spent = SpentOutput {
+        output_key: &O.to_bytes(),
+        commitment: &C.to_bytes(),
+        spend_scalar: &x.to_repr(),
+        y_kem: &y_kem.to_repr(),
+        commitment_mask: &Scalar::from(17u64).to_repr(),
+    };
+    let params = SalSigningParams::new(
+        &[0x42; RERANDOMIZATION_SEED_LEN],
+        &spent,
+        &Scalar::from(19u64).to_repr(),
+        SIGNABLE,
+    )
+    .unwrap();
+    let input = params.rerandomized().input();
+    let hex =
+        |p: EdwardsPoint| -> String { p.to_bytes().iter().map(|b| format!("{b:02x}")).collect() };
+    let got = [
+        hex(input.O_tilde()),
+        hex(input.I_tilde()),
+        hex(input.R()),
+        hex(input.C_tilde()),
+    ];
+    // The pseudo-out is not drawn from the seed: C~ = C + (a − z)·G, here
+    // (13 + 19 − 17)·G.
+    assert_eq!(
+        input.C_tilde(),
+        EdwardsPoint::generator() * Scalar::from(15u64)
+    );
+    let pinned: [&str; 4] = PINNED_RERANDOMIZATION;
+    assert_eq!(got, pinned.map(String::from), "{got:?}");
+}
+
+const PINNED_RERANDOMIZATION: [&str; 4] = [
+    "ccc7efd8f5a126b863eee86e8b74fbfda67a657d865e65862046ee1fdf146224",
+    "6201c93718c73988f995b6b6d4109c0da157721da77b01058e4c8abce9fdc2b2",
+    "e73f786b2732bcca2588b686cbc0570cfb08af0e388034be0b77da3bf56ff32b",
+    "df5c2eadc44c6d94a19a9aa118afe5ac3193d26401f76251f522ff042dfbcb92",
+];

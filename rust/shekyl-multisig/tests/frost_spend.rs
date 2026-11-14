@@ -41,7 +41,7 @@ use shekyl_crypto_pq::multisig_output::{
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
 use shekyl_fcmp::frost_sal::{
     complete, dealer_split, preprocess, sign, threshold_keys, Ed25519T, Participant,
-    SalSigningParams, SpentOutput, ThresholdKeys,
+    SalSigningParams, SpentOutput, ThresholdKeys, RERANDOMIZATION_SEED_LEN,
 };
 use shekyl_fcmp::proof::{prove_with_sal, verify, BranchLayer, ProveInputLeafChunk};
 use shekyl_fcmp::tree::{
@@ -329,6 +329,8 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
         .zip(&scans)
         .zip(&blinds)
         .map(|(((out, _), s), a)| {
+            let mut seed = [0u8; RERANDOMIZATION_SEED_LEN];
+            OsRng.fill_bytes(&mut seed);
             let spent = SpentOutput {
                 output_key: &out.output_key,
                 commitment: &out.commitment,
@@ -336,7 +338,7 @@ fn spend(n: u8, m: u8, signer_indices: &[u8]) {
                 y_kem: &s.y_kem,
                 commitment_mask: &s.z,
             };
-            SalSigningParams::propose(&mut OsRng, &spent, a, SIGNABLE).unwrap()
+            SalSigningParams::new(&seed, &spent, a, SIGNABLE).unwrap()
         })
         .collect();
     let keys: HashMap<Participant, ThresholdKeys<Ed25519T>> = signer_indices
