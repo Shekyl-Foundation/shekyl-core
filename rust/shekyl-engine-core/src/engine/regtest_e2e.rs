@@ -661,11 +661,19 @@ const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
 const ONION_REACHABLE_LIMIT: Duration = Duration::from_secs(600);
 
 /// How long the trio's sessions may take to form once every onion reads
-/// `reachable` ([`RegtestDaemon::await_trio_mesh`]): one Tor test of an
-/// address, its three attempts each up to the 120 s dial deadline, with
-/// the longest retry waits between them, 10 s and 30 s (`shekyl-transport-
-/// layer` `dial_profile(Tor)`, `RETRY_WAITS`): 3 × 120 + 10 + 30 = 400 s.
-const TRIO_MESH_LIMIT: Duration = Duration::from_secs(400);
+/// `reachable` ([`RegtestDaemon::await_trio_mesh`]): Tor's re-query gap,
+/// then one Tor test of the address (Rick, 2026-11-14).
+///
+/// A lookup that reaches directories without the descriptor fails, and the
+/// client's Tor does not ask those directories again for 15 minutes
+/// (`REND_HID_SERV_DIR_REQUERY_PERIOD`), so a dial inside that gap waits on
+/// the same failed lookup; run 4 (2026-11-14) failed three dials to one
+/// fresh onion inside 400 s while its owner read it reachable. After the
+/// gap, one Tor test is three attempts each up to the 120 s dial deadline,
+/// with the longest retry waits between them, 10 s and 30 s
+/// (`shekyl-transport-layer` `dial_profile(Tor)`, `RETRY_WAITS`): 400 s.
+/// 900 + 400 = 1,300 s.
+const TRIO_MESH_LIMIT: Duration = Duration::from_secs(1_300);
 
 /// The origin's shipped retry, spelled here for the harness only: at its
 /// first fire an origin with no alternate fluffs as the last resort (W3b).
@@ -894,11 +902,6 @@ impl RegtestDaemon {
     /// mining address and a Tor, `shekyl-node` `producer::seat`), and is the
     /// daemon the wallet uses. B and C are relays. **A dials B and C; B
     /// dials C; C dials nobody.**
-    ///
-    /// This is the walk's public-network configuration, the Tor lane's
-    /// verification gate (Rick, 2026-11-14). The evidence run is on the Tor
-    /// lane's private network with operator Tor, a second configuration
-    /// beside this one (`docs/FOLLOWUPS.md`, the emission walk).
     ///
     /// **Why three.** A daemon with a Tor holds a transaction it originates
     /// until an outbound session hides its address
@@ -5005,13 +5008,13 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// an `SEB` of 128, which closed `J + 1` at ~770 blocks; at `SEB` 2,000
 /// `J + 1` closes past 6,000 blocks, past that supply, with the walk's
 /// spends paying fees, so the pin may not hold at its first run. Its
-/// disposition is re-derived from that run's figures (#1373's successor). The positive-pool split coverage is the B5 unit
+/// disposition is re-derived from that run's figures. The positive-pool split coverage is the B5 unit
 /// KAT family. The claim
 /// itself still carries real `ToKey` fee inputs (`fee_gindexes`
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
 /// runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about six hours: its evidence run waits on the Tor lane's private Tor network and the wallet's operator mode (docs/FOLLOWUPS.md, the emission walk); today it runs three daemons on the pinned managed Tor, the public-network verification gate; needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
+#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about six hours: three daemons on the pinned managed Tor over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun (docs/FOLLOWUPS.md, the emission walk); needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;

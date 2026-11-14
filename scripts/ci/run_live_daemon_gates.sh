@@ -41,15 +41,14 @@
 #           archival shard with real spends before they stake).
 #   acceptance — ACCEPTANCE, run by hand on a quiet fleet VM under a
 #           USAGE.md claim (Rick, 2026-11-14): the emission walk over Tor,
-#           about six hours. Its evidence run is on the Tor lane's private
-#           Tor network with operator Tor, and WAITS on that network and on
-#           the wallet's operator mode (docs/FOLLOWUPS.md, the emission
-#           walk); it then runs before each release cut and whenever the
-#           recapture check says the emission-claim vector is stale. Today's
-#           configuration, the pinned managed Tor on the public network, is
-#           the Tor lane's public-network verification gate, not that
-#           evidence. Per PR its coverage is the vector's replay in the Rust
-#           job. Needs SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
+#           about six hours, on the public Tor network with the pinned
+#           managed Tor. It WAITS on a healthy public onion network: run it
+#           when the Tor lane reports the network healthy, and rerun a
+#           failure on propagation (docs/FOLLOWUPS.md, the emission walk).
+#           Then it runs before each release cut and whenever the recapture
+#           check says the emission-claim vector is stale. Per PR its
+#           coverage is the vector's replay in the Rust job. Needs
+#           SHEKYL_TEST_TOR_BINARY, the pinned bundle's tor
 #           (scripts/release/tor_bundle.py stage).
 # Both lanes name-check ALL lists, so a rename is caught in every run.
 #
