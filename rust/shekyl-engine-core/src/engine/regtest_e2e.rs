@@ -190,10 +190,16 @@ pub(super) struct RegtestDaemon {
     /// [`Self::restart_keeping_chain`] starts the same daemon on the same
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
-    /// How long [`Self::wait_shown_pool_in_template`] waits for the posted
-    /// job to list the shown pool: [`SHOWN_POOL_LIMIT`], or
-    /// [`TOR_SHOWN_POOL_LIMIT`] for a daemon on a Tor.
+    /// How long [`Self::wait_shown_pool_in_template`] waits:
+    /// [`SHOWN_POOL_LIMIT`], or [`TOR_SHOWN_POOL_LIMIT`] for a daemon on a
+    /// Tor, which also waits for the transactions it originated to come back
+    /// as a fluff before it reads the job.
     shown_pool_limit: Duration,
+    /// Whether the wait also covers this daemon's unbroadcast entries: the
+    /// Tor trio's miner, whose relays return each origin as a fluff
+    /// ([`Self::start_tor_trio`]). A linked daemon that holds a stem through
+    /// its embargo does not wait for it (the origin rig).
+    waits_for_stems: bool,
     /// The draws [`Self::generate_blocks`] gives a read window to: the walk
     /// that reads over Tor sets it over the epoch whose draws its persona
     /// must serve ([`Self::watch_draws`]).
@@ -537,9 +543,9 @@ impl RegtestSpawn {
 /// the relay fluffs at once, and the follower rebuilds on the wake.
 const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
 
-/// The same wait on the three-daemon Tor rig ([`RegtestDaemon::start_tor_trio`]),
-/// where a transaction the miner originates is shown only when a fluff of it
-/// comes back. The longest path is A → C (stem), C → B (fluff), B → A
+/// The same wait on a daemon with a Tor: on the three-daemon rig
+/// ([`RegtestDaemon::start_tor_trio`]) a transaction the miner originates is
+/// unbroadcast until a fluff of it comes back, and the wait covers that. The longest path is A → C (stem), C → B (fluff), B → A
 /// (fluff), or A → B → C (stems) and C → A (fluff): at most two stem hops,
 /// each waiting at most one carrier slot (`NOISE_MIN_DELAY_MS` +
 /// `NOISE_DELAY_JITTER_MS`, 6.67 s), and at most two fluff flushes toward an
@@ -1153,6 +1159,7 @@ impl RegtestDaemon {
             } else {
                 SHOWN_POOL_LIMIT
             },
+            waits_for_stems: tor_on,
         };
         daemon.await_ready().await;
         daemon
@@ -1660,28 +1667,55 @@ impl RegtestDaemon {
         let limit = self.shown_pool_limit;
         let deadline = Instant::now() + limit;
         loop {
-            let shown = self
-                .rpc
-                .call::<wire::TxpoolList>(NoParams)
-                .await
-                .expect("txpool_list");
-            if shown.is_empty() {
+            // The host is told both counts: the entries this node has
+            // broadcast, and those it holds and has not (`daemon_status`,
+            // RT-O9.3). `txpool_list` answers the host from both, so the job
+            // is compared with the broadcast count alone.
+            let status = self.status().await;
+            let unbroadcast = status
+                .txpool_private_count
+                .shown()
+                .expect("the harness is the host, and is told the host-only part")
+                .0
+                .expect("the harness's pool is live")
+                .0;
+            let broadcast = status
+                .txpool_count
+                .shown()
+                .expect("the harness is the host, and is told the pool part")
+                .0
+                .expect("the harness's pool is live")
+                .0;
+            let returned = !self.waits_for_stems || unbroadcast == 0;
+            if returned && broadcast == 0 {
                 return;
             }
             if Instant::now() >= deadline {
                 panic!(
                     "the posted job did not list the shown pool within {limit:?} \
-                     (shown={}); the relay's fluff event must mark the entry shown and \
-                     wake the tip follower (DRS_X_STORE_FLIP.md Q9)",
-                    shown.len()
+                     ({broadcast} shown, {unbroadcast} unbroadcast); the relay's fluff \
+                     event must mark the entry shown and wake the tip follower \
+                     (DRS_X_STORE_FLIP.md Q9){}",
+                    if returned {
+                        ""
+                    } else {
+                        "; on the Tor trio an origin is shown when its fluff comes back"
+                    }
                 );
             }
-            if let Ok(job) = self.rpc.call::<wire::BlockTemplate>(NoParams).await {
-                let listed = shekyl_wire::Block::from_bytes(&job.body.0)
-                    .expect("the posted job's body is a block")
-                    .transaction_hashes;
-                if listed.len() == shown.len() || job_is_full(&job, &listed, &shown) {
-                    return;
+            if returned {
+                let shown = self
+                    .rpc
+                    .call::<wire::TxpoolList>(NoParams)
+                    .await
+                    .expect("txpool_list");
+                if let Ok(job) = self.rpc.call::<wire::BlockTemplate>(NoParams).await {
+                    let listed = shekyl_wire::Block::from_bytes(&job.body.0)
+                        .expect("the posted job's body is a block")
+                        .transaction_hashes;
+                    if listed.len() as u64 == broadcast || job_is_full(&job, &listed, &shown) {
+                        return;
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
