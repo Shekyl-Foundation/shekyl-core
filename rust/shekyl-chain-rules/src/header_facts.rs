@@ -165,7 +165,7 @@ impl HeaderFacts<Proven> {
 /// What [`prove_header`] judges: the preimage, and the claims the caller
 /// makes about it. [`crate::form`] fills this from a block;
 /// [`crate::form_header`] fills it from a [`PowBlob`].
-pub(crate) struct HeaderProof<'a, S: Substrate> {
+pub(crate) struct HeaderProof<'a, S: Substrate + ?Sized> {
     /// The header the facts carry. The caller parsed it from `pow_blob`.
     pub header: BlockHeader,
     /// The bytes B6 hashes and D2 longhashes.
@@ -191,7 +191,7 @@ pub(crate) struct HeaderProof<'a, S: Substrate> {
 /// # Errors
 ///
 /// The substrate's fault, from the longhash. A refusal is `Ok(Err(_))`.
-pub(crate) fn prove_header<S: Substrate>(
+pub(crate) fn prove_header<S: Substrate + ?Sized>(
     proof: HeaderProof<'_, S>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<HeaderFacts<Proven>>, S::Fault> {

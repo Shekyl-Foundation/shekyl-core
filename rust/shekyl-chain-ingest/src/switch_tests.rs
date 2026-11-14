@@ -738,9 +738,10 @@ impl CountingPow {
     }
 }
 
+impl crate::pow::Fixture for CountingPow {}
+
 impl shekyl_chain_rules::Substrate for CountingPow {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<shekyl_types::Timestamp, Self::Fault> {
         Ok(crate::scenario::CLOCK_START)

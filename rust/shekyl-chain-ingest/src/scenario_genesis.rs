@@ -24,7 +24,7 @@
 
 use core::num::NonZeroU128;
 
-use shekyl_chain_rules::{Candidate, CappedEpoch, Substrate};
+use shekyl_chain_rules::{Candidate, CappedEpoch};
 use shekyl_genesis_tool::builder::pinned_genesis;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::{Network, NetworkId};
@@ -32,12 +32,10 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
 use super::{MinerKeys, Scenario, StepOutcome};
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 
-impl<P: Substrate + Send + Sync + 'static> Scenario<P>
-where
-    P::Fault: std::fmt::Debug + Send,
-{
+impl<P: Pow> Scenario<P> {
     /// A chain carrying regtest's identity at a fresh store named `name`:
     /// regtest at fixed difficulty one under `schedule`, held to regtest's
     /// table genesis, which is connected as block 0 before this returns

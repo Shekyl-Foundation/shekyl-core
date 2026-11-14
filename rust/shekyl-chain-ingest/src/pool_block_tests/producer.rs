@@ -320,7 +320,6 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
         // A clock ahead of the scenario's blocks, so they connect again.
         Arc::new(crate::service::service_tests::Gated::new()),
         crate::service::ServiceConfig::default(),
-        shekyl_hash_budget::Budget::of_host(),
         Follow {
             job: None,
             pool: Some(PoolWiring {

@@ -543,6 +543,27 @@ impl Core {
                 .all(|entry| entry.state != EntryState::Retiring)
     }
 
+    /// Whether nothing is in motion: no job waits, no lease is out, the
+    /// builder holds no claim, and every entry is built and held (none
+    /// reserved, deriving or being returned). The published
+    /// [`Resident::quiet`](crate::Resident::quiet). At quiescence the
+    /// entries are the list's seeds (HA-R5), which the property test holds
+    /// after every event.
+    ///
+    /// The claim is its own term: a job that leaves can take its reserved
+    /// entry with it while the builder still waits for that build's
+    /// permit, and the builder takes the permit before it finds the build
+    /// gone.
+    pub(crate) fn quiet(&self) -> bool {
+        self.queue.is_empty()
+            && self.leases.is_empty()
+            && self.claim.is_none()
+            && self
+                .entries
+                .iter()
+                .all(|entry| entry.state == EntryState::Resident)
+    }
+
     /// Whether the hasher is stopping.
     pub(crate) const fn closed(&self) -> bool {
         self.closed

@@ -234,13 +234,12 @@ fn claim_one(
 /// and before any cache is built.
 #[derive(Clone, Debug)]
 pub(crate) enum ClaimedAlt {
-    /// Inside the band. The target was read. `prepare` is the branch's own
-    /// seed block: prepare it into the transient slot before the hash (B2).
+    /// Inside the band. The target was read. The arrival is formed as a
+    /// job on the claims' seed: a main-chain seed in the window, or the
+    /// branch's own seed block (B2).
     Ready {
         /// The claims.
         claims: Claims,
-        /// The seed is the branch's own block, above the fork.
-        prepare: bool,
     },
     /// The early gate's answer. The target was not read.
     Spend(AltSpend),
@@ -255,7 +254,7 @@ pub(crate) enum ClaimedAlt {
 /// the window is read on the same snapshot. A fork outside the band, or a
 /// below-fork seed the pair does not hold, comes back as
 /// [`ClaimedAlt::Spend`] and the target is not derived. A seed on the
-/// branch itself is [`ClaimedAlt::Ready`] with `prepare` (B2).
+/// branch itself is [`ClaimedAlt::Ready`] like any other (B2).
 ///
 /// # Errors
 ///
@@ -303,11 +302,9 @@ pub(crate) fn claim_alt(
     };
     let floor = snap.undo_floor().map_err(ClaimStop::Store)?;
     let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window, floor);
-    let prepare = match outcome {
-        AltSpend::Hash => false,
-        AltSpend::Prepare => true,
-        refused => return Ok(ClaimedAlt::Spend(refused)),
-    };
+    if !matches!(outcome, AltSpend::Hash) {
+        return Ok(ClaimedAlt::Spend(outcome));
+    }
     let target = match target_claim(&view, height, &rule_set) {
         Ok(target) => target,
         Err(Fault::Corrupt(corrupt)) => return Err(ClaimStop::Corrupt { height, corrupt }),
@@ -323,7 +320,6 @@ pub(crate) fn claim_alt(
             references: ReferenceClaims::EMPTY,
             network: rules.trust().network_id(),
         },
-        prepare,
     })
 }
 

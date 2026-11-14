@@ -78,7 +78,6 @@ impl Default for MockSubstrate {
 
 impl Substrate for MockSubstrate {
     type Fault = Faulted;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Faulted> {
         Ok(self.clock)
