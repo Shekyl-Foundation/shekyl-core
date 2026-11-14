@@ -3462,8 +3462,8 @@ not only the four paths that moved this time; on #1323's diff it answers
 `run`. The job has its own runner beside the Rust job, so it adds runner
 time and no wall time: on #1369 it ran 13.9 minutes (the release build 4.9,
 the pins 8.6), and the Rust job beside it runs about two hours. Its
-timeout is twice its measured time (35 minutes since EUP-4 prep 2's pin
-joined it, §5.32.1). A smoke fold over the burst scenarios was the
+timeout is about twice its measured time (§5.32.1, since EUP-4 prep 2's
+pin joined it). A smoke fold over the burst scenarios was the
 cheaper option; it was not built, because it would pin a second, smaller
 narration that the full ones already cover, and the pins fit beside the
 Rust job.
@@ -3799,9 +3799,11 @@ load of 30 to 50 from other lanes; regenerating both of its fixtures took
 (`eup4_narration_matches_the_committed_fixture`); its nightly scope
 (the shared runs on the baseline and the stuffing attack, the stuffer's
 campaigns from year 5) is pinned nightly and in the per-PR narrations job
-(`eup4_nightly_narration_matches_the_committed_fixture`). On the per-PR job's runner the four pins took 790 s at `15af799fd`,
-against 516 s for the three before it, and the job 17.2 minutes with its
-release build; its timeout is 35 minutes, about twice that.
+(`eup4_nightly_narration_matches_the_committed_fixture`). On the per-PR job's runner, at `daff21237`, the four pins took 1 304 s
+(against 516 s for the three before it) and the job 26.7 minutes with its
+release build; its timeout is 55 minutes, about twice that. The job runs
+on its own runner beside the Rust job (2 h 19 min there), so it adds no
+wall time.
 
 **Regenerated** under `SHEKYL_PINNED_REGEN_DECISION="2026-11-14 EUP-4 prep
 2: the --eup4 narration's first fixtures, its instruments predicted in
