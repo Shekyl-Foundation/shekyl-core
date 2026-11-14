@@ -1,0 +1,224 @@
+EUP-4 PREP 2 — THE CRITERIA'S INSTRUMENTS (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.32).
+Measures only: no line grades a criterion. Arms: inherited (the run's w_ref and zone) and
+re-derived (the declared pair, ESR-10).
+
+EI-1 — ROW 2, MINER INCOME. Per block, by year: production's PaidEmission::owed (the miner
+leg of the emission and the miner's fee income) in SKL, and in brackets the fee part's share
+of it. Then the tail era's fee share: the fee part over owed in the blocks whose effective
+emission is the tail subsidy.
+== inherited | production x1
+  baseline_steady_state  y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      tail era: not reached by y60
+  stuffing_attack        y1 711.09 (3.7%) y4 638.76 (3.6%) y8 543.56 (3.6%) y10 498.55 (3.6%) y12 456.00 (3.6%) y15 397.31 (3.6%) y20 378.33 (1.6%) y30 204.64 (1.5%) y40 109.84 (1.5%) y60 31.44 (1.5%)
+      tail era: not reached by y60
+== inherited | flat control
+  baseline_steady_state  y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      tail era: not reached by y60
+  stuffing_attack        y1 687.19 (0.3%) y4 617.91 (0.3%) y8 526.00 (0.3%) y10 482.55 (0.4%) y12 441.48 (0.4%) y15 384.84 (0.4%) y20 303.95 (0.5%) y30 187.00 (0.8%) y40 114.32 (1.3%) y60 42.90 (3.3%)
+      tail era: not reached by y60
+== re-derived | production x1
+  baseline_steady_state  y1 870.48 (2.2%) y4 754.14 (2.3%) y8 610.37 (2.3%) y10 545.97 (2.3%) y12 487.02 (2.3%) y15 409.09 (2.4%) y20 303.19 (2.4%) y30 164.11 (2.4%) y40 88.09 (2.4%) y60 25.21 (2.4%)
+      tail era: not reached by y60
+  stuffing_attack        y1 888.61 (1.9%) y4 752.94 (2.3%) y8 609.40 (2.3%) y10 545.10 (2.3%) y12 486.30 (2.3%) y15 408.44 (2.4%) y20 302.71 (2.4%) y30 163.84 (2.4%) y40 87.95 (2.4%) y60 25.17 (2.4%)
+      tail era: not reached by y60
+== re-derived | flat control
+  baseline_steady_state  y1 855.98 (0.6%) y4 741.51 (0.6%) y8 600.56 (0.7%) y10 537.44 (0.7%) y12 479.67 (0.8%) y15 402.91 (0.9%) y20 299.25 (1.1%) y30 163.12 (1.8%) y40 88.72 (3.1%) y60 27.19 (9.5%)
+      tail era: not reached by y60
+  stuffing_attack        y1 877.19 (0.6%) y4 740.33 (0.6%) y8 599.61 (0.7%) y10 536.59 (0.7%) y12 478.90 (0.8%) y15 402.27 (0.9%) y20 298.77 (1.1%) y30 162.86 (1.8%) y40 88.58 (3.1%) y60 27.15 (9.5%)
+      tail era: not reached by y60
+
+EI-2 — ROW 3, PREDICTABILITY. The year each run first holds 50 % and 80 % of the asymptote,
+and in brackets its distance in years from the neutral trajectory's, which production's
+neutral_height_reaching gives: 50 % at block 2907270 (y11.06), 80 % at block 6750472 (y25.69).
+Then the emitted fraction at the sampled years.
+== inherited | production x1
+  baseline_steady_state  50% y13.83 (+2.77); 80% y29.34 (+3.66)
+      emitted y1 4.9% y4 18.2% y8 33.0% y10 39.4% y12 45.2% y15 52.9% y20 64.1% y30 80.8% y40 89.7% y60 97.1%
+  stuffing_attack        50% y13.83 (+2.77); 80% y29.34 (+3.66)
+      emitted y1 4.9% y4 18.2% y8 33.0% y10 39.4% y12 45.2% y15 52.9% y20 64.1% y30 80.8% y40 89.7% y60 97.1%
+== inherited | flat control
+  baseline_steady_state  50% y13.83 (+2.77); 80% y32.11 (+6.42)
+      emitted y1 4.9% y4 18.2% y8 33.0% y10 39.4% y12 45.2% y15 52.9% y20 63.3% y30 77.8% y40 86.5% y60 95.1%
+  stuffing_attack        50% y13.83 (+2.77); 80% y32.11 (+6.42)
+      emitted y1 4.9% y4 18.2% y8 33.0% y10 39.4% y12 45.2% y15 52.9% y20 63.3% y30 77.8% y40 86.5% y60 95.1%
+== re-derived | production x1
+  baseline_steady_state  50% y11.06 (+0.00); 80% y25.69 (+0.00)
+      emitted y1 6.1% y4 22.2% y8 39.4% y10 46.6% y12 52.9% y15 60.9% y20 71.4% y30 84.7% y40 91.8% y60 97.7%
+  stuffing_attack        50% y11.04 (-0.03); 80% y25.66 (-0.03)
+      emitted y1 6.2% y4 22.3% y8 39.5% y10 46.6% y12 52.9% y15 61.0% y20 71.5% y30 84.8% y40 91.9% y60 97.7%
+== re-derived | flat control
+  baseline_steady_state  50% y11.06 (+0.00); 80% y25.69 (+0.00)
+      emitted y1 6.1% y4 22.2% y8 39.4% y10 46.6% y12 52.9% y15 60.9% y20 71.4% y30 84.7% y40 91.8% y60 97.7%
+  stuffing_attack        50% y11.04 (-0.03); 80% y25.66 (-0.03)
+      emitted y1 6.2% y4 22.3% y8 39.5% y10 46.6% y12 52.9% y15 61.0% y20 71.5% y30 84.8% y40 91.9% y60 97.7%
+
+EI-4 — CAPACITY. On the baseline scenario, the first year whose blocks carry its 50 a block
+within one transaction, per arm.
+  inherited   production x1  carries 50 from y20
+  inherited   flat control   carries 50 from never by y60
+  re-derived  production x1  carries 50 from y1
+  re-derived  flat control   carries 50 from y1
+
+EI-3 — ROW 5, THE STEP RESPONSE. Production x1. Across each step in demand, M_r and the burn
+rate every 120 blocks from 120 before the edge to 2160 after it, and the blocks each takes
+to cover 95 % of its move (from the block before the edge to the trace's last block). The
+step schedule (step_50_200_50) is declared; boom-bust and the stuffing attack are run beside it.
+== inherited | step_50_200_50 | edge at block 262800: M_r 0.800 -> 0.800, 95 % in no move; burn 1.62% -> 1.63%, 95 % in 2054 blocks
+      -120:0.800/1.62% +0:0.800/1.62% +120:0.800/1.62% +240:0.800/1.62% +360:0.800/1.62%
+      +480:0.800/1.62% +600:0.800/1.62% +720:0.800/1.63% +840:0.800/1.63% +960:0.800/1.63%
+      +1080:0.800/1.63% +1200:0.800/1.63% +1320:0.800/1.63% +1440:0.800/1.63% +1560:0.800/1.63%
+      +1680:0.800/1.63% +1800:0.800/1.63% +1920:0.800/1.63% +2040:0.800/1.63%
+== inherited | step_50_200_50 | edge at block 525600: M_r 0.800 -> 0.800, 95 % in no move; burn 3.16% -> 3.17%, 95 % in 2043 blocks
+      -120:0.800/3.16% +0:0.800/3.16% +120:0.800/3.16% +240:0.800/3.16% +360:0.800/3.16%
+      +480:0.800/3.17% +600:0.800/3.17% +720:0.800/3.17% +840:0.800/3.17% +960:0.800/3.17%
+      +1080:0.800/3.17% +1200:0.800/3.17% +1320:0.800/3.17% +1440:0.800/3.17% +1560:0.800/3.17%
+      +1680:0.800/3.17% +1800:0.800/3.17% +1920:0.800/3.17% +2040:0.800/3.17%
+== inherited | boom_bust_cycle | edge at block 262800: M_r 0.800 -> 0.800, 95 % in no move; burn 1.62% -> 1.35%, 95 % in 945 blocks
+      -120:0.800/1.62% +0:0.800/1.62% +120:0.800/1.62% +240:0.800/1.62% +360:0.800/1.59%
+      +480:0.800/1.55% +600:0.800/1.50% +720:0.800/1.45% +840:0.800/1.41% +960:0.800/1.36%
+      +1080:0.800/1.34% +1200:0.800/1.34% +1320:0.800/1.35% +1440:0.800/1.35% +1560:0.800/1.35%
+      +1680:0.800/1.35% +1800:0.800/1.35% +1920:0.800/1.35% +2040:0.800/1.35%
+== inherited | boom_bust_cycle | edge at block 525600: M_r 0.800 -> 0.800, 95 % in no move; burn 2.61% -> 3.10%, 95 % in 694 blocks
+      -120:0.800/2.61% +0:0.800/2.61% +120:0.800/2.70% +240:0.800/2.78% +360:0.800/2.86%
+      +480:0.800/2.94% +600:0.800/3.02% +720:0.800/3.09% +840:0.800/3.09% +960:0.800/3.10%
+      +1080:0.800/3.10% +1200:0.800/3.10% +1320:0.800/3.10% +1440:0.800/3.10% +1560:0.800/3.10%
+      +1680:0.800/3.10% +1800:0.800/3.10% +1920:0.800/3.10% +2040:0.800/3.10%
+== inherited | stuffing_attack | edge at block 21600: M_r 0.800 -> 0.800, 95 % in no move; burn 0.14% -> 0.15%, 95 % in 2058 blocks
+      -120:0.800/0.14% +0:0.800/0.14% +120:0.800/0.14% +240:0.800/0.14% +360:0.800/0.14%
+      +480:0.800/0.14% +600:0.800/0.14% +720:0.800/0.14% +840:0.800/0.14% +960:0.800/0.14%
+      +1080:0.800/0.14% +1200:0.800/0.14% +1320:0.800/0.14% +1440:0.800/0.15% +1560:0.800/0.15%
+      +1680:0.800/0.15% +1800:0.800/0.15% +1920:0.800/0.15% +2040:0.800/0.15%
+== re-derived | step_50_200_50 | edge at block 262800: M_r 1.000 -> 1.300, 95 % in 251 blocks; burn 3.04% -> 6.09%, 95 % in 1967 blocks
+      -120:1.000/3.03% +0:1.000/3.04% +120:1.128/3.23% +240:1.272/3.43% +360:1.300/3.64%
+      +480:1.300/3.86% +600:1.300/4.08% +720:1.300/4.31% +840:1.300/4.43% +960:1.300/4.55%
+      +1080:1.300/4.68% +1200:1.300/4.82% +1320:1.300/4.98% +1440:1.300/5.15% +1560:1.300/5.35%
+      +1680:1.300/5.56% +1800:1.300/5.74% +1920:1.300/5.89% +2040:1.300/6.01%
+== re-derived | step_50_200_50 | edge at block 525600: M_r 1.300 -> 1.000, 95 % in 717 blocks; burn 13.40% -> 6.73%, 95 % in 695 blocks
+      -120:1.300/13.40% +0:1.300/13.40% +120:1.300/12.54% +240:1.300/11.61% +360:1.300/10.60%
+      +480:1.300/9.49% +600:1.300/8.22% +720:1.000/6.71% +840:1.000/6.71% +960:1.000/6.71%
+      +1080:1.000/6.71% +1200:1.000/6.72% +1320:1.000/6.72% +1440:1.000/6.72% +1560:1.000/6.72%
+      +1680:1.000/6.72% +1800:1.000/6.72% +1920:1.000/6.72% +2040:1.000/6.72%
+== re-derived | boom_bust_cycle | edge at block 262800: M_r 1.300 -> 0.800, 95 % in 580 blocks; burn 6.77% -> 2.15%, 95 % in 702 blocks
+      -120:1.300/6.77% +0:1.300/6.77% +120:1.300/6.25% +240:1.300/5.67% +360:1.300/5.03%
+      +480:1.200/4.29% +600:0.800/3.39% +720:0.800/2.15% +840:0.800/2.15% +960:0.800/2.15%
+      +1080:0.800/2.15% +1200:0.800/2.15% +1320:0.800/2.15% +1440:0.800/2.15% +1560:0.800/2.15%
+      +1680:0.800/2.15% +1800:0.800/2.15% +1920:0.800/2.15% +2040:0.800/2.15%
+== re-derived | boom_bust_cycle | edge at block 525600: M_r 0.800 -> 1.300, 95 % in 441 blocks; burn 3.38% -> 10.73%, 95 % in 1443 blocks
+      -120:0.800/3.38% +0:0.800/3.38% +120:0.800/4.55% +240:0.805/5.53% +360:1.081/6.41%
+      +480:1.300/7.23% +600:1.300/8.00% +720:1.300/8.76% +840:1.300/9.00% +960:1.300/9.26%
+      +1080:1.300/9.55% +1200:1.300/9.86% +1320:1.300/10.13% +1440:1.300/10.35% +1560:1.300/10.53%
+      +1680:1.300/10.65% +1800:1.300/10.71% +1920:1.300/10.72% +2040:1.300/10.72%
+== re-derived | stuffing_attack | edge at block 21600: M_r 1.300 -> 1.000, 95 % in 718 blocks; burn 0.75% -> 0.36%, 95 % in 680 blocks
+      -120:1.300/0.74% +0:1.300/0.75% +120:1.300/0.70% +240:1.300/0.65% +360:1.300/0.59%
+      +480:1.300/0.52% +600:1.300/0.44% +720:1.000/0.34% +840:1.000/0.35% +960:1.000/0.35%
+      +1080:1.000/0.35% +1200:1.000/0.35% +1320:1.000/0.35% +1440:1.000/0.35% +1560:1.000/0.35%
+      +1680:1.000/0.36% +1800:1.000/0.36% +1920:1.000/0.36% +2040:1.000/0.36%
+
+EI-3 — ROW 5, THE WINDOW-EDGE STUFFER. On the baseline, a miner with a hashrate share mines
+every round(100/share)-th block and lists bodies of its own there after the pool's, as many
+as fit under the penalty-free weight, for one window (720 blocks) from the start of a
+year: unenforced (no fee) or enforced (the relay floor), uniform (every own block) or edge (the
+same bodies in the first own blocks). Measured over 2160 blocks from the start: the longest run of
+M_r > 1.0 and M_r's mean over it; the fees paid in floors (one floor = the relay floor's fee
+for one reference transaction at the start); the net gain against no stuffing (its payout
+change less its fees, SKL).
+  arm           y share fee        timing   bodies    run    mean  cost floors   net gain SKL
+  inherited     5   10% unenforced uniform       0      0       -          0.0           0.00
+  inherited     5   10% unenforced edge          0      0       -          0.0           0.00
+  inherited     5   10% enforced   uniform       0      0       -          0.0           0.00
+  inherited     5   10% enforced   edge          0      0       -          0.0           0.00
+  inherited     5   20% unenforced uniform       0      0       -          0.0           0.00
+  inherited     5   20% unenforced edge          0      0       -          0.0           0.00
+  inherited     5   20% enforced   uniform       0      0       -          0.0           0.00
+  inherited     5   20% enforced   edge          0      0       -          0.0           0.00
+  inherited     5   33% unenforced uniform       0      0       -          0.0           0.00
+  inherited     5   33% unenforced edge          0      0       -          0.0           0.00
+  inherited     5   33% enforced   uniform       0      0       -          0.0           0.00
+  inherited     5   33% enforced   edge          0      0       -          0.0           0.00
+  re-derived    5   10% unenforced uniform    2520   1430  1.0352          0.0        3703.88
+  re-derived    5   10% unenforced edge       2520   1430  1.0352          0.0        3703.88
+  re-derived    5   10% enforced   uniform    2520   1430  1.0352       3037.2        3676.22
+  re-derived    5   10% enforced   edge       2520   1430  1.0352       3037.2        3676.22
+  re-derived    5   20% unenforced uniform    5040   1435  1.0702          0.0       14815.51
+  re-derived    5   20% unenforced edge       5040   1435  1.0702          0.0       14815.51
+  re-derived    5   20% enforced   uniform    5040   1435  1.0702       6293.6       14757.22
+  re-derived    5   20% enforced   edge       5040   1435  1.0702       6293.6       14757.22
+  re-derived    5   33% unenforced uniform    8400   1437  1.1169          0.0       41153.96
+  re-derived    5   33% unenforced edge       8400   1437  1.1169          0.0       41153.96
+  re-derived    5   33% enforced   uniform    8400   1437  1.1169      10979.0       41049.98
+  re-derived    5   33% enforced   edge       8400   1437  1.1169      10979.0       41049.98
+
+EI-5 — STUFFING. The ESR-7 envelope's minimum on each chain (today; and with the floor
+enforced on a block's own bodies) per archival byte, over the relay floor's rate at the same
+block, in floors per byte, at ESR-7's rows; production x1. Then the window-edge stuffer as a
+member: its net cost per archival byte it added, over the floor at its start (negative where
+it gains), at the 20 % share.
+== inherited
+  baseline_steady_state  y5   constrained floor 17975 atomic/B: today 3.417, enforced 3.477 floors/B
+  baseline_steady_state  y20  carried     floor 2958 atomic/B: today 2.510, enforced 2.769 floors/B
+  baseline_steady_state  y45  tail        floor 727 atomic/B: today 1.985, enforced 2.356 floors/B
+  window-edge stuffer    y5   unenforced  0 archival bytes: - (listed nothing) floors/B
+  window-edge stuffer    y5   enforced    0 archival bytes: - (listed nothing) floors/B
+== re-derived
+  baseline_steady_state  y5   constrained floor 6257 atomic/B: today 0.000, enforced 0.104 floors/B
+  baseline_steady_state  y20  carried     floor 3538 atomic/B: today 0.000, enforced 0.279 floors/B
+  baseline_steady_state  y45  tail        floor 908 atomic/B: today 0.000, enforced 0.367 floors/B
+  window-edge stuffer    y5   unenforced  60414480 archival bytes: -38.228 floors/B
+  window-edge stuffer    y5   enforced    60414480 archival bytes: -38.077 floors/B
+
+EI-6 — PRIORITY ELASTICITY. The 15/80/5 mix with Priority's share at 5, 2.5, 1 and 0 %, the
+share it gives up moved to Standard, and an elastic arm (a declared behaviour): Priority keeps
+5 % x min(1, P0/P), P its fee and P0 its fee at the fold's first block, unit elasticity.
+Per cell: A1's onset (flat-25, best), its fee leg at the flat-25 onset, and miner income
+per block at the sampled years (SKL).
+== inherited | 15/80/5 x1.000
+  baseline_steady_state  onset flat-25 y40, best y55; fee leg 617132.3 SKL/yr (90.2%) at y40
+      owed y1 862.92 y4 775.58 y8 659.99 y10 605.34 y12 553.68 y15 482.42 y20 418.48 y30 221.20 y40 121.75 y60 36.63
+== inherited | 15/82.5/2.5 x1.000
+  baseline_steady_state  onset flat-25 y36, best y48; fee leg 425324.6 SKL/yr (76.6%) at y36
+      owed y1 787.01 y4 707.17 y8 601.78 y10 551.94 y12 504.84 y15 439.87 y20 397.14 y30 210.48 y40 115.85 y60 34.86
+== inherited | 15/84/1 x1.000
+  baseline_steady_state  onset flat-25 y33, best y40; fee leg 260416.7 SKL/yr (55.0%) at y33
+      owed y1 741.45 y4 666.12 y8 566.85 y10 519.90 y12 475.54 y15 414.34 y20 385.43 y30 204.08 y40 112.32 y60 33.80
+== inherited | 15/85/0 x1.000
+  baseline_steady_state  onset flat-25 y31, best y33; fee leg 118672.9 SKL/yr (28.6%) at y31
+      owed y1 711.09 y4 638.76 y8 543.56 y10 498.55 y12 456.00 y15 397.31 y20 377.65 y30 199.82 y40 109.98 y60 33.09
+== inherited | 15/80/5 elastic x1.000
+  baseline_steady_state  onset flat-25 y40, best y55; fee leg 617132.3 SKL/yr (90.2%) at y40
+      owed y1 862.92 y4 775.58 y8 659.99 y10 605.34 y12 553.68 y15 482.42 y20 418.48 y30 221.20 y40 121.75 y60 36.63
+== re-derived | 15/80/5 x1.000
+  baseline_steady_state  onset flat-25 y32, best y45; fee leg 552017.8 SKL/yr (73.1%) at y32
+      owed y1 915.87 y4 794.19 y8 642.79 y10 574.97 y12 512.89 y15 431.75 y20 319.98 y30 173.19 y40 92.97 y60 26.61
+== re-derived | 15/82.5/2.5 x1.000
+  baseline_steady_state  onset flat-25 y30, best y39; fee leg 385446.6 SKL/yr (57.5%) at y30
+      owed y1 892.08 y4 773.20 y8 625.80 y10 559.77 y12 499.33 y15 419.87 y20 311.18 y30 168.43 y40 90.41 y60 25.87
+== re-derived | 15/84/1 x1.000
+  baseline_steady_state  onset flat-25 y28, best y35; fee leg 274320.6 SKL/yr (40.8%) at y28
+      owed y1 877.81 y4 760.61 y8 615.61 y10 550.65 y12 491.19 y15 412.75 y20 305.90 y30 165.57 y40 88.88 y60 25.44
+== re-derived | 15/85/0 x1.000
+  baseline_steady_state  onset flat-25 y27, best y31; fee leg 184329.2 SKL/yr (28.1%) at y27
+      owed y1 868.29 y4 752.21 y8 608.81 y10 544.57 y12 485.77 y15 408.00 y20 302.38 y30 163.67 y40 87.85 y60 25.14
+== re-derived | 15/80/5 elastic x1.000
+  baseline_steady_state  onset flat-25 y32, best y45; fee leg 552228.8 SKL/yr (73.1%) at y32
+      owed y1 907.13 y4 787.99 y8 641.11 y10 574.97 y12 512.89 y15 431.75 y20 319.98 y30 173.19 y40 92.97 y60 26.61
+
+EI-7 — MEDIAN PATH-DEPENDENCE. The inherited arm's 15/80/5 baseline with a demand blip, the
+demand multiplied for a number of blocks from the start of a year: one volume window (720,
+registered), and half the long-term median's window (50000, added after the registered run, which
+no window's blip can reach). Per run: the year blocks grow, the long-term median at y30 and
+y60 (KB), and Economy carried over Economy demanded over the run.
+  blip none                     blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y17 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y18 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y19 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y20 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y21 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x1.5 at y19 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x3.0 at y19 for 720      blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y17 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.0%
+  blip x2.0 at y18 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.0%
+  blip x2.0 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.0%
+  blip x2.0 at y20 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.2%
+  blip x2.0 at y21 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.7%
+  blip x1.5 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 52.1%
+  blip x3.0 at y19 for 50000    blocks grow y19    median y30  734K y60  734K; Economy served 51.9%
