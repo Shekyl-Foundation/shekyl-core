@@ -27,13 +27,13 @@ use crate::scenario::{Clocked, FreeHash, Mined, Scenario, RULES};
 use crate::schedule::ChainRules;
 use crate::service::service_tests::arrival;
 use crate::service::{Follow, Reply, Service, ServiceConfig};
-use shekyl_hasher::quiet::{assert_matches_fresh, seeds as quiet_seeds};
-
-use crate::test_support::{open_store, open_store_under, own_hasher, tmp, OwnHasher};
+use crate::test_support::{
+    named_seeds, open_store, open_store_under, own_hasher, quiet_seeds, tmp, OwnHasher,
+};
 
 /// The seeds resident once `own`'s hasher is quiet.
-fn quiet(own: &OwnHasher) -> BTreeSet<[u8; 32]> {
-    quiet_seeds(&own.hasher.resident())
+async fn quiet(own: &OwnHasher) -> BTreeSet<[u8; 32]> {
+    quiet_seeds(&own.hasher).await
 }
 
 fn seeds(of: &[BlockHash]) -> BTreeSet<[u8; 32]> {
@@ -87,8 +87,9 @@ async fn connect_all(service: &Service<Judged>, own: &OwnHasher, blocks: &[Mined
     }
 }
 
-/// HA-R5 for a service: once its hasher is quiet it holds what a fresh
-/// one fed the store's list holds. Returns what it holds.
+/// HA-R5 for a service: once the ranker has sent the store's list and the
+/// hasher is quiet, it holds exactly the seeds that list names. Returns
+/// what it holds.
 async fn settled(
     service: &Service<Judged>,
     own: &OwnHasher,
@@ -99,8 +100,13 @@ async fn settled(
         let snap = service.store().begin_read().expect("read");
         crate::service::ranked_on(&snap, rules, None).expect("the store ranks")
     };
-    assert_matches_fresh(&own.hasher.resident(), list.as_ref());
-    quiet(own)
+    let held = quiet(own).await;
+    assert_eq!(
+        held,
+        named_seeds(list.as_ref()),
+        "a quiet hasher holds the seeds its last list names (HA-R5); the list: {list:?}"
+    );
+    held
 }
 
 /// The null seed is built as genesis's job and never ranked
@@ -126,7 +132,7 @@ async fn a_fresh_store_derives_the_null_seed_and_block_zeros_and_keeps_one() {
         Follow::default(),
     );
     assert!(
-        quiet(&own).is_empty(),
+        quiet(&own).await.is_empty(),
         "nothing is ranked on an empty store"
     );
     connect_all(&service, &own, &blocks).await;
@@ -176,7 +182,7 @@ async fn a_switch_whose_blocks_carry_recorded_hashes_builds_nothing() {
         panic!("the heavier tip did not name a switch");
     };
     // Settle first, so a refill in flight is not counted as the switch's.
-    let _resident = quiet(&own);
+    let _resident = quiet(&own).await;
     let (builds, hashes) = (own.pow.derives().builds, own.pow.artifact().hashes);
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(matches!(switched, Switched::Done(_)), "{switched:?}");
@@ -260,7 +266,7 @@ async fn a_held_fork_past_its_seed_point_is_warm_until_it_leaves_the_cap() {
         );
     }
     assert_eq!(
-        quiet(&own),
+        quiet(&own).await,
         seeds(&[main_seed, genesis, fork_seed]),
         "the window's two seeds and the held fork's own"
     );
@@ -275,11 +281,11 @@ async fn a_held_fork_past_its_seed_point_is_warm_until_it_leaves_the_cap() {
         builds,
         "a second span of a live fork builds nothing"
     );
-    assert_eq!(quiet(&own), seeds(&[main_seed, genesis, fork_seed]));
+    assert_eq!(quiet(&own).await, seeds(&[main_seed, genesis, fork_seed]));
     // The fork's root passes the cap.
     x.mine(ROOT + CAP_BLOCKS + 10 - MAIN_TIP).await;
     assert_eq!(
-        quiet(&own),
+        quiet(&own).await,
         seeds(&[main_seed, genesis]),
         "the fork left the cap and its cache is gone"
     );

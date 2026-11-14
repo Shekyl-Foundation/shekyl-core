@@ -74,7 +74,6 @@
 #![deny(unsafe_code)]
 
 mod core;
-pub mod quiet;
 
 use std::cell::Cell;
 use std::fmt;
@@ -134,6 +133,16 @@ impl Ranked {
     const fn third(&self) -> Option<(Seedhash, Class)> {
         self.third
     }
+
+    /// Every seed the list names, in rank order: the window's, then the
+    /// third. What a quiet hasher holds (HA-R5), so a caller that sent
+    /// this list can compare it with [`Resident::caches`].
+    pub fn seeds(&self) -> impl Iterator<Item = Seedhash> + '_ {
+        self.window
+            .iter()
+            .copied()
+            .chain(self.third.map(|(seed, _)| seed))
+    }
 }
 
 /// A ranked list named one seed twice.
@@ -166,15 +175,38 @@ pub enum Residency {
 }
 
 /// What is resident (doc §5.6), published after every change.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Resident {
     /// Each place in use: its seed and what it holds. The length is the
-    /// live-cache count the memory budget is checked against (PB-R1).
+    /// quantity HA-R2 caps, an upper bound on the RandomX cache memory,
+    /// never a reading of it: a place reserved for a build counts, and so
+    /// does a derive still filling its pages, and a cache whose 256 MiB is
+    /// still being returned. It is what the memory budget is checked
+    /// against (PB-R1).
     pub caches: Vec<(Seedhash, Residency)>,
     /// Caches derived since start.
     pub builds: u64,
     /// Nanoseconds those derives took, summed.
     pub build_ns: u64,
+    /// Nothing is in motion: no job waits, no lease is out, no build is
+    /// reserved or deriving, and no freed cache is still being returned.
+    /// The core's fact, set under its lock with every change. A quiet
+    /// hasher holds exactly the seeds its last list names, and nothing
+    /// when it was sent none (HA-R5).
+    pub quiet: bool,
+}
+
+/// A hasher that has been asked for nothing: it holds nothing, and it is
+/// quiet.
+impl Default for Resident {
+    fn default() -> Self {
+        Self {
+            caches: Vec::new(),
+            builds: 0,
+            build_ns: 0,
+            quiet: true,
+        }
+    }
 }
 
 /// Why a [`Loan::hash`] did not hash.
@@ -447,6 +479,7 @@ impl Shared {
             caches: state.core.residency(),
             builds: state.builds,
             build_ns: state.build_ns,
+            quiet: state.core.quiet(),
         };
         self.resident.send_if_modified(|current| {
             if *current == next {
@@ -811,9 +844,12 @@ fn build_loop(shared: &Shared) {
         let mut state = shared.lock();
         let Some(permit) = permit else {
             state.core.unclaim();
+            // The claim is part of `quiet`.
+            shared.publish(&state);
             continue;
         };
         if !state.core.begin(claimed) {
+            shared.publish(&state);
             drop(state);
             drop(permit);
             continue;

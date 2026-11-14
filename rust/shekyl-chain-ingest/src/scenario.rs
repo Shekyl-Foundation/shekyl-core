@@ -202,20 +202,38 @@ impl<P: Pow> Scenario<P> {
         }
     }
 
-    /// HA-R5 at the end of a run on a production pow: the hasher already
-    /// holds the list the writes sent, and that is what a fresh hasher
-    /// fed the same list holds. This does not rank. A write that did not
+    /// HA-R5 at the end of a run on a production pow: once the hasher is
+    /// quiet ([`shekyl_hasher::Resident::quiet`], the core's own fact) it
+    /// holds exactly the seeds the store's list names, and nothing when
+    /// the store has no block. This does not rank. A write that did not
     /// wake the ranker fails here. A free longhash has no hasher, and
     /// this does nothing.
-    fn quiet_is_fresh(&self) {
-        let (Some(store), Some(resident)) = (&self.store, self.substrate.resident()) else {
+    async fn quiet_holds_the_list(&self) {
+        let (Some(store), Some(mut resident)) = (&self.store, self.substrate.resident()) else {
             return;
         };
         let snap = store.begin_read().expect("the driver's store reads");
         let list = crate::cache_window::ranked_on(&snap, self.rules, None)
             .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
         drop(snap);
-        shekyl_hasher::quiet::assert_matches_fresh(&resident, list.as_ref());
+        let named: std::collections::BTreeSet<[u8; 32]> = list
+            .iter()
+            .flat_map(shekyl_hasher::Ranked::seeds)
+            .map(|seed| *seed.as_bytes())
+            .collect();
+        let quiet = resident
+            .wait_for(|resident| resident.quiet)
+            .await
+            .expect("the driver's hasher runs for the driver's life");
+        let held: std::collections::BTreeSet<[u8; 32]> = quiet
+            .caches
+            .iter()
+            .map(|(seed, _)| *seed.as_bytes())
+            .collect();
+        assert_eq!(
+            held, named,
+            "a quiet hasher holds the seeds its last list names (HA-R5); the list: {list:?}"
+        );
     }
 
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
@@ -957,7 +975,7 @@ impl<P: Pow> Scenario<P> {
     /// production pow, first hold the hasher to HA-R5. The writes ranked
     /// it; this checks that they did, and does not send the list again.
     pub async fn close(mut self) {
-        self.quiet_is_fresh();
+        self.quiet_holds_the_list().await;
         self.stop_connector().await;
     }
 

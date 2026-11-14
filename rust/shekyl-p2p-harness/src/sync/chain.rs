@@ -15,6 +15,7 @@
 //! the corpus's fixed target, so its proof is one real hash and its body
 //! is never offered.
 
+use std::collections::BTreeSet;
 use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -198,6 +199,10 @@ pub struct OwnHasher {
     _owner: shekyl_hasher::Owner,
 }
 
+/// How long a stopping chain's hasher may take to come to rest on its
+/// list: the ranker's last list, and at most three derives.
+const QUIET_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Start a hasher over a budget of `permits`.
 ///
 /// # Panics
@@ -360,19 +365,45 @@ impl Chain {
         } = self;
         // Whatever published the frontier has stopped: the service ranks
         // without one. Then HA-R5 on this node's production path
-        // (`RANDOMX_CACHE_ACTOR.md` §8): once the hasher is quiet it holds
-        // what a fresh one fed the store's list holds.
+        // (`RANDOMX_CACHE_ACTOR.md` §8): the hasher comes to rest holding
+        // exactly the seeds the store's list names.
+        //
+        // The service's ranker runs on its own task and sends the list
+        // after it sees the frontier close, so the hasher can read quiet
+        // once on the list before that one. The wait is for the state HA-R5
+        // names, quiet and holding the list's seeds; a hasher that never
+        // reaches it fails here with what it holds.
         drop(frontier);
         let list = {
             let snap = store.begin_read().expect("the store reads");
             shekyl_chain_ingest::service::ranked_on(&snap, rules, None).expect("the store ranks")
         };
-        let resident = own.hasher.resident();
-        tokio::task::spawn_blocking(move || {
-            shekyl_hasher::quiet::assert_matches_fresh(&resident, list.as_ref())
-        })
+        let named: BTreeSet<[u8; 32]> = list
+            .iter()
+            .flat_map(shekyl_hasher::Ranked::seeds)
+            .map(|seed| *seed.as_bytes())
+            .collect();
+        let held = |resident: &shekyl_hasher::Resident| -> BTreeSet<[u8; 32]> {
+            resident
+                .caches
+                .iter()
+                .map(|(seed, _)| *seed.as_bytes())
+                .collect()
+        };
+        let mut resident = own.hasher.resident();
+        let rested = tokio::time::timeout(
+            QUIET_WITHIN,
+            resident.wait_for(|resident| resident.quiet && held(resident) == named),
+        )
         .await
-        .expect("the quiet hasher holds what a fresh one holds (HA-R5)");
+        .is_ok_and(|waited| waited.is_ok());
+        if !rested {
+            let now = resident.borrow().clone();
+            panic!(
+                "the hasher did not come to rest on its list (HA-R5): it holds {now:?}, the \
+                 list names {list:?}"
+            );
+        }
         let _stopped = service.stop().await;
         drop(store);
         drop(own);

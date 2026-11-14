@@ -169,9 +169,11 @@ The actor's loop only takes lists, grants and releases leases, and queues builds
 
 ### 5.6 Publication
 
-The actor publishes `Resident` on a watch after every change: each place's seed and whether it is `Warm`, `Leased`, `Building` or `Retiring` (freed, its cache being dropped), with the count of builds and their total time.
+The actor publishes `Resident` on a watch after every change: each place's seed and whether it is `Warm`, `Leased`, `Building` or `Retiring` (freed, its cache being dropped), with the count of builds and their total time, and `quiet`.
 
-- **The live-cache count is its length,** which the memory budget is checked against (PB-R1). `daemon_status` reports it as `randomx_caches`, in the part shown to `status`, beside `data_size`: the node's status facts read the watch when the call is made, and nothing else counts caches. A caller without the grant gets no part.
+- **`quiet` is the core's fact, not a reader's guess.** It is true when no job waits, no lease is out, the builder holds no claim, and every place is built and held: nothing reserved, deriving or being returned. The core sets it under its lock with every change. A quiet actor holds exactly the seeds its last list names (HA-R5), which `Ranked::seeds` gives a caller to compare; a reader that watched for unchanged warm places would be reading time, and a parked job is not a change.
+
+- **The place count is its length:** the quantity HA-R2 caps, an upper bound on the RandomX cache memory, never a reading of it. A place reserved for a build counts, and so does a derive still filling its pages, and a cache whose 256 MiB is still being returned. It is what the memory budget is checked against (PB-R1). `daemon_status` reports it as `randomx_cache_places`, in the part shown to `status`, beside `data_size`: the node's status facts read the watch when the call is made, and nothing else counts places. A caller without the grant gets no part.
 - **The tip follower reads it for the template's seed.** A seed is ready when its place is `Warm` or `Leased`. The follower first has the list name the tip's seeds (§5.1), then builds; when the build finds the seed still building it leaves the current job and waits on the watch for that seed, and builds again when it is built. It waits on the watch only then: a `Resident` change is every lease taken and returned.
 - **`builds` and `build_ns` are the one source of derive counts.** The ingest's metrics sink counts hashes and each job's wait for its lease, and its artifact reads the derives from here.
 - **Nothing waits on a seed it found absent.** A span's forms and chain sync's proofs are jobs, and a job waits for its own build.
@@ -234,7 +236,8 @@ The cache store, the slot methods on `Substrate`, the ingest's pin lock, window 
 - **`ranked_seeds`, in isolation** (`cache_window.rs`): one table over a one-seed and a two-seed window, a held fork past its seed point, two held forks (the heavier is listed; of two equal, the first in key order), a header frontier ahead of the window, a frontier and a fork together (the more work is listed; of two equal, the fork), and a seed already in the window (not listed twice, and the next-heaviest does not take the place). A store with no block ranks nothing.
 - **The invariant (HA-R5):** once the actor is quiet it holds exactly the caches a fresh actor fed the same list would hold, and no more than three caches exist at any time.
   - In the crate: the core's property test, and the same sequences through the real shell in the nightly lane.
-  - On the production path: every scenario driver over `ProductionPow` checks the cap after each write and the quiet half at its close; the loopback harness gives each node a hasher of its own, checks the cap on every wait, and holds each chain's quiet hasher to a fresh one at its stop.
+  - In the shell: a quiet hasher holds exactly the seeds its last list names, before a list, once built, and after an outside job; a job parked for its permit keeps `quiet` false (`shell_tests.rs`). The property test holds `quiet` to the model's own quiescence after every event, and that no state has a waiting job beside places that are all warm.
+  - On the production path: every scenario driver over `ProductionPow` checks the cap after each write, and at its close waits for `quiet` and compares the places with the seeds the store's list names; the loopback harness gives each node a hasher of its own, checks the cap on every wait, and at each chain's stop waits for the hasher to be quiet on the store's list. Neither starts a second hasher: the core's property test is what holds a quiet core to a fresh one.
 - **Red first, on the production path over real RandomX:**
   - a held fork past its seed point is the list's third and its cache is warm; a second span of it builds nothing; when its root leaves the cap the cache is gone at the next quiescence (`resident_tests.rs`, nightly);
   - a header run's seed is built once while the list names it and freed when the list drops it (HA-F1), and a fork proven by headers and then formed by the ingest is built once (HA-F2) (`executor_tests.rs`);
@@ -244,10 +247,10 @@ The cache store, the slot methods on `Substrate`, the ingest's pin lock, window 
   - two outside-window jobs while the window names two seeds free no window seed (HA-R7) (`executor_tests.rs`);
   - a mining job whose seed leaves the list is cancelled, the worker leaves it, and the cache is freed (`miner_tests.rs`);
   - `pow` on a seed that is not warm is declined, nothing is built, and no RPC hash is spent (`rpc_store_reads_tests.rs`).
-- **The boundary:** a form whose claims name one seed, run as a job on another, ends the service with `SeedNotLent` and refuses nothing; a span has one form waiting for its job at a time; a fresh store derives the null seed and block 0's and keeps one; a closed frontier ranks without it.
+- **The boundary:** a form whose claims name one seed, run as a job on another, ends the service with `SeedNotLent` and refuses nothing; a prove job with an item under another seed answers with the fault, and the sync owner ends with `EndCause::ProofUnjudged`, which reaches `Node::ended()` as `NodeEnd::Sync`; a span has one form waiting for its job at a time; a fresh store derives the null seed and block 0's and keeps one; a closed frontier ranks without it.
 - **Consensus results do not move:** for the RandomX known-answer vector, `Lent::hash`, `Loan::hash`, `Loan::hash_timed` and a warm loan's hash equal the fork's output (`shekyl-hasher` `shell_tests.rs`). The differential harness's parity lanes, the verifier's vectors and every captured corpus run unchanged.
 - **Carried over from #1338:** the 2,124-block nightly test, on the hasher: genesis's cache is freed once the window stops naming it (`resident_tests.rs`). The live RSS reading is step 4's.
-- **The metric:** `daemon_status`'s `randomx_caches` (§5.6): a status call while the hasher holds two caches reports two, and a caller without `status` gets no part.
+- **The metric:** `daemon_status`'s `randomx_cache_places` (§5.6): a status call while the hasher has two places in use reports two, and a caller without `status` gets no part.
 - **The gate** of §7, with the edit that turns each of its sides red in its header.
 
 ## 9. Wargame

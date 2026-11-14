@@ -119,7 +119,7 @@ async fn daemon_status_reports_the_hashers_live_caches_to_status_alone() {
     own.hasher
         .rank(shekyl_hasher::Ranked::new(seed(0xc1), Some(seed(0xc2)), None).expect("two seeds"));
     assert_eq!(
-        shekyl_hasher::quiet::seeds(&own.hasher.resident()).len(),
+        crate::test_support::quiet_seeds(&own.hasher).await.len(),
         2,
         "the hasher holds the two ranked seeds' caches"
     );
@@ -135,7 +135,7 @@ async fn daemon_status_reports_the_hashers_live_caches_to_status_alone() {
         )
         .unwrap_or_else(|_| panic!("daemon_status"));
         assert_eq!(
-            full.randomx_caches.shown().map(|count| count.0),
+            full.randomx_cache_places.shown().map(|count| count.0),
             Some(2),
             "a status call while the hasher holds two caches reports 2"
         );
@@ -148,7 +148,7 @@ async fn daemon_status_reports_the_hashers_live_caches_to_status_alone() {
         )
         .unwrap_or_else(|_| panic!("daemon_status"));
         assert!(
-            restricted.randomx_caches.is_withheld(),
+            restricted.randomx_cache_places.is_withheld(),
             "a caller without `status` gets no part"
         );
         drop(facts);

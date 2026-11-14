@@ -507,12 +507,7 @@ fn a_job_that_frees_the_third_builds_only_once_the_thirds_memory_is_returned() {
 fn a_quiet_hasher_holds_what_a_fresh_one_holds_for_the_same_list() {
     let _serial = serial();
     let list = Ranked::new(s(1), Some(s(2)), Some((s(3), Class::HeaderPow))).expect("distinct");
-    let quiet = |r: &Resident| {
-        r.caches.len() == 3
-            && r.caches
-                .iter()
-                .all(|(_, residency)| *residency == Residency::Warm)
-    };
+    let quiet = |r: &Resident| r.quiet;
     let worked = {
         let (hasher, owner) = start(4);
         hasher.rank(window(&[s(5)]));
@@ -536,6 +531,100 @@ fn a_quiet_hasher_holds_what_a_fresh_one_holds_for_the_same_list() {
         fresh
     };
     assert_eq!(seeds(&worked), seeds(&fresh));
+}
+
+/// What a list names, as a caller compares it with [`Resident::caches`].
+fn named(list: &Ranked) -> Vec<[u8; 32]> {
+    let mut seeds: Vec<[u8; 32]> = list.seeds().map(|seed| *seed.as_bytes()).collect();
+    seeds.sort_unstable();
+    seeds
+}
+
+/// `Resident::quiet` is the core's fact, and a quiet hasher holds exactly
+/// the seeds its last list names (HA-R5): nothing before a list, the
+/// list's seeds once they are built, and the same seeds again after a job
+/// on a seed the list does not name has come and gone. A list that names a
+/// seed the hasher was never sent is not what it holds.
+///
+/// Red edits: publish `quiet: true` always in `Shared::publish`: the first
+/// read after `rank` finds a quiet hasher that holds nothing. Have
+/// `Ranked::seeds` leave the third out: the first comparison fails.
+#[test]
+fn a_quiet_hasher_holds_exactly_the_seeds_its_last_list_names() {
+    let _serial = serial();
+    let (hasher, owner) = start(2);
+    let before = hasher.resident().borrow().clone();
+    assert!(before.quiet, "a hasher asked for nothing is quiet");
+    assert!(before.caches.is_empty());
+    let list = Ranked::new(s(1), Some(s(2)), Some((s(3), Class::HeaderPow))).expect("distinct");
+    hasher.rank(list.clone());
+    assert!(
+        !hasher.resident().borrow().quiet,
+        "a list with nothing built is not quiet when `rank` returns"
+    );
+    let built = until(&hasher, "quiet on the list", |r| r.quiet);
+    assert_eq!(seeds(&built), named(&list));
+    // A job on a seed the list does not name: its cache is gone again at
+    // quiescence, and the third it pushed out is back.
+    let stop = AtomicBool::new(false);
+    assert!(hasher
+        .run(Class::Evidence, s(7), &stop, |lent| lent.hash(b"x"))
+        .is_some());
+    let after = until(&hasher, "quiet after an outside job", |r| r.quiet);
+    assert_eq!(seeds(&after), named(&list));
+    assert_eq!(after.builds, 5, "the outside seed, and the third again");
+    // The comparison a caller makes fails against a list never sent.
+    let never_sent =
+        Ranked::new(s(1), Some(s(2)), Some((s(9), Class::HeaderPow))).expect("distinct");
+    assert_ne!(seeds(&after), named(&never_sent));
+    owner.stop();
+}
+
+/// A job that waits keeps the hasher from reading quiet. On a one-permit
+/// budget whose permit the test holds, a job on the list's own warm seed
+/// is granted its lease and parks for the permit: nothing is being built
+/// and nothing is freed, and `quiet` is false until the job has hashed and
+/// returned. Reading "every cache warm for a while" as quiet is the guess
+/// this replaces; the core's property test holds that no published state
+/// has a waiting job beside caches that are all warm.
+///
+/// Red edit: drop the lease term from `Core::quiet`.
+#[test]
+fn a_job_parked_for_its_permit_keeps_the_hasher_from_reading_quiet() {
+    let _serial = serial();
+    let pool = budget(1);
+    let (hasher, owner) = started(Hasher::start(pool.clone()));
+    let list = window(&[s(1)]);
+    hasher.rank(list.clone());
+    until(&hasher, "quiet on the list", |r| r.quiet);
+    let held = pool.acquire(Class::Chain);
+    let job = {
+        let hasher = hasher.clone();
+        std::thread::spawn(move || {
+            let stop = AtomicBool::new(false);
+            hasher.lend(Class::CalcPow, s(1), &stop, |loan| {
+                loan.hash(b"parked").is_ok()
+            })
+        })
+    };
+    let deadline = Instant::now() + PATIENCE;
+    while pool.waiting(Class::CalcPow) == 0 {
+        assert!(Instant::now() < deadline, "the job parks for the permit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let parked = hasher.resident().borrow().clone();
+    assert!(!parked.quiet, "a parked job is not quiet: {parked:?}");
+    assert!(holds(&parked, s(1), Residency::Leased));
+    std::thread::sleep(QUIET);
+    assert!(
+        !hasher.resident().borrow().quiet,
+        "and waiting does not make it quiet"
+    );
+    drop(held);
+    assert_eq!(job.join().expect("the job returns"), Some(true));
+    let rested = until(&hasher, "quiet once the job returned", |r| r.quiet);
+    assert_eq!(seeds(&rested), named(&list));
+    owner.stop();
 }
 
 /// §5.4 on a one-permit budget: a refill of the third waits for the permit
@@ -965,13 +1054,7 @@ fn a_long_random_sequence_through_the_shell_keeps_the_cap_and_quiesces_to_the_li
     for job in jobs {
         job.join().expect("a job returns");
     }
-    let listed = 1 + usize::from(last.window.len() == 2) + usize::from(last.third.is_some());
-    let quiet = |r: &Resident| {
-        r.caches.len() == listed
-            && r.caches
-                .iter()
-                .all(|(_, residency)| *residency == Residency::Warm)
-    };
+    let quiet = |r: &Resident| r.quiet;
     let worked = until(&hasher, "quiet on the last list", quiet);
     watching.store(false, Ordering::Release);
     let most = watcher.join().expect("the watcher returns");
