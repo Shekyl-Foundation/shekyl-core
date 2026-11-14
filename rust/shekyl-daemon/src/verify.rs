@@ -59,6 +59,16 @@ pub(crate) fn walk(
     // `service` is refused for that, not for a data directory it could
     // not open (`RPC_CHANNEL.md` §7.1).
     owner_socket::service_rendezvous(config, platform).map_err(one)?;
+    // A service's data home is the service manager's or the installer's,
+    // checked and never created (Rick, 2026-11-14): the given data
+    // directory, or the service's root the default one sits in.
+    let explicit = matches!(
+        resolved.source("data-dir"),
+        Some(Source::Cli | Source::File { .. })
+    )
+    .then_some(config.data_dir.as_path());
+    shekyl_daemon_config::paths::check_service_data_home(platform, config.run_mode, explicit)
+        .map_err(one)?;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;

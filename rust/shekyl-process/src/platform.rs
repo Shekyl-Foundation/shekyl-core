@@ -154,6 +154,22 @@ pub fn service_rendezvous() -> Option<PathBuf> {
     }
 }
 
+/// The machine-wide parent of a service's data home, `shekyl` under it
+/// (Rick, 2026-11-14, amending IG-Q36 and `RPC_CHANNEL.md` §7.1):
+/// `%ProgramData%` on Windows, `/var/lib` on Linux, `/var/db` on FreeBSD and
+/// macOS. The service manager or the installer creates `shekyl` there; the
+/// daemon checks it and never creates it.
+#[must_use]
+pub fn service_parent() -> Option<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Some(PathBuf::from("/var/lib"))
+    } else if cfg!(any(target_os = "freebsd", target_os = "macos")) {
+        Some(PathBuf::from("/var/db"))
+    } else {
+        program_data()
+    }
+}
+
 /// This account's and this machine's roots, as the daemon's configuration
 /// takes them: the one constructor the daemon's start, the snapshot export
 /// and the utilities' default data directory share.
@@ -161,7 +177,7 @@ pub fn service_rendezvous() -> Option<PathBuf> {
 pub fn current() -> shekyl_daemon_config::Platform {
     shekyl_daemon_config::Platform {
         home: account_home(),
-        program_data: program_data(),
+        program_data: service_parent(),
         session_dir: session_dir(),
         service_rendezvous: service_rendezvous(),
     }

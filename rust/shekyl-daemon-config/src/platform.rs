@@ -17,7 +17,7 @@ use std::path::PathBuf;
 pub enum RunMode {
     /// Run as a user: the per-account root.
     User,
-    /// Run by the Windows service manager: the machine-wide root.
+    /// The machine's service instance: the machine-wide root.
     Service,
 }
 
@@ -28,7 +28,10 @@ pub struct Platform {
     /// The account's home: the passwd entry on Unix, `FOLDERID_LocalAppData`
     /// on Windows. `None` when the account has none.
     pub home: Option<PathBuf>,
-    /// `%ProgramData%` on Windows; `None` elsewhere.
+    /// The machine-wide parent of a service's data home, which is `shekyl`
+    /// under it (Rick, 2026-11-14): `%ProgramData%` on Windows, `/var/lib`
+    /// on Linux, `/var/db` on FreeBSD and macOS. `None` where the platform
+    /// names none. The daemon checks the data home and never creates it.
     pub program_data: Option<PathBuf>,
     /// The account's per-user session directory, from the platform's own
     /// interface and never the environment (IG-Q14): `/run/user/<uid>` on
