@@ -1361,6 +1361,19 @@ path_set = "rpc-hash-budget"
 # `<crate>::<gungraun-target>`. It has no capture to go stale, because the
 # gate re-measures it on every run; it is here for its path set, the code
 # whose change can move its counts.
+#
+# What the capture costs on the CI runner (the capture job's own time,
+# queue excluded; `benchmarks.yml` sizes its two capture timeouts at about
+# twice the every-row figure, 150 minutes):
+#
+#   2026-11-13  every row, as of the block-path rows      62 min 48 s  run 43360223481 (pull request)
+#   2026-11-13  every row, as of the block-path rows      62 min       run 43357162994 (push to dev)
+#   2026-11-13  every row, network and sync rows added    73 min  0 s  run 43368858900 (pull request)
+#   2026-11-14  every row, network and sync rows added    75 min 28 s  run 43530910488 (pull request)
+#   2026-11-13  four engine-core rows, a scoped capture    9 min 51 s  run 43361888340 (pull request)
+#
+# No pull request has yet been scoped to the block-path rows alone: each
+# daemon-side change so far reached every row.
 
 # The spec names the crates whose code the rows enter. It is not the list of
 # everything they call: the capture's scope reaches a row through the

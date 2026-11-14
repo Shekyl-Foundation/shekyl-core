@@ -81,6 +81,16 @@ refreshes that file. The baseline's tip was captured from `cd51261ab2` on
 | Trigger | PR or push to `dev` touching one of seven crate directories, the Cargo manifests, `scripts/bench/**` or the workflow | `.github/workflows/benchmarks.yml:61` |
 | Device | CI runner only. Nothing in the gate runs on the floor | `.github/workflows/benchmarks.yml:121` |
 
+**What the capture costs (2026-11-13 and 2026-11-14, after this section's
+pin).** The capture job's own time on the CI runner, queue excluded. Every
+row, as of the block-path rows (BA-T2, BA-T41, BA-T42): 62 min 48 s on a
+pull request (run 43360223481) and 62 min on the push to `dev` (run
+43357162994). Every row, with the network and sync rows (BA-T43 to BA-T47,
+BA-T24's arm): 73 min 0 s and 75 min 28 s (runs 43368858900, 43530910488).
+A capture scoped to four engine-core rows: 9 min 51 s (run 43361888340).
+No pull request has yet been scoped to the block-path rows alone. Both
+capture jobs' timeouts are 150 minutes, about twice the every-row figure.
+
 What the gate covers by subject: wallet ledger postcard round-trip (6
 entries), wallet balance compute (3), wallet file open at a KAT KDF (1),
 scanner bookkeeping after scan (3), Bulletproofs+ 2-output prove and hybrid

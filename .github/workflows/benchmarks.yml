@@ -146,12 +146,16 @@ jobs:
           && needs.scope.outputs.bench_rows != 'none')
       )
     runs-on: ubuntu-latest
-    # The capture took 18 to 24 minutes before the block-path rows
-    # (2026-11-12). Those add thirteen functions whose setup replays a
-    # fixture chain under callgrind: 34 minutes on a 16-core workstation,
-    # and a release build of the ingest crate's benches. Sized for a 4-vCPU
-    # runner from that; reread from the first runs.
-    timeout-minutes: 120
+    # About twice the measured capture (ruled 2026-11-12). The capture job's
+    # own time on this runner, queue excluded:
+    #   every row, block-path rows in:        62 min 48 s (run 43360223481)
+    #   every row, network and sync rows in:  73 min 0 s  (run 43368858900)
+    #                                         75 min 28 s (run 43530910488)
+    #   four engine-core rows (a scoped PR):   9 min 51 s (run 43361888340)
+    # The limit is sized from the every-row capture, the longest a pull
+    # request can be scoped to. No pull request has yet been scoped to the
+    # block-path rows alone; its figure lies between the two.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
         with:
@@ -448,8 +452,10 @@ jobs:
     name: update bench-baseline branch
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-    # The same capture as `capture-pr`, and its sizing.
-    timeout-minutes: 120
+    # The same capture as `capture-pr` at every row, and its sizing: 62 min
+    # on the push that merged the block-path rows (run 43357162994), before
+    # the network and sync rows.
+    timeout-minutes: 150
     permissions:
       contents: write
     steps:
