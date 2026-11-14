@@ -808,6 +808,44 @@ fn a_service_is_given_no_socket_directory() {
     assert_eq!(c.rpc.socket_dir, Some(PathBuf::from("/run/shekyl")));
 }
 
+/// The owning connection (IG-Q106) is the command line's alone, never a
+/// standard stream's number, and never a service's: the service manager
+/// holds a service's life. Red edit: drop the conflict in
+/// `session_section`, and the service start builds.
+#[cfg(not(windows))]
+#[test]
+fn the_owning_connection_is_the_command_lines_and_not_a_services() {
+    assert_eq!(
+        codes(build_from(&[], "owning-connection = 5\n")),
+        vec![(Code::ValueSurface, "owning-connection".into())]
+    );
+    for standard in ["0", "1", "2"] {
+        assert_eq!(
+            codes(build_from(&["--owning-connection", standard], "")),
+            vec![(Code::ValueRange, "owning-connection".into())],
+            "{standard}"
+        );
+    }
+    assert_eq!(
+        codes(build_from(
+            &[
+                "--service",
+                "--owning-connection",
+                "5",
+                "--data-dir",
+                "/var/lib/shekyl",
+                "--log-file",
+                "/var/log/shekyl/shekyld.log",
+            ],
+            ""
+        )),
+        vec![(Code::ValueConflict, "owning-connection".into())]
+    );
+    let c = build_from(&["--owning-connection", "5"], "").unwrap();
+    assert_eq!(c.session.owning_connection, Some(5));
+    assert_eq!(build_from(&[], "").unwrap().session.owning_connection, None);
+}
+
 /// On Windows `service` also answers the service manager, whose dispatcher
 /// is RT-W14's, so the switch is refused there as the reserved row was.
 #[cfg(windows)]

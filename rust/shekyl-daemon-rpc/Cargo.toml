@@ -112,6 +112,9 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The owner's pipe name is drawn at random on every start (RPC_CHANNEL.md
 # §7.1). The pin the channel crate already carries.
 rand_core = { version = "0.6", features = ["getrandom"] }
+# The rendezvous record's format, which the client that resolves "this
+# computer" reads from the same module (RPC_CHANNEL.md RT-15, §7.1).
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

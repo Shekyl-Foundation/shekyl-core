@@ -6,7 +6,7 @@ version = "0.1.0"
 # SemVer contract on its public surface. Owns a small hyper client (see `http_client`)
 # re-absorbed from `simple-request` so it can add an optional SOCKS5h proxy connector.
 publish = false
-description = "Shekyl RPC transport: hyper client (optional SOCKS5h) plus the shared listen-address classifier (RT-1/RT-2)"
+description = "Shekyl RPC transport: hyper client (optional SOCKS5h), the shared listen-address classifier (RT-1/RT-2), and the \"this computer\" dial of a daemon's owner's leg (RT-15)"
 license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
@@ -48,10 +48,36 @@ shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, f
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# "This computer" (`local`): the daemon's own rendezvous naming and record
+# (RPC_CHANNEL.md RT-15, §7.1), and the network whose id the name hashes.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-network = { path = "../shekyl-network" }
+
+# The account's root and, on Unix, the peer's account for the owner's leg's
+# check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
+# the daemon's process crate reads the same root from.
+shekyl-os-account = { path = "../shekyl-os-account" }
+
+[target.'cfg(windows)'.dependencies]
+# The logon session, and the pipe's open with its peer check
+# (`open_verified`).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
 shekyl-address = { path = "../shekyl-address" }
+
+[target.'cfg(windows)'.dev-dependencies]
+# tests/local_peer_check.rs: a pipe with a Low integrity label behind a
+# rendezvous record, which the peer check must refuse (RT-15).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+

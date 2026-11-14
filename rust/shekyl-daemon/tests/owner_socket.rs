@@ -20,12 +20,15 @@
 //! lacks them.
 
 use std::fs::File;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use shekyl_daemon_config::Platform;
+use shekyl_network::Network;
+use shekyl_rpc_channel::Instance;
+use shekyl_rpc_transport::local::LocalTarget;
+use shekyl_rpc_types::endpoint::JSON_RPC_ROUTE;
 
 /// The child's working directory. Set only when this binary is a child.
 const CHILD_DIR: &str = "SHEKYL_TEST_OWNER_SOCKET_CHILD_DIR";
@@ -95,15 +98,27 @@ struct Node {
 /// the daemon makes the directory itself, labelled.
 fn workdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a directory");
+    owner_only(dir.path());
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(dir.path().join("s"))
-            .expect("the socket directory");
+        let socket_dir = dir.path().join("s");
+        std::fs::create_dir(&socket_dir).expect("the socket directory");
+        owner_only(&socket_dir);
     }
     dir
+}
+
+/// Set `dir`'s mode to 0700 (Unix): every directory this test creates is
+/// the owner's alone, whatever the box's umask would give it.
+fn owner_only(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the directory's mode");
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 impl Node {
@@ -111,6 +126,7 @@ impl Node {
     /// `dir` with the data directory `data`.
     fn spawn(test_name: &str, dir: &Path, data: &'static str) -> Self {
         std::fs::create_dir_all(dir.join(data)).expect("the data directory");
+        owner_only(&dir.join(data));
         let stderr = File::create(dir.join(format!("{data}.stderr"))).expect("the stderr file");
         let mut command = Command::new(std::env::current_exe().expect("this test binary"));
         command
@@ -120,8 +136,8 @@ impl Node {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr));
-        let child = shekyl_tor_control_client::spawn_lock::with(|| command.spawn())
-            .expect("the daemon child starts");
+        let child =
+            shekyl_spawn::spawn_lock::with(|| command.spawn()).expect("the daemon child starts");
         Self {
             child,
             dir: dir.to_path_buf(),
@@ -156,22 +172,11 @@ impl Node {
     }
 
     /// The socket (Unix) or the rendezvous record (Windows) the daemon
-    /// published: `shekyl-<24 hex>`, with `.sock` on Unix.
+    /// published, found as a client finds it: by the daemon's own naming
+    /// for regtest's default instance, in the harness's directory.
     fn socket(&self) -> Option<PathBuf> {
-        let suffix = if cfg!(unix) { ".sock" } else { "" };
-        std::fs::read_dir(self.dir.join("s"))
-            .ok()?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(|n| n.strip_prefix("shekyl-"))
-                    .and_then(|n| n.strip_suffix(suffix))
-                    .is_some_and(|hex| {
-                        hex.len() == 24 && hex.bytes().all(|b| b.is_ascii_hexdigit())
-                    })
-            })
+        let path = target(&self.dir).path().to_path_buf();
+        path.exists().then_some(path)
     }
 
     fn log(&self) -> String {
@@ -215,39 +220,22 @@ impl Drop for Node {
     }
 }
 
-/// The owner's leg at `rendezvous`, connected: the socket itself on Unix,
-/// the pipe the record names on Windows, opened through the peer check.
-#[cfg(unix)]
-fn connect(rendezvous: &Path) -> Option<std::os::unix::net::UnixStream> {
-    let stream = std::os::unix::net::UnixStream::connect(rendezvous).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .ok()?;
-    Some(stream)
+/// "This computer"'s client, told the harness's socket directory: the
+/// rendezvous by the daemon's own naming (`RPC_CHANNEL.md` RT-15, §7.1).
+fn target(dir: &Path) -> LocalTarget {
+    LocalTarget::resolve(Network::Regtest, &Instance::Default, Some(&dir.join("s")))
+        .expect("a named directory")
 }
 
-#[cfg(windows)]
-fn connect(rendezvous: &Path) -> Option<shekyl_win_sec::VerifiedPipe> {
-    let record = std::fs::read_to_string(rendezvous).ok()?;
-    let pipe = record.lines().find_map(|l| l.strip_prefix("pipe "))?;
-    shekyl_win_sec::open_verified(pipe).ok()
-}
-
-/// One JSON-RPC call over the owner's leg; the reply's body, or `None`
-/// while nothing serves it.
-fn post(path: &Path, method: &str) -> Option<String> {
-    let mut stream = connect(path)?;
+/// One JSON-RPC call over the owner's leg at `rendezvous`, through the
+/// client; the reply's body, or `None` while nothing serves it.
+fn post(rendezvous: &Path, method: &str) -> Option<String> {
+    let dir = rendezvous.parent()?.parent()?;
     let body = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}"}}"#);
-    let request = format!(
-        "POST /json_rpc HTTP/1.1\r\nHost: owner\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).ok()?;
-    let (head, body) = reply.split_once("\r\n\r\n")?;
-    head.starts_with("HTTP/1.1 200").then(|| body.to_owned())
+    let reply = target(dir)
+        .post(JSON_RPC_ROUTE, body.as_bytes(), Duration::from_secs(10))
+        .ok()?;
+    String::from_utf8(reply.to_vec()).ok()
 }
 
 /// **The owner is the host's administrator, and the daemon's life is its

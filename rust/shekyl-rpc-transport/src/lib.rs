@@ -25,6 +25,7 @@ use shekyl_rpc_client::{Rpc, RpcError};
 
 mod http_client;
 pub mod listen;
+pub mod local;
 pub mod network_posture;
 use http_client::{error_chain, HttpClient, HttpError, TransportTls};
 
@@ -671,19 +672,7 @@ impl SyncDaemon {
         &self,
         request: &M::Request,
     ) -> Result<M::Reply, JsonRpcError> {
-        let params = serde_json::to_value(request)
-            .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
-        let reply_shape = <M::Reply as shekyl_rpc_types::schema::Schema>::shape();
-        // The switches this request turned on: the reply carries the fields
-        // they select, and no field a switch left off (RW-Q4).
-        let on = shekyl_rpc_types::schema::switches_on(&params, &reply_shape);
-        let result = self.json_rpc_result(M::NAME, &params)?;
-        shekyl_rpc_types::schema::conforms_presence(&result, &reply_shape, &on).map_err(|why| {
-            JsonRpcError::Malformed(format!("malformed {} reply: {why}", M::NAME))
-        })?;
-        serde_json::from_value(result).map_err(|error| {
-            JsonRpcError::Malformed(format!("malformed {} reply: {error}", M::NAME))
-        })
+        call_via::<M, _>(request, |route, body| self.post(route, body))
     }
 
     /// One JSON-RPC call by name: the table's calls go through
@@ -698,50 +687,87 @@ impl SyncDaemon {
         Req: serde::Serialize,
         Reply: serde::de::DeserializeOwned,
     {
-        let result = self.json_rpc_result(method, request)?;
-        serde_json::from_value(result)
-            .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
-    }
-
-    /// One JSON-RPC call's `result`, undecoded.
-    fn json_rpc_result<Req: serde::Serialize>(
-        &self,
-        method: &str,
-        request: &Req,
-    ) -> Result<serde_json::Value, JsonRpcError> {
-        let body = serde_json::to_vec(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": method,
-            "params": request,
-        }))
-        .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
-        let raw = self
-            .post(shekyl_rpc_types::endpoint::JSON_RPC_ROUTE, body)
-            .map_err(JsonRpcError::Transport)?;
-        let envelope: serde_json::Value = serde_json::from_slice(&raw)
-            .map_err(|_| JsonRpcError::Malformed(format!("malformed {method} reply")))?;
-        if let Some(error) = envelope.get("error") {
-            if shekyl_rpc_types::errors::is_method_not_found(error) {
-                return Err(JsonRpcError::NoSuchMethod(method.to_owned()));
-            }
-            return Err(match shekyl_rpc_types::errors::read_error_object(error) {
-                Some(refusal) => JsonRpcError::Refusal(refusal),
-                None => JsonRpcError::Malformed(format!("{method} failed")),
-            });
-        }
-        envelope
-            .get("result")
-            .cloned()
-            .ok_or_else(|| JsonRpcError::Malformed(format!("malformed {method} reply: no result")))
+        json_rpc_via(method, request, |route, body| self.post(route, body))
     }
 }
 
-/// A JSON-RPC call that did not return a reply.
+/// One call of method `M` over `post`, whatever carries it: the envelope,
+/// the reply's shape check and the refusal's reading, once for every
+/// transport.
+pub(crate) fn call_via<M, T>(
+    request: &M::Request,
+    post: impl FnOnce(&str, Vec<u8>) -> Result<Vec<u8>, T>,
+) -> Result<M::Reply, JsonRpcError<T>>
+where
+    M: shekyl_rpc_client::RpcMethod,
+{
+    let params = serde_json::to_value(request)
+        .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+    let reply_shape = <M::Reply as shekyl_rpc_types::schema::Schema>::shape();
+    // The switches this request turned on: the reply carries the fields
+    // they select, and no field a switch left off (RW-Q4).
+    let on = shekyl_rpc_types::schema::switches_on(&params, &reply_shape);
+    let result = json_rpc_result_via(M::NAME, &params, post)?;
+    shekyl_rpc_types::schema::conforms_presence(&result, &reply_shape, &on)
+        .map_err(|why| JsonRpcError::Malformed(format!("malformed {} reply: {why}", M::NAME)))?;
+    serde_json::from_value(result)
+        .map_err(|error| JsonRpcError::Malformed(format!("malformed {} reply: {error}", M::NAME)))
+}
+
+/// One JSON-RPC call by name over `post`, its result decoded as `Reply`.
+pub(crate) fn json_rpc_via<Req, Reply, T>(
+    method: &str,
+    request: &Req,
+    post: impl FnOnce(&str, Vec<u8>) -> Result<Vec<u8>, T>,
+) -> Result<Reply, JsonRpcError<T>>
+where
+    Req: serde::Serialize,
+    Reply: serde::de::DeserializeOwned,
+{
+    let result = json_rpc_result_via(method, request, post)?;
+    serde_json::from_value(result)
+        .map_err(|error| JsonRpcError::Malformed(format!("malformed {method} reply: {error}")))
+}
+
+/// One JSON-RPC call's `result`, undecoded.
+fn json_rpc_result_via<Req: serde::Serialize, T>(
+    method: &str,
+    request: &Req,
+    post: impl FnOnce(&str, Vec<u8>) -> Result<Vec<u8>, T>,
+) -> Result<serde_json::Value, JsonRpcError<T>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": method,
+        "params": request,
+    }))
+    .map_err(|error| JsonRpcError::Malformed(error.to_string()))?;
+    let raw =
+        post(shekyl_rpc_types::endpoint::JSON_RPC_ROUTE, body).map_err(JsonRpcError::Transport)?;
+    let envelope: serde_json::Value = serde_json::from_slice(&raw)
+        .map_err(|_| JsonRpcError::Malformed(format!("malformed {method} reply")))?;
+    if let Some(error) = envelope.get("error") {
+        if shekyl_rpc_types::errors::is_method_not_found(error) {
+            return Err(JsonRpcError::NoSuchMethod(method.to_owned()));
+        }
+        return Err(match shekyl_rpc_types::errors::read_error_object(error) {
+            Some(refusal) => JsonRpcError::Refusal(refusal),
+            None => JsonRpcError::Malformed(format!("{method} failed")),
+        });
+    }
+    envelope
+        .get("result")
+        .cloned()
+        .ok_or_else(|| JsonRpcError::Malformed(format!("malformed {method} reply: no result")))
+}
+
+/// A JSON-RPC call that did not return a reply. `T` is the transport's own
+/// failure: [`PostFault`] for HTTP, [`local::LocalFault`] for "this
+/// computer", so neither is folded into the other.
 #[derive(Debug)]
-pub enum JsonRpcError {
+pub enum JsonRpcError<T = PostFault> {
     /// The post failed.
-    Transport(PostFault),
+    Transport(T),
     /// The daemon refused. The class and the diagnostic are the refusal.
     Refusal(shekyl_rpc_types::errors::RpcError),
     /// The daemon serves no method by this name: a daemon of another RPC
@@ -763,7 +789,7 @@ pub fn json_rpc_result_body(result: &impl serde::Serialize) -> String {
     .to_string()
 }
 
-impl std::fmt::Display for JsonRpcError {
+impl<T: std::fmt::Display> std::fmt::Display for JsonRpcError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Transport(error) => write!(f, "{error}"),

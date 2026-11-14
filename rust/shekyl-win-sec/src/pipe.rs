@@ -56,6 +56,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
@@ -403,8 +404,19 @@ const BUSY_RETRIES: u32 = 3;
 /// returned with no byte written. This is the dial-side half of containment
 /// (module docs) and the only pipe-open path `shekyl-cli` has.
 pub fn open_verified(name: &str) -> Result<VerifiedPipe, DialError> {
+    open_verified_checked(name, None)
+}
+
+/// [`open_verified`], with every busy-wait ending by `deadline`: a pipe
+/// still busy then is [`DialError::Busy`]. For a caller whose whole call is
+/// bounded, so the open spends only what is left of it.
+pub fn open_verified_by(name: &str, deadline: Instant) -> Result<VerifiedPipe, DialError> {
+    open_verified_checked(name, Some(deadline))
+}
+
+fn open_verified_checked(name: &str, deadline: Option<Instant>) -> Result<VerifiedPipe, DialError> {
     let me = current_user_sid()?;
-    let file = open_pipe_handle(name)?;
+    let file = open_pipe_handle(name, deadline)?;
     // SAFETY: `file` owns a live handle to a pipe this process just opened,
     // and it outlives the call.
     let verified = unsafe { PeerCheck::verify(file.as_raw_handle().cast(), &me) }
@@ -415,8 +427,9 @@ pub fn open_verified(name: &str) -> Result<VerifiedPipe, DialError> {
     })
 }
 
-/// `CreateFile` on the pipe name, synchronous, with a bounded busy-wait.
-fn open_pipe_handle(name: &str) -> Result<File, DialError> {
+/// `CreateFile` on the pipe name, synchronous, with a bounded busy-wait:
+/// at most [`BUSY_RETRIES`] waits of [`BUSY_WAIT_MS`], none past `deadline`.
+fn open_pipe_handle(name: &str, deadline: Option<Instant>) -> Result<File, DialError> {
     let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     let mut busy_waits = 0;
     loop {
@@ -448,8 +461,20 @@ fn open_pipe_handle(name: &str) -> Result<File, DialError> {
             Some(ERROR_FILE_NOT_FOUND) => return Err(DialError::NotFound),
             Some(ERROR_PIPE_BUSY) if busy_waits < BUSY_RETRIES => {
                 busy_waits += 1;
-                // SAFETY: `wide` as above. Blocks for at most `BUSY_WAIT_MS`.
-                let freed = unsafe { WaitNamedPipeW(wide.as_ptr(), BUSY_WAIT_MS) };
+                let wait_ms = match deadline {
+                    None => BUSY_WAIT_MS,
+                    Some(deadline) => {
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        if left.is_zero() {
+                            return Err(DialError::Busy);
+                        }
+                        u32::try_from(left.as_millis())
+                            .unwrap_or(u32::MAX)
+                            .clamp(1, BUSY_WAIT_MS)
+                    }
+                };
+                // SAFETY: `wide` as above. Blocks for at most `wait_ms`.
+                let freed = unsafe { WaitNamedPipeW(wide.as_ptr(), wait_ms) };
                 if freed == 0 {
                     let wait_err = io::Error::last_os_error();
                     return Err(if os_code(&wait_err) == Some(ERROR_SEM_TIMEOUT) {
@@ -469,4 +494,32 @@ fn open_pipe_handle(name: &str) -> Result<File, DialError> {
 /// are typed as. `None` for a non-OS error or a negative code.
 fn os_code(err: &io::Error) -> Option<u32> {
     err.raw_os_error().and_then(|code| u32::try_from(code).ok())
+}
+
+/// Cancel the synchronous I/O `thread` is blocked in, if any: a read or
+/// write on a [`VerifiedPipe`] that would otherwise wait for a peer that
+/// never answers. `Ok(true)` when an operation was cancelled (it returns
+/// `ERROR_OPERATION_ABORTED` on that thread), `Ok(false)` when the thread
+/// was not in one: it has finished, or is between two calls, so a caller
+/// that needs the thread out repeats until the thread reports back. The
+/// handle is the `JoinHandle`'s, valid while it is borrowed.
+///
+/// # Errors
+///
+/// The operating system's, other than "nothing to cancel".
+pub fn cancel_synchronous_io<T>(thread: &std::thread::JoinHandle<T>) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::System::IO::CancelSynchronousIo;
+    // SAFETY: the handle is the thread's, held open by the borrowed
+    // `JoinHandle` for the call's duration.
+    if unsafe { CancelSynchronousIo(thread.as_raw_handle().cast()) } != 0 {
+        return Ok(true);
+    }
+    let err = io::Error::last_os_error();
+    if os_code(&err) == Some(ERROR_NOT_FOUND) {
+        Ok(false)
+    } else {
+        Err(err)
+    }
 }

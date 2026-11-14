@@ -982,6 +982,13 @@ control port of its own (`net/listeners/control` empty); closing our end
 exited Tor in about 20 ms (C4); and the parent's `abort()` exited Tor cleanly
 through the same path (C5).
 
+The pair, its spawn window and the spawn lock are `shekyl-spawn`'s
+(`rust/shekyl-spawn`: `pair.rs`, `spawn_lock.rs`, `inherit.rs`), a leaf crate
+the managed launch shares with a GUI's launch of the daemon holding its owning
+connection (`GUI_SYNC_LANE.md` GS-C3). Its contract: one lock per process, and
+a holder only spawns under it. The Tor launcher (`control/launch.rs`) adds
+Tor's control halves and errors around it.
+
 - **Unix:** a `socketpair`. Tor's end is marked inheritable in the child only,
   in `pre_exec` (clearing `FD_CLOEXEC`), so no concurrent spawn can inherit it.
   The parent's copy keeps close-on-exec, and is closed before the spawn returns.

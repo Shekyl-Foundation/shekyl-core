@@ -82,7 +82,7 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 # The regtest spawns in this crate's tests take the spawn lock. The binary
 # does not launch tor; the lock is the gate's subject for a watched image,
 # and the test uses the same call the harness does.
-shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-spawn = { path = "../shekyl-spawn" }
 proptest = "1"
 tempfile = "3"
 # A console fixture that builds a reply the daemon would send

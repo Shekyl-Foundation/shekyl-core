@@ -424,6 +424,16 @@ members = [
     # wallet and daemon never name each other.
     "shekyl-tor-control-wallet",
     "shekyl-tor-control-client",
+    # Spawning a child that inherits one end of a connected pair: the one spawn
+    # lock, the child's descriptor hygiene, and the pair with its window. A
+    # leaf (std, libc, windows-sys): the Tor launcher, the daemon's owning
+    # connection and the GUI's launch share it.
+    "shekyl-spawn",
+    # The operating-system account: its effective user id, its session
+    # directory, its root for a rendezvous, and the account at the other end
+    # of a local socket. A leaf with no network stack (libc; shekyl-win-sec on
+    # Windows): the daemon's process crate and the transport share it.
+    "shekyl-os-account",
     "shekyl-tor-control-daemon",
     # The Tor status as it crosses the wire, and the one renderer that
     # turns it into words (`docs/design/TOR_STATUS_CRATE.md`). No I/O;

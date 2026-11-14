@@ -308,9 +308,9 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The lib test image both serves `WalletTorControl` and spawns
 # (`engine::regtest_e2e`). Those spawns share an address space with a managed
 # tor, so they take the spawn lock (`TOR_SUPERVISOR.md` §4.7). This direct
-# dev edge is how the test names `spawn_lock`. Already a normal dependency of
-# `shekyl-tor-control-wallet`, which this crate depends on.
-shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# dev edge is how the test names `spawn_lock`: the process's one lock, the
+# copy `shekyl-tor-control-client` (under `shekyl-tor-control-wallet`) takes.
+shekyl-spawn = { path = "../shekyl-spawn" }
 # Serving-lifecycle tests mint an ephemeral onion (`task_lifecycle.rs`,
 # compiled only under `cfg(test)`). Production takes the keypair from the
 # persona bundle and does not name this crate.

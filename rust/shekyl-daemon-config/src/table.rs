@@ -173,6 +173,10 @@ const ROWS: &[Row] = &[
         visibility: Visibility::Public,
         help: "Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14).",
     },
+    // IG-Q106: the end of a connected pair the starting process handed this
+    // one. The number names a descriptor of this process start only, so the
+    // command line is its one surface; 0 to 2 are the standard streams.
+    public("owning-connection", Kind::Integer { min: 3, keywords: &[] }, Default::Unset, Surface::Cli, "The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service."),
     public("instance", INSTANCE, Default::Unset, Surface::Both, "This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir."),
     public("config-file", Kind::Path, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused."),
     public("data-dir", Kind::Path, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
@@ -421,13 +425,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 52 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 53 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 52);
+        assert_eq!(live, 53);
         let levers = TABLE
             .rows
             .iter()
