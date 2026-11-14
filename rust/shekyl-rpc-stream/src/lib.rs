@@ -317,6 +317,37 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         }
     }
 
+    /// A stream whose first record the handshake already opened, that
+    /// record admitted into the stream's record shapes as if this stream had
+    /// read it: its class and whether it was empty. A submission that starts
+    /// in the first record is then counted whole, so the connection's first
+    /// `tx_submit` is shaped as one ([`InboundShape`]). This is what the
+    /// daemon's listener calls; [`Self::after_first_record`] is the payload
+    /// alone.
+    ///
+    /// # Errors
+    ///
+    /// The first record is in a shape no sender makes, or is the close:
+    /// [`RecordShapeRefused`], as an [`io::ErrorKind::InvalidData`].
+    pub fn after_first_opened(
+        io: T,
+        send: SendDirection,
+        recv: RecvDirection,
+        first: shekyl_noise::Opened,
+        unread_wire: Vec<u8>,
+    ) -> io::Result<Self> {
+        let class = first.class;
+        let empty = first.payload.is_empty();
+        let mut stream = Self::after_first_record(io, send, recv, first.payload, unread_wire);
+        if stream.admit_shape(class, empty)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                RecordShapeRefused,
+            ));
+        }
+        Ok(stream)
+    }
+
     /// The idle RT-W11's pool sets. A session waits this long with no
     /// record in progress before it is closed. A record already started
     /// still fails at [`READ_STALL`].
