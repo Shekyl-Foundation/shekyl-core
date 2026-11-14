@@ -436,10 +436,15 @@ mod tests {
             .expect("a read bound");
         ours.write_all(b"x").expect("the child is reading");
         assert!(child.wait().expect("the child exits").success());
+        // End of stream, or on Windows a reset: a process's exit closes its
+        // sockets abortively there. A parent copy left open is neither: the
+        // read times out.
         let mut rest = Vec::new();
-        ours.read_to_end(&mut rest)
-            .expect("EOF once the child is gone");
-        assert!(rest.is_empty());
+        match ours.read_to_end(&mut rest) {
+            Ok(_) => assert!(rest.is_empty()),
+            Err(e) if cfg!(windows) && e.kind() == io::ErrorKind::ConnectionReset => {}
+            Err(e) => panic!("the connection outlived the child: {e}"),
+        }
     }
 
     /// A spawn that fails returns its own error, and the window still closes
