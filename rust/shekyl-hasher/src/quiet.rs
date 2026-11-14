@@ -23,7 +23,7 @@ use crate::{Hasher, Ranked, Residency, Resident};
 /// How long every cache must sit warm and unchanged before the watch is quiet.
 const SETTLED_FOR: Duration = Duration::from_millis(300);
 
-/// How often the check reads the watch while it waits for [`SETTLED_FOR`].
+/// How often the check reads the watch while it waits for `SETTLED_FOR`.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How long the check waits. Past this the hasher is not coming to rest,
@@ -31,12 +31,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SETTLE_LIMIT: Duration = Duration::from_secs(120);
 
 /// The seeds `resident` shows once it is quiet: every cache warm, and
-/// nothing changing for [`SETTLED_FOR`]. A build or a lease in flight is
+/// nothing changing for 300 ms. A build or a lease in flight is
 /// waited out.
 ///
 /// # Panics
 ///
-/// The watch does not settle within [`SETTLE_LIMIT`].
+/// The watch does not settle within two minutes.
 #[must_use]
 pub fn seeds(resident: &Receiver<Resident>) -> BTreeSet<[u8; 32]> {
     let started = Instant::now();
