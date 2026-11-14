@@ -140,6 +140,27 @@ BENCHES=(
   # a cache derived outside the measured region. iai-only: the floor
   # figure is BA-T40's and the Rust-to-C ratio BA-T27's.
   "shekyl-pow-randomx::verify_header_iai"
+  # BA-T44: one body response built from the store, the sync owner's
+  # `serve_bodies` for a peer's request of eight blocks. iai-only. The
+  # store is the block-path driver's, so the bench is chain-ingest's and
+  # rides the same two features.
+  "shekyl-chain-ingest::serve_bodies_iai:bench-internals,harness"
+  # BA-T45: that response as one inbound Levin frame, read off the
+  # session's bytes and decoded into its bodies. iai-only.
+  "shekyl-chain-ingest::levin_bodies_iai:bench-internals,harness"
+  # BA-T46: one block template built over the design load's listing.
+  # The design load names 30 transactions a block; 28 2-in/2-out spends
+  # are what one block admits at the genesis median. iai-only.
+  "shekyl-chain-ingest::block_template_iai:bench-internals,harness"
+  # BA-T47: a wallet's block read, the RPC's `block_list` over the store
+  # facts for eight heights, and the reply serialized. iai-only.
+  "shekyl-chain-ingest::wallet_block_read_iai:bench-internals,harness"
+  # BA-T24's per-PR arm: C5's cells as counts. The handshake's three
+  # steps, one record and one window sealed and opened, one rekey. The
+  # criterion `c5` target stays a floor run's instrument and is not
+  # captured here: it has no `crypto_bench_*` routing and its samples
+  # are sessions, not calls.
+  "shekyl-p2p-transport::c5_iai:c5-bench"
 )
 
 # The nightly set: rows too long for a pull request. Same row format.

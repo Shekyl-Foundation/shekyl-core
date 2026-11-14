@@ -58,7 +58,8 @@ pipeline = [
 ]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 # bench-internals: the synchronous block-path driver the instruction-count
-# benches run (`bench_support.rs`, `benches/block_path_iai.rs`). The driver
+# benches run (`bench_support.rs`; `benches/block_path_iai.rs` and the
+# benches that read or serve from its store). The driver
 # also needs `harness`, for the unpinned regtest rules a fixture chain is
 # mined under (`ChainRules::harness_regtest`). This feature does not enable
 # it: `harness` is TEST_ONLY and no feature of this crate may turn it on
@@ -102,6 +103,32 @@ required-features = ["bench-internals", "harness"]
 # bench-full) and not a pull request's.
 [[bench]]
 name = "block_path_full_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One body response built from the store (BA-T44): the sync owner's
+# `serve_bodies`, over the block-path driver's store.
+[[bench]]
+name = "serve_bodies_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One inbound body response read off the session and decoded (BA-T45).
+[[bench]]
+name = "levin_bodies_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# A wallet's block read answered from the store (BA-T47): the RPC's
+# `block_list` over the store facts, and the reply serialized.
+[[bench]]
+name = "wallet_block_read_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One block template built over a committed listing (BA-T46).
+[[bench]]
+name = "block_template_iai"
 harness = false
 required-features = ["bench-internals", "harness"]
 
@@ -217,6 +244,13 @@ shekyl-tor-status = { path = "../shekyl-tor-status" }
 # The instruction-count harness of `benches/block_path_iai.rs`, at the
 # version every other gated bench uses.
 gungraun = "0.19"
+# `serve_bodies`, the subject of `benches/serve_bodies_iai.rs` and the
+# producer of the frame `benches/levin_bodies_iai.rs` decodes. That crate
+# depends on this one, so the edge is a dev-dependency cycle, as
+# `shekyl-chain-sync`'s edge back to this crate is.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
+# The body request and response those two benches build and decode.
+shekyl-levin = { path = "../shekyl-levin" }
 # Each test store's own directory (`test_support::tmp`), which takes the
 # store's sidecar files with it when the test ends.
 tempfile = { workspace = true }

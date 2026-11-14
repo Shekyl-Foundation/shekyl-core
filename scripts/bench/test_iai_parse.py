@@ -78,6 +78,32 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(derive["metrics"]["instructions"], 2351031131)
         self.assertEqual(len(derive["metrics"]), 6)
 
+    def test_a_named_case_without_a_setup_keeps_its_own_counts(self) -> None:
+        """A `#[bench::<id>()]` case prints `<function> <id>` and no colon.
+
+        Red edit: require `:<args>` again in `HEADER_RE`. The rekey's
+        counts would attach to the window cell before it, and this entry's
+        instruction count would be the window's.
+        """
+        window = METRICS
+        rekey = METRICS.replace("2351031131", "21822", 1)
+        text = (
+            "==== shekyl-p2p-transport::c5_iai ====\n"
+            "c5_iai::c5_group::crypto_bench_noise_window_open "
+            "w_65535:(window_before_open)\n"
+            + window
+            + "c5_iai::c5_group::crypto_bench_noise_rekey one_hkdf\n"
+            + rekey
+        )
+        entries = iai_parse.parse(text, [("shekyl-p2p-transport", "c5_iai")])
+        self.assertEqual([e["run_id"] for e in entries], ["w_65535", "one_hkdf"])
+        self.assertEqual(entries[0]["setup"], "(window_before_open)")
+        self.assertEqual(entries[0]["metrics"]["instructions"], 2351031131)
+        self.assertEqual(entries[1]["function"], "crypto_bench_noise_rekey")
+        self.assertEqual(entries[1]["setup"], "")
+        self.assertEqual(entries[1]["metrics"]["instructions"], 21822)
+        self.assertEqual(len(entries[1]["metrics"]), 6)
+
     def test_a_header_without_a_run_id_is_refused_not_dropped(self) -> None:
         """Red edit: drop the `HEADER_SHAPE_RE` problem in `parse`. The
         relay section still yields its entries, so only this check sees

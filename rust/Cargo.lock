@@ -3836,6 +3836,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
@@ -3849,6 +3850,7 @@ dependencies = [
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-hash-budget",
+ "shekyl-levin",
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-network",
@@ -5010,6 +5012,7 @@ version = "3.1.0"
 dependencies = [
  "criterion",
  "fips203",
+ "gungraun",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "shekyl-crypto-hash",

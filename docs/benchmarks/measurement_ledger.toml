@@ -746,6 +746,7 @@ stale_through = [
   { through = "4943ebc7f7", note = "rpc 4.0: one module-doc line in shekyl-transport-layer's ban.rs renames set_bans to ban_add. Dial, handshake and gap I/O are unchanged. Not re-measured; the rows stay stale." },
   { through = "22c02b759c", note = "CF-1a (chain forge): the clearnet tests' harness takes the listener's network id, and a new test runs a fresh listener per pair of networks to check that another network's prefix is closed and the listener's own opens a session. Tests and a dev-dependency only; no dial, handshake or gap wait changes. Not re-measured; the rows stay stale." },
   { through = "50d655056c", note = "CF-1a review: the prefix-lock test shares the existing seal and prefix-reply helpers, and the linger-cap tests move to their own module (linger_tests.rs). Tests only; no dial, handshake or gap wait changes. Not re-measured; the rows stay stale." },
+  { through = "6880e8e382", note = "The C5 seam gains the window's seal and open as two calls and the session's two halves apart, behind the c5-bench feature, for benches/c5_iai.rs; production code gains nothing it calls. Not re-measured." },
 ]
 
 [[constant]]
@@ -1364,6 +1365,19 @@ path_set = "rpc-hash-budget"
 # `<crate>::<gungraun-target>`. It has no capture to go stale, because the
 # gate re-measures it on every run; it is here for its path set, the code
 # whose change can move its counts.
+#
+# What the capture costs on the CI runner (the capture job's own time,
+# queue excluded; `benchmarks.yml` sizes its two capture timeouts at about
+# twice the every-row figure, 150 minutes):
+#
+#   2026-11-13  every row, as of the block-path rows      62 min 48 s  run 43360223481 (pull request)
+#   2026-11-13  every row, as of the block-path rows      62 min       run 43357162994 (push to dev)
+#   2026-11-13  every row, network and sync rows added    73 min  0 s  run 43368858900 (pull request)
+#   2026-11-14  every row, network and sync rows added    75 min 28 s  run 43530910488 (pull request)
+#   2026-11-13  four engine-core rows, a scoped capture    9 min 51 s  run 43361888340 (pull request)
+#
+# No pull request has yet been scoped to the block-path rows alone: each
+# daemon-side change so far reached every row.
 
 # The spec names the crates whose code the rows enter. It is not the list of
 # everything they call: the capture's scope reaches a row through the
@@ -1393,7 +1407,7 @@ spec = [
 
 [[gated_row]]
 bench = "shekyl-chain-ingest::block_path_iai"
-measured_by = ["BA-T2", "BA-T41"]
+measured_by = ["BA-T2", "BA-T41", "BA-T43"]
 path_set = "block-path"
 
 [[path_set]]
@@ -1422,6 +1436,77 @@ spec = [
 bench = "shekyl-pow-randomx::cache_derive_iai"
 measured_by = ["BA-T14"]
 path_set = "randomx-cache-derive"
+
+# --- gated rows: the daemon's network and sync path --------------------
+#
+# `bench_rows` matches a path set by package: the package of any spec
+# path, or a changed file under one. A file list does not narrow a row
+# and does not add a dependency the closure already walks, so each spec
+# names the packages that select it.
+#
+# The benches live in `shekyl-chain-ingest` because the store is the
+# block-path driver's. Naming that crate also selects the row for every
+# crate it links. Two subjects are reached through a dev-dependency
+# edge, which that closure does not follow, so those path sets name the
+# subject crate as well: `shekyl-chain-sync-runtime` for the body
+# exchange, `shekyl-daemon-rpc` for the wallet read.
+#
+# The serve and the frame share one path set. The frame is the serve's
+# bytes, and `shekyl-levin` is a normal dependency of the runtime, so
+# the two rows cannot be told apart at package grain. A transport change
+# reaches both, and the wallet read, because the runtime and the RPC
+# server sit downstream of the transport.
+
+[[path_set]]
+id = "sync-body-exchange"
+spec = [
+  "rust/shekyl-chain-ingest",
+  "rust/shekyl-chain-sync-runtime",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::serve_bodies_iai"
+measured_by = ["BA-T44"]
+path_set = "sync-body-exchange"
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::levin_bodies_iai"
+measured_by = ["BA-T45"]
+path_set = "sync-body-exchange"
+
+[[path_set]]
+id = "block-template-build"
+spec = [
+  "rust/shekyl-chain-ingest",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::block_template_iai"
+measured_by = ["BA-T46"]
+path_set = "block-template-build"
+
+[[path_set]]
+id = "rpc-block-list"
+spec = [
+  "rust/shekyl-chain-ingest",
+  "rust/shekyl-daemon-rpc",
+]
+
+[[gated_row]]
+bench = "shekyl-chain-ingest::wallet_block_read_iai"
+measured_by = ["BA-T47"]
+path_set = "rpc-block-list"
+
+[[path_set]]
+id = "p2p-transport-c5"
+spec = [
+  "rust/shekyl-p2p-transport",
+]
+
+[[gated_row]]
+bench = "shekyl-p2p-transport::c5_iai"
+measured_by = ["BA-T24"]
+path_set = "p2p-transport-c5"
 
 # --- gated rows: the rows that were gated before the ledger named them --
 #
