@@ -40,6 +40,8 @@ use shekyl_fcmp::tree::{
 use shekyl_multisig::{MemberFile, MemberSecrets};
 use shekyl_types::CurveTreeRoot;
 
+pub mod wallet;
+
 /// The network every fixture is on.
 pub const NET: [u8; 16] = [0x4E; 16];
 
@@ -237,6 +239,27 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
             first
         })
         .collect();
+    let (root, layers, chunks) = tree(&outputs, &scans);
+    GroupOutputs {
+        outputs,
+        scans,
+        root,
+        layers,
+        chunks,
+    }
+}
+
+/// The leaf chunks of `paid`'s outputs again: the prover consumes them.
+pub fn rebuild_chunks(paid: &GroupOutputs) -> Vec<ProveInputLeafChunk> {
+    tree(&paid.outputs, &paid.scans).2
+}
+
+/// The tree that holds `outputs`, as the daemon builds it: its root, its
+/// layer count, and each output's leaf chunk and branch.
+fn tree(
+    outputs: &[(MultisigOutputData, u64, u64)],
+    scans: &[Scanned],
+) -> (CurveTreeRoot, u8, Vec<ProveInputLeafChunk>) {
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = outputs
         .iter()
         .map(|(out, _, _)| {
@@ -272,7 +295,7 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
     let helios_chunk = vec![selene_point_to_helios_scalar(&layers[0][0]).unwrap()];
     let chunks = outputs
         .iter()
-        .zip(&scans)
+        .zip(scans)
         .map(|((out, _, _), s)| ProveInputLeafChunk {
             pqc_leaf_commitment: out.pqc_leaf.point,
             pqc_leaf_blind: *s.blind,
@@ -284,11 +307,5 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
             }],
         })
         .collect();
-    GroupOutputs {
-        outputs,
-        scans,
-        root,
-        layers: depth,
-        chunks,
-    }
+    (root, depth, chunks)
 }
