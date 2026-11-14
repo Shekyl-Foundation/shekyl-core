@@ -1,173 +1,138 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // All rights reserved. BSD-3-Clause
 
-//! Honest-signer invariant checks (PQC_MULTISIG.md §2.7).
+//! The intent a member may sign: [`ValidatedIntent`] (`PQC_MULTISIG.md`
+//! §2.7, §9.2, §9.3).
 //!
-//! These are the mandatory checks every honest signer performs before
-//! producing a signature share. Failure of any check aborts signing,
-//! publishes an InvariantViolation, and moves the intent to REJECTED.
+//! A member signs only for an intent that is valid against its own view of
+//! the chain and its own ledger: I1 (the intent's structure, its group, its
+//! reference block, its balance and its seed's freshness) and I2 (the chain
+//! state fingerprint). Both run once, in [`ValidatedIntent::validate`],
+//! which is the type's only constructor. The ceremony takes a
+//! `ValidatedIntent`, never a `SpendIntent`, so a member cannot be led into
+//! a signing step over an intent it has not checked.
 //!
-//! The invariants are numbered per the spec:
-//!
-//! - I1: SpendIntent structural + group binding (§9.2)
-//! - I2: Chain state fingerprint agreement (§9.3)
-//! - I3: FCMP++ proof verification against signing_payload
-//! - I4: BP+ proof deterministic match (§10.2)
-//!
-//! Discriminants 5, 6 and 7 are gaps (this enum is internal and never
-//! serialized — see below). A multisig output's receive check is a scan
-//! verdict (§8.2, `shekyl-scanner`), not a signer invariant.
+//! The other honest-signer checks are types too, in the ceremony: a proof
+//! verifies once and becomes a verified type, and the transaction a member
+//! signs is one it assembled itself from its context and those verified
+//! proofs (`crate::ceremony`).
+
+use std::collections::HashSet;
 
 use shekyl_units::AtomicUnits;
 
-/// Invariant identifiers for InvariantViolation messages.
-///
-/// This enum is internal to honest-signer abort reporting and is **never
-/// serialized** (no `Serialize`/`Deserialize`; its wire consumer went out
-/// with the Option-D `InvariantViolation` struct). Discriminants 5, 6 and 7
-/// are therefore free to remain gaps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum InvariantId {
-    I1SpendIntentValidation = 1,
-    I2ChainStateFingerprint = 2,
-    I3FcmpProofVerification = 3,
-    I4BpPlusDeterministic = 4,
-}
+use crate::intent::{SpendIntent, SpendIntentError};
 
-impl InvariantId {
-    pub fn from_u8(v: u8) -> Option<Self> {
-        match v {
-            1 => Some(Self::I1SpendIntentValidation),
-            2 => Some(Self::I2ChainStateFingerprint),
-            3 => Some(Self::I3FcmpProofVerification),
-            4 => Some(Self::I4BpPlusDeterministic),
-            _ => None,
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::I1SpendIntentValidation => "SpendIntent structural/group binding",
-            Self::I2ChainStateFingerprint => "chain state fingerprint mismatch",
-            Self::I3FcmpProofVerification => "FCMP++ proof verification failed",
-            Self::I4BpPlusDeterministic => "BP+ proof deterministic mismatch",
-        }
-    }
-}
-
-/// Result of running the pre-signing invariant pipeline.
-#[derive(Debug)]
-pub enum InvariantCheckResult {
-    Pass,
-    Fail {
-        invariant: InvariantId,
-        evidence: Vec<u8>,
-    },
-}
-
-/// Input to the invariant pipeline for a single intent.
-///
-/// The caller provides all locally-derived values; the invariant checks
-/// compare them against the proposed intent.
-pub struct InvariantCheckInput<'a> {
-    /// Our address_fingerprint.
+/// What a member's own wallet knows that an intent is checked against.
+pub struct LedgerView<'a> {
+    /// This member's group, by its address fingerprint.
     pub our_address_fingerprint: &'a [u8; 32],
-    /// n_total from group metadata.
+    /// The group's member count.
     pub n_total: u8,
-    /// m_required from group metadata.
+    /// The group's threshold.
     pub m_required: u8,
-    /// Chain tip height from local view.
+    /// This member's chain tip height.
     pub chain_tip_height: u64,
-    /// Block hash at the intent's reference_block_height from local view.
+    /// The block hash at the intent's reference height, in this member's
+    /// chain.
     pub local_ref_block_hash: &'a [u8; 32],
-    /// Locally computed chain_state_fingerprint.
+    /// The chain state fingerprint this member computes over the intent's
+    /// inputs.
     pub local_chain_state_fingerprint: &'a [u8; 32],
-    /// Input amounts from local view.
+    /// The amounts of the intent's inputs, in this member's ledger.
     pub input_amounts: &'a [AtomicUnits],
-    /// Set of seen kem_randomness_seeds (for replay detection).
-    pub seen_kem_seeds: &'a std::collections::HashSet<[u8; 32]>,
-    /// Locally recomputed BP+ proof bytes for deterministic match.
-    pub local_bp_plus_bytes: &'a [u8],
-    /// The proposed BP+ proof bytes to check for deterministic match.
-    pub proposed_bp_plus_bytes: &'a [u8],
+    /// Every `kem_randomness_seed` this member has seen in an intent.
+    pub seen_kem_seeds: &'a HashSet<[u8; 32]>,
 }
 
-/// Run the pre-signing invariant pipeline (I1, I2, I4).
-///
-/// I3 (FCMP++ verification) is checked against the signing payload elsewhere.
-/// The spend-time and assembly-time checks of the E′ ceremony are slice 3's
-/// (§15.4a).
-pub fn check_pre_signing_invariants(
-    intent: &super::intent::SpendIntent,
-    input: &InvariantCheckInput<'_>,
-) -> InvariantCheckResult {
-    // I1: SpendIntent structural + group binding (§9.2)
-    if intent.address_fingerprint != *input.our_address_fingerprint {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I1SpendIntentValidation,
-            evidence: intent.address_fingerprint.to_vec(),
-        };
-    }
-    if let Err(e) = intent.validate_structural(input.n_total, input.m_required) {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I1SpendIntentValidation,
-            evidence: format!("{e}").into_bytes(),
-        };
-    }
-    if let Err(e) = intent.validate_temporal(input.chain_tip_height, input.local_ref_block_hash) {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I1SpendIntentValidation,
-            evidence: format!("{e}").into_bytes(),
-        };
-    }
-    if let Err(e) = intent.validate_balance(input.input_amounts) {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I1SpendIntentValidation,
-            evidence: format!("{e}").into_bytes(),
-        };
-    }
-    if input.seen_kem_seeds.contains(&intent.kem_randomness_seed) {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I1SpendIntentValidation,
-            evidence: b"kem_randomness_seed replay".to_vec(),
-        };
+/// Why a member will not sign an intent. Each names one check.
+#[derive(Debug, thiserror::Error)]
+pub enum IntentRefusal {
+    /// I1: the intent is for another group.
+    #[error("the intent is for another group")]
+    OtherGroup,
+    /// I1: the intent's structure (§9.2 items 1–4, 9, 10).
+    #[error("the intent is malformed: {0}")]
+    Structure(SpendIntentError),
+    /// I1: the reference block (§9.2 items 7–8).
+    #[error("the intent's reference block does not hold here: {0}")]
+    ReferenceBlock(SpendIntentError),
+    /// I1: the amounts do not balance (§9.2 item 11).
+    #[error("the intent does not balance: {0}")]
+    Balance(SpendIntentError),
+    /// I1: the seed was used before (§9.2 item 12).
+    #[error("the intent's kem_randomness_seed was seen before")]
+    KemSeedReplay,
+    /// I2: this member's chain state differs (§9.3).
+    #[error("the chain state fingerprint differs from this member's")]
+    ChainState,
+}
+
+/// An intent that passed I1 and I2 against one member's ledger.
+#[derive(Debug, Clone)]
+pub struct ValidatedIntent {
+    intent: SpendIntent,
+    hash: [u8; 32],
+}
+
+impl ValidatedIntent {
+    /// Check `intent` against `ledger`: I1 then I2.
+    ///
+    /// # Errors
+    ///
+    /// The first [`IntentRefusal`] that holds.
+    pub fn validate(intent: SpendIntent, ledger: &LedgerView<'_>) -> Result<Self, IntentRefusal> {
+        if intent.address_fingerprint != *ledger.our_address_fingerprint {
+            return Err(IntentRefusal::OtherGroup);
+        }
+        intent
+            .validate_structural(ledger.n_total, ledger.m_required)
+            .map_err(IntentRefusal::Structure)?;
+        intent
+            .validate_temporal(ledger.chain_tip_height, ledger.local_ref_block_hash)
+            .map_err(IntentRefusal::ReferenceBlock)?;
+        intent
+            .validate_balance(ledger.input_amounts)
+            .map_err(IntentRefusal::Balance)?;
+        if ledger.seen_kem_seeds.contains(&intent.kem_randomness_seed) {
+            return Err(IntentRefusal::KemSeedReplay);
+        }
+        if intent.chain_state_fingerprint != *ledger.local_chain_state_fingerprint {
+            return Err(IntentRefusal::ChainState);
+        }
+        let hash = intent.intent_hash().map_err(IntentRefusal::Structure)?;
+        Ok(Self { intent, hash })
     }
 
-    // I2: Chain state fingerprint (§9.3)
-    if intent.chain_state_fingerprint != *input.local_chain_state_fingerprint {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I2ChainStateFingerprint,
-            evidence: input.local_chain_state_fingerprint.to_vec(),
-        };
+    /// The intent.
+    #[must_use]
+    pub fn intent(&self) -> &SpendIntent {
+        &self.intent
     }
 
-    // I4: BP+ deterministic match (§10.2)
-    if input.local_bp_plus_bytes != input.proposed_bp_plus_bytes {
-        return InvariantCheckResult::Fail {
-            invariant: InvariantId::I4BpPlusDeterministic,
-            evidence: Vec::new(),
-        };
+    /// Its hash, which every file of its ceremony carries.
+    #[must_use]
+    pub fn hash(&self) -> &[u8; 32] {
+        &self.hash
     }
-
-    InvariantCheckResult::Pass
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
-    use std::collections::HashSet;
+    use crate::intent::{ChainStateFingerprint, IntentRecipient, SPEND_INTENT_VERSION};
 
-    fn test_intent() -> SpendIntent {
-        let fp = crate::intent::ChainStateFingerprint {
+    fn chain_fingerprint() -> [u8; 32] {
+        ChainStateFingerprint {
             reference_block_hash: [0xCC; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
             input_amounts: vec![AtomicUnits::from_raw(310)],
-        };
-        let chain_fp = fp.compute();
+        }
+        .compute()
+    }
 
+    fn intent() -> SpendIntent {
         SpendIntent {
             version: SPEND_INTENT_VERSION,
             intent_id: [0xAA; 32],
@@ -185,104 +150,68 @@ mod tests {
             fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42],
             kem_randomness_seed: [0xDD; 32],
-            chain_state_fingerprint: chain_fp,
+            chain_state_fingerprint: chain_fingerprint(),
         }
     }
 
-    fn test_input(intent: &SpendIntent) -> InvariantCheckInput<'static> {
-        let fp = crate::intent::ChainStateFingerprint {
-            reference_block_hash: [0xCC; 32],
-            input_global_indices: vec![42],
-            input_eligible_heights: vec![800],
-            input_amounts: vec![AtomicUnits::from_raw(310)],
+    fn check(
+        intent: SpendIntent,
+        seen: &HashSet<[u8; 32]>,
+    ) -> Result<ValidatedIntent, IntentRefusal> {
+        ValidatedIntent::validate(
+            intent,
+            &LedgerView {
+                our_address_fingerprint: &[0xBB; 32],
+                n_total: 3,
+                m_required: 2,
+                chain_tip_height: 950,
+                local_ref_block_hash: &[0xCC; 32],
+                local_chain_state_fingerprint: &chain_fingerprint(),
+                input_amounts: &[AtomicUnits::from_raw(310)],
+                seen_kem_seeds: seen,
+            },
+        )
+    }
+
+    #[test]
+    fn a_valid_intent_validates_and_carries_its_hash() {
+        let validated = check(intent(), &HashSet::new()).unwrap();
+        assert_eq!(*validated.hash(), intent().intent_hash().unwrap());
+    }
+
+    /// Each refusal by name.
+    #[test]
+    fn each_check_refuses_by_name() {
+        let seen = HashSet::new();
+        let refused = |edit: &dyn Fn(&mut SpendIntent)| {
+            let mut i = intent();
+            edit(&mut i);
+            check(i, &seen).err()
         };
-        let chain_fp = fp.compute();
-
-        let _ = intent;
-
-        // We leak the boxed values so they live for 'static in tests.
-        let address_fingerprint = Box::leak(Box::new([0xBB; 32]));
-        let ref_hash = Box::leak(Box::new([0xCC; 32]));
-        let chain_fp_ref = Box::leak(Box::new(chain_fp));
-        let amounts: &'static [AtomicUnits] =
-            Box::leak(vec![AtomicUnits::from_raw(310)].into_boxed_slice());
-        let seeds: &'static HashSet<[u8; 32]> = Box::leak(Box::new(HashSet::new()));
-        let bp_bytes: &'static [u8] = Box::leak(vec![0x11u8; 50].into_boxed_slice());
-
-        InvariantCheckInput {
-            our_address_fingerprint: address_fingerprint,
-            n_total: 3,
-            m_required: 2,
-            chain_tip_height: 950,
-            local_ref_block_hash: ref_hash,
-            local_chain_state_fingerprint: chain_fp_ref,
-            input_amounts: amounts,
-            seen_kem_seeds: seeds,
-            local_bp_plus_bytes: bp_bytes,
-            proposed_bp_plus_bytes: bp_bytes,
-        }
-    }
-
-    #[test]
-    fn pre_signing_passes() {
-        let intent = test_intent();
-        let input = test_input(&intent);
         assert!(matches!(
-            check_pre_signing_invariants(&intent, &input),
-            InvariantCheckResult::Pass
+            refused(&|i| i.address_fingerprint = [0xBC; 32]),
+            Some(IntentRefusal::OtherGroup)
         ));
-    }
-
-    #[test]
-    fn i1_fails_on_address_fingerprint_mismatch() {
-        let mut intent = test_intent();
-        intent.address_fingerprint = [0xFF; 32];
-        let input = test_input(&intent);
-        match check_pre_signing_invariants(&intent, &input) {
-            InvariantCheckResult::Fail { invariant, .. } => {
-                assert_eq!(invariant, InvariantId::I1SpendIntentValidation);
-            }
-            _ => panic!("expected I1 failure"),
-        }
-    }
-
-    #[test]
-    fn i2_fails_on_chain_state_mismatch() {
-        let mut intent = test_intent();
-        intent.chain_state_fingerprint = [0xFF; 32];
-        let input = test_input(&intent);
-        match check_pre_signing_invariants(&intent, &input) {
-            InvariantCheckResult::Fail { invariant, .. } => {
-                assert_eq!(invariant, InvariantId::I2ChainStateFingerprint);
-            }
-            _ => panic!("expected failure"),
-        }
-    }
-
-    #[test]
-    fn i4_fails_on_bp_plus_mismatch() {
-        let intent = test_intent();
-        let mut input = test_input(&intent);
-        let different_bp: &'static [u8] = Box::leak(vec![0x22u8; 50].into_boxed_slice());
-        input.proposed_bp_plus_bytes = different_bp;
-        match check_pre_signing_invariants(&intent, &input) {
-            InvariantCheckResult::Fail { invariant, .. } => {
-                assert_eq!(invariant, InvariantId::I4BpPlusDeterministic);
-            }
-            _ => panic!("expected I4 failure"),
-        }
-    }
-
-    #[test]
-    fn invariant_id_roundtrip() {
-        for i in [1u8, 2, 3, 4] {
-            let id = InvariantId::from_u8(i).unwrap();
-            assert_eq!(id as u8, i);
-            assert!(!id.description().is_empty());
-        }
-        // 0 and 8 are out of range; 5, 6 and 7 are not assigned.
-        for i in [0u8, 5, 6, 7, 8] {
-            assert!(InvariantId::from_u8(i).is_none());
-        }
+        assert!(matches!(
+            refused(&|i| i.signers = vec![0]),
+            Some(IntentRefusal::Structure(_))
+        ));
+        assert!(matches!(
+            refused(&|i| i.reference_block_hash = [0xCD; 32]),
+            Some(IntentRefusal::ReferenceBlock(_))
+        ));
+        assert!(matches!(
+            refused(&|i| i.fee = AtomicUnits::from_raw(11)),
+            Some(IntentRefusal::Balance(_))
+        ));
+        assert!(matches!(
+            refused(&|i| i.chain_state_fingerprint = [0; 32]),
+            Some(IntentRefusal::ChainState)
+        ));
+        let seen = HashSet::from([[0xDD; 32]]);
+        assert!(matches!(
+            check(intent(), &seen).err(),
+            Some(IntentRefusal::KemSeedReplay)
+        ));
     }
 }

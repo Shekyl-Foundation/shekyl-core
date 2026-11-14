@@ -3,8 +3,7 @@
 > **Protocol version:** V3.1 (equal-participants, coordinator-less)
 >
 > **Product path:** **Option E′** (`spend_auth_version = 0x02`) — dealer-mode
-> FROST on `y`, plaintext `b`, **no mandatory prover / no 1/N permanent-loss
-> assignment**. See `PQC_MULTISIG.md` §15.4a and
+> FROST on `y`, plaintext `b`, no prover role. See `PQC_MULTISIG.md` §15.4a and
 > `V3_1_MULTISIG_RUST_ENGINE.md` §0.5.
 >
 > **Spec:** `docs/PQC_MULTISIG.md`
@@ -12,11 +11,6 @@
 > **Analysis:** `docs/PQC_MULTISIG_V3_1_ANALYSIS.md`
 >
 > **Wire format:** `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`
->
-> **Historical:** Sections that still describe a rotating designated prover,
-> ProverOutput / ProverReceipt, or 1/N recovery playbooks are **Option D
-> scaffold** (deleted, not shipped). They remain until rewritten; do not
-> treat them as E′ operational guidance.
 
 ## Overview
 
@@ -37,8 +31,6 @@ proof construction is not assigned to a single permanent loser.
   default path
 - **Files are the transport**: members pass sealed ceremony files by any
   means they choose; a file shows only that it is a Shekyl multisig file
-- ~~Rotating prover assignment / 1/N permanent loss~~ — **Option D only;
-  deleted under E′**
 
 ---
 
@@ -53,9 +45,8 @@ proof construction is not assigned to a single permanent loser.
 | **3-of-5** | Tolerates 2 compromised keys | Tolerates 2 offline members | Medium | Organization treasury |
 | **5-of-5** | All must agree | All must be online | High | High-value cold storage (max N) |
 
-Target consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G;
-decided — code still `= 7` until MSW-1). After MSW-1, configurations
-with `n_total > 5` are unreachable.
+The cap is `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G): the wallet, the
+address and consensus refuse `n_total > 5`.
 
 **Rules of thumb:**
 
@@ -78,9 +69,6 @@ For most users, 2-of-3 is the right starting point:
 - An attacker must compromise two keys (security).
 - Only two people need to coordinate for any spend (operational
   simplicity).
-- The **Option D** 1/N loss limitation (§6.1, historical) is **not**
-  the E′ product path. Under E′, plan for ordinary M-of-N availability
-  (enough shares online), not prover rebalancing.
 
 ### When to Use Larger Groups
 
@@ -188,8 +176,6 @@ spending.
   review" (enforced socially, not by protocol).
 - Agree how files travel (a shared folder, encrypted email, USB for
   high-value transactions) and a time for each signing session (§7).
-- Assign one member as "consolidation lead" who periodically proposes
-  consolidation transactions to reduce the impact of 1/N loss.
 
 ### 3.3 Migrating from Single-Sig to Multisig
 
@@ -225,49 +211,53 @@ If an attacker floods the chain with fake multisig outputs, the
 
 ## 5. Spending Funds
 
-### 5.1 Proposing a Transaction
+### 5.1 Who Does What
 
-Any group member can propose a spend:
+A proposal names exactly M signers and, among them, one **responder**.
+The member who proposes collects the others' files, builds the proofs
+and broadcasts. The responder (often the device kept in a safe) takes
+part once per round and keeps nothing between visits. Every other
+signer is a **holder**: its wallet keeps one secret between the two
+rounds, in the same protected store as its share. The full protocol is
+`PQC_MULTISIG.md` §11.
 
-1. **Create SpendIntent**: Specify recipients, amounts, and fee. The
-   wallet automatically selects inputs, computes the chain state
-   fingerprint, and assigns provers.
+### 5.2 Proposing a Transaction
 
-2. **Send to the group**: The wallet writes a `Proposal` file, sealed
-   under the group's key and signed with your envelope key. Pass it to
-   the other signers by whatever means the group uses (§7).
+1. **Create the proposal**: specify recipients, amounts and fee. The
+   wallet selects inputs, computes the chain state fingerprint, and
+   names the signers and the responder.
+2. **Send it**: the wallet writes a `Proposal` file, sealed under the
+   group's key and signed with your envelope key. Pass it to the holders,
+   or, in a 2-of-N group, to the responder (§7).
+3. **Each signer checks it**: a receiving wallet checks the proposal
+   against its own view of the chain and its own records, then shows you
+   what it spends and to whom. Approving it is your decision. If a check
+   fails, the wallet refuses, shows which check, and sends nothing: tell
+   the group yourself.
 
-3. **14-check validation**: Each receiving member validates the intent
-   against structural, temporal, chain-state, and balance checks.
+### 5.3 The Two Rounds
 
-### 5.2 Proving
+**Round 1.** Each holder's wallet writes a `Commitment` for the
+proposer. The proposer forwards the proposal and the commitments to the
+responder, whose wallet answers with a `ResponderShare`; the proposer
+forwards all of it to the holders, whose wallets answer with a
+`SignatureShare`.
 
-The assigned prover for each output constructs the FCMP++ membership
-proof:
+**Round 2.** The proposer's wallet builds the proofs and writes a
+`FinalTx` for every other signer. Each signer's wallet builds the
+transaction itself from the proposal, checks the proofs against it, and
+only then signs it, writing a `HybridSig`. A signer never signs bytes its
+own wallet did not build or check.
 
-1. The prover generates the proof using their assigned outputs.
-2. The `ProverOutput` is broadcast to all members with an FCMP++ proof
-   commitment for equivocation detection.
-3. All members verify the proof before signing.
-
-### 5.3 Signing
-
-Each of M required signers produces a `SignatureShare`:
-
-1. Run invariant checks I1–I5 (SpendIntent validation, chain state,
-   FCMP++ proof, BP+ determinism, prover assignment).
-2. Sign the transaction hash with the hybrid signature scheme.
-3. Broadcast the `SignatureShare` with commitments to tx_hash,
-   fcmp_proof, and bp_plus_proof.
+A 2-of-N spend is four files: `Proposal`, `ResponderShare`, `FinalTx`,
+`HybridSig`. Each holder adds four files and two visits. A wallet that
+restarts during a session picks up where it left off from the files it
+received.
 
 ### 5.4 Assembly
 
-Once M signatures are collected:
-
-1. Run assembly consensus check (I6) — all M shares must commit to the
-   same tx_hash, fcmp_proof, and bp_plus_proof.
-2. Assemble the final transaction.
-3. Broadcast to the network.
+The proposer's wallet checks every signer's signatures, assembles the
+transaction, checks the whole of it again, and broadcasts it.
 
 ### 5.5 Confirmation
 
@@ -279,35 +269,21 @@ any of the same inputs.
 
 ## 6. Failure Recovery
 
-> **Option E′ note:** permanent key loss for a participant is an
-> **M-of-N threshold** problem (can the remaining members still meet
-> `m_required`?), not a rotating-prover 1/N permanent-loss problem.
-> §6.1 and §9.1 below still describe the **deleted Option D** playbook
-> and will be rewritten; do not follow them as E′ ops guidance.
-
 ### 6.1 A Participant Lost Their Keys
 
-> **Historical (Option D scaffold).**
+**Severity:** depends on the group: any M members can still spend.
 
-**Severity:** Medium (1/N of outputs at risk)
+If participant P permanently loses its member file:
 
-In V3.1, each participant is the designated prover for approximately 1/N
-of group outputs. If participant P permanently loses their keys, the
-outputs assigned to P as prover cannot be spent.
-
-**What to do:**
-1. Immediately propose a consolidation: spend all outputs NOT assigned
-   to P into new outputs (which will be reassigned to surviving provers).
-2. The consolidated outputs are safe. Only the ~1/N that were P's
-   prover assignments may be permanently lost.
-3. Consider creating a new group with a replacement participant and
-   migrating remaining funds.
+1. If at least M members remain, the group can still spend. Propose a
+   sweep of every output to a new group with a replacement for P.
+2. If fewer than M remain, the group can no longer spend. There is no
+   recovery: plan the threshold and the backups so that this needs more
+   than `n − m` simultaneous losses.
 
 **Prevention:**
-- All participants should keep encrypted backups of their seed phrases.
+- Every member keeps an encrypted backup of its member file (§6.2).
 - Export and securely store the group descriptor file.
-- For high-value groups, consider periodic consolidation to rebalance
-  prover assignments.
 
 ### 6.2 Restoring a Member After Wallet Reinstall
 
@@ -330,8 +306,8 @@ If you suspect participant P's device is compromised:
 
 1. **Do not sign any new intents.** Alert all other participants
    out-of-band (phone, in person).
-2. Check for invariant violations in the Dashboard. A compromised
-   participant might produce equivocating proofs.
+2. Check the wallet's refusals: a wallet that refuses a file shows which
+   check failed and which member sent it.
 3. If P's key is confirmed compromised:
    - Immediately sweep all outputs to a new group (without P) using the
      remaining M-1 honest signers (if M-1 >= threshold) or contact
@@ -345,13 +321,14 @@ If you suspect participant P's device is compromised:
 The Dashboard shows a yellow alert: "Signed intent not broadcast."
 
 **Causes:**
-- A ceremony file never reached the member assembling the transaction.
+- A ceremony file never reached the proposer.
 - Network issue prevented broadcast.
-- The assembler went offline mid-process.
+- The proposer went offline mid-process.
 
 **What to do:**
 - If the session hasn't expired (its reference block can still be used,
-  §7): any member can retry the broadcast.
+  §7): the proposer retries the broadcast, or another member sends it
+  the missing file again.
 - If it expired: create a new intent for the same transaction. Its inputs
   are free again once the old session has ended.
 
@@ -430,19 +407,11 @@ For your specific situation, answer these questions:
 These are known limitations. They are not bugs — they are engineering
 trade-offs documented for transparency.
 
-### 9.1 1/N Prover Loss
+### 9.1 Key Loss Is Threshold Loss
 
-> **Historical (Option D scaffold).** Under Option E′ there is no
-> rotating prover assignment and no 1/N permanent-loss lock from that
-> mechanism. Key-loss risk is ordinary threshold failure (`m_required`
-> cannot be met).
-
-If a participant permanently disappears under the **deleted** Option D
-model, approximately 1/N of group
-outputs become unspendable. This is inherent to V3.1's rotating prover
-model. **Mitigation:** periodic consolidation to rebalance prover
-assignments. **Future fix:** V4 will use threshold FCMP++ proving to
-eliminate this limitation.
+Any M members can spend. If more than `n − m` members permanently lose
+their member files, the group can no longer spend, and nothing recovers
+it. Choose `m` and the backups with that in mind (§6.1).
 
 ### 9.2 ML-DSA-65 Signing Latency
 
@@ -579,15 +548,13 @@ for the layouts):
 
 | Type | ID | Description |
 |------|----|-------------|
-| SignatureShare | 0x03 | A FROST signature share |
-| InvariantViolation | 0x09 | Report of a failed invariant check |
-| EquivocationProof | 0x0B | Two conflicting messages from one member |
 | Proposal | 0x0C | The spend intent and the proposer's first round |
 | Commitment | 0x0D | A holder's first round |
-| SigningSet | 0x0E | The set the responder signs over |
+| SigningSet | 0x0E | Other members' files, forwarded as received |
 | ResponderShare | 0x0F | The responder's round |
-| FinalTx | 0x10 | The finished transaction |
-| HybridSig | 0x11 | Each signer's post-quantum signatures |
+| SignatureShare | 0x03 | A holder's share |
+| FinalTx | 0x10 | The proofs, for every signer to check and sign |
+| HybridSig | 0x11 | A signer's post-quantum signatures |
 
 The message type is inside the file's ciphertext, so nothing that
 carries a file sees which step it is.

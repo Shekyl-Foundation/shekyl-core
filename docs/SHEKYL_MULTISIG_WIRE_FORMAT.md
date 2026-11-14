@@ -1,16 +1,15 @@
 # Shekyl Multisig Wire Format v2
 
 > **Status:** normative for the ceremony file (§1, §4), the spend intent
-> (§2) and the message-type discriminants (§3). Each message type's body
-> is defined with the ceremony (slice 3 PR-C); this version fixes the
-> discriminants and the body cap.
+> (§2), the message types and their bodies (§3).
 >
-> **Spec version:** 2
+> **Spec version:** 2.1
 >
 > **Parent spec:** `PQC_MULTISIG.md`
 >
 > **Reference implementation:** `rust/shekyl-multisig/src/envelope.rs`,
-> `intent.rs`, `messages.rs`; `rust/shekyl-crypto-pq/src/multisig_blob.rs`,
+> `intent.rs`, `messages.rs`, `ceremony/files.rs`;
+> `rust/shekyl-crypto-pq/src/multisig_blob.rs`,
 > `multisig_envelope.rs`
 
 This document defines the bytes Option E′ group members exchange. A
@@ -55,7 +54,7 @@ Offset   Size     Field                 Notes
 64       1        sender_index          0-indexed member
 65       1        message_type          §3
 66       4        body_len              u32 LE, ≤ MAX_BODY_LEN
-70       B        body                  type-specific (PR-C)
+70       B        body                  §3.1
 70+B     4        sig_len               u32 LE, exactly SENDER_SIG_LEN
 74+B     3385     sender_sig            §1.3
 ```
@@ -222,24 +221,58 @@ The message type is carried **inside the ciphertext** (§1.2).
 |----|------|--------|------|
 | `0x01` | SpendIntent | REJECTED | Replaced by `Proposal`, which carries the intent with the proposer's first round |
 | `0x02` | ProverOutput | REJECTED | Option D; E′ has no prover |
-| `0x03` | SignatureShare | live | A FROST signature share |
+| `0x03` | SignatureShare | live | Per input, a holder's FROST share |
 | `0x04` | Veto | REJECTED | Option D |
 | `0x05` | ProverReceipt | REJECTED | Option D |
 | `0x06` | Heartbeat | REJECTED | Option D |
 | `0x07` | CounterProof | REJECTED | Option D |
 | `0x08` | GroupStateSummary | REJECTED | No producer or reader |
-| `0x09` | InvariantViolation | live | Evidence that a member saw an invariant fail |
+| `0x09` | InvariantViolation | REJECTED | No producer or reader: a member that refuses an intent shows its human and sends nothing (`PQC_MULTISIG.md` §2.7) |
 | `0x0A` | RotationIntent | REJECTED | Option D |
-| `0x0B` | EquivocationProof | live | Two conflicting messages signed by one member |
-| `0x0C` | Proposal | live | The intent (§2.2); the proposer's preprocesses |
-| `0x0D` | Commitment | live | A holder's preprocesses |
-| `0x0E` | SigningSet | live | The preprocess set |
-| `0x0F` | ResponderShare | live | The responder's preprocesses and shares |
-| `0x10` | FinalTx | live | The finished transaction |
-| `0x11` | HybridSig | live | Per input: the signer's per-output public key and hybrid signature |
+| `0x0B` | EquivocationProof | REJECTED | No producer or reader: different preprocess sets complete no SAL and use each nonce once (`PQC_MULTISIG.md` §11.4) |
+| `0x0C` | Proposal | live | The intent (§2.2); per input, the proposer's preprocess and per-output key |
+| `0x0D` | Commitment | live | Per input, a holder's preprocess and per-output key |
+| `0x0E` | SigningSet | live | Other members' files, forwarded sealed as received |
+| `0x0F` | ResponderShare | live | Per input, the responder's preprocess, share and per-output key |
+| `0x10` | FinalTx | live | The `Proposal` file; per input, every signer's per-output key; the FCMP++ proof; the range proof |
+| `0x11` | HybridSig | live | Per input, the signer's hybrid signature |
 
 A REJECTED value is never reused. An import refuses any value that is
-not live, after the sender signature has verified (§1.4).
+not live, after the sender signature has verified (§1.4). Which member
+sends each type, and when, is `PQC_MULTISIG.md` §11.1.
+
+### 3.1 Bodies
+
+Every body parses **exactly**: each count and length is bounded before
+it is read, every field is read in full, and no bytes may follow the
+last field. A per-input list leads with its count `n` (one byte,
+`1 ≤ n ≤ MAX_INPUTS` = 8) and is in the intent's input order; a
+per-signer list leads with its count (one byte, at most
+`MAX_MULTISIG_PARTICIPANTS` = 5). A length prefix is a `u32` LE,
+at most `MAX_FILE_LEN`.
+
+| Field | Size | Encoding |
+|-------|------|----------|
+| `preprocess` | 64 | A FROST SAL preprocess: two compressed Ed25519 points, decoded by the receiver's signing machine, which refuses a non-canonical, torsioned or identity point |
+| `share` | 32 | A FROST SAL share: a canonical scalar, decoded by the receiver's machine |
+| `key` | 1996 | A member's per-output hybrid public key, canonical (`POST_QUANTUM_CRYPTOGRAPHY.md`) |
+| `signature` | 3385 | A hybrid signature, canonical |
+| `file` | `u32` + len | A ceremony file (§1), sealed as its sender wrote it |
+
+```
+Proposal       = u32(len) ‖ intent (§2.2) ‖ n ‖ n × (preprocess ‖ key)
+Commitment     = n ‖ n × (preprocess ‖ key)
+SigningSet     = k ‖ k × file                              1 ≤ k ≤ 5
+ResponderShare = n ‖ n × (preprocess ‖ share ‖ key)
+SignatureShare = n ‖ n × share
+FinalTx        = file (the Proposal) ‖ n ‖ m ‖ n × m × key  2 ≤ m ≤ 5
+                 ‖ u32(len) ‖ FCMP++ proof ‖ u32(len) ‖ range proof
+HybridSig      = n ‖ n × signature
+```
+
+In `FinalTx`, each input's `m` keys are in the intent's signer order. The
+FCMP++ proof is `shekyl-fcmp`'s (SALs included); the range proof is one
+Bulletproof+ over every output.
 
 ---
 
@@ -348,7 +381,8 @@ An implementation claiming conformance MUST:
    key.
 4. Run the import checks of §1.4 in order, and hand on no body that has
    not passed all of them.
-5. Refuse a `message_type` that is not live (§3).
+5. Refuse a `message_type` that is not live (§3), and parse each body
+   exactly (§3.1).
 6. Refuse recipients that are not sorted per §2.3 or contain duplicates.
 7. Enforce every bound in §1.2 and §2.2 without allocating past it.
 8. Draw a fresh 24-byte nonce for every seal (§4.2).
@@ -363,3 +397,4 @@ An implementation claiming conformance MUST:
 | 1.1 | 2026-04-14 | Size bounds on every length prefix, the recipient sort order, the signable header, a persisted message counter, body layouts for eleven types, zeroization guidance, CSPRNG file names |
 | 1.2 | 2026-11-12 | The E′ seal: XChaCha20-Poly1305 under an HKDF-SHA-512 key from the group transport secret, a random 24-byte nonce, a clear 66-byte header as associated data |
 | 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter and the intent's `tx_counter` deleted (replay is the reference block's age, the per-intent held nonce and consensus key images); message types `0x0C`–`0x11`; files are the only transport |
+| 2.1 | 2026-11-14 | Slice 3 PR-C: each live type's body (§3.1); `0x09` and `0x0B` REJECTED. The file format byte is unchanged |

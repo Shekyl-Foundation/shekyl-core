@@ -577,3 +577,39 @@ fn the_member_keypair_derivation_is_pinned() {
     assert_eq!(public.ml_dsa[..32], rho);
     assert_eq!(public.ml_dsa.len(), crate::derivation::ML_DSA_65_PK_LEN);
 }
+
+/// A member's public key is known before it signs, and it is the key the
+/// signature is made with: what the member sends in a ceremony's first
+/// round is what the spend's key blob will reveal. Another member's
+/// ciphertext gives another key.
+#[test]
+fn a_member_public_key_is_the_key_it_signs_with() {
+    let n = 3u8;
+    let g = group(n, 2);
+    let index = 1u64;
+    let out = construct_multisig_output(&tx_key(), &g.address, 4_000, index, &NET).unwrap();
+    let msg = SigningPayloadHash::from_bytes([0x31; 64]);
+    for i in 0..n {
+        let key = multisig_member_public_key(&member_view(&g, i), &own_ciphertext(&out, i, n))
+            .unwrap()
+            .to_canonical_bytes()
+            .unwrap();
+        let signed = member_sign(&g, &out, i, &msg).unwrap();
+        assert_eq!(key, signed.public_key.to_canonical_bytes().unwrap());
+        assert!(verify_multisig_member_auth(&signed.public_key, &msg, &signed.signature).is_ok());
+        let other = SigningPayloadHash::from_bytes([0x32; 64]);
+        assert!(
+            verify_multisig_member_auth(&signed.public_key, &other, &signed.signature).is_err()
+        );
+    }
+    let mine = multisig_member_public_key(&member_view(&g, 0), &own_ciphertext(&out, 0, n));
+    let theirs = multisig_member_public_key(&member_view(&g, 1), &own_ciphertext(&out, 1, n));
+    assert_ne!(
+        mine.unwrap().to_canonical_bytes().unwrap(),
+        theirs.unwrap().to_canonical_bytes().unwrap()
+    );
+    assert_eq!(
+        multisig_member_public_key(&member_view(&g, 0), &own_ciphertext(&out, 0, n + 1)).err(),
+        Some(MultisigSignError::GroupSize)
+    );
+}

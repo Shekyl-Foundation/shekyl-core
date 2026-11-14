@@ -27,9 +27,9 @@
 //!   `input_assigned_prover_indices`) is excised. The modules below are the
 //!   E′-shared **format** substrate.
 //!
-//! The E′ spend ceremony itself — the FROST `SigningCeremony` FSM and its nonce
-//! typestates — lands in this crate under MS-5; the format modules below are its
-//! substrate.
+//! The E′ signing ceremony is [`ceremony`]: the roles, the ceremony files, the
+//! nonce and proof types that make each honest-signer check a type, over the
+//! format modules below.
 #![deny(unsafe_code)]
 
 pub mod ceremony;
@@ -41,8 +41,10 @@ pub mod member_file;
 pub mod messages;
 
 pub use ceremony::{
-    CeremonyError, ConsumedNonce, FrostCeremony, NonceCounterError, NonceCounterSink, SpendRequest,
-    SpendResponse,
+    import, Authenticated, CeremonyError, ConsumedNonce, Cosigner, HeldNonce, HeldNonceStore,
+    Holder, ImportError, Incoming, InputContext, LiveCeremonies, NonceCounterError,
+    NonceCounterSink, Proposer, ProposerInputs, Responder, ResponderInput, Role, SigningContext,
+    UnsignedSpend,
 };
 pub use envelope::{
     open_envelope, seal_envelope, ImportRefusal, OpenedEnvelope, SealError, MAX_BODY_LEN,
@@ -53,9 +55,7 @@ pub use intent::{
     ChainStateFingerprint, SpendIntent, SpendIntentError, MAX_ADDRESS_LEN, MAX_INPUTS,
     MAX_RECIPIENTS,
 };
-pub use invariants::{
-    check_pre_signing_invariants, InvariantCheckInput, InvariantCheckResult, InvariantId,
-};
+pub use invariants::{IntentRefusal, LedgerView, ValidatedIntent};
 pub use member_file::{MemberFile, MemberFileError, MemberSecrets};
 pub use messages::MessageType;
 

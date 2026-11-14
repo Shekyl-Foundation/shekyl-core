@@ -20,16 +20,24 @@
 //!   [`threshold_keys`] turns one member's stored share back into
 //!   `ThresholdKeys<Ed25519T>`, refusing a share set that does not open the
 //!   address's `Y_group`.
-//! - [`SalSigningParams`] is what the proposer fixes for one input: the
-//!   output, its rerandomization, the transaction's `tx_signable`, and the
-//!   member-known scalars `x` and `y_kem`. Every signer builds the same
-//!   [`SalAlgorithm`] from it, so all of them share one transcript.
-//! - [`preprocess`], [`from_cache`], [`sign`], [`complete`] and [`cache`]
-//!   drive the machines. A sign machine exists only through [`preprocess`]
-//!   or [`from_cache`], both of which offset the keys and check that they
-//!   open the rerandomized output, so the `SalAlgorithm` contract ("the
-//!   keys are already offset; undefined behavior if not") is met by
-//!   construction.
+//! - [`SalSigningParams`] is what every signer builds for one input from
+//!   the intent: the output, its rerandomization (from the input's seed),
+//!   the transaction's `tx_signable`, and the member-known scalars `x` and
+//!   `y_kem`. The same inputs give the same value, so every signer's
+//!   [`SalAlgorithm`] has one transcript.
+//! - [`preprocess`], [`hold`], [`HeldSession::resume`], [`sign`] and
+//!   [`complete`] drive the machines. A sign machine exists only through
+//!   [`preprocess`] or [`HeldSession::resume`], and both offset the keys and
+//!   check that they open the rerandomized output, so the `SalAlgorithm`
+//!   contract ("the keys are already offset; undefined behavior if not") is
+//!   met by construction.
+//! - A round-1 state that has to wait for other members is a
+//!   [`HeldSession`]: the cached seed together with the parameters and keys
+//!   it was made under. `modular_frost`'s `from_cache` ignores the
+//!   parameters (its nonces are a hash of the seed and the share), so a seed
+//!   resumed under other parameters would sign one nonce twice and reveal
+//!   the share. No function here takes a seed and parameters separately:
+//!   [`HeldSession::resume`] uses its own.
 //!
 //! Nonce custody is the machine's: `modular_frost` hedges each nonce with
 //! the secret share and binds every signer's nonces to the whole signing
@@ -47,15 +55,15 @@ use ciphersuite::Ciphersuite;
 use dalek_ff_group::{EdwardsPoint, Scalar};
 use modular_frost::dkg::Interpolation;
 use modular_frost::sign::{
-    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine, PreprocessMachine,
-    SignMachine, SignatureMachine,
+    AlgorithmMachine, AlgorithmSignMachine, AlgorithmSignatureMachine, CachedPreprocess,
+    PreprocessMachine, SignMachine, SignatureMachine, Writable,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
 use transcript::{RecommendedTranscript, Transcript};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-pub use modular_frost::sign::{CachedPreprocess, Preprocess, SignatureShare};
+pub use modular_frost::sign::{Preprocess, SignatureShare};
 pub use modular_frost::{FrostError, Participant, ThresholdKeys, ThresholdParams};
 pub use shekyl_fcmp_proofs::sal::multisig::{Ed25519T, SalAlgorithm};
 use shekyl_fcmp_proofs::sal::{RerandomizedOutput, SpendAuthAndLinkability};
@@ -276,8 +284,10 @@ pub fn threshold_keys(
     )
 }
 
-/// dkg's participant for a 0-based member index.
-fn participant(member_index: u8) -> Participant {
+/// dkg's participant for a 0-based member index: the one place the
+/// member file's index becomes FROST's 1-based participant.
+#[must_use]
+pub fn participant(member_index: u8) -> Participant {
     Participant::new(u16::from(member_index) + 1).expect("index + 1 is never zero")
 }
 
@@ -346,6 +356,12 @@ pub enum FrostSalError {
     /// other output or group.
     #[error("these keys do not open this output's rerandomized key")]
     KeysDoNotOpenOutput,
+    /// A preprocess is not two canonical, prime-order, non-identity points.
+    #[error("the preprocess does not decode")]
+    Preprocess,
+    /// A share is not a canonical scalar.
+    #[error("the signature share does not decode")]
+    Share,
 }
 
 /// One group output being spent, as every member knows it from its own
@@ -366,8 +382,13 @@ pub struct SpentOutput<'a> {
     pub commitment_mask: &'a [u8; 32],
 }
 
-/// What the proposer fixes for one input. Every signer signs from the same
-/// value, so every signer's [`SalAlgorithm`] has the same transcript.
+/// Bytes of one input's rerandomization seed.
+pub const RERANDOMIZATION_SEED_LEN: usize = 32;
+
+/// One input's signing parameters. Every signer builds its own from the
+/// same intent (R-7): the same spent output, pseudo-out blind, message and
+/// rerandomization seed give the same value, so every signer's
+/// [`SalAlgorithm`] has the same transcript without any member sending it.
 ///
 /// `x` and `y_kem` are secret to the group (every member can compute them
 /// from the output), and the rerandomization links the input to its output,
@@ -393,26 +414,30 @@ impl fmt::Debug for SalSigningParams {
 }
 
 impl SalSigningParams {
-    /// The proposer's parameters for spending `spent` as one input of a
-    /// transaction whose message is `signable`, with pseudo-out blind
-    /// `pseudo_out_blind` (`a`).
+    /// The parameters for spending `spent` as one input of a transaction
+    /// whose message is `signable`, with pseudo-out blind `pseudo_out_blind`
+    /// (`a`).
     ///
     /// The rerandomization comes from
     /// [`RerandomizedOutput::for_pseudo_out`]: `r_c = a − z`, so the
-    /// input's pseudo-out is `C~ = a·G + amount·H`. The assembler picks
-    /// every `a` and balances the last one, through the same constructor
-    /// the solo prover uses. The other three blinds are drawn from `rng`.
-    /// The key-image generator is `Hp(O)`.
+    /// input's pseudo-out is `C~ = a·G + amount·H`. The other three blinds
+    /// (`r_o`, `r_i`, `r_r_i`) are drawn from the ChaCha20 stream over
+    /// `rerandomization_seed`
+    /// ([`shekyl_crypto_pq::seeded_rng::SeededRng`], which wipes itself), so
+    /// two members with the same seed build the same rerandomized input. The
+    /// expansion is pinned by `the_rerandomization_is_pinned`. The
+    /// key-image generator is `Hp(O)`.
     ///
     /// # Errors
     ///
     /// [`FrostSalError`] for a point or scalar that does not decode.
-    pub fn propose(
-        rng: &mut (impl RngCore + CryptoRng),
+    pub fn new(
+        rerandomization_seed: &[u8; RERANDOMIZATION_SEED_LEN],
         spent: &SpentOutput<'_>,
         pseudo_out_blind: &[u8; 32],
         signable: TxSignableHash,
     ) -> Result<Self, FrostSalError> {
+        let rng = &mut shekyl_crypto_pq::seeded_rng::SeededRng::from_seed(rerandomization_seed);
         let o = decode_point(spent.output_key).ok_or(FrostSalError::OutputKey)?;
         let c = decode_point(spent.commitment).ok_or(FrostSalError::Commitment)?;
         let i = EdwardsPoint(shekyl_curve_generators::biased_hash_to_point(
@@ -512,28 +537,146 @@ pub fn preprocess(
     Ok(AlgorithmMachine::new(params.algorithm(), keys).preprocess(rng))
 }
 
-/// This round-1 state as a seed that [`from_cache`] rebuilds it from.
+/// A round-1 state held across a wait for other members: the cached seed,
+/// and the parameters and keys it was made under, owned together.
 ///
-/// The seed is as secret as the member's share, and is used once: signing
-/// twice from one seed reveals the share.
-#[must_use]
-pub fn cache(machine: SalSignMachine) -> CachedPreprocess {
-    machine.cache()
+/// The seed is as secret as the member's share and is used once: signing
+/// twice from one seed reveals the share. `modular_frost` does not tie the
+/// seed to its parameters (its nonces are a hash of the seed and the
+/// share, and every SAL commitment is on `T`), so this type does: the only
+/// way to use the seed is [`HeldSession::resume`], with the parameters it
+/// holds. It is not `Clone`, and it wipes on drop.
+pub struct HeldSession {
+    params: SalSigningParams,
+    keys: ThresholdKeys<Ed25519T>,
+    cached: CachedPreprocess,
 }
 
-/// Rebuild a round-1 state from [`cache`]'s seed, for the same params and
-/// keys.
+impl fmt::Debug for HeldSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeldSession")
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether `keys` open `params`' output: the check every machine
+/// constructor makes, for a caller that wants to refuse before round 1.
+///
+/// # Errors
+///
+/// [`FrostSalError::KeysDoNotOpenOutput`].
+pub fn check_keys_open(
+    params: &SalSigningParams,
+    keys: &ThresholdKeys<Ed25519T>,
+) -> Result<(), FrostSalError> {
+    params.offset_keys(keys.clone()).map(|_| ())
+}
+
+/// Round 1 for one input whose share is released later: this member's
+/// preprocess, and the [`HeldSession`] that resumes it.
 ///
 /// # Errors
 ///
 /// [`FrostSalError::KeysDoNotOpenOutput`], as for [`preprocess`].
-pub fn from_cache(
-    params: &SalSigningParams,
+pub fn hold(
+    params: SalSigningParams,
     keys: ThresholdKeys<Ed25519T>,
-    cached: CachedPreprocess,
-) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
-    let keys = params.offset_keys(keys)?;
-    Ok(SalSignMachine::from_cache(params.algorithm(), keys, cached))
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<(HeldSession, SalPreprocess), FrostSalError> {
+    let (machine, preprocess) = preprocess(&params, keys.clone(), rng)?;
+    Ok((
+        HeldSession {
+            params,
+            keys,
+            cached: machine.cache(),
+        },
+        preprocess,
+    ))
+}
+
+impl HeldSession {
+    /// The sign machine this session was made as, rebuilt from its seed
+    /// under its own parameters and keys, and the preprocess it sent.
+    /// Consumes the session: the seed is used once.
+    ///
+    /// # Errors
+    ///
+    /// [`FrostSalError::KeysDoNotOpenOutput`], which [`hold`] already
+    /// refused for these parameters and keys.
+    pub fn resume(self) -> Result<(SalSignMachine, SalPreprocess), FrostSalError> {
+        let keys = self.params.offset_keys(self.keys.clone())?;
+        Ok(SalSignMachine::from_cache(
+            self.params.algorithm(),
+            keys,
+            CachedPreprocess(self.cached.0.clone()),
+        ))
+    }
+
+    /// The parameters this session was made under.
+    #[must_use]
+    pub fn params(&self) -> &SalSigningParams {
+        &self.params
+    }
+}
+
+/// Bytes of a SAL preprocess: one nonce's two commitments on `T`, and an
+/// empty addendum.
+pub const SAL_PREPROCESS_LEN: usize = 64;
+
+/// Bytes of a SAL signature share: one scalar.
+pub const SAL_SHARE_LEN: usize = 32;
+
+/// A preprocess as its signer sends it.
+#[must_use]
+pub fn preprocess_bytes(preprocess: &SalPreprocess) -> [u8; SAL_PREPROCESS_LEN] {
+    let mut out = Vec::with_capacity(SAL_PREPROCESS_LEN);
+    preprocess
+        .write(&mut out)
+        .expect("writing to a Vec is infallible");
+    out.try_into()
+        .expect("a SAL preprocess is two commitments on T")
+}
+
+/// Another signer's preprocess, read by this signer's machine for the same
+/// input. `modular_frost` reads a preprocess only through a machine, which
+/// knows the algorithm's generators.
+///
+/// # Errors
+///
+/// [`FrostSalError::Preprocess`] for a point that is not canonical, not
+/// prime-order, or the identity.
+pub fn read_preprocess(
+    machine: &SalSignMachine,
+    bytes: &[u8; SAL_PREPROCESS_LEN],
+) -> Result<SalPreprocess, FrostSalError> {
+    machine
+        .read_preprocess(&mut bytes.as_slice())
+        .map_err(|_| FrostSalError::Preprocess)
+}
+
+/// A share as its signer sends it.
+#[must_use]
+pub fn share_bytes(share: &SalShare) -> [u8; SAL_SHARE_LEN] {
+    let mut out = Vec::with_capacity(SAL_SHARE_LEN);
+    share
+        .write(&mut out)
+        .expect("writing to a Vec is infallible");
+    out.try_into().expect("a SAL share is one scalar")
+}
+
+/// Another signer's share, read by the machine that completes the input.
+///
+/// # Errors
+///
+/// [`FrostSalError::Share`] for a scalar that is not canonical.
+pub fn read_share(
+    machine: &SalSignatureMachine,
+    bytes: &[u8; SAL_SHARE_LEN],
+) -> Result<SalShare, FrostSalError> {
+    machine
+        .read_share(&mut bytes.as_slice())
+        .map_err(|_| FrostSalError::Share)
 }
 
 /// Round 2: this member's share, over every other signer's preprocess. The

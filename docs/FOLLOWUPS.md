@@ -786,9 +786,6 @@ Default. Lands before genesis if it should exist at launch.
   - **`tx_extra` tag `0x05` — reserve-vs-free decision.** RULED 2026-09-22 (PR #825): REJECTED, the tag is deleted and the byte retired.
   - **C-2 (the P0-n gate is a literal denylist).**
 
-- **PQC Multisig : Option-D residue left standing after the F-6**
-  - Target: pre-genesis
-
 - **PQC Multisig : external adversarial review (Phase 5).**
   - Target: pre-genesis
 

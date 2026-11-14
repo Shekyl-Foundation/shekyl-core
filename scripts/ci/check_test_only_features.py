@@ -396,8 +396,7 @@ PERMANENT: dict[tuple[str, str], str] = {
     ): "the threshold spend: frost_sal's dealer split, share loader and FROST "
     "SAL drivers over modular_frost, and the fcmp-proofs multisig SAL. Off by "
     "default so a solo build links no FROST code; the multisig wallet's "
-    "ceremony takes it (shekyl-multisig, whose end-to-end spend test enables "
-    "it today on a dev edge, and as a normal edge from slice 3 PR-C)",
+    "signing ceremony takes it on a normal edge (shekyl-multisig)",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
