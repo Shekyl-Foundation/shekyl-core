@@ -21,6 +21,7 @@ use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
     PendingTxDiagnostic,
 };
+use super::super::dispatch_durability::{commit_verdict, LedgerCommit};
 use super::super::error::{
     OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
 };
@@ -29,7 +30,7 @@ use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
@@ -41,6 +42,7 @@ use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, Transac
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
+use super::dispatch::DispatchFacts;
 use super::support::{
     assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
     map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
@@ -170,7 +172,7 @@ where
     /// "build concurrency permit stays 1"): exactly one `build` runs at
     /// a time, **engine-owned** so every embedder — wallet-rpc under a
     /// read lock, the in-process GUI — inherits the serialization now
-    /// that `Engine::build_pending_tx{,_async}` take `&self`. This
+    /// that `Engine::build_pending_tx` takes `&self`. This
     /// preserves the pre-relaxation network observable: one
     /// `AssembleTx` membership round-trip against the segment layer at
     /// a time. Raising the count is a rule-21 reopen gated on
@@ -324,33 +326,6 @@ where
                 .expect("pending-tx state lock poisoned")
                 .rescan_queue,
         )
-    }
-
-    /// Look up the retained network-exposed bytes for `tx_hash` (§5.3
-    /// decision 2), cloned for the watchdog's resubmit-same-bytes probe.
-    /// `None` means the bytes are gone — a restart crossed the await, or
-    /// the tx already left the held projection and was pruned — and the
-    /// probe rung degrades to the operator alarm.
-    pub(crate) fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>> {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .get(tx_hash)
-            .cloned()
-    }
-
-    /// Prune retained probe bytes down to the live held-projection set
-    /// `live` (decision 2: "prune when the hash leaves the held
-    /// projection"). The driver calls this after projecting
-    /// `held_submits` so confirmed / released txs do not retain their
-    /// bytes indefinitely.
-    pub(crate) fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .retain(|tx_hash, _| live.contains(tx_hash));
     }
 
     pub(super) fn build_select_sync(
@@ -1348,11 +1323,12 @@ where
         }))
     }
 
-    pub(super) async fn submit_async(
+    pub(super) async fn submit_async<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<SubmitOutcome, SubmitError> {
+        commit: &C,
+    ) -> Result<SubmitReceipt, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1414,8 +1390,8 @@ where
             }
         }
 
-        // --- broadcast gate (sync): content_gen consent + atomic flip, then send ---
-        let tx_bytes = {
+        // --- broadcast gate (sync): content_gen consent + atomic flip ---
+        let dispatch = {
             let mut state = self
                 .state
                 .lock()
@@ -1455,74 +1431,35 @@ where
             }
 
             // Consent satisfied. Move the entry out of `consumer_held` and flip it
-            // to `in_flight` atomically under the lock, then send lock-free —
-            // "committed as of" the flip (F-H). The lock is held continuously
-            // since the peek above (no await), so the entry is still present.
+            // to `in_flight` atomically under the lock (F-H): from here a
+            // concurrent submit is `SubmitAlreadyPending` and a discard is
+            // refused, so the save below can run without the state lock.
             // `in_flight` preserves the *whole* entry (re-anchor substrate
-            // included) so a §2.5 retryable rejection can restore it to
-            // `consumer_held` losslessly; one `tx_bytes` clone moves on to the
-            // send.
+            // included) so a failed save or a §2.5 retryable rejection can
+            // restore it to `consumer_held` losslessly.
             let held = state
                 .consumer_held
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
-            let tx_bytes = held.tx_bytes.clone();
-
-            // WI-RPC-3 retention (OUTBOUND PREREQUISITE pin 1, dispatch
-            // form): persist the per-tx secret BEFORE the bytes can
-            // leave for the daemon. The accept verdict is an
-            // *observation* about network exposure, not its start — a
-            // crash or dropped connection between this send and the
-            // verdict leaves a tx the network may still mine, and a
-            // secret that lived only in the runtime `in_flight` map
-            // died with the process, permanently disabling the OUTBOUND
-            // proof for a payment that settles normally. Definite
-            // refusals (terminal / retryable — provably unrelayed under
-            // single-egress, §2.5) retire the record in their
-            // finalizers, so a never-accepted build still leaves no
-            // residue; accept / already-in-chain / ambiguous / crash
-            // keep it.
-            //
-            // Second copy, accounted: from here the persisted record is
-            // the durable holder; the runtime copy stays on the entry
-            // only so a §2.5 retryable restoration can re-dispatch, and
-            // is wiped when the entry drops (`TxSecretKey` is
-            // zeroize-on-drop).
-            let dispatch_txid = canonical_tx_id(&held.tx_bytes);
-            // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
-            // read from the wire bytes — the same cleartext value the
-            // chain sees — never an estimator output. Wallet-built bytes
-            // are canonical wire by construction (the `canonical_tx_id`
-            // contract).
-            let realized_fee = wire_fee(&held.tx_bytes);
             let selected: Vec<OutputId> = state
                 .output_locks
                 .iter()
                 .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
                 .collect();
-            let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                *held.tx_key_secret.as_bytes(),
-            ));
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
-                // PR-SJ-1: the journal row is born in the same guard as
-                // the retention record — dispatch facts persist
-                // atomically, before the bytes can reach the daemon
-                // (pin-1 dispatch form). C2: the journal owns these
-                // facts; the F14 field is the derived cache.
-                let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
-                    .iter()
-                    .map(|&idx| {
-                        let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
-                            panic!("dispatch: output_locks references missing transfer index {idx}")
-                        });
-                        shekyl_engine_state::SendInputRef {
-                            gindex: td.global_output_index.to_raw(),
-                            amount: td.amount().to_raw(),
-                        }
-                    })
-                    .collect();
-                let recipients = held
+            let dispatch = DispatchFacts {
+                txid: canonical_tx_id(&held.tx_bytes),
+                // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
+                // read from the wire bytes — the same cleartext value the
+                // chain sees — never an estimator output. Wallet-built bytes
+                // are canonical wire by construction (the `canonical_tx_id`
+                // contract).
+                fee: wire_fee(&held.tx_bytes),
+                tx_bytes: held.tx_bytes.clone(),
+                selected,
+                retained: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
+                    *held.tx_key_secret.as_bytes(),
+                )),
+                recipients: held
                     .request
                     .recipients
                     .iter()
@@ -1531,61 +1468,97 @@ where
                         amount: r.amount_atomic_units.to_raw(),
                         rid: r.rid,
                     })
-                    .collect();
-                wallet.record_dispatched_send(
-                    dispatch_txid.to_bytes(),
-                    realized_fee,
-                    recipients,
-                    inputs,
-                );
-            });
-
-            let submitted_at = Instant::now();
+                    .collect(),
+            };
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
                     entry: held,
-                    submitted_at,
+                    submitted_at: Instant::now(),
                 },
             );
+            dispatch
+        };
 
+        // --- save before send: only a saved dispatch can be handed over ---
+        let durable = self.save_dispatch(id, dispatch, commit)?;
+
+        // The daemon round-trip does not hold the pending-tx lock. A
+        // test-injected reply takes the same path as the transport, and
+        // its bytes are dropped unsent.
+        let daemon_result = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            if let Some(outcome) = self.take_queued_submit_outcome() {
+                drop(durable);
+                outcome
+            } else {
+                drop(state);
+                let submitter = Arc::clone(&self.submitter);
+                submitter.submit(durable).await
+            }
+        };
+
+        // State edits under the pending-tx lock. The journal edit is
+        // named here and committed below, after this lock drops: a build
+        // holds the state lock across a ledger read, and the save must
+        // not nest the other way either.
+        let (result, edit) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            match daemon_result {
+                Ok(success) => {
+                    let (outcome, edit) = self.finalize_submit_success(&mut state, id, success);
+                    (Ok(outcome), Some(edit))
+                }
+                Err(err) => {
+                    let (error, edit) = self.finalize_submit_error(&mut state, id, &err);
+                    (Err(error), edit)
+                }
+            }
+        };
+
+        let applied = if let Some(edit) = edit {
+            self.ledger
+                .with_wallet_ledger_mut(|wallet| commit_verdict(wallet, commit, edit))
+        } else {
+            super::super::dispatch_durability::AppliedVerdict {
+                saved: true,
+                rescan: None,
+            }
+        };
+
+        if let Some((txid, claimed_height)) = applied.rescan {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            let tx_hash = TxHash::from_bytes(txid);
+            state.rescan_queue.push(RescanRequest {
+                tx_hash,
+                claimed_height,
+            });
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
-                PendingTxDiagnostic::SubmitAttempted { reservation_id: id },
+                PendingTxDiagnostic::TargetedRescanRequested {
+                    reservation_id: id,
+                    tx_hash,
+                    claimed_height,
+                },
             );
+        }
 
-            if let Some(outcome) = self.take_queued_submit_outcome() {
-                // Test-injected daemon reply: same finalization as the
-                // production dispatch below, through the same two methods,
-                // so the injected path cannot certify a projection the real
-                // one does not perform.
-                return match outcome {
-                    Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
-                    Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
-                };
-            }
-
-            tx_bytes
-        };
-
-        let submitter = Arc::clone(&self.submitter);
-        let success = match submitter.submit(tx_bytes).await {
-            Ok(success) => success,
-            Err(submit_err) => {
-                let mut state = self
-                    .state
-                    .lock()
-                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-                return Err(self.finalize_submit_error(&mut state, id, &submit_err));
-            }
-        };
-
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-
-        Ok(self.finalize_submit_success(&mut state, id, success))
+        match result {
+            Ok(outcome) => Ok(SubmitReceipt {
+                outcome,
+                verdict_saved: applied.saved,
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn discard_sync(
@@ -1710,7 +1683,8 @@ where
             in_flight: HashMap::new(),
             next_id: 0,
             loop_breaker: SubmitLoopBreaker::default(),
-            held_bytes: HashMap::new(),
+            dispatched_this_session: HashSet::new(),
+            raised_alarms: HashMap::new(),
             rescan_queue: Vec::new(),
         });
         Self {

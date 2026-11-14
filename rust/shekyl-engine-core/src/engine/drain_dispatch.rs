@@ -412,8 +412,8 @@ where
             reference_height,
             terminal: None,
         };
-        let admission = store
-            .mutate(move |block| {
+        let (admission, durability) = store
+            .mutate_reporting(move |block| {
                 // Seal-time reservation re-check under the write lock. The
                 // `reserved` snapshot read before proof assembly is stale: a
                 // same-persona bond post or emission claim assembled
@@ -458,7 +458,12 @@ where
         // so only the record's end date ends it, and the cause names the
         // outcome there.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let sent = submitter.submit_bound(assembled.bound_tx.clone()).await;
+        let sent = submitter
+            .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
+                assembled.bound_tx.clone(),
+                durability,
+            ))
+            .await;
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {

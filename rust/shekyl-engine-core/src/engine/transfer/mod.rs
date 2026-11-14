@@ -39,6 +39,7 @@
 //! a `Signer`, an `OutputSelector`, a `FeeEstimator`, a `LedgerEngine`
 //! handle, the diagnostic sink, and reservation state under a `Mutex`.
 
+mod dispatch;
 mod engine;
 mod submit_finalize;
 mod support;

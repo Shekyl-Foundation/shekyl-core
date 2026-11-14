@@ -101,8 +101,9 @@
 use std::future::Future;
 
 use crate::engine::diagnostics::DiscardReason;
+use crate::engine::dispatch_durability::LedgerCommit;
 use crate::engine::error::{PendingTxError, SendError, SubmitError};
-use crate::engine::pending::{PendingTx, ReservationId, SubmitOutcome, TxRequest};
+use crate::engine::pending::{PendingTx, ReservationId, SubmitReceipt, TxRequest};
 
 /// Engine-side surface for the [`PendingTx`] lifecycle (§2.4).
 ///
@@ -272,16 +273,25 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// [`PendingTx`] handle (CT-5d §4); it gates broadcast so a re-anchor cannot
     /// silently change the authorized content out from under the consumer.
     ///
-    /// Success is the identity-bearing [`SubmitOutcome`]: a fresh accept,
+    /// Success is the identity-bearing [`SubmitOutcome`](crate::engine::pending::SubmitOutcome): a fresh accept,
     /// a pool-resident duplicate, or the daemon's already-in-chain claim
     /// with its claimed height. All three share the §2.5 lock disposition
     /// — the verdict informs the consumer, it never changes what the
     /// engine does with the reservation or the F14 lock.
-    fn submit(
+    ///
+    /// `commit` is the durable-save capability the engine lends for this
+    /// one call: the dispatch record is saved through it before the bytes
+    /// can leave ([`commit_dispatch`](crate::engine::dispatch_durability::commit_dispatch)),
+    /// and a failed save returns [`SubmitError::DispatchNotSaved`] with
+    /// nothing sent. A definite verdict's journal edit is saved through
+    /// the same `commit`, under one ledger write guard, before this
+    /// returns. [`SubmitReceipt::verdict_saved`] reports that save.
+    fn submit<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send;
+        commit: &C,
+    ) -> impl Future<Output = Result<SubmitReceipt, SubmitError>> + Send;
 
     /// Discard the named reservation with an explicit reason.
     ///

@@ -13,15 +13,18 @@ use shekyl_curve_tree::{
 };
 use shekyl_engine_state::LedgerBlock;
 
-use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
+use super::super::diagnostics::{
+    emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic, WatchdogAlarmReason,
+};
+use super::super::dispatch_durability::{commit_release, LedgerCommit};
 use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::output_selector::OutputSelector;
-use super::super::pending::{PendingTx, ReservationId, SubmitOutcome, TxHash, TxRequest};
+use super::super::pending::{PendingTx, ReservationId, SubmitReceipt, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
-use super::super::submit_lifecycle::WatchdogHost;
+use super::super::submit_lifecycle::{HeldSendFact, ReleasePersistence, WatchdogHost};
 use super::super::submit_watchdog::{self, HeldSubmit};
 use super::super::traits::{LedgerEngine, PendingTxEngine};
 use super::super::transaction_submitter::TransactionSubmitter;
@@ -78,15 +81,50 @@ where
         LocalPendingTx::held_bytes_for(self, tx_hash)
     }
 
-    fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
-        LocalPendingTx::prune_held_bytes(self, live);
+    fn prune_settled_send_bytes(&self) {
+        LocalPendingTx::prune_settled_send_bytes(self);
+    }
+
+    fn dispatched_this_session(&self, tx_hash: &TxHash) -> bool {
+        LocalPendingTx::dispatched_this_session(self, tx_hash)
+    }
+
+    fn latch_alarm(&self, tx_hash: TxHash, reason: WatchdogAlarmReason) -> bool {
+        let mut state = self.state.lock().expect("pending-tx state lock poisoned");
+        match state.raised_alarms.entry(tx_hash) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(reason);
+                true
+            }
+        }
+    }
+
+    fn release_alarms(&self, live: &HashSet<TxHash>) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .raised_alarms
+            .retain(|tx_hash, _| live.contains(tx_hash));
+    }
+
+    fn clear_alarm(&self, tx_hash: &TxHash) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .raised_alarms
+            .remove(tx_hash);
     }
 
     fn drain_rescan_queue(&self) -> Vec<RescanRequest> {
         LocalPendingTx::drain_rescan_queue(self)
     }
 
-    fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
+    fn release_awaiting_confirmation(
+        &self,
+        tx_hashes: &HashSet<TxHash>,
+        commit: &dyn LedgerCommit,
+    ) -> ReleasePersistence {
         // The confirmed-absent verdict releases the F14 locks ONLY. It
         // deliberately does NOT touch the WI-RPC-3 retention record:
         // the release trigger — a terminal reject when the held bytes
@@ -101,9 +139,48 @@ where
         // safe-direction residue — the retention policy's deliberate
         // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
         // death rule).
-        self.ledger.with_wallet_ledger_mut(|wallet| {
-            submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes)
+        //
+        // The release frees inputs a new send can select, so it is saved
+        // under the same guard. [`commit_release`] restores the whole row
+        // when the rename does not land.
+        self.ledger
+            .with_wallet_ledger_mut(|wallet| commit_release(wallet, commit, tx_hashes))
+    }
+
+    fn held_send_facts(&self) -> Vec<HeldSendFact> {
+        // State first, then the ledger. A build holds the state lock
+        // across a ledger read, so the reverse order deadlocks behind a
+        // writer waiting on that read.
+        let (session, alarms) = {
+            let state = self.state.lock().expect("pending-tx state lock poisoned");
+            (
+                state.dispatched_this_session.clone(),
+                state.raised_alarms.clone(),
+            )
+        };
+        self.ledger.with_wallet_ledger(|wallet| {
+            wallet
+                .send_journal
+                .rows
+                .iter()
+                .filter(|(_, row)| row.lock_baseline.is_some() && row.state.locks_carried_inputs())
+                .map(|(txid, row)| {
+                    let tx_hash = TxHash::from_bytes(*txid);
+                    HeldSendFact {
+                        tx_hash,
+                        sent_height: row.dispatched_at_height,
+                        has_bytes: row.tx_bytes.is_some(),
+                        dispatched_this_session: session.contains(&tx_hash),
+                        latched: alarms.get(&tx_hash).copied(),
+                    }
+                })
+                .collect()
         })
+    }
+
+    fn adopt_into_session(&self, tx_hash: TxHash) {
+        LocalPendingTx::adopt_into_session(self, tx_hash);
+        self.clear_alarm(&tx_hash);
     }
 
     fn emit(&self, event: PendingTxDiagnostic) {
@@ -342,13 +419,14 @@ where
         Ok(pending)
     }
 
-    fn submit(
+    fn submit<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+        commit: &C,
+    ) -> impl Future<Output = Result<SubmitReceipt, SubmitError>> + Send {
         let this = self;
-        async move { this.submit_async(id, seen_gen).await }
+        async move { this.submit_async(id, seen_gen, commit).await }
     }
 
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {

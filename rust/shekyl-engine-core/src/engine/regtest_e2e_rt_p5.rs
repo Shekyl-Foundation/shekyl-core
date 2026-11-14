@@ -198,7 +198,7 @@ async fn build(
     request: &TxRequest,
 ) -> Built {
     for _ in 0..48 {
-        let attempt = wallet.read().await.build_pending_tx_async(request).await;
+        let attempt = wallet.read().await.build_pending_tx(request).await;
         match attempt {
             Ok(pending) => {
                 let tx = shekyl_wire::Transaction::from_bytes(&pending.tx_bytes)
@@ -231,7 +231,7 @@ async fn submit(wallet: &Arc<RwLock<Engine<SoloSigner>>>, built: &mut Built) {
     let outcome = wallet
         .read()
         .await
-        .submit_pending_tx_async(built.pending_id, built.content_gen)
+        .submit_pending_tx(built.pending_id, built.content_gen)
         .await
         .expect("the daemon answers the submission");
     built.hash = Some(require_fresh_accept(outcome, built.wallet));
