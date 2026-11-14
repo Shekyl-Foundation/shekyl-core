@@ -324,20 +324,37 @@ mod tests {
         drop(std::fs::remove_file(&dir));
     }
 
-    /// A connected end is adopted close-on-exec, and readiness and the close
-    /// cross it.
+    /// **Adoption makes the end close-on-exec.** The end arrives as an
+    /// inherited descriptor does, with `FD_CLOEXEC` clear; after adoption
+    /// the flag is set, so no child the daemon starts holds a copy. This is
+    /// the first layer; the Tor launch's stdio-only walk is the second, and
+    /// `owning_connection.rs` test 4 holds that one. Red edit: remove the
+    /// adoption's `F_SETFD` call, and the flag stays clear.
     #[test]
-    fn a_connected_end_is_adopted_close_on_exec_and_carries_ready_and_close() {
+    fn adoption_makes_the_end_close_on_exec() {
+        let (_ours, theirs) = End::pair().unwrap();
+        let number = theirs.as_raw_fd();
+        // Hand the descriptor over: the adoption owns it from here.
+        std::mem::forget(theirs);
+        crate::pair::clear_cloexec(number).unwrap();
+        // SAFETY: reads only this descriptor's flags.
+        let before = unsafe { libc::fcntl(number, libc::F_GETFD) };
+        assert_eq!(before & libc::FD_CLOEXEC, 0, "the end arrives inheritable");
+        let owning = adopt(u64::try_from(number).unwrap()).expect("adopted");
+        // SAFETY: reads only this descriptor's flags.
+        let after = unsafe { libc::fcntl(number, libc::F_GETFD) };
+        assert_ne!(after & libc::FD_CLOEXEC, 0, "adopted close-on-exec");
+        drop(owning);
+    }
+
+    /// An adopted end carries readiness one way and the close the other.
+    #[test]
+    fn an_adopted_end_carries_ready_and_close() {
         let (mut ours, theirs) = End::pair().unwrap();
         let number = theirs.as_raw_fd();
         // Hand the descriptor over: the adoption owns it from here.
         std::mem::forget(theirs);
-        // Clear the flag, as an inherited descriptor arrives.
-        crate::pair::clear_cloexec(number).unwrap();
         let mut owning = adopt(u64::try_from(number).unwrap()).expect("adopted");
-        // SAFETY: reads only this descriptor's flags.
-        let flags = unsafe { libc::fcntl(number, libc::F_GETFD) };
-        assert_ne!(flags & libc::FD_CLOEXEC, 0, "adopted close-on-exec");
         owning.write_ready().unwrap();
         read_ready(&mut ours).expect("the ready line");
         ours.write_all(b"ignored").unwrap();
@@ -353,5 +370,45 @@ mod tests {
         let file = std::fs::File::create(&path).unwrap();
         drop(std::fs::remove_file(&path));
         file
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::io::IntoRawSocket;
+
+    /// Whether `socket`'s handle is inheritable.
+    fn inheritable(socket: u64) -> bool {
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT};
+        let mut flags: u32 = 0;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a SOCKET is pointer-sized on Windows"
+        )]
+        let handle = socket as usize as HANDLE;
+        // SAFETY: `handle` is the socket the test holds open, and `flags` is
+        // a local out-value.
+        let read = unsafe { GetHandleInformation(handle, &raw mut flags) };
+        assert_ne!(read, 0, "{}", io::Error::last_os_error());
+        flags & HANDLE_FLAG_INHERIT != 0
+    }
+
+    /// **Adoption makes the end not inheritable.** The end arrives as an
+    /// inherited handle does, with the inherit flag set; after adoption it
+    /// is clear, so no child the daemon starts holds a copy. Red edit:
+    /// remove the adoption's `set_inherit_bit` call, and the flag stays set.
+    #[test]
+    fn adoption_makes_the_end_not_inheritable() {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let _ours = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (theirs, _) = listener.accept().unwrap();
+        crate::pair::set_inherit_bit(&theirs, true).unwrap();
+        // Hand the socket over: the adoption owns it from here.
+        let number = theirs.into_raw_socket();
+        assert!(inheritable(number), "the end arrives inheritable");
+        let owning = adopt(number).expect("adopted");
+        assert!(!inheritable(number), "adopted not inheritable");
+        drop(owning);
     }
 }

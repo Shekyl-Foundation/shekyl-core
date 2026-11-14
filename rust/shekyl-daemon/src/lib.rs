@@ -61,7 +61,7 @@ pub fn main(args: &[std::ffi::OsString]) -> i32 {
 pub(crate) fn test_session_dir(home: &std::path::Path) -> Option<std::path::PathBuf> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let dir = home.join("s");
         if !dir.is_dir() {
             std::fs::DirBuilder::new()
@@ -69,6 +69,9 @@ pub(crate) fn test_session_dir(home: &std::path::Path) -> Option<std::path::Path
                 .create(&dir)
                 .expect("a session directory");
         }
+        // The mode the daemon checks, set rather than left to the umask.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the session directory's mode");
         Some(dir)
     }
     #[cfg(not(unix))]

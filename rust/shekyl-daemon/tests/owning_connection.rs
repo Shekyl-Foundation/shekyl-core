@@ -182,24 +182,43 @@ fn raw_number(file: &File) -> u64 {
 /// makes it. On Windows the daemon makes the directory itself, labelled.
 fn workdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a directory");
+    owner_only(dir.path());
+    // Unix: the socket directory, which the daemon checks (this account's,
+    // mode 0700, local). On Windows the daemon creates the rendezvous
+    // directory itself, with its owner, protections and label (IG-Q104).
+    #[cfg(unix)]
+    private_dir(&dir.path().join("s"));
+    dir
+}
+
+/// Set `dir`'s mode to 0700 (Unix): every directory this test creates is
+/// the owner's alone, whatever the box's umask would give it.
+fn owner_only(dir: &Path) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        // A configuration file in it is checked with its directory.
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
             .expect("the directory's mode");
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(dir.path().join("s"))
-            .expect("the socket directory");
     }
-    dir
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Create `dir`, owner-only. Its parent is this test's own directory,
+/// already the owner's alone.
+fn private_dir(dir: &Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => panic!("the directory {}: {e}", dir.display()),
+    }
+    owner_only(dir);
 }
 
 /// This binary again, as the daemon of `test`, in `dir` with the data
 /// directory `data`.
 fn daemon_command(test: &str, dir: &Path, data: &str, extra: &[&str]) -> Command {
-    std::fs::create_dir_all(dir.join(data)).expect("the data directory");
+    private_dir(&dir.join(data));
     let stderr = File::create(dir.join(format!("{data}.stderr"))).expect("the stderr file");
     let mut command = Command::new(std::env::current_exe().expect("this test binary"));
     command
@@ -532,14 +551,10 @@ fn refused(
 
 /// **Test 6: bad values refuse, each with its typed diagnostic.** A number
 /// this process does not hold, a regular file's descriptor, a standard
-/// stream's number, and the option with `service`. The option in a
-/// configuration file (`config.value.surface`) is the configuration's
-/// refusal, asserted where the file is read
-/// (`shekyl-daemon-config` `the_owning_connection_is_the_command_lines_and_not_a_services`):
-/// a file here would first meet the file-permission check on every
-/// ancestor of the test's directory. Red edit: drop the socket check in
-/// `shekyl_spawn::owning::adopt`, and the regular file is refused for the
-/// wrong reason.
+/// stream's number, the option in a configuration file
+/// (`config.value.surface`), and the option with `service`. Red edit: drop
+/// the socket check in `shekyl_spawn::owning::adopt`, and the regular file
+/// is refused for the wrong reason.
 #[test]
 fn bad_owning_connections_refuse_with_their_diagnostics() {
     const NAME: &str = "bad_owning_connections_refuse_with_their_diagnostics";
@@ -559,10 +574,77 @@ fn bad_owning_connections_refuse_with_their_diagnostics() {
     assert_eq!(code, Some(2), "{err}");
     assert!(err.contains("config.value.range"), "{err}");
 
+    let config = owner_only_config("owning-connection = 5\n");
+    let file = config.path().join(CONFIG_FILE);
+    let file = file.to_str().expect("a UTF-8 path");
+    let (code, err) = refused(
+        NAME,
+        dir.path(),
+        "file-option",
+        None,
+        &["--config-file", file],
+    );
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("config.value.surface"), "{err}");
+    assert!(err.contains("owning-connection"), "{err}");
+
     // A valid end, so the refusal is the pair's and not the adoption's. On
     // Windows `service` is refused before the session is read (RT-W14).
     #[cfg(unix)]
     service_refuses_the_owning_connection(NAME, dir.path());
+}
+
+/// The configuration file's name in [`owner_only_config`]'s directory.
+const CONFIG_FILE: &str = "shekyld.toml";
+
+/// A directory of this test's own holding a configuration file with
+/// `text`, in a place the daemon accepts one: the file and every directory
+/// above it writable by root and this account alone (Unix), or by the
+/// permitted principals (Windows). The candidates, nearest first: the
+/// temporary directory, the account's session directory, its home. On Unix
+/// the temporary directory is world-writable and never qualifies. Each is
+/// asked through the daemon's own check (`shekyl_daemon_config::file::open`);
+/// none qualifying fails the test, naming each refusal.
+fn owner_only_config(text: &str) -> tempfile::TempDir {
+    let account = shekyl_process::platform::current();
+    let candidates = std::iter::once(std::env::temp_dir())
+        .chain(account.session_dir)
+        .chain(account.home);
+    let mut refusals = Vec::new();
+    for root in candidates {
+        let dir = match tempfile::Builder::new()
+            .prefix("shekyl-owning-config-")
+            .tempdir_in(&root)
+        {
+            Ok(dir) => dir,
+            Err(e) => {
+                refusals.push(format!("{}: {e}", root.display()));
+                continue;
+            }
+        };
+        owner_only(dir.path());
+        let path = dir.path().join(CONFIG_FILE);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(&path)
+            .and_then(|mut file| file.write_all(text.as_bytes()))
+            .expect("the configuration file");
+        match shekyl_daemon_config::file::open(&path, true) {
+            Ok(Some(_)) => return dir,
+            Ok(None) => refusals.push(format!("{}: read as absent", root.display())),
+            Err(refusal) => refusals.push(format!("{}: {refusal}", root.display())),
+        }
+    }
+    panic!(
+        "no place this account owns the whole way up for a configuration file: {}",
+        refusals.join("; ")
+    )
 }
 
 /// Test 6's last case: the option with `service`, given a valid end.
@@ -580,8 +662,14 @@ fn service_refuses_the_owning_connection(test: &str, dir: &Path) {
 /// **Test 4: Tor does not hold the connection.** With the managed Tor
 /// running, the daemon's end is in no Tor descriptor (Linux, from
 /// `/proc`), and closing the parent's end stops the daemon and its Tor.
-/// Needs the pinned Tor binary: `SHEKYL_TEST_PINNED_TOR_BINARY`. Red edit:
-/// drop `FD_CLOEXEC` from the adoption, and Tor's descriptors hold the
+/// Needs the pinned Tor binary: `SHEKYL_TEST_PINNED_TOR_BINARY`. Two layers
+/// keep the end out of Tor: the adoption makes it close-on-exec (its own
+/// test, `shekyl-spawn` `adoption_makes_the_end_close_on_exec`), and the
+/// Tor launch's stdio-only walk closes every descriptor above stderr. This
+/// test is the second layer's: with the first held by its own test, the
+/// end reaching Tor here means the walk let it through. Either layer alone
+/// keeps the end out, so the red edit removes both: the walk from the Tor
+/// launch and the adoption's `F_SETFD`, and Tor's descriptors hold the
 /// daemon's end.
 #[cfg(target_os = "linux")]
 #[test]

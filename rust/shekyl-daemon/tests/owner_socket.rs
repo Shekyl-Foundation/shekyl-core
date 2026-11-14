@@ -98,15 +98,27 @@ struct Node {
 /// the daemon makes the directory itself, labelled.
 fn workdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a directory");
+    owner_only(dir.path());
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(dir.path().join("s"))
-            .expect("the socket directory");
+        let socket_dir = dir.path().join("s");
+        std::fs::create_dir(&socket_dir).expect("the socket directory");
+        owner_only(&socket_dir);
     }
     dir
+}
+
+/// Set `dir`'s mode to 0700 (Unix): every directory this test creates is
+/// the owner's alone, whatever the box's umask would give it.
+fn owner_only(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the directory's mode");
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 impl Node {
@@ -114,6 +126,7 @@ impl Node {
     /// `dir` with the data directory `data`.
     fn spawn(test_name: &str, dir: &Path, data: &'static str) -> Self {
         std::fs::create_dir_all(dir.join(data)).expect("the data directory");
+        owner_only(&dir.join(data));
         let stderr = File::create(dir.join(format!("{data}.stderr"))).expect("the stderr file");
         let mut command = Command::new(std::env::current_exe().expect("this test binary"));
         command

@@ -87,12 +87,12 @@ fn run_child_if_requested() {
     // (`RPC_CHANNEL.md` §7.1).
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::PermissionsExt;
         let socket_dir = dir.join("s");
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&socket_dir)
-            .expect("a socket directory");
+        std::fs::create_dir(&socket_dir).expect("a socket directory");
+        // The mode the daemon checks, set rather than left to the umask.
+        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the socket directory's mode");
         args.push("--rpc-socket-dir".into());
         args.push(socket_dir.into_os_string());
     }
@@ -121,6 +121,13 @@ impl Node {
     /// the RPC accepts a connection.
     fn start(test_name: &str, ignored: bool) -> Self {
         let dir = tempfile::tempdir().expect("a directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Owner-only, whatever the box's umask would give it.
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                .expect("the directory's mode");
+        }
         let port = TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .expect("a free port")
