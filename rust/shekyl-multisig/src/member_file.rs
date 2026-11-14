@@ -17,7 +17,10 @@
 //!   `0x06` ciphertext is to it);
 //! - the member's own hybrid KEM secret (its per-output signing keys come
 //!   from the `0x0D` ciphertext to it);
-//! - the group transport secret, which keys the ceremony blobs (slice 3).
+//! - the group transport secret, which keys the ceremony files (slice 3);
+//! - the member's long-term envelope secret, and every member's envelope
+//!   public key: a ceremony file's sender signs it with the first, and every
+//!   other member checks it with the second (R-6).
 //!
 //! This module defines the plaintext serialization, versioned. Keeping the
 //! file encrypted at rest is the wallet's job (slice 4), as it is for every
@@ -27,24 +30,30 @@
 //! Byte validity of the scalars and points (canonical, on the curve) is
 //! checked where they are used — the scanner, and the FROST key share
 //! (`shekyl_fcmp::frost_sal::threshold_keys`, which also turns the 0-based
-//! `member_index` into the 1-based FROST participant) — so this crate takes
-//! no curve dependency, as `shekyl-address` takes none.
+//! `member_index` into the 1-based FROST participant) — so this crate does
+//! no curve arithmetic, as `shekyl-address` does none.
 //!
-//! Layout, version 1:
+//! Layout, version 2:
 //!
 //! ```text
-//! magic "SKMF" ‖ version(1) ‖ u32_le(len) ‖ address payload(len) ‖
+//! magic "SKMF" ‖ version(2) ‖ u32_le(len) ‖ address payload(len) ‖
 //! member_index(1) ‖ b(32) ‖ y_share(32) ‖ verification_share × n (32 each) ‖
-//! group_kem_secret(HYBRID_KEM_SECRET_LEN) ‖ member_kem_secret(HYBRID_KEM_SECRET_LEN) ‖ transport_secret(FIELD_LEN)
+//! group_kem_secret(HYBRID_KEM_SECRET_LEN) ‖ member_kem_secret(HYBRID_KEM_SECRET_LEN) ‖
+//! transport_secret(32) ‖ envelope_secret(ENVELOPE_SECRET_LEN) ‖
+//! envelope_public_key × n (HybridPublicKey::CANONICAL_LEN each)
 //! ```
+//!
+//! Version 1 had no envelope keys. Pre-genesis, it is refused, not migrated.
 
 use shekyl_address::multisig_address::{MultisigAddressError, MultisigAddressPayload};
+use shekyl_crypto_pq::multisig_envelope::{MultisigEnvelopeSecret, ENVELOPE_SECRET_LEN};
+use shekyl_crypto_pq::signature::HybridPublicKey;
 use zeroize::Zeroizing;
 
 /// The file's first four bytes.
 pub const MEMBER_FILE_MAGIC: [u8; 4] = *b"SKMF";
 /// The layout version this module writes and reads.
-pub const MEMBER_FILE_VERSION: u8 = 1;
+pub const MEMBER_FILE_VERSION: u8 = 2;
 /// X25519 secret scalar length. Pinned, in the test build, to the classical
 /// half of the hybrid KEM (`shekyl_crypto_pq::kem::X25519_KEM_CT_LEN`: an
 /// X25519 scalar and its Montgomery u-coordinate are the same width).
@@ -82,6 +91,14 @@ pub enum MemberFileError {
     VerificationShareCount { expected: u8, got: usize },
     #[error("a hybrid KEM secret must be {HYBRID_KEM_SECRET_LEN} bytes, got {0}")]
     KemSecretLength(usize),
+    #[error("expected {expected} envelope public keys, got {got}")]
+    EnvelopeKeyCount { expected: u8, got: usize },
+    #[error("member {member}'s envelope public key is malformed")]
+    EnvelopeKey { member: u8 },
+    #[error("two members have the same envelope public key")]
+    DuplicateEnvelopeKeys,
+    #[error("this member's envelope secret does not match its public key in the list")]
+    EnvelopeKeyMismatch,
 }
 
 impl From<MultisigAddressError> for MemberFileError {
@@ -102,6 +119,8 @@ pub struct MemberFile {
     group_kem_secret: Zeroizing<Vec<u8>>,
     member_kem_secret: Zeroizing<Vec<u8>>,
     transport_secret: Zeroizing<[u8; FIELD_LEN]>,
+    envelope_secret: MultisigEnvelopeSecret,
+    envelope_public_keys: Vec<HybridPublicKey>,
 }
 
 impl std::fmt::Debug for MemberFile {
@@ -128,6 +147,9 @@ pub struct MemberSecrets {
     /// The group transport secret. The dealer derives it and passes the
     /// bytes in; this file stores them and does not derive them.
     pub transport_secret: Zeroizing<[u8; FIELD_LEN]>,
+    /// This member's long-term envelope secret, minted by the dealer
+    /// (`shekyl_crypto_pq::multisig_envelope::mint_multisig_envelope_keypair`).
+    pub envelope_secret: MultisigEnvelopeSecret,
 }
 
 impl MemberFile {
@@ -138,11 +160,18 @@ impl MemberFile {
     /// [`MemberFileError::MemberIndex`] unless `member_index < n`;
     /// [`MemberFileError::VerificationShareCount`] unless there are `n`
     /// verification shares; [`MemberFileError::KemSecretLength`] for a KEM
-    /// secret of the wrong length.
+    /// secret of the wrong length; [`MemberFileError::EnvelopeKeyCount`]
+    /// unless there are `n` envelope public keys;
+    /// [`MemberFileError::DuplicateEnvelopeKeys`] if two are equal (a file
+    /// could not then say which of them sent it); and
+    /// [`MemberFileError::EnvelopeKeyMismatch`] unless this member's
+    /// envelope secret is the one behind its own public key, as the loader
+    /// checks the FROST share against its verification share.
     pub fn new(
         address: MultisigAddressPayload,
         member_index: u8,
         verification_shares: Vec<[u8; FIELD_LEN]>,
+        envelope_public_keys: Vec<HybridPublicKey>,
         secrets: MemberSecrets,
     ) -> Result<Self, MemberFileError> {
         let n = address.n_total();
@@ -163,6 +192,30 @@ impl MemberFile {
                 return Err(MemberFileError::KemSecretLength(secret.len()));
             }
         }
+        if envelope_public_keys.len() != usize::from(n) {
+            return Err(MemberFileError::EnvelopeKeyCount {
+                expected: n,
+                got: envelope_public_keys.len(),
+            });
+        }
+        let mut canonical = Vec::with_capacity(envelope_public_keys.len());
+        for (member, key) in (0u8..).zip(&envelope_public_keys) {
+            let bytes = key
+                .to_canonical_bytes()
+                .map_err(|_| MemberFileError::EnvelopeKey { member })?;
+            if canonical.contains(&bytes) {
+                return Err(MemberFileError::DuplicateEnvelopeKeys);
+            }
+            canonical.push(bytes);
+        }
+        let own = secrets
+            .envelope_secret
+            .public_key()
+            .and_then(|key| key.to_canonical_bytes())
+            .map_err(|_| MemberFileError::EnvelopeKeyMismatch)?;
+        if own != canonical[usize::from(member_index)] {
+            return Err(MemberFileError::EnvelopeKeyMismatch);
+        }
         Ok(Self {
             address,
             member_index,
@@ -172,6 +225,8 @@ impl MemberFile {
             group_kem_secret: secrets.group_kem_secret,
             member_kem_secret: secrets.member_kem_secret,
             transport_secret: secrets.transport_secret,
+            envelope_secret: secrets.envelope_secret,
+            envelope_public_keys,
         })
     }
 
@@ -223,7 +278,19 @@ impl MemberFile {
         &self.transport_secret
     }
 
-    /// The version 1 bytes. Secret-bearing, so returned `Zeroizing`.
+    /// This member's envelope secret.
+    #[must_use]
+    pub fn envelope_secret(&self) -> &MultisigEnvelopeSecret {
+        &self.envelope_secret
+    }
+
+    /// Every member's envelope public key, member order.
+    #[must_use]
+    pub fn envelope_public_keys(&self) -> &[HybridPublicKey] {
+        &self.envelope_public_keys
+    }
+
+    /// The version 2 bytes. Secret-bearing, so returned `Zeroizing`.
     #[must_use]
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let address = self.address.to_canonical_bytes();
@@ -234,7 +301,9 @@ impl MemberFile {
                 + address.len()
                 + 1
                 + FIELD_LEN * (3 + self.verification_shares.len())
-                + 2 * HYBRID_KEM_SECRET_LEN,
+                + 2 * HYBRID_KEM_SECRET_LEN
+                + ENVELOPE_SECRET_LEN
+                + HybridPublicKey::CANONICAL_LEN * self.envelope_public_keys.len(),
         ));
         out.extend_from_slice(&MEMBER_FILE_MAGIC);
         out.push(MEMBER_FILE_VERSION);
@@ -249,10 +318,17 @@ impl MemberFile {
         out.extend_from_slice(&self.group_kem_secret);
         out.extend_from_slice(&self.member_kem_secret);
         out.extend_from_slice(self.transport_secret.as_ref());
+        out.extend_from_slice(self.envelope_secret.as_bytes());
+        for key in &self.envelope_public_keys {
+            out.extend_from_slice(
+                &key.to_canonical_bytes()
+                    .expect("new() checked every envelope public key encodes"),
+            );
+        }
         out
     }
 
-    /// Read a version 1 member file.
+    /// Read a version 2 member file.
     ///
     /// # Errors
     ///
@@ -281,6 +357,17 @@ impl MemberFile {
         let group_kem_secret = Zeroizing::new(r.take(HYBRID_KEM_SECRET_LEN)?.to_vec());
         let member_kem_secret = Zeroizing::new(r.take(HYBRID_KEM_SECRET_LEN)?.to_vec());
         let transport_secret = Zeroizing::new(r.field()?);
+        let envelope_secret = MultisigEnvelopeSecret::from_bytes(Zeroizing::new(
+            r.take(ENVELOPE_SECRET_LEN)?
+                .try_into()
+                .expect("ENVELOPE_SECRET_LEN bytes"),
+        ));
+        let envelope_public_keys = (0..address.n_total())
+            .map(|member| {
+                HybridPublicKey::from_canonical_bytes(r.take(HybridPublicKey::CANONICAL_LEN)?)
+                    .map_err(|_| MemberFileError::EnvelopeKey { member })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         if !r.0.is_empty() {
             return Err(MemberFileError::TrailingBytes(r.0.len()));
         }
@@ -288,12 +375,14 @@ impl MemberFile {
             address,
             member_index,
             verification_shares,
+            envelope_public_keys,
             MemberSecrets {
                 b,
                 y_share,
                 group_kem_secret,
                 member_kem_secret,
                 transport_secret,
+                envelope_secret,
             },
         )
     }
@@ -323,38 +412,66 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::OsRng;
     use shekyl_address::multisig_address::HYBRID_KEM_PUBKEY_LEN;
     use shekyl_address::Network;
+    use shekyl_crypto_pq::multisig_envelope::mint_multisig_envelope_keypair;
 
-    fn file(n: u8, index: u8) -> MemberFile {
-        let address = MultisigAddressPayload::new(
+    /// Every member's envelope keypair, as the dealer mints them.
+    fn envelope_keys(n: u8) -> Vec<(HybridPublicKey, MultisigEnvelopeSecret)> {
+        (0..n)
+            .map(|_| mint_multisig_envelope_keypair(&mut OsRng).unwrap())
+            .collect()
+    }
+
+    fn address(n: u8) -> MultisigAddressPayload {
+        MultisigAddressPayload::new(
             Network::Testnet,
             n,
-            2.min(n),
+            2,
             [0xB1; 32],
             [0x71; 32],
             vec![0x40; HYBRID_KEM_PUBKEY_LEN],
             (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn secrets(envelope_secret: MultisigEnvelopeSecret) -> MemberSecrets {
+        MemberSecrets {
+            b: Zeroizing::new([0x0B; 32]),
+            y_share: Zeroizing::new([0x0F; 32]),
+            group_kem_secret: Zeroizing::new(vec![0x6A; HYBRID_KEM_SECRET_LEN]),
+            member_kem_secret: Zeroizing::new(vec![0x6B; HYBRID_KEM_SECRET_LEN]),
+            transport_secret: Zeroizing::new([0x5E; 32]),
+            envelope_secret,
+        }
+    }
+
+    /// Member `index`'s file in a new `n`-member group.
+    fn file(n: u8, index: u8) -> MemberFile {
+        let mut keys = envelope_keys(n);
+        let publics = keys.iter().map(|(pk, _)| pk.clone()).collect();
+        let (_, own) = keys.swap_remove(usize::from(index));
         MemberFile::new(
-            address,
+            address(n),
             index,
             (0..n).map(|i| [0x50 + i; 32]).collect(),
-            MemberSecrets {
-                b: Zeroizing::new([0x0B; 32]),
-                y_share: Zeroizing::new([0x0F; 32]),
-                group_kem_secret: Zeroizing::new(vec![0x6A; HYBRID_KEM_SECRET_LEN]),
-                member_kem_secret: Zeroizing::new(vec![0x6B; HYBRID_KEM_SECRET_LEN]),
-                transport_secret: Zeroizing::new([0x5E; 32]),
-            },
+            publics,
+            secrets(own),
         )
         .unwrap()
     }
 
+    fn canonical(keys: &[HybridPublicKey]) -> Vec<Vec<u8>> {
+        keys.iter()
+            .map(|k| k.to_canonical_bytes().unwrap())
+            .collect()
+    }
+
     #[test]
     fn member_file_round_trips() {
-        for (n, index) in [(1u8, 0u8), (3, 2), (5, 4)] {
+        for (n, index) in [(2u8, 0u8), (3, 2), (5, 4)] {
             let original = file(n, index);
             let bytes = original.to_bytes();
             let read = MemberFile::from_bytes(&bytes).unwrap();
@@ -366,6 +483,14 @@ mod tests {
             assert_eq!(read.group_kem_secret(), original.group_kem_secret());
             assert_eq!(read.member_kem_secret(), original.member_kem_secret());
             assert_eq!(read.transport_secret(), original.transport_secret());
+            assert_eq!(
+                read.envelope_secret().as_bytes(),
+                original.envelope_secret().as_bytes()
+            );
+            assert_eq!(
+                canonical(read.envelope_public_keys()),
+                canonical(original.envelope_public_keys())
+            );
             assert_eq!(*read.to_bytes(), *bytes);
         }
     }
@@ -379,12 +504,15 @@ mod tests {
             MemberFile::from_bytes(&magic).unwrap_err(),
             MemberFileError::Magic
         );
-        let mut version = bytes.clone();
-        version[4] = 2;
-        assert_eq!(
-            MemberFile::from_bytes(&version).unwrap_err(),
-            MemberFileError::UnsupportedVersion(2)
-        );
+        // Version 1 had no envelope keys: refused, not migrated.
+        for v in [1, 3] {
+            let mut version = bytes.clone();
+            version[4] = v;
+            assert_eq!(
+                MemberFile::from_bytes(&version).unwrap_err(),
+                MemberFileError::UnsupportedVersion(v)
+            );
+        }
         assert_eq!(
             MemberFile::from_bytes(&bytes[..bytes.len() - 1]).unwrap_err(),
             MemberFileError::Truncated
@@ -401,6 +529,58 @@ mod tests {
         assert_eq!(
             MemberFile::from_bytes(&index).unwrap_err(),
             MemberFileError::MemberIndex { index: 3, n: 3 }
+        );
+        // The last envelope public key with its version byte edited.
+        let mut key = bytes.clone();
+        let last_key_at = key.len() - HybridPublicKey::CANONICAL_LEN;
+        key[last_key_at] ^= 0xFF;
+        assert_eq!(
+            MemberFile::from_bytes(&key).unwrap_err(),
+            MemberFileError::EnvelopeKey { member: 2 }
+        );
+    }
+
+    /// The dealer's list must hold `n` distinct keys, and the member's own
+    /// secret must be the one behind its own slot.
+    #[test]
+    fn the_envelope_keys_are_checked_on_assembly() {
+        let build = |publics: Vec<HybridPublicKey>, own: MultisigEnvelopeSecret| {
+            MemberFile::new(
+                address(3),
+                1,
+                (0..3).map(|i| [0x50 + i; 32]).collect(),
+                publics,
+                secrets(own),
+            )
+            .err()
+        };
+        let mut keys = envelope_keys(3);
+        let publics: Vec<_> = keys.iter().map(|(pk, _)| pk.clone()).collect();
+
+        assert_eq!(
+            build(publics[..2].to_vec(), keys.swap_remove(1).1),
+            Some(MemberFileError::EnvelopeKeyCount {
+                expected: 3,
+                got: 2
+            })
+        );
+
+        let keys = envelope_keys(3);
+        let mut repeated: Vec<_> = keys.iter().map(|(pk, _)| pk.clone()).collect();
+        repeated[2] = repeated[0].clone();
+        let (_, own) = keys.into_iter().nth(1).unwrap();
+        assert_eq!(
+            build(repeated, own),
+            Some(MemberFileError::DuplicateEnvelopeKeys)
+        );
+
+        // Member 1's file holding member 0's secret.
+        let keys = envelope_keys(3);
+        let publics: Vec<_> = keys.iter().map(|(pk, _)| pk.clone()).collect();
+        let (_, someone_else) = keys.into_iter().next().unwrap();
+        assert_eq!(
+            build(publics, someone_else),
+            Some(MemberFileError::EnvelopeKeyMismatch)
         );
     }
 

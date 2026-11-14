@@ -75,10 +75,8 @@ pub struct InvariantCheckInput<'a> {
     pub our_address_fingerprint: &'a [u8; 32],
     /// n_total from group metadata.
     pub n_total: u8,
-    /// Current time (unix seconds).
-    pub now_secs: u64,
-    /// Expected tx_counter from local state.
-    pub expected_tx_counter: u64,
+    /// m_required from group metadata.
+    pub m_required: u8,
     /// Chain tip height from local view.
     pub chain_tip_height: u64,
     /// Block hash at the intent's reference_block_height from local view.
@@ -111,17 +109,13 @@ pub fn check_pre_signing_invariants(
             evidence: intent.address_fingerprint.to_vec(),
         };
     }
-    if let Err(e) = intent.validate_structural(input.n_total, input.now_secs) {
+    if let Err(e) = intent.validate_structural(input.n_total, input.m_required) {
         return InvariantCheckResult::Fail {
             invariant: InvariantId::I1SpendIntentValidation,
             evidence: format!("{e}").into_bytes(),
         };
     }
-    if let Err(e) = intent.validate_temporal(
-        input.expected_tx_counter,
-        input.chain_tip_height,
-        input.local_ref_block_hash,
-    ) {
+    if let Err(e) = intent.validate_temporal(input.chain_tip_height, input.local_ref_block_hash) {
         return InvariantCheckResult::Fail {
             invariant: InvariantId::I1SpendIntentValidation,
             evidence: format!("{e}").into_bytes(),
@@ -179,10 +173,9 @@ mod tests {
             intent_id: [0xAA; 32],
             address_fingerprint: [0xBB; 32],
             proposer_index: 0,
-            proposer_sig: vec![0; 64],
+            signers: vec![0, 2],
+            responder_index: 2,
             created_at: 1000,
-            expires_at: 2000,
-            tx_counter: 5,
             reference_block_height: 900,
             reference_block_hash: [0xCC; 32],
             recipients: vec![IntentRecipient {
@@ -219,8 +212,7 @@ mod tests {
         InvariantCheckInput {
             our_address_fingerprint: address_fingerprint,
             n_total: 3,
-            now_secs: 1500,
-            expected_tx_counter: 5,
+            m_required: 2,
             chain_tip_height: 950,
             local_ref_block_hash: ref_hash,
             local_chain_state_fingerprint: chain_fp_ref,

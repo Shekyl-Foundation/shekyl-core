@@ -1,164 +1,174 @@
-# Shekyl Multisig Wire Format v1
+# Shekyl Multisig Wire Format v2
 
-> **Status:** **Envelope tables are the Option-D record; §4 is the E′ seal.**
-> Under Option E′ the `group_id` field is retired (identity is the address
-> fingerprint) and the wallet owns no transport, so the envelope offset tables
-> are not yet a conforming E′ spec. See the "Option-D residue" note under §1.
-> **§4 is normative** for the ceremony blob and matches
-> `shekyl_crypto_pq::multisig_blob`. A full envelope rewrite lands with the
-> transport slice.
+> **Status:** normative for the ceremony file (§1, §4), the spend intent
+> (§2) and the message-type discriminants (§3). Each message type's body
+> is defined with the ceremony (slice 3 PR-C); this version fixes the
+> discriminants and the body cap.
 >
-> **Spec version:** 1
+> **Spec version:** 2
 >
 > **Parent spec:** `PQC_MULTISIG.md`
 >
-> **Reference implementation:** `rust/shekyl-engine-core/src/multisig/v31/`
+> **Reference implementation:** `rust/shekyl-multisig/src/envelope.rs`,
+> `intent.rs`, `messages.rs`; `rust/shekyl-crypto-pq/src/multisig_blob.rs`,
+> `multisig_envelope.rs`
 
-This document defines the portable binary wire format for Shekyl V3.1
-multisig inter-participant communication. A third-party wallet
-implementation can target this document without reading the full V3.1
-multisig spec. All multi-byte integers are **little-endian** unless
-stated otherwise.
+This document defines the bytes Option E′ group members exchange. A
+third-party wallet can target it without reading the full multisig spec.
+All multi-byte integers are **little-endian** unless stated otherwise.
 
-> **Option-D residue (2026-07-18, MS-5 PR-B / E′; §4 rewritten 2026-11-12).**
-> Two facts have moved out from under the envelope tables and those tables
-> have **not** yet been rewritten to match: (1) the `group_id` field named
-> in the offset tables (envelope offset 1, §2, §3) is the **retired**
-> per-container Keccak-256 group hash — group identity is now the **address
-> fingerprint** (`PQC_MULTISIG.md` §5.3), and those 32 bytes are what §4
-> calls `address_fingerprint`; (2) under Option E′ the wallet **owns no
-> transport** — the engine emits/consumes a self-authenticating blob and
-> this envelope/relay framing is not a wallet responsibility (the E′ "no
-> wallet transport" decision; see `design/V3_1_MULTISIG_RUST_ENGINE.md`).
-> The offset tables are retained as the Option-D transport record. §4 is
-> the E′ seal. A conforming E′ envelope spec lands with the transport slice.
+The only transport is files (R-9): a member writes a ceremony file and
+the others receive it by any means — email, a messenger, a USB stick. The
+wallet moves no bytes itself.
 
 ---
 
-## 1. MultisigEnvelope
+## 1. Ceremony file
 
-The `MultisigEnvelope` is the common wrapper for all inter-participant
-messages. It is the unit of transport — every relay message, P2P
-message, and file-transport blob is exactly one envelope.
+One file is one message from one member. **Only its format version is in
+the clear** (R-10): which group, which intent, which member and which
+step are inside the ciphertext. A file shows its size and that it is a
+Shekyl multisig file, and nothing else.
 
-### 1.1 Binary Layout
-
-```
-Offset   Size     Field                   Notes
-------   ----     -----                   -----
-0        1        version                 Must be 0x01
-1        32       group_id                Keccak-256 of group key material (retired — see note above)
-33       32       intent_hash             keccak256 of SpendIntent canonical bytes (§2.4)
-65       1        sender_index            0-indexed participant number
-66       4        sig_len                 u32 LE, length of sender_sig
-70       sig_len  sender_sig              Hybrid signature over the §1.2 bytes (no production signer yet; see §1.2)
-70+S     4        payload_len             u32 LE, length of encrypted_payload
-74+S     P        encrypted_payload       sealed blob: nonce ‖ ciphertext ‖ tag (§4)
-```
-
-Where `S = sig_len` and `P = payload_len`.
-
-**Size bounds:**
-- **Minimum:** 74 bytes (sig_len=0, payload_len=0). Implementations
-  MUST reject envelopes shorter than 74 bytes.
-- **Maximum:** Implementations MUST reject envelopes where
-  `sig_len + payload_len > 1,048,576` (1 MiB). This bounds memory
-  allocation from untrusted input.
-- **`sig_len`** MUST NOT exceed 8,192 bytes (hybrid signatures are
-  ~3,385 bytes; the bound allows headroom for future schemes).
-- **`payload_len`** MUST NOT exceed 1,048,576 bytes (1 MiB).
-
-### 1.2 Signable Header
-
-The `sender_sig` covers these bytes concatenated in order:
+### 1.1 File layout
 
 ```
-version || group_id || intent_hash || sender_index || payload_len || encrypted_payload
+Offset   Size     Field             Notes
+------   ----     -----             -----
+0        1        format_version    0x02
+1        24       nonce             random, §4.2
+25       C        ciphertext        XChaCha20-Poly1305 of the plaintext (§1.2)
+25+C     16       tag               Poly1305
 ```
 
-Note: `payload_len` (4 bytes, u32 LE) is included in the signed data
-to prevent framing attacks where an attacker swaps the length prefix
-while preserving the ciphertext. `sig_len` is NOT included because it
-is metadata about the signature itself.
+A file is `plaintext_len + 41` bytes: `MIN_FILE_LEN = 3,500` for an empty
+body, `MAX_FILE_LEN = MIN_FILE_LEN + MAX_BODY_LEN` for a full one. A file
+outside those bounds is not a ceremony file.
 
-**No production signer exists (SA-2 §2.1 census / SA-3b).** Every live
-path carries `sender_sig` empty (`sig_len = 0`), and the bare
-preimage-builder function was deleted rather than kept as dead code. A
-future signer MUST NOT sign these bytes bare: it must route through the
-domain-separated hybrid scheme (`shekyl_crypto_pq::signature`) under a
-distinct `…-scheme-v1` domain registered in
-`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (SA-R-2), which will version
-this section.
+### 1.2 Plaintext layout
 
-The signature is computed over these bytes using the sender's hybrid
-signing key (Ed25519 + ML-DSA-65). The signature format is the hybrid
-signature defined in `POST_QUANTUM_CRYPTOGRAPHY.md`.
+```
+Offset   Size     Field                 Notes
+------   ----     -----                 -----
+0        32       address_fingerprint   the group's identity (PQC_MULTISIG.md §5.3)
+32       32       intent_hash           §2.4
+64       1        sender_index          0-indexed member
+65       1        message_type          §3
+66       4        body_len              u32 LE, ≤ MAX_BODY_LEN
+70       B        body                  type-specific (PR-C)
+70+B     4        sig_len               u32 LE, exactly SENDER_SIG_LEN
+74+B     3385     sender_sig            §1.3
+```
 
-### 1.3 Version Negotiation
+| Name | Value | Meaning |
+|------|-------|---------|
+| `MAX_BODY_LEN` | `1,048,576` | The largest body (1 MiB) |
+| `SENDER_SIG_LEN` | `3385` | One canonical hybrid signature (`POST_QUANTUM_CRYPTOGRAPHY.md`) |
 
-- Version `0x01` is the only defined version.
-- Implementations MUST reject envelopes with `version != 0x01`.
-- No silent skip: an unknown version is a hard error, not a warning.
-- Future versions will be defined in updated wire format specs.
+The plaintext parses **exactly**: `body_len` is bounded before it is read
+and must not exceed what follows; `sig_len` must equal `SENDER_SIG_LEN`;
+the signature ends the plaintext, with no trailing bytes. Any other shape
+is refused without allocating past the bounds.
+
+### 1.3 Sender signature
+
+Every member has a long-term hybrid envelope keypair (Ed25519 +
+ML-DSA-65), minted by the dealer and written into the member files: the
+member's own secret, and every member's public key (`PQC_MULTISIG.md`
+§6.6). It derives from no spend secret and signs nothing but ceremony
+files. The sender signs every plaintext field except the signature:
+
+```
+message    = frame("shekyl/multisig-envelope-v1", network_id,
+                   [u64(format_version), address_fingerprint, intent_hash,
+                    u64(sender_index), u64(message_type), body])          // 64 bytes
+sender_sig = HybridEd25519MlDsa.sign(envelope_secret,
+                                     "shekyl/multisig-envelope-scheme-v1", message)
+```
+
+`frame` is the signing envelope (`NETWORK_IDENTITY.md` §2.6): cSHAKE256
+with the first string as customization over the 16-byte network id
+followed by each field behind its u64-LE length, read to 64 bytes; an
+integer field is its u64-LE bytes. Both strings are registered
+(`CRYPTO_DOMAIN_REGISTRY.tsv`).
+
+A member who holds the group transport secret can write a file that
+opens for the group, but cannot sign it as another member: the
+signature is checked under the envelope public key of the member the
+file names.
+
+### 1.4 Import
+
+Nothing in a file names its group, so a wallet finds the group by **trial
+decryption**. It checks, in this order, and refuses at the first
+failure; the body reaches nothing before every check has passed:
+
+1. `format_version` is `0x02`, and the file's length is within
+   `MIN_FILE_LEN..=MAX_FILE_LEN` (§1.1); both read once, before any key is
+   tried, so an unauthenticated file costs nothing per group. Version
+   `0x01`, the clear-header layout, is refused by name.
+2. The file opens under one of the wallet's groups' keys (§4). Under
+   none: "not for this wallet".
+3. The plaintext parses exactly (§1.2).
+4. `address_fingerprint` is the fingerprint of the group whose key
+   opened the file.
+5. `sender_index < n`.
+6. `sender_sig` verifies under member `sender_index`'s envelope public
+   key, on this network.
+7. `message_type` is assigned (§3).
 
 ---
 
 ## 2. SpendIntent Canonical Serialization
 
-The `SpendIntent` is the proposal message that initiates a multisig
-spend. Its canonical serialization is the input to `intent_hash` and
-determines cross-implementation compatibility.
+The `SpendIntent` is the proposal that starts a spend; a `Proposal` file
+(§3) carries it, and that file's sender signature is the proposal's. It
+is the only input a signer trusts (R-7): every signer rebuilds every
+signing input from it. Its canonical serialization is the input to
+`intent_hash`.
 
 ### 2.1 Constants
 
 | Name | Value | Description |
 |------|-------|-------------|
-| `SPEND_INTENT_VERSION` | `0x01` | Current version |
-| `MAX_VALIDITY_SECS` | `86400` | Maximum validity window (24h) |
-| `FCMP_REFERENCE_BLOCK_MIN_AGE` | `5` | Minimum ref block age in blocks (matches `src/cryptonote_config.h`; reduced from `10` in Decision 14) |
-| `FCMP_REFERENCE_BLOCK_MAX_AGE` | `100` | Maximum ref block age in blocks |
+| `SPEND_INTENT_VERSION` | `0x02` | Current version |
+| `MIN_MULTISIG_THRESHOLD` | `2` | The smallest `m` (R-11) |
 | `MAX_RECIPIENTS` | `16` | Maximum recipients per intent: the consensus output cap (`MAX_OUTPUTS`). Change is a recipient |
 | `MAX_INPUTS` | `8` | Maximum inputs per intent: the consensus cap (`MAX_FCMP_INPUTS`, CEN-I4) |
 | `MAX_ADDRESS_LEN` | `65536` | Maximum address byte length |
 
 ### 2.2 Canonical Byte Layout
 
-Fields are serialized in declaration order with no padding. All
-subsequent fields follow the preceding field immediately.
-Variable-length fields use a `u32 LE` length prefix.
+Fields are serialized in this order with no padding. Variable-length
+fields use a `u32 LE` length prefix.
 
 ```
-Offset   Size     Field
-------   ----     -----
-0        1        version                 0x01
-1        32       intent_id               Random 32 bytes
-33       32       group_id                32-byte group identifier
-65       1        proposer_index          0-indexed
-66       4        proposer_sig_len        u32 LE
-70       S        proposer_sig            Hybrid signature bytes
-```
-
-All subsequent fields follow at `offset = 70 + S` with no padding,
-concatenated in the order listed:
-
-```
-8        created_at              u64 LE, unix seconds
-8        expires_at              u64 LE, unix seconds
-8        tx_counter              u64 LE, monotonic
+1        version                 0x02
+32       intent_id               random 32 bytes
+32       address_fingerprint     the group's identity
+1        proposer_index          0-indexed
+4        signers_len             u32 LE, equal to m
+m        signers                 member indices, strictly ascending
+1        responder_index         one of signers, not the proposer
+8        created_at              u64 LE, unix seconds; display only
 8        reference_block_height  u64 LE
 32       reference_block_hash    32 bytes
 4        recipients_count        u32 LE (MUST be ≤ MAX_RECIPIENTS)
-...      recipients[]            See §2.3, repeated recipients_count times
+...      recipients[]            §2.3, repeated recipients_count times
 8        fee                     u64 LE, atomic units
-4        inputs_count            u32 LE (MUST be ≤ MAX_INPUTS)
-...      input_global_indices[]  inputs_count × u64 LE (8 bytes each)
+4        inputs_count            u32 LE (1..=MAX_INPUTS)
+...      input_global_indices[]  inputs_count × u64 LE
 32       kem_randomness_seed     32 bytes
 32       chain_state_fingerprint 32 bytes
 ```
 
-Implementations MUST reject intents where `recipients_count >
-MAX_RECIPIENTS` or `inputs_count > MAX_INPUTS` or `proposer_sig_len >
-8192`.
+A verifier with an `m`-of-`n` group refuses, each by name: a version other
+than `0x02`; `m < 2` or `m > n`; `proposer_index ≥ n`; a signer count
+other than `m`; signers not strictly ascending; a signer `≥ n`; a
+proposer who is not a signer; a responder who is not a signer; a
+responder who is the proposer; an input count outside `1..=MAX_INPUTS`;
+more than `MAX_RECIPIENTS` recipients; an address longer than
+`MAX_ADDRESS_LEN`; recipients out of order or repeated.
 
 ### 2.3 Recipient Encoding
 
@@ -169,9 +179,6 @@ Each recipient is encoded as:
 A        address        Raw address bytes (A = address_len)
 8        amount         u64 LE, atomic units
 ```
-
-Implementations MUST reject recipients with `address_len >
-MAX_ADDRESS_LEN`.
 
 **Sort order:** Recipients MUST be sorted by `(address, amount)` where
 `address` is compared as raw bytes via unsigned byte-wise lexicographic
@@ -188,61 +195,57 @@ intent_hash = keccak256(canonical_bytes)
 ```
 
 Where `keccak256` is **original-padding Keccak-256** (`0x01` padding, NOT
-FIPS-202 SHA3-256's `0x06` — the two differ in one byte and fail silently)
-— implemented as `shekyl_crypto_hash::keccak256`, byte-identical to the
-C++ daemon's `cn_fast_hash` — and `canonical_bytes` is the full
-serialization from §2.2 (including `proposer_sig_len` and
-`proposer_sig`). Every live hash definition in this document uses this
-primitive.
+FIPS-202 SHA3-256's `0x06` — the two differ in one byte and fail silently),
+implemented as `shekyl_crypto_hash::keccak256`, and `canonical_bytes` is
+the full serialization from §2.2. Because the signer set and the
+responder are in it, every file of a ceremony binds them.
 
-### 2.5 Signable Bytes
+### 2.5 Deadline
 
-The `proposer_sig` covers the canonical serialization from §2.2 with
-the `proposer_sig_len` (4 bytes) and `proposer_sig` (S bytes) fields
-**skipped**: all other fields are concatenated in declaration order
-with no padding and no placeholder bytes filling the gap. Concretely:
-
-```
-version || intent_id || group_id || proposer_index
-|| created_at || expires_at || tx_counter || reference_block_height
-|| reference_block_hash || recipients_count || recipients[]
-|| fee || inputs_count || input_global_indices[]
-|| kem_randomness_seed || chain_state_fingerprint
-```
+An intent has no wall-clock expiry (R-13). It expires when no block can
+list a spend anchored at its reference block: consensus admits a
+reference whose age **measured from the connecting height** is in
+`[FCMP_REFERENCE_BLOCK_MIN_AGE, FCMP_REFERENCE_BLOCK_MAX_AGE]` (CEN-I11),
+so the last block that can list the spend is
+`reference_block_height + MAX_AGE`, and the last tip at which a member
+can still submit is one below that. A reference above a member's tip is
+"not yet" (the member's node is behind), never "expired".
+`created_at` is shown to people and checked against nothing.
 
 ---
 
 ## 3. Message Types
 
-The message type is carried **inside the encrypted payload** (not in
-the cleartext envelope header) to prevent role-pattern leakage.
+The message type is carried **inside the ciphertext** (§1.2).
 
-| ID | Name | Direction | Description |
-|----|------|-----------|-------------|
-| `0x01` | SpendIntent | proposer → all | Transaction proposal |
-| `0x02` | ProverOutput | prover → all | FCMP++ proof for assigned outputs |
-| `0x03` | SignatureShare | signer → all | Partial hybrid signature |
-| `0x04` | Veto | any → all | Abort request with reason |
-| `0x05` | ProverReceipt | prover → all | Acknowledgment of prover assignment |
-| `0x06` | Heartbeat | any → all | Liveness and sync beacon |
-| `0x07` | CounterProof | any → stale | Chain evidence for counter recovery |
-| `0x08` | GroupStateSummary | any → all | Group state synchronization |
-| `0x09` | InvariantViolation | any → all | Report of failed invariant check |
-| `0x0A` | RotationIntent | reserved | Reserved for V3.2 |
-| `0x0B` | EquivocationProof | any → all | Evidence of conflicting proofs |
+| ID | Name | Status | Body |
+|----|------|--------|------|
+| `0x01` | SpendIntent | REJECTED | Replaced by `Proposal`, which carries the intent with the proposer's first round |
+| `0x02` | ProverOutput | REJECTED | Option D; E′ has no prover |
+| `0x03` | SignatureShare | live | A FROST signature share |
+| `0x04` | Veto | REJECTED | Option D |
+| `0x05` | ProverReceipt | REJECTED | Option D |
+| `0x06` | Heartbeat | REJECTED | Option D |
+| `0x07` | CounterProof | REJECTED | Option D |
+| `0x08` | GroupStateSummary | REJECTED | No producer or reader |
+| `0x09` | InvariantViolation | live | Evidence that a member saw an invariant fail |
+| `0x0A` | RotationIntent | REJECTED | Option D |
+| `0x0B` | EquivocationProof | live | Two conflicting messages signed by one member |
+| `0x0C` | Proposal | live | The intent (§2.2); the proposer's preprocesses |
+| `0x0D` | Commitment | live | A holder's preprocesses |
+| `0x0E` | SigningSet | live | The preprocess set |
+| `0x0F` | ResponderShare | live | The responder's preprocesses and shares |
+| `0x10` | FinalTx | live | The finished transaction |
+| `0x11` | HybridSig | live | Per input: the signer's per-output public key and hybrid signature |
 
-Implementations MUST reject unknown message type bytes. `0x0A` is
-reserved and MUST NOT be sent in V3.1.
+A REJECTED value is never reused. An import refuses any value that is
+not live, after the sender signature has verified (§1.4).
 
 ---
 
-## 4. Ceremony blob seal
+## 4. Seal
 
-`encrypted_payload` is one sealed blob from
-`shekyl_crypto_pq::multisig_blob` (Round 0 ruling R-4;
-`PQC_MULTISIG.md` §12.3). The Option-D ChaCha20-Poly1305 construction,
-its SHA-256 HKDF, its counter-derived 12-byte nonce and its empty
-associated data are deleted. Do not implement them.
+The ciphertext is `shekyl_crypto_pq::multisig_blob` (R-4, R-10).
 
 ### 4.1 Key
 
@@ -250,299 +253,113 @@ associated data are deleted. Do not implement them.
 key = HKDF-SHA-512(
     ikm  = transport_secret,              // 32 bytes, the group transport secret
     salt = empty,                         // RFC 5869's HashLen zero salt
-    info = "shekyl/multisig-blob-key-v1"  // LABEL_MULTISIG_BLOB_KEY
-           || intent_hash                 // 32 bytes
-           || u8(message_type)            // 1 byte
-           || u8(sender_index),           // 1 byte
+    info = "shekyl/multisig-blob-key-v1", // LABEL_MULTISIG_BLOB_KEY, alone
     L    = 32
 )
 ```
 
-`transport_secret` is the group transport secret every member file
-holds (`PQC_MULTISIG.md` §6.6), derived by the dealer under `salt_for`.
-It is not the DKG shared secret. The `info` field is that label, then
-the raw concatenation of the three fixed-width fields, with no length
-prefixes. The message type is a key field. It is not written on the
-envelope in the clear (SS12.5).
+One key per group. `transport_secret` is the group transport secret every
+member file holds (`PQC_MULTISIG.md` §6.6), derived by the dealer under
+`salt_for`.
 
 ### 4.2 Nonce
 
-Each seal draws 24 bytes from a cryptographic RNG and writes them at
-the front of `encrypted_payload`. The nonce is not derived. A ceremony
-counter still orders blobs and refuses replays; it is not an input to
-this seal, and a restored wallet does not resume one. A nonce taken
-from a persisted counter would repeat after a restore, and a repeated
-nonce under this AEAD leaks the XOR of two payloads and the Poly1305 key.
+Each seal draws 24 bytes from a cryptographic RNG and writes them after
+the version byte. The nonce is not derived from anything: a nonce taken
+from persisted state would repeat after a wallet is restored, and a
+repeated nonce under this AEAD leaks the XOR of two plaintexts and the
+Poly1305 key. At 192 bits a random nonce under one key does not repeat
+for any number of files a group will ever make.
 
-### 4.3 Associated data and ciphertext
-
-The associated data is fixed width, [`BLOB_AAD_LEN`](../rust/shekyl-crypto-pq/src/multisig_blob.rs)
-bytes (66), and it is the envelope's own prefix through `sender_index`:
+### 4.3 Associated data
 
 ```
-aad = version                  // 1 byte
-      || address_fingerprint   // 32 bytes; the offset tables' retired group_id slot
-      || intent_hash           // 32 bytes
-      || u8(sender_index)      // 1 byte
+aad = format_version     // 1 byte
 ```
-
-`BlobHeader::associated_data` is that encoding. The sender signature is
-not in it: the signature's preimage is the sealed payload, so binding
-the signature here would make sealing and signing depend on each other.
-The payload length is not in it either: it is the length of the bytes
-that follow. The message type is not in it: the key binds the type, and
-the type lives inside the plaintext.
-
-```
-encrypted_payload = nonce(24)
-                    || XChaCha20-Poly1305(key, nonce, aad, DecryptedPayload)
-                    || tag(16)
-```
-
-`encrypted_payload` length is `plaintext_len + 40`. A payload shorter
-than 40 bytes is not a sealed blob.
 
 ### 4.4 Sensitive material
 
 Implementations MUST zeroize the following values when no longer needed:
 
-- **The blob key**, immediately after each seal or open. The cipher
-  wipes its copy of the key on drop.
-- **The plaintext working buffer.** Seal keeps it in a zeroizing buffer
-  so a refusal does not free the unencrypted copy. Open returns the
-  plaintext in a zeroizing buffer; wipe it after the message body has
-  been parsed.
-- **`transport_secret`**: lives for the lifetime of the wallet session.
-  MUST be zeroized on wallet close, session end, or process exit. MUST
-  be stored in memory pages excluded from swap/core dumps where the OS
-  supports it.
+- **The group key**, immediately after each seal or open.
+- **The plaintext working buffer**, on seal and after the body has been
+  handed on, on open. A body may carry FROST material.
+- **`transport_secret` and the envelope secret**: they live for the
+  wallet session and MUST be zeroized on close. MUST be stored in memory
+  pages excluded from swap and core dumps where the OS supports it.
 
-The nonce is not sensitive. It is random and it travels with the
-ciphertext.
+The nonce is not sensitive.
 
 ---
 
-## 5. DecryptedPayload
+## 5. Chain State Fingerprint
 
-After AEAD decryption, the plaintext has this layout:
-
-```
-Offset  Size     Field
-------  ----     -----
-0       1        message_type    One of the IDs from §3
-1       ...      body            Type-specific serialization (see §5.1)
-```
-
-### 5.1 Message Body Layouts
-
-All bodies use the same conventions: multi-byte integers are LE,
-variable-length fields use `u32 LE` length prefixes, fields are
-concatenated with no padding.
-
-#### 0x01 SpendIntent
-
-The body is the SpendIntent canonical serialization from §2.2.
-
-#### 0x02 ProverOutput
-
-```
-1        prover_index
-32       intent_hash
-4        proof_count            u32 LE
-         [repeated proof_count times:]
-           8        input_global_index    u64 LE
-           4        fcmp_proof_len        u32 LE
-           ...      fcmp_proof            fcmp_proof_len bytes
-           32       key_image
-4        prover_sig_len         u32 LE
-...      prover_sig             prover_sig_len bytes
-```
-
-#### 0x03 SignatureShare
-
-```
-1        signer_index
-4        hybrid_sig_len         u32 LE
-...      hybrid_sig             hybrid_sig_len bytes
-32       tx_hash_commitment
-32       fcmp_proof_commitment
-32       bp_plus_proof_commitment
-```
-
-#### 0x04 Veto
-
-```
-1        sender_index
-32       intent_hash
-1        reason_code            0x01=InvariantFailed, 0x02=ProverEquivocation,
-                                0x03=ChainStateMismatch, 0x04=RateLimitExceeded,
-                                0x05=Manual
-         [if reason_code == 0x01:]
-           1        invariant_id
-         [if reason_code == 0x05:]
-           4        message_len       u32 LE (MUST be ≤ 1024)
-           ...      message           UTF-8 text
-4        sender_sig_len         u32 LE
-...      sender_sig             sender_sig_len bytes
-```
-
-#### 0x05 ProverReceipt
-
-```
-1        prover_index
-32       intent_hash
-8        local_counter          u64 LE
-4        receipt_sig_len        u32 LE
-...      receipt_sig            receipt_sig_len bytes
-```
-
-#### 0x06 Heartbeat
-
-```
-1        sender_index
-8        timestamp              u64 LE, unix seconds
-32       last_seen_intent       intent_hash of most recent known intent
-4        relay_ops_count        u32 LE (MUST be ≤ 32)
-         [repeated relay_ops_count times:]
-           4        op_len           u32 LE (MUST be ≤ 256)
-           ...      operator_id      UTF-8 string
-8        local_tx_counter       u64 LE
-4        sig_len                u32 LE
-...      sig                    sig_len bytes
-```
-
-#### 0x07 CounterProof
-
-```
-1        sender_index
-8        advancing_to           u64 LE
-32       tx_hash
-8        block_height           u64 LE
-32       block_hash
-2        tx_position            u16 LE
-4        consumed_count         u32 LE (MUST be ≤ MAX_INPUTS)
-         [repeated consumed_count times:]
-           32       key_image
-4        output_count           u32 LE (MUST be ≤ MAX_INPUTS)
-         [repeated output_count times:]
-           32       output_commitment
-32       intent_hash
-4        sender_sig_len         u32 LE
-...      sender_sig             sender_sig_len bytes
-```
-
-#### 0x08 GroupStateSummary
-
-Body format defined in `PQC_MULTISIG.md` §13.5. Implementations that
-do not need group state synchronization MAY treat this as opaque.
-
-#### 0x09 InvariantViolation
-
-```
-1        reporter_index
-32       intent_hash
-1        invariant_id           I1=0x01 through I7=0x07
-4        evidence_len           u32 LE (MUST be ≤ 65536)
-...      evidence               evidence_len bytes (opaque)
-4        reporter_sig_len       u32 LE
-...      reporter_sig           reporter_sig_len bytes
-```
-
-#### 0x0A RotationIntent
-
-Reserved for V3.2. MUST NOT be sent or accepted in V3.1.
-
-#### 0x0B EquivocationProof
-
-```
-1        prover_index
-32       intent_hash
-4        proof_a_len            u32 LE
-...      proof_a                ProverOutput body (§5.1 0x02 layout)
-4        proof_b_len            u32 LE
-...      proof_b                ProverOutput body (§5.1 0x02 layout)
-```
-
----
-
-## 6. Chain State Fingerprint
-
-The chain state fingerprint is a 32-byte hash that members must agree
-on before signing. It ensures all signers see the same chain state.
-
-### 6.1 Computation
+The chain state fingerprint is a 32-byte hash members agree on before
+signing.
 
 ```
 preimage = reference_block_hash          // 32 bytes
         || sorted(input_global_indices)  // each u64 LE
         || sorted(input_eligible_heights)// each u64 LE
         || sorted(input_amounts)         // each u64 LE
-        || sorted(input_assigned_prover_indices)  // each u8
 
 chain_state_fingerprint = keccak256(preimage)   // §2.4 primitive
 ```
 
-All arrays are sorted independently in ascending numeric order before
-concatenation. Duplicates are expected and preserved — multiple inputs
-may share the same prover index, amount, or eligible height.
+Each array is sorted ascending on its own before concatenation.
+Duplicates are preserved.
 
 ---
 
-## 7. File Transport
+## 6. File Transport
 
-For air-gapped operation, envelopes are transported as files.
-
-### 7.1 File Naming
+### 6.1 File Naming
 
 Files use **random opaque filenames**: `shekyl-ms-<random64hex>.bin`.
-The 64 hex characters represent 32 bytes of randomness, which MUST be
-generated from a cryptographically secure source (OS-level CSPRNG:
-`/dev/urandom`, `getrandom(2)`, `BCryptGenRandom`, or equivalent).
-The filename MUST NOT be generated from a userspace PRNG seeded with
-predictable data.
+The 64 hex characters represent 32 bytes from a cryptographically secure
+source (`/dev/urandom`, `getrandom(2)`, `BCryptGenRandom`, or
+equivalent). The filename MUST NOT contain metadata (group, intent hash,
+message type, sender).
 
-The filename MUST NOT contain metadata (group_id, intent_hash, message
-type, sender index). Metadata is carried inside the encrypted payload.
+### 6.2 File Contents
 
-### 7.2 File Contents
+The file is exactly one ceremony file (§1.1). No additional framing.
 
-The file contains exactly one `MultisigEnvelope` serialized per §1.1.
-No additional framing, headers, or magic bytes.
+### 6.3 Display Names
 
-### 7.3 Display Names
-
-Wallet UIs SHOULD display human-readable names derived from the
-decrypted metadata (e.g., "Intent 0x1a2b... from participant 3").
-These display names are never written to disk.
+Wallet UIs SHOULD show names derived from the opened plaintext (e.g.,
+"Proposal 0x1a2b… from member 3"). These names are never written to
+disk.
 
 ---
 
-## 8. Conformance
+## 7. Conformance
 
-An implementation claiming V3.1 wire format conformance MUST:
+An implementation claiming conformance MUST:
 
-1. Produce byte-identical **canonical serialization** (§2.2) for the
-   same `SpendIntent` inputs. The `intent_hash` equality follows from
-   serialization equality, but it is the serialization itself that is
-   the interoperability requirement.
-2. Successfully open envelopes produced by any other conforming
-   implementation given the same group transport secret (§4.1).
-3. Reject envelopes with unknown version bytes (no silent skip).
-4. Reject unknown `message_type` bytes (no silent skip).
-5. Reject recipients that are not sorted per §2.3 or contain
-   duplicates.
-6. Enforce all size bounds in §1.1 and §2.2 (reject oversized length
-   prefixes without allocating).
-7. Draw a fresh 24-byte nonce for every seal (§4.2). The ceremony
-   counter is not an input to the AEAD.
-8. Pass all canonical test vectors in `test_vectors/v3.1/`.
+1. Produce byte-identical canonical serialization (§2.2) for the same
+   `SpendIntent`, and so the same `intent_hash`
+   (`docs/test_vectors/MULTISIG_INTENT_V2.json`, checked by
+   `scripts/kat/multisig_intent_oracle.py`).
+2. Open files produced by any other conforming implementation given the
+   same transport secret, and derive the same group key (§4.1; the key
+   vector in `multisig_blob.rs`'s `the_blob_key_is_pinned`).
+3. Refuse a file whose version is not `0x02`, reading the byte before any
+   key.
+4. Run the import checks of §1.4 in order, and hand on no body that has
+   not passed all of them.
+5. Refuse a `message_type` that is not live (§3).
+6. Refuse recipients that are not sorted per §2.3 or contain duplicates.
+7. Enforce every bound in §1.2 and §2.2 without allocating past it.
+8. Draw a fresh 24-byte nonce for every seal (§4.2).
 
 ---
 
-## 9. Version History
+## 8. Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
 | 1 | 2026-04-13 | Initial release for V3.1 |
-| 1.1 | 2026-04-14 | Tighten ambiguities: add size bounds on all length prefixes, clarify recipient sort order as unsigned bytewise comparison, fix signable header to include payload_len, clarify signable bytes gap semantics, add message_counter persistence requirements, add message body layouts for all 11 types, fix RotationIntent target to V3.2, expand zeroization guidance, require CSPRNG for file naming, strengthen conformance requirements |
-| 1.2 | 2026-11-12 | §4 is the E′ seal: XChaCha20-Poly1305, HKDF-SHA-512 under `shekyl/multisig-blob-key-v1` from the group transport secret, a random 24-byte nonce, and associated data of version ‖ address fingerprint ‖ intent hash ‖ sender index. The counter-derived nonce is not an AEAD input. |
+| 1.1 | 2026-04-14 | Size bounds on every length prefix, the recipient sort order, the signable header, a persisted message counter, body layouts for eleven types, zeroization guidance, CSPRNG file names |
+| 1.2 | 2026-11-12 | The E′ seal: XChaCha20-Poly1305 under an HKDF-SHA-512 key from the group transport secret, a random 24-byte nonce, a clear 66-byte header as associated data |
+| 2 | 2026-11-13 | R-6, R-9, R-10, R-12, R-13 (slice 3 PR-B): the header moves inside the ciphertext and a file shows only its version; one key per group and trial decryption on import; a sender signature under a per-member envelope key; intent version 2 with the signer set and responder, without the proposer signature or wall-clock expiry; the persisted message counter and the intent's `tx_counter` deleted (replay is the reference block's age, the per-intent held nonce and consensus key images); message types `0x0C`–`0x11`; files are the only transport |

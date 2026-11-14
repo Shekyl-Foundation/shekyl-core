@@ -386,6 +386,18 @@ PERMANENT: dict[tuple[str, str], str] = {
     "default because the ring alone is linked through the ingest crate's "
     "`pipeline`, which shekyl-chain-sync-runtime and shekyl-p2p-harness take "
     "alone; the ingest crate's `producer` feature turns it on for the node",
+    (
+        "shekyl-fcmp",
+        "std",
+    ): "the crate's std build, on by default; every consumer takes it",
+    (
+        "shekyl-fcmp",
+        "multisig",
+    ): "the threshold spend: frost_sal's dealer split, share loader and FROST "
+    "SAL drivers over modular_frost, and the fcmp-proofs multisig SAL. Off by "
+    "default so a solo build links no FROST code; the multisig wallet's "
+    "ceremony takes it (shekyl-multisig, whose end-to-end spend test enables "
+    "it today on a dev edge, and as a normal edge from slice 3 PR-C)",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -422,6 +434,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-relay-privacy` joined 2026-11-06: `conformance` is its only
 # feature, and shekyl-relay's dev edge enables it for the origin-budget
 # pin. The crate's own tests enable it too; no normal edge does.
+# `shekyl-fcmp` joined 2026-11-13 (multisig slice 3 PR-B), the commit whose
+# move of the end-to-end spend test into shekyl-multisig first enabled its
+# `multisig` from another crate. Both its features are PERMANENT.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -452,6 +467,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-relay-privacy",
         "shekyl-network",
         "randomx-v2-sys",
+        "shekyl-fcmp",
     }
 )
 

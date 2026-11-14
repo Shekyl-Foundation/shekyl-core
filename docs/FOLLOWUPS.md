@@ -194,7 +194,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`P2P_TRANSPORT_LAYER.md`](design/P2P_TRANSPORT_LAYER.md)
   - Target: pre-genesis
 
-- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed; it starts on Rick's authorization (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
+- **EUP-3's coupling half: run the staking sim on the economy's purse.** The purse the economics sim computes replaces the abstract 100 units per epoch (Appendix B A1), `budget_throttle`'s copied `emis_frac` is computed (R18), L19i's challenge egress enters the population model, the bond runs as A7 is ruled, and the calibrations of [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6.2 item 4 are re-derived on the production reward arm. ESR-10 and ESR-17 have landed, and Rick authorized it on 2026-11-13 (`ECONOMY_UMBRELLA_PLAN.md` §3). Falsifier: the L11–L19 sections report runs on that purse, each citing the run it replaces.
   - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
   - Target: pre-genesis
 
@@ -1418,6 +1418,14 @@ Exceptional deferral with a named blocker. This list stays tiny.
 
 - **Wallet on network filesystems (NFS / SMB): advisory lock + atomic-rename semantics.** Named blocker: lock and rename guarantees are filesystem-implementation-specific and need real deployments to test against; no pre-genesis user has network-filesystem wallet state to protect.
   - Target: post-genesis
+
+- **Multisig: an online mailbox for ceremony files.** DEFERRED (rule 23, R-9 ruled 2026-11-12): files are the only transport and the wallet moves no bytes; the three-relay, operator-directory and heartbeat design is removed from `PQC_MULTISIG.md` §12.4. Named blocker: evidence that file-based sessions are what stops groups from spending. Reopen from an outbound-only mailbox over Tor with a per-intent drop-box address. Zero code exists.
+  - Target: post-genesis
+  - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§12.4, R-9)
+
+- **Multisig: 1-of-N with provable attribution.** DEFERRED (rule 23, R-11 ruled 2026-11-12): either of two people can spend with separate keys, and it is provable which one did. E′ refuses `m < 2` and cannot deliver this honestly: the dealer generated every member's keys, and whoever built an output (for change, a group member) can derive every member's per-output signing key for it, so the attribution is forgeable by either party. Named blocker: per-output keys only the recipient can derive (the sender-known-seed round in core). Zero code exists.
+  - Target: post-genesis
+  - Owner: the multisig protocol — [`PQC_MULTISIG.md`](PQC_MULTISIG.md) (§5.1, R-11)
 
 ## V4
 

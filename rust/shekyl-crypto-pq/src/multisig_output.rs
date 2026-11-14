@@ -80,35 +80,11 @@ const HASHES_NONCE: [u8; 12] = [0u8; 12];
 pub(crate) fn derive_multisig_member_keypair(
     member_combined_ss: &[u8; 64],
 ) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
-    use ed25519_dalek::SigningKey;
-    use fips204::traits::SerDes;
-
     let hk = Hkdf::<Sha512>::new(None, member_combined_ss);
     let mut seed = Zeroizing::new([0u8; 64]);
     hk.expand(LABEL_MULTISIG_MEMBER_SIGN, seed.as_mut())
         .map_err(|_| CryptoError::KeyGenerationFailed("HKDF-Expand failed".into()))?;
-    let ed_seed: Zeroizing<[u8; 32]> =
-        Zeroizing::new(seed[..32].try_into().expect("first half of 64"));
-    let ml_seed: Zeroizing<[u8; 32]> =
-        Zeroizing::new(seed[32..].try_into().expect("second half of 64"));
-
-    let ed_signing = SigningKey::from_bytes(&ed_seed);
-    let (ml_pk, ml_sk) = crate::derivation::keygen_from_seed(&ml_seed)?;
-    let public = HybridPublicKey {
-        ed25519: ed_signing.verifying_key().to_bytes(),
-        ml_dsa: ml_pk.into_bytes().to_vec(),
-    };
-    // The serialized halves are secret. `to_bytes` / `into_bytes` return
-    // them by value; wrapping that value in `Zeroizing` wipes the source
-    // array when the copy into `HybridSecretKey` is done (rule 35).
-    let ed_sk_bytes = Zeroizing::new(ed_signing.to_bytes());
-    let ml_sk_bytes = Zeroizing::new(ml_sk.into_bytes());
-    let mut ed25519 = vec![0u8; ed_sk_bytes.len()];
-    ed25519.copy_from_slice(ed_sk_bytes.as_slice());
-    let mut ml_dsa = vec![0u8; ml_sk_bytes.len()];
-    ml_dsa.copy_from_slice(ml_sk_bytes.as_slice());
-    let secret = HybridSecretKey { ed25519, ml_dsa };
-    Ok((public, secret))
+    crate::derivation::hybrid_keypair_from_seed(&seed)
 }
 
 const _: () = assert!(
