@@ -17,8 +17,15 @@
 //!
 //! Each item takes one permit of the job's class for its hash, and a job's
 //! items are spread across as many lanes as the hasher has permits
-//! ([`prove`]). The answer is in item order and stops at the first refusal
-//! or fault, exactly as `form_header` returns it.
+//! ([`prove`]). The answer is in item order and stops at the first
+//! refusal, exactly as `form_header` returns it.
+//!
+//! An item that cannot be judged is not an answer. A hash asked under a
+//! seed the job did not borrow is a defect in the model's batching, and a
+//! clock before the epoch is the host's: neither is a verdict on a header,
+//! and neither heals when the model plans the item again. The job returns
+//! the [`ProveFault`], and the owner ends on it
+//! ([`EndCause::ProofUnjudged`](crate::owner::EndCause::ProofUnjudged)).
 //!
 //! [`Command::Prove`]: shekyl_chain_sync::Command::Prove
 //! [`Event::Proven`]: shekyl_chain_sync::Event::Proven
@@ -42,6 +49,49 @@ pub const fn budget_class(class: HashClass) -> Class {
         HashClass::HeaderPow => Class::HeaderPow,
         HashClass::Unsolicited => Class::Unsolicited,
         HashClass::Evidence => Class::Evidence,
+    }
+}
+
+/// Why a prove job could not judge an item: never a verdict on the header,
+/// and never a stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProveFault {
+    /// The item named `asked` inside a job that borrowed `lent`'s cache:
+    /// the model put a header in a job under another seed.
+    SeedNotLent {
+        /// The seed the item's rule named.
+        asked: BlockHash,
+        /// The seed the job borrowed a cache for.
+        lent: BlockHash,
+    },
+    /// The system clock reads before the Unix epoch, so the FTL rule
+    /// (CEN-C1) has no local time.
+    ClockBeforeEpoch,
+}
+
+impl ProveFault {
+    /// The prose of this fault, without its seeds.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::SeedNotLent { .. } => {
+                "a header proof was asked under a seed its job did not borrow"
+            }
+            Self::ClockBeforeEpoch => "a header proof found the system clock before the Unix epoch",
+        }
+    }
+}
+
+impl std::fmt::Display for ProveFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SeedNotLent { asked, lent } => write!(
+                formatter,
+                "{}: the item named {asked:?}, the job borrowed {lent:?}",
+                self.text()
+            ),
+            Self::ClockBeforeEpoch => formatter.write_str(self.text()),
+        }
     }
 }
 
@@ -112,13 +162,24 @@ impl Executor {
     /// an earlier item ended the job. A lane already waiting for its
     /// permit when that happens still hashes its item; its answer is
     /// dropped.
-    fn prove_blocking(&self, class: Class, seed: BlockHash, items: &[ProveItem]) -> Vec<Proved> {
+    ///
+    /// # Errors
+    ///
+    /// The fault of the lowest item that could not be judged, when no item
+    /// before it ended the answer.
+    fn prove_blocking(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        items: &[ProveItem],
+    ) -> Result<Vec<Proved>, ProveFault> {
         let lanes = self.permits().max(1).min(items.len());
         // The lowest index that ended the job; items above it are not
         // taken.
         let ended = AtomicUsize::new(usize::MAX);
         let next = AtomicUsize::new(0);
-        let slots: Vec<Mutex<Option<Proved>>> = items.iter().map(|_| Mutex::new(None)).collect();
+        let slots: Vec<Mutex<Option<Result<Proved, ProveFault>>>> =
+            items.iter().map(|_| Mutex::new(None)).collect();
         let granted = self.pow.lend(class, seed, &self.stop, |job| {
             std::thread::scope(|scope| {
                 for _ in 0..lanes {
@@ -127,8 +188,8 @@ impl Executor {
                         if index >= items.len() || index > ended.load(Ordering::Acquire) {
                             break;
                         }
-                        let proved = prove_one(job, &items[index]);
-                        if !matches!(proved, Some(Proved::Formed(_))) {
+                        let proved = prove_one(job, seed, &items[index]);
+                        if !matches!(proved, Some(Ok(Proved::Formed(_)))) {
                             ended.fetch_min(index, Ordering::AcqRel);
                         }
                         *slots[index].lock().unwrap_or_else(PoisonError::into_inner) = proved;
@@ -138,31 +199,39 @@ impl Executor {
         });
         if granted.is_none() {
             // The stop came before the job was granted: nothing was proven.
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let mut results = Vec::with_capacity(slots.len());
         for slot in slots {
             let Some(proved) = slot.into_inner().unwrap_or_else(PoisonError::into_inner) else {
                 break;
             };
+            let proved = proved?;
             let last = !matches!(proved, Proved::Formed(_));
             results.push(proved);
             if last {
                 break;
             }
         }
-        results
+        Ok(results)
     }
 }
 
-/// Prove one item inside the job. `None` when a stop reached the hash, or
-/// the item could not be judged: the clock, or a seed the job did not
-/// borrow, which is a defect in the model's batching and never a verdict.
-fn prove_one(job: &LendJob<'_, SubstrateFault>, item: &ProveItem) -> Option<Proved> {
+/// Prove one item inside the job on `lent`. `None` when a stop reached
+/// the hash: nothing was judged, and nothing is a fault. An item that
+/// could not be judged is its [`ProveFault`].
+fn prove_one(
+    job: &LendJob<'_, SubstrateFault>,
+    lent: BlockHash,
+    item: &ProveItem,
+) -> Option<Result<Proved, ProveFault>> {
     let Ok(pow) = PowBlob::read(&item.pow) else {
         // The model writes the preimage from a parsed one. One that does
         // not read back is not a header.
-        return Some(Proved::Refused(InvalidBlock::new(CenRow::A6, Locus::Block)));
+        return Some(Ok(Proved::Refused(InvalidBlock::new(
+            CenRow::A6,
+            Locus::Block,
+        ))));
     };
     let verdict = form_header(
         &pow,
@@ -173,15 +242,16 @@ fn prove_one(job: &LendJob<'_, SubstrateFault>, item: &ProveItem) -> Option<Prov
         item.attempt,
     );
     match verdict {
-        Ok(Ok(formed)) => Some(Proved::Formed(Box::new(formed))),
-        Ok(Err(refused)) => Some(Proved::Refused(refused)),
-        // A stop, not a fault: nothing was judged, and nothing is logged
-        // as an error.
+        Ok(Ok(formed)) => Some(Ok(Proved::Formed(Box::new(formed)))),
+        Ok(Err(refused)) => Some(Ok(Proved::Refused(refused))),
+        // A stop, not a fault: nothing was judged.
         Err(SubstrateFault::Stopped) => None,
-        Err(fault @ (SubstrateFault::SeedNotLent { .. } | SubstrateFault::ClockBeforeEpoch)) => {
-            tracing::error!(%fault, "the proof could not be judged");
-            None
+        // The job's substrate names the seed it was lent; a job always
+        // has one, so `lent` is the job's own.
+        Err(SubstrateFault::SeedNotLent { asked, .. }) => {
+            Some(Err(ProveFault::SeedNotLent { asked, lent }))
         }
+        Err(SubstrateFault::ClockBeforeEpoch) => Some(Err(ProveFault::ClockBeforeEpoch)),
     }
 }
 
@@ -197,18 +267,24 @@ fn prove_one(job: &LendJob<'_, SubstrateFault>, item: &ProveItem) -> Option<Prov
 ///
 /// The job is one blocking task of the owner's row; its lanes are scoped
 /// threads of that task.
+///
+/// # Errors
+///
+/// The [`ProveFault`] of the first item that could not be judged, when
+/// every item before it formed. No answer is cut short for it: the owner
+/// ends (module docs).
 pub async fn prove(
     executor: Arc<Executor>,
     class: HashClass,
     seed: BlockHash,
     items: Vec<ProveItem>,
-) -> Vec<Proved> {
+) -> Result<Vec<Proved>, ProveFault> {
     let class = budget_class(class);
     match tokio::task::spawn_blocking(move || executor.prove_blocking(class, seed, &items)).await {
-        Ok(results) => results,
+        Ok(answer) => answer,
         Err(join) => {
             tracing::error!(%join, "a proof job ended without an answer");
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 }

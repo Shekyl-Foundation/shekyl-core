@@ -93,7 +93,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::bundles::{relay_message, relayed, serve_bundle_bodies};
-use crate::executor::Executor;
+use crate::executor::{Executor, ProveFault};
 use crate::outcome;
 use crate::port::Inbound;
 use crate::relay;
@@ -321,6 +321,11 @@ pub enum EndCause {
     TipWatchClosed,
     /// The latch watch closed.
     LatchWatchClosed,
+    /// A prove job could not judge an item: a hash asked under a seed the
+    /// job did not borrow, or a clock before the epoch. A defect of this
+    /// node, not a verdict on a header, and planning the item again meets
+    /// it again.
+    ProofUnjudged(ProveFault),
 }
 
 impl EndCause {
@@ -333,13 +338,22 @@ impl EndCause {
             Self::EngineClosed => "the timing engine closed",
             Self::TipWatchClosed => "the connector's tip watch closed",
             Self::LatchWatchClosed => "the latch watch closed",
+            Self::ProofUnjudged(fault) => fault.text(),
         }
     }
 }
 
 impl std::fmt::Display for EndCause {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.text())
+        match self {
+            // With the seeds, which the prose alone does not carry.
+            Self::ProofUnjudged(fault) => fault.fmt(formatter),
+            Self::Panicked
+            | Self::PortClosed
+            | Self::EngineClosed
+            | Self::TipWatchClosed
+            | Self::LatchWatchClosed => formatter.write_str(self.text()),
+        }
     }
 }
 
@@ -386,6 +400,9 @@ enum Input {
         job: Job,
         results: Vec<Proved>,
     },
+    /// A prove job could not judge an item ([`ProveFault`]): the owner
+    /// ends.
+    Unjudged(ProveFault),
     Entry {
         tag: u64,
         reply: Reply,
@@ -496,6 +513,10 @@ struct Owner<C: Clock + Clone, R> {
     /// session answers in the order it was asked, so a 2017 answers the
     /// first.
     bundle_asks: HashMap<Session, VecDeque<BundleAsk>>,
+    /// Set when the owner must end on its own for a cause no input's
+    /// closing carries ([`Self::unjudged`]). The task's loop reads it
+    /// before each wait.
+    failed: Option<EndCause>,
 }
 
 /// One 2016 this owner sent: the block whose section names the bodies, and
@@ -597,6 +618,7 @@ async fn run<C, R>(
         state_tx,
         published,
         bundle_asks: HashMap::new(),
+        failed: None,
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -607,6 +629,10 @@ async fn run<C, R>(
     owner.tip(&first);
     owner.room();
     loop {
+        if let Some(cause) = owner.failed {
+            end.how = Ended::Failed(cause);
+            break;
+        }
         owner_select!(
             publish_rx,
             state,
@@ -1209,6 +1235,7 @@ where
                 tracing::trace!(?job, proved = results.len(), last = ?results.last().map(outcome::proved_kind), "a prove job answered");
                 self.event(Event::Proven { job, results });
             }
+            Input::Unjudged(fault) => self.unjudged(fault),
             Input::Entry { tag, reply } => {
                 let offered = self.offered.remove(&tag);
                 if let Some(offered) = &offered {
@@ -1383,6 +1410,17 @@ where
         }
         self.commands(out);
         self.published.alarm_tx.send_replace(self.sync.alarm());
+    }
+
+    /// A prove job could not judge an item: record the end, which the
+    /// task's loop takes before it reads another input. Logged here, once:
+    /// the first fault stands, and a second job's is the same defect.
+    fn unjudged(&mut self, fault: ProveFault) {
+        if self.failed.is_some() {
+            return;
+        }
+        tracing::error!(%fault, "a proof could not be judged: chain sync stops");
+        self.failed = Some(EndCause::ProofUnjudged(fault));
     }
 
     /// Publish the model's header frontier for the ranked list, when it
@@ -1570,8 +1608,12 @@ where
                     let executor = Arc::clone(&self.executor);
                     let inputs = self.inputs.clone();
                     tokio::spawn(async move {
-                        let results = crate::executor::prove(executor, class, seed, items).await;
-                        let _gone = inputs.send(Input::Proven { job, results });
+                        let input = match crate::executor::prove(executor, class, seed, items).await
+                        {
+                            Ok(results) => Input::Proven { job, results },
+                            Err(fault) => Input::Unjudged(fault),
+                        };
+                        let _gone = inputs.send(input);
                     });
                 }
                 Command::Offer { arrivals } => self.offer(arrivals),

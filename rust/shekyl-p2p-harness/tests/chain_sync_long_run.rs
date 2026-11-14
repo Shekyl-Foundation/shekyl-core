@@ -154,14 +154,20 @@ async fn hash_rate_per_slot() {
         // outside it: folding that proof in overstates the derivation,
         // most on the floor device where one hash dominates the build.
         let started = Instant::now();
-        let derived = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(0)).await;
+        let derived = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(0))
+            .await
+            .expect("every item is under the job's seed");
         let derive = started.elapsed();
         assert!(derived.is_empty(), "{derived:?}");
-        let warm = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(1)).await;
+        let warm = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(1))
+            .await
+            .expect("every item is under the job's seed");
         assert!(matches!(warm.as_slice(), [Proved::Formed(_)]), "{warm:?}");
         let n = PROOFS_PER_SLOT * permits.get();
         let started = Instant::now();
-        let proved = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(n)).await;
+        let proved = prove(Arc::clone(&executor), HashClass::HeaderPow, plan, job(n))
+            .await
+            .expect("every item is under the job's seed");
         let hashing = started.elapsed();
         assert_eq!(proved.len(), n, "every proof formed");
         let rate = f64::from(u32::try_from(n).expect("a count")) / hashing.as_secs_f64();

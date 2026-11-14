@@ -27,7 +27,7 @@ use shekyl_hasher::{Class, Hasher, Owner, Ranked, Residency};
 use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{BlockCount, BlockHash};
 
-use super::{prove, Executor};
+use super::{prove, Executor, ProveFault};
 use shekyl_chain_sync::{HashClass, ProveItem, Proved};
 
 /// A fakechain rule set at a fixed `target` with a reorg cap of `blocks`.
@@ -86,6 +86,18 @@ fn seed(byte: u8) -> BlockHash {
 
 fn as_seed(seed: BlockHash) -> Seedhash {
     Seedhash::from_bytes(*seed.as_bytes())
+}
+
+/// [`prove`], for a job whose every item can be judged.
+async fn judged(
+    executor: Arc<Executor>,
+    class: HashClass,
+    seed: BlockHash,
+    items: Vec<ProveItem>,
+) -> Vec<Proved> {
+    prove(executor, class, seed, items)
+        .await
+        .expect("every item of this job can be judged")
 }
 
 fn all_formed(results: &[Proved], count: usize) -> bool {
@@ -148,7 +160,7 @@ impl Rig {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_gets_its_cache_and_an_unranked_one_is_freed_after_it() {
     let rig = rig(Budget::new(NonZeroUsize::MIN));
-    let results = prove(
+    let results = judged(
         Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         seed(1),
@@ -173,7 +185,7 @@ async fn a_stop_ends_a_job_waiting_on_a_full_budget() {
     let budget = Budget::new(NonZeroUsize::MIN);
     let busy = budget.acquire(Class::Chain);
     let rig = rig(budget.clone());
-    let job = tokio::spawn(prove(
+    let job = tokio::spawn(judged(
         Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         seed(1),
@@ -209,7 +221,7 @@ async fn a_ranked_seed_is_built_once_across_jobs_and_freed_when_the_list_drops_i
     let rig = rig(Budget::new(NonZeroUsize::MIN));
     rig.rank(&[9], Some(2));
     for count in [2, 1] {
-        let results = prove(
+        let results = judged(
             Arc::clone(&rig.executor),
             HashClass::HeaderPow,
             seed(2),
@@ -233,7 +245,7 @@ async fn an_evidence_job_runs_beside_a_miner_on_a_budget_of_two() {
     let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
     let mining = budget.acquire(Class::Miner);
     let rig = rig(budget.clone());
-    let results = prove(
+    let results = judged(
         Arc::clone(&rig.executor),
         HashClass::Evidence,
         seed(4),
@@ -253,7 +265,7 @@ async fn a_job_answers_in_item_order_and_ends_at_its_first_refusal() {
     let rig = rig(Budget::new(NonZeroUsize::new(2).expect("two")));
     let mut broken = item(seed(5));
     broken.pow = vec![0xFF; 3];
-    let results = prove(
+    let results = judged(
         Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         seed(5),
@@ -279,25 +291,34 @@ async fn a_job_answers_in_item_order_and_ends_at_its_first_refusal() {
     );
 }
 
-/// An item that names a seed other than its job's is not judged, and it
-/// ends the answer: a defect in the model's batching, never a verdict on
-/// the header.
+/// An item that names a seed other than its job's is not judged, and the
+/// job answers with the fault, not with the items before it: a defect in
+/// the model's batching, never a verdict on the header, and the same
+/// defect again if the model planned the rest. The owner ends on it
+/// (`EndCause::ProofUnjudged`;
+/// `owner_tests::an_unjudged_proof_is_an_end_that_names_its_fault`).
 ///
-/// Red edit: in `prove_one`, answer `SeedNotLent` as
-/// `Proved::Refused(...)`: the session would be closed for our defect.
+/// Red edits: in `prove_one`, answer `SeedNotLent` as `None` again: the
+/// job answers `Ok` with one formed item, and the owner carries on. Answer
+/// it as `Proved::Refused(...)`: the session would be closed for our
+/// defect.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_item_under_another_seed_is_not_judged() {
     let rig = rig(Budget::new(NonZeroUsize::MIN));
-    let results = prove(
+    let answer = prove(
         Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         seed(6),
         vec![item(seed(6)), item(seed(7)), item(seed(6))],
     )
     .await;
-    assert!(
-        matches!(results.as_slice(), [Proved::Formed(_)]),
-        "the answer ends before the item that could not be judged: {results:?}"
+    assert_eq!(
+        answer.map(|results| results.len()),
+        Err(ProveFault::SeedNotLent {
+            asked: seed(7),
+            lent: seed(6),
+        }),
+        "the job answers with the fault, and cuts nothing short"
     );
     assert_eq!(rig.builds(), 1, "and nothing was built for the other seed");
 }
@@ -323,7 +344,7 @@ async fn a_fork_proven_by_headers_then_formed_by_the_ingest_is_built_once() {
     // The list while the run proves: the window, and the fork's seed as
     // the frontier's third.
     rig.rank(&[1], Some(3));
-    let proven = prove(
+    let proven = judged(
         Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         fork,
@@ -383,7 +404,7 @@ async fn an_evidence_check_takes_the_warm_thirds_place_and_the_third_comes_back(
     assert_eq!(rig.builds(), 3);
     let results = tokio::time::timeout(
         Duration::from_secs(60),
-        prove(
+        judged(
             Arc::clone(&rig.executor),
             HashClass::Evidence,
             seed(4),
@@ -439,7 +460,7 @@ async fn an_evidence_check_runs_after_the_one_job_ahead_of_it_not_the_stream() {
     let check = {
         let (executor, order) = (Arc::clone(&rig.executor), Arc::clone(&order));
         tokio::spawn(async move {
-            let results = prove(executor, HashClass::Evidence, seed(4), vec![item(seed(4))]).await;
+            let results = judged(executor, HashClass::Evidence, seed(4), vec![item(seed(4))]).await;
             order.lock().expect("order").push("evidence check");
             results
         })
@@ -506,7 +527,7 @@ async fn two_jobs_outside_a_two_seed_window_free_no_window_seed() {
     let jobs: Vec<_> = [5u8, 6]
         .into_iter()
         .map(|outside| {
-            tokio::spawn(prove(
+            tokio::spawn(judged(
                 Arc::clone(&rig.executor),
                 HashClass::HeaderPow,
                 seed(outside),
