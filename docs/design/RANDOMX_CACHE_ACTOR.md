@@ -19,7 +19,7 @@ Each fix so far made the bookkeeping more careful. This design removes the bookk
 
 ## 2. Who touches a cache
 
-One crate builds, holds and frees a `PreparedCache`: `shekyl-hasher`. Every other consumer hashes through a job on the node's one `Hasher` and holds no cache and no budget. `scripts/ci/check_randomx_cache_owner.sh` holds `PreparedCache::derive` and `Arc<PreparedCache>` to the paths in the last two rows.
+One crate builds, holds and frees a `PreparedCache`: `shekyl-hasher`. Every other consumer hashes through a job on the node's one `Hasher` and holds no cache and no budget. `scripts/ci/check_randomx_cache_owner.sh` holds the identifier `PreparedCache` to the paths in the last two rows, so a field, a path-qualified `Arc` and `PreparedCache::derive` are one use, and `CacheStore` may not appear in Rust code at all.
 
 | Consumer | Where | How it hashes |
 | --- | --- | --- |
@@ -222,8 +222,9 @@ The crate has no end of its own, so it has no `NodeEnd` variant: `PreparedCache:
 
 The cache store, the slot methods on `Substrate`, the ingest's pin lock, window install and branch gate, the executor's branch cache, and the sync model's slot-miss protocol are deleted. What keeps them from coming back is one gate, `scripts/ci/check_randomx_cache_owner.sh`:
 
-- `PreparedCache::derive` and `Arc<PreparedCache>` appear in Rust code only under `rust/shekyl-hasher/src`, `rust/shekyl-pow-randomx/{src,benches,examples}`, `rust/shekyl-randomx-differential` and `rust/shekyl-verify-cost/benches`.
-- Each allowed path must exist and still use one of them, so an allowance that names nothing fails (rule 47).
+- The identifier `PreparedCache` appears in Rust code only under `rust/shekyl-hasher/src`, `rust/shekyl-pow-randomx/{src,benches,examples}`, `rust/shekyl-randomx-differential` and `rust/shekyl-verify-cost/benches`. A field, a path-qualified `Arc<shekyl_pow_randomx::PreparedCache>` and `PreparedCache::derive` are the same use.
+- `CacheStore` does not appear in Rust code, those paths included. The type was deleted.
+- Each allowed path must exist and still name `PreparedCache`, so an allowance that names nothing fails (rule 47).
 - A use anywhere else fails, naming the file and line.
 
 `PreparedCache::derive` stays `pub`, because the actor lives above the verifier crate: that crate is held to isolation invariants a scheduler has no business under.

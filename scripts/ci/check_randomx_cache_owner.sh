@@ -9,12 +9,14 @@
 #
 # A cache is 256 MiB. In the daemon one crate builds, holds and frees one:
 # `shekyl-hasher`, whose cap is three. Every other consumer hashes through
-# a job on that hasher and holds no cache, so the cap is the memory. A
-# second `PreparedCache::derive`, or an `Arc<PreparedCache>` held anywhere
-# else, is a cache the cap does not count.
+# a job on that hasher and holds no cache, so the cap is the memory. Naming
+# `PreparedCache` outside the allowed paths is a cache the cap does not
+# count, whichever way it is spelled: a field, a path-qualified `Arc`, or
+# `PreparedCache::derive`. `CacheStore` was deleted and may not return in
+# Rust code at all, including those paths.
 #
-# The gate: `PreparedCache::derive` and `Arc<PreparedCache>` appear in Rust
-# code only under the paths in ALLOWED:
+# The gate: the identifier `PreparedCache` appears in Rust code only under
+# the paths in ALLOWED:
 #
 #   - rust/shekyl-hasher/src            the owner;
 #   - rust/shekyl-pow-randomx/src       the verifier, which defines both;
@@ -36,11 +38,17 @@
 #     Red edit: add `rust/shekyl-pow-randomx/tests` to ALLOWED (no test
 #     there derives a cache), or rename an allowed directory.
 #   - a match anywhere else fails, naming the file and line. Red edit: add
-#     `let _cache = shekyl_pow_randomx::PreparedCache::derive(seed);` to
-#     any file under rust/shekyl-chain-ingest/src.
+#     `let _cache: shekyl_pow_randomx::PreparedCache;` to any file under
+#     rust/shekyl-chain-ingest/src. An `Arc<shekyl_pow_randomx::PreparedCache>`
+#     is the same failure: the identifier, not one spelling of it.
+#   - `CacheStore` in any Rust file fails, allowed paths included. Red
+#     edit: add `struct CacheStore;` under rust/shekyl-hasher/src.
 #
 # Exits (rule 46): rg's status is read outside the substitution, and a
-# scan error is a failure, never "no hit".
+# scan error is a failure, never "no hit". A match is `grep -q` on a
+# here-string, never a pipe: under pipefail an early `grep -q` SIGPIPEs
+# its producer and a real match reads as failure once the hit list
+# outgrows the pipe buffer.
 
 set -euo pipefail
 
@@ -64,7 +72,12 @@ ALLOWED=(
   "rust/shekyl-verify-cost/benches"
 )
 
-PATTERN='PreparedCache::derive|Arc<PreparedCache>'
+# The type, not one way of constructing or holding it. A path-qualified
+# `Arc<shekyl_pow_randomx::PreparedCache>` and a field `cache: PreparedCache`
+# are the same use as `PreparedCache::derive`.
+PATTERN='\bPreparedCache\b'
+# The deleted store. No path is allowed to grow it back.
+DELETED='\bCacheStore\b'
 
 # Subject: the two names exist where they are defined. A rename of either
 # would leave the pattern matching nothing, and every scan below green.
@@ -73,38 +86,63 @@ rg -q 'pub fn derive\(' rust/shekyl-pow-randomx/src/prepared_cache.rs \
 rg -q 'pub struct PreparedCache' rust/shekyl-pow-randomx/src/prepared_cache.rs \
   || fail "PreparedCache is not defined in rust/shekyl-pow-randomx/src/prepared_cache.rs: re-anchor this gate"
 
-# Every match in Rust code under rust/, comment lines dropped. The vendored
-# tree and the build output are not first-party code.
-rc=0
-hits="$(rg -n --no-heading -g '*.rs' -g '!rust/target/**' -g '!rust/shekyl-oxide/**' \
-  -e "$PATTERN" rust)" || rc=$?
-if (( rc > 1 )); then
-  fail "rg exited ${rc} scanning rust/"
-fi
-code_hits="$(printf '%s\n' "$hits" | awk -F: '
-  NF >= 3 {
-    line = $0
-    sub(/^[^:]*:[^:]*:/, "", line)
-    if (line ~ /^[[:space:]]*\/\//) next
-    print $0
-  }')"
+# Full-line comments are not code: a doc may cite the name. A block
+# comment is code, so a citation hidden in one fails closed.
+strip_comments() {
+  awk -F: '
+    NF >= 3 {
+      line = $0
+      sub(/^[^:]*:[^:]*:/, "", line)
+      if (line ~ /^[[:space:]]*\/\//) next
+      print $0
+    }'
+}
 
+# rg over rust/. Status is the substitution's, read on the next line:
+# exit 1 is no hit, above 1 is a scan error. The vendored tree and the
+# build output are not first-party code.
+scan() {
+  local pattern="$1"
+  local rc=0
+  local hits
+  hits="$(rg -n --no-heading -g '*.rs' -g '!rust/target/**' -g '!rust/shekyl-oxide/**' \
+    -e "$pattern" rust)" || rc=$?
+  if (( rc > 1 )); then
+    fail "rg exited ${rc} scanning rust/ for ${pattern}"
+  fi
+  printf '%s\n' "$hits" | strip_comments
+}
+
+code_hits="$(scan "$PATTERN")"
 [[ -n "$code_hits" ]] \
-  || fail "no use of PreparedCache::derive or Arc<PreparedCache> anywhere under rust/: the scan read nothing"
+  || fail "no use of PreparedCache anywhere under rust/: the scan read nothing"
 
-# Each allowed path exists and has a match.
+# Each allowed path exists and has a match. The hit list is already in
+# memory; grep reads it from a here-string, so a match cannot SIGPIPE
+# the producer (rule 46).
 for allowed in "${ALLOWED[@]}"; do
   [[ -d "$allowed" ]] \
     || fail "allowed path ${allowed} does not exist: the allowance names nothing; update ALLOWED"
-  printf '%s\n' "$code_hits" | grep -q "^${allowed}/" \
-    || fail "allowed path ${allowed} holds no use of PreparedCache::derive or Arc<PreparedCache>: remove it from ALLOWED"
+  grep -q "^${allowed}/" <<<"$code_hits" \
+    || fail "allowed path ${allowed} holds no use of PreparedCache: remove it from ALLOWED"
 done
 
-# Every match is under an allowed path.
-outside="$code_hits"
-for allowed in "${ALLOWED[@]}"; do
-  outside="$(printf '%s\n' "$outside" | grep -v "^${allowed}/" || true)"
-done
+# Every match is under an allowed path. The filter is a read of the
+# captured list, not a pipe whose empty result could be a grep error.
+outside=""
+while IFS= read -r hit || [[ -n "$hit" ]]; do
+  [[ -z "$hit" ]] && continue
+  kept=1
+  for allowed in "${ALLOWED[@]}"; do
+    if [[ "$hit" == "$allowed/"* ]]; then
+      kept=0
+      break
+    fi
+  done
+  if (( kept )); then
+    outside+="${hit}"$'\n'
+  fi
+done <<<"$code_hits"
 if [[ -n "$outside" ]]; then
   echo "FAIL: check_randomx_cache_owner: a RandomX cache is built or held outside its owner:" >&2
   printf '%s\n' "$outside" >&2
@@ -112,4 +150,13 @@ if [[ -n "$outside" ]]; then
   exit 1
 fi
 
-echo "OK: PreparedCache::derive and Arc<PreparedCache> are used only under: ${ALLOWED[*]}"
+# The store is gone. A hit in an allowed path is still the type coming back.
+deleted="$(scan "$DELETED")"
+if [[ -n "$deleted" ]]; then
+  echo "FAIL: check_randomx_cache_owner: CacheStore was deleted and may not return:" >&2
+  printf '%s\n' "$deleted" >&2
+  echo "A cache is a job on shekyl-hasher, not a store. See docs/design/RANDOMX_CACHE_ACTOR.md §7." >&2
+  exit 1
+fi
+
+echo "OK: PreparedCache is used only under: ${ALLOWED[*]}; CacheStore is absent"

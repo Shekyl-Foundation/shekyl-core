@@ -721,8 +721,8 @@ impl Node {
         // dropped before it becomes a block. A start that has published
         // its stop flag and not yet its threads is signaled here too, so
         // those threads deliver nothing after this returns. The join takes
-        // that gate and is the last thing this stop does, so a stop already
-        // inside the gate finishes before it.
+        // that gate, so a stop already inside it finishes before the hasher,
+        // which is stopped last.
         self.mining.close();
         // Before the network: its stop drops the port chain sync reads,
         // and that close is a failure unless the stop is already asked.

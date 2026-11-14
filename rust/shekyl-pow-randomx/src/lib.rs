@@ -12,7 +12,7 @@
 //! builds every cache, lends it to a job and frees it
 //! (`docs/design/RANDOMX_CACHE_ACTOR.md`). The ingest, chain sync, `pow`
 //! and `shekyl-miner` hash through its jobs and hold no cache. A CI gate
-//! holds `PreparedCache::derive` and `Arc<PreparedCache>` to that crate,
+//! holds the identifier `PreparedCache` to that crate,
 //! this one, the differential harness and the cost benches
 //! (`scripts/ci/check_randomx_cache_owner.sh`). Fast mining is an
 //! external miner's job: the Monero RandomX C/C++ library at

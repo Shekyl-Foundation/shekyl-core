@@ -243,9 +243,9 @@ jobs:
             scripts/ci/check_pow_test_seam.sh
           # RANDOMX_CACHE_ACTOR.md: one crate builds, holds and frees a
           # RandomX cache, so the hasher's cap of three is the memory. The
-          # gate holds PreparedCache::derive and Arc<PreparedCache> to that
-          # crate, the verifier, the differential harness and the cost
-          # benches, and requires each allowed path to still use one.
+          # gate holds the identifier PreparedCache to that crate, the
+          # verifier, the differential harness and the cost benches, requires
+          # each allowed path to still use it, and refuses CacheStore anywhere.
           run_one "One owner of every RandomX cache (HA-R1)" \
             scripts/ci/check_randomx_cache_owner.sh
           # DX-Q3 Q4: the node's template draws its coinbase secret and its

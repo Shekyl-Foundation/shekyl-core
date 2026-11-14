@@ -41,9 +41,10 @@
 //!   the store a run left; the `shekyl-chain-replay` binary calls it. The
 //!   pipeline stages, the trace writer among them, sit behind the
 //!   `pipeline` feature.
-//! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
-//!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
-//!   system clock. The only hasher any Shekyl validator runs (§1.3).
+//! - [`substrate`] — the faults a hashing job's substrate returns, and the
+//!   recalled-hash substrate a switch re-judges through. The production
+//!   longhash lives inside the job that borrowed the cache
+//!   (`RANDOMX_CACHE_ACTOR.md` §5.3), not on a cache the caller holds.
 //! - [`metrics`] — the RandomX measurement sink (RD-F11), shared by the
 //!   substrate and the pipeline.
 //! - [`mutation`] — one deliberate invalidation of one `Extend`, naming
