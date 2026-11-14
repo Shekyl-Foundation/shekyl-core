@@ -582,6 +582,14 @@ mod tests {
             open_envelope(&[&members[1]], &NET, &forged).unwrap_err(),
             ImportRefusal::BadSignature
         );
+        // The ceremony's import refuses it at the same check, before its
+        // body is parsed.
+        assert!(matches!(
+            crate::ceremony::import(&[&members[1]], &NET, &forged),
+            Err(crate::ceremony::ImportError::Envelope(
+                ImportRefusal::BadSignature
+            ))
+        ));
         // The same file, honestly attributed, is accepted.
         let honest = craft(
             members[2].transport_secret(),

@@ -163,9 +163,10 @@ fn through_step_5<'w>(
 // ---------------------------------------------------------------------------
 
 /// A compromised member writes a `Proposal` under its own name: the file
-/// opens, but it is not from the intent's proposer. (One naming the
-/// proposer as its sender fails the envelope signature:
-/// `envelope::tests::a_member_cannot_write_a_file_as_another_member`.)
+/// opens, but it is not from the intent's proposer. One naming the
+/// proposer as its sender is refused by `import` at the envelope
+/// signature (`envelope::tests::a_member_cannot_write_a_file_as_another_member`,
+/// in-crate: forging needs the plaintext codec, which is private).
 #[test]
 fn a_proposal_not_from_the_proposer_is_refused() {
     let (s, m, mut ca, _, _) = setup();
