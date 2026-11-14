@@ -218,14 +218,20 @@ jobs:
     # arms on the baseline and the stuffing attack
     # (esr10_nightly_narration_matches_the_committed_fixture); the full set
     # runs on demand (esr10_narration_matches_the_committed_fixture, named
-    # on demand in the script below). Before it none
+    # on demand in the script below). EUP-4 prep 2's instruments (§5.32) are
+    # split the same way: the nightly scope here
+    # (eup4_nightly_narration_matches_the_committed_fixture), the full
+    # --eup4 narration on demand (eup4_narration_matches_the_committed_fixture,
+    # about 18 minutes on 16 threads). An instrument's mode reads the fold's
+    # fields, and refuses a cell whose report equals its baseline's when it
+    # runs. Before it none
     # did: on PR #1009 the sim's share calls moved onto a function that is
     # zero at height 0 (783053554), both narrations drifted, and CI stayed
     # green until a fresh clone ran the tests by hand two commits later
     # (e3d0931d77).
     #
-    # The crate's two regeneration helpers WRITE the committed fixtures and
-    # are never run here; the script names them so the set is exact.
+    # The crate's regeneration helpers WRITE the committed fixtures and are
+    # never run here; the script names them so the set is exact.
     #
     # Same matrix as above. The schedule runs main's copy of this file over
     # both branches, but the set is read from the checked-out ref's
