@@ -162,6 +162,60 @@ fi
 # Same stripper as the call-site arms: a re-implementation parked inside a
 # block comment is not a live copy, and matching it would be a spurious red.
 # Rule 47: the scanned population is asserted non-empty before it is read.
+#
+# A statement never crosses a file. Each file's text is split on its own and
+# ends its own last statement: a file that ends in an item with no `;` (an
+# enum, say) would otherwise run on into whichever file `rg --files` lists
+# next, and that order is the directory walk's, not the tree's. On #1372 the
+# bond builder's error enum (a `!=` and the word bond_spend_pk, both in
+# messages) ran into daemon-rpc's core.rs (pqc_auths in its first statement)
+# on the runner and not on a workstation: one tree, two verdicts.
+statements_in() {
+  while IFS= read -r f; do
+    statements_of "$f"
+    printf '\n'
+  done
+}
+
+# The invariant's filter, over statements on stdin.
+compares_auth_to_stored() {
+  rg 'bond_spend_pk' \
+    | rg '(==|!=)' \
+    | rg '(pqc_auths|auth_pubkey|auth_key)' \
+    | rg -v 'cold_authority_pin\(' || true
+}
+
+# Self-test of the two, before the tree is read: the case above, in that
+# order, is no hit; a comparison inlined in one statement is.
+fixtures=$(mktemp -d) || {
+  echo "FAIL: no temporary directory for the scan's self-test."
+  exit 2
+}
+trap 'rm -rf "$fixtures"' EXIT
+cat > "$fixtures/tail.rs" <<'RS'
+pub enum E {
+    #[error("{a} != {b}")]
+    Imbalance { a: u64, b: u64 },
+    #[error("failed to encode bond_spend_pk")]
+    Encode,
+}
+RS
+cat > "$fixtures/head.rs" <<'RS'
+use crate::wire::pqc_auths;
+RS
+cat > "$fixtures/inline.rs" <<'RS'
+fn authorized(record: &Record, auth_key: &[u8]) -> bool {
+    auth_key == record.bond_spend_pk()
+}
+RS
+across=$(printf '%s\n' "$fixtures/tail.rs" "$fixtures/head.rs" | statements_in | compares_auth_to_stored)
+inline=$(printf '%s\n' "$fixtures/inline.rs" | statements_in | compares_auth_to_stored)
+if [ -n "$across" ] || [ -z "$inline" ]; then
+  echo "FAIL: the statement scan failed its self-test (a statement across two"
+  echo "      files: '${across}'; a comparison inlined in one: '${inline}')."
+  exit 1
+fi
+
 sources=$(rg --files rust -g '*.rs' -g '!**/target/**' -g '!rust/shekyl-oxide/**' \
             -g '!rust/shekyl-archival-retention/src/debit_auth.rs' \
             -g '!*_tests.rs' -g '!**/tests/**' -g '!**/benches/**') || {
@@ -172,15 +226,8 @@ if [ -z "$sources" ]; then
   echo "FAIL: no Rust source was listed; the scan below would pass over nothing."
   exit 2
 fi
-statements=$(printf '%s\n' "$sources" \
-              | while IFS= read -r f; do code_only "$f"; done \
-              | tr '\n' ' ' \
-              | sed 's:;:;\n:g')
-hits=$(printf '%s\n' "$statements" \
-        | rg 'bond_spend_pk' \
-        | rg '(==|!=)' \
-        | rg '(pqc_auths|auth_pubkey|auth_key)' \
-        | rg -v 'cold_authority_pin\(' || true)
+statements=$(printf '%s\n' "$sources" | statements_in)
+hits=$(printf '%s\n' "$statements" | compares_auth_to_stored)
 if [ -n "$hits" ]; then
   echo "FAIL: a Rust statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
