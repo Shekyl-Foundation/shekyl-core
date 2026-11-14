@@ -612,6 +612,11 @@ impl MiningFacts for MiningControl {
         Ok(Self::stop(self))
     }
 
+    fn found_answered(&self) -> Result<(), FactsFault> {
+        self.found.answered();
+        Ok(())
+    }
+
     /// The refusal [`MiningFacts::withdrawn`] waits for, read now.
     /// `Ok(None)` while a job is posted or the withdrawal is one the next
     /// pass replaces.
