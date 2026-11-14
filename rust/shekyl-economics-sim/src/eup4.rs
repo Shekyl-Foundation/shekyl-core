@@ -711,10 +711,9 @@ const fn blips_of(blocks: u64) -> [Blip; 7] {
 pub(crate) const REGISTERED_BLIPS: [Blip; 7] = blips_of(TX_VOLUME_WINDOW);
 pub(crate) const LONG_BLIPS: [Blip; 7] = blips_of(BLOCK_WEIGHT_LONG_TERM_WINDOW / 2);
 
-/// The demand the stuffing attack offers above the baseline (`scenarios.rs`:
-/// five times it), and for how long.
-const STUFFING_FACTOR_MILLI: u64 = 5_000;
-const STUFFING_BLOCKS: u64 = 21_600;
+/// The stuffing attack's demand multiple, in thousandths.
+const STUFFING_FACTOR_MILLI: u64 = crate::scenarios::STUFFING_ATTACK_MULTIPLE * 1_000;
+use crate::scenarios::STUFFING_ATTACK_BLOCKS as STUFFING_BLOCKS;
 
 /// Blips added on review, after the registered run: at the ratchet year, a
 /// doubling for longer than half the long-term window (which a median can
@@ -1049,33 +1048,34 @@ pub fn run_scoped(
             summary.capacity = Some(write_capacity(out, shared, base)?);
         }
     }
-    let stuffer =
+    // The campaigns' start years; both of EI-3's arms and EI-5's member use
+    // them.
+    let starts: &[u64] = match scope {
+        Scope::Full => &crate::window_stuffer::CAMPAIGN_START_YEARS,
+        #[cfg(test)]
+        Scope::Nightly => &crate::window_stuffer::CAMPAIGN_START_YEARS[..1],
+    };
+    // The window-edge stuffer's campaigns, folded once for whichever of
+    // EI-3 and EI-5 runs, and carried in the summary for either.
+    summary.window_edge_stuffer =
         (runs(Instrument::DemandResponse) || runs(Instrument::StuffingEnvelope)).then(|| {
-            use crate::window_stuffer::{CAMPAIGN_START_YEARS, STUFFER_SHARES_PCT};
-            let (starts, shares): (&[u64], &[u64]) = match scope {
-                Scope::Full => (&CAMPAIGN_START_YEARS, &STUFFER_SHARES_PCT),
-                #[cfg(test)]
-                Scope::Nightly => (&CAMPAIGN_START_YEARS[..1], &STUFFER_SHARES_PCT),
-            };
-            crate::window_stuffer::stuffer_rows(&arms, starts, shares)
+            crate::window_stuffer::stuffer_rows(
+                &arms,
+                starts,
+                &crate::window_stuffer::STUFFER_SHARES_PCT,
+            )
         });
     if runs(Instrument::DemandResponse) {
         summary.step_response = Some(crate::window_stuffer::write_step_response(out, &arms)?);
-        if let Some(rows) = &stuffer {
+        if let Some(rows) = summary.window_edge_stuffer.as_deref() {
             crate::window_stuffer::write_stuffer(out, rows)?;
-            summary.window_edge_stuffer = Some(rows.clone());
         }
-        let starts: &[u64] = match scope {
-            Scope::Full => &crate::window_stuffer::CAMPAIGN_START_YEARS,
-            #[cfg(test)]
-            Scope::Nightly => &crate::window_stuffer::CAMPAIGN_START_YEARS[..1],
-        };
         let every_miner = crate::window_stuffer::all_miners_rows(&arms, starts);
         crate::window_stuffer::write_all_miners(out, &every_miner)?;
         summary.every_miner_stuffs = Some(every_miner);
     }
     if runs(Instrument::StuffingEnvelope) {
-        if let (Some(shared), Some(rows)) = (&shared, &stuffer) {
+        if let (Some(shared), Some(rows)) = (&shared, summary.window_edge_stuffer.as_deref()) {
             summary.stuffing = Some(crate::window_stuffer::write_stuffing_floors(
                 out, shared, &arms, rows,
             )?);
@@ -1206,6 +1206,28 @@ mod tests {
             assert_eq!(read.year, agg.year);
             assert!(read.miner_fee_atomic <= read.miner_owed_atomic);
             assert_eq!(read.tail_blocks, 0, "the tail is decades away");
+        }
+    }
+
+    /// `--demand-response` and `--stuffing-envelope` run through at a day a
+    /// block (365 blocks a year, fewer than a trace or a campaign's span),
+    /// and each carries the window-edge stuffer's campaigns in its summary:
+    /// EI-5 reads them as a member, so its JSON holds them too.
+    #[test]
+    fn the_stuffer_modes_run_at_a_long_block_time_and_carry_the_campaigns() {
+        let params = SimParams::with_overrides(vec![crate::baseline::Override::parse(
+            "economic.daa_target_seconds=86400",
+        )
+        .expect("well-formed")])
+        .expect("a day a block passes the validators");
+        for instrument in [Instrument::StuffingEnvelope, Instrument::DemandResponse] {
+            let mut out = String::new();
+            let summary = run(&mut out, &params, Some(instrument)).expect("String sink");
+            let campaigns = summary
+                .window_edge_stuffer
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} carries the campaigns", instrument.flag()));
+            assert!(!campaigns.is_empty());
         }
     }
 

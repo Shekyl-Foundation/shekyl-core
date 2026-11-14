@@ -29,12 +29,20 @@ use crate::engine::{ScenarioConfig, SimParams, VolumeSchedule};
 use crate::esr10::{scenario_named, Arm};
 use crate::eup4::{release_multiplier_at, SharedRuns};
 use crate::miner_stuffer::{envelope_at, ROWS};
-use crate::scenarios::{BASELINE_STEADY_STATE, BOOM_BUST_CYCLE, STUFFING_ATTACK};
+use crate::scenarios::{
+    BASELINE_STEADY_STATE, BOOM_BUST_CYCLE, STUFFING_ATTACK, STUFFING_ATTACK_BLOCKS,
+};
 use crate::stage2::{a1_year_aggs_probed, BlockSeen, FoldProbe};
 
 /// Blocks a trace starts before its edge, and runs after it.
 const TRACE_BEFORE: u64 = 120;
 const TRACE_AFTER: u64 = 3 * TX_VOLUME_WINDOW;
+/// The first block of `edge`'s trace: [`TRACE_BEFORE`] blocks before it,
+/// or the fold's first block where the edge is nearer than that.
+fn trace_start(edge: u64) -> u64 {
+    edge.saturating_sub(TRACE_BEFORE)
+}
+
 /// Blocks between printed trace samples.
 const TRACE_STRIDE: u64 = 120;
 
@@ -62,6 +70,14 @@ pub(crate) fn step_scenario(params: &SimParams) -> ScenarioConfig {
     config
 }
 
+/// Whole years of `blocks_per_year` blocks that hold the fold's first
+/// `blocks` blocks. A schedule's edges and a campaign's span are counted in
+/// blocks, and a year's blocks move with `daa_target_seconds`, so a fold is
+/// long enough for what it measures whatever a cell sets that to.
+fn years_through(blocks: u64, blocks_per_year: u64) -> u64 {
+    blocks.div_ceil(blocks_per_year)
+}
+
 /// One schedule the step response folds, and the blocks its demand steps
 /// at.
 struct Stepped {
@@ -75,21 +91,19 @@ fn stepped(params: &SimParams) -> Vec<Stepped> {
     boom_bust.sim_years = 3;
     let mut stuffing = scenario_named(params, STUFFING_ATTACK);
     stuffing.sim_years = 1;
-    vec![
-        Stepped {
-            config: step_scenario(params),
-            edges: vec![bpy, 2 * bpy],
-        },
-        Stepped {
-            config: boom_bust,
-            edges: vec![bpy, 2 * bpy],
-        },
-        Stepped {
-            config: stuffing,
-            // The attack's last block is 21 599 (`scenarios.rs`).
-            edges: vec![21_600],
-        },
+    [
+        (step_scenario(params), vec![bpy, 2 * bpy]),
+        (boom_bust, vec![bpy, 2 * bpy]),
+        // The attack's demand steps down at its last block's successor.
+        (stuffing, vec![STUFFING_ATTACK_BLOCKS]),
     ]
+    .into_iter()
+    .map(|(mut config, edges)| {
+        let last = edges.iter().max().expect("a schedule steps");
+        config.sim_years = config.sim_years.max(years_through(last + TRACE_AFTER, bpy));
+        Stepped { config, edges }
+    })
+    .collect()
 }
 
 /// `M_r` and the burn rate at each block of a fold inside any edge's
@@ -180,7 +194,7 @@ pub(crate) fn write_step_response(
             ranges: schedule
                 .edges
                 .iter()
-                .map(|&edge| (edge - TRACE_BEFORE, edge + TRACE_AFTER))
+                .map(|&edge| (trace_start(edge), edge + TRACE_AFTER))
                 .collect(),
             samples: BTreeMap::new(),
         };
@@ -209,8 +223,8 @@ pub(crate) fn write_step_response(
             )?;
             let mut line = String::from("     ");
             let mut t = 0;
-            while t < TRACE_BEFORE + TRACE_AFTER {
-                let block = edge - TRACE_BEFORE + t;
+            while trace_start(edge) + t < edge + TRACE_AFTER {
+                let block = trace_start(edge) + t;
                 if let Some(&(m, b)) = samples.get(&block) {
                     line.push_str(&format!(
                         " {:+}:{:.3}/{:.2}%",
@@ -365,7 +379,10 @@ struct Folded {
 
 fn fold_campaign(params: &SimParams, start_year: u64, campaign: Campaign) -> Folded {
     let mut config = scenario_named(params, BASELINE_STEADY_STATE);
-    config.sim_years = start_year;
+    config.sim_years = start_year.max(years_through(
+        campaign.start + MEASURED_BLOCKS,
+        params.blocks_per_year(),
+    ));
     let mut probe = StufferProbe {
         params,
         campaign,
@@ -786,6 +803,56 @@ pub(crate) fn write_stuffing_floors(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A day a block: 365 blocks a year, fewer than a trace or a
+    /// campaign's span, which are counted in blocks.
+    fn day_blocks() -> SimParams {
+        SimParams::with_overrides(vec![crate::baseline::Override::parse(
+            "economic.daa_target_seconds=86400",
+        )
+        .expect("well-formed")])
+        .expect("a day a block passes the validators")
+    }
+
+    /// Each schedule folds through its last edge's trace, whatever a
+    /// year's blocks: the step response reads a sample at every traced block.
+    #[test]
+    fn every_schedule_folds_through_its_last_trace() {
+        let params = day_blocks();
+        let bpy = params.blocks_per_year();
+        assert_eq!(bpy, 365);
+        for schedule in stepped(&params) {
+            let last = schedule.edges.iter().max().expect("a schedule steps");
+            assert!(
+                schedule.config.sim_years * bpy >= last + TRACE_AFTER,
+                "{} ends before its trace",
+                schedule.config.name
+            );
+        }
+    }
+
+    /// A campaign measures its whole span, whatever a year's blocks.
+    #[test]
+    fn a_campaign_measures_its_whole_span() {
+        let params = day_blocks();
+        let year = CAMPAIGN_START_YEARS[0];
+        let folded = fold_campaign(
+            &params,
+            year,
+            Campaign {
+                every: 5,
+                start: (year - 1) * params.blocks_per_year(),
+                fee: None,
+                timing: Timing::Uniform,
+                budget: None,
+                blocks: CAMPAIGN_BLOCKS,
+            },
+        );
+        assert_eq!(
+            folded.m_r.len(),
+            usize::try_from(MEASURED_BLOCKS).expect("fits")
+        );
+    }
 
     /// The longest run counts only `M_r` strictly above 1.0, and its mean is
     /// over that run alone.
