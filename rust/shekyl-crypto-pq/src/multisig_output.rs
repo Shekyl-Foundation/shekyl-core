@@ -453,6 +453,36 @@ pub struct MultisigMemberSignature {
     pub signature: HybridSignature,
 }
 
+/// This member's per-output hybrid public key for an output its group owns:
+/// the key [`sign_multisig_member_auth`] signs with, derived from the
+/// member's own `0x0D` ciphertext. The shared secret and the secret key
+/// exist only inside this call. A ceremony sends this key in its first
+/// round, because every input's `signed_hash(i)` covers every signer's key
+/// (CEN-I17) and no other member can derive it.
+///
+/// # Errors
+///
+/// [`MultisigSignError::GroupSize`] or [`MultisigSignError::MemberDecap`],
+/// as for [`sign_multisig_member_auth`].
+pub fn multisig_member_public_key(
+    member: &MultisigMemberView<'_>,
+    ciphertext: &MemberOwnCiphertext<'_>,
+) -> Result<HybridPublicKey, MultisigSignError> {
+    if ciphertext.n != member.n_total || member.member_index >= member.n_total {
+        return Err(MultisigSignError::GroupSize);
+    }
+    let member_ss = recover_combined_ss(
+        member.member_x25519_sk,
+        member.member_ml_kem_dk,
+        ciphertext.own_x25519_ct,
+        ciphertext.own_ml_kem_ct,
+    )
+    .map_err(|_| MultisigSignError::MemberDecap)?;
+    let (public_key, _secret_key) =
+        derive_multisig_member_keypair(&member_ss.0).map_err(|_| MultisigSignError::MemberDecap)?;
+    Ok(public_key)
+}
+
 /// Sign, as one member, input `i` of a spend of an output the group owns:
 /// recover this member's `ss_i` from its own `0x0D` ciphertext, derive its
 /// per-output hybrid key, and sign `message` (the input's `signed_hash(i)`,
