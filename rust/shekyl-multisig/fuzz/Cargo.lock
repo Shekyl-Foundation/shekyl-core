@@ -113,10 +113,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsh"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
+dependencies = [
+ "borsh-derive",
+ "bytes",
+ "cfg_aliases",
+]
+
+[[package]]
+name = "borsh-derive"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
+dependencies = [
+ "once_cell",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
+name = "bytes"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
@@ -135,6 +165,12 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
@@ -321,6 +357,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dkg"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "881ac13c8de9ec314164a624980704110bbba50f7f5027b4dc839ad9e060f001"
+dependencies = [
+ "borsh",
+ "ciphersuite",
+ "std-shims",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "dkg-dealer"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf1230af3c12aa00106bbb6483b036dc7793e920802bbf9b4e7af6cf5ec41c0"
+dependencies = [
+ "ciphersuite",
+ "dkg",
+ "rand_core",
+ "std-shims",
+ "zeroize",
+]
+
+[[package]]
 name = "ec-divisors"
 version = "0.1.0"
 dependencies = [
@@ -390,6 +452,12 @@ dependencies = [
  "tap",
  "zeroize",
 ]
+
+[[package]]
+name = "equivalent"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "ff"
@@ -643,6 +711,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
 name = "helioselene"
 version = "0.1.0"
 dependencies = [
@@ -684,6 +758,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "indexmap"
+version = "2.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
+dependencies = [
+ "equivalent",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -779,6 +863,26 @@ dependencies = [
  "rand_core",
  "rustversion",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "modular-frost"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373d09390d150d030cc06163dc83eae2af031e8048ceb08d74ac0eb187da1f4a"
+dependencies = [
+ "ciphersuite",
+ "dalek-ff-group 0.5.0",
+ "digest",
+ "dkg",
+ "flexible-transcript",
+ "multiexp",
+ "rand_chacha",
+ "rand_core",
+ "schnorr-signatures",
+ "subtle",
+ "thiserror",
  "zeroize",
 ]
 
@@ -897,6 +1001,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-crate"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -979,6 +1092,20 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "schnorr-signatures"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fe30c28740bba75dc4649a8985861784e8a44fd636706076edb7cb2aec5765"
+dependencies = [
+ "ciphersuite",
+ "flexible-transcript",
+ "multiexp",
+ "rand_core",
+ "std-shims",
+ "zeroize",
+]
 
 [[package]]
 name = "sec1"
@@ -1084,6 +1211,22 @@ dependencies = [
  "shekyl-encoding",
  "shekyl-network",
  "thiserror",
+]
+
+[[package]]
+name = "shekyl-bulletproofs"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek",
+ "rand_chacha",
+ "rand_core",
+ "shekyl-crypto-hash",
+ "shekyl-curve-generators",
+ "shekyl-curve-io",
+ "shekyl-curve-primitives",
+ "std-shims",
+ "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -1207,9 +1350,12 @@ dependencies = [
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
+ "dkg-dealer",
  "ec-divisors",
+ "flexible-transcript",
  "generalized-bulletproofs",
  "helioselene",
+ "modular-frost",
  "multiexp",
  "rand_chacha",
  "rand_core",
@@ -1238,6 +1384,7 @@ dependencies = [
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.4.5",
  "helioselene",
+ "modular-frost",
  "multiexp",
  "rand_chacha",
  "rand_core",
@@ -1258,16 +1405,22 @@ dependencies = [
 name = "shekyl-multisig"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
  "rand",
  "serde",
  "serde_json",
  "shekyl-address",
+ "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-fcmp",
  "shekyl-network",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-wire",
  "thiserror",
  "zeroize",
 ]
@@ -1320,6 +1473,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wire"
+version = "3.1.0"
+dependencies = [
+ "serde_json",
+ "shekyl-bulletproofs",
+ "shekyl-crypto-hash",
+ "shekyl-curve-generators",
+ "shekyl-network",
+ "shekyl-types",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,7 +1521,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "227c4f8561598188d0df96dbe749824576174bba278b5b6bb2eacff1066067d0"
 dependencies = [
- "hashbrown",
+ "hashbrown 0.16.1",
  "rustversion",
  "spin",
 ]
@@ -1420,6 +1585,36 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.17+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3641d5bbb5349a79e1020a242d251efbc546ad8048d133958323ce9c40a9c9c"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "winnow",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
+dependencies = [
+ "winnow",
+]
 
 [[package]]
 name = "tracing"
@@ -1494,6 +1689,15 @@ name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+
+[[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wyz"

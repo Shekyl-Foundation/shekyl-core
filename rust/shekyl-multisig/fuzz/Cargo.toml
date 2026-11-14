@@ -26,4 +26,53 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_body_proposal_decode"
+path = "fuzz_targets/fuzz_body_proposal_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_commitment_decode"
+path = "fuzz_targets/fuzz_body_commitment_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_signing_set_decode"
+path = "fuzz_targets/fuzz_body_signing_set_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_responder_share_decode"
+path = "fuzz_targets/fuzz_body_responder_share_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_signature_share_decode"
+path = "fuzz_targets/fuzz_body_signature_share_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_final_tx_decode"
+path = "fuzz_targets/fuzz_body_final_tx_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_hybrid_sig_decode"
+path = "fuzz_targets/fuzz_body_hybrid_sig_decode.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
