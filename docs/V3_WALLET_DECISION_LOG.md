@@ -7086,6 +7086,24 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge: the max-bundle block (PB-D1 shape 8) is the forge's to build
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R22`; `DAEMON_REDB_STORE.md`
+§1.3a.7 row 8 on #1373).
+
+- `CF-E35` max-bundle is built by the chain forge, no longer waiting on
+  SO-D12. SO-D12 owns the definition and checks the forge's chain
+  against it; it does not build chains of its own.
+- The definition: the worst of shapes 1–7 filled to the weight limit,
+  plus a bundle section at its full budget, `c · (⌊9·D/SEB⌋ + 1)` draws;
+  the budget counts draws, not weight, so the two add. Pass/fail at the
+  `D` = 324,000 equivalent (292 records a bundle, 584 a section), mined
+  under the real validator on a short regtest epoch with the same record
+  count (`SEB` 100, about 3,240 drawable pairs), every block admitted,
+  with real receipt-key signatures.
+- The report: cost per record and per bundle, and the largest `D` at
+  which `PB-D1` holds on the floor device.
+
 ## 2026-11-13 — Chain forge: the design load stays 30 spends for now; the shard-fill freeze against consensus changes
 
 **Decision** (Rick, on `69e366391`; `CHAIN_FORGE.md` §1, `CF-R20`, `CF-R21`).
