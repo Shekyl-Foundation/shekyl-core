@@ -170,9 +170,9 @@ jobs:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
     # The bundle producer's gate (`SO-D12` increment 4c,
     # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
-    # admitted by 4a's verifier on a driven chain and connects through the
-    # staged door, with its support-stream twin. The cutover (4b) does not
-    # land until they hold, so a lane runs them every night. They are
+    # admitted by the bundle verifier (CEN-J29 to J37) on a driven chain and
+    # connects, with its support-stream twin: the producer's path end to
+    # end, so a lane runs them every night. They are
     # `#[ignore]`d because they fill a shard with real proofs and mine long
     # epochs; the script runs exactly them, in release, after asserting
     # each is in the ignored listing.
@@ -649,7 +649,7 @@ jobs:
               'producer-gate': {
                 title: 'nightly bundle producer gate RED',
                 lines: [
-                  'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door` and its support-stream twin `a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door` in `shekyl-chain-ingest` (SO-D12 increments 4c and 4b item 3): a produced bundle admitted by the queue and connected through the staged door on a driven chain.',
+                  'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects` and its support-stream twin `a_produced_support_bundle_is_admitted_and_connects` in `shekyl-chain-ingest` (SO-D12 increments 4c and 4b item 3): a produced bundle admitted by the queue and by the bundle verifier, and connected, on a driven chain.',
                   'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
                 ],
               },

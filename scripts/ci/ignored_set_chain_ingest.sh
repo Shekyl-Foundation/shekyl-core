@@ -14,7 +14,7 @@
 # ignore string names the job. The set: the scenarios that fill shards
 # with real proofs (the archival pop round trips, the emission claims, the
 # levered slash chain, the join, the two pool-shim posts, a produced
-# bundle and a produced support bundle through the staged door), the miner
+# bundle and a produced support bundle, each admitted), the miner
 # over real RandomX, two service runs past the first seed epoch, a spend
 # read by the wallet and the RPC after its shard was discarded, the
 # captured-chain replay under the production substrate, and the
@@ -60,8 +60,8 @@ subjects=(
   'archival_pop_roundtrip_tests::a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused'
   'archival_slash_tests::a_slash_waits_out_an_epoch_with_no_observation'
   'archival_slash_tests::the_slash_chain_judges_each_row_on_one_record'
-  'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects_through_the_staged_door'
-  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door'
+  'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects'
+  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects'
   'miner_tests::a_chain_at_the_difficulty_floor_mines_its_way_back'
   'miner_tests::the_miner_extends_the_chain_block_after_block'
   'miner_tests::the_miners_rate_per_worker'

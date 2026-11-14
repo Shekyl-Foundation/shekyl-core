@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The 4b gate (`ARCHIVAL_SETTLEMENT_WRITER.md` §16; round 0, F2): a bundle
-//! this daemon's producer made is admitted by 4a's verifier on a driven
-//! chain, and connects.
+//! The producer's path end to end (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11):
+//! a bundle this daemon's producer made is admitted by the bundle verifier
+//! (CEN-J29 to J37) on a driven chain, and connects.
 //!
 //! One chain, in the live lane, because a compact bond needs a closed,
 //! final and priced shard (CEN-J15) and that is a few hundred real spends:
@@ -350,7 +350,7 @@ async fn step(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines three long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_bundle_is_admitted"]
-async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
+async fn a_produced_bundle_is_admitted_and_connects() {
     let rules = rules();
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
     let mut scenario = Scenario::open_under("bundle-producer-gate", FreeHash, rules);
@@ -562,7 +562,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
 /// a_produced_support_bundle_is_admitted`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines two long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_support_bundle_is_admitted"]
-async fn a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door() {
+async fn a_produced_support_bundle_is_admitted_and_connects() {
     let rules = rules();
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
     let mut scenario = Scenario::open_under("bundle-producer-support", FreeHash, rules);
