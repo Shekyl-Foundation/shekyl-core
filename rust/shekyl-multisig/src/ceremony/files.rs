@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The ceremony's file bodies, and [`Authenticated`]: a body from the
-//! member a file names, made only by [`import`] (brief §3, §3A).
+//! member a file names, made only by [`import`] (`PQC_MULTISIG.md` §11.1,
+//! §11.3; the layouts are `SHEKYL_MULTISIG_WIRE_FORMAT.md` §3.1).
 //!
 //! Every body is self-describing and bounded: a per-input list leads with
 //! its input count (`1..=MAX_INPUTS`), a per-signer list with its count
@@ -140,7 +141,8 @@ fn key_bytes(key: &HybridPublicKey) -> Vec<u8> {
 }
 
 /// A member's first-round contribution for one input: its preprocess, and
-/// its per-output public key (brief P-1).
+/// its per-output public key (`PQC_MULTISIG.md` §11.1: every signer's keys
+/// travel in round 1).
 #[derive(Clone)]
 pub struct RoundOne {
     /// The preprocess, as its machine wrote it.
@@ -248,7 +250,8 @@ impl Body for Commitment {
 }
 
 /// Steps 3 and 5: other members' files, forwarded sealed as received
-/// (brief P-2), so each is checked under its own sender's signature.
+/// (`PQC_MULTISIG.md` §11.1), so each is checked under its own sender's
+/// signature.
 pub struct SigningSet {
     /// The forwarded files.
     pub files: Vec<Vec<u8>>,
@@ -345,7 +348,8 @@ impl Body for SignatureShare {
 
 /// Step 8: what a signer cannot compute itself: the proofs, and every
 /// signer's per-output key per input. The `Proposal` file rides along so a
-/// member that kept no state can rebuild its context (brief P-3).
+/// member that kept no state can rebuild its context (`PQC_MULTISIG.md`
+/// §11.1).
 pub struct FinalTx {
     /// The proposer's `Proposal` file, sealed as sent.
     pub proposal_file: Vec<u8>,

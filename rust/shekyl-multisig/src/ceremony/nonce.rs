@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Nonces, and the durable writes the ceremony needs but does not own
-//! (brief §4, §3A).
+//! (`PQC_MULTISIG.md` §11.3, §11.4).
 //!
 //! - A proposer or holder **holds** its round-1 state across the wait for
 //!   the other members: a [`HeldNonce`], one `frost_sal::HeldSession` per

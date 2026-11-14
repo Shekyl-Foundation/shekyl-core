@@ -179,53 +179,51 @@ fn hold_all(
     Ok(rounds)
 }
 
-/// The other signers' preprocesses for one input, read by `machine`.
-type OthersPreprocesses = BTreeMap<u8, Vec<[u8; SAL_PREPROCESS_LEN]>>;
+/// The other signers' preprocesses, per member, per input: exactly the
+/// intent's signers but this member, each read from a file its sender
+/// signed whose keys were checked on receipt. Made only by
+/// [`PreprocessSet::new`], and signing takes one, never a bare map. This
+/// member's own preprocess is the one its machine produces, so "mine is
+/// the one I sent" holds by construction.
+struct PreprocessSet(BTreeMap<u8, Vec<[u8; SAL_PREPROCESS_LEN]>>);
 
-fn read_others(
-    machine: &SalSignMachine,
-    input: usize,
-    others: &OthersPreprocesses,
-) -> Result<HashMap<shekyl_fcmp::frost_sal::Participant, SalPreprocess>, CeremonyError> {
-    others
-        .iter()
-        .map(|(&member, per_input)| {
-            read_preprocess(machine, &per_input[input])
-                .map(|pre| (participant(member), pre))
-                .map_err(|source| CeremonyError::Frost { input, source })
-        })
-        .collect()
-}
-
-/// The preprocess set every signer other than this member contributed:
-/// exactly the signer set minus this member, each from a file its sender
-/// signed. This member's own preprocess is the one its machine produces,
-/// so "mine is the one I sent" holds by construction.
-fn check_set(ctx: &SigningContext<'_>, others: &OthersPreprocesses) -> Result<(), CeremonyError> {
-    let me = ctx.member.member_index();
-    let expected: Vec<u8> = ctx
-        .intent
-        .intent()
-        .signers
-        .iter()
-        .copied()
-        .filter(|&m| m != me)
-        .collect();
-    if others.keys().copied().collect::<Vec<_>>() != expected {
-        return Err(CeremonyError::SigningSetContents);
+impl PreprocessSet {
+    fn new(
+        ctx: &SigningContext<'_>,
+        others: BTreeMap<u8, Vec<[u8; SAL_PREPROCESS_LEN]>>,
+    ) -> Result<Self, CeremonyError> {
+        let me = ctx.member.member_index();
+        let expected = ctx.intent.intent().signers.iter().filter(|&&m| m != me);
+        if !others.keys().eq(expected) {
+            return Err(CeremonyError::SigningSetContents);
+        }
+        Ok(Self(others))
     }
-    Ok(())
+
+    /// The set for one input, read by `machine`.
+    fn read(
+        &self,
+        machine: &SalSignMachine,
+        input: usize,
+    ) -> Result<HashMap<shekyl_fcmp::frost_sal::Participant, SalPreprocess>, CeremonyError> {
+        self.0
+            .iter()
+            .map(|(&member, per_input)| {
+                read_preprocess(machine, &per_input[input])
+                    .map(|pre| (participant(member), pre))
+                    .map_err(|source| CeremonyError::Frost { input, source })
+            })
+            .collect()
+    }
 }
 
 /// Resume a held nonce and sign every input over the other signers'
 /// preprocesses; check each rebuilt preprocess is the one this member sent.
 fn sign_held(
-    ctx: &SigningContext<'_>,
     consumed: super::nonce::ConsumedNonce,
     sent: &[RoundOne],
-    others: &OthersPreprocesses,
+    set: &PreprocessSet,
 ) -> Result<Vec<(shekyl_fcmp::frost_sal::SalSignatureMachine, SalShare)>, CeremonyError> {
-    check_set(ctx, others)?;
     consumed
         .into_sessions()
         .into_iter()
@@ -237,7 +235,7 @@ fn sign_held(
             if sent.get(input).map(|r| r.preprocess) != Some(preprocess_bytes(&rebuilt)) {
                 return Err(CeremonyError::HeldNonceMismatch);
             }
-            let preprocesses = read_others(&machine, input, others)?;
+            let preprocesses = set.read(&machine, input)?;
             sign(machine, preprocesses).map_err(|source| CeremonyError::Signing { input, source })
         })
         .collect()
@@ -564,7 +562,7 @@ impl<'a> Proposer<'a, SharesPending> {
             return Err(CeremonyError::Incomplete);
         }
         let responder = &self.state.responder;
-        let mut others: OthersPreprocesses = self
+        let mut others: BTreeMap<_, _> = self
             .state
             .commitments
             .iter()
@@ -580,8 +578,9 @@ impl<'a> Proposer<'a, SharesPending> {
                 .collect(),
         );
 
+        let set = PreprocessSet::new(ctx, others)?;
         let consumed = consume(ctx.intent.hash(), store, sink)?;
-        let signed = sign_held(ctx, consumed, &self.own, &others)?;
+        let signed = sign_held(consumed, &self.own, &set)?;
 
         let mut sals = Vec::with_capacity(ctx.inputs.len());
         for (input, (machine, _own_share)) in signed.into_iter().enumerate() {
@@ -904,7 +903,7 @@ impl<'a> Holder<'a, Committed> {
         let Some(own) = opened.commitments.get(&me).cloned() else {
             return Err(CeremonyError::SigningSetContents);
         };
-        let mut others: OthersPreprocesses = opened
+        let mut others: BTreeMap<_, _> = opened
             .commitments
             .into_iter()
             .filter(|(m, _)| *m != me)
@@ -918,8 +917,9 @@ impl<'a> Holder<'a, Committed> {
             responder,
             responder_inputs.iter().map(|(r, _)| r.preprocess).collect(),
         );
+        let set = PreprocessSet::new(ctx, others)?;
         let consumed = consume(ctx.intent.hash(), store, sink)?;
-        let signed = sign_held(ctx, consumed, &own, &others)?;
+        let signed = sign_held(consumed, &own, &set)?;
         let shares = signed.iter().map(|(_, share)| share_bytes(share)).collect();
         Ok(seal(
             ctx.member,
@@ -999,7 +999,7 @@ impl Responder {
         expect_role(ctx, Role::Responder)?;
         let proposer = ctx.intent.intent().proposer_index;
         let has_holders = !holders(ctx).is_empty();
-        let mut others: OthersPreprocesses = BTreeMap::new();
+        let mut others = BTreeMap::new();
         match received {
             ResponderInput::Proposal(p) if !has_holders => {
                 from_role(ctx, p, Role::Proposer)?;
@@ -1027,14 +1027,14 @@ impl Responder {
             }
             _ => return Err(CeremonyError::SigningSetContents),
         }
-        check_set(ctx, &others)?;
+        let set = PreprocessSet::new(ctx, others)?;
         live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
         let keys = own_keys(ctx)?;
         let mut inputs = Vec::with_capacity(ctx.inputs.len());
         for (input, key) in keys.into_iter().enumerate() {
             let (machine, pre) = preprocess(&ctx.params(input), ctx.keys.clone(), rng)
                 .map_err(|source| CeremonyError::Frost { input, source })?;
-            let preprocesses = read_others(&machine, input, &others)?;
+            let preprocesses = set.read(&machine, input)?;
             let (_, share) = sign(machine, preprocesses)
                 .map_err(|source| CeremonyError::Signing { input, source })?;
             inputs.push((
@@ -1061,7 +1061,7 @@ impl Responder {
 
 /// The responder or a holder, in the second round: stateless, so a member
 /// that kept nothing since the first round signs from its rebuilt context
-/// (brief P-3).
+/// (`PQC_MULTISIG.md` §11.1, §13.1).
 pub struct Cosigner;
 
 impl Cosigner {

@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The ceremony against each adversary of the brief's §8 table, and a
-//! ceremony that survives every member restarting between files.
+//! The ceremony against each of its adversaries (`PQC_MULTISIG.md` §16.8),
+//! and a ceremony that survives every member restarting between files.
 //!
 //! A 3-of-5 group throughout: proposer 1, holder 3, responder 4.
 
@@ -221,6 +221,37 @@ fn a_forged_commitment_in_a_signing_set_is_refused() {
             &mut OsRng,
         ),
         Err(CeremonyError::Sender { sender: 1 })
+    ));
+}
+
+/// A malicious proposer leaves a holder's `Commitment` out of the set it
+/// shows the responder: the set is not exactly the other signers, and the
+/// responder signs nothing.
+#[test]
+fn a_signing_set_without_every_signer_is_refused() {
+    let (s, m, mut ca, _, mut cb) = setup();
+    let (_, proposal) = Proposer::propose(
+        s.ctx(&m.a),
+        s.proposer_inputs(),
+        &mut ca.store,
+        &mut ca.live,
+        &mut OsRng,
+    )
+    .unwrap();
+    let set = s.sealed(
+        &m.a,
+        &SigningSet {
+            files: vec![proposal],
+        },
+    );
+    assert!(matches!(
+        Responder::respond(
+            &s.ctx(&m.b),
+            ResponderInput::SigningSet(&expect!(import_for(&m.b, &set), SigningSet)),
+            &mut cb.live,
+            &mut OsRng,
+        ),
+        Err(CeremonyError::SigningSetContents)
     ));
 }
 

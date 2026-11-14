@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The checks between "a member received it" and "a member signs over
-//! it", each a type whose only constructor runs the check (brief §3A):
+//! it", each a type whose only constructor runs the check
+//! (`PQC_MULTISIG.md` §11.3):
 //!
 //! - [`CommittedMemberKey`]: a per-output key that hashes to `h_i` at its
 //!   member's index of the input's committed form.

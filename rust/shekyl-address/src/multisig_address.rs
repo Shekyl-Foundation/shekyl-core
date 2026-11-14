@@ -42,7 +42,7 @@
 //! where `tag` is the network's name (`shekyl/<network>`) — per-group, computable by every participant from the address alone, and (with
 //! `B`/`Y` in the payload) covering the whole of the group's public state: both
 //! points, the KEM pubkeys, the versions, and `m`/`n`. This is the artifact the
-//! §5.5 setup ritual wanted ("did we all derive the same group?"), and it
+//! §5.4 setup ritual wanted ("did we all derive the same group?"), and it
 //! replaces the deleted `multisig_group_id`, which had no consumer under E′ and
 //! computed a per-output hash under a per-group name. See [`address_fingerprint`]
 //! for why cSHAKE256 and not the consensus `keccak256`.
