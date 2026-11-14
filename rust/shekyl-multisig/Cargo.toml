@@ -10,7 +10,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shekyl V3.1 multisig (Option E′): the FROST spend-ceremony FSM, blob format, and nonce typestates. Pure logic — no ledger, no I/O, no transport."
+description = "Shekyl V3.1 multisig (Option E′): the FROST spend-ceremony FSM, the ceremony file format, and nonce typestates. Pure logic — no ledger, no I/O, no transport."
 build = "build.rs"
 
 # The dependency list IS the "no transport" ban (MS-1(a), the crate that lets the
@@ -24,11 +24,21 @@ build = "build.rs"
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # The member file (`member_file.rs`) carries the address payload. The group
-# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes,
-# and the ceremony blobs are sealed there too (`multisig_blob`, R-4): this
-# crate derives, hashes and encrypts nothing under a secret (rule 36). The address crate reaches no
-# transport crate, so the dependency list still enforces the "no transport" ban.
+# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes.
+# The ceremony files are sealed (`multisig_blob`, R-4, R-10) and their
+# senders' envelope signatures made and checked (`multisig_envelope`, R-6)
+# there too: this crate derives, hashes, signs and encrypts nothing under a
+# secret itself (rule 36); it holds crypto-pq's typed values and lays out
+# the plaintext. The intent's deadline is the reference block's age as
+# consensus measures it, which `shekyl-curve-tree::reference` owns (R-13).
+# None of the three reaches a transport crate, so the dependency list still
+# enforces the "no transport" ban.
 shekyl-address = { path = "../shekyl-address" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-network = { path = "../shekyl-network" }
+shekyl-types = { path = "../shekyl-types" }
+rand = "0.8"
 serde = { workspace = true }
 serde_json = "1"
 thiserror = { workspace = true }
@@ -41,16 +51,19 @@ zeroize = { workspace = true }
 serde_json = "1"
 
 [dev-dependencies]
-# The ceremony-blob AEAD round trip in `src/tests/functional.rs` seals with
-# `shekyl_crypto_pq::multisig_blob`, which draws its nonce from an RNG.
-rand = "0.8"
 # Test-only: `intent.rs`'s canonical-bytes test cross-checks against
-# `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge (cargo permits
-# dev-dep cycles), so it never enters the runtime dependency surface the ban covers.
+# `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge, so it never
+# enters the runtime dependency surface the ban covers.
 shekyl-wire = { path = "../shekyl-wire" }
-# Test-only pin of the member file's hybrid KEM secret length against the
-# cryptographic source of truth. Not a runtime dependency (rule 36).
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# `tests/frost_spend.rs`: a multisig spend end to end, from a dealt group's
+# member files and slice 1's outputs through FROST SAL into one FCMP++ proof.
+# Test-only; `shekyl-fcmp` takes no edge back to this crate, so there is no
+# cycle through `shekyl-curve-tree`.
+shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
+ciphersuite = "0.4"
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+rand_core = { version = "0.6", features = ["std"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Wall-clock micro-benchmarks for the format-module operations (moved here with
