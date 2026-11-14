@@ -238,7 +238,7 @@ async fn file_draws(
         support: filed.support,
     };
     let (reference, body) = assemble_bundle(
-        &shekyl_network::HARNESS_NETWORK_ID,
+        &scenario.network_id(),
         &kept,
         &filed.records,
         &witness.public,

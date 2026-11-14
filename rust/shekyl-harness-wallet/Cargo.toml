@@ -41,5 +41,10 @@ shekyl-wire = { path = "../shekyl-wire" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = { workspace = true }
 
+[dev-dependencies]
+# The wallet's payment-address decoder, which the public seed's regtest
+# address must be refused by on every other network (`HARNESS_SEED`).
+shekyl-address = { path = "../shekyl-address" }
+
 [lints]
 workspace = true
