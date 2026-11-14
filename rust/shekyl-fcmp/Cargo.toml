@@ -64,18 +64,13 @@ rand = "0.8"
 # check; its refusal test exercises it through a real serde format.
 serde_json = "1"
 modular-frost = { version = "0.11", features = ["ed25519", "tests"] }
-# `tests/frost_spend.rs`: a multisig spend end to end, from a dealt group's
-# member files and slice 1's outputs. Test-only edges; `shekyl-multisig`
-# takes no curve dependency, so there is no cycle.
-shekyl-multisig = { path = "../shekyl-multisig" }
-shekyl-address = { path = "../shekyl-address" }
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"] }
 rand_chacha = "0.3"
 
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-dealer"]
+multisig = ["shekyl-fcmp-proofs/multisig", "dep:transcript", "dep:modular-frost", "dep:dkg-dealer"]
 
 [lints]
 workspace = true
