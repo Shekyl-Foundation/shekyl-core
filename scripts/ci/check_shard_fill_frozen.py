@@ -117,8 +117,8 @@ READERS: dict[str, dict[str, int]] = {
     },
     "rust/shekyl-chain-ingest/src/bundle_producer_gate_tests.rs": {
         MODULE: 1,
-        "a_produced_bundle_is_admitted_and_connects_through_the_staged_door": 1,
-        "a_produced_support_bundle_is_admitted_and_connects_through_the_staged_door": 1,
+        "a_produced_bundle_is_admitted_and_connects": 1,
+        "a_produced_support_bundle_is_admitted_and_connects": 1,
     },
     "rust/shekyl-chain-ingest/src/pool_submit_tests.rs": {
         "closed_shards_lane": 2,
