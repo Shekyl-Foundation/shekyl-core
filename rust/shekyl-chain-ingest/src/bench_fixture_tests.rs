@@ -82,18 +82,33 @@ enum Size {
     /// As many as the weight limit admits: the block the nightly capture
     /// counts, and the shape set's own definition (§1.3a.7).
     Full,
+    /// The design load's block: [`DESIGN_TRANSACTIONS`], or the most of
+    /// them the weight limit admits.
+    Design,
 }
 
 impl Size {
-    const ALL: [Self; 2] = [Self::Unit, Self::Full];
+    /// The sizes every shape of §1.3a.7 is committed at.
+    const BLOCK_PATH: &'static [Self] = &[Self::Unit, Self::Full];
 
     const fn suffix(self) -> &'static str {
         match self {
             Self::Unit => "unit",
             Self::Full => "full",
+            Self::Design => "design",
         }
     }
 }
+
+/// The transactions a block lists at the design load
+/// (`DAEMON_REDB_STORE.md` §1.3a, load profiles: 30 transactions a block,
+/// each a 2-in/2-out spend).
+///
+/// A 2-in/2-out spend weighs 21,184, and the listing's budget at the
+/// genesis median is 598,614, which holds 28 of them: 30 are 635,520. The
+/// fixture lists the 28 that fit, and the replay test holds it to
+/// "30, or full".
+const DESIGN_TRANSACTIONS: u64 = 30;
 
 /// The transactions a [`Size::Unit`] block lists. More than one, so the
 /// block's range-proof batch folds several proofs as a full block's does;
@@ -110,6 +125,8 @@ struct Shape {
     outputs_per_tx: usize,
     /// Whether each transaction carries a bond post.
     posts_a_bond: bool,
+    /// The block sizes the shape is committed at.
+    sizes: &'static [Size],
     /// The spend of `coinbases` (their heights) connecting at `at`.
     build: fn(&Spender, &MinerWallet, &[BlockHeight], BlockHeight) -> Transaction,
 }
@@ -126,6 +143,7 @@ const SHAPES: &[Shape] = &[
         inputs_per_tx: 1,
         outputs_per_tx: 2,
         posts_a_bond: false,
+        sizes: Size::BLOCK_PATH,
         build: |spender, wallet, coinbases, at| {
             spender.spend_coinbase(wallet, coinbases[0], at, Family::Main.fee())
         },
@@ -137,6 +155,7 @@ const SHAPES: &[Shape] = &[
         inputs_per_tx: MAX_FCMP_INPUTS as u64,
         outputs_per_tx: 2,
         posts_a_bond: false,
+        sizes: Size::BLOCK_PATH,
         build: |spender, wallet, coinbases, at| {
             spender
                 .spend_coinbases(wallet, coinbases, at, Family::Main.fee())
@@ -150,6 +169,7 @@ const SHAPES: &[Shape] = &[
         inputs_per_tx: 1,
         outputs_per_tx: MAX_OUTPUTS,
         posts_a_bond: false,
+        sizes: Size::BLOCK_PATH,
         build: |spender, wallet, coinbases, at| {
             spender.spend_coinbase_paying(wallet, coinbases[0], at, Family::Main.fee(), MAX_OUTPUTS)
         },
@@ -164,12 +184,28 @@ const SHAPES: &[Shape] = &[
         inputs_per_tx: 1,
         outputs_per_tx: 2,
         posts_a_bond: true,
+        sizes: Size::BLOCK_PATH,
         build: |spender, wallet, coinbases, at| {
             // One persona a transaction: the slot is the coinbase's height.
             let slot = u32::try_from(coinbases[0].to_raw()).expect("a short chain");
             let persona = Persona::at(slot);
             let join = persona.join(complete_tree(), ENDPOINT);
             spender.spend_coinbase_posting(wallet, coinbases[0], at, FEE, Some(&join))
+        },
+    },
+    // The design load's transaction, at the design load's count and no
+    // other: the listing `benches/block_template_iai.rs` builds a template
+    // over. Not a shape of §1.3a.7 and not a block-path row.
+    Shape {
+        name: "spend_2in_2out",
+        inputs_per_tx: 2,
+        outputs_per_tx: 2,
+        posts_a_bond: false,
+        sizes: &[Size::Design],
+        build: |spender, wallet, coinbases, at| {
+            spender
+                .spend_coinbases(wallet, coinbases, at, Family::Main.fee())
+                .0
         },
     },
 ];
@@ -213,6 +249,8 @@ async fn mine(shape: &Shape, size: Size) -> Vec<Mined> {
     let count = match size {
         Size::Unit => UNIT_TRANSACTIONS,
         Size::Full => fills,
+        // The design load, or as much of it as one block admits.
+        Size::Design => DESIGN_TRANSACTIONS.min(fills),
     };
 
     // The last coinbase spent is block `count * inputs - 1`'s; the subject
@@ -286,7 +324,7 @@ async fn regenerate_block_path_fixtures() {
     );
     let mut written = 0;
     for shape in SHAPES {
-        for size in Size::ALL {
+        for &size in shape.sizes {
             let name = fixture_name(shape, size);
             if only.as_deref().is_some_and(|only| only != name) {
                 continue;
@@ -308,7 +346,7 @@ async fn regenerate_block_path_fixtures() {
 #[test]
 fn every_block_path_fixture_replays() {
     for shape in SHAPES {
-        for size in Size::ALL {
+        for &size in shape.sizes {
             let name = fixture_name(shape, size);
             let path = fixture_path(&name);
             let corpus = std::fs::read(&path).unwrap_or_else(|e| {
@@ -353,6 +391,15 @@ fn every_block_path_fixture_replays() {
             }
             match size {
                 Size::Unit => assert_eq!(listed, UNIT_TRANSACTIONS, "{name}"),
+                Size::Design => {
+                    let one = subject.transactions[0].weight();
+                    assert!(listed <= DESIGN_TRANSACTIONS, "{name}");
+                    assert!(
+                        listed == DESIGN_TRANSACTIONS || weight + one > listed_budget(),
+                        "{name}: {listed} transactions of {one} are short of the design load and leave room in {}; regenerate",
+                        listed_budget()
+                    );
+                }
                 // Full means full: one more transaction of the shape would
                 // pass the budget. A raised limit or a lighter transaction
                 // leaves the block short of the boundary it is named for.

@@ -18,6 +18,10 @@
 //!   durability. The store's share, `PB-D1s`.
 //! - **`crypto_bench_block_pop`**: one pop and its commit.
 //!
+//! then **`crypto_bench_ingest_route`**, the router's step for one arrival
+//! before `form` (BA-T43): its placement and its claims, read off the
+//! store;
+//!
 //! and three reads a wallet or a syncing peer issues, on the output-cap
 //! fixture's store: the subject block by height once it is connected, and
 //! over its history a run of
@@ -56,7 +60,8 @@
 use std::hint::black_box;
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
-use shekyl_chain_ingest::bench_support::{BlockPath, Claimed};
+use shekyl_chain_ingest::bench_support::{BlockPath, Claimed, RULES};
+use shekyl_chain_ingest::router::{claim_run, place, Claims, Placed};
 use shekyl_chain_rules::{AtHeight, Candidate, StructurallyValid};
 use shekyl_chain_store::store::AtIndex;
 use shekyl_types::{BlockHeight, TreeLeaf, TreePosition};
@@ -113,6 +118,30 @@ fn crypto_bench_block_connect(
 fn crypto_bench_block_pop(mut chain: BlockPath) -> BlockPath {
     chain.pop();
     chain
+}
+
+// The router's step for one arrival, before `form`: where the block goes
+// (`router::place`) and the claims `form` is handed for it
+// (`router::claim_run`), each on its own snapshot as the service takes
+// them. The claim reads the difficulty window's headers off the store.
+#[library_benchmark]
+#[bench::spend_1in_2out(args = (SPEND_1IN_2OUT), setup = before_route)]
+fn crypto_bench_ingest_route(
+    (chain, run): (BlockPath, Vec<Candidate>),
+) -> (BlockPath, Vec<Candidate>, Vec<Claims>) {
+    let placed = black_box(place(chain.store(), &run[0].block).expect("the placement read"));
+    let Placed::Extend { height } = placed else {
+        panic!("the subject extends the tip: {placed:?}");
+    };
+    let (claims, stop) = claim_run(chain.store(), RULES, height, black_box(&run));
+    assert!(stop.is_none(), "the claims are whole: {stop:?}");
+    (chain, run, claims)
+}
+
+/// The chain below the subject, and the subject as a run of one.
+fn before_route(corpus: &[u8]) -> (BlockPath, Vec<Candidate>) {
+    let (chain, subject) = BlockPath::replayed(corpus);
+    (chain, vec![subject])
 }
 
 /// The chain with its subject connected, and the tip's height.
@@ -219,6 +248,7 @@ library_benchmark_group!(
         crypto_bench_block_form,
         crypto_bench_block_connect,
         crypto_bench_block_pop,
+        crypto_bench_ingest_route,
         crypto_bench_store_read_block,
         crypto_bench_store_read_header_range,
         crypto_bench_store_read_tree_leaves
