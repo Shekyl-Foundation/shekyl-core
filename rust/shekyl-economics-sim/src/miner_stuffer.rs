@@ -274,6 +274,9 @@ struct Attack {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Envelope {
     attacks: [Attack; AttackKind::ALL.len()],
+    /// The relay floor at the block: what the relay stuffer pays at the
+    /// least, and the unit EI-5 reads the envelope in (§5.32).
+    pub(crate) floor: PerByteRate,
 }
 
 impl Envelope {
@@ -843,7 +846,7 @@ fn cost_per_byte_ord(cost_a: u128, bytes_a: u128, cost_b: u128, bytes_b: u128) -
 
 /// Where the report samples the envelope: three eras of the baseline, and a
 /// chain whose demand sits below the zone, where free room exists (§5.10).
-const ROWS: [(&str, u64, &str); 4] = [
+pub(crate) const ROWS: [(&str, u64, &str); 4] = [
     (crate::scenarios::BASELINE_STEADY_STATE, 5, "constrained"),
     (crate::scenarios::BASELINE_STEADY_STATE, 20, "carried"),
     (crate::scenarios::BASELINE_STEADY_STATE, 45, "tail"),
@@ -982,6 +985,7 @@ pub(crate) fn envelope_at(last: &LastBlock, params: &SimParams) -> Envelope {
         .all(|(column, kind)| kind.column() == column));
     Envelope {
         attacks: AttackKind::ALL.map(|kind| block.price(kind, floor)),
+        floor,
     }
 }
 
