@@ -56,6 +56,14 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 tempfile = "3"
+# The owning connection's tests (tests/owning_connection.rs) call the
+# daemon as a GUI does: "this computer"'s client on the owner's leg, the
+# rendezvous naming it resolves with, and the methods' table.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+shekyl-network = { path = "../shekyl-network" }
 # The reservation test mines through a parsed address. The address crate
 # owns that grammar.
 shekyl-address = { path = "../shekyl-address" }

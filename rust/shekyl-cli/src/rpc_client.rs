@@ -581,27 +581,17 @@ fn http_post_pipe(name: &str, payload: &[u8]) -> Result<String, RpcError> {
     http_post_over(&mut pipe, payload)
 }
 
-/// The `Connection: close` HTTP/1.1 exchange both local transports speak:
-/// write the request, read to EOF, parse. Takes the caller's already-
-/// serialized bytes and re-serializes nothing (see [`RpcSession::call`]).
+/// The `Connection: close` HTTP/1.1 exchange both local transports speak,
+/// the one the daemon's owner's leg speaks too
+/// ([`shekyl_rpc_transport::local::post_over`]): write the request, read to
+/// EOF, parse. Takes the caller's already-serialized bytes and
+/// re-serializes nothing (see [`RpcSession::call`]). The read buffer is
+/// wiped on drop: the response can carry secret material (`create_wallet`
+/// returns the seed).
 fn http_post_over<S: Read + Write>(stream: &mut S, payload: &[u8]) -> Result<String, RpcError> {
-    let request = format!(
-        "POST {JSON_RPC_PATH} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
-        payload.len()
-    );
-    stream
-        .write_all(request.as_bytes())
-        .and_then(|()| stream.write_all(payload))
-        .map_err(|e| RpcError::Transport(format!("write request: {e}")))?;
-
-    // The response can carry secret material (create_wallet returns the seed);
-    // wipe the read buffer on drop.
-    let mut raw = Zeroizing::new(Vec::new());
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| RpcError::Transport(format!("read response: {e}")))?;
-    parse_http_response(&raw)
+    let body = shekyl_rpc_transport::local::post_over(stream, JSON_RPC_PATH, payload)
+        .map_err(RpcError::Transport)?;
+    String::from_utf8(body.to_vec()).map_err(|_| RpcError::Transport("non-UTF-8 HTTP body".into()))
 }
 
 /// The accepted `--rpc-url` forms.
@@ -726,116 +716,9 @@ fn http_post_tcp(agent: &ureq::Agent, url: &str, payload: &[u8]) -> Result<Strin
         .map_err(|e| RpcError::Transport(format!("read response: {e}")))
 }
 
-/// Minimal HTTP/1.1 response parser for the `Connection: close` UDS path:
-/// checks the status line, then extracts the body (chunked or
-/// length/EOF-delimited).
-fn parse_http_response(raw: &[u8]) -> Result<String, RpcError> {
-    // Split header/body on the raw bytes. The header is ASCII (parsed as
-    // UTF-8), but the body may contain multibyte UTF-8 (addresses, labels,
-    // error text) that must not be sliced at a non-char boundary — so it stays
-    // bytes until fully reassembled.
-    let sep = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| RpcError::Transport("truncated HTTP response".into()))?;
-    let head = std::str::from_utf8(&raw[..sep])
-        .map_err(|_| RpcError::Transport("non-UTF-8 HTTP header".into()))?;
-    let body = &raw[sep + 4..];
-
-    let status_line = head.lines().next().unwrap_or("");
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| RpcError::Transport(format!("bad HTTP status line: {status_line}")))?;
-    if status != 200 {
-        return Err(RpcError::Transport(format!(
-            "wallet RPC returned HTTP {status}"
-        )));
-    }
-
-    let chunked = head.lines().skip(1).any(|line| {
-        let lower = line.to_ascii_lowercase();
-        lower.starts_with("transfer-encoding:") && lower.contains("chunked")
-    });
-    let body = if chunked {
-        decode_chunked(body)?
-    } else {
-        // `Connection: close` — the body runs to EOF (Content-Length, when
-        // present, matches by construction).
-        body.to_vec()
-    };
-    String::from_utf8(body).map_err(|_| RpcError::Transport("non-UTF-8 HTTP body".into()))
-}
-
-/// Decode a chunked transfer-encoded body.
-///
-/// Operates on raw bytes and concatenates chunk data byte-for-byte: a
-/// multibyte UTF-8 sequence can straddle a chunk boundary, so slicing each
-/// chunk as `&str` would panic on a non-char boundary. The caller validates
-/// UTF-8 once on the fully reassembled body.
-fn decode_chunked(body: &[u8]) -> Result<Vec<u8>, RpcError> {
-    let mut out: Vec<u8> = Vec::new();
-    let mut rest = body;
-    loop {
-        let nl = rest
-            .windows(2)
-            .position(|w| w == b"\r\n")
-            .ok_or_else(|| RpcError::Transport("truncated chunked body".into()))?;
-        let size_hex = std::str::from_utf8(&rest[..nl])
-            .ok()
-            .and_then(|line| line.split(';').next())
-            .map(str::trim)
-            .ok_or_else(|| RpcError::Transport("bad chunk size line".into()))?;
-        let size = usize::from_str_radix(size_hex, 16)
-            .map_err(|_| RpcError::Transport(format!("bad chunk size: {size_hex:?}")))?;
-        let after = &rest[nl + 2..];
-        if size == 0 {
-            return Ok(out);
-        }
-        if after.len() < size + 2 {
-            return Err(RpcError::Transport("truncated chunk".into()));
-        }
-        out.extend_from_slice(&after[..size]);
-        rest = &after[size + 2..];
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_content_length_response() {
-        let raw =
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
-        assert_eq!(parse_http_response(raw).unwrap(), "{}");
-    }
-
-    #[test]
-    fn parses_chunked_response() {
-        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n";
-        assert_eq!(parse_http_response(raw).unwrap(), "{}");
-    }
-
-    #[test]
-    fn chunked_response_splits_multibyte_utf8_across_chunks() {
-        // Body `{"m":"—"}` (— is U+2014 = 0xE2 0x80 0x94) split so the em-dash
-        // straddles the chunk boundary: chunk 1 = `{"m":"` + 0xE2 (7 bytes),
-        // chunk 2 = 0x80 0x94 + `"}` (4 bytes). Byte-wise reassembly must
-        // decode it; slicing each chunk as &str would panic / reject it.
-        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
-                    7\r\n{\"m\":\"\xe2\r\n4\r\n\x80\x94\"}\r\n0\r\n\r\n";
-        assert_eq!(parse_http_response(raw).unwrap(), "{\"m\":\"\u{2014}\"}");
-    }
-
-    #[test]
-    fn rejects_non_200() {
-        let raw = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n";
-        let err = parse_http_response(raw).unwrap_err();
-        assert!(matches!(err, RpcError::Transport(_)), "{err}");
-        assert!(err.to_string().contains("401"), "{err}");
-    }
 
     #[test]
     fn connect_rejects_unknown_scheme() {

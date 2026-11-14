@@ -48,8 +48,23 @@ shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, f
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# "This computer" (`local`): the daemon's own rendezvous naming and record
+# (RPC_CHANNEL.md RT-15, §7.1), and the network whose id the name hashes.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-network = { path = "../shekyl-network" }
+
+[target.'cfg(unix)'.dependencies]
+# The account's session directory (`geteuid`, macOS `confstr`) and the
+# owner's leg's peer check (`SO_PEERCRED`, `getpeereid`).
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The local application data folder, the logon session, and the pipe's
+# open with its peer check (`open_verified`).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }

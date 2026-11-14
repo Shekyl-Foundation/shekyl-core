@@ -98,16 +98,11 @@ mod windows {
     use rand_core::{OsRng, RngCore};
     use shekyl_daemon_config::OwnerSocketPlan;
     use shekyl_options::{Code, Diagnostic, Source};
+    use shekyl_rpc_channel::rendezvous::{Record, PIPE_PREFIX};
     use shekyl_win_sec::rendezvous::{
         create_rendezvous_file, ensure_data_home, ensure_rendezvous_dir,
     };
     use shekyl_win_sec::{current_logon_sid, open_verified, DialError, OwnerOnlyPipeListener};
-
-    /// The record's first line: its format and version.
-    const RECORD_FORMAT: &str = "shekyl-rendezvous 1";
-
-    /// The pipe namespace prefix; the rest of the name is drawn at random.
-    const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-owner-";
 
     /// The bound owner's pipe and its published record, not yet served.
     pub struct OwnerSocket {
@@ -130,34 +125,6 @@ mod windows {
 
     /// The owner's pipe as the server accepts on it.
     pub struct OwnerListener(OwnerOnlyPipeListener);
-
-    /// A rendezvous record's fields.
-    struct Record {
-        pipe: String,
-        session: String,
-    }
-
-    impl Record {
-        fn bytes(&self) -> Vec<u8> {
-            format!(
-                "{RECORD_FORMAT}\npipe {}\nsession {}\n",
-                self.pipe, self.session
-            )
-            .into_bytes()
-        }
-
-        fn parse(bytes: &[u8]) -> Option<Self> {
-            let text = std::str::from_utf8(bytes).ok()?;
-            let mut lines = text.lines();
-            if lines.next()? != RECORD_FORMAT {
-                return None;
-            }
-            let pipe = lines.next()?.strip_prefix("pipe ")?.to_owned();
-            let session = lines.next()?.strip_prefix("session ")?.to_owned();
-            pipe.starts_with(PIPE_PREFIX)
-                .then_some(Self { pipe, session })
-        }
-    }
 
     fn running(plan: &OwnerSocketPlan, network: &str) -> Diagnostic {
         Diagnostic::new(Code::SocketRunning, Source::Machine)

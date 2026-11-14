@@ -16,6 +16,9 @@ publish = false
 [dependencies]
 # `platform::current` yields the configuration's `Platform` value.
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+# The account's session directory, read once for the daemon and the client
+# that resolves "this computer" (RPC_CHANNEL.md RT-15).
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]

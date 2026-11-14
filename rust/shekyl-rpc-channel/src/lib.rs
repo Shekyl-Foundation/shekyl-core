@@ -32,6 +32,7 @@ pub mod budget;
 pub mod deadline;
 pub mod handshake;
 mod mac1;
+pub mod rendezvous;
 pub mod retry;
 mod static_public;
 
