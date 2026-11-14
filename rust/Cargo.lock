@@ -5225,6 +5225,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower-service",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
