@@ -1771,6 +1771,8 @@ mod emission_claim_assembly {
                 reward_amount_plain: claims.reward_amount_plain,
             },
             shape.fee,
+            // The id the actor under test was spawned with (`test_fixtures`).
+            &shekyl_network::HARNESS_NETWORK_ID,
             &shape.tree_ctx,
         );
 

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_network::Network;
 use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
@@ -57,6 +58,7 @@ fn causes() -> Recorded {
 }
 
 fn config(
+    network_id: [u8; 16],
     option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
@@ -66,7 +68,7 @@ fn config(
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         option,
         column: ConnectorId::Clearnet.column(),
-        network_id: ID,
+        network_id,
         ceiling,
         handshake_within: within,
         shutdown_timeout: Duration::from_millis(50),
@@ -87,11 +89,12 @@ fn start(
     Listener<MonotonicClock>,
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
-    start_on(Sockets::new(), option, within, ceiling)
+    start_on(Sockets::new(), ID, option, within, ceiling)
 }
 
 fn start_on(
     sockets: Sockets,
+    network_id: [u8; 16],
     option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
@@ -108,7 +111,7 @@ fn start_on(
         pool,
         &engine.handle(),
         sockets,
-        &config(option, within, ceiling, recorded.sink),
+        &config(network_id, option, within, ceiling, recorded.sink),
     )
     .expect("listen");
     (engine, listener, seen)
@@ -126,6 +129,50 @@ async fn next_session(sessions: &mut mpsc::UnboundedReceiver<super::Session>) ->
         .await
         .expect("session wait")
         .expect("session")
+}
+
+/// Write `prefix` and read what comes back before the peer closes.
+/// Zero is a FIN with no payload.
+fn prefix_reply(client: &mut StdStream, prefix: &[u8]) -> usize {
+    client.write_all(prefix).expect("write");
+    let mut buf = [0u8; 8];
+    client.read(&mut buf).expect("read")
+}
+
+/// Spin until `seen` records `kind`.
+fn await_close_kind(seen: &Arc<Mutex<Vec<CloseKind>>>, kind: CloseKind, why: &str) {
+    let start = Instant::now();
+    while !seen.lock().expect("causes").contains(&kind) {
+        assert!(start.elapsed() < Duration::from_secs(2), "{why}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Open a sealed session under `network_id` and deliver `plain`.
+/// Returns what the listener's session read.
+fn sealed_plaintext(
+    listener: &mut Listener<MonotonicClock>,
+    client: &mut StdStream,
+    network_id: &[u8; 16],
+    plain: &[u8],
+) -> Vec<u8> {
+    let (initiator, message1) = Initiator::new(network_id).expect("initiator");
+    client.write_all(&prefix_for(network_id)).expect("prefix");
+    client.write_all(&message1).expect("message1");
+    let mut prefix = [0u8; PREFIX_LEN];
+    client.read_exact(&mut prefix).expect("prefix");
+    assert_eq!(prefix, prefix_for(network_id));
+    let mut message2 = vec![0u8; MESSAGE2_LEN];
+    client.read_exact(&mut message2).expect("message2");
+    let (mut send, _recv) = initiator
+        .read_message2(&message2)
+        .expect("message2")
+        .split();
+    let wire = send.seal(plain).expect("seal");
+    client.write_all(&wire).expect("record");
+    let handle = listener.runtime_handle().clone();
+    let mut session = handle.block_on(next_session(&mut listener.sessions));
+    handle.block_on(session.recv()).expect("plain")
 }
 
 #[test]
@@ -195,21 +242,58 @@ fn a_bad_prefix_is_fin_after_zero_bytes() {
         InboundCeiling::Bounded(4),
     );
     let mut client = connect(listener.local_addr());
-    client.write_all(&[0u8; PREFIX_LEN]).expect("write");
-    let mut buf = [0u8; 8];
-    let n = client.read(&mut buf).expect("read");
+    let n = prefix_reply(&mut client, &[0u8; PREFIX_LEN]);
     assert_eq!(n, 0);
-    let start = Instant::now();
-    while !seen
-        .lock()
-        .expect("causes")
-        .contains(&CloseKind::PrefixMismatch)
-    {
-        assert!(start.elapsed() < Duration::from_secs(2), "cause");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    await_close_kind(&seen, CloseKind::PrefixMismatch, "cause");
     listener.shutdown();
     drop(engine);
+}
+
+/// Lock 4 of the chain forge's identity test (`CHAIN_FORGE.md` §6): a node
+/// of one network does not take a session from another. For every pair of
+/// networks, a fresh listener under the listening network's id is offered
+/// the dialing network's prefix: another network's is closed after zero
+/// bytes with `PrefixMismatch`, and the listener's own opens a sealed
+/// session — the positive control, so a listener that refused everything
+/// fails here too. One listener per attempt, so the per-host accept rate
+/// (`AcceptRateExceeded`) never stands in for the prefix.
+#[test]
+fn a_listener_refuses_every_other_networks_prefix_and_takes_its_own() {
+    let mut refused = 0;
+    let mut sealed = 0;
+    for listening in Network::ALL {
+        for dialing in Network::ALL {
+            let id = listening.network_id();
+            let (engine, mut listener, seen) = start_on(
+                Sockets::new(),
+                id,
+                ClearnetOption::On,
+                Tick::new(5_000_000_000),
+                InboundCeiling::Bounded(4),
+            );
+            let mut client = connect(listener.local_addr());
+            if dialing == listening {
+                let got = sealed_plaintext(&mut listener, &mut client, &id, b"same network");
+                assert_eq!(got, b"same network", "{listening}");
+                sealed += 1;
+            } else {
+                let theirs = prefix_for(&dialing.network_id());
+                assert_ne!(theirs, prefix_for(&id), "{listening} and {dialing}");
+                let n = prefix_reply(&mut client, &theirs);
+                assert_eq!(n, 0, "{listening} answered {dialing}'s prefix");
+                await_close_kind(
+                    &seen,
+                    CloseKind::PrefixMismatch,
+                    &format!("{listening}: {dialing}'s close cause"),
+                );
+                refused += 1;
+            }
+            listener.shutdown();
+            drop(engine);
+        }
+    }
+    assert_eq!(sealed, Network::ALL.len());
+    assert_eq!(refused, Network::ALL.len() * (Network::ALL.len() - 1));
 }
 
 #[test]
@@ -220,23 +304,7 @@ fn option_on_seals_above_the_seam() {
         InboundCeiling::Bounded(4),
     );
     let mut client = connect(listener.local_addr());
-    let (initiator, message1) = Initiator::new(&ID).expect("initiator");
-    client.write_all(&prefix_for(&ID)).expect("prefix");
-    client.write_all(&message1).expect("message1");
-    let mut prefix = [0u8; PREFIX_LEN];
-    client.read_exact(&mut prefix).expect("prefix");
-    assert_eq!(prefix, prefix_for(&ID));
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    client.read_exact(&mut message2).expect("message2");
-    let (mut send, _recv) = initiator
-        .read_message2(&message2)
-        .expect("message2")
-        .split();
-    let wire = send.seal(b"hello").expect("seal");
-    client.write_all(&wire).expect("record");
-    let handle = listener.runtime_handle().clone();
-    let mut session = handle.block_on(next_session(&mut listener.sessions));
-    let got = handle.block_on(session.recv()).expect("plain");
+    let got = sealed_plaintext(&mut listener, &mut client, &ID, b"hello");
     assert_eq!(got, b"hello");
     assert_eq!(listener.tally.computed(), 1);
     assert_eq!(listener.tally.skipped(), 0);
@@ -328,6 +396,7 @@ fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
     );
     let (engine, listener, seen) = start_on(
         Sockets::with_clearnet_gate(gate),
+        ID,
         ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
@@ -636,6 +705,7 @@ fn a_socks_refusal_carries_the_reply_byte() {
         &engine.handle(),
         Sockets::new(),
         &config(
+            ID,
             ClearnetOption::Off,
             Tick::new(5_000_000_000),
             InboundCeiling::Bounded(4),
@@ -700,261 +770,5 @@ mod gap_tests;
 #[path = "admission_tests.rs"]
 mod admission_tests;
 
-/// A gate refusing every inbound from one host after its first, whose
-/// connector admits `burst` at once and one more every `every`: the linger
-/// cap for a span is `burst + span / every`. Test shapes, not ruled values.
-fn refusing_gate(every: u64, burst: u32) -> Sockets {
-    use shekyl_transport_layer::{AcceptGate, AcceptRate};
-    Sockets::with_clearnet_gate(AcceptGate::new(
-        AcceptRate {
-            token_every_nanos: every,
-            burst,
-        },
-        AcceptRate {
-            token_every_nanos: 60_000_000_000,
-            burst: 1,
-        },
-    ))
-}
-
-fn wait_for_refusals(seen: &Arc<Mutex<Vec<CloseKind>>>, count: usize) {
-    let start = Instant::now();
-    while seen
-        .lock()
-        .expect("causes")
-        .iter()
-        .filter(|kind| **kind == CloseKind::AcceptRateExceeded)
-        .count()
-        < count
-    {
-        assert!(start.elapsed() < Duration::from_secs(2), "refusal {count}");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
-
-/// What a refused client sees when it writes its first flight `after` its
-/// connect, as a Noise initiator on the internet does: `None` for an
-/// orderly end, or the socket error an RST left.
-fn flight_after(mut client: StdStream, after: Duration) -> Option<std::io::Error> {
-    std::thread::sleep(after);
-    client
-        .write_all(&[0x5a; shekyl_p2p_transport::INITIATOR_FLIGHT_LEN])
-        .expect("the flight");
-    let mut buf = [0u8; 4];
-    let read = client.read(&mut buf);
-    std::thread::sleep(Duration::from_millis(50));
-    match (read, client.take_error().expect("socket error")) {
-        (_, Some(error)) | (Err(error), None) => Some(error),
-        (Ok(n), None) => {
-            assert_eq!(n, 0, "nothing written to a refused peer");
-            None
-        }
-    }
-}
-
-/// The refusal comes first and the flight 50 ms later, at a socket the
-/// accept refused: it is held half-closed until the flight arrives, so
-/// the far side sees FIN and no RST (D10.2).
-#[test]
-fn a_flight_written_after_the_refusal_ends_with_fin_not_rst() {
-    let (engine, listener, seen) = start_on(
-        refusing_gate(100_000_000, 4),
-        ClearnetOption::On,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
-    let _first = connect(listener.local_addr());
-    let start = Instant::now();
-    while listener.sockets.live() == 0 {
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "the first is admitted"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let refused = connect(listener.local_addr());
-    wait_for_refusals(&seen, 1);
-    let error = flight_after(refused, Duration::from_millis(50));
-    assert!(error.is_none(), "an RST answered the flight: {error:?}");
-    listener.shutdown();
-    drop(engine);
-}
-
-/// The linger cap holds: with room for two, the third refusal closes at
-/// once and its late flight is answered with RST (the residual D10.2
-/// states), while the two held sockets still end with FIN.
-#[test]
-fn refusals_past_the_linger_cap_close_at_once() {
-    // Burst 1, one token per 5 s span: a cap of 1 + 1 = 2.
-    let (engine, listener, seen) = start_on(
-        refusing_gate(5_000_000_000, 1),
-        ClearnetOption::On,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(8),
-    );
-    let _first = connect(listener.local_addr());
-    let start = Instant::now();
-    while listener.sockets.live() == 0 {
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "the first is admitted"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let held_a = connect(listener.local_addr());
-    wait_for_refusals(&seen, 1);
-    let held_b = connect(listener.local_addr());
-    wait_for_refusals(&seen, 2);
-    let past_cap = connect(listener.local_addr());
-    wait_for_refusals(&seen, 3);
-    assert!(
-        flight_after(past_cap, Duration::from_millis(50)).is_some(),
-        "the refusal past the cap closed at once"
-    );
-    for (name, held) in [("first", held_a), ("second", held_b)] {
-        let error = flight_after(held, Duration::ZERO);
-        assert!(error.is_none(), "the {name} held socket: {error:?}");
-    }
-    listener.shutdown();
-    drop(engine);
-}
-
-/// Two listeners share one linger cap. With room for two, both filled on
-/// the first listener, a refusal on the second closes at once: a cap per
-/// listener would hold that socket and its late flight would end with FIN
-/// (D10.2).
-#[test]
-fn two_listeners_share_the_linger_cap() {
-    let span = Tick::new(5_000_000_000);
-    let sockets = refusing_gate(span.get(), 1);
-    assert_eq!(sockets.clearnet_linger_cap(span), 2);
-    let engine = EngineService::start(MonotonicClock::new());
-    let pool = runtime(harness_budget(), &name("sk-clearnet-two")).expect("runtime");
-    let recorded = causes();
-    let seen = Arc::clone(&recorded.seen);
-    let (admitted_tx, admitted_rx) = mpsc::unbounded_channel();
-    let sockets_for_loops = sockets.clone();
-    let on_cause = Arc::clone(&recorded.sink);
-    let linger_engine = engine.handle();
-    let cap = sockets.clearnet_linger_cap(span);
-    let (addr_a, addr_b) = pool.block_on(async move {
-        let linger = super::Linger::spawn(linger_engine.clone(), cap, span);
-        let make_inbound = || super::Inbound {
-            sockets: sockets_for_loops.clone(),
-            ceiling: || InboundCeiling::Bounded(8),
-            kind: ChannelChoice::Plain,
-            network_id: ID,
-            handshake_within: span,
-            gap_within: None,
-            tally: Arc::new(super::zero_tally()),
-            on_cause: Arc::clone(&on_cause),
-            send_queue_bytes: 65_536,
-            admitted: super::publish_on(admitted_tx.clone()),
-            linger: linger.clone(),
-            backoff: Duration::from_millis(1),
-        };
-        let listener_a = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .await
-            .expect("bind");
-        let listener_b = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .await
-            .expect("bind");
-        let addr_a = listener_a.local_addr().expect("addr");
-        let addr_b = listener_b.local_addr().expect("addr");
-        tokio::spawn(super::accept_inbound(
-            listener_a,
-            make_inbound(),
-            linger_engine.clone(),
-        ));
-        tokio::spawn(super::accept_inbound(
-            listener_b,
-            make_inbound(),
-            linger_engine,
-        ));
-        (addr_a, addr_b)
-    });
-    let _keep_admitted = admitted_rx;
-    let _admitted = connect(addr_a);
-    let start = Instant::now();
-    while sockets.live() == 0 {
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "the first is admitted"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let held_a = connect(addr_a);
-    wait_for_refusals(&seen, 1);
-    let held_b = connect(addr_a);
-    wait_for_refusals(&seen, 2);
-    let past = connect(addr_b);
-    wait_for_refusals(&seen, 3);
-    assert!(
-        flight_after(past, Duration::from_millis(50)).is_some(),
-        "the second listener shares the cap, so this refusal closed at once"
-    );
-    for (label, held) in [("first", held_a), ("second", held_b)] {
-        let error = flight_after(held, Duration::ZERO);
-        assert!(error.is_none(), "the {label} held socket: {error:?}");
-    }
-    pool.shutdown(Duration::from_millis(50));
-    drop(engine);
-}
-
-/// A refused peer that never writes is held until the span passes, then
-/// closed, and its slot is free again: twice over, so the second expiry
-/// rests on the timing engine's deadline re-arming after its first wake.
-/// The span here is 300 ms and the cap two.
-#[test]
-fn idle_refusals_close_at_the_span_and_free_their_slots() {
-    let span = Duration::from_millis(300);
-    // Burst 1, one token per 300 ms span: a cap of 1 + 1 = 2.
-    let (engine, listener, seen) = start_on(
-        refusing_gate(300_000_000, 1),
-        ClearnetOption::On,
-        Tick::new(300_000_000),
-        InboundCeiling::Bounded(8),
-    );
-    let _first = connect(listener.local_addr());
-    let start = Instant::now();
-    while listener.sockets.live() == 0 {
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "the first is admitted"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let mut refused = 0;
-    let mut refuse = || {
-        let client = connect(listener.local_addr());
-        refused += 1;
-        wait_for_refusals(&seen, refused);
-        client
-    };
-    // Round one: two idle holds fill the cap, then the span passes.
-    let idle_a = refuse();
-    let idle_b = refuse();
-    std::thread::sleep(span * 2);
-    let late = refuse();
-    assert!(
-        flight_after(late, Duration::from_millis(50)).is_none(),
-        "the expired holds freed their slots, so this one lingered"
-    );
-    for (name, idle) in [("first", idle_a), ("second", idle_b)] {
-        assert!(
-            flight_after(idle, Duration::ZERO).is_some(),
-            "the {name} idle hold was closed at the span"
-        );
-    }
-    // Round two, after the engine's first wakes.
-    let _idle_c = refuse();
-    let _idle_d = refuse();
-    std::thread::sleep(span * 2);
-    let later = refuse();
-    assert!(
-        flight_after(later, Duration::from_millis(50)).is_none(),
-        "the second round of holds expired too"
-    );
-    listener.shutdown();
-    drop(engine);
-}
+#[path = "linger_tests.rs"]
+mod linger_tests;
