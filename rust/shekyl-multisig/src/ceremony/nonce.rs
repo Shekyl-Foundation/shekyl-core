@@ -30,7 +30,8 @@
 use shekyl_fcmp::frost_sal::HeldSession;
 
 /// One member's held round-1 state for one intent: a session per input,
-/// in the intent's input order. Not `Clone`; each session wipes on drop.
+/// in the transaction's input order. Not `Clone`; each session wipes on
+/// drop.
 ///
 /// A held session owns the parameters and keys it was made under, and
 /// resumes only with them:

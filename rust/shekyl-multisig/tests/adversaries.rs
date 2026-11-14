@@ -4,20 +4,21 @@
 // BSD-3-Clause
 
 //! The ceremony against each of its adversaries (`PQC_MULTISIG.md` §16.8),
-//! and a ceremony that survives every member restarting between files.
+//! the durable nonce write failing, and ceremonies that survive every
+//! member restarting between files, the proposer included after it has
+//! finished.
 //!
 //! A 3-of-5 group throughout: proposer 1, holder 3, responder 4.
 
 mod common;
 
 use rand_core::OsRng;
-use zeroize::Zeroizing;
 
 use common::wallet::{
-    context, derive, import_for, intent, try_context, validate, verify_from_the_wire, Derived,
-    Live, Sink, Store, PAID,
+    context, derive, import_for, input_contexts, intent, openings, try_context, validate,
+    verify_from_the_wire, Derived, Live, Sink, Store,
 };
-use common::{found_group, pay_group_twice, rebuild_chunks, GroupOutputs, NET};
+use common::{found_group, pay_group_twice, rebuild_paths, GroupOutputs, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
@@ -56,7 +57,7 @@ struct Caps {
 fn setup() -> (Spend, Members, Caps, Caps, Caps) {
     let (address, files) = found_group(5, 3);
     let paid = pay_group_twice(&address, &files);
-    let derived = derive(&paid);
+    let derived = derive(&address);
     let mut files: Vec<Option<MemberFile>> = files.into_iter().map(Some).collect();
     let mut take = |i: usize| files[i].take().unwrap();
     let members = Members {
@@ -90,8 +91,8 @@ impl Spend {
 
     fn proposer_inputs(&self) -> ProposerInputs {
         ProposerInputs {
-            outputs: vec![(PAID, Zeroizing::new(self.derived.out_mask))],
-            leaf_chunks: rebuild_chunks(&self.paid),
+            output_openings: openings(&self.derived),
+            input_paths: rebuild_paths(&self.paid),
         }
     }
 
@@ -109,11 +110,14 @@ impl Spend {
     }
 }
 
-/// The honest ceremony through step 5.
+/// The honest ceremony through step 5, with the files the proposer
+/// received, for replay after a restart.
 struct ThroughStep5<'w> {
     proposer: Proposer<'w, SharesPending>,
     holder: Holder<'w, Committed>,
+    proposal: Vec<u8>,
     commitment: Vec<u8>,
+    response: Vec<u8>,
     to_holder: Vec<u8>,
 }
 
@@ -153,7 +157,9 @@ fn through_step_5<'w>(
     ThroughStep5 {
         proposer,
         holder,
+        proposal,
         commitment,
+        response,
         to_holder,
     }
 }
@@ -338,7 +344,10 @@ fn different_preprocess_sets_give_no_sal_and_no_reused_nonce() {
 /// A malicious proposer's `FinalTx`: proofs that are not over the
 /// transaction this member builds from the intent, an edited range proof,
 /// an edited membership proof, or a key that is not the signer's. Each is
-/// refused before any hybrid signature; the honest file signs.
+/// refused before any hybrid signature; the honest file signs. The fee and
+/// the reference block are the intent's in every member's own transaction
+/// (`SigningContext` reads them from the intent), so no file can move
+/// them; `verify_from_the_wire` checks both on every released spend.
 #[test]
 fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
     let (s, m, mut ca, mut ch, mut cb) = setup();
@@ -368,28 +377,13 @@ fn a_final_tx_that_is_not_the_intents_is_refused_before_signing() {
 
     // The member's own transaction pays another output: the proofs are
     // not over it.
-    let mut other = derive(&s.paid);
+    let mut other = derive(&s.address);
     other.blinds = s.derived.blinds;
     other.seeds = s.derived.seeds;
     let ctx_other = context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, &other);
     assert!(matches!(
         Cosigner::sign_final_tx(&ctx_other, &honest, &mut OsRng),
         Err(CeremonyError::MembershipProof)
-    ));
-    // Another fee: the member's own transaction carries the intent's fee,
-    // or its context does not build; a proof over any other fee is a proof
-    // over another transaction, refused as above.
-    let mut fee = s.derived.unsigned.clone();
-    fee.fee += 1;
-    let other_fee = Derived {
-        unsigned: fee,
-        blinds: s.derived.blinds,
-        seeds: s.derived.seeds,
-        out_mask: s.derived.out_mask,
-    };
-    assert!(matches!(
-        try_context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, &other_fee),
-        Err(ContextError::Fee)
     ));
     assert!(matches!(
         Cosigner::sign_final_tx(&ctx_b, &edited(&|f| f.range_proof[40] ^= 1), &mut OsRng),
@@ -642,11 +636,217 @@ fn every_member_restarting_between_files_still_spends() {
     )
     .unwrap();
     let tx = proposer
-        .hybrid_sig(&expect!(import_for(&m.a, &from_h), HybridSig))
+        .hybrid_sig(expect!(import_for(&m.a, &from_h), HybridSig))
         .unwrap()
-        .hybrid_sig(&expect!(import_for(&m.a, &from_b), HybridSig))
+        .hybrid_sig(expect!(import_for(&m.a, &from_b), HybridSig))
         .unwrap()
         .release()
         .unwrap();
     verify_from_the_wire(&tx, &s.paid);
+}
+
+/// The proposer restarts after it has finished: it is rebuilt from the
+/// `FinalTx` it sent, re-checks and re-signs that transaction, replays the
+/// hybrid signatures it received, and releases. Once straight after
+/// finishing, once after one signature had arrived.
+#[test]
+fn a_proposer_restarting_after_finish_still_releases() {
+    for received_before_restart in 0..=1 {
+        let (s, m, mut ca, mut ch, mut cb) = setup();
+        let run = through_step_5(&s, &m, &mut ca, &mut ch, &mut cb);
+        let share = run
+            .holder
+            .sign(
+                &expect!(import_for(&m.h, &run.to_holder), SigningSet),
+                &mut ch.store,
+                &mut ch.sink,
+                &mut OsRng,
+            )
+            .unwrap();
+        let (mut proposer, final_tx) = run
+            .proposer
+            .holder_share(expect!(import_for(&m.a, &share), SignatureShare))
+            .unwrap()
+            .finish(&mut ca.store, &mut ca.sink, &mut OsRng)
+            .unwrap();
+        let signed: Vec<Vec<u8>> = [&m.h, &m.b]
+            .into_iter()
+            .map(|cosigner| {
+                Cosigner::sign_final_tx(
+                    &s.ctx(cosigner),
+                    &expect!(import_for(cosigner, &final_tx), FinalTx),
+                    &mut OsRng,
+                )
+                .unwrap()
+            })
+            .collect();
+        for file in &signed[..received_before_restart] {
+            proposer = proposer
+                .hybrid_sig(expect!(import_for(&m.a, file), HybridSig))
+                .unwrap();
+        }
+        drop(proposer);
+
+        let mut proposer = Proposer::resume_after_finish(s.ctx(&m.a), &final_tx).unwrap();
+        for file in &signed {
+            proposer = proposer
+                .hybrid_sig(expect!(import_for(&m.a, file), HybridSig))
+                .unwrap();
+        }
+        verify_from_the_wire(&proposer.release().unwrap(), &s.paid);
+    }
+}
+
+/// The proposer is rebuilt as finished only from its own `FinalTx`: not
+/// from its `Proposal`, and not from a `FinalTx` another member wrote.
+#[test]
+fn a_proposer_resumes_after_finish_only_from_its_own_final_tx() {
+    let (s, m, mut ca, _, _) = setup();
+    let (_, proposal) = Proposer::propose(
+        s.ctx(&m.a),
+        s.proposer_inputs(),
+        &mut ca.store,
+        &mut ca.live,
+        &mut OsRng,
+    )
+    .unwrap();
+    assert!(matches!(
+        Proposer::resume_after_finish(s.ctx(&m.a), &proposal).err(),
+        Some(CeremonyError::FileType)
+    ));
+    let key = expect!(import_for(&m.a, &proposal), Proposal).body().rounds[0]
+        .key
+        .clone();
+    let forged = s.sealed(
+        &m.h,
+        &FinalTx {
+            proposal_file: proposal,
+            keys: vec![vec![key; 3]; 2],
+            fcmp_proof: Vec::new(),
+            range_proof: Vec::new(),
+        },
+    );
+    assert!(matches!(
+        Proposer::resume_after_finish(s.ctx(&m.a), &forged).err(),
+        Some(CeremonyError::Sender { sender: 3 })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// The durable nonce write
+// ---------------------------------------------------------------------------
+
+/// A holder whose nonce-counter write fails signs nothing. Its held nonce
+/// left the store before the write and is gone, so a retry, even on a
+/// working disk, finds nothing to sign from and writes nothing.
+#[test]
+fn a_failed_counter_write_forfeits_the_holders_nonce() {
+    let (s, m, mut ca, mut ch, mut cb) = setup();
+    let run = through_step_5(&s, &m, &mut ca, &mut ch, &mut cb);
+    let set = expect!(import_for(&m.h, &run.to_holder), SigningSet);
+    let refused = run
+        .holder
+        .sign(&set, &mut ch.store, &mut Sink::failing(), &mut OsRng);
+    assert!(
+        matches!(
+            refused,
+            Err(CeremonyError::Consume(ConsumeError::Persist(_)))
+        ),
+        "{refused:?}"
+    );
+    assert!(ch.store.0.is_empty(), "the nonce left the store");
+    let retried =
+        Holder::committed(s.ctx(&m.h))
+            .unwrap()
+            .sign(&set, &mut ch.store, &mut ch.sink, &mut OsRng);
+    assert!(matches!(
+        retried,
+        Err(CeremonyError::Consume(ConsumeError::NotHeld))
+    ));
+    assert!(ch.sink.persisted.is_empty());
+}
+
+/// The proposer's nonce-counter write fails at `finish`: no SAL, no proof,
+/// and the nonce is gone. Rebuilt from its `Proposal` and replayed, the
+/// proposer finds nothing to sign from.
+#[test]
+fn a_failed_counter_write_forfeits_the_proposers_nonce() {
+    let (s, m, mut ca, mut ch, mut cb) = setup();
+    let run = through_step_5(&s, &m, &mut ca, &mut ch, &mut cb);
+    let share = run
+        .holder
+        .sign(
+            &expect!(import_for(&m.h, &run.to_holder), SigningSet),
+            &mut ch.store,
+            &mut ch.sink,
+            &mut OsRng,
+        )
+        .unwrap();
+    let refused = run
+        .proposer
+        .holder_share(expect!(import_for(&m.a, &share), SignatureShare))
+        .unwrap()
+        .finish(&mut ca.store, &mut Sink::failing(), &mut OsRng)
+        .err();
+    assert!(
+        matches!(
+            refused,
+            Some(CeremonyError::Consume(ConsumeError::Persist(_)))
+        ),
+        "{refused:?}"
+    );
+    assert!(ca.store.0.is_empty(), "the nonce left the store");
+    let retried = Proposer::resume(s.ctx(&m.a), s.proposer_inputs(), run.proposal)
+        .unwrap()
+        .commitment(expect!(import_for(&m.a, &run.commitment), Commitment))
+        .unwrap()
+        .responder_share(expect!(import_for(&m.a, &run.response), ResponderShare))
+        .unwrap()
+        .holder_share(expect!(import_for(&m.a, &share), SignatureShare))
+        .unwrap()
+        .finish(&mut ca.store, &mut ca.sink, &mut OsRng)
+        .err();
+    assert!(matches!(
+        retried,
+        Some(CeremonyError::Consume(ConsumeError::NotHeld))
+    ));
+    assert!(ca.sink.persisted.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The context
+// ---------------------------------------------------------------------------
+
+/// A context under a layer count no spend proves under does not build.
+#[test]
+fn a_context_needs_a_layer_count_a_spend_proves_under() {
+    let (s, m, ..) = setup();
+    for layers in [0, 1, shekyl_fcmp::MAX_TREE_DEPTH + 1] {
+        assert!(matches!(
+            try_context(&m.b, validate(&m.b, s.intent.clone()), &s.paid, &s.derived, layers),
+            Err(ContextError::TreeLayers { layers: refused }) if refused == layers
+        ));
+    }
+}
+
+/// A member's inputs are put in the transaction's order whatever order it
+/// supplies them in: the context built from them reversed signs the same
+/// message.
+#[test]
+fn a_context_orders_its_inputs_by_key_image() {
+    let (s, m, ..) = setup();
+    let in_order = s.ctx(&m.b);
+    let mut reversed = input_contexts(&m.b, &s.paid, &s.derived);
+    reversed.reverse();
+    let from_reversed = SigningContext::new(
+        &m.b,
+        NET,
+        validate(&m.b, s.intent.clone()),
+        reversed,
+        s.derived.unsigned.clone(),
+        s.paid.root,
+        s.paid.layers,
+    )
+    .unwrap();
+    assert_eq!(in_order.tx_signable(), from_reversed.tx_signable());
 }

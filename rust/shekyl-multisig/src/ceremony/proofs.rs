@@ -15,9 +15,11 @@
 //! - [`VerifiedRangeProof`]: the range proof, verified against the
 //!   outputs' commitments in this member's own base.
 //! - [`SignableTransaction`]: assembled by this member from its own
-//!   context, the two verified proofs and the checked keys. The hybrid
-//!   signer is called only on it, so a byte the member neither built nor
-//!   verified has no way into its signature.
+//!   context, the two verified proofs and the checked keys, and well formed
+//!   by the wire's structural rules. The hybrid signer is called only on
+//!   it, so a byte the member neither built nor verified has no way into
+//!   its signature, and no member signs a transaction the pool refuses on
+//!   its shape.
 //!
 //! The SALs travel inside the FCMP++ proof (`prove_with_sal` writes them
 //! there), so one verifier covers both: there is no separate verified SAL.
@@ -28,21 +30,16 @@
 //! has no valid SAL.
 
 use shekyl_crypto_pq::multisig::{multisig_key_hash, MultisigKeyBlob, HYBRID_SCHEME_ID_MULTISIG};
-use shekyl_crypto_pq::multisig_output::{
-    sign_multisig_member_auth, MemberOwnCiphertext, MultisigMemberView,
-};
+use shekyl_crypto_pq::multisig_output::{sign_multisig_member_auth, verify_multisig_member_auth};
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::SigningPayloadHash;
-use shekyl_wire::{BpPlus, Ct, PqcAuth, Prunable, Transaction};
+use shekyl_wire::{BpPlus, PqcAuth, Prunable, Transaction};
 
 use super::context::SigningContext;
 use super::CeremonyError;
-
-/// `pqc_auth.auth_version` (CEN-I16 requires 1).
-const PQC_AUTH_VERSION: u8 = 1;
 
 /// A per-output key that hashes, under this network, to the committed
 /// hash at its member's index of one input's committed form.
@@ -122,6 +119,33 @@ impl SignerKeys {
             .collect()
     }
 
+    /// Check `member`'s signature on every input against its checked key.
+    pub(crate) fn verify_signatures(
+        &self,
+        member: u8,
+        hashes: &[SigningPayloadHash],
+        signatures: &[HybridSignature],
+    ) -> Result<(), CeremonyError> {
+        if signatures.len() != self.per_input.len() {
+            return Err(CeremonyError::InputCount);
+        }
+        for (input, ((keys, hash), signature)) in self
+            .per_input
+            .iter()
+            .zip(hashes)
+            .zip(signatures)
+            .enumerate()
+        {
+            let key = keys
+                .iter()
+                .find(|k| k.member_index == member)
+                .ok_or(CeremonyError::Sender { sender: member })?;
+            verify_multisig_member_auth(&key.key, hash, signature)
+                .map_err(|_| CeremonyError::HybridSignature { member, input })?;
+        }
+        Ok(())
+    }
+
     fn key_blob(&self, ctx: &SigningContext<'_>, input: usize) -> Result<Vec<u8>, CeremonyError> {
         MultisigKeyBlob::assemble(
             ctx.inputs[input].committed_form.clone(),
@@ -146,8 +170,8 @@ impl VerifiedMembershipProof {
     pub(crate) fn verify(ctx: &SigningContext<'_>, data: Vec<u8>) -> Result<Self, CeremonyError> {
         let n = ctx.inputs.len();
         let pseudo_outs: Vec<[u8; 32]> = (0..n)
-            .map(|i| {
-                ctx.params(i)
+            .map(|input| {
+                ctx.params(input)
                     .rerandomized()
                     .input()
                     .C_tilde()
@@ -201,9 +225,7 @@ impl VerifiedRangeProof {
         let proof = BpPlus::from_bytes(bytes).map_err(|_| CeremonyError::RangeProof)?;
         let bulletproof = proof.to_bulletproof().ok_or(CeremonyError::RangeProof)?;
         let commitments: Vec<CompressedPoint> = ctx
-            .unsigned
-            .base
-            .commitments
+            .output_commitments()
             .iter()
             .map(|c| CompressedPoint::from(*c))
             .collect();
@@ -225,8 +247,9 @@ impl VerifiedRangeProof {
     }
 }
 
-/// The transaction this member signs: its own unsigned spend, the two
-/// verified proofs, and a key blob per input built from checked keys.
+/// The transaction this member signs: its own spend, the two verified
+/// proofs, and a key blob per input built from checked keys, well formed by
+/// the wire's structural rules.
 ///
 /// A cosigner signs the `FinalTx` it received, from which it assembles
 /// this type itself:
@@ -277,31 +300,21 @@ impl SignableTransaction {
     ) -> Result<Self, CeremonyError> {
         let pqc_auths = (0..ctx.inputs.len())
             .map(|input| {
-                Ok(PqcAuth {
-                    auth_version: PQC_AUTH_VERSION,
-                    scheme_id: HYBRID_SCHEME_ID_MULTISIG,
-                    flags: 0,
-                    hybrid_public_key: keys.key_blob(ctx, input)?,
-                    hybrid_signature: Vec::new(),
-                })
+                keys.key_blob(ctx, input)
+                    .map(|blob| PqcAuth::unsigned(HYBRID_SCHEME_ID_MULTISIG, blob))
             })
             .collect::<Result<_, CeremonyError>>()?;
-        let tx = Transaction {
-            prefix: ctx.unsigned.prefix.clone(),
-            ct: Ct::Fcmp {
-                fee: ctx.unsigned.fee,
-                reference_block: ctx.unsigned.reference_block,
-                base: ctx.unsigned.base.clone(),
-                pqc_auths,
-                prunable: Some(Prunable {
-                    bulletproofs: vec![range.proof.clone()],
-                    tree_depth: u64::from(ctx.fcmp_layers) - 1,
-                    fcmp_proof: membership.data.clone(),
-                    pseudo_outs: membership.pseudo_outs.clone(),
-                }),
-            },
-        };
+        let tx = ctx.transaction(
+            pqc_auths,
+            Some(Prunable {
+                bulletproofs: vec![range.proof.clone()],
+                tree_depth: ctx.tree_depth(),
+                fcmp_proof: membership.data.clone(),
+                pseudo_outs: membership.pseudo_outs.clone(),
+            }),
+        );
         debug_assert_eq!(tx.tx_signable(&ctx.network_id), ctx.tx_signable);
+        tx.validate().map_err(CeremonyError::Structure)?;
         let hashes = tx.pqc_signing_payload_hashes(&ctx.network_id);
         Ok(Self { tx, hashes })
     }
@@ -312,35 +325,14 @@ impl SignableTransaction {
         &self,
         ctx: &SigningContext<'_>,
     ) -> Result<Vec<HybridSignature>, CeremonyError> {
-        let member = ctx.member;
-        let address = member.address();
-        let (x25519, ml_kem) = member.member_kem_secret().split_at(32);
-        let x25519: &[u8; 32] = x25519
-            .try_into()
-            .expect("a hybrid KEM secret starts with X25519");
-        let view = MultisigMemberView {
-            member_index: member.member_index(),
-            n_total: address.n_total(),
-            m_required: address.m_required(),
-            member_x25519_sk: x25519,
-            member_ml_kem_dk: ml_kem,
-            network: &ctx.network_id,
-        };
-        ctx.inputs
+        let view = ctx.signing_view();
+        self.hashes
             .iter()
-            .zip(&self.hashes)
+            .enumerate()
             .map(|(input, hash)| {
-                sign_multisig_member_auth(
-                    &view,
-                    &MemberOwnCiphertext {
-                        n: address.n_total(),
-                        own_x25519_ct: &input.own_x25519_ct,
-                        own_ml_kem_ct: &input.own_ml_kem_ct,
-                    },
-                    hash,
-                )
-                .map(|signed| signed.signature)
-                .map_err(CeremonyError::MemberSign)
+                sign_multisig_member_auth(&view, &ctx.own_ciphertext(input), hash)
+                    .map(|signed| signed.signature)
+                    .map_err(CeremonyError::MemberSign)
             })
             .collect()
     }

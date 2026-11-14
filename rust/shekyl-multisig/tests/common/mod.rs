@@ -37,7 +37,7 @@ use shekyl_fcmp::tree::{
     build_layers, construct_leaf, ed25519_point_to_selene_scalar, key_image_generator,
     selene_point_to_helios_scalar,
 };
-use shekyl_multisig::{MemberFile, MemberSecrets};
+use shekyl_multisig::{InputPath, MemberFile, MemberSecrets};
 use shekyl_types::CurveTreeRoot;
 
 pub mod wallet;
@@ -256,9 +256,21 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
     }
 }
 
-/// The leaf chunks of `paid`'s outputs again: the prover consumes them.
-pub fn rebuild_chunks(paid: &GroupOutputs) -> Vec<ProveInputLeafChunk> {
-    tree(&paid.outputs, &paid.scans).2
+/// Each of `paid`'s outputs' path, named by its key image.
+pub fn paths(paid: &GroupOutputs, chunks: Vec<ProveInputLeafChunk>) -> Vec<InputPath> {
+    paid.scans
+        .iter()
+        .zip(chunks)
+        .map(|(scan, leaf_chunk)| InputPath {
+            key_image: scan.key_image,
+            leaf_chunk,
+        })
+        .collect()
+}
+
+/// `paid`'s paths again: the prover consumes them.
+pub fn rebuild_paths(paid: &GroupOutputs) -> Vec<InputPath> {
+    paths(paid, tree(&paid.outputs, &paid.scans).2)
 }
 
 /// The tree that holds `outputs`, as the daemon builds it: its root, its

@@ -283,10 +283,20 @@ impl Body for SigningSet {
     }
 }
 
+/// The responder's contribution for one input: its first round and, made
+/// in the same call, its share.
+#[derive(Clone)]
+pub struct ResponderRound {
+    /// Its first round.
+    pub round: RoundOne,
+    /// Its share, as its machine wrote it.
+    pub share: [u8; SAL_SHARE_LEN],
+}
+
 /// Step 4: the responder's first round and share per input.
 pub struct ResponderShare {
-    /// Per input: the responder's first round and its share.
-    pub inputs: Vec<(RoundOne, [u8; SAL_SHARE_LEN])>,
+    /// Per input, in the transaction's input order.
+    pub inputs: Vec<ResponderRound>,
 }
 
 impl Body for ResponderShare {
@@ -295,7 +305,7 @@ impl Body for ResponderShare {
     fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         push_count(&mut out, self.inputs.len());
-        for (round, share) in &self.inputs {
+        for ResponderRound { round, share } in &self.inputs {
             out.extend_from_slice(&round.preprocess);
             out.extend_from_slice(share);
             out.extend_from_slice(&key_bytes(&round.key));
@@ -311,7 +321,10 @@ impl Body for ResponderShare {
                 let preprocess = r.arr("preprocess")?;
                 let share = r.arr("share")?;
                 let key = r.key()?;
-                Ok((RoundOne { preprocess, key }, share))
+                Ok(ResponderRound {
+                    round: RoundOne { preprocess, key },
+                    share,
+                })
             })
             .collect::<Result<_, BodyError>>()?;
         r.finish()?;
@@ -467,6 +480,12 @@ impl<B> Authenticated<B> {
     #[must_use]
     pub fn file(&self) -> &[u8] {
         &self.file
+    }
+
+    /// The body, for a step that keeps it and not the file.
+    #[must_use]
+    pub fn into_body(self) -> B {
+        self.body
     }
 }
 

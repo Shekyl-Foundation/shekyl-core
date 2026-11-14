@@ -32,7 +32,7 @@ use shekyl_multisig::{Cosigner, Holder, MemberFile, Proposer, Responder, Respond
 fn two_of_three_spends_two_group_outputs() {
     let (address, files) = found_group(3, 2);
     let mut paid = pay_group_twice(&address, &files);
-    let derived = derive(&paid);
+    let derived = derive(&address);
     let [a, _, b]: [MemberFile; 3] = files.try_into().ok().unwrap();
     let mut a = Wallet::new(a);
     let mut b = Wallet::new(b);
@@ -88,7 +88,7 @@ fn two_of_three_spends_two_group_outputs() {
 
     // 10: A assembles, verifies and releases.
     let tx = proposer
-        .hybrid_sig(&expect!(import_into(&a, &hybrid), HybridSig))
+        .hybrid_sig(expect!(import_into(&a, &hybrid), HybridSig))
         .unwrap()
         .release()
         .unwrap();
@@ -100,7 +100,7 @@ fn two_of_three_spends_two_group_outputs() {
 fn three_of_five_spends_two_group_outputs() {
     let (address, files) = found_group(5, 3);
     let mut paid = pay_group_twice(&address, &files);
-    let derived = derive(&paid);
+    let derived = derive(&address);
     let mut files: Vec<Option<MemberFile>> = files.into_iter().map(Some).collect();
     let mut wallet = |i: usize| Wallet::new(files[i].take().unwrap());
     let (mut a, mut h, mut b) = (wallet(1), wallet(3), wallet(4));
@@ -193,9 +193,9 @@ fn three_of_five_spends_two_group_outputs() {
 
     // 10: A releases.
     let tx = proposer
-        .hybrid_sig(&expect!(import_into(&a, &from_h), HybridSig))
+        .hybrid_sig(expect!(import_into(&a, &from_h), HybridSig))
         .unwrap()
-        .hybrid_sig(&expect!(import_into(&a, &from_b), HybridSig))
+        .hybrid_sig(expect!(import_into(&a, &from_b), HybridSig))
         .unwrap()
         .release()
         .unwrap();

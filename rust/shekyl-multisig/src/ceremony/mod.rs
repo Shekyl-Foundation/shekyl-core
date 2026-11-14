@@ -3,8 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The Option E′ signing ceremony (`PQC_MULTISIG.md` §11;
-//! `claude/MULTISIG_SLICE3_PRC_CEREMONY_BRIEF.md`).
+//! The Option E′ signing ceremony (`PQC_MULTISIG.md` §11, §13).
 //!
 //! # Roles and files
 //!
@@ -50,8 +49,8 @@
 //!   keys.
 //!
 //! Every state that spans a wait for another member is rebuilt from what
-//! survives a restart: the context, the held-nonce store and the files the
-//! member received.
+//! survives a restart: the context, the held-nonce store, the files the
+//! member sent and the files it received.
 
 pub mod context;
 pub mod files;
@@ -59,20 +58,28 @@ pub mod nonce;
 pub mod proofs;
 pub mod roles;
 
-pub use context::{ContextError, InputContext, ProposerInputs, SigningContext, UnsignedSpend};
+pub use context::{
+    ContextError, InputContext, InputPath, ProposerInputs, SigningContext, UnsignedSpend,
+};
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
     ConsumeError, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies,
     NonceCounterError, NonceCounterSink, StoreError,
 };
 pub use proofs::{CommittedMemberKey, SignableTransaction};
-pub use roles::{Cosigner, Holder, Proposer, Responder, ResponderInput};
+pub use roles::{
+    AwaitingSignatures, Collecting, Committed, Cosigner, Holder, Proposer, Responder,
+    ResponderInput, SharesPending,
+};
 
+use shekyl_bulletproofs::BulletproofError;
 use shekyl_crypto_pq::error::PqcVerifyError;
 use shekyl_crypto_pq::multisig_output::MultisigSignError;
 use shekyl_fcmp::frost_sal::{FrostError, FrostSalError};
+use shekyl_fcmp::proof::ProveError;
 
 use crate::envelope::SealError;
+use crate::intent::SpendIntent;
 
 /// A member's role in one intent's ceremony.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,30 +93,32 @@ pub enum Role {
 }
 
 impl Role {
-    /// `member`'s role in an intent proposed by `proposer` with responder
-    /// `responder`, or `None` if `member` is not among `signers`.
+    /// `member`'s role in `intent` (R-5), or `None` if it does not sign.
     #[must_use]
-    pub fn of(member: u8, proposer: u8, responder: u8, signers: &[u8]) -> Option<Self> {
-        if !signers.contains(&member) {
+    pub fn of(intent: &SpendIntent, member: u8) -> Option<Self> {
+        if !intent.signers.contains(&member) {
             None
-        } else if member == proposer {
+        } else if member == intent.proposer_index {
             Some(Self::Proposer)
-        } else if member == responder {
+        } else if member == intent.responder_index {
             Some(Self::Responder)
         } else {
             Some(Self::Holder)
         }
     }
+
+    /// The roles that run the second round as a cosigner.
+    pub const COSIGNERS: &'static [Role] = &[Role::Responder, Role::Holder];
 }
 
 /// Why a ceremony step refused. Each names one check.
 #[derive(Debug, thiserror::Error)]
 pub enum CeremonyError {
-    /// This member's role in the intent is not the one the step is for.
-    #[error("this step is for the {expected:?}; this member is the {actual:?}")]
+    /// This member's role in the intent is not one the step is for.
+    #[error("this step is for {allowed:?}; this member is the {actual:?}")]
     WrongRole {
-        /// The step's role.
-        expected: Role,
+        /// The roles the step is for.
+        allowed: &'static [Role],
         /// This member's role.
         actual: Role,
     },
@@ -137,6 +146,10 @@ pub enum CeremonyError {
     /// A forwarded set is not exactly the files this step needs.
     #[error("the signing set is not the signer set's files")]
     SigningSetContents,
+    /// A file inside another, or a file a step rebuilds from, is not the
+    /// type the step needs.
+    #[error("the file is not the type this step needs")]
+    FileType,
     /// A per-output key does not hash to its committed hash.
     #[error("member {member}'s key for input {input} does not match its committed hash")]
     KeyHash {
@@ -193,12 +206,16 @@ pub enum CeremonyError {
         /// The refusal.
         source: FrostError,
     },
+    /// The assembled transaction is not well formed (the wire's
+    /// structural rules, which the pool applies before any proof).
+    #[error("the assembled transaction is not well formed: {0}")]
+    Structure(#[source] std::io::Error),
     /// The FCMP++ prover refused.
-    #[error("the FCMP++ prover refused: {0}")]
-    Prove(String),
+    #[error(transparent)]
+    Prove(#[from] ProveError),
     /// The range prover refused.
-    #[error("the range prover refused")]
-    RangeProve,
+    #[error("the range prover refused: {0}")]
+    RangeProve(#[source] BulletproofError),
     /// The member's own hybrid signer refused.
     #[error(transparent)]
     MemberSign(#[from] MultisigSignError),

@@ -47,7 +47,9 @@
 
 use shekyl_address::multisig_address::{MultisigAddressError, MultisigAddressPayload};
 use shekyl_crypto_pq::multisig_envelope::{MultisigEnvelopeSecret, ENVELOPE_SECRET_LEN};
+use shekyl_crypto_pq::multisig_output::MultisigMemberView;
 use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_network::NetworkId;
 use zeroize::Zeroizing;
 
 /// The file's first four bytes.
@@ -270,6 +272,25 @@ impl MemberFile {
     #[must_use]
     pub fn member_kem_secret(&self) -> &[u8] {
         &self.member_kem_secret
+    }
+
+    /// This member as the multisig signer sees it on `network`: its index,
+    /// the group's size and threshold, and its own KEM secret split into
+    /// its X25519 and ML-KEM-768 halves. The split is this file's layout,
+    /// so it is made here and nowhere else.
+    pub(crate) fn signing_view<'a>(&'a self, network: &'a NetworkId) -> MultisigMemberView<'a> {
+        let (x25519, ml_kem) = self.member_kem_secret.split_at(X25519_SECRET_LEN);
+        let address = self.address();
+        MultisigMemberView {
+            member_index: self.member_index(),
+            n_total: address.n_total(),
+            m_required: address.m_required(),
+            member_x25519_sk: x25519
+                .try_into()
+                .expect("a member KEM secret is HYBRID_KEM_SECRET_LEN bytes, X25519 first"),
+            member_ml_kem_dk: ml_kem,
+            network,
+        }
     }
 
     /// The group transport secret.
