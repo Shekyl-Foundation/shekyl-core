@@ -1405,7 +1405,6 @@ dependencies = [
 name = "shekyl-multisig"
 version = "3.1.0"
 dependencies = [
- "curve25519-dalek",
  "rand",
  "serde",
  "serde_json",
