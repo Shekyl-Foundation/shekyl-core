@@ -58,8 +58,8 @@ zeroize = { workspace = true }
 
 [build-dependencies]
 # Generate the FCMP reference-block age bounds + CT type from the JSON authority
-# `config/consensus_constants.json` (the same source the C++ header and
-# engine-core's build.rs read), so `intent.rs` never hardcodes them. See build.rs.
+# `config/consensus_constants.json` (the same source engine-core's and
+# shekyl-wire's build.rs read), so `intent.rs` never hardcodes them. See build.rs.
 serde_json = "1"
 
 [dev-dependencies]
