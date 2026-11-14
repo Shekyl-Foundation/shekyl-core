@@ -34,8 +34,8 @@
 //! # What is real and what is placeholder
 //!
 //! Real: the template, the coinbase and its hybrid-KEM output, the
-//! validator, the store, the burn fold. Under a [`ProductionSubstrate`]
-//! the PoW is real RandomX at the fixed regtest difficulty; the default
+//! validator, the store, the burn fold. Under a
+//! [`ProductionPow`](crate::pow::ProductionPow) the PoW is real RandomX at the fixed regtest difficulty; the default
 //! [`Clocked`] over the harness longhash keeps the clock deterministic and
 //! the hash free. Nothing is a placeholder any more: the curve-tree root
 //! stopped being one with DRS-E3, the two medians with slice 7 commit 4,
@@ -44,15 +44,19 @@
 //! against, and the producer's ledger of what it priced (`Priced`, handed
 //! to `connect` through `Composed`) went with the last of them.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use kameo::actor::ActorRef;
+use kameo::error::SendError;
+use kameo::message::Message;
+use kameo::reply::Reply;
 use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
     form, seed_height, Candidate, CenRow, FormAttempt, FormClaims, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target,
+    StructurallyValid, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -64,6 +68,7 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
+use tokio::sync::Notify;
 use zeroize::Zeroizing;
 
 use crate::connector::{
@@ -71,6 +76,7 @@ use crate::connector::{
     Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize, Rewind, Rewound,
     RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
 use crate::test_support::{open_store, open_store_under, tmp, TestPath};
@@ -99,6 +105,10 @@ fn spawn_connector(args: ConnectorArgs) -> (ActorRef<Connector>, ConnectorTask) 
 /// clock; every block it mines pays the harness miner.
 pub struct Scenario<P> {
     connector: ActorRef<Connector>,
+    /// The connector's ranker wake. This driver is the ranker: [`Self::asked`]
+    /// drains a permit a write stored and ranks before it returns, so a
+    /// rewind and a refused promotion rank the same way a connect does.
+    ranked: Arc<Notify>,
     /// The connector's task, joined on [`close`](Self::close) and
     /// [`reopen`](Self::reopen) so the store it owns is dropped before the
     /// file is touched (`test_support::JoinedConnector`'s reason).
@@ -151,10 +161,63 @@ impl Scenario<FreeHash> {
     }
 }
 
-impl<P: Substrate + Send + Sync + 'static> Scenario<P>
-where
-    P::Fault: std::fmt::Debug + Send,
-{
+impl<P: Pow> Scenario<P> {
+    /// Run `job` as one hashing job on `seed`, as the ingest forms a
+    /// block: the driver's clock, and `seed`'s cache under a production
+    /// pow. The driver has no stop, so the job is always granted.
+    fn job<R>(
+        &self,
+        seed: BlockHash,
+        job: impl for<'job> FnOnce(&crate::pow::RunJob<'job, P::Fault>) -> R,
+    ) -> R {
+        static NEVER_STOPS: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        self.substrate
+            .run(shekyl_hasher::Class::Chain, seed, &NEVER_STOPS, job)
+            .expect("the driver's hasher runs for the driver's life")
+    }
+
+    /// Send the ranked list for the store as it is now, as the service's
+    /// ranker does after a write (`window::rank`), with no frontier. A
+    /// free longhash ignores it. [`Self::asked`] calls this when a write
+    /// woke the ranker. A test whose hasher the connector does not drive
+    /// calls it itself.
+    pub fn rank(&self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let snap = store.begin_read().expect("the driver's store reads");
+        let list = crate::cache_window::ranked_on(&snap, self.rules, None)
+            .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
+        if let Some(list) = list {
+            self.substrate.rank(list);
+        }
+        // Always, quiet or not: no more than the cap exist (HA-R5).
+        if let Some(resident) = self.substrate.resident() {
+            let resident = resident.borrow();
+            assert!(
+                resident.caches.len() <= shekyl_hasher::CAP,
+                "more caches than the cap: {resident:?}"
+            );
+        }
+    }
+
+    /// HA-R5 at the end of a run on a production pow: the hasher already
+    /// holds the list the writes sent, and that is what a fresh hasher
+    /// fed the same list holds. This does not rank. A write that did not
+    /// wake the ranker fails here. A free longhash has no hasher, and
+    /// this does nothing.
+    fn quiet_is_fresh(&self) {
+        let (Some(store), Some(resident)) = (&self.store, self.substrate.resident()) else {
+            return;
+        };
+        let snap = store.begin_read().expect("the driver's store reads");
+        let list = crate::cache_window::ranked_on(&snap, self.rules, None)
+            .unwrap_or_else(|read| panic!("the driver's store ranks: {read:?}"));
+        drop(snap);
+        shekyl_hasher::quiet::assert_matches_fresh(&resident, list.as_ref());
+    }
+
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
         Self::open_under_with(name, pow, RULES, |path| open_store(path))
@@ -184,13 +247,16 @@ where
     ) -> Self {
         let path = tmp(name);
         let opened: Arc<ChainStore> = store(path.path()).into();
+        let ranked = Arc::new(Notify::new());
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: Arc::clone(&opened),
             rules,
             bundle_queued: None,
+            ranked: Some(Arc::clone(&ranked)),
         });
         Self {
             connector,
+            ranked,
             task: Some(task),
             opener: Box::new(store),
             substrate: Clocked::new(pow),
@@ -235,8 +301,47 @@ where
     }
 
     /// The connector, for a test that wants to ask it something directly.
+    ///
+    /// A write through this reference wakes the ranker and does not rank
+    /// by itself. The next scenario ask drains that wake. Call [`Self::rank`]
+    /// before reading residency when nothing else will ask.
     pub const fn connector(&self) -> &ActorRef<Connector> {
         &self.connector
+    }
+
+    /// Ask the connector, then rank when that ask woke the ranker.
+    ///
+    /// The reply is the actor's, unchanged: a [`Result`](Result) reply is
+    /// the handler's `Ok`, and a mailbox failure is the [`SendError`]. The
+    /// connector stores a wake before `ask` returns, so the poll sees a
+    /// write that already happened and does not wait. A read stores none.
+    /// A write made through [`Self::connector`] leaves its permit here, and
+    /// this ranks the store as it stands now.
+    async fn asked<M>(
+        &self,
+        msg: M,
+    ) -> Result<
+        <<Connector as Message<M>>::Reply as Reply>::Ok,
+        SendError<M, <<Connector as Message<M>>::Reply as Reply>::Error>,
+    >
+    where
+        Connector: Message<M>,
+        M: Send + 'static,
+        <Connector as Message<M>>::Reply: Reply,
+    {
+        let reply = self.connector.ask(msg).await;
+        self.rank_if_woken();
+        reply
+    }
+
+    /// Rank when the connector has stored a wake since the last drain.
+    fn rank_if_woken(&self) {
+        let mut pending = std::pin::pin!(self.ranked.notified());
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        if std::pin::Pin::as_mut(&mut pending).poll(&mut cx).is_ready() {
+            self.rank();
+        }
     }
 
     /// The miner every block of this scenario pays, secrets included.
@@ -246,10 +351,7 @@ where
 
     /// What the chain is now, as the producer reads it.
     pub async fn facts(&self) -> Result<ChainFacts, RunFault> {
-        self.connector
-            .ask(TemplateFacts)
-            .await
-            .map_err(handler_error)
+        self.asked(TemplateFacts).await.map_err(handler_error)
     }
 
     /// Mine `n` empty blocks; every one must land.
@@ -306,8 +408,7 @@ where
     pub async fn connect_template(&mut self, next: NextBlock) -> Result<Mined, StepOutcome> {
         let (height, formed, kept) = self.form_next(next)?;
         let applied = self
-            .connector
-            .ask(Apply(vec![(height, Ok(formed))]))
+            .asked(Apply(vec![(height, Ok(formed))]))
             .await
             .map_err(handler_error)
             .map_err(StepOutcome::Connector)?;
@@ -349,8 +450,7 @@ where
         let section = self.queued_section(next.height);
         let (height, formed, kept) = self.form_next_carrying(next, section)?;
         let out = self
-            .connector
-            .ask(crate::connector::ApplyAdmitting {
+            .asked(crate::connector::ApplyAdmitting {
                 height,
                 formed: Ok(formed),
             })
@@ -438,22 +538,22 @@ where
             Ok(references) => references,
             Err(never) => match never {},
         };
-        // The longhash looks the cache up. This driver is the chain, so
-        // it pins the seed first; a harness longhash's pin does nothing.
-        self.substrate.pin_seed(&seed);
-        let formed = form(
-            candidate,
-            &FormClaims {
-                rule_set: &rule_set,
-                seed,
-                target,
-                references: &references,
-                network: self.rules.trust().network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault");
+        let formed = self
+            .job(seed, |job| {
+                form(
+                    candidate,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault");
         let formed = formed.map_err(StepOutcome::Refused)?;
         Ok((
             height,
@@ -532,8 +632,7 @@ where
     /// publishes it.
     pub async fn last_deep_reorg(&self) -> Option<crate::connector::DeepReorg> {
         let watch = self
-            .connector
-            .ask(crate::connector::WatchDeepReorg)
+            .asked(crate::connector::WatchDeepReorg)
             .await
             .expect("the deep-reorg watch");
         let held = *watch.borrow();
@@ -542,8 +641,7 @@ where
 
     pub async fn following_degraded(&self) -> Option<shekyl_chain_store::codec::FollowingDegraded> {
         let watch = self
-            .connector
-            .ask(crate::connector::WatchLatch)
+            .asked(crate::connector::WatchLatch)
             .await
             .expect("the latch watch");
         let held = *watch.borrow();
@@ -552,15 +650,12 @@ where
 
     /// How many alternative blocks the store holds (`AltBlocksHeld`, AL6).
     pub async fn alt_blocks_held(&self) -> Result<u64, RunFault> {
-        self.connector
-            .ask(AltBlocksHeld)
-            .await
-            .map_err(handler_error)
+        self.asked(AltBlocksHeld).await.map_err(handler_error)
     }
 
     /// The logical-state digest of the store (`Digest`).
     pub async fn digest(&self) -> Result<crate::trace::Digest, RunFault> {
-        self.connector.ask(Digest).await.map_err(handler_error)
+        self.asked(Digest).await.map_err(handler_error)
     }
 
     /// Offer `mined` — a block another driver mined on another branch — as
@@ -570,27 +665,24 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
-        // This driver's own substrate, so the form can look the cache up.
-        // An untrusted alternative on the live service never pins.
-        self.substrate.pin_seed(&mined.seed);
-        let formed = form(
-            mined.candidate(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(mined.height),
-                seed: mined.seed,
-                target: mined.target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault")
-        .expect("a block another driver connected forms");
-        self.connector
-            .ask(OfferAlt(formed))
-            .await
-            .map_err(handler_error)
+        let formed = self
+            .job(mined.seed, |job| {
+                form(
+                    mined.candidate(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(mined.height),
+                        seed: mined.seed,
+                        target: mined.target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .expect("a block another driver connected forms");
+        self.asked(OfferAlt(formed)).await.map_err(handler_error)
     }
 
     /// Build the next block on `facts` without connecting it.
@@ -614,21 +706,23 @@ where
             .template(facts, now, listed)
             .map_err(StepOutcome::Template)?;
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
-        self.substrate.pin_seed(&seed);
-        let formed = form(
-            candidate.clone(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(height),
-                seed,
-                target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault")
-        .map_err(StepOutcome::Refused)?;
+        let formed = self
+            .job(seed, |job| {
+                form(
+                    candidate.clone(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(height),
+                        seed,
+                        target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .map_err(StepOutcome::Refused)?;
         self.targets
             .extend(height, &template.block, target)
             .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
@@ -645,25 +739,24 @@ where
     /// again here under empty reference claims, then [`OfferAlt`].
     #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
-        self.substrate.pin_seed(&block.seed);
-        let formed = form(
-            block.candidate.clone(),
-            &FormClaims {
-                rule_set: &self.rules.in_force(block.height),
-                seed: block.seed,
-                target: block.target,
-                references: &ReferenceClaims::EMPTY,
-                network: self.rules.trust().network_id(),
-            },
-            &self.substrate,
-            FormAttempt::FIRST,
-        )
-        .expect("the driver's substrate does not fault")
-        .expect("a block assembled under empty claims forms");
-        self.connector
-            .ask(OfferAlt(formed))
-            .await
-            .map_err(handler_error)
+        let formed = self
+            .job(block.seed, |job| {
+                form(
+                    block.candidate.clone(),
+                    &FormClaims {
+                        rule_set: &self.rules.in_force(block.height),
+                        seed: block.seed,
+                        target: block.target,
+                        references: &ReferenceClaims::EMPTY,
+                        network: self.rules.trust().network_id(),
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+            .expect("the driver's substrate does not fault")
+            .expect("a block assembled under empty claims forms");
+        self.asked(OfferAlt(formed)).await.map_err(handler_error)
     }
 
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
@@ -691,15 +784,18 @@ where
         plan: &SwitchPlan,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        static NEVER_STOPS: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         let formed_plan = match crate::plan_form::form_plan(
             plan,
             self.rules,
             &self.substrate,
-            threads,
-            &|| (),
+            &NEVER_STOPS,
         ) {
             Ok(formed) => formed,
+            Err(crate::plan_form::PlanStop::Stopped) => {
+                unreachable!("the driver has no stop")
+            }
             Err(crate::plan_form::PlanStop::Substrate(fault)) => {
                 panic!("the driver's substrate does not fault: {fault:?}")
             }
@@ -713,8 +809,7 @@ where
                 }
                 let started = std::time::Instant::now();
                 let switched = self
-                    .connector
-                    .ask(RefusePromotion {
+                    .asked(RefusePromotion {
                         tip: plan.tip,
                         alt_tip: plan.alt_tip,
                         hash: refusal.hash,
@@ -735,8 +830,7 @@ where
         let formed = started.elapsed();
         let started = std::time::Instant::now();
         let switched = self
-            .connector
-            .ask(Reorganize {
+            .asked(Reorganize {
                 tip: plan.tip,
                 alt_tip: plan.alt_tip,
                 demoted,
@@ -765,32 +859,22 @@ where
     /// Pop the chain back to `to`.
     pub async fn rewind_to(&mut self, to: BlockHeight) -> Result<Rewound, RunFault> {
         self.targets.rewind_to(to);
-        self.connector
-            .ask(Rewind { to })
-            .await
-            .map_err(handler_error)
+        self.asked(Rewind { to }).await.map_err(handler_error)
     }
 
     /// The block's identity at `height`, if recorded.
     pub async fn hash_at(&self, height: BlockHeight) -> Result<Option<BlockHash>, RunFault> {
-        self.connector
-            .ask(HashAt { height })
-            .await
-            .map_err(handler_error)
+        self.asked(HashAt { height }).await.map_err(handler_error)
     }
 
     /// The store's curve-tree root going into `height` (`RootAt`).
     pub async fn root_at(&self, height: BlockHeight) -> Result<Option<CurveTreeRoot>, RunFault> {
-        self.connector
-            .ask(RootAt { height })
-            .await
-            .map_err(handler_error)
+        self.asked(RootAt { height }).await.map_err(handler_error)
     }
 
     /// `persona`'s bond record as the store holds it (`BondRecordOf`).
     pub async fn bond_record(&self, persona: PCanonicalId) -> Result<Option<BondRecord>, RunFault> {
-        self.connector
-            .ask(BondRecordOf { persona })
+        self.asked(BondRecordOf { persona })
             .await
             .map_err(handler_error)
     }
@@ -800,8 +884,7 @@ where
         &self,
         epoch: SettlementEpoch,
     ) -> Result<Option<AtomicUnits>, RunFault> {
-        self.connector
-            .ask(BudgetAccruingOf { epoch })
+        self.asked(BudgetAccruingOf { epoch })
             .await
             .map_err(handler_error)
     }
@@ -823,6 +906,7 @@ where
             store: Arc::clone(&opened),
             rules: self.rules,
             bundle_queued: None,
+            ranked: Some(Arc::clone(&self.ranked)),
         });
         self.task = Some(task);
         self.connector = connector;
@@ -844,8 +928,11 @@ where
         self.start_connector();
     }
 
-    /// Stop the connector, release the store, remove the file.
+    /// Stop the connector, release the store, remove the file. On a
+    /// production pow, first hold the hasher to HA-R5. The writes ranked
+    /// it; this checks that they did, and does not send the list again.
     pub async fn close(mut self) {
+        self.quiet_is_fresh();
         self.stop_connector().await;
     }
 
@@ -867,7 +954,7 @@ where
         std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>,
         RunFault,
     > {
-        self.connector.ask(TableRows).await.map_err(handler_error)
+        self.asked(TableRows).await.map_err(handler_error)
     }
 
     /// The seed and target an honest producer claims for `height`.
@@ -883,8 +970,7 @@ where
         let seed = match seed_height(height) {
             None => BlockHash::NULL,
             Some(at) => self
-                .connector
-                .ask(HashAt { height: at })
+                .asked(HashAt { height: at })
                 .await
                 .map_err(handler_error)
                 .map_err(StepOutcome::Connector)?
@@ -893,8 +979,7 @@ where
         let rule_set = self.rules.in_force(height);
         for at in self.targets.missing_for(height) {
             let record = self
-                .connector
-                .ask(HeaderAt { height: at })
+                .asked(HeaderAt { height: at })
                 .await
                 .map_err(handler_error)
                 .map_err(StepOutcome::Connector)?

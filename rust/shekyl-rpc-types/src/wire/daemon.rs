@@ -135,6 +135,12 @@ crate::wire_parted! {
             started: Time,
             disk_free: Size,
             data_size: Size,
+            /// The RandomX caches the node's hasher holds now, 256 MiB
+            /// each: the operator's memory fact, beside `data_size`
+            /// (`RANDOMX_CACHE_ACTOR.md` §5.6). Every place in use is
+            /// counted, whether its cache is warm, lent, being built or
+            /// being dropped, so the count is never above three.
+            randomx_caches: Count,
             revision: Text,
             /// `null` while P2P is off.
             peer_outbound_count: Nullable<Count>,

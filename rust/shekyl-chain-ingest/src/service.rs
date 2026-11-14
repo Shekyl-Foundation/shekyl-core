@@ -37,12 +37,29 @@
 //! Each span is worked by its own task, so two sessions' spans race to the
 //! one writer, and the router places on snapshots the other span's commits
 //! can move (`router` module docs). Within a span, a run of blocks each
-//! extending the one before it from the tip is formed in parallel, under
-//! the hasher permits, and connected in order; an alternative arrival goes
+//! extending the one before it from the tip is formed in parallel, each
+//! block as a hashing job, and connected in order; an alternative arrival goes
 //! through `OfferAlt` and, if it makes a switch due, the switch. A stale
 //! placement — the connector's `HeightClaim`, a `Stale` claim, or an
 //! `OfferAlt` whose parent became the tip — sends the arrival back to be
 //! placed again, never to a verdict.
+//!
+//! # The ranked list
+//!
+//! The service holds no RandomX cache. Every hash is a job on the node's
+//! one hasher, through the [`Pow`] boundary, and a job always gets its
+//! cache (`RANDOMX_CACHE_ACTOR.md` HA-R1). What the hasher keeps warm
+//! between jobs is the ranked list, and the service is what computes it:
+//! one task, the ranker (`window::rank`), reads a fresh store snapshot and
+//! chain sync's header frontier ([`Follow::frontier`]) and sends the list
+//! whole ([`ranked_on`]). The connector wakes it after every write that
+//! can change the list, and a change of the frontier wakes it too. Wakes
+//! coalesce, so the last list sent is from the newest snapshot.
+//!
+//! The tip follower asks for a ranking of its own before it builds a
+//! template and waits for it: the miner's warm loan is granted only on a
+//! listed seed, so the list names the new tip's seed before a job on it
+//! is posted.
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,9 +67,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kameo::actor::{ActorRef, PreparedActor};
-use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
+use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_hash_budget::{Budget, Class};
+use shekyl_hasher::Class;
 use shekyl_mempool::{Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
@@ -65,6 +82,7 @@ use crate::connector::{
     PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
 };
 use crate::follower::JobSeat;
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 
 /// The caller's name for one arrival, carried on its reply.
@@ -405,16 +423,6 @@ enum Proof {
     Judged(Box<shekyl_chain_rules::HeaderJudged>),
 }
 
-impl Proof {
-    /// The class a hash waits in. A judged arrival does not hash.
-    const fn hash_class(&self) -> Option<Class> {
-        match self {
-            Self::Hash { class } => Some(*class),
-            Self::Judged(_) => None,
-        }
-    }
-}
-
 /// The hasher class an arrival's `form` waits in: a block this node asked
 /// for or made is the chain's; an announcement is unsolicited.
 const fn class_of(origin: Origin) -> Class {
@@ -529,24 +537,22 @@ pub enum ServiceFault<F> {
     #[error("pool: {0:?}")]
     Pool(PoolFault<StoreError>),
     /// The tip attendant ended while the service had not stopped, or it
-    /// panicked, or a blocking task of the follower's panicked: the seed
-    /// window's install, the pool's judging, the template producer. The
-    /// miner must not keep hashing a job nothing will refresh.
+    /// panicked, or a blocking task of the follower's panicked: the pool's
+    /// judging, the template producer. The miner must not keep hashing a
+    /// job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
+    /// The ranker panicked: nothing tells the hasher which seeds the node
+    /// needs any more. Reached only where a panic unwinds (the test
+    /// profile); dev and release abort.
+    #[error("the ranker ended")]
+    RankerEnded,
     /// An in-cap alternative named a seed below its fork that the window
     /// does not hold. The window's arithmetic says it cannot: a defect in
     /// this node, never a peer's doing (`cache_window` module docs).
     #[error("an in-cap alternative at height {height} named a below-fork seed outside the window")]
     SeedNotInWindow {
         /// The alternative's height on its chain.
-        height: BlockHeight,
-    },
-    /// A form hashed under a seed this node had just prepared, and the
-    /// substrate still had no cache for it.
-    #[error("a prepared seed's cache was absent at height {height}")]
-    PreparedSeedAbsent {
-        /// The block's height on its chain.
         height: BlockHeight,
     },
     /// A block this node connected failed its own stateless rules when a
@@ -600,41 +606,34 @@ impl core::fmt::Display for ServiceEnd {
 }
 
 /// What every span task, and the tip attendant, shares.
-pub(crate) struct Shared<S: Substrate> {
+pub(crate) struct Shared<P: Pow> {
     store: Arc<ChainStore>,
     rules: ChainRules,
-    substrate: Arc<S>,
+    /// The proof-of-work boundary every hash goes through, inside a job.
+    pow: Arc<P>,
     connector: ActorRef<Connector>,
     /// The bundles this node filed and queued, for the sync owner to relay.
     filed: tokio::sync::broadcast::Sender<FiledBundle>,
-    /// The daemon's one hasher budget.
-    budget: Budget,
-    /// Set with [`Self::request_stop`]. The budget's waiters load it.
+    /// Set with [`Self::request_stop`]. Every job's wait loads it.
     stop_flag: Arc<AtomicBool>,
     /// Set once: the service is stopping (a stop, or a fault).
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
-    fault: Mutex<Option<ServiceFault<S::Fault>>>,
+    fault: Mutex<Option<ServiceFault<P::Fault>>>,
     /// That fault's own words, published when it is recorded
     /// ([`Service::ended`]). `None` while the service runs, and after a
     /// stop that met no fault.
     ended: tokio::sync::watch::Sender<Option<ServiceEnd>>,
-    /// Serializes cache pins. Taken after a hasher permit, never before
-    /// (the install's settled check takes and drops it holding none).
-    /// Holds the seed window last installed: the only seeds a later
-    /// install may release (A2). A run's pins and a branch preparation
-    /// take the lock and leave the window as it is. The lock publishes
-    /// the slots when the critical section ends, so `seeds` read under
-    /// it is what the slots hold.
-    pin_lock: Arc<Mutex<Option<crate::cache_window::SeedPair>>>,
-    /// Serialises every form under a branch's own seed (B2): an alternative
-    /// arrival's, and a switch that promotes past its branch's seed point.
-    /// Taken before any permit, so the order is gate, permit, `pin_lock`.
-    /// With one such form at a time, the live caches are the canonical, the
-    /// transient, and at most one evicted cache a form still holds.
-    branch_gate: tokio::sync::Mutex<()>,
-    /// The seeds the two slots hold. `None` until a seed is canonical.
-    seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SlotPair>>,
+    /// Wakes the ranker (module docs, *The ranked list*). The connector
+    /// fires it after every write that can change the seeds the node
+    /// needs.
+    ranked: Arc<Notify>,
+    /// How many rankings have been asked for ([`Self::ranked_now`]).
+    rank_asked: std::sync::atomic::AtomicU64,
+    /// The highest ask a completed ranking has served: the ranker reads
+    /// `rank_asked` before its snapshot and publishes that number once
+    /// the list is sent.
+    rank_served: tokio::sync::watch::Sender<u64>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
     /// The live phases' measurement sink ([`Follow::metrics`]).
@@ -660,10 +659,7 @@ pub(crate) struct Shared<S: Substrate> {
     pub(crate) between_locks: Mutex<Option<Arc<crate::template::HeldBetweenLocks>>>,
 }
 
-impl<S: Substrate> Shared<S>
-where
-    S::Fault: core::fmt::Debug,
-{
+impl<P: Pow> Shared<P> {
     pub(crate) fn stopping(&self) -> bool {
         self.stop_flag.load(Ordering::Acquire)
     }
@@ -673,11 +669,43 @@ where
         self.stop.subscribe()
     }
 
-    /// Stop the service and wake every hasher waiter.
+    /// Stop the service and wake every job waiting for a cache or a
+    /// permit.
     pub(crate) fn request_stop(&self) {
         self.stop_flag.store(true, Ordering::Release);
         self.stop.send_replace(true);
-        self.budget.wake();
+        self.pow.wake();
+    }
+
+    /// Ask the ranker for a ranking and wait until one that began after
+    /// this call has been sent to the hasher. The tip follower calls it
+    /// before it builds a template: the miner's warm loan is granted only
+    /// on a listed seed, so the list must name the new tip's seed before a
+    /// job on it is posted. `false` when the service stopped first.
+    pub(crate) async fn ranked_now(&self) -> bool {
+        let mine = self.rank_asked.fetch_add(1, Ordering::AcqRel) + 1;
+        let mut served = self.rank_served.subscribe();
+        let mut stopping = self.stop_signal();
+        self.ranked.notify_one();
+        tokio::select! {
+            reached = served.wait_for(|served| *served >= mine) => reached.is_ok(),
+            _ = stopping.wait_for(|stop| *stop) => false,
+        }
+    }
+
+    /// The ask count a ranking that starts now will have served.
+    pub(crate) fn rank_asked(&self) -> u64 {
+        self.rank_asked.load(Ordering::Acquire)
+    }
+
+    /// A ranking that read `asked` before its snapshot was sent.
+    pub(crate) fn rank_served(&self, asked: u64) {
+        self.rank_served.send_replace(asked);
+    }
+
+    /// The flag every job's wait loads.
+    pub(crate) const fn stop_flag(&self) -> &Arc<AtomicBool> {
+        &self.stop_flag
     }
 
     /// The tip attendant acted on publication `seq`.
@@ -691,47 +719,6 @@ where
         Arc::clone(&self.kept)
     }
 
-    /// The seeds the slots hold now, including while the service is stopping.
-    pub(crate) fn published_seeds(&self) -> Option<crate::cache_window::SlotPair> {
-        *self.seeds.borrow()
-    }
-
-    /// The seeds an arrival may hash under. `None` while the service is stopping.
-    pub(crate) fn seed_now(&self) -> Option<crate::cache_window::SlotPair> {
-        if self.stopping() {
-            None
-        } else {
-            self.published_seeds()
-        }
-    }
-
-    /// Wait until the slots hold a pair, or the service stops.
-    pub(crate) async fn seed_pair(&self) -> Option<crate::cache_window::SlotPair> {
-        let mut published = self.seeds.subscribe();
-        let mut stopping = self.stop_signal();
-        loop {
-            if self.stopping() {
-                return None;
-            }
-            if let Some(pair) = *published.borrow_and_update() {
-                return Some(pair);
-            }
-            tokio::select! {
-                changed = published.changed() => {
-                    if changed.is_err() {
-                        return None;
-                    }
-                }
-                _ = stopping.wait_for(|stop| *stop) => return None,
-            }
-        }
-    }
-
-    /// The gate every form under a branch's own seed takes first.
-    pub(crate) async fn branch_form(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.branch_gate.lock().await
-    }
-
     pub(crate) const fn store(&self) -> &Arc<ChainStore> {
         &self.store
     }
@@ -740,8 +727,8 @@ where
         self.rules
     }
 
-    pub(crate) const fn substrate(&self) -> &Arc<S> {
-        &self.substrate
+    pub(crate) const fn pow(&self) -> &Arc<P> {
+        &self.pow
     }
 
     /// The pool, locked, for a read that does not wait on anything.
@@ -862,7 +849,7 @@ where
     /// answering from the old tip, so the line cannot wait for the
     /// process to exit (rule 82). A later fault is a consequence of the
     /// first and is logged at `debug`.
-    pub(crate) fn fail(&self, fault: ServiceFault<S::Fault>) {
+    pub(crate) fn fail(&self, fault: ServiceFault<P::Fault>) {
         let mut first = self
             .fault
             .lock()
@@ -947,7 +934,6 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
-    seeds: tokio::sync::watch::Receiver<Option<SlotPair>>,
     connector: ActorRef<Connector>,
     filed: tokio::sync::broadcast::Sender<FiledBundle>,
     /// The follower's postings: a block mined on one is given its bundle
@@ -997,17 +983,6 @@ impl Door {
     #[must_use]
     pub fn filed(&self) -> tokio::sync::broadcast::Receiver<FiledBundle> {
         self.filed.subscribe()
-    }
-
-    /// The seeds the two cache slots hold, published before the pin lock
-    /// drops: the pair the lookup-only longhash answers from. The window
-    /// last installed, plus any seed a run or a branch has prepared there
-    /// since. `None` until a seed is canonical. A caller whose proof found
-    /// a seed absent waits on this for the slots to change, and reads it
-    /// to see whether they already have.
-    #[must_use]
-    pub fn seeds(&self) -> tokio::sync::watch::Receiver<Option<SlotPair>> {
-        self.seeds.clone()
     }
 
     /// Seats a sync caller can take now. Zero when the door is closed.
@@ -1232,9 +1207,16 @@ pub struct Follow {
     /// The measurement sink the live phases are timed into: each
     /// `form_judged`, and each run the connector applies
     /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5, the per-block profile). The
-    /// composition root hands the substrate's own sink. `None` times
-    /// nothing.
+    /// composition root hands the proof-of-work boundary's own sink. `None`
+    /// times nothing.
     pub metrics: Option<Arc<crate::metrics::Metrics>>,
+    /// Chain sync's header frontier, for the ranked list (module docs,
+    /// *The ranked list*). The node creates the channel before either
+    /// service starts, and chain sync's owner holds the sender. `None`,
+    /// and a sender that has closed, both rank without a frontier: the
+    /// owner's own end reaches the node as its own, so a closed sender is
+    /// not a fault here.
+    pub frontier: Option<tokio::sync::watch::Receiver<Option<Frontier>>>,
 }
 
 /// Told the ids that left the pool on a reconcile.
@@ -1263,17 +1245,11 @@ pub struct PoolWiring {
 
 /// Pops blocks for `dev_chain_pop` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
 /// apart from the service ([`Service::rewinder`]).
-pub struct Rewinder<S: Substrate>
-where
-    S::Fault: core::fmt::Debug,
-{
-    shared: Arc<Shared<S>>,
+pub struct Rewinder<P: Pow> {
+    shared: Arc<Shared<P>>,
 }
 
-impl<S: Substrate> Clone for Rewinder<S>
-where
-    S::Fault: core::fmt::Debug,
-{
+impl<P: Pow> Clone for Rewinder<P> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
@@ -1281,10 +1257,9 @@ where
     }
 }
 
-impl<S> Rewinder<S>
+impl<P> Rewinder<P>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     /// Pop `count` blocks from the tip ([`PopBlocks`]). A count that would
     /// pop genesis or a retired block is refused before any pop, and the
@@ -1295,7 +1270,7 @@ where
     ///
     /// [`ServiceFault::Connector`] for a store fault; [`ServiceFault::Mailbox`]
     /// when the connector is gone.
-    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<S::Fault>> {
+    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<P::Fault>> {
         let rewound = self
             .shared
             .connector
@@ -1357,22 +1332,18 @@ impl PoolHealth {
 }
 
 /// The running service (module docs).
-pub struct Service<S: Substrate>
-where
-    S::Fault: core::fmt::Debug,
-{
+pub struct Service<P: Pow> {
     door: Door,
-    shared: Arc<Shared<S>>,
+    shared: Arc<Shared<P>>,
     task: tokio::task::JoinHandle<()>,
     connector_task: tokio::task::JoinHandle<
         Result<(Connector, kameo::error::ActorStopReason), kameo::error::PanicError>,
     >,
 }
 
-impl<S> Service<S>
+impl<P> Service<P>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     /// Start the service over `store`: the connector actor that alone writes
     /// it, and the loop that works each accepted span.
@@ -1380,18 +1351,16 @@ where
     pub fn start(
         store: Arc<ChainStore>,
         rules: ChainRules,
-        substrate: Arc<S>,
+        pow: Arc<P>,
         config: ServiceConfig,
-        budget: Budget,
         follow: Follow,
     ) -> Self {
         let started = std::time::Instant::now();
         Self::start_with_clock(
             store,
             rules,
-            substrate,
+            pow,
             config,
-            budget,
             follow,
             Arc::new(move || started.elapsed()),
         )
@@ -1403,9 +1372,8 @@ where
     pub fn start_with_clock(
         store: Arc<ChainStore>,
         rules: ChainRules,
-        substrate: Arc<S>,
+        pow: Arc<P>,
         config: ServiceConfig,
-        budget: Budget,
         follow: Follow,
         clock: Clock,
     ) -> Self {
@@ -1421,27 +1389,28 @@ where
         // The follower's one wake: a shown pool transaction and a bundle
         // the queue admits both rebuild the posted job through it.
         let pending_ready = follow.shown.unwrap_or_else(|| Arc::new(Notify::new()));
+        let ranked = Arc::new(Notify::new());
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
         let connector_task = prepared.spawn(ConnectorArgs {
             store: Arc::clone(&store),
             rules,
             bundle_queued: Some(Arc::clone(&pending_ready)),
+            ranked: Some(Arc::clone(&ranked)),
         });
         let shared = Arc::new(Shared {
             store,
             rules,
-            substrate,
+            pow,
             connector,
             filed: tokio::sync::broadcast::Sender::new(FILED_FEED_CAPACITY),
-            budget,
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
             ended: tokio::sync::watch::Sender::new(None),
-            pin_lock: Arc::new(Mutex::new(None)),
-            branch_gate: tokio::sync::Mutex::new(()),
-            seeds: tokio::sync::watch::Sender::new(None),
+            ranked,
+            rank_asked: std::sync::atomic::AtomicU64::new(0),
+            rank_served: tokio::sync::watch::Sender::new(0),
             followed: tokio::sync::watch::Sender::new(0),
             metrics: follow.metrics,
             kept: crate::follower::Postings::default(),
@@ -1458,17 +1427,11 @@ where
                 window::record_store_read(&shared, read);
             }));
         }
-        // The first pair is pinned before any span can hash. Later tips
-        // reinstall from the attendant.
-        if let Err(read) = window::install_blocking(&shared) {
-            window::record_store_read(&shared, read);
-        }
         let (spans_tx, mut incoming) = mpsc::unbounded_channel::<Vec<Accepted>>();
         let door = Door {
             spans: spans_tx,
             room: crate::room::Room::new(config.room.get()),
             admission,
-            seeds: shared.seeds.subscribe(),
             connector: shared.connector.clone(),
             filed: shared.filed.clone(),
             postings: shared.postings(),
@@ -1476,6 +1439,7 @@ where
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
         let mut stopped = shared.stop.subscribe();
+        let ranker = tokio::spawn(window::rank(Arc::clone(&shared), follow.frontier));
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
         let job = follow.job;
@@ -1542,6 +1506,10 @@ where
                 drop(span);
             }
             while spans.join_next().await.is_some() {}
+            if let Err(join) = ranker.await {
+                tracing::error!("the ranker ended on a panic: {join}");
+                loop_shared.fail(ServiceFault::RankerEnded);
+            }
             #[cfg(feature = "producer")]
             if let Some(producing) = producing {
                 if let Err(join) = producing.await {
@@ -1576,7 +1544,7 @@ where
     /// The connector is gone.
     pub async fn watch_tip(
         &self,
-    ) -> Result<tokio::sync::watch::Receiver<crate::connector::TipChanged>, ServiceFault<S::Fault>>
+    ) -> Result<tokio::sync::watch::Receiver<crate::connector::TipChanged>, ServiceFault<P::Fault>>
     {
         self.shared
             .connector
@@ -1595,7 +1563,7 @@ where
         &self,
     ) -> Result<
         tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
-        ServiceFault<S::Fault>,
+        ServiceFault<P::Fault>,
     > {
         self.shared
             .connector
@@ -1614,7 +1582,7 @@ where
     pub async fn raise_alarm(
         &self,
         evidence: shekyl_chain_store::codec::FollowingDegraded,
-    ) -> Result<bool, ServiceFault<S::Fault>> {
+    ) -> Result<bool, ServiceFault<P::Fault>> {
         self.alarm()
             .raise(evidence)
             .await
@@ -1659,7 +1627,7 @@ where
 
     /// What pops blocks for `dev_chain_pop`, held apart from the service.
     #[must_use]
-    pub fn rewinder(&self) -> Rewinder<S> {
+    pub fn rewinder(&self) -> Rewinder<P> {
         Rewinder {
             shared: Arc::clone(&self.shared),
         }
@@ -1673,6 +1641,20 @@ where
             wired: self.shared.pool.is_some(),
             live: Arc::clone(&self.shared.pool_live),
         }
+    }
+
+    /// Wait until the ranker has sent a list computed after this call
+    /// ([`Shared::ranked_now`]): a test reads what the hasher holds for
+    /// the store as it is now. `false` when the service stopped first.
+    #[cfg(test)]
+    pub(crate) async fn ranked(&self) -> bool {
+        self.shared.ranked_now().await
+    }
+
+    /// The store this service writes, for a test's own snapshot.
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &Arc<ChainStore> {
+        self.shared.store()
     }
 
     /// The door.
@@ -1694,7 +1676,7 @@ where
     /// # Errors
     ///
     /// The fault that ended the service, if one did before the stop.
-    pub async fn stop(self) -> Result<(), ServiceFault<S::Fault>> {
+    pub async fn stop(self) -> Result<(), ServiceFault<P::Fault>> {
         self.door.close();
         self.shared.request_stop();
         let _joined = self.task.await;
@@ -1719,11 +1701,8 @@ mod window;
 
 pub use window::Reservation;
 
-pub use crate::cache_window::{SeedPair, SlotPair};
-pub(crate) use window::{
-    divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
-    PoolDivision,
-};
+pub use crate::cache_window::{ranked_on, Frontier};
+pub(crate) use window::{divide_pool_faults, record_store_read, with_pool, PoolDivision};
 
 #[cfg(test)]
 #[path = "log_capture.rs"]

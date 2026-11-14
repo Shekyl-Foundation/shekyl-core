@@ -379,6 +379,7 @@ mod tests {
             ("started", json!(1)),
             ("disk_free", json!(2)),
             ("data_size", json!(3)),
+            ("randomx_caches", json!(1)),
             ("revision", json!("v")),
             ("peer_outbound_count", json!(4)),
             ("peer_inbound_count", Value::Null),

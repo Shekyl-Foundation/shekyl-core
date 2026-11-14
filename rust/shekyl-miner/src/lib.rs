@@ -11,17 +11,15 @@
 //! # A crate, not a daemon module
 //!
 //! The loop's threads hash with RandomX for as long as mining runs, and
-//! only under a cache the store already holds. The daemon's other RandomX
-//! callers are the validator's substrate, which fills the canonical slot
-//! through `pin_canonical`, and the RPC's `pow`, which hashes only
-//! under a cache already held. The miner and `pow` never derive: a
-//! derivation publishes into the transient slot and evicts the validator's
-//! spare (`DRS_X_STORE_FLIP.md` §3.1, ruled 2026-10-17), and both run on a
-//! seed they did not pin. They share one
-//! [`CacheStore`](shekyl_pow_randomx::CacheStore) — the daemon's one
-//! RandomX budget, handed in. The miner shares nothing else: it has no
-//! RPC, store or p2p dependency, and the RPC crate gains no hashing
-//! threads. PR 2's composition root wires the ends.
+//! only under a cache the node's one hasher already holds
+//! (`RANDOMX_CACHE_ACTOR.md`). Each job is a warm loan
+//! ([`Hasher::lend_warm`](shekyl_hasher::Hasher::lend_warm)) on the job's
+//! seed: it builds nothing, it is declined when the seed is not built or
+//! not on the ranked list, and it is cancelled when the seed leaves the
+//! list. Each hash takes one permit in the miner's class through the loan.
+//! The miner holds no cache and no budget, and shares nothing else: it has
+//! no RPC, store or p2p dependency, and the RPC crate gains no hashing
+//! threads. The composition root wires the ends.
 //!
 //! # Inputs are values
 //!

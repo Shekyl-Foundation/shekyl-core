@@ -107,8 +107,11 @@ pub(crate) enum NoTemplate {
     Facts(FactsStop),
     /// The seed, the target or the next seed could not be claimed.
     Claim(ClaimStop),
-    /// The seed for the next block is not one the caches hold yet.
-    SeedNotHeld,
+    /// The cache for the next block's seed is not built yet.
+    SeedNotWarm {
+        /// The seed.
+        seed: BlockHash,
+    },
     /// The pool's selection could not read the chain.
     Selection(Fault<StoreError>),
     /// The bundle section could not be read: the queue, the window's
@@ -186,7 +189,7 @@ pub(crate) fn produce(
     let (height, seed, target) = claim_next(snap, producer.rules).map_err(NoTemplate::Claim)?;
     debug_assert_eq!(height, facts.connecting, "one snapshot, one tip");
     if !holds(&seed) {
-        return Err(NoTemplate::SeedNotHeld);
+        return Err(NoTemplate::SeedNotWarm { seed });
     }
     let next_seed = next_seed(snap, height).map_err(NoTemplate::Claim)?;
     let rule_set = producer.rules.in_force(height);

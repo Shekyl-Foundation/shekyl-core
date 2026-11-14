@@ -18,11 +18,8 @@
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
 
-use std::sync::Arc;
-
 use shekyl_archival_retention::ShardCoverageIn;
 use shekyl_chain_rules::EmissionEpochFacts;
-use shekyl_pow_randomx::PreparedCache;
 use shekyl_types::archival::HoldingsKind;
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, CurveTreeRoot, KeyImage, PCanonicalId, PowHash,
@@ -104,41 +101,29 @@ pub enum PowDecline {
         /// The tip the snapshot holds.
         tip: BlockHeight,
     },
-    /// The daemon's cache store does not hold this seed's cache.
-    /// `pow` hashes only under a held cache and never derives one
-    /// (ruled 2026-10-17): a derivation is a 256 MiB fill that would
-    /// evict the validator's spare cache, and an RPC caller names the
-    /// seed.
-    SeedNotHeld {
+    /// This seed's cache is not warm: not built, not on the node's ranked
+    /// list, or lent and then cancelled when the seed left the list.
+    /// `pow` hashes only under a warm cache and never builds one (ruled
+    /// 2026-10-17): a build is a 256 MiB fill, and an RPC caller names
+    /// the seed.
+    SeedNotWarm {
         /// The seed asked for, given or named by the height.
         seed: BlockHash,
     },
 }
 
-/// A cache the daemon already holds, admitted for one `pow` hash.
-///
-/// Only [`ChainReadFacts::admit_pow`] mints one. The caller spends its
-/// hash budget against this value, then [`ChainReadFacts::hash_admitted`]
-/// runs RandomX on the cache it holds, so the lookup that succeeded is
-/// the lookup that hashes. The cache is crate-private: a caller outside
-/// this crate passes the value on and does not build one.
-pub struct AdmittedPow {
-    pub(crate) cache: Arc<PreparedCache>,
-}
-
-impl std::fmt::Debug for AdmittedPow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("AdmittedPow")
-    }
-}
-
-/// A seed resolved to a held cache, or a reason it will not be hashed.
+/// What one `pow` request came to ([`ChainReadFacts::pow`]).
 #[derive(Debug)]
-pub enum PowAdmission {
-    /// The seed's cache is held. Hashing it is what spends a hash.
-    Admitted(AdmittedPow),
-    /// The chain has no seed there, or the cache is not held.
+pub enum PowAnswer {
+    /// RandomX ran: the hash.
+    Hashed(PowHash),
+    /// The chain has no seed there, or its cache is not warm. Nothing was
+    /// hashed. A loan cancelled after the caller paid leaves the payment
+    /// spent.
     Declined(PowDecline),
+    /// The loan was granted and the caller's payment was refused, so
+    /// nothing was hashed.
+    Unpaid,
 }
 
 /// A claimant's bond record, as the claim source reports it: what the
@@ -342,31 +327,27 @@ pub trait ChainReadFacts: Send + Sync {
     /// when a listed transaction or a block in range is missing.
     fn coinbase_sum(&self, start: BlockHeight, count: u64) -> Result<CoinbaseRange, FactsFault>;
 
-    /// Resolve `seed` to a cache the daemon already holds.
+    /// RandomX over `pow_blob` under `seed`, on a warm loan from the
+    /// node's hasher (`Class::CalcPow`).
     ///
-    /// Looks the seed up and, when the seed is a height, reads that block.
-    /// Does not derive a cache, run RandomX, take a hasher permit, or
-    /// spend an RPC hash. [`PowAdmission::Declined`] is a request that
-    /// will not hash.
-    ///
-    /// # Errors
-    ///
-    /// [`FactsFault::NotReady`] when this handle is not open. The store's
-    /// faults when the seed is a height read off the chain.
-    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault>;
-
-    /// RandomX over `pow_blob` on the cache `admitted` holds.
-    ///
-    /// Takes one permit in the `pow` hasher class (`Class::CalcPow`), then hashes. The
-    /// hash does not fail. [`FactsFault::NotReady`] is the handle: a
-    /// chain that is not open never admits, and hashing on it is that
-    /// fault rather than a zero.
+    /// The seed is resolved first; a height reads that block. The loan
+    /// builds nothing and is declined unless the seed's cache is warm.
+    /// **Inside the loan**, `pay` is called once, then the hash runs under
+    /// one permit. So a caller pays only for a seed that was granted, and
+    /// before the hash; `pay` returning `false` is [`PowAnswer::Unpaid`]
+    /// and nothing is hashed.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] when this handle is not open.
-    fn hash_admitted(&self, pow_blob: &[u8], admitted: &AdmittedPow)
-        -> Result<PowHash, FactsFault>;
+    /// [`FactsFault::NotReady`] when this handle is not open, or the node
+    /// is stopping. The store's faults when the seed is a height read off
+    /// the chain.
+    fn pow(
+        &self,
+        seed: PowSeed,
+        pow_blob: &[u8],
+        pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault>;
 
     /// What `persona`'s emission claim is built from (`ClaimSource`).
     ///

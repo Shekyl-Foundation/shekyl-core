@@ -5,7 +5,8 @@
 
 //! Real proofs for the sync model's tests.
 //!
-//! One [`CacheStore`] for the process. A header under a fixed target of 1
+//! One hasher for the process, started here: the proofs go through the
+//! one owner of caches, as the daemon's do. A header under a fixed target of 1
 //! is a proof at nonce 0: every RandomX output satisfies, so verification
 //! is one hash. A forged header is mined at target 2 and then altered;
 //! the refusal is that hash failing.
@@ -16,10 +17,9 @@
 #![cfg(test)]
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
     form_header, AtHeight, CappedEpoch, FormAttempt, HeaderView, InvalidBlock, RuleSet,
@@ -27,8 +27,9 @@ use shekyl_chain_rules::{
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
+use shekyl_hasher::{Class, Hasher, Lent, Owner, Ranked};
 use shekyl_levin::PortableMap;
-use shekyl_pow_randomx::CacheStore;
+use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{Block, BlockBody, PowBlob};
 
@@ -36,31 +37,101 @@ use crate::model::{CloseCause, Event, Outcome, ProveItem, Proved, Sync};
 
 use crate::{Command, PeerClaim};
 
-pub(crate) fn substrate() -> &'static ProductionSubstrate {
-    static CELL: OnceLock<ProductionSubstrate> = OnceLock::new();
+/// The process's hasher, its stop owner (held so the hasher runs for the
+/// process's life), and the seeds last proven under, newest first.
+struct Proofs {
+    hasher: Hasher,
+    _owner: Owner,
+    ranked: std::sync::Mutex<Vec<Seedhash>>,
+}
+
+fn proofs() -> &'static Proofs {
+    static CELL: OnceLock<Proofs> = OnceLock::new();
     CELL.get_or_init(|| {
-        ProductionSubstrate::new(Arc::new(CacheStore::new()), Arc::new(Metrics::new()))
+        let (hasher, owner) = Hasher::start(shekyl_hash_budget::Budget::of_host())
+            .expect("the builder thread starts");
+        Proofs {
+            hasher,
+            _owner: owner,
+            ranked: std::sync::Mutex::new(Vec::new()),
+        }
     })
 }
 
+/// One proof's substrate: the cache its job borrowed, and the system clock.
+struct Job<'a, 'job> {
+    lent: &'a Lent<'job>,
+    seed: BlockHash,
+}
+
+impl Substrate for Job<'_, '_> {
+    type Fault = &'static str;
+
+    fn local_clock(&self) -> Result<shekyl_types::Timestamp, Self::Fault> {
+        let since_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "the clock reads before the epoch")?;
+        Ok(shekyl_types::Timestamp::from_raw(since_epoch.as_secs()))
+    }
+
+    fn longhash(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+    ) -> Result<shekyl_types::PowHash, Self::Fault> {
+        if *seed != self.seed {
+            return Err("a hash asked for a seed the job did not borrow");
+        }
+        Ok(shekyl_types::PowHash::from_bytes(self.lent.hash(pow_blob)))
+    }
+}
+
 /// One real verification of a prove item. `Err` is the header's refusal.
+///
+/// The item's seed is ranked first and the one before it second, so the
+/// tests' two seeds stay warm between proofs: an unranked seed's cache is
+/// freed when its job ends, and each proof would build it again.
 pub(crate) fn prove_item(
     item: &ProveItem,
 ) -> Result<shekyl_chain_rules::FormedHeader, InvalidBlock> {
-    let substrate = substrate();
-    substrate.pin_seed(&item.seed);
+    static NEVER_STOPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let proofs = proofs();
+    let seed = Seedhash::from_bytes(*item.seed.as_bytes());
+    {
+        let mut ranked = proofs
+            .ranked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ranked.first() != Some(&seed) {
+            ranked.retain(|held| *held != seed);
+            ranked.insert(0, seed);
+            ranked.truncate(2);
+            proofs.hasher.rank(
+                Ranked::new(ranked[0], ranked.get(1).copied(), None).expect("two distinct seeds"),
+            );
+        }
+    }
     let pow = PowBlob::read(&item.pow).expect("the preimage parses");
-    match form_header(
-        &pow,
-        &item.rule_set,
-        substrate,
-        item.seed,
-        item.target,
-        item.attempt,
-    ) {
+    let formed = proofs
+        .hasher
+        .run(Class::HeaderPow, seed, &NEVER_STOPS, |lent| {
+            form_header(
+                &pow,
+                &item.rule_set,
+                &Job {
+                    lent,
+                    seed: item.seed,
+                },
+                item.seed,
+                item.target,
+                item.attempt,
+            )
+        })
+        .expect("the process's hasher runs for the process's life");
+    match formed {
         Ok(Ok(formed)) => Ok(formed),
         Ok(Err(refused)) => Err(refused),
-        Err(fault) => panic!("the production substrate faulted: {fault}"),
+        Err(fault) => panic!("the proof's substrate faulted: {fault}"),
     }
 }
 

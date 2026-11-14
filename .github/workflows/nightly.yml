@@ -299,7 +299,7 @@ jobs:
     # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
     # shards with real proofs (the emission claims, the levered slash chain,
     # the join, the pool-shim posts), the miner over real RandomX, the
-    # captured-chain replay under the production substrate, and the
+    # captured-chain replay under the production proof-of-work boundary, and the
     # measurements (the switch at the genesis cap, the miner's rate, the H19
     # batch cost). This job is the lane that invokes them. Before it none
     # did: their ignore strings named a "live lane" no workflow ran, and its

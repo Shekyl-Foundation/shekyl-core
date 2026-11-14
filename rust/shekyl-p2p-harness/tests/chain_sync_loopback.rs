@@ -17,14 +17,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use shekyl_chain_ingest::ProductionSubstrate;
-use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
+use shekyl_chain_ingest::pow::Pow;
+use shekyl_chain_rules::{form_header, target_claim, FormAttempt};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
 use shekyl_levin::{Command, RequestBodies, ResponseBodies, ResponseHeaders};
 use shekyl_p2p_harness::sync::{
-    announcement, fork_headers, frame, request_headers, substrate, Bodies, HeaderChainPeer, Node,
+    announcement, fork_headers, frame, own_hasher, request_headers, Bodies, HeaderChainPeer, Node,
     ServingPeer, Silent, Step, SyncPeer,
 };
 use shekyl_p2p_session::harness::new_transactions;
@@ -205,6 +205,61 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     held.stop().await;
 }
 
+/// The sync owner publishes its header frontier for the ingest's ranked
+/// list while a run stands, and takes it back when the run ends
+/// (`RANDOMX_CACHE_ACTOR.md` §5.1, HA-F1). A peer that serves every header
+/// and withholds every body leaves a proven run standing: the frontier
+/// names the seed the run's headers hash under, block 0's id on this
+/// corpus, and the hasher keeps that one cache. Closing the session ends
+/// the run, and the frontier is withdrawn.
+///
+/// Red edits: in the owner, drop the `publish_frontier` call after a
+/// batch of commands: the watch never names a seed. Have
+/// `publish_frontier` send only a frontier that is `Some`: the seed is
+/// still published after the session closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owner_publishes_a_standing_runs_frontier_and_withdraws_it_when_the_run_ends() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("frontier-src", &corpus, &steps).await;
+    let mut node = Node::start(
+        "frontier",
+        corpus.rules(),
+        &steps[..1],
+        2,
+        rng(),
+        session_rng(),
+    )
+    .await;
+    let (_, _, genesis) = node.chain.tip().expect("genesis is connected");
+    let frontier = node.chain.frontier.subscribe();
+    assert_eq!(*frontier.borrow(), None, "no run, no frontier");
+    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
+    let id = node.connect(Box::new(peer), Some(claim_of(&held))).await;
+    assert!(
+        node.wait(LIMIT, |_| seen.bodies() >= 1).await,
+        "no body was asked for"
+    );
+    // A body is asked for once the run's headers are proven, and the
+    // frontier is published in the batch that proved them.
+    assert!(
+        node.wait(LIMIT, |_| frontier.borrow().is_some()).await,
+        "a standing run published no frontier"
+    );
+    assert_eq!(
+        frontier.borrow().map(|frontier| frontier.seed),
+        Some(genesis),
+        "every height on this corpus hashes under block 0's id"
+    );
+    node.close(id);
+    assert!(
+        node.wait(LIMIT, |_| frontier.borrow().is_none()).await,
+        "the frontier outlived its run"
+    );
+    node.stop().await;
+    held.stop().await;
+}
+
 /// A peer slower than the body deadline is excluded as a body source and
 /// not closed; its late answer closes nothing; an honest peer that never
 /// served a header, and names our tip, finishes the sync (CS-F8).
@@ -346,27 +401,46 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let genesis = node.chain.block(0);
     let Step { block, .. } = &steps[1];
     let mut forged = Block::from_bytes(block).expect("a block");
-    let (prover, _) = substrate();
+    // The test's own hasher: it searches for a nonce that fails, apart
+    // from the node whose close is the subject.
+    let prover = own_hasher(2);
     let snap = node.chain.store.begin_read().expect("a read");
     let view = SnapshotView::new(&snap);
     let connecting = BlockHeight::from_raw(1);
     let rule_set = rules.in_force(connecting);
     let target = target_claim(&view, connecting, &rule_set).expect("a read");
     drop(snap);
-    prover.pin_seed(&genesis.hash());
-    let passes = |block: &Block, prover: &ProductionSubstrate| {
-        let pow = PowBlob::read(&block.pow_blob()).expect("a preimage");
-        matches!(
-            form_header(
-                &pow,
-                &rule_set,
-                prover,
-                genesis.hash(),
-                target,
-                FormAttempt::FIRST
-            ),
-            Ok(Ok(_))
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    // Ranked, so the search's hashes share one build.
+    prover.hasher.rank(
+        shekyl_hasher::Ranked::new(
+            shekyl_pow_randomx::Seedhash::from_bytes(*genesis.hash().as_bytes()),
+            None,
+            None,
         )
+        .expect("one seed"),
+    );
+    let passes = |block: &Block, prover: &shekyl_p2p_harness::sync::OwnHasher| {
+        let pow = PowBlob::read(&block.pow_blob()).expect("a preimage");
+        let formed = prover
+            .pow
+            .run(
+                shekyl_hasher::Class::HeaderPow,
+                genesis.hash(),
+                &RUNNING,
+                |job| {
+                    form_header(
+                        &pow,
+                        &rule_set,
+                        job,
+                        genesis.hash(),
+                        target,
+                        FormAttempt::FIRST,
+                    )
+                },
+            )
+            .expect("the test's hasher runs for the test's life");
+        matches!(formed, Ok(Ok(_)))
     };
     let failing = (0..64u32)
         .find(|nonce| {

@@ -34,7 +34,13 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+# The budget the node's one hasher takes its permits from: the node
+# starts the hasher over it and hands every consumer the hasher, never the
+# budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The one owner of every RandomX cache in the daemon
+# (RANDOMX_CACHE_ACTOR.md).
+shekyl-hasher = { path = "../shekyl-hasher" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-miner = { path = "../shekyl-miner" }
 # Hostnames the connection list renders from a dialed onion's service key.

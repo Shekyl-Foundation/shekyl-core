@@ -6,8 +6,8 @@
 //! The daemon's one [`Node`] (`DRS_X_STORE_FLIP.md` DX-Q6, N1).
 //!
 //! The composition root builds it at start. It owns the chain store, the
-//! ingest service, the pool, the hasher budget, the cache store, the job
-//! board, the socket table and the network. Block arrivals enter the ingest
+//! ingest service, the pool, the one hasher and the budget it takes its
+//! permits from, the job board, the socket table and the network. Block arrivals enter the ingest
 //! door, and transactions enter this pool. An empty store connects the
 //! pinned genesis through the service's door.
 //!
@@ -24,24 +24,36 @@
 //! 5. The sync owner is joined.
 //! 6. The ingest service stops, and the fact slots are cleared.
 //! 7. The runtime shuts down, then the miner is drained.
+//! 8. The hasher stops ([`shekyl_hasher::Owner::stop`]): every job, loan
+//!    and form that borrowed a cache has ended with the steps above, so
+//!    the stop waits on none of them. It frees every cache and joins the
+//!    builder thread.
+//!
+//! The hasher has no end of its own to report through [`Node::ended`]: it
+//! cannot fail and no input of its can close (`shekyl-hasher` crate docs,
+//! *This crate has no end of its own*).
 //!
 //! # Blocking threads
 //!
 //! Every blocking task the ingest service runs is one of three kinds, and
 //! the runtime has a thread for each one that can be outstanding at once:
 //!
-//! - **A form**, which hashes holding a hasher permit: at most the
+//! - **A granted form**: a hashing job that holds its cache and its
+//!   permit ([`Hasher::run`](shekyl_hasher::Hasher::run)). At most the
 //!   budget's permits.
-//! - **A span's one other task**: a permit wait
-//!   ([`Budget::acquire_unless`](shekyl_hash_budget::Budget::acquire_unless)
-//!   waits on its thread), a claim, or a pool step. A span runs one at a
-//!   time, and every span holds a seat, so at most the arrival window.
+//! - **A span's one other task**: a form whose job is not yet granted (it
+//!   waits for its cache and its permit on its thread), a claim, a
+//!   switch's forming, or a pool step. A span sends its next form only
+//!   once the previous one's job was granted, so it has one of these at a
+//!   time, and every span holds a seat: at most the arrival window.
 //! - **The tip follower's one**: its pool step, or the template build,
-//!   which takes no permit.
+//!   which asks for no job.
 //!
-//! A permit holder waits for a thread to form on, so the count must not be
-//! one that permit waiters alone can fill: it is permits + window + 1. A
-//! local arrival waits for its seat without a thread.
+//! A granted form holds a thread until it has hashed, so the count must
+//! not be one that ungranted forms alone can fill: it is the permits, plus
+//! the window, plus one. A local arrival waits for its seat without a
+//! thread. The ranker reads its snapshot on one more blocking task,
+//! briefly, and is not counted: it waits for nothing.
 //!
 //! # The board
 //!
@@ -90,7 +102,7 @@ use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
 use shekyl_chain_ingest::service::{
     ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig, ServiceFault,
 };
-use shekyl_chain_ingest::{ChainRules, Metrics, ProductionSubstrate, SubstrateFault};
+use shekyl_chain_ingest::{ChainRules, Metrics, ProductionPow, SubstrateFault};
 pub use shekyl_chain_ingest::{ChainTip, TipChanged};
 use shekyl_chain_rules::{AdmissionPolicy, CappedEpoch, GenesisPin, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
@@ -101,9 +113,9 @@ use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
 use shekyl_hash_budget::Budget;
+use shekyl_hasher::Hasher;
 use shekyl_mempool::Pool;
 use shekyl_miner::{JobBoard, MiningAddress};
-use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
@@ -181,6 +193,9 @@ pub enum OpenError {
     /// The node's runtime did not start.
     #[error("the runtime did not start: {0}")]
     Runtime(#[from] std::io::Error),
+    /// The hasher's builder thread did not start.
+    #[error("the hasher did not start: {0}")]
+    Hasher(std::io::Error),
     /// The pinned genesis did not connect.
     #[error("genesis did not connect: {0}")]
     Genesis(String),
@@ -253,14 +268,18 @@ pub struct Node {
     /// chain sync is asked to stop and before it is joined.
     network: Network,
     handles: Handles,
-    service: Mutex<Option<Service<ProductionSubstrate>>>,
+    service: Mutex<Option<Service<ProductionPow>>>,
+    /// The stop owner of the node's one hasher (`RANDOMX_CACHE_ACTOR.md`):
+    /// the only owner of a RandomX cache in the process. Stopped last
+    /// ([`Self::stop`], step 8).
+    hasher: Mutex<Option<shekyl_hasher::Owner>>,
     /// Chain sync's owner (CS-5 §2), the node's for its lifetime. It
     /// publishes into [`Self::sync`] and reads the session layer's port.
     sync_owner: Mutex<Option<sync_owner::Held>>,
     /// The first fatal end of a task this node owns ([`Self::ended`]).
     ended: ended::Reporter,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
-    /// The hasher budget `pow_hash` acquires under. The facts-lock test
+    /// The budget the hasher takes its permits from. The facts-lock test
     /// holds its permits; production does not keep a second copy.
     #[cfg(test)]
     budget: Budget,
@@ -283,16 +302,20 @@ impl Node {
         let store = Arc::new(open_chain(&store_path, horizons, &genesis)?);
         tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+        // The one hasher: the only owner of a RandomX cache in the
+        // process. Every consumer below is handed a clone of it, or the
+        // boundary over it, and none holds a budget of its own.
         let budget = Budget::new(parallelism);
-        let caches = Arc::new(CacheStore::new());
-        let substrate = Arc::new(ProductionSubstrate::new(
-            Arc::clone(&caches),
-            Arc::new(Metrics::new()),
-        ));
+        let (hasher, hasher_owner) = Hasher::start(budget.clone()).map_err(OpenError::Hasher)?;
+        let pow = Arc::new(ProductionPow::new(hasher.clone(), Arc::new(Metrics::new())));
+        // Chain sync's header frontier, for the ingest's ranked list. The
+        // channel exists before either service starts; neither calls the
+        // other.
+        let (frontier, frontier_seen) = tokio::sync::watch::channel(None);
         let pool = open_pool(&store, &pool_path, rules)?;
         let submit_pool = Arc::clone(&pool);
         let sync_pool = Arc::clone(&pool);
-        let sync_substrate = ProductionSubstrate::clone(&substrate);
+        let sync_pow = ProductionPow::clone(&pow);
         // Every id that leaves the pool releases its relay state in the
         // relay owner (`DRS_X_STORE_FLIP.md` §2), once the network is up.
         let departures = Arc::new(Departures::default());
@@ -365,9 +388,10 @@ impl Node {
             }),
             producer,
             shown: Some(shown),
-            // The substrate's own sink, which the sync owner's executor
+            // The boundary's own sink, which the sync owner's executor
             // shares: every phase of the per-block profile in one place.
-            metrics: Some(Arc::clone(substrate.metrics())),
+            metrics: Some(Arc::clone(pow.metrics())),
+            frontier: Some(frontier_seen),
         };
         let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
@@ -379,14 +403,7 @@ impl Node {
             &ThreadName::new("shekyl-node").expect("the name is static"),
         )?;
         let started = runtime.block_on(async {
-            let service = Service::start(
-                Arc::clone(&store),
-                rules,
-                substrate,
-                service_config,
-                budget.clone(),
-                follow,
-            );
+            let service = Service::start(Arc::clone(&store), rules, pow, service_config, follow);
             if let Err(error) = connect_genesis(&service, nettype).await {
                 if let Err(stop) = service.stop().await {
                     tracing::error!("genesis did not connect, and the service stopped on {stop}");
@@ -436,8 +453,8 @@ impl Node {
             door: service.door(),
             alarm: service.alarm(),
             latch: latch.clone(),
-            budget: budget.clone(),
-            sync_substrate,
+            sync_pow,
+            frontier,
             rules,
             requesting: if args.config.dev.sync {
                 Requesting::On
@@ -486,8 +503,7 @@ impl Node {
         let mining =
             Arc::new(MiningControl::new(
                 Arc::clone(&board),
-                Arc::clone(&caches),
-                budget.clone(),
+                hasher.clone(),
                 found,
                 mining::Configured {
                     address: miner_address,
@@ -519,8 +535,7 @@ impl Node {
                 start_time: started_at,
                 protocol_version: args.protocol_version,
             },
-            caches,
-            budget,
+            hasher,
         );
         let facts_slot = Arc::new(Mutex::new(Some(Arc::new(facts))));
         let door_slot = Arc::new(Mutex::new(Some(DoorEntry { door, rewinder })));
@@ -561,6 +576,7 @@ impl Node {
             network,
             handles,
             service: Mutex::new(Some(service)),
+            hasher: Mutex::new(Some(hasher_owner)),
             ended,
             sync_owner: Mutex::new(Some(sync_owner)),
             runtime: Mutex::new(Some(runtime)),
@@ -705,8 +721,8 @@ impl Node {
         // dropped before it becomes a block. A start that has published
         // its stop flag and not yet its threads is signaled here too, so
         // those threads deliver nothing after this returns. The join takes
-        // that gate and is the last thing this stop does, so a stop already
-        // inside the gate finishes before it.
+        // that gate, so a stop already inside it finishes before the hasher,
+        // which is stopped last.
         self.mining.close();
         // Before the network: its stop drops the port chain sync reads,
         // and that close is a failure unless the stop is already asked.
@@ -770,11 +786,22 @@ impl Node {
         // The store has closed with the service and the slots: only now
         // wait for the stopped miner's last hashes.
         self.mining.join_drained();
+        // The hasher last: every job, loan and form that borrowed a cache
+        // has ended above, so this waits on none. It blocks while the
+        // builder is joined, where this stop already blocks.
+        if let Some(hasher) = self
+            .hasher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            hasher.stop();
+        }
     }
 
-    /// The hasher budget the facts hash under. The lock test holds every
-    /// permit, so `pow_hash` waits inside `acquire` with the slot lock
-    /// already dropped.
+    /// The budget the hasher takes its permits from. The lock test holds
+    /// every permit, so `pow`'s hash waits for one inside its loan with the
+    /// slot lock already dropped.
     #[cfg(test)]
     fn budget(&self) -> Budget {
         self.budget.clone()
@@ -841,7 +868,7 @@ enum OpenUnwind {
     ServiceStopped,
     /// The service is still running.
     StillRunning {
-        service: Service<ProductionSubstrate>,
+        service: Service<ProductionPow>,
         /// Named when that stop itself fails.
         why: &'static str,
     },
@@ -974,7 +1001,7 @@ fn open_pool(
 }
 
 async fn connect_genesis(
-    service: &Service<ProductionSubstrate>,
+    service: &Service<ProductionPow>,
     network: shekyl_daemon_config::Network,
 ) -> Result<(), OpenError> {
     // A restart already holds genesis (or a longer chain). `AlreadyHeld` is

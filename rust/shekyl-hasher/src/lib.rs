@@ -74,6 +74,7 @@
 #![deny(unsafe_code)]
 
 mod core;
+pub mod quiet;
 
 use std::cell::Cell;
 use std::fmt;
@@ -289,6 +290,17 @@ impl Loan<'_> {
     /// When both are set, the cancel is reported: the loan is over either
     /// way, and the cancel is the hasher's news to the caller.
     pub fn hash(&self, blob: &[u8]) -> Result<[u8; 32], Unhashed> {
+        self.hash_timed(blob).map(|(hash, _)| hash)
+    }
+
+    /// [`hash`](Self::hash), with how long RandomX itself ran: the permit
+    /// wait is not in it. A caller that measures the verifier reads this,
+    /// since it cannot time the hash apart from the wait from outside.
+    ///
+    /// # Errors
+    ///
+    /// As [`hash`](Self::hash).
+    pub fn hash_timed(&self, blob: &[u8]) -> Result<([u8; 32], std::time::Duration), Unhashed> {
         let cancelled = || self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
         if cancelled() {
             return Err(Unhashed::Cancelled);
@@ -309,9 +321,11 @@ impl Loan<'_> {
         if cancelled() {
             return Err(Unhashed::Cancelled);
         }
+        let started = Instant::now();
         let hash = compute_hash(self.cache, blob);
+        let took = started.elapsed();
         drop(permit);
-        Ok(hash)
+        Ok((hash, took))
     }
 }
 
@@ -715,6 +729,15 @@ impl Hasher {
         drop(self.shared.lock());
         self.shared.changed.notify_all();
         self.shared.budget.wake();
+    }
+
+    /// The budget's permits: the most hashes that run at once, so the most
+    /// threads a [`lend`](Self::lend) job is worth spreading over. A
+    /// consumer reads it here because it holds no budget of its own (crate
+    /// docs, *Deadlock*).
+    #[must_use]
+    pub fn permits(&self) -> usize {
+        self.shared.budget.permits()
     }
 
     /// What is resident, published after every change.

@@ -4,8 +4,7 @@
 // BSD-3-Clause
 
 //! [`MiningControl`]: the node's built-in miner, started and stopped over
-//! the node's board, hasher budget and cache store
-//! (`DRS_X_STORE_FLIP.md` DX-Q3, N2).
+//! the node's board and its one hasher (`DRS_X_STORE_FLIP.md` DX-Q3, N2).
 //!
 //! The miner hashes the job the tip follower posts. It builds nothing and
 //! pays no one itself: the template pays the `mine-address` row's keys.
@@ -25,12 +24,11 @@ use shekyl_daemon_rpc::mining_facts::{
     BacklogEntry, MinerState, MiningState, Pending, PostedSummary, PostedTemplate,
 };
 use shekyl_daemon_rpc::mining_methods::codes;
-use shekyl_hash_budget::Budget;
+use shekyl_hasher::Hasher;
 use shekyl_miner::{
     DrainGate, FoundBlocks, Job, JobBoard, Miner, MinerConfig, MinerStartRefused, MinerStatus,
     MinerStop, MiningAddress, PreparedMiner, SearchBound,
 };
-use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::errors::Diagnostic;
 use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::BlockHeight;
@@ -204,8 +202,8 @@ impl Drop for ClearArming<'_> {
 pub struct MiningControl {
     /// The node's one job board; the crate's tests read it here.
     pub(crate) board: Arc<JobBoard>,
-    caches: Arc<CacheStore>,
-    budget: Budget,
+    /// The node's one hasher: each worker's job is a warm loan from it.
+    hasher: Hasher,
     found: FoundBlocks,
     address: Option<MiningAddress>,
     /// The `mine-threads` row's count: what a start that names none uses.
@@ -236,8 +234,7 @@ pub struct MiningControl {
 impl MiningControl {
     pub(crate) fn new(
         board: Arc<JobBoard>,
-        caches: Arc<CacheStore>,
-        budget: Budget,
+        hasher: Hasher,
         found: FoundBlocks,
         configured: Configured,
         watches: Watched,
@@ -245,8 +242,7 @@ impl MiningControl {
     ) -> Self {
         Self {
             board,
-            caches,
-            budget,
+            hasher,
             found,
             address: configured.address,
             threads: configured.threads,
@@ -353,8 +349,7 @@ impl MiningControl {
             });
         }
         let board = Arc::clone(&self.board);
-        let caches = Arc::clone(&self.caches);
-        let budget = self.budget.clone();
+        let hasher = self.hasher.clone();
         let found = self.found.clone();
         // The closure borrows these fields on their own. A method on
         // `self` would borrow all of it, and `before_spawn` already
@@ -381,8 +376,7 @@ impl MiningControl {
                         bound,
                     },
                     board,
-                    caches,
-                    budget,
+                    hasher,
                     found,
                 )
                 .map_err(MiningRefused::Start)?

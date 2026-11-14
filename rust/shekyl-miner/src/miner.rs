@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_difficulty::check_hash;
-use shekyl_hash_budget::{Budget, Class};
-use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
+use shekyl_hasher::{Class, Declined, Hasher, Unhashed};
+use shekyl_pow_randomx::Seedhash;
 use shekyl_thread_ledger::{spawn_dedicated, DedicatedThread, ThreadName};
 use shekyl_types::{BlockHeight, PowHash};
 
@@ -123,9 +123,9 @@ struct Shared {
     board: Arc<JobBoard>,
     /// [`MinerConfig::bound`], fixed for this miner's life.
     bound: SearchBound,
-    caches: Arc<CacheStore>,
-    /// The daemon's one hasher budget: a permit per hash (PR2-Q3).
-    budget: Budget,
+    /// The node's one hasher: a warm loan per job, and through it a
+    /// permit per hash (PR2-Q3).
+    hasher: Hasher,
     found: FoundBlocks,
     stop: AtomicBool,
     started: Instant,
@@ -139,11 +139,11 @@ impl Shared {
     }
 
     fn signal(&self) {
-        // The board flag first, then the budget: a worker blocked in
-        // `acquire_unless` reads the flag only after `wake`, and a worker
-        // between hashes sees the flag in `next_after`.
+        // The board flag first, then the hasher: a worker blocked in a
+        // hash's permit wait reads the flag only after `wake`, and a
+        // worker between hashes sees the flag in `next_after`.
         self.board.stop(&self.stop);
-        self.budget.wake();
+        self.hasher.wake();
     }
 }
 
@@ -186,11 +186,10 @@ impl PreparedMiner {
     pub fn arm(
         config: &MinerConfig,
         board: Arc<JobBoard>,
-        caches: Arc<CacheStore>,
-        budget: Budget,
+        hasher: Hasher,
         found: FoundBlocks,
     ) -> Result<Self, MinerStartRefused> {
-        if budget.permits() < 2 {
+        if hasher.permits() < 2 {
             return Err(MinerStartRefused::OnePermit);
         }
         let threads = config.threads;
@@ -198,8 +197,7 @@ impl PreparedMiner {
             shared: Arc::new(Shared {
                 board,
                 bound: config.bound,
-                caches,
-                budget,
+                hasher,
                 found,
                 stop: AtomicBool::new(false),
                 started: Instant::now(),
@@ -295,82 +293,102 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
             continue;
         }
         let seed = Seedhash::from_bytes(*posted.job.seed.as_bytes());
-        // A derivation would publish into the transient slot and evict the
-        // validator's spare, and the seed is the job's, not one this loop
-        // pinned. `pin_canonical` is the fill. A template whose seed is not
-        // held is the composition root's bug; this worker leaves the job.
-        // A stop already set leaves it too: this worker has not taken a
-        // cache, and the one a hash in progress holds is dropped when that
-        // hash returns.
+        // The job's seed is the chain's, not one this loop chose, and a
+        // warm loan builds nothing: the hasher lends a cache that is
+        // already built for a listed seed, or declines. A template whose
+        // seed is not warm is the composition root's bug; this worker
+        // leaves the job. A stop already set leaves it too.
         if shared.stop.load(Ordering::Acquire) {
             break;
         }
-        let Some(cache) = shared.caches.lookup(&seed) else {
-            tracing::error!(
+        let searched = shared
+            .hasher
+            .lend_warm(Class::Miner, seed, &shared.stop, |loan| {
+                let mut preimage = posted.preimage.clone();
+                let at = posted.nonce_offset;
+                for nonce in range.clone() {
+                    if shared.stop.load(Ordering::Relaxed)
+                        || !shared.board.searching(posted.generation)
+                    {
+                        break;
+                    }
+                    preimage[at..at + 4].copy_from_slice(&nonce.to_le_bytes());
+                    // One permit per hash, and never the last: a hash at
+                    // nice 19 can run for about a minute, and the chain
+                    // must not wait that out. Stop unblocks the wait; an
+                    // in-progress hash finishes.
+                    let pow = match loan.hash(&preimage) {
+                        Ok(pow) => pow,
+                        // The seed left the ranked list, or a job needs
+                        // the place: the loan is over. Leave the job; the
+                        // next posting is on a seed the list names.
+                        Err(Unhashed::Cancelled) => return Searched::Left,
+                        Err(Unhashed::Stopped) => return Searched::Stopped,
+                    };
+                    // A stop does not wait for this hash: what it finished
+                    // after the stop is dropped here, and the claim below
+                    // re-reads the flag under the board's lock, where the
+                    // stop sets it.
+                    if shared.stop.load(Ordering::Acquire) {
+                        return Searched::Stopped;
+                    }
+                    rate.record(shared.second());
+                    if !check_hash(&pow, posted.job.difficulty) {
+                        continue;
+                    }
+                    let mut block = posted.job.block.clone();
+                    block.header.nonce = nonce;
+                    let found = Found {
+                        block,
+                        height: posted.job.height,
+                        generation: posted.generation,
+                        pow: PowHash::from_bytes(pow),
+                    };
+                    match shared
+                        .board
+                        .claim_and_deliver(posted.generation, &shared.stop, || {
+                            shared.found.deliver(found)
+                        }) {
+                        Claim::Delivered => tracing::info!(
+                            height = %posted.job.height,
+                            generation = posted.generation.to_raw(),
+                            "the miner found a block"
+                        ),
+                        Claim::InboxClosed => tracing::error!(
+                            height = %posted.job.height,
+                            "the miner found a block and nothing receives it"
+                        ),
+                        Claim::Stopped | Claim::Superseded => {}
+                    }
+                    break;
+                }
+                Searched::Left
+            });
+        match searched {
+            Ok(Searched::Left) => {}
+            Ok(Searched::Stopped) | Err(Declined::Stopped) => break,
+            Err(Declined::NotWarm) => tracing::error!(
                 seed = %posted.job.seed,
                 height = %posted.job.height,
                 generation = posted.generation.to_raw(),
-                "the miner left a job whose seed is not held; it does not derive a cache"
-            );
-            continue;
-        };
-        let mut preimage = posted.preimage.clone();
-        let at = posted.nonce_offset;
-        for nonce in range.clone() {
-            if shared.stop.load(Ordering::Relaxed) || !shared.board.searching(posted.generation) {
-                break;
-            }
-            preimage[at..at + 4].copy_from_slice(&nonce.to_le_bytes());
-            // One permit per hash, and never the last: a hash at nice 19
-            // can run for about a minute, and the chain must not wait that
-            // out. Stop unblocks the wait; an in-progress hash finishes.
-            let Some(permit) = shared.budget.acquire_unless(Class::Miner, &shared.stop) else {
-                break;
-            };
-            let pow = compute_hash(&cache, &preimage);
-            drop(permit);
-            // A stop does not wait for this hash: what it finished after
-            // the stop is dropped here, and the claim below re-reads the
-            // flag under the board's lock, where the stop sets it.
-            if shared.stop.load(Ordering::Acquire) {
-                break;
-            }
-            rate.record(shared.second());
-            if !check_hash(&pow, posted.job.difficulty) {
-                continue;
-            }
-            let mut block = posted.job.block.clone();
-            block.header.nonce = nonce;
-            let found = Found {
-                block,
-                height: posted.job.height,
-                generation: posted.generation,
-                pow: PowHash::from_bytes(pow),
-            };
-            match shared
-                .board
-                .claim_and_deliver(posted.generation, &shared.stop, || {
-                    shared.found.deliver(found)
-                }) {
-                Claim::Delivered => tracing::info!(
-                    height = %posted.job.height,
-                    generation = posted.generation.to_raw(),
-                    "the miner found a block"
-                ),
-                Claim::InboxClosed => tracing::error!(
-                    height = %posted.job.height,
-                    "the miner found a block and nothing receives it"
-                ),
-                Claim::Stopped | Claim::Superseded => {}
-            }
-            break;
+                "the miner left a job whose seed is not warm; it does not build a cache"
+            ),
         }
     }
 }
 
+/// How a worker's search of one job ended.
+enum Searched {
+    /// The job is done with: solved, superseded, cancelled, or the nonce
+    /// range ran out. The worker waits for the next posting.
+    Left,
+    /// The miner is stopping.
+    Stopped,
+}
+
 impl Miner {
-    /// Start `config.threads` workers on `board`, hashing with `caches`
-    /// under `budget`'s permits and sending what they find to `found`.
+    /// Start `config.threads` workers on `board`, hashing through `hasher`'s
+    /// warm loans and sending what they find to `found`.
     ///
     /// # Errors
     ///
@@ -380,11 +398,10 @@ impl Miner {
     pub fn start(
         config: &MinerConfig,
         board: Arc<JobBoard>,
-        caches: Arc<CacheStore>,
-        budget: Budget,
+        hasher: Hasher,
         found: FoundBlocks,
     ) -> Result<Self, MinerStartRefused> {
-        PreparedMiner::arm(config, board, caches, budget, found)?.spawn()
+        PreparedMiner::arm(config, board, hasher, found)?.spawn()
     }
 
     /// What the miner is doing.

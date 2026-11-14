@@ -136,6 +136,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
             store: open_store(&path).into(),
             rules: GENESIS_RULES,
             bundle_queued: None,
+            ranked: None,
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
         let applied = first
@@ -161,6 +162,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
         bundle_queued: None,
+        ranked: None,
     });
     let connector = joined.actor.clone();
 
@@ -373,6 +375,7 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
         bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -434,6 +437,7 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
         bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -485,6 +489,7 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
         bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -785,6 +790,7 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
         bundle_queued: None,
+        ranked: None,
     });
     let ahead = joined
         .actor

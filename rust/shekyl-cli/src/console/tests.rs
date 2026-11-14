@@ -348,6 +348,7 @@ pub(crate) fn daemon_status_value(count: u64) -> serde_json::Value {
         "started": 1_700_000_000_u64,
         "disk_free": 1_u64 << 40,
         "data_size": 1_u64 << 30,
+        "randomx_caches": 1,
         "revision": "3.1.0-test",
         "peer_outbound_count": 8,
         "peer_inbound_count": 3,
@@ -386,6 +387,7 @@ const STATUS_PART_KEYS: &[&str] = &[
     "started",
     "disk_free",
     "data_size",
+    "randomx_caches",
     "revision",
     "peer_outbound_count",
     "peer_inbound_count",
@@ -1394,6 +1396,9 @@ fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
         out.contains("net hash 1.03 kH/s, 8(out)+3(in) connections, uptime "),
         "{out}"
     );
+    // The node's live caches, as memory (4.4). Red edit: drop the clause
+    // from `show_status`.
+    assert!(out.contains(", RandomX caches 1 (256 MiB)"), "{out}");
 }
 
 /// Eight hashes in ten seconds is 0.80 H/s.
@@ -1431,6 +1436,8 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
         "no counts and no uptime clause: {out}"
     );
     assert!(!out.contains("(out)") && !out.contains("uptime"), "{out}");
+    // Status withheld: no cache count either, never a zero.
+    assert!(!out.contains("RandomX"), "{out}");
 }
 
 /// **An offline daemon that withholds Status still says it is offline**:

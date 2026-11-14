@@ -281,6 +281,7 @@ daemon_status	field	daemon	txpool_count	pool	count or null
 daemon_status	field	daemon	started	status	time
 daemon_status	field	daemon	disk_free	status	size
 daemon_status	field	daemon	data_size	status	size
+daemon_status	field	daemon	randomx_caches	status	count
 daemon_status	field	daemon	revision	status	text
 daemon_status	field	daemon	peer_outbound_count	status	count or null
 daemon_status	field	daemon	peer_inbound_count	status	count or null

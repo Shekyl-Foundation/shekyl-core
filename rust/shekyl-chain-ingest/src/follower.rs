@@ -45,9 +45,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_block_template::MinerKeys;
-use shekyl_chain_rules::{
-    Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip, ViewRead,
-};
+use shekyl_chain_rules::{Fault, HeaderView, InvalidBlock, StatelessPass, Tip, ViewRead};
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_chain_sync::SyncState;
 use shekyl_mempool::{stateless, Admission, PoolFault};
@@ -57,11 +55,11 @@ use shekyl_wire::Transaction;
 use tokio::sync::watch;
 
 use crate::connector::{FactsStop, TipChanged};
+use crate::pow::Pow;
 use crate::router::ClaimStop;
 use crate::schedule::ChainRules;
 use crate::service::{
-    divide_pool_faults, install_window, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault,
-    Shared,
+    divide_pool_faults, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault, Shared,
 };
 use crate::template::{produce, NoTemplate, Producer};
 
@@ -368,14 +366,13 @@ struct SinkJoin {
 }
 
 /// Run the attendant until the service stops (module docs).
-pub(crate) async fn follow<S>(
-    shared: Arc<Shared<S>>,
+pub(crate) async fn follow<P>(
+    shared: Arc<Shared<P>>,
     door: Door,
     mut tips: watch::Receiver<TipChanged>,
     job: Option<JobSeat>,
 ) where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     let postings = shared.postings();
     let (mut seat, sink) = match job {
@@ -417,16 +414,20 @@ pub(crate) async fn follow<S>(
     // one build of its own. A tip that moves during the extra build is a
     // new sequence and gets its own.
     let mut extra_for: Option<u64> = None;
+    // What is resident, and the seed the last build found not warm. A
+    // canonical seed that finishes building without a tip move must still
+    // get its template, so the wait below ends when that seed is built.
+    // Only then: a `Resident` change is every lease taken and returned.
+    let mut resident = shared.pow().resident();
+    let mut awaited: Option<shekyl_types::BlockHash> = None;
     loop {
         if shared.stopping() {
             break;
         }
         let tip = *tips.borrow_and_update();
-        if let Err(stop) = install_window(&shared).await {
-            crate::service::record_window_stop(&shared, stop);
-            break;
-        }
-        if shared.stopping() {
+        // The list names this tip's seeds before a job on one is posted:
+        // the miner's warm loan is granted only on a listed seed.
+        if !shared.ranked_now().await {
             break;
         }
         // The pool, before the job, so a template never lists a transaction
@@ -449,7 +450,7 @@ pub(crate) async fn follow<S>(
             match (&seat.keys, state) {
                 (None, _) => seat.withdraw(NoJob::NoAddress),
                 (Some(_), SyncState::Synced) => {
-                    post(&shared, seat, &postings).await;
+                    awaited = post(&shared, seat, &postings).await;
                     // [`Unbuilt::Retry`]: one more build at this tip. The
                     // pass reconciles the pool on the way in, and a body
                     // that left is left out. A second retry in this same
@@ -479,8 +480,24 @@ pub(crate) async fn follow<S>(
                 None => std::future::pending().await,
             }
         };
+        let seed_built = async {
+            match (resident.as_mut(), awaited) {
+                (Some(resident), Some(seed)) => {
+                    let built = resident
+                        .wait_for(|_| shared.pow().warm(&seed))
+                        .await
+                        .is_ok();
+                    if !built {
+                        // The hasher is gone, which only a stop does.
+                        std::future::pending::<()>().await;
+                    }
+                }
+                _ => std::future::pending().await,
+            }
+        };
         tokio::select! {
             changed = tips.changed() => if changed.is_err() { break },
+            () = seed_built => awaited = None,
             // The sync owner is gone: nothing says this node is synced
             // any more. That is "behind" — the job is withdrawn on the
             // next pass — not a reason to stop following the chain.
@@ -533,10 +550,9 @@ enum PlantFault {
 /// the lock. A pool-file fault retires the pool. A chain fault stops the
 /// service. A tip that moved parks the bodies without waking: the next tip
 /// retries them.
-async fn reconcile<S>(shared: &Arc<Shared<S>>)
+async fn reconcile<P>(shared: &Arc<Shared<P>>)
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     if !shared.pool_is_live() {
         return;
@@ -624,14 +640,13 @@ where
     shared.park_pending(division.parked);
 }
 
-async fn plant<S>(
-    shared: &Arc<Shared<S>>,
+async fn plant<P>(
+    shared: &Arc<Shared<P>>,
     unverified: Vec<(TxHash, Transaction)>,
     pending: Vec<Transaction>,
 ) -> Result<Planted, PlantFault>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     let store = std::sync::Arc::clone(shared.store());
     let rules = shared.rules();
@@ -679,33 +694,40 @@ fn plant_blocking(
 }
 
 /// Build and post the job for the block after the tip (`template`
-/// module docs). The slots already hold the window. A seed they do not
-/// hold leaves the current job; the next publication tries again.
+/// module docs). The ranked list already names the tip's seeds. A seed
+/// whose cache is not built yet leaves the current job, and is returned:
+/// the follower builds again when it is.
 ///
-/// The build runs on a blocking thread and takes no hasher permit: one
+/// The build runs on a blocking thread and asks for no hashing job: one
 /// more blocking task than the permits (`shekyl-node`, "Blocking
 /// threads").
-async fn post<S>(shared: &Arc<Shared<S>>, seat: &Seated, postings: &Postings)
+async fn post<P>(
+    shared: &Arc<Shared<P>>,
+    seat: &Seated,
+    postings: &Postings,
+) -> Option<shekyl_types::BlockHash>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     let Some(keys) = seat.keys.clone() else {
-        return seat.withdraw(NoJob::NoAddress);
+        seat.withdraw(NoJob::NoAddress);
+        return None;
     };
     if shared.pool_retired() {
-        return seat.withdraw(NoJob::PoolRetired);
+        seat.withdraw(NoJob::PoolRetired);
+        return None;
     }
-    let now = match shared.substrate().local_clock() {
+    let now = match shared.pow().clock() {
         Ok(now) => now,
         Err(fault) => {
             tracing::error!("no template: the clock: {fault:?}");
-            return seat.withdraw(NoJob::Unbuilt(Unbuilt::Clock));
+            seat.withdraw(NoJob::Unbuilt(Unbuilt::Clock));
+            return None;
         }
     };
-    let Some(resident) = shared.seed_now() else {
-        return;
-    };
+    if shared.stopping() {
+        return None;
+    }
     let reader = Arc::clone(shared);
     let witness = Arc::clone(&seat.witness);
     // Cloned before the build, so a test can replace the hook between wakes.
@@ -742,7 +764,7 @@ where
             },
         };
         produce(&snap, &producer, reader.live_pool(), |seed| {
-            resident.holds(seed)
+            reader.pow().warm(seed)
         })
         .map_err(Unposted::Template)
     })
@@ -758,16 +780,20 @@ where
             tracing::error!("the template producer panicked: {join}");
             seat.withdraw(NoJob::Unbuilt(Unbuilt::ProducerPanicked));
             shared.fail(ServiceFault::FollowerEnded);
-            return;
+            return None;
         }
     };
     let produced = match produced {
         Ok(produced) => produced,
         Err(unposted) => {
+            let awaited = match &unposted {
+                Unposted::Template(NoTemplate::SeedNotWarm { seed }) => Some(*seed),
+                _ => None,
+            };
             if let Some(why) = unposted.apply(shared) {
                 seat.withdraw(why);
             }
-            return;
+            return awaited;
         }
     };
     tracing::debug!(
@@ -801,6 +827,7 @@ where
     }
     drop(kept);
     seat.posting.send_replace(Posting::Posted(generation));
+    None
 }
 
 /// Why a pass posted nothing.
@@ -815,10 +842,9 @@ impl Unposted {
     /// pool's chain fault; a pool-file fault retires the pool. Returns the
     /// reason to withdraw the job with, or `None` to leave it (a seed the
     /// slots do not hold yet).
-    fn apply<S>(self, shared: &Shared<S>) -> Option<NoJob>
+    fn apply<P>(self, shared: &Shared<P>) -> Option<NoJob>
     where
-        S: Substrate,
-        S::Fault: core::fmt::Debug,
+        P: Pow,
     {
         let why = |kind: Unbuilt| Some(NoJob::Unbuilt(kind));
         match self {
@@ -857,7 +883,7 @@ impl Unposted {
                 shared.pool_dead(&store);
                 Some(NoJob::PoolRetired)
             }
-            Self::Template(NoTemplate::SeedNotHeld) => None,
+            Self::Template(NoTemplate::SeedNotWarm { .. }) => None,
             Self::Template(NoTemplate::Facts(FactsStop::NoNextHeight { tip })) => {
                 tracing::error!("no template: the tip {tip:?} is the last height there is");
                 why(Unbuilt::LastHeight)

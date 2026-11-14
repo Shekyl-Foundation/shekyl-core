@@ -19,8 +19,7 @@
 //!   RD-Q10): a table on the set would be refused whenever the driver's
 //!   copy differed, or would have to be carved out of the comparison.
 //! - **Not on `Substrate`.** That trait is *services with faults* — a clock
-//!   that may be unavailable, a VM that may fail (and, since `pin_seed`,
-//!   advisory hints to those services). The pin is static data with no
+//!   that may be unavailable, a VM that may fail. The pin is static data with no
 //!   failure mode and nothing to serve; a method returning it would make
 //!   the trait carry configuration, and its mock in every test would have
 //!   to answer with a pin it has no reason to hold.

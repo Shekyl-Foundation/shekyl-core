@@ -106,7 +106,7 @@ impl D2 {
     /// The candidate's longhash under `seed`, from the substrate, recorded
     /// in `coverage` as this row. `Err` is the substrate's fault: no
     /// longhash, no verdict.
-    pub(crate) fn longhash<S: Substrate>(
+    pub(crate) fn longhash<S: Substrate + ?Sized>(
         substrate: &S,
         pow_blob: &[u8],
         seed: BlockHash,

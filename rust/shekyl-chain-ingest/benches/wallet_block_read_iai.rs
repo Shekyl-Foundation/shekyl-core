@@ -33,7 +33,8 @@
 //! (rule 76).
 
 use std::hint::black_box;
-use std::sync::Arc;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, OnceLock};
 
 use gungraun::{library_benchmark, library_benchmark_group, main};
 use shekyl_chain_ingest::bench_support::RULES;
@@ -42,7 +43,8 @@ use shekyl_daemon_rpc::info_facts::{PeerFacts, PoolCounts, PoolScope, PoolState,
 use shekyl_daemon_rpc::reads::block_list;
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, PoolBody, StoreFacts, SyncFacts};
 use shekyl_daemon_rpc::sync_facts::SyncViewFacts;
-use shekyl_pow_randomx::CacheStore;
+use shekyl_hash_budget::Budget;
+use shekyl_hasher::{Hasher, Owner};
 use shekyl_rpc_types::kinds::Height;
 use shekyl_rpc_types::wire::block::BlockListQuery;
 use shekyl_rpc_types::wire::shared::Slot;
@@ -99,6 +101,19 @@ struct Prepared {
     _dir: tempfile::TempDir,
 }
 
+/// A hasher nothing ranks. This read never hashes: `pow` is not on the
+/// path, and a warm loan on an unranked hasher is declined. The owner
+/// stays for the process, so the builder thread is not joined between
+/// iterations.
+fn idle_hasher() -> Hasher {
+    static IDLE: OnceLock<(Hasher, Owner)> = OnceLock::new();
+    IDLE.get_or_init(|| {
+        Hasher::start(Budget::new(NonZeroUsize::MIN)).expect("the builder thread starts")
+    })
+    .0
+    .clone()
+}
+
 fn prepared(corpus: &[u8]) -> Prepared {
     let tail = RequestedTail::connected(corpus);
     let tip = u64::try_from(tail.chain.hashes().len()).expect("a short chain") - 1;
@@ -120,8 +135,7 @@ fn prepared(corpus: &[u8]) -> Prepared {
             start_time: 0,
             protocol_version: 3,
         },
-        Arc::new(CacheStore::new()),
-        shekyl_hash_budget::Budget::of_host(),
+        idle_hasher(),
     );
     let prepared = Prepared {
         facts,

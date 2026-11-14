@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use shekyl_chain_ingest::service::{
     ArrivalTag, Door, PoolHealth, Refusal, Reply, Rewinder, ServiceFault,
 };
-use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
+use shekyl_chain_ingest::{ProductionPow, Rewound, TipChanged};
 use shekyl_chain_store::codec::FollowingDegraded;
 use shekyl_chain_sync::{SessionMode, SyncState, SyncView};
 use shekyl_daemon_rpc::chain_facts::{
@@ -32,8 +32,8 @@ use shekyl_daemon_rpc::info_facts::{
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
-    AdmittedPow, AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange,
-    CurveTreeFacts, PowAdmission, PowSeed, ShardCoverage, SpentAt,
+    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAnswer,
+    PowSeed, ShardCoverage, SpentAt,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_daemon_rpc::sync_facts::{
@@ -44,7 +44,7 @@ use shekyl_p2p::{session_of, BanSpan, BanTarget, Bans, ConnectorCounts, Network}
 use shekyl_rpc_types::kinds::Count;
 use shekyl_rpc_types::wire::p2p::{SyncMode, SyncState as WireSyncState};
 use shekyl_transport_layer::{BanLeft, ConnectorId, Ipv4Subnet, ListedBan, SocketId};
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -376,7 +376,7 @@ impl ChainBridge {
     /// Clone the facts out of the slot and drop the lock before `read`.
     ///
     /// The guard covers the swap to absent. The read runs after it drops:
-    /// `hash_admitted` waits for a hasher permit and then hashes, and a read
+    /// `pow` waits for a hasher permit and then hashes, and a read
     /// such as `block_at` or `coinbase_sum` takes its own time. A guard
     /// that spanned any of them would stall every chain read.
     fn with<T>(
@@ -500,16 +500,13 @@ impl ChainReadFacts for ChainBridge {
         self.with(|facts| facts.coinbase_sum(start, count))
     }
 
-    fn admit_pow(&self, seed: PowSeed) -> Result<PowAdmission, FactsFault> {
-        self.with(|facts| facts.admit_pow(seed))
-    }
-
-    fn hash_admitted(
+    fn pow(
         &self,
+        seed: PowSeed,
         pow_blob: &[u8],
-        admitted: &AdmittedPow,
-    ) -> Result<PowHash, FactsFault> {
-        self.with(|facts| facts.hash_admitted(pow_blob, admitted))
+        pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault> {
+        self.with(|facts| facts.pow(seed, pow_blob, pay))
     }
 
     fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
@@ -660,7 +657,7 @@ impl PoolFacts for PoolBridge {
 #[derive(Clone)]
 pub(crate) struct DoorEntry {
     pub(crate) door: Door,
-    pub(crate) rewinder: Rewinder<ProductionSubstrate>,
+    pub(crate) rewinder: Rewinder<ProductionPow>,
 }
 
 pub(crate) struct DoorBridge {

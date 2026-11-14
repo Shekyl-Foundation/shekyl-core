@@ -760,6 +760,75 @@ fn a_job_asking_for_another_job_panics() {
     owner.stop();
 }
 
+/// The RandomX known-answer vector, through every way the hasher hands
+/// out a hash: the v2 fork's `randomx_calculate_hash` output at pin
+/// `aaafe71` for the canonical seedhash and data input
+/// (`shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin`,
+/// the verifier's one end-to-end vector). The inputs are restated here
+/// from `shekyl-pow-randomx/src/vm.rs`'s tests; a drift on either side
+/// fails against the vector.
+const KAT_SEED: [u8; 32] = [
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+];
+const KAT_DATA: &[u8] = b"phase2c-t8-end-to-end-stub-nop-hash-canonical-data-input-padding-to-256-bytes-so-the-blake2b-input-spans-multiple-blocks-and-the-fillaes1rx4-scratchpad-init-consumes-a-non-trivial-seed.....END";
+const KAT_HASH: &[u8; 32] = include_bytes!(
+    "../../shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin"
+);
+
+/// Consensus results cannot move with who holds the cache
+/// (`RANDOMX_CACHE_ACTOR.md` §8): a hash under a lent cache is the
+/// verifier's own. `Lent::hash` in a `run` job, `Loan::hash` and
+/// `Loan::hash_timed` in a `lend` job, and `Loan::hash` on a warm loan
+/// each equal the fork's vector.
+///
+/// Red edit: in `Lent::hash`, hash `&blob[1..]`, or hash under another
+/// seed's cache: the output is not the vector's.
+#[test]
+fn every_way_to_hash_gives_the_randomx_known_answer() {
+    let _serial = serial();
+    let (hasher, owner) = start(2);
+    let seed = Seedhash::from_bytes(KAT_SEED);
+    let running = AtomicBool::new(false);
+    assert_eq!(KAT_DATA.len(), 192, "the vector's data input is 192 bytes");
+    let lent = hasher
+        .run(Class::Chain, seed, &running, |lent| lent.hash(KAT_DATA))
+        .expect("granted");
+    assert_eq!(&lent, KAT_HASH, "Lent::hash in a run job");
+    let (loaned, timed) = hasher
+        .lend(Class::Chain, seed, &running, |loan| {
+            (
+                loan.hash(KAT_DATA).expect("a job's loan hashes"),
+                loan.hash_timed(KAT_DATA).expect("a job's loan hashes").0,
+            )
+        })
+        .expect("granted");
+    assert_eq!(&loaned, KAT_HASH, "Loan::hash in a lend job");
+    assert_eq!(&timed, KAT_HASH, "Loan::hash_timed in a lend job");
+    hasher.rank(window(&[seed]));
+    until(&hasher, "the ranked seed is warm", |resident| {
+        holds(resident, seed, Residency::Warm)
+    });
+    let warm = hasher
+        .lend_warm(Class::CalcPow, seed, &running, |loan| loan.hash(KAT_DATA))
+        .expect("the seed is listed and built")
+        .expect("the loan is not cancelled");
+    assert_eq!(&warm, KAT_HASH, "Loan::hash on a warm loan");
+    owner.stop();
+}
+
+/// `Hasher::permits` is the budget's: what a consumer that holds no
+/// budget sizes its lanes by.
+///
+/// Red edit: have `Hasher::permits` return a constant.
+#[test]
+fn the_hasher_reports_its_budgets_permits() {
+    let _serial = serial();
+    let (hasher, owner) = start(3);
+    assert_eq!(hasher.permits(), 3);
+    owner.stop();
+}
+
 #[test]
 fn a_ranked_list_naming_a_seed_twice_is_refused() {
     assert_eq!(

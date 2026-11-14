@@ -16,9 +16,9 @@ use shekyl_levin::PortableMap;
 use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{Block, PowBlob};
 
-use crate::model::{CachePlan, Event, Outcome, Proved, Sync};
+use crate::model::{Event, Outcome, Sync};
 use crate::proof::{drive, headers_of, open_claim, serialized};
-use crate::scenarios::{answer, no_close, offer_tag, request_for, target_one, NoDraw};
+use crate::scenarios::{answer, offer_tag, request_for, target_one, NoDraw};
 use crate::{Command, PeerClaim};
 
 /// A chain of eight, a session whose claim is open, and one block that
@@ -47,130 +47,6 @@ where
         block.header.previous = tip.hash;
         block.header.timestamp = timestamp + 120;
         f(&mut sync, &view, &mut block, tip, timestamp);
-    });
-}
-
-/// A main seed the cache slots do not hold drops the run, keeps the
-/// session, and does not issue the same proof again on the same event.
-#[test]
-fn a_main_seed_not_held_drops_the_run_and_keeps_the_session() {
-    with_extension(|sync, view, block, _tip, _timestamp| {
-        block.header.nonce = 0;
-        let pow = block.pow_blob();
-        let hash = PowBlob::read(&pow).expect("preimage").identity();
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Headers {
-                session: 1,
-                bytes: headers_of(pow),
-            },
-            view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        let job = out
-            .iter()
-            .find_map(|command| match command {
-                Command::Prove {
-                    job,
-                    cache: CachePlan::Main(_),
-                    ..
-                } => Some(*job),
-                _ => None,
-            })
-            .expect("a proof under a main seed");
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Proven {
-                job,
-                results: vec![Proved::NotHeld],
-            },
-            view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        no_close(&out);
-        assert!(
-            !out.iter()
-                .any(|command| matches!(command, Command::Prove { .. })),
-            "the same plan was issued again on the same event: {out:?}"
-        );
-        assert_eq!(sync.run_len(1), 0, "the run was dropped");
-        assert!(!sync.contains_header(hash), "an unproven header joined T");
-        assert!(sync.transit(1).is_some(), "the session is kept");
-    });
-}
-
-/// A seed the slots do not hold is the window's state, not the peer's
-/// answer: the session is not asked again against the same slots, and it
-/// is asked again as soon as the slots change, with its claim and `H*`
-/// unchanged. Defect 8: the spend gate closed this session until its
-/// claim or `H*` moved, and an idle source moved neither.
-#[test]
-fn a_main_seed_not_held_asks_again_when_the_window_changes() {
-    with_extension(|sync, view, block, _tip, _timestamp| {
-        block.header.nonce = 0;
-        let pow = block.pow_blob();
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Headers {
-                session: 1,
-                bytes: headers_of(pow),
-            },
-            view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        let job = out
-            .iter()
-            .find_map(|command| match command {
-                Command::Prove { job, .. } => Some(*job),
-                _ => None,
-            })
-            .expect("a proof");
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Proven {
-                job,
-                results: vec![Proved::NotHeld],
-            },
-            view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        no_close(&out);
-        // An unrelated event: the same slots would answer the same way.
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Room { seats: 4 },
-            view,
-            Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("main answers");
-        assert!(
-            !out.iter()
-                .any(|command| matches!(command, Command::RequestHeaders { .. })),
-            "asked again against the slots that did not hold the seed: {out:?}"
-        );
-        let mut out = Vec::new();
-        sync.handle(Event::Seeds, view, Instant::now(), &mut NoDraw, &mut out)
-            .expect("main answers");
-        assert!(
-            out.iter()
-                .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
-            "the slots changed and the session was not asked again: {out:?}"
-        );
-        assert!(sync.transit(1).is_some(), "the session is kept");
     });
 }
 

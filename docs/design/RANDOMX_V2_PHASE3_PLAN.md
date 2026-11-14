@@ -266,6 +266,8 @@ tip advance ──► shekyl_pow_randomx_v2_set_canonical(&seed)  [3a]
 
 ### 4.1 Why a second committed export
 
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
+
 Spec §5 commits **one** export (`…_hash`) and lists
 `set_main_seedhash` and `prewarm` as explicitly *not* exported (§5,
 §6, §13). But the ratified sticky-eviction DoS mitigation

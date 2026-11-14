@@ -14,7 +14,9 @@
 use std::num::NonZeroU128;
 use std::sync::Arc;
 
-use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks, Substrate};
+use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
+
+use crate::pow::Pow;
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_types::{BlockCount, BlockHeight};
 
@@ -77,8 +79,7 @@ pub(crate) async fn replay_open<S, Src>(
     trace: Arc<Trace>,
 ) -> (Result<RunReport, String>, TestPath, ChainRules)
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + std::fmt::Debug + 'static,
+    S: Pow,
     Src: Source,
     Src::Fault: std::fmt::Debug,
 {
@@ -116,8 +117,7 @@ pub(crate) async fn replay_keeping_store<S>(
     tag: &str,
 ) -> (Result<RunReport, String>, TestPath, ChainRules)
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + std::fmt::Debug + 'static,
+    S: Pow,
 {
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");

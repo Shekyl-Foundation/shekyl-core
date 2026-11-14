@@ -9,9 +9,10 @@
 //! genesis's id. The next height hashes under the block at
 //! `SEEDHASH_EPOCH_BLOCKS` on its own chain (CEN-D3). A branch that forks
 //! below that block and grows past it names a seed no main-chain window
-//! holds. The service prepares that seed into the transient slot, never
-//! pins it, and hashes with the cache the preparation returned, one branch
-//! form at a time.
+//! holds. The service forms each such block as a job on the branch's own
+//! seed, and the window's seeds do not move for it. What holds that
+//! cache, and for how long, is the hasher's (`resident_tests`, over real
+//! RandomX); here the fixture records each job asked for and the list.
 //!
 //! The file is one test. It mines the chains once — three drivers in
 //! parallel — and then runs each [`Case`] in order, each on its own
@@ -259,8 +260,8 @@ impl Case {
     /// The partition case: two nodes split across a seed point, and the
     /// heavier side passes the seed lag. The lighter node follows it: it
     /// stores the branch past its own seed point, switches when it is
-    /// heavier, and once the follower has run the branch's seed block is
-    /// canonical.
+    /// heavier, and the list the ranker then sends has the branch's seed
+    /// block first.
     async fn follow(self, chains: &Branches) {
         let (service, substrate) = self.open_on_main(chains).await;
         let replies = offer_all(&service, Z_SESSION, &chains.z).await;
@@ -293,10 +294,31 @@ impl Case {
             "following",
             service.followed().wait_for(|at| *at >= seq).await,
         );
+        assert!(service.shared.ranked_now().await, "{self}: running");
+        let (window, list) = {
+            let snap = claimed(self, "read", service.shared.store().begin_read());
+            (
+                claimed(
+                    self,
+                    "window",
+                    crate::cache_window::seeds_on(&snap, service.shared.rules()),
+                ),
+                claimed(
+                    self,
+                    "list",
+                    crate::cache_window::ranked_on(&snap, service.shared.rules(), None),
+                ),
+            )
+        };
         assert_eq!(
-            substrate.canonical(),
-            Some(seed_block(&chains.z)),
-            "{self}: after the switch the branch's seed block is canonical"
+            window.canonical,
+            seed_block(&chains.z),
+            "{self}: after the switch the branch's seed block is the window's first seed"
+        );
+        assert_eq!(
+            substrate.ranked(),
+            list,
+            "{self}: the last list sent is the one for the chain after the switch"
         );
         claimed(self, "stops", service.stop().await);
     }
@@ -318,21 +340,28 @@ impl Case {
         }
     }
 
-    /// An in-cap block naming its own branch's seed costs one derivation,
-    /// into the transient slot, with the chain's seed still canonical and
-    /// nothing pinned. Two branches alternating cost one derivation per
-    /// alternation: each evicts the other's seed from the one transient slot.
+    /// An in-cap block naming its own branch's seed is one job on that
+    /// seed, and the window's first seed stays the chain's. Two branches
+    /// alternating are a job each time, on each branch's own seed in turn.
     async fn alternate(self, chains: &Branches) {
         let (service, substrate) = self.open_on_main(chains).await;
         self.up_to_the_seed_point(&service, chains).await;
-        let canonical = substrate.canonical();
+        let canonical = |what: &str| {
+            let snap = claimed(self, what, service.shared.store().begin_read());
+            claimed(
+                self,
+                what,
+                crate::cache_window::seeds_on(&snap, service.shared.rules()),
+            )
+            .canonical
+        };
         assert_eq!(
-            canonical,
-            Some(seed_block(&chains.main)),
+            canonical("the window"),
+            seed_block(&chains.main),
             "{self}: the main chain's seed"
         );
         let door = service.door();
-        let (prepared, pins) = (substrate.prepared(), substrate.pins());
+        let asked = substrate.jobs().len();
         let first = claimed(
             self,
             "room",
@@ -349,16 +378,21 @@ impl Case {
             matches!(first, Reply::Held { .. }),
             "{self}: the first block past the seed is held: {first:?}"
         );
+        let seeds_asked = |from: usize| -> Vec<BlockHash> {
+            substrate.jobs()[from..]
+                .iter()
+                .map(|(_, seed)| *seed)
+                .collect()
+        };
         assert_eq!(
-            substrate.prepared(),
-            prepared + 1,
-            "{self}: exactly one derivation"
+            seeds_asked(asked),
+            vec![seed_block(&chains.z)],
+            "{self}: exactly one job, on the branch's own seed"
         );
-        assert_eq!(substrate.pins(), pins, "{self}: nothing pinned");
         assert_eq!(
-            substrate.canonical(),
-            canonical,
-            "{self}: the chain's seed stays canonical"
+            canonical("the window after the branch block"),
+            seed_block(&chains.main),
+            "{self}: the chain's seed stays the window's first"
         );
         // Then w, z, w, z, … : each switch of branch evicts the other's seed.
         // The tag names w's height on both offers. z's block is the next one.
@@ -372,7 +406,7 @@ impl Case {
                 height + BlockCount::ONE,
             ));
         }
-        let mut alternations = 0;
+        let mut expected = vec![seed_block(&chains.z)];
         for (tag, branch, height) in order {
             let reply = claimed(
                 self,
@@ -386,26 +420,27 @@ impl Case {
                 matches!(reply, Reply::Held { .. }),
                 "{self}: {height} held: {reply:?}"
             );
-            alternations += 1;
+            expected.push(seed_block(branch));
         }
         assert_eq!(
-            substrate.prepared(),
-            prepared + 1 + alternations,
-            "{self}: one derivation per alternation"
+            seeds_asked(asked),
+            expected,
+            "{self}: one job per alternation, each on its own branch's seed"
         );
         assert_eq!(
-            substrate.pins(),
-            pins,
-            "{self}: branch seeds are never pinned"
+            canonical("the window after the alternation"),
+            seed_block(&chains.main),
+            "{self}: the window never names a branch's seed"
         );
         claimed(self, "stops", service.stop().await);
     }
 
-    /// Two branches past their seed points arriving at once: their forms
-    /// run one at a time on the branch gate, so at most one cache beyond
-    /// the two slots is ever held.
+    /// Two branches past their seed points arriving at once: both are
+    /// stored, each block as a job on its branch's own seed. How many
+    /// caches that costs at once is the hasher's cap, not a gate here.
     async fn concurrent(self, chains: &Branches) {
         let (service, substrate) = self.open_on_main(chains).await;
+        let asked = substrate.jobs().len();
         self.up_to_the_seed_point(&service, chains).await;
         let together_end = PAST_SEED + TOGETHER;
         let (z, w) = tokio::join!(
@@ -426,10 +461,19 @@ impl Case {
                 .all(|reply| matches!(reply, Reply::Held { .. })),
             "{self}: both branches held: {z:?} {w:?}"
         );
+        let mut on_each: std::collections::BTreeMap<BlockHash, usize> =
+            std::collections::BTreeMap::new();
+        for (_, seed) in &substrate.jobs()[asked..] {
+            *on_each.entry(*seed).or_default() += 1;
+        }
+        let together = usize::try_from(TOGETHER.to_raw()).expect("small");
         assert_eq!(
-            substrate.branch_forms_max(),
-            1,
-            "{self}: one branch form at a time"
+            (
+                on_each.get(&seed_block(&chains.z)),
+                on_each.get(&seed_block(&chains.w))
+            ),
+            (Some(&together), Some(&together)),
+            "{self}: each branch's blocks past its seed are jobs on that branch's seed: {on_each:?}"
         );
         claimed(self, "stops", service.stop().await);
     }

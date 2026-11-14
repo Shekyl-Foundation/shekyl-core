@@ -10,7 +10,7 @@
 //! is, forms the block and connects it. Callers keep the names on
 //! `crate::scenario`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use shekyl_archival_retention::BundleBody;
 use shekyl_block_template::{Template, TemplateError};
@@ -21,7 +21,10 @@ use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::Transaction;
 
+use shekyl_hasher::{Class, Ranked, Resident};
+
 use crate::connector::RunFault;
+use crate::pow::{Fixture, LendJob, Pow, RunJob};
 
 /// The seconds between the driver's blocks by default — the DAA target, so
 /// a scripted chain's timestamps look like a chain's.
@@ -32,7 +35,7 @@ const BLOCK_INTERVAL: u64 = 120;
 pub const CLOCK_START: Timestamp = Timestamp::from_raw(1_800_000_000);
 
 /// A substrate whose clock the driver owns and advances, over a longhash
-/// the caller chooses. Production PoW is `Clocked<ProductionSubstrate>`;
+/// the caller chooses. Production PoW is `Clocked<ProductionPow>`;
 /// the default is the harness's always-satisfying longhash.
 pub struct Clocked<P> {
     clock: AtomicU64,
@@ -74,58 +77,110 @@ impl<P> Clocked<P> {
     }
 }
 
-impl<P: Substrate> Substrate for Clocked<P> {
-    type Fault = P::Fault;
-    type Held = P::Held;
+/// A job's substrate under the driver's clock: the inner job's longhash,
+/// and the instant the driver set.
+struct ClockedJob<'a, J: ?Sized> {
+    now: Timestamp,
+    job: &'a J,
+}
 
-    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
+impl<J: Substrate + ?Sized> Substrate for ClockedJob<'_, J> {
+    type Fault = J::Fault;
+
+    fn local_clock(&self) -> Result<Timestamp, J::Fault> {
+        Ok(self.now)
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, J::Fault> {
+        self.job.longhash(pow_blob, seed)
+    }
+}
+
+/// The inner boundary's jobs, each judged at the driver's clock. Every
+/// other call is the inner boundary's: a clock over a production pow asks
+/// its hasher, or a rank through the clock would rank nothing.
+impl<P: Pow> Pow for Clocked<P> {
+    type Fault = P::Fault;
+
+    fn clock(&self) -> Result<Timestamp, P::Fault> {
         Ok(self.now())
     }
 
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
-        self.pow.longhash(pow_blob, seed)
-    }
-
-    /// The pin is the longhash's: a clock over a production substrate pins
-    /// its cache store, or a pin through the clock would pin nothing.
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.pow.pin_seed(seed);
-    }
-
-    /// The release is the pin's: through the clock to the cache store.
-    fn release_seed(&self, seed: &BlockHash) {
-        self.pow.release_seed(seed);
-    }
-
-    /// The slots are the pin's: the cache store's under a production pow.
-    fn slots(&self) -> (Option<BlockHash>, Option<BlockHash>) {
-        self.pow.slots()
-    }
-
-    fn cache_absent(&self, fault: &P::Fault) -> bool {
-        self.pow.cache_absent(fault)
-    }
-
-    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
-        self.pow.prepare_seed(seed)
-    }
-
-    fn longhash_held(
+    fn run<R>(
         &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        held: &P::Held,
-    ) -> Result<PowHash, P::Fault> {
-        self.pow.longhash_held(pow_blob, seed, held)
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&RunJob<'job, P::Fault>) -> R,
+    ) -> Option<R> {
+        self.pow.run(class, seed, stop, |inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn lend<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&LendJob<'job, P::Fault>) -> R,
+    ) -> Option<R> {
+        self.pow.lend(class, seed, stop, |inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn wake(&self) {
+        self.pow.wake();
+    }
+
+    fn rank(&self, list: Ranked) {
+        self.pow.rank(list);
+    }
+
+    fn warm(&self, seed: &BlockHash) -> bool {
+        self.pow.warm(seed)
+    }
+
+    fn resident(&self) -> Option<tokio::sync::watch::Receiver<Resident>> {
+        self.pow.resident()
+    }
+
+    fn permits(&self) -> usize {
+        self.pow.permits()
+    }
+
+    fn derives(&self) -> crate::metrics::Derives {
+        self.pow.derives()
+    }
+
+    fn unlent<R>(&self, job: impl for<'job> FnOnce(&LendJob<'job, P::Fault>) -> R) -> R {
+        self.pow.unlent(|inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn stopped(fault: &P::Fault) -> bool {
+        P::stopped(fault)
     }
 }
 
 /// The harness longhash as a substrate: every target satisfied, no cache.
 pub struct FreeHash;
 
+impl Fixture for FreeHash {}
+
 impl Substrate for FreeHash {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(CLOCK_START)

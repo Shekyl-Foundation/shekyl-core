@@ -109,6 +109,8 @@ on:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
       - 'rust/shekyl-pow-randomx/**'
+      - 'rust/shekyl-hasher/**'
+      - 'rust/shekyl-hash-budget/**'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - 'external/randomx-v2/**'
@@ -125,6 +127,8 @@ on:
       - 'rust/shekyl-randomx-differential/**'
       - 'rust/randomx-v2-sys/**'
       - 'rust/shekyl-pow-randomx/**'
+      - 'rust/shekyl-hasher/**'
+      - 'rust/shekyl-hash-budget/**'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - 'external/randomx-v2/**'
@@ -524,13 +528,12 @@ jobs:
         # of the §6.7.5/§6.8 deferral, shipped in Phase 2g as
         # mode_concurrent.rs but wired into no workflow until this
         # job): 4+1 workers × 256 hashes each over the per-PR-size
-        # random corpus against a capacity-2 CacheStore — T7 asserts
-        # cross-worker determinism plus rust/C byte-equality, T8
-        # asserts the (workers+1)×256 MiB + 128 MiB (×1.10) RSS
-        # ceiling (R1-D9 F4 Round-3 amendment; the original 640 MiB
-        # slot-only pin failed every daily cron 2026-07-08 →
-        # 2026-08-08 at a flat ~1035 MiB drift plateau — see
-        # rss_ceiling_bytes in mode_concurrent.rs) via /proc/self/statm
+        # random corpus, each hash a job on the daemon's one owner of
+        # caches (shekyl-hasher) — T7 asserts cross-worker determinism
+        # plus rust/C byte-equality, T8 asserts the hasher's cap as an
+        # RSS ceiling: (CAP−1)×256 MiB + 128 MiB (×1.10) over a
+        # baseline that already holds one cache (see rss_ceiling_bytes
+        # in mode_concurrent.rs) via /proc/self/statm
         # (Linux runner, so the T8 leg is live, not the cross-platform
         # no-op). The daemon verifies blocks on multiple threads: a
         # divergence here is a plausible REAL consensus finding —

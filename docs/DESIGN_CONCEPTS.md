@@ -56,20 +56,19 @@ restated:
   XMRig-class miner ecosystem consume the C ABI **out of process**. The
   built-in `start_mining` is a light-mode convenience, not the ceiling.
   Enforced on the linked binary by `scripts/ci/check_randomx_symbol_isolation.sh`.
-- **No prewarm FFI; caches are built by pins, never by a hash** (§6;
-  `RANDOMX_V2_PLAN.md` Decision #6). The Rust ingest pins the seeds its
-  window names, the canonical one sticky against eviction, and builds a
-  branch's seed into the transient slot before hashing under it
-  (`shekyl-chain-ingest`, `Substrate::pin_seed` / `prepare_seed`); a hash
-  under a seed no slot holds is a fault, not a derive. That pin is the
-  sanctioned replacement for async/fake prewarm, not a contradiction of
-  Decision #6. *Records-was:* before the DRS-X flip the C++ chain pinned
-  through `shekyl_pow_randomx_v2_set_canonical` (deleted) and a
-  non-canonical cache derived on its first hash.
+- **One owner of every RandomX cache; a hash never builds one on its
+  own** ([`RANDOMX_CACHE_ACTOR.md`](design/RANDOMX_CACHE_ACTOR.md);
+  `RANDOMX_V2_PLAN.md` Decision #6). The node's one hasher
+  (`shekyl-hasher`) builds, lends and frees every cache, three at most.
+  Every hash is a job on its seed: the hasher builds that seed's cache
+  for the job when it is not warm, inside the cap, and keeps warm the
+  seeds the node's ranked list names. That is the sanctioned replacement
+  for async/fake prewarm, not a contradiction of Decision #6.
 - **Verifier API shaped by [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc)**:
-  cache/dataset/hash are transform-shaped; the daemon's memo is the node's
-  one `CacheStore`, held by the ingest. `shekyl-ffi` keeps its own only
-  for `shekyl_pow_randomx_v2_hash`, whose callers are the C++ parity gates.
+  cache/dataset/hash are transform-shaped, and the verifier crate keeps
+  no memo of its own. The daemon's caches are the hasher's, above the
+  verifier; a CI gate holds cache derivation to it
+  (`scripts/ci/check_randomx_cache_owner.sh`).
 - **`rust/shekyl-consensus` stays** — six live Cargo consumers; it is not a
   PoW vestige.
 - **Genesis-era mining asymmetry** (the honest light-mode floor vs the tuned

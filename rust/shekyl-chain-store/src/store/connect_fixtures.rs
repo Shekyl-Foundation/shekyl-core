@@ -134,7 +134,6 @@ impl FixtureSubstrate {
 
 impl Substrate for FixtureSubstrate {
     type Fault = Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Infallible> {
         Ok(Self::CLOCK)
