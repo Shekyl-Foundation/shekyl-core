@@ -70,3 +70,14 @@ tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
 shekyl-address = { path = "../shekyl-address" }
+
+[target.'cfg(windows)'.dev-dependencies]
+# tests/local_peer_check.rs: a pipe with a Low integrity label behind a
+# rendezvous record, which the peer check must refuse (RT-15).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+
