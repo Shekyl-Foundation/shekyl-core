@@ -257,8 +257,8 @@ the three operands.
 3. **Tail.** "A criterion, not a number": at maturity the tail is at least
    `k` times the median per-block fee revenue on the baseline demand
    scenario, `k ≥ 1` ("Carlsten: the fixed reward must dominate fee
-   variance"). It is in §4 as a PROPOSED criterion. The
-   ratio-of-asymptote figure is derived from EUP-4's tables and then
+   variance"). It is in §4, its wording ratified (Rick, 2026-11-13) and
+   `k` still open: Rick sets `k`. The ratio-of-asymptote figure is derived from EUP-4's tables and then
    ratified as the inflation Rick is willing to carry. The structural arms
    carry a per-block fee revenue and variance column to about year 135.
 4. **Fee basis: direction ruled, derivation open.** Fees are decoupled from
@@ -275,18 +275,22 @@ the three operands.
 | # | Work | Gate |
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
-| b | `Fill::admit_up_to` admits the penalty-free part and the penalty zone in closed form, held to the single-offer walk. **Built 2026-11-06**, the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.28) | EUP-4 prep. The 135-year horizon for the registered tables waits on §4's ratification |
+| b | `Fill::admit_up_to` admits the penalty-free part and the penalty zone in closed form, held to the single-offer walk. **Built 2026-11-06**, the first EUP-4 prep PR (ruling 5, 2026-10-24; [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.28) | EUP-4 prep. The 135-year horizon for the registered tables is ratified (§4.1) |
 | c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
 | d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
 
 Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
 principal (B); the knee stays held; nothing in EUP-5 moves before EUP-4's
-tables. Still Rick's and not yet given: the §4 ratifications still
-PROPOSED (the criteria and the horizon; the year-1 Standard-rung fee was
-ratified 2026-11-06), the GF-7 asymptote (EUP-5 F), and
-the authorization to start EUP-3's coupling half, which waited on ESR-8 and
-ESR-10; both have closed.
+tables. Given 2026-11-13: §4's criteria and the horizon, ratified as
+written (the year-1 Standard-rung fee was ratified 2026-11-06, and the
+Tail's wording with its `k` left open), and the authorization to start
+EUP-3's coupling half. Still Rick's, before EUP-4 runs: the tail's `k` (§4),
+§4.2's boom/bust emission fraction, and what the growth schedule does past
+its supply break (§4.1). The GF-7 asymptote is EUP-5 F's, after BA-T10: the
+steepest member stays excluded until BA-T10 sets S (Rick, 2026-11-13). Also
+Rick's: whether a member is then admitted only if it passes the slew gate
+across BA-T10's whole plausible range of S (a review recommendation).
 
 ---
 
@@ -294,20 +298,21 @@ ESR-10; both have closed.
 
 Graded at EUP-4 against the design curve, both fee arms, every scenario. A
 criterion with an April number takes it; a criterion April did not set is
-**PROPOSED** and needs Rick's ratification before EUP-4 runs — setting a
+**PROPOSED** until Rick ratifies it, before EUP-4 runs — setting a
 threshold after seeing the numbers is the failure this section exists to
-prevent.
+prevent. Rick ratified the set as written on 2026-11-13; the Tail's `k` is
+still his to set.
 
 | Design goal (`DESIGN_CONCEPTS.md` §1) | Measured as | April's figure | Criterion |
 | --- | --- | --- | --- |
-| 2. Long-run security budget | Miner income (reward + kept fees) per block, by year; the tail era's share that is fee | Miner income ≥ 85 % of no-share in year 1, 95 % by year 10 | Holds on the baseline and the boom/bust schedule. **PROPOSED:** no year in which the tail-era miner income falls below the tail subsidy alone |
-| 3. Predictability | Emitted fraction by year; release multiplier's range | 50 % ~year 11, 80 % ~year 25 | The owner's curve test pins April's figures on the neutral trajectory. **PROPOSED:** within ±1 year of them on every scenario |
-| 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response | M_r in [0.8, 1.3] | **PROPOSED:** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
-| 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **PROPOSED:** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
-| Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **PROPOSED:** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
+| 2. Long-run security budget | Miner income (reward + kept fees) per block, by year; the tail era's share that is fee | Miner income ≥ 85 % of no-share in year 1, 95 % by year 10 | Holds on the baseline and the boom/bust schedule. **RATIFIED (Rick, 2026-11-13):** no year in which the tail-era miner income falls below the tail subsidy alone |
+| 3. Predictability | Emitted fraction by year; release multiplier's range | 50 % ~year 11, 80 % ~year 25 | The owner's curve test pins April's figures on the neutral trajectory. **RATIFIED (Rick, 2026-11-13):** within ±1 year of them on every scenario |
+| 5. Demand-responsive emission | Release multiplier and burn under step, boom/bust and stuffing schedules; the 720 window's step response | M_r in [0.8, 1.3] | **RATIFIED (Rick, 2026-11-13):** a stuffer working the window's edge cannot hold M_r above 1.0 for longer than the window at a cost below the ESR-7 envelope |
+| 6. Self-regulating balance | Staker yield; A1 clearance; onset year; coverage | Staker yield 4–6 % years 1–5, ~1.7 % at year 10 | **RATIFIED (Rick, 2026-11-13):** yields within a factor of two of April's in years 1–10; A1 flat-25 clearance ≥ 1 through year 20 at 10 % on the baseline |
+| Capacity (no April row) | Transactions carried per block against demand; years to carry the baseline's 50 | — (April assumed blocks carry demand) | **RATIFIED (Rick, 2026-11-13):** the default rung carries the baseline's demand from genesis, or the deviation is a ruled choice |
 | Usability (no April row) | Standard-rung fee for an ordinary transaction, by year | — | **RATIFIED (Rick, 2026-11-06):** the year-1 Standard-rung fee for an ordinary 1-in/2-out transaction is at most **0.05 %** of the year-1 block reward: about 0.496 SKL (496 289 839 atomic) on the design curve, whose year-1 mean block reward is 992.58 SKL (`projected_already_generated` over the first 262 800 blocks, read at `b8b11453e`). The floor is the stuffing criterion, applied in year 1. Set before ESR-10 runs, which prints this fee for every cell |
-| Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **PROPOSED:** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`; Rick sets `k`. The tail's ratio of the asymptote per year is read off this table and then ratified |
-| Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **PROPOSED:** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
+| Tail (no April row; ruled a criterion, §3.2) | Per-block fee revenue, median and variance, on the baseline, in the structural arms to about year 135 | — | **RATIFIED except `k` (Rick, 2026-11-13; Rick sets `k`):** at maturity the tail is at least `k` × the median per-block fee revenue, `k ≥ 1`. The tail's ratio of the asymptote per year is read off this table and then ratified |
+| Stuffing (§6) | The ESR-7 envelope minimum, in floors per byte, by era | "Marginally profitable short-term" | **RATIFIED (Rick, 2026-11-13):** the cheapest archival byte is no cheaper than the relay floor in any era, after D is decided |
 
 Goals 1 (denomination) and 4 (`uint64_t` safety) are code properties, held by
 their own tests, and are not graded here.
@@ -324,7 +329,7 @@ and assert it (`onset::tests::assert_tail_era`). The third is the escalation
 knee's band, whose high fell to 2,079,614 against a shipped knee of 2,250,000;
 the knee is held, not re-pinned (`docs/FOLLOWUPS.md`).
 
-**Horizon — PROPOSED, a decision about the assessment.** The structural
+**Horizon — RATIFIED (Rick, 2026-11-13), a decision about the assessment.** The structural
 questions (onset, fee era, tail) are tail-era questions, and a 60-year run no
 longer sees them. The structural arms run to about 135 years; the remaining
 arms stay at 60. Measured cost on the control arm: the baseline to 135 years
@@ -334,7 +339,8 @@ is [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
 §5.28.1. The growth schedule stops in year 114 on production and year 80 on
 the flat control. That is the year its cumulative fee burn passes everything
 emitted, and the sim's supply invariant refuses the fold (§5.28.1). Whether the growth arm runs to
-the horizon is a question about that schedule, not about cost. The structural arms carry a per-block fee
+the horizon is a question about that schedule, not about cost, and is still
+Rick's to rule. The structural arms carry a per-block fee
 revenue and variance column for the tail criterion (§3.2, 3).
 
 Scenario 9 (high history, low activity) is the first of the structural arms.

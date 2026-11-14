@@ -145,6 +145,28 @@ pub fn forfeit_at_the_ceiling(
     emission.to_raw() - at_ceiling
 }
 
+/// A6's slew gate, in staker-share points an epoch: the worst penalty-free
+/// slew a flood at the surge ceiling can force must stay under it (ruled
+/// 2026-10-24; `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.4.1, A6).
+pub const A6_SLEW_GATE_PTS_PER_EPOCH: f64 = 1.0;
+
+/// A6's verdict: the measurement and the gate's result, and nothing else.
+/// The slew scales with the surge factor, so the line names the `S` it was
+/// measured at; which members the band admits is a ruling and stays out of
+/// printed output.
+#[must_use]
+pub fn a6_slew_verdict(worst_penalty_free_pts: f64, surge_factor: u64) -> String {
+    let result = if worst_penalty_free_pts < A6_SLEW_GATE_PTS_PER_EPOCH {
+        "under"
+    } else {
+        "at or over"
+    };
+    format!(
+        "worst penalty-free slew {worst_penalty_free_pts:.4} points an epoch at S = \
+         {surge_factor}, {result} the {A6_SLEW_GATE_PTS_PER_EPOCH:.1} gate"
+    )
+}
+
 /// A6 report: the slew ceiling, per-epoch `Δshare` under a sustained flood, and
 /// the reorg-window reversibility bound — measured on the **steepest** candidate,
 /// since a cliff would appear there first.
@@ -232,11 +254,7 @@ pub fn a6_report(
          VERDICT: {V}",
         W = worst_epoch_pts,
         RD = REORG_DEPTH_BLOCKS,
-        V = if worst_epoch_pts < 1.0 {
-            "no measurable adversarial slew."
-        } else {
-            "see the slew reading below."
-        },
+        V = a6_slew_verdict(worst_epoch_pts, run.economic().block_weight_surge_factor),
     )?;
     writeln!(out,
         "  -> §6.0/§6.1 SEPARATED, because they are different claims:\n\
@@ -402,5 +420,22 @@ mod tests {
                 bar
             );
         }
+    }
+
+    #[test]
+    fn the_slew_verdict_names_the_figure_the_surge_factor_and_the_gate() {
+        assert_eq!(
+            a6_slew_verdict(0.7558, 3),
+            "worst penalty-free slew 0.7558 points an epoch at S = 3, under the 1.0 gate"
+        );
+        assert_eq!(
+            a6_slew_verdict(1.0080, 4),
+            "worst penalty-free slew 1.0080 points an epoch at S = 4, at or over the 1.0 gate"
+        );
+        // The gate is strict: a slew of exactly 1.0 does not pass it.
+        assert_eq!(
+            a6_slew_verdict(A6_SLEW_GATE_PTS_PER_EPOCH, 3),
+            "worst penalty-free slew 1.0000 points an epoch at S = 3, at or over the 1.0 gate"
+        );
     }
 }
