@@ -20,4 +20,4 @@
   - `Input::fcmp_spend`;
   - `TxPrefix::NO_UNLOCK_TIME`.
 
-  `shekyl-fcmp` gains `curve_trees_tree_depth` with `MIN_SPEND_LAYERS`, the checked conversion from an FCMP++ layer count to the on-chain depth. `shekyl-curve-primitives` gains `Commitment::from_canonical_mask`, which reads a commitment mask in the crate that owns it. `shekyl-tx-builder` and the multisig ceremony both use them, in place of literals each had written for itself.
+  `shekyl-fcmp` gains `curve_trees_tree_depth` with `MIN_SPEND_LAYERS`, the checked conversion from an FCMP++ layer count to the on-chain depth. `shekyl-curve-primitives` gains `Commitment::from_canonical_mask`, which reads a commitment mask in the crate that owns it. Every builder, fixture and test that wrote these values as literals now names them, and so do both consensus validators: CEN-I16 in `shekyl-chain-rules` and the submit verifier's K13 in `shekyl-daemon-rpc`. The submit verifier's private copies of the scheme ids are deleted for `shekyl-crypto-pq`'s. `Input::fcmp_spend` takes the `KeyImage` newtype (RTN-7). No value changes, so no transaction's bytes and no verdict change.
