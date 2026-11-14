@@ -351,9 +351,15 @@ fn is_local(dir: &std::path::Path) -> std::io::Result<bool> {
 #[cfg(all(unix, not(target_os = "linux")))]
 fn is_local(dir: &std::path::Path) -> std::io::Result<bool> {
     let stat = rustix::fs::statfs(dir)?;
-    // `u32` on macOS, `u64` on FreeBSD.
+    // `u32` on macOS, `u64` on FreeBSD: the conversions are needless on one
+    // of the two.
+    #[allow(clippy::useless_conversion, reason = "u32 on macOS, u64 on FreeBSD")]
     let flags = u64::from(stat.f_flags);
-    #[allow(clippy::cast_sign_loss, reason = "a flag bit, never negative")]
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::unnecessary_cast,
+        reason = "a flag bit, never negative; u32 on macOS, u64 on FreeBSD"
+    )]
     let local = libc::MNT_LOCAL as u64;
     Ok(flags & local != 0)
 }

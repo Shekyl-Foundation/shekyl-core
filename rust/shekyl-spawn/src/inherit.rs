@@ -194,31 +194,70 @@ mod tests {
         }
     }
 
-    /// Whether a child spawned with `install` still holds `fd`. `/dev/fd/N`
-    /// is the child's own table; a redirection (`<&N`) would not do, because
-    /// dash takes only one-digit descriptor numbers there, and a test
-    /// process can hold ten.
-    fn child_holds(fd: libc::c_int, install: impl FnOnce(&mut std::process::Command)) -> bool {
-        let mut cmd = std::process::Command::new("/bin/sh");
-        cmd.arg("-c")
-            .arg(format!("test -e /dev/fd/{fd}"))
+    /// Set only in a probe child: the descriptor number to look for.
+    const PROBE: &str = "SHEKYL_SPAWN_TEST_PROBE_FD";
+
+    /// The probe child's role: exit 0 when `fd` is open and is `/dev/null`
+    /// (the planted descriptor, not another that reused its number), 1
+    /// otherwise. Returns in the parent.
+    fn probe_if_requested() {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(fd) = std::env::var_os(PROBE) else {
+            return;
+        };
+        let fd: libc::c_int = fd
+            .to_str()
+            .and_then(|n| n.parse().ok())
+            .expect("a descriptor number");
+        let null = std::fs::metadata("/dev/null").expect("/dev/null");
+        // SAFETY: `F_GETFD` reads only this descriptor's flags; an unopened
+        // `fd` fails with `EBADF`.
+        let open = unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0;
+        let is_null = open && {
+            // SAFETY: `fd` is open in this process; `ManuallyDrop` never
+            // closes it, so the borrow takes nothing.
+            let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+            file.metadata()
+                .is_ok_and(|m| m.ino() == null.ino() && m.rdev() == null.rdev())
+        };
+        std::process::exit(i32::from(!is_null));
+    }
+
+    /// Whether a child spawned with `install` still holds `fd`. The child is
+    /// this test binary again, as the probe, running `test`: it looks at its
+    /// own table, where `/dev/fd/N` would not do (FreeBSD without `fdescfs`
+    /// lists only 0 to 2 there, and dash takes only one-digit numbers in a
+    /// redirection).
+    fn child_holds(
+        test: &str,
+        fd: libc::c_int,
+        install: impl FnOnce(&mut std::process::Command),
+    ) -> bool {
+        let mut cmd = std::process::Command::new(std::env::current_exe().expect("this binary"));
+        cmd.args(["--exact", test, "--nocapture"])
+            .env(PROBE, fd.to_string())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         install(&mut cmd);
         crate::spawn_lock::status(&mut cmd)
-            .expect("run the shell")
+            .expect("run the probe")
             .success()
     }
 
     #[test]
     fn a_planted_descriptor_reaches_a_child_without_it_and_not_with_it() {
+        const NAME: &str =
+            "inherit::tests::a_planted_descriptor_reaches_a_child_without_it_and_not_with_it";
+        probe_if_requested();
         let planted = Planted::open();
         assert!(
-            child_holds(planted.0, |_| {}),
+            child_holds(NAME, planted.0, |_| {}),
             "the planted descriptor is inheritable: the control arm sees it"
         );
-        let held = child_holds(planted.0, |cmd| {
+        let held = child_holds(NAME, planted.0, |cmd| {
             let stdio_only = StdioOnly::prepare();
             // SAFETY: as [`stdio_only`].
             unsafe {
@@ -249,8 +288,15 @@ mod tests {
     /// descriptor from the child too.
     #[test]
     fn the_walk_alone_keeps_a_planted_descriptor_from_the_child() {
+        const NAME: &str =
+            "inherit::tests::the_walk_alone_keeps_a_planted_descriptor_from_the_child";
+        probe_if_requested();
         let planted = Planted::open();
-        let held = child_holds(planted.0, |cmd| {
+        assert!(
+            child_holds(NAME, planted.0, |_| {}),
+            "the planted descriptor is inheritable: the control arm sees it"
+        );
+        let held = child_holds(NAME, planted.0, |cmd| {
             let stdio_only = StdioOnly::prepare();
             // SAFETY: as [`stdio_only`]; the walk is async-signal-safe.
             unsafe {
