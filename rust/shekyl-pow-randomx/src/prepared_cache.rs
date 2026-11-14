@@ -34,15 +34,14 @@
 //! [`PreparedCache`] derives nothing. The wrapped (crate-private)
 //! cache is ~256 MiB; cloning would be an extraordinarily
 //! expensive operation that no caller wants. Sharing across
-//! consumers is handled via [`std::sync::Arc<PreparedCache>`]
-//! (the `CacheStore` shape per the same §3.1 Round 2 disposition,
-//! landing in Phase 2F commit 2); pointer-equality goes through
-//! [`std::sync::Arc::ptr_eq`].
+//! consumers is handled via [`std::sync::Arc<PreparedCache>`],
+//! which in the daemon only `shekyl-hasher` holds; pointer-equality
+//! goes through [`std::sync::Arc::ptr_eq`].
 //!
 //! Equality semantics (per Phase 2F §1.1 Round 2 post-closure
 //! pin #2):
 //!
-//! - **Seedhash equality** (CacheStore lookup, slot indexing):
+//! - **Seedhash equality** (finding a seed's cache):
 //!   `prepared.seedhash() == lookup_key` via [`crate::Seedhash`]'s
 //!   derived `PartialEq`.
 //! - **Arc identity** (test assertions like "same Arc clone
@@ -321,9 +320,6 @@ mod tests {
     ///
     /// Note: this test pays one full cache-derive cost
     /// (~150–200 ms, dominated by Argon2d). Acceptable for one
-    /// assertion; bulk slot-behavior testing in the (Phase 2F
-    /// commit 2) `cache_store.rs#mod tests` uses a `pub(crate)`
-    /// test-time cache constructor to avoid paying the cost per
     /// assertion.
     #[test]
     fn seedhash_accessor_returns_input() {

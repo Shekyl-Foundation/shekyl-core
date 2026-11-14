@@ -83,10 +83,6 @@ pub enum Event<K> {
         /// Seats free.
         seats: u32,
     },
-    /// The ingest window's cache slots changed: a seed they did not hold
-    /// may be held now. A session whose headers could not be proven for
-    /// that reason ([`Proved::NotHeld`]) is drawn again.
-    Seeds,
     /// The header request's deadline passed.
     Deadline {
         /// The session the request was drawn for.
@@ -164,15 +160,6 @@ pub enum Proved {
     Formed(Box<FormedHeader>),
     /// `form_header` refused it. The run layer closes the supplier.
     Refused(InvalidBlock),
-    /// A [`CachePlan::Main`] seed is not in either cache slot. The executor
-    /// looks a main seed up and never derives it (B2), so the header cannot
-    /// be proven against this window. Not the peer's fault: the run is
-    /// dropped and the session kept, closed to header draws until the
-    /// slots change ([`Event::Seeds`]), when the next header request
-    /// fetches the headers again against the window as it stands then.
-    /// Dropping the run, not only the proof, is what stops the same plan
-    /// being issued again on the same event.
-    NotHeld,
 }
 
 /// What the model asks the executor to do.
@@ -238,8 +225,11 @@ pub enum Command<K> {
         job: Job,
         /// Which hasher class.
         class: HashClass,
-        /// Which cache the seed is hashed under.
-        cache: CachePlan,
+        /// The seed every item hashes under. The executor borrows this
+        /// seed's cache for the job, and the hasher builds it when it is
+        /// not warm. The model names a seed only once it is earned
+        /// (`peer::seed_for`).
+        seed: BlockHash,
         /// The preimages, in chain order.
         items: Vec<ProveItem>,
     },
@@ -318,21 +308,6 @@ pub enum Command<K> {
         /// What the response, or its proof, came to.
         cause: Spent,
     },
-    /// This session's headers could not be proven: the cache for `seed`
-    /// was in neither of the ingest window's slots ([`Proved::NotHeld`]).
-    /// The run is dropped and the session is not drawn for headers until
-    /// the slots change ([`Event::Seeds`]). A record: the owner logs it,
-    /// and nothing is sent. The owner also reads the window it holds: a
-    /// pair that holds `seed` by the time this command is handled was
-    /// published between the lookup and now, and its change event may
-    /// already have passed, so the owner raises [`Event::Seeds`] at the
-    /// end of the batch.
-    SeedNotHeld {
-        /// The session.
-        session: K,
-        /// The seed the slots did not hold.
-        seed: BlockHash,
-    },
 }
 
 /// Why a session's headers from `H*` yielded nothing
@@ -363,17 +338,6 @@ pub enum HashClass {
     Unsolicited,
     /// The past-cap evidence check.
     Evidence,
-}
-
-/// Which cache one prove item's seed is hashed under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CachePlan {
-    /// On the main chain. The executor looks it up and never derives it.
-    Main(BlockHash),
-    /// Earned on the run's own branch. One branch seed at a time.
-    Branch(BlockHash),
-    /// The evidence check's first seed.
-    Evidence(BlockHash),
 }
 
 /// One preimage the executor proves.

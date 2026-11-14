@@ -8,8 +8,9 @@
 //! `DAEMON_REDB_STORE.md` §1.3a's `PB-D1` and `PB-D2`).
 //!
 //! The measured call is [`shekyl_pow_randomx::compute_hash`] over a prepared
-//! cache: what the production substrate's `longhash` runs for every block a
-//! node connects (`shekyl-chain-ingest` `substrate.rs`), in light mode,
+//! cache: what a hashing job's `longhash` runs for every block a node
+//! connects (`shekyl-hasher`'s `Lent::hash`, through `shekyl-chain-ingest`
+//! `pow.rs`), in light mode,
 //! with a scratchpad allocated per call. The input is a header-sized
 //! proof-of-work blob, [`HEADER_POW_BYTES`] long, the length
 //! `examples/rt_w10_request_cost.rs` times on the floor device.

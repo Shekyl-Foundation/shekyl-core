@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 14e8482fb79f677305e7d4db945649500c7c7413992699026a50876aed205c18 # shrinks to ops = [Rank([0], None), Rank([0, 1], None), Request(4, Chain), Claim, Claim, Claim, Request(2, Chain), Rank([0, 1], None), Request(4, Chain), Claim, Begin, Built, Rank([4], None)]
+cc ecab74e09994276343185f122b1fb1002edaadd276de39850af8af438e7058d7 # shrinks to ops = [Request(0, Chain), Claim, Leave(0)]
