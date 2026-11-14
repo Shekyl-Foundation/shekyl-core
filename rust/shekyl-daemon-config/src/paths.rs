@@ -189,7 +189,6 @@ mod tests {
             ..Platform::default()
         };
         let home = parent.path().join("shekyl");
-        let me = std::fs::metadata(parent.path()).unwrap().uid();
         let found = |r: Result<(), Diagnostic>| {
             let d = r.expect_err("refused");
             assert_eq!(d.code, Code::ServiceRoot);
@@ -199,9 +198,18 @@ mod tests {
             check_service_data_home_as(&platform, RunMode::Service, explicit, uid)
         };
 
-        assert!(found(check(None, me)).contains("does not exist"));
+        assert!(found(check(None, 4242)).contains("does not exist"));
         assert!(!home.exists(), "the check created nothing");
         std::fs::create_dir(&home).unwrap();
+        // An ordinary account's own home, whoever runs the tests: run as
+        // root, the home is given to an ordinary uid.
+        let me = std::fs::metadata(&home).unwrap().uid();
+        let me = if me == 0 {
+            std::os::unix::fs::chown(&home, Some(4242), None).unwrap();
+            4242
+        } else {
+            me
+        };
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o750)).unwrap();
         assert!(found(check(None, me)).contains("not 0700"));
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();

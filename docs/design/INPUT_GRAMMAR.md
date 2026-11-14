@@ -763,7 +763,7 @@ The wallet RPC (`docs/api/wallet_rpc.yaml`) predates Part C's rename and keeps i
 
 ## 17. The method census
 
-Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
+Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42; RT-W10 step 4 adds IG-Q87's five (§25.3), 47 in all. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
 
 | Served today | Method | Parameters | Grant | Notes |
 |---|---|---|---|---|
@@ -803,6 +803,9 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `set_bans` | `ban_add`, `ban_remove` | `host`; `duration` for `ban_add` | bans | one verb per change; IG-Q44 |
 | `get_bans`, `banned` | `ban_list`, `ban_show` | `host` for `ban_show` | bans | IG-Q46 |
 | `/get_stem_tallies` | `relay_stats` | — | host-only (RT-O9.3) | |
+| — | `rpc_client_add`, `rpc_client_set` | `fingerprint`, `ceiling` | enrol | IG-Q87; built by RT-W10 step 4 |
+| — | `rpc_client_remove` | `fingerprint` | enrol | IG-Q87; closes the fingerprint's sessions |
+| — | `rpc_client_list`, `rpc_bundle_show` | — | enrol | IG-Q87 |
 | `generateblocks` | `dev_block_generate` | `count` | armed lever (RT-O9.2) | IG-Q49; IG-F23 |
 | `/pop_blocks` | `dev_chain_pop` | `count` | armed lever (RT-O9.2) | IG-Q49 |
 | `save_bc`, `flush_cache`, `inject_archival_serve_credit`, `/set_log_hash_rate` | — | — | — | deleted (`DRS_X_STORE_FLIP.md` DX-Q3) |
