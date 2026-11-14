@@ -306,7 +306,13 @@ impl ReleaseRequestError {
 /// without driving the engine to the dispatch stage; the seam's tripwire
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
-    matches!(e, BroadcastSubmitError::PersonaMismatch { .. })
+    // Nothing left the wallet: a persona mismatch, or a seal whose
+    // parent-directory fsync did not confirm. The just-taken seal is
+    // released so the lane can be retried.
+    matches!(
+        e,
+        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealUnconfirmed
+    )
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_drain
@@ -612,8 +618,8 @@ where
             reference_height,
             terminal: None,
         };
-        let admission = store
-            .mutate(move |block| {
+        let (admission, durability) = store
+            .mutate_reporting(move |block| {
                 // One locked decision, shared with the bond-post/claim/drain
                 // seams: persona dedup first (remedy: wait), then cross-kind
                 // gindex overlap (remedy: retry), then the generation guard.
@@ -652,7 +658,13 @@ where
         // - `RejectedRetryable` and `Ambiguous` keep the record live as
         //   before; the end date ends them too.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        match submitter.submit_bound(assembled.bound_tx.clone()).await {
+        match submitter
+            .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
+                assembled.bound_tx.clone(),
+                durability,
+            ))
+            .await
+        {
             Ok(submit) => Ok(ReleaseReceipt {
                 release: assembled,
                 submit,

@@ -192,7 +192,7 @@ file formats and code paths.
   in-process** via `EngineSession` (`engine_session.rs`, GUI-PR1
   `c7da109`) — create / restore-from-BIP-39 / open / close /
   `primary_address` / ledger balance / one-shot transfer
-  (`build_pending_tx_async` → `submit_pending_tx_async`,
+  (`build_pending_tx` → `submit_pending_tx`,
   `engine_session.rs:601`) / fee estimate / transfer history
   (GUI-PR2 `03eb868`). No `wallet2_ffi` on this path.
 - The engine backend is **default-on** (`SHEKYL_ENGINE_BACKEND` env,

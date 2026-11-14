@@ -40,15 +40,58 @@ use shekyl_wire::Input;
 // PBoundBytes — the byte↔persona pairing, minted only here (pin P-1)
 // ---------------------------------------------------------------------------
 
+/// Bytes read back from the pending store.
+///
+/// The field is private. [`PBoundBytes::from_pending`] is the constructor,
+/// so a fresh assembly cannot claim this witness.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LoadedSeal {
+    bound: PBoundBytes,
+}
+
+impl LoadedSeal {
+    /// The sealed pairing.
+    #[cfg(test)]
+    pub(crate) fn as_bound(&self) -> &PBoundBytes {
+        &self.bound
+    }
+
+    /// The persona these bytes are bound to.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        self.bound.persona()
+    }
+
+    /// The stored transaction bytes.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.bound.bytes()
+    }
+
+    /// Consume into the raw bytes. [`DurableTxBytes::from_loaded_seal`](super::dispatch_durability::DurableTxBytes::from_loaded_seal)
+    /// is the production caller.
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.bound.into_bytes()
+    }
+}
+
+impl std::fmt::Debug for LoadedSeal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LoadedSeal(<redacted>)")
+    }
+}
+
 /// `P`-bound transaction bytes — the byte↔persona pairing carried as a value
 /// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1 part 4).
 ///
-/// [`BroadcastSubmitter::submit_bound`] accepts only this type and
-/// equality-checks the carried persona against the submitter's
-/// constructor-bound persona, so `P1`'s bytes cannot ride `P2`'s circuit.
-/// Full per-persona type *branding* is rejected (the persona set is dynamic;
-/// rule-21 reopen in §3.1 part 4) — the pairing is a checked value, not a
-/// type parameter.
+/// [`BroadcastSubmitter::submit_bound`] accepts a [`BoundForSend`](super::transaction_submitter::BoundForSend)
+/// built from this pairing and equality-checks the carried persona against
+/// the submitter's constructor-bound persona, so `P1`'s bytes cannot ride
+/// `P2`'s circuit. Full per-persona type branding is rejected (the persona
+/// set is dynamic; rule-21 reopen in §3.1 part 4) — the pairing is a checked
+/// value, not a type parameter.
+///
+/// A record read back from the pending store is a [`LoadedSeal`], not a
+/// fresh value of this type. Only [`Self::from_pending`] constructs it.
 ///
 /// **Provenance pins (§3.1.1 part 6), discharged here:**
 ///
@@ -56,18 +99,12 @@ use shekyl_wire::Input;
 ///   to this module: production bytes are minted exactly once, by the
 ///   assemble/finalize path, from the transaction it just encoded. The only
 ///   other production path is [`Self::from_pending`], which re-lifts a
-///   [`PendingBondPost`] this module previously sealed — trusting our own
-///   prior seal, exactly as `PScanAccrual::from_state` trusts the sealed
-///   frontier. Tests use [`Self::bind_for_test`].
+///   [`PendingBondPost`] this module previously sealed. Tests use
+///   [`Self::bind_for_test`].
 /// - **P-2 — retries re-send the stored value.** The pending record persists
 ///   the pairing's fields (`persona`, `tx_bytes`); F31/watchdog resubmits
-///   re-lift and re-send the *stored* bytes through the same
-///   `submit_bound` choke path, never a re-encode.
-///
-/// [`BroadcastSubmitter::submit_bound`]: super::transaction_submitter::BroadcastSubmitter::submit_bound
-//
-// Lint-visible: the WI-2 assemble handler mints these and the WI-3 dispatch
-// driver consumes them, so no suppression applies.
+///   re-lift and re-send the stored bytes through the same `submit_bound`
+///   choke path, never a re-encode.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PBoundBytes {
     persona: PCanonicalId,
@@ -92,13 +129,13 @@ impl PBoundBytes {
         Self { persona, bytes }
     }
 
-    /// Re-lift a sealed [`PendingBondPost`] into its transform-shaped twin
-    /// (rule 18) for dispatch. The record's `(persona, tx_bytes)` pair was
-    /// written by this module's assemble path (persist-before-dispatch), so
-    /// the re-lift trusts the seal — pin P-2's "retries re-send the stored
-    /// value" is this function feeding `submit_bound`.
-    pub(crate) fn from_pending(post: &PendingBondPost) -> Self {
-        Self::bind(post.persona, post.tx_bytes.clone())
+    /// Re-lift a sealed [`PendingBondPost`] that was read from the pending
+    /// store. The [`LoadedSeal`] is the witness that these bytes came back
+    /// from that store; a fresh assembly does not construct one.
+    pub(crate) fn from_pending(post: &PendingBondPost) -> LoadedSeal {
+        LoadedSeal {
+            bound: Self::bind(post.persona, post.tx_bytes.clone()),
+        }
     }
 
     /// The persona these bytes are bound to.
@@ -1099,7 +1136,10 @@ mod tests {
         let bound = PBoundBytes::from_pending(&post);
         assert_eq!(bound.persona(), &persona);
         assert_eq!(bound.bytes(), bytes.as_slice());
-        assert_eq!(bound, PBoundBytes::bind_for_test(persona, bytes));
+        assert_eq!(
+            bound.as_bound(),
+            &PBoundBytes::bind_for_test(persona, bytes)
+        );
     }
 
     /// The pairing's `Debug` is redacted wholesale — the persona↔tx link is

@@ -113,6 +113,7 @@ fn state(dir: &TempDir, daemon_address: String) -> Arc<AppState> {
             p: 1,
         },
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 

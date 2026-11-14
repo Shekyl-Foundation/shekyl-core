@@ -270,6 +270,13 @@ pub enum ResolvedCommand {
     Abandon {
         txid: String,
     },
+    /// The held sends that need the user's decision (`tx_alarm`, A19).
+    TxAlarm,
+    /// Resend a held send's saved bytes, by the user's decision
+    /// (`tx_resend`, A19).
+    TxResend {
+        txid: String,
+    },
 
     // -- Receiving (payment requests / URIs, WI-RPC-1) --
     RequestNew {

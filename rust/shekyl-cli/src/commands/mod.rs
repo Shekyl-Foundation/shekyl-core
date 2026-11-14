@@ -304,6 +304,18 @@ pub fn run(
                 transfers::cmd_abandon(&rpc, &txid),
                 transfers::show_abandoned,
             ),
+            ResolvedCommand::TxAlarm => present(
+                &presentation,
+                "tx alarm",
+                transfers::cmd_tx_alarm(&rpc),
+                transfers::show_tx_alarm,
+            ),
+            ResolvedCommand::TxResend { txid } => present(
+                &presentation,
+                "tx resend",
+                transfers::cmd_tx_resend(&rpc, &txid),
+                transfers::show_submit,
+            ),
 
             ResolvedCommand::RequestNew {
                 amount,

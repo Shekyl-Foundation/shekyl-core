@@ -146,6 +146,7 @@ mod tests {
             0,
             Vec::new(),
             vec![SendInputRef { gindex, amount: 0 }],
+            vec![0xAA],
         );
         assert!(journal.stamp_lock_baseline(&txid, 90));
         journal.spend_locks()

@@ -535,7 +535,8 @@ Default. Lands before genesis if it should exist at launch.
 - **Full all-segment frozen-`R_k` recheck (CT-3c bounded-check deferral, 2026-06-12).**
   - Target: pre-genesis
 
-- **Watchdog probe bytes: ephemeral in-memory held-bytes store — reversion clause (rule 21), two independent axes, only one reopens.**
+- **Watchdog probe bytes — the durability axis REOPENED by A19 (alpha.11 bug hunt) and built (#1362): the bytes are saved on the send record at dispatch. The auto-versus-confirm axis stays CLOSED: after a restart a resend is the user's (`tx_resend`), never the watchdog's; it reopens only on a ruling that a cross-restart re-offer is privacy-neutral (provably the same daemon the bytes went to).**
+  - Owner: the submit lifecycle — [`DAEMON_SUBMIT_VERDICT.md`](design/DAEMON_SUBMIT_VERDICT.md) §5.3
   - Target: pre-genesis
 
 - **F41 constant-work-on-Conceal: invariant NAMED + enforcement DECOMPOSED (2c design round 2026-07-04, `DAEMON_SUBMIT_VERDICT.md` §3.1) — four implementation obligations open, and a hard ordering constraint.**
