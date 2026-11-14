@@ -20,7 +20,7 @@ use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
     Client, Daemon, DaemonReadyForMessage2, FirstMessageRefused, HandshakeError, Message1Admission,
     PendingSession, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, MESSAGE2_LEN,
-    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN, TRANSPORT_AD,
+    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, PAYLOAD_LEN, TAG_LEN, TRANSPORT_AD,
 };
 use shekyl_rpc_channel::{NetworkId, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 use std::time::{Duration, Instant};
@@ -51,8 +51,10 @@ fn read1(daemon: &StaticKeypair, message: &[u8]) -> Result<DaemonReadyForMessage
 
 const NETWORK: NetworkId = [0x17; 16];
 const OTHER_NETWORK: NetworkId = [0x18; 16];
-const REQUEST: &[u8] = b"what the client asks for";
-const GRANT: &[u8] = b"what the daemon grants";
+/// What the client asks for: `view`, as RT-O31 writes a grant set.
+const REQUEST: &[u8; PAYLOAD_LEN] = &[1, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// The ceiling the daemon answers with: `wallet`.
+const GRANT: &[u8; PAYLOAD_LEN] = &[1, 0x2F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 fn identities() -> (StaticKeypair, StaticKeypair) {
     (
@@ -96,7 +98,7 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     let (pending, message4) = daemon.write_message4(GRANT).unwrap();
     assert_eq!(message4.len(), MESSAGE4_OVERHEAD + GRANT.len());
     let (client, grant) = client.read_message4(&message4).unwrap();
-    assert_eq!(grant, GRANT);
+    assert_eq!(&grant, GRANT);
     let session_hash = client.handshake_hash();
     assert_eq!(session_hash, pending.handshake_hash());
 
@@ -107,7 +109,7 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     let (message, _) = client_send.seal(b"first request", TRANSPORT_AD).unwrap();
     let (mut session, first) = pending.open_first_message(bare(&message)).unwrap();
     assert_eq!(first, b"first request");
-    assert_eq!(session.request, REQUEST);
+    assert_eq!(&session.request, REQUEST);
     assert_eq!(
         session.client.fingerprint().as_bytes(),
         client_id.public().fingerprint().as_bytes()
@@ -526,7 +528,7 @@ fn a_fragmented_first_record_stays_withheld_until_it_opens() {
         .release(recv, Ok::<_, ClassedError>(opened.payload))
         .unwrap();
     assert_eq!(released, b"request");
-    assert_eq!(session.request, REQUEST);
+    assert_eq!(&session.request, REQUEST);
     assert_eq!(session.recv.opened(), 1);
 
     let wire = framed_send.seal(ClassId(0), b"second").unwrap();

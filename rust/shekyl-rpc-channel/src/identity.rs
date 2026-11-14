@@ -93,6 +93,106 @@ impl StaticKeypair {
     }
 }
 
+/// The key file's first bytes: what it is, before its version.
+pub const KEY_FILE_MAGIC: &[u8] = b"shekyl/rpc-static-key";
+
+/// The key file's version (RT-O34: versioned, and pinned by a known answer).
+pub const KEY_FILE_VERSION: u8 = 1;
+
+/// An X25519 secret's length.
+const X25519_SECRET_LEN: usize = 32;
+
+/// An ML-KEM-768 decapsulation key's length (FIPS 203: `dk_PKE`, `ek`,
+/// `H(ek)`, `z`).
+const MLKEM768_DK_LEN: usize = 2400;
+
+/// Where `ek` sits inside an ML-KEM-768 decapsulation key: after `dk_PKE`,
+/// 384 bytes for each of its three polynomials.
+const MLKEM768_DK_EK_AT: usize = 3 * 384;
+
+/// A key file's length at [`KEY_FILE_VERSION`].
+pub const KEY_FILE_LEN: usize = KEY_FILE_MAGIC.len() + 1 + X25519_SECRET_LEN + MLKEM768_DK_LEN;
+
+/// A key file that does not hold a usable identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFileError {
+    /// Not a key file: the magic or the length is wrong.
+    Format,
+    /// A key file of a version this build does not read.
+    Version(u8),
+    /// The secret halves do not form an identity: the decapsulation key
+    /// fails FIPS 203's check, or its public half is not a usable bundle.
+    Key,
+}
+
+impl core::fmt::Display for KeyFileError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Format => f.write_str("it is not an RPC channel key file"),
+            Self::Version(v) => write!(
+                f,
+                "it is a version {v} key file, and this build reads version {KEY_FILE_VERSION}"
+            ),
+            Self::Key => f.write_str("its keys do not form a usable identity"),
+        }
+    }
+}
+
+impl std::error::Error for KeyFileError {}
+
+impl StaticKeypair {
+    /// The key file's bytes: [`KEY_FILE_MAGIC`], [`KEY_FILE_VERSION`], the
+    /// X25519 secret, then the ML-KEM-768 decapsulation key, which carries
+    /// its encapsulation key. The public bundle is derived again on read,
+    /// so it cannot disagree with the secrets. Wiped when dropped (rule 35).
+    #[must_use]
+    pub fn to_key_file(&self) -> Zeroizing<Vec<u8>> {
+        let mut out = Zeroizing::new(Vec::with_capacity(KEY_FILE_LEN));
+        out.extend_from_slice(KEY_FILE_MAGIC);
+        out.push(KEY_FILE_VERSION);
+        out.extend_from_slice(Zeroizing::new(self.x25519.to_bytes()).as_slice());
+        out.extend_from_slice(Zeroizing::new(self.mlkem_dk.clone().into_bytes()).as_slice());
+        out
+    }
+
+    /// Read a key file [`Self::to_key_file`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyFileError`]: not a key file, another version, or keys that do
+    /// not form an identity.
+    pub fn from_key_file(bytes: &[u8]) -> Result<Self, KeyFileError> {
+        let rest = bytes
+            .strip_prefix(KEY_FILE_MAGIC)
+            .ok_or(KeyFileError::Format)?;
+        let (&version, rest) = rest.split_first().ok_or(KeyFileError::Format)?;
+        if version != KEY_FILE_VERSION {
+            return Err(KeyFileError::Version(version));
+        }
+        if rest.len() != X25519_SECRET_LEN + MLKEM768_DK_LEN {
+            return Err(KeyFileError::Format);
+        }
+        let (x25519, dk) = rest.split_at(X25519_SECRET_LEN);
+        let mut secret = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+        secret.copy_from_slice(x25519);
+        let x25519 = StaticSecret::from(*secret);
+        let mut dk_bytes = Zeroizing::new([0u8; MLKEM768_DK_LEN]);
+        dk_bytes.copy_from_slice(dk);
+        let mlkem_dk =
+            ml_kem_768::DecapsKey::try_from_bytes(*dk_bytes).map_err(|_| KeyFileError::Key)?;
+        let mut ek = [0u8; MLKEM768_EK_LEN];
+        ek.copy_from_slice(&dk_bytes[MLKEM768_DK_EK_AT..MLKEM768_DK_EK_AT + MLKEM768_EK_LEN]);
+        let public = StaticPublic::from_parts(PublicKey::from(&x25519).to_bytes(), ek)
+            .map_err(|_| KeyFileError::Key)?;
+        Ok(Self {
+            x25519,
+            mlkem_dk,
+            mac1_key: Mac1Key::of(&public),
+            public,
+        })
+    }
+}
+
 /// One side's ephemeral pair for one handshake.
 pub(super) struct Ephemeral {
     pub(super) x25519: StaticSecret,
