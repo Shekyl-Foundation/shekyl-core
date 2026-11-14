@@ -7086,6 +7086,21 @@ source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
 keeps regeneration at one commit and puts the first differing block in a
 consensus PR's own diff.
 
+## 2026-11-13 — Chain forge: CF-7 before CF-6; PB-D1 names both limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R25`).
+
+- After `CF-4b`, `CF-7` (the max-bundle chain) runs in parallel with the
+  rest of `CF-5`, then `CF-6`. `CF-7`'s surge-ceiling timing is an input
+  to the block-size decision; `CF-6` (Chain P) depends on that decision
+  and is redone after it.
+- `DAEMON_REDB_STORE.md`'s `PB-D1` row names both limits (`CF-R24`): the
+  design-load limit, gated and derived when the plan is built; the surge
+  ceiling, required and reported, a miss over 10 s a finding for the
+  simulation and not a change to the budget. #1370 carries the edit; the
+  `PB-` rows stay the DRS line's. #1373 edits row 8 of the same file, and
+  whichever of the two merges second rebases.
+
 ## 2026-11-13 — Chain forge: the shard-fill replacement moves ahead of Chain L; the max-bundle block at two limits
 
 **Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R23`, `CF-R24`).
