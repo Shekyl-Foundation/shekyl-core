@@ -278,9 +278,10 @@ fn an_owner_exit_publishes_no_view_and_reports_how_it_ended() {
 
 /// A prove job that could not judge an item ends the owner, and the end
 /// names the fault with its seeds: what `Node::ended()` carries as
-/// `NodeEnd::Sync` and the daemon's stop line prints. The owner's loop
-/// takes [`super::Owner::unjudged`]'s record before it waits again; the
-/// guard reports it as every other end.
+/// `NodeEnd::Sync` and the daemon's stop line prints. `Owner::input`
+/// returns it as a break, which the task's loop, the inbound burst and
+/// `pump_local` each stop on, so an ended owner reads no further input;
+/// the guard reports it as every other end.
 ///
 /// The job's half is `executor_tests::an_item_under_another_seed_is_not_judged`.
 /// No test drives a whole owner into this end: the model names one seed

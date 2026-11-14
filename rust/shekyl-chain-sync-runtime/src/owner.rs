@@ -63,6 +63,7 @@
 //!   is accepted body by body, and a 2017 nothing asked for closes it.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -513,10 +514,6 @@ struct Owner<C: Clock + Clone, R> {
     /// session answers in the order it was asked, so a 2017 answers the
     /// first.
     bundle_asks: HashMap<Session, VecDeque<BundleAsk>>,
-    /// Set when the owner must end on its own for a cause no input's
-    /// closing carries ([`Self::unjudged`]). The task's loop reads it
-    /// before each wait.
-    failed: Option<EndCause>,
 }
 
 /// One 2016 this owner sent: the block whose section names the bodies, and
@@ -618,7 +615,6 @@ async fn run<C, R>(
         state_tx,
         published,
         bundle_asks: HashMap::new(),
-        failed: None,
     };
     // The fill does not exist yet: the frontier is genesis (§4.7).
     owner.event(Event::Fill {
@@ -629,10 +625,6 @@ async fn run<C, R>(
     owner.tip(&first);
     owner.room();
     loop {
-        if let Some(cause) = owner.failed {
-            end.how = Ended::Failed(cause);
-            break;
-        }
         owner_select!(
             publish_rx,
             state,
@@ -645,7 +637,10 @@ async fn run<C, R>(
             }
             input = input_rx.recv() => {
                 if let Some(input) = input {
-                    owner.input(input);
+                    if let ControlFlow::Break(cause) = owner.input(input) {
+                        end.how = Ended::Failed(cause);
+                        break;
+                    }
                 }
             },
             changed = tips.changed() => {
@@ -682,20 +677,28 @@ async fn run<C, R>(
                     Some(false) => {}
                     Some(true) => {
                         let pending = inbound.len();
-                        let mut closed = false;
+                        // Why the burst ended the owner, when it did: the
+                        // port closing, or an input that ends it. Nothing
+                        // queued behind either is read.
+                        let mut ended = None;
                         for _ in 0..pending {
                             match inbound.try_recv() {
                                 Ok(inbound_one) => owner.inbound(inbound_one),
                                 Err(mpsc::error::TryRecvError::Empty) => break,
                                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                                    closed = true;
+                                    ended = Some(EndCause::PortClosed);
                                     break;
                                 }
                             }
-                            pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch);
+                            if let ControlFlow::Break(cause) =
+                                pump_local(&mut owner, &mut input_rx, &mut tips, &mut latch)
+                            {
+                                ended = Some(cause);
+                                break;
+                            }
                         }
-                        if closed {
-                            end.how = Ended::Failed(EndCause::PortClosed);
+                        if let Some(cause) = ended {
+                            end.how = Ended::Failed(cause);
                             break;
                         }
                         owner.deadlines_due();
@@ -754,17 +757,21 @@ fn clock_ready<C: Clock>(timer: &OwnerHandle<C>) -> Option<bool> {
 /// Proofs, entry replies, the tip and the latch, when any are already
 /// waiting. A deadline is not one of these: it runs after the peer
 /// messages that were queued when the clock fired.
+///
+/// `Break` when an input ends the owner ([`Owner::input`]): the inputs
+/// queued behind it, the tip and the latch are left unread.
 fn pump_local<C, R>(
     owner: &mut Owner<C, R>,
     input_rx: &mut mpsc::UnboundedReceiver<Input>,
     tips: &mut watch::Receiver<TipChanged>,
     latch: &mut watch::Receiver<Option<FollowingDegraded>>,
-) where
+) -> ControlFlow<EndCause>
+where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
 {
     while let Ok(input) = input_rx.try_recv() {
-        owner.input(input);
+        owner.input(input)?;
     }
     if tips.has_changed().unwrap_or(false) {
         let tip = *tips.borrow_and_update();
@@ -774,6 +781,7 @@ fn pump_local<C, R>(
         let set = latch.borrow_and_update().is_some();
         owner.latch(set);
     }
+    ControlFlow::Continue(())
 }
 
 impl<C, R> Owner<C, R>
@@ -1229,13 +1237,16 @@ where
         });
     }
 
-    fn input(&mut self, input: Input) {
+    /// Apply one input of the owner's own spawned work. `Break` is the
+    /// owner's end, with its cause: every caller stops reading and the
+    /// task's loop ends on it, so an ended owner applies no further input.
+    fn input(&mut self, input: Input) -> ControlFlow<EndCause> {
         match input {
             Input::Proven { job, results } => {
                 tracing::trace!(?job, proved = results.len(), last = ?results.last().map(outcome::proved_kind), "a prove job answered");
                 self.event(Event::Proven { job, results });
             }
-            Input::Unjudged(fault) => self.unjudged(fault),
+            Input::Unjudged(fault) => return ControlFlow::Break(Self::unjudged(fault)),
             Input::Entry { tag, reply } => {
                 let offered = self.offered.remove(&tag);
                 if let Some(offered) = &offered {
@@ -1305,6 +1316,7 @@ where
                 self.serving.remove(&session);
             }
         }
+        ControlFlow::Continue(())
     }
 
     /// An announced block (2008): the block, the transactions it
@@ -1412,15 +1424,12 @@ where
         self.published.alarm_tx.send_replace(self.sync.alarm());
     }
 
-    /// A prove job could not judge an item: record the end, which the
-    /// task's loop takes before it reads another input. Logged here, once:
-    /// the first fault stands, and a second job's is the same defect.
-    fn unjudged(&mut self, fault: ProveFault) {
-        if self.failed.is_some() {
-            return;
-        }
+    /// A prove job could not judge an item: the owner's end. Logged here,
+    /// once: [`Self::input`] breaks on what this returns, and no caller
+    /// reads another input after a break, so no second fault arrives.
+    fn unjudged(fault: ProveFault) -> EndCause {
         tracing::error!(%fault, "a proof could not be judged: chain sync stops");
-        self.failed = Some(EndCause::ProofUnjudged(fault));
+        EndCause::ProofUnjudged(fault)
     }
 
     /// Publish the model's header frontier for the ranked list, when it
