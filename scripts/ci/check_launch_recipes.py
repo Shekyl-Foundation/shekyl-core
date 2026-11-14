@@ -271,8 +271,11 @@ def check_rc_script(
         errors.append(
             f"{rel}: restart_seconds is {restart.group(1)}, not the shipped unit's RestartSec={unit_delay}"
         )
-    if not re.search(r'if \[ "\$status" -eq 0 \]; then\n\s*exit 0\n', body):
-        errors.append(f"{rel}: {called}() retries a clean exit; exit 0 must end the supervisor")
+    if not re.search(r'case "\$status" in\n\s*0 \| 129 \| 130 \| 141 \| 143\) exit 0 ;;\n\s*esac\n', body):
+        errors.append(
+            f"{rel}: {called}() retries a clean exit; exit 0, or death by SIGHUP, SIGINT, SIGTERM or SIGPIPE "
+            "(the shipped unit's Restart=on-failure counts them clean), must end the supervisor"
+        )
     hook = assignment(text, "start_precmd")
     rc_name = assignment(text, "name")
     if hook is None or rc_name is None:
@@ -441,9 +444,9 @@ def selftest() -> int:
         "{\n"
         "\trestart_seconds=30\n"
         '\t/usr/local/bin/shekyld "$@" &\n'
-        "\tif [ \"$status\" -eq 0 ]; then\n"
-        "\t\texit 0\n"
-        "\tfi\n"
+        '\tcase "$status" in\n'
+        "\t0 | 129 | 130 | 141 | 143) exit 0 ;;\n"
+        "\tesac\n"
         "}\n"
         'if [ "${1:-}" = "supervise" ]; then\n'
         "\tshift\n"
@@ -471,7 +474,8 @@ def selftest() -> int:
         ("an rc.d script that runs no shekyld is named", rc_ok.replace("/usr/local/bin/shekyld", "/usr/local/bin/other"), platform_ok, unit_ok, ["does not run /usr/local/bin/shekyld"]),
         ("an rc.d script whose prestart is not the called function is named", rc_ok.replace('start_precmd="${name}_prestart"', 'start_precmd="${name}_other"'), platform_ok, unit_ok, ["shekyld_other()"]),
         ("an rc.d supervise branch that calls no function is named", rc_ok.replace('\tshekyld_supervise "$@"\n', "\t:\n"), platform_ok, unit_ok, ["no supervise branch calls its function"]),
-        ("an rc.d script that restarts a clean exit is named", rc_ok.replace('\t\texit 0\n', "\t\t:\n"), platform_ok, unit_ok, ["retries a clean exit"]),
+        ("an rc.d script that restarts a clean exit is named", rc_ok.replace("0 | 129 | 130 | 141 | 143) exit 0", "0 | 129 | 130 | 141 | 143) :"), platform_ok, unit_ok, ["retries a clean exit"]),
+        ("an rc.d script that restarts a death by SIGTERM is named", rc_ok.replace("0 | 129 | 130 | 141 | 143)", "0 | 129 | 130 | 141)"), platform_ok, unit_ok, ["retries a clean exit"]),
         ("an rc.d script that passes daemon -R is named", rc_ok.replace("-f -S", "-f -R 30 -S"), platform_ok, unit_ok, ["daemon(8) is passed -R"]),
         ("an rc.d restart delay off the shipped unit is named", rc_ok.replace("restart_seconds=30", "restart_seconds=5"), platform_ok, unit_ok, ["restart_seconds is 5, not the shipped unit's RestartSec=30"]),
     ]
