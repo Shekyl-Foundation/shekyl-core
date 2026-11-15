@@ -33,6 +33,12 @@ async fn the_inbound_shape_tells_a_submission_from_anything_else() {
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..300]).await.unwrap();
     assert!(shape.ends_in_submission());
+    // The 9 ordinary bytes, then this frame's 300. The claim is spent
+    // by the note.
+    shape.note_message(9, 309);
+    assert!(shape.message_is_submission());
+    shape.note_message(9, 309);
+    assert!(!shape.message_is_submission());
 
     // A submission that fills all its records carries no padding. The
     // padded frame that preceded it is the boundary they are counted from.
@@ -41,6 +47,15 @@ async fn the_inbound_shape_tells_a_submission_from_anything_else() {
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
     assert!(shape.ends_in_submission());
+    // A prefix of the frame is not the frame, and it spends the claim.
+    // Red edit: leave the span in place after a note that does not match,
+    // and the second note below is the submission.
+    let frame_at = 309u64;
+    let frame_to = frame_at + SUBMISSION_CAP as u64;
+    shape.note_message(frame_at, frame_to - 1);
+    assert!(!shape.message_is_submission());
+    shape.note_message(frame_at, frame_to);
+    assert!(!shape.message_is_submission());
 
     // The same bytes sent unarmed: full ordinary records, after a
     // message that ended on a full record. Not taken for a submission.

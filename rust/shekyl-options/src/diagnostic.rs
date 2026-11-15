@@ -102,6 +102,10 @@ pub enum Code {
     SocketDirUnusable,
     /// The owner's socket path is longer than the platform's socket limit.
     SocketPathLong,
+    /// An operator-named socket directory on a platform whose owner's leg
+    /// has no socket directory: Windows, whose rendezvous directory is
+    /// fixed (Rick, 2026-11-14).
+    SocketDirPlatform,
     /// Another daemon of this user, network and instance answers at the
     /// owner's socket.
     SocketRunning,
@@ -156,6 +160,7 @@ impl Code {
             Self::SocketDirNone => "config.socket-dir.none",
             Self::SocketDirUnusable => "config.socket-dir.unusable",
             Self::SocketPathLong => "config.socket-dir.path-long",
+            Self::SocketDirPlatform => "config.socket-dir.platform",
             Self::SocketRunning => "config.socket.running",
             Self::SocketImpostor => "config.socket.impostor",
             Self::OwningConnectionUnusable => "config.owning-connection.unusable",
@@ -408,6 +413,10 @@ impl Diagnostic {
                 p("path"),
                 p("found")
             ),
+            Code::SocketDirPlatform => format!(
+                "`{opt}` is not available on this platform: {}",
+                p("reason")
+            ),
             Code::SocketPathLong => format!(
                 "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
                 p("path"),
@@ -530,6 +539,7 @@ mod tests {
             Code::SocketDirNone,
             Code::SocketDirUnusable,
             Code::SocketPathLong,
+            Code::SocketDirPlatform,
             Code::SocketRunning,
             Code::SocketImpostor,
             Code::OwningConnectionUnusable,

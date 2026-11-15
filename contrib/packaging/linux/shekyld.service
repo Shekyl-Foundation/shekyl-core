@@ -9,11 +9,12 @@ Wants=network-online.target
 Slice=shekyl.slice
 Type=simple
 # No console unless asked (--console), so nothing reads stdin under the
-# service manager. The two paths are the unit's StateDirectory and
-# LogsDirectory below; the recipe gate holds them equal. `--service`: this
-# is the machine's service instance, which serves no owner's socket and is
-# given no socket directory (INPUT_GRAMMAR.md IG-Q105).
-ExecStart=/usr/local/bin/shekyld --service --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log
+# service manager. `--service`: this is the machine's service instance,
+# which serves no owner's socket and is given no socket directory
+# (INPUT_GRAMMAR.md IG-Q105); its data home is the service root,
+# /var/lib/shekyl (the StateDirectory below), so no --data-dir is passed.
+# The log path is the LogsDirectory below; the recipe gate holds it.
+ExecStart=/usr/local/bin/shekyld --service --log-file /var/log/shekyl/shekyld.log
 ExecStartPre=/bin/mkdir -p /var/log/shekyl
 
 User=shekyl
@@ -24,7 +25,11 @@ Group=shekyl
 # checks and never creates.
 RuntimeDirectory=shekyl
 RuntimeDirectoryMode=0755
+# /var/lib/shekyl: the service's data home, the account's alone (mode
+# 0700), which the daemon checks and never creates (RPC_CHANNEL.md §7.1;
+# Rick, 2026-11-14).
 StateDirectory=shekyl
+StateDirectoryMode=0700
 LogsDirectory=shekyl
 
 Restart=on-failure

@@ -158,6 +158,7 @@ const ROWS: &[Row] = &[
     // Network, paths, logging
     public("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),
     public("version", Kind::Switch, Default::Unset, Surface::Cli, "Print the version and the operating system, and exit."),
+    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrolment. Service mode only; refused while the daemon runs."),
     public("config-verify", Kind::Switch, Default::Unset, Surface::Cli, "Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own."),
     public("network", Kind::OneOf(NETWORKS), Default::Value("mainnet"), Surface::Cli, "The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file."),
     Row {
@@ -272,18 +273,9 @@ const ROWS: &[Row] = &[
     rejected("bg-mining-idle-threshold", NO_BG_MINING),
     rejected("bg-mining-miner-target", NO_BG_MINING),
     // RPC
-    Row {
-        name: "rpc-listen",
-        kind: Kind::List(&ENDPOINT),
-        default: Default::Unset,
-        surface: Surface::Both,
-        runtime: false,
-        grant: Grant::Config,
-        visibility: Visibility::Reserved {
-            reason: "the authenticated channel listener (RPC_CHANNEL.md RT-W10)",
-        },
-        help: "",
-    },
+    // The channel listener (RT-W10 step 4): any address, a wildcard
+    // included (RT-14); no channel port is ruled, so unset is no listener.
+    public("rpc-listen", Kind::List(&ENDPOINT), Default::Value("none"), Surface::Both, "The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener."),
     public("rpc-socket-dir", Kind::Path, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
     public("rpc-admin-listen", Kind::List(&LOOPBACK), Default::Derived("127.0.0.1 and the network's rpc port"), Surface::Both, "The plaintext full-access listeners, loopback only; `none` is no admin listener."),
     public("rpc-view-listen", Kind::List(&LOOPBACK), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only."),
@@ -425,13 +417,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 53 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 55 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 53);
+        assert_eq!(live, 55);
         let levers = TABLE
             .rows
             .iter()
