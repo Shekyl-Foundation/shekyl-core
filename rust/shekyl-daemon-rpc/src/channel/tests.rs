@@ -505,9 +505,12 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
         .await
         .expect("the handshaking connection is closed when the listener returns");
     assert_eq!(read.ok(), Some(0));
-    let after = tokio::time::timeout(Duration::from_millis(500), session.call("version", json!({})))
-        .await
-        .expect("the session is closed when the listener returns");
+    let after = tokio::time::timeout(
+        Duration::from_millis(500),
+        session.call("version", json!({})),
+    )
+    .await
+    .expect("the session is closed when the listener returns");
     assert!(after.is_none(), "{after:?}");
 }
 
