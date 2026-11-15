@@ -1,0 +1,52 @@
+J x G — THE VOLUME SIGNAL CROSSED WITH THE ZONE (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.33).
+Measures only. Signals: SMA (production's window sum), median (the window's lower-middle
+per-block count), median+floor (the median, the stuffer paying the relay floor on its own
+bodies), decoupled (release rails at 1.0; the burn and C still read the sum). Zone: N
+2-in/2-out spends of 19939 B (genesis depth and Standard fee) plus the coinbase reserve
+(1386 B), beside the inherited and re-derived zones; w_ref at 3000 and 12595 B, each fixed across
+N. Not re-derived: TX_WEIGHT_LIMIT (the sim does not read it; it caps one transaction, not a
+count) and COINBASE_RESERVE (it does not depend on the zone).
+
+THE HONEST CHAIN. Per signal, zone and w_ref: the year-1 Standard fee (SKL, and over the
+ceiling), a day's blocks filled to the zone at the year-1 relay floor (SKL), the first year
+blocks carry the design load (30 spends, 48 ordinary transactions a block), and the
+declared step's up-edge: M_r before and after, and the blocks to 95 % of the move.
+  SMA          inherited       300000 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
+  SMA          inherited       300000 B w_ref 12595: fee 1.2233 (2.46x) ; fill a day     4337.9 ; design load y1 ; step M_r 1.000->1.300 in 654 blocks
+  SMA          N = 90         1795896 B w_ref  3000: fee 0.0462 (0.09x) ; fill a day     1031.9 ; design load y1 ; step M_r 1.000->1.300 in 141 blocks
+  SMA          N = 90         1795896 B w_ref 12595: fee 0.1940 (0.39x) ; fill a day     4331.7 ; design load y1 ; step M_r 1.000->1.300 in 136 blocks
+  median       inherited       300000 B w_ref  3000: fee 1.1888 (2.40x) ; fill a day     4471.4 ; design load y20 ; step M_r 0.800->0.800 in no move
+  median       inherited       300000 B w_ref 12595: fee 1.2231 (2.46x) ; fill a day     4337.9 ; design load y1 ; step M_r 1.000->1.300 in 714 blocks
+  median       N = 90         1795896 B w_ref  3000: fee 0.0462 (0.09x) ; fill a day     1031.9 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+  median       N = 90         1795896 B w_ref 12595: fee 0.1940 (0.39x) ; fill a day     4331.7 ; design load y1 ; step M_r 1.000->1.300 in 361 blocks
+
+THE STUFFER. Per signal, zone, w_ref and start: a stuffer holding its share (100 = every miner)
+for the whole measured span (2160 blocks from the start of the year); the bodies listed, M_r
+at the span's end and its mean over it, the longest run of M_r > 1.0, the stuffer's payout
+less its fees against no stuffing (SKL), and the burn and C at rest. A share is an even
+proportion of the blocks; the bodies are the ordinary 1-in/2-out, the lightest valid shape
+(CEN-I1).
+== inherited (300000 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  SMA            5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   20%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+  median         5   51%       0   0.8000  0.8000      0           0.00   6.032  0.7676
+== inherited (300000 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  SMA            5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   20%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+  median         5   51%       0   1.0000  1.0000      0           0.00  11.073  1.0139
+== N = 90 (1795896 B) | w_ref 3000
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   20%   31104   1.2880  1.2397   2155       74560.01  12.606  1.3289
+  SMA            5   51%   79272   1.3000  1.2794   2158      221547.53  14.636  1.3731
+  median         5   20%   31104   1.0000  1.0000      0           0.00  11.103  1.0143
+  median         5   51%   79272   1.3000  1.2017   1452      159872.76  17.350  1.4182
+== N = 90 (1795896 B) | w_ref 12595
+  signal         y share  bodies  at rest    mean    run   net gain SKL  burn %       C
+  SMA            5   20%   31104   1.2880  1.2397   2155       75207.66  12.602  1.3288
+  SMA            5   51%   79272   1.3000  1.2794   2158      223471.23  14.631  1.3731
+  median         5   20%   31104   1.0000  1.0000      0           0.00  11.099  1.0142
+  median         5   51%   79272   1.3000  1.2017   1452      161262.16  17.344  1.4181
